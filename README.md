@@ -13,6 +13,7 @@ Included packages:
 
 - `pi-chrono-compact` — chronological context compaction. Experimental. Pi 0.83-compatible source boundary.
 - `pi-grounded-tools` — evidence-first tools and coordination extensions. Experimental. Pi 0.83-compatible source boundary.
+- `pi-progressive-tools` — conservative tool discovery and lazy activation. Experimental. Pi 0.83–0.84-compatible package boundary.
 - `pi-tool-controls` — tool-output display controls. Experimental.
 - `pi-review-ui` — approval UI for edit and write tools. Experimental.
 - `pi-files-ui` — file and context browser. Experimental.
@@ -24,6 +25,8 @@ No installation is provided by this repository. Use a pinned local path or a pin
 Do not use an unpinned remote source.
 
 Each package has its own manifest and package instructions. Build output is intentionally absent from this source-only tree.
+
+`pi-progressive-tools` keeps approved optional tools out of model context until search activates them. It is package-only and does not provide accepted Pi-core integration. See `packages/progressive-tools/README.md` for setup and limits.
 
 ## Development
 

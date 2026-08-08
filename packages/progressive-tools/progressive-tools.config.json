@@ -1,0 +1,18 @@
+{
+  "$schema": "./progressive-tools.schema.json",
+  "version": 1,
+  "areas": [],
+  "alwaysActive": [],
+  "managed": [],
+  "blocked": [],
+  "aliases": [],
+  "search": {
+    "defaultLimit": 3,
+    "maxLimit": 5,
+    "minimumScore": 2,
+    "showUnmanagedHints": true
+  },
+  "audit": {
+    "largeSchemaTokens": 1000
+  }
+}

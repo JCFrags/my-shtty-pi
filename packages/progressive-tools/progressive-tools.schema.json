@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pi Progressive Tools configuration",
+  "type": "object",
+  "required": [
+    "version"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1
+    },
+    "areas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "alwaysActive": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/matchRule"
+      }
+    },
+    "managed": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/matchRule"
+      }
+    },
+    "blocked": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/matchRule"
+      }
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/aliasRule"
+      }
+    },
+    "search": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "maxLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "minimumScore": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "showUnmanagedHints": {
+          "type": "boolean"
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "largeSchemaTokens": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "pattern": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      ]
+    },
+    "selectors": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/pattern"
+        },
+        "source": {
+          "$ref": "#/$defs/pattern"
+        },
+        "path": {
+          "$ref": "#/$defs/pattern"
+        },
+        "scope": {
+          "$ref": "#/$defs/pattern"
+        },
+        "origin": {
+          "$ref": "#/$defs/pattern"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "scope"
+          ]
+        },
+        {
+          "required": [
+            "origin"
+          ]
+        }
+      ]
+    },
+    "matchRule": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/selectors"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "area": {
+              "type": "string",
+              "minLength": 1
+            },
+            "aliases": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "aliasRule": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/selectors"
+        },
+        {
+          "type": "object",
+          "required": [
+            "terms"
+          ],
+          "properties": {
+            "terms": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}
