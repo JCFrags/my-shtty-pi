@@ -1,0 +1,76 @@
+{
+  "name": "pi-chrono-compact",
+  "version": "2.0.0",
+  "description": "Progressive chronological event compaction for long-running Pi sessions.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "context-compaction",
+    "jsonl",
+    "coding-agent"
+  ],
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./extension": {
+      "types": "./dist/src/pi-extension.d.ts",
+      "import": "./dist/src/pi-extension.js"
+    }
+  },
+  "bin": {
+    "pi-chrono-compact": "./dist/src/cli.js"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/src/pi-extension.js"
+    ]
+  },
+  "files": [
+    "dist/src",
+    "README.md",
+    "BUILD_REPORT.md",
+    "LICENSE",
+    "docs",
+    "examples"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "demo": "npm run build && node dist/src/cli.js compact examples/synthetic-session.jsonl --target 2500",
+    "prepack": "npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@types/node": "^24.12.4",
+    "typebox": "^1.3.7",
+    "typescript": "^5.9.3"
+  }
+}

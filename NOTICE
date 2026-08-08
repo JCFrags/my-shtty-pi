@@ -1,0 +1,12 @@
+my-shtty-pi source repository
+
+The package directories retain their own MIT license files and package metadata.
+No upstream Pi source, generated build, binary, dependency tree, credential, session,
+or private orchestration record is included here.
+
+Pi is a separate project. This repository does not claim official Pi status.
+Herdr is a separate project. `pi-herdr-status` is display-only and does not replace
+Herdr's official integration.
+
+Dependency licenses remain the responsibility of the package that declares them.
+Review package manifests and lock files before any distribution.

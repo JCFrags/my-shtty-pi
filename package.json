@@ -1,0 +1,8 @@
+{
+  "name": "my-shtty-pi",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Source-only repository for small Pi extensions and local tools.",
+  "type": "module",
+  "workspaces": ["packages/*"]
+}

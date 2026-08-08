@@ -1,0 +1,488 @@
+{
+  "generationHash": "6f2f229cee2f7e41362a",
+  "historyEditor": {
+    "calls": 0,
+    "inputItems": 0,
+    "status": "disabled"
+  },
+  "plan": [
+    {
+      "importance": 602.9,
+      "importanceReasons": [
+        "retention band warm at 14907 source token(s) from newest",
+        "protected authority or exact evidence",
+        "direct request or control message",
+        "exact identifiers"
+      ],
+      "level": "raw",
+      "rawTokens": 14,
+      "renderedTokens": 14,
+      "sourceRefs": [
+        {
+          "entryId": "e120"
+        }
+      ],
+      "unitId": "e120:user:0"
+    },
+    {
+      "importance": 388.201052631579,
+      "importanceReasons": [
+        "retention band warm at 14893 source token(s) from newest",
+        "unresolved work",
+        "exact identifiers"
+      ],
+      "level": "semantic",
+      "rawTokens": 992,
+      "renderedTokens": 20,
+      "sourceRefs": [
+        {
+          "blockIndex": 0,
+          "entryId": "e121"
+        }
+      ],
+      "unitId": "e121:assistant_reasoning:0"
+    },
+    {
+      "importance": 28.46421052631579,
+      "importanceReasons": [
+        "retention band warm at 13901 source token(s) from newest"
+      ],
+      "level": "raw",
+      "rawTokens": 10,
+      "renderedTokens": 10,
+      "sourceRefs": [
+        {
+          "blockIndex": 1,
+          "entryId": "e121"
+        }
+      ],
+      "unitId": "e121:assistant_text:1"
+    },
+    {
+      "importance": 51.065263157894734,
+      "importanceReasons": [
+        "retention band warm at 13891 source token(s) from newest",
+        "exact identifiers",
+        "reproducible routine output"
+      ],
+      "level": "raw",
+      "rawTokens": 18,
+      "renderedTokens": 18,
+      "sourceRefs": [
+        {
+          "blockIndex": 2,
+          "entryId": "e121"
+        }
+      ],
+      "unitId": "e121:tool_call:2"
+    },
+    {
+      "importance": 110.25263157894737,
+      "importanceReasons": [
+        "superseded resource version; latest state preferred",
+        "retention band warm at 13873 source token(s) from newest",
+        "exact identifiers",
+        "reproducible routine output"
+      ],
+      "level": "marker",
+      "rawTokens": 10592,
+      "renderedTokens": 68,
+      "sourceRefs": [
+        {
+          "entryId": "e122"
+        }
+      ],
+      "unitId": "e122:tool_result:0"
+    },
+    {
+      "importance": 225.34526315789472,
+      "importanceReasons": [
+        "retention band hot at 3281 source token(s) from newest"
+      ],
+      "level": "normalized",
+      "rawTokens": 584,
+      "renderedTokens": 584,
+      "sourceRefs": [
+        {
+          "blockIndex": 0,
+          "entryId": "e123"
+        }
+      ],
+      "unitId": "e123:assistant_reasoning:0"
+    },
+    {
+      "importance": 127.77684210526316,
+      "importanceReasons": [
+        "-28: older of 2 repeated command interactions",
+        "+24: evidence immediately before an outcome transition to success",
+        "retention band hot at 2697 source token(s) from newest",
+        "exact identifiers",
+        "reproducible routine output"
+      ],
+      "level": "raw",
+      "rawTokens": 16,
+      "renderedTokens": 16,
+      "sourceRefs": [
+        {
+          "blockIndex": 1,
+          "entryId": "e123"
+        }
+      ],
+      "unitId": "e123:tool_call:1"
+    },
+    {
+      "importance": 287.62947368421055,
+      "importanceReasons": [
+        "-28: older of 2 repeated command interactions",
+        "+24: evidence immediately before an outcome transition to success",
+        "retention band hot at 2681 source token(s) from newest",
+        "failure evidence",
+        "exact identifiers"
+      ],
+      "level": "reduced",
+      "rawTokens": 1947,
+      "renderedTokens": 182,
+      "sourceRefs": [
+        {
+          "entryId": "e124"
+        }
+      ],
+      "unitId": "e124:tool_result:0"
+    },
+    {
+      "importance": 228.52842105263156,
+      "importanceReasons": [
+        "retention band hot at 734 source token(s) from newest"
+      ],
+      "level": "raw",
+      "rawTokens": 59,
+      "renderedTokens": 59,
+      "sourceRefs": [
+        {
+          "blockIndex": 0,
+          "entryId": "e125"
+        }
+      ],
+      "unitId": "e125:assistant_reasoning:0"
+    },
+    {
+      "importance": 131.13894736842104,
+      "importanceReasons": [
+        "retention band hot at 675 source token(s) from newest",
+        "exact identifiers"
+      ],
+      "level": "raw",
+      "rawTokens": 32,
+      "renderedTokens": 32,
+      "sourceRefs": [
+        {
+          "blockIndex": 1,
+          "entryId": "e125"
+        }
+      ],
+      "unitId": "e125:assistant_text:1"
+    },
+    {
+      "importance": 90.2442105263158,
+      "importanceReasons": [
+        "retention band hot at 643 source token(s) from newest",
+        "exact identifiers"
+      ],
+      "level": "raw",
+      "rawTokens": 52,
+      "renderedTokens": 52,
+      "sourceRefs": [
+        {
+          "blockIndex": 2,
+          "entryId": "e125"
+        }
+      ],
+      "unitId": "e125:tool_call:2"
+    },
+    {
+      "importance": 72.61473684210526,
+      "importanceReasons": [
+        "retention band hot at 591 source token(s) from newest",
+        "exact identifiers"
+      ],
+      "level": "raw",
+      "rawTokens": 23,
+      "renderedTokens": 23,
+      "sourceRefs": [
+        {
+          "entryId": "e126"
+        }
+      ],
+      "unitId": "e126:tool_result:0"
+    },
+    {
+      "importance": 232.77263157894737,
+      "importanceReasons": [
+        "retention band hot at 568 source token(s) from newest"
+      ],
+      "level": "raw",
+      "rawTokens": 53,
+      "renderedTokens": 53,
+      "sourceRefs": [
+        {
+          "blockIndex": 0,
+          "entryId": "e127"
+        }
+      ],
+      "unitId": "e127:assistant_reasoning:0"
+    },
+    {
+      "importance": 216.04210526315788,
+      "importanceReasons": [
+        "+14: latest of 2 repeated command interactions",
+        "+70: resource outcome changed from failure to success",
+        "retention band hot at 515 source token(s) from newest",
+        "exact identifiers",
+        "reproducible routine output"
+      ],
+      "level": "raw",
+      "rawTokens": 16,
+      "renderedTokens": 16,
+      "sourceRefs": [
+        {
+          "blockIndex": 1,
+          "entryId": "e127"
+        }
+      ],
+      "unitId": "e127:tool_call:1"
+    },
+    {
+      "importance": 204.77473684210526,
+      "importanceReasons": [
+        "+14: latest of 2 repeated command interactions",
+        "+70: resource outcome changed from failure to success",
+        "retention band hot at 499 source token(s) from newest",
+        "exact identifiers",
+        "reproducible routine output"
+      ],
+      "level": "raw",
+      "rawTokens": 94,
+      "renderedTokens": 94,
+      "sourceRefs": [
+        {
+          "entryId": "e128"
+        }
+      ],
+      "unitId": "e128:tool_result:0"
+    },
+    {
+      "importance": 68.92631578947369,
+      "importanceReasons": [
+        "retention band hot at 405 source token(s) from newest",
+        "exact identifiers",
+        "reproducible routine output"
+      ],
+      "level": "raw",
+      "rawTokens": 11,
+      "renderedTokens": 11,
+      "sourceRefs": [
+        {
+          "blockIndex": 0,
+          "entryId": "e129"
+        }
+      ],
+      "unitId": "e129:tool_call:0"
+    },
+    {
+      "importance": 128.85052631578947,
+      "importanceReasons": [
+        "retention band hot at 394 source token(s) from newest",
+        "exact identifiers",
+        "reproducible routine output"
+      ],
+      "level": "raw",
+      "rawTokens": 314,
+      "renderedTokens": 314,
+      "sourceRefs": [
+        {
+          "entryId": "e130"
+        }
+      ],
+      "unitId": "e130:tool_result:0"
+    },
+    {
+      "importance": 293.7557894736842,
+      "importanceReasons": [
+        "retention band hot at 80 source token(s) from newest",
+        "assistant outcome",
+        "exact identifiers"
+      ],
+      "level": "raw",
+      "rawTokens": 40,
+      "renderedTokens": 40,
+      "sourceRefs": [
+        {
+          "blockIndex": 0,
+          "entryId": "e131"
+        }
+      ],
+      "unitId": "e131:assistant_text:0"
+    },
+    {
+      "importance": 565.1578947368421,
+      "importanceReasons": [
+        "retention band hot at 40 source token(s) from newest",
+        "protected authority or exact evidence",
+        "direct request or control message",
+        "exact identifiers"
+      ],
+      "level": "raw",
+      "rawTokens": 22,
+      "renderedTokens": 22,
+      "sourceRefs": [
+        {
+          "entryId": "e133"
+        }
+      ],
+      "unitId": "e133:user:0"
+    },
+    {
+      "importance": 332.79999999999995,
+      "importanceReasons": [
+        "retention band hot at 18 source token(s) from newest",
+        "unresolved work",
+        "assistant outcome"
+      ],
+      "level": "raw",
+      "rawTokens": 18,
+      "renderedTokens": 18,
+      "sourceRefs": [
+        {
+          "blockIndex": 0,
+          "entryId": "e134"
+        }
+      ],
+      "unitId": "e134:assistant_text:0"
+    }
+  ],
+  "rawTokens": 14907,
+  "reducerVersions": {
+    "assistant-cleanup": "1.0.0",
+    "assistant-extractive": "1.0.0",
+    "exact-repeat": "1.0.0",
+    "file-read": "1.0.0",
+    "generic-text": "1.0.0",
+    "git-diff": "1.0.0",
+    "history-editor-v1": "1.1.0",
+    "observation-delta": "1.0.0",
+    "search-results": "1.0.0",
+    "structured-json": "2.0.0",
+    "terminal": "2.0.0",
+    "test-output": "1.0.0",
+    "user-reference-segmentation": "1.0.0"
+  },
+  "renderedTokens": 2106,
+  "schemaVersion": 2,
+  "sourceEntryIds": [
+    "e120",
+    "e121",
+    "e122",
+    "e123",
+    "e124",
+    "e125",
+    "e126",
+    "e127",
+    "e128",
+    "e129",
+    "e130",
+    "e131",
+    "e132",
+    "e133",
+    "e134"
+  ],
+  "sourceRange": {
+    "end": "e134",
+    "start": "e120"
+  },
+  "targetTokens": 2500,
+  "v2": {
+    "causalGenerationHash": "6991b113d9a3c8f68890",
+    "pinnedMemoryTokens": 111,
+    "resourceGenerationHash": "2758ba00ebee34be3d9c",
+    "retentionBands": {
+      "cold": 0,
+      "hot": 15,
+      "warm": 5
+    },
+    "tokenTelemetry": {
+      "categories": [
+        {
+          "category": "assistant",
+          "renderedTokens": 816,
+          "savedTokens": 972,
+          "sourceBlocks": 8,
+          "sourceTokens": 1788
+        },
+        {
+          "category": "authority",
+          "renderedTokens": 36,
+          "savedTokens": 0,
+          "sourceBlocks": 2,
+          "sourceTokens": 36
+        },
+        {
+          "category": "file",
+          "renderedTokens": 68,
+          "savedTokens": 10524,
+          "sourceBlocks": 1,
+          "sourceTokens": 10592
+        },
+        {
+          "category": "terminal",
+          "renderedTokens": 613,
+          "savedTokens": 1765,
+          "sourceBlocks": 4,
+          "sourceTokens": 2378
+        },
+        {
+          "category": "tool-call",
+          "renderedTokens": 113,
+          "savedTokens": 0,
+          "sourceBlocks": 5,
+          "sourceTokens": 113
+        }
+      ],
+      "generationHash": "bd16a15e038cbe71a52c",
+      "reducers": {
+        "assistant-extractive": {
+          "blocks": 1,
+          "renderedTokens": 20,
+          "sourceTokens": 992
+        },
+        "lossless-normalizer": {
+          "blocks": 1,
+          "renderedTokens": 584,
+          "sourceTokens": 584
+        },
+        "raw": {
+          "blocks": 16,
+          "renderedTokens": 792,
+          "sourceTokens": 792
+        },
+        "superseded-resource-version": {
+          "blocks": 1,
+          "renderedTokens": 68,
+          "sourceTokens": 10592
+        },
+        "test-output": {
+          "blocks": 1,
+          "renderedTokens": 182,
+          "sourceTokens": 1947
+        }
+      },
+      "renderedTokens": 1646,
+      "savedTokens": 13261,
+      "schemaVersion": 2,
+      "sourceTokens": 14907
+    }
+  },
+  "validation": {
+    "issues": [],
+    "ok": true
+  }
+}

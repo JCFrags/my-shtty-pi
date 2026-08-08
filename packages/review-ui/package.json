@@ -1,0 +1,51 @@
+{
+  "name": "pi-review-ui",
+  "version": "0.1.0",
+  "description": "Pre-execution approval UI for Pi's built-in edit and write tools",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/review-ui.js"
+    ]
+  },
+  "scripts": {
+    "clean": "node ./scripts/clean.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "test": "node ./scripts/test.mjs",
+    "smoke": "node ./scripts/smoke.mjs",
+    "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@types/node": "25.1.0",
+    "typescript": "5.8.3"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "approval",
+    "diff",
+    "review"
+  ]
+}

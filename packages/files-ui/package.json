@@ -1,0 +1,59 @@
+{
+  "name": "pi-files-ui",
+  "version": "0.1.0",
+  "description": "Mouse-first repository tree and context-selection browser for Pi",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "coding-agent",
+    "files",
+    "context"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "dist/extensions",
+    "dist/src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-tui": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.4",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.tmp-smoke']) fs.rmSync(path,{recursive:true,force:true})\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "smoke": "npm run build && node dist/scripts/smoke.js",
+    "validate": "npm run typecheck && npm test && npm run smoke",
+    "prepack": "npm run validate"
+  }
+}

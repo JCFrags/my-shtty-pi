@@ -1,0 +1,28 @@
+{
+  "name": "@grounded/pi-core",
+  "version": "0.1.0",
+  "description": "Shared evidence-preserving primitives for Grounded Pi tools",
+  "type": "module",
+  "license": "MIT",
+  "files": ["src"],
+  "exports": {
+    "./anchors": "./src/anchors.ts",
+    "./atomic": "./src/atomic.ts",
+    "./exec": "./src/exec.ts",
+    "./lsp-client": "./src/lsp-client.ts",
+    "./output": "./src/output.ts",
+    "./paths": "./src/paths.ts",
+    "./process-manager": "./src/process-manager.ts",
+    "./search": "./src/search.ts",
+    "./state": "./src/state.ts",
+    "./notes": "./src/notes.ts",
+    "./workplan": "./src/workplan.ts",
+    "./syntax": "./src/syntax.ts",
+    "./tasks": "./src/tasks.ts",
+    "./text": "./src/text.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "engines": { "node": ">=22" }
+}
