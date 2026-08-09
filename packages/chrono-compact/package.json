@@ -48,6 +48,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",
     "demo": "npm run build && node dist/src/cli.js compact examples/synthetic-session.jsonl --target 2500",
+    "benchmark": "npm run build && node scripts/benchmark-v2.mjs",
     "prepack": "npm test"
   },
   "peerDependencies": {

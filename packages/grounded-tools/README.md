@@ -150,4 +150,6 @@ npm install --ignore-scripts
 npm run check
 ```
 
+Package artifact boundaries and clean-load checks are documented in [docs/artifacts.md](docs/artifacts.md).
+
 Tests cover exact/anchored edits, stale rejection, BOM/CRLF/modes, symlinks/hard links, search pagination, process logs/PTY/timeouts, LSP framing, RPC dialog responses, task transactions/cycles, package manifests, and spill artifacts. Benchmark methodology is in [docs/benchmark.md](docs/benchmark.md).
