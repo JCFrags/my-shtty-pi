@@ -50,13 +50,13 @@
       "sourceDirectory": "packages/chrono-compact",
       "stable": false,
       "validationCommands": {
-        "benchmark": "npm run build && node scripts/benchmark-v2.mjs",
-        "build": "tsc -p tsconfig.json",
-        "check": "tsc -p tsconfig.json --noEmit",
         "clean": "rm -rf dist",
+        "check": "tsc -p tsconfig.json --noEmit",
+        "build": "tsc -p tsconfig.json",
+        "test": "npm run build && node --test dist/test/*.test.js",
         "demo": "npm run build && node dist/src/cli.js compact examples/synthetic-session.jsonl --target 2500",
-        "prepack": "npm test",
-        "test": "npm run build && node --test dist/test/*.test.js"
+        "benchmark": "npm run build && node scripts/benchmark-v2.mjs",
+        "prepack": "npm test"
       },
       "peerDependencies": {
         "@earendil-works/pi-ai": "*",
@@ -177,9 +177,9 @@
       "stable": false,
       "validationCommands": {
         "check": "npm run typecheck && npm test && npm run pack:check",
-        "pack:check": "npm pack --dry-run --json > /dev/null && npm pack --workspaces --dry-run --json > /dev/null",
+        "typecheck": "tsc --noEmit",
         "test": "node --import tsx --test tests/*.test.ts",
-        "typecheck": "tsc --noEmit"
+        "pack:check": "npm pack --dry-run --json > /dev/null && npm pack --workspaces --dry-run --json > /dev/null"
       },
       "peerDependencies": {
         "@earendil-works/pi-ai": "*",
@@ -247,9 +247,9 @@
       "sourceDirectory": "packages/progressive-tools",
       "stable": false,
       "validationCommands": {
-        "prepack": "npm run syntax && npm test",
+        "test": "node --experimental-strip-types --test tests/*.test.ts",
         "syntax": "node --experimental-strip-types --check extensions/index.ts",
-        "test": "node --experimental-strip-types --test tests/*.test.ts"
+        "prepack": "npm run syntax && npm test"
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": ">=0.83.0 <0.85.0",
@@ -319,13 +319,13 @@
       "sourceDirectory": "packages/files-ui",
       "stable": false,
       "validationCommands": {
-        "build": "npm run clean && tsc -p tsconfig.build.json",
         "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.tmp-smoke']) fs.rmSync(path,{recursive:true,force:true})\"",
-        "prepack": "npm run validate",
-        "smoke": "npm run build && node dist/scripts/smoke.js",
-        "test": "npm run build && node --test dist/test/*.test.js",
         "typecheck": "tsc -p tsconfig.json --noEmit",
-        "validate": "npm run typecheck && npm test && npm run smoke"
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "test": "npm run build && node --test dist/test/*.test.js",
+        "smoke": "npm run build && node dist/scripts/smoke.js",
+        "validate": "npm run typecheck && npm test && npm run smoke",
+        "prepack": "npm run validate"
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
@@ -395,11 +395,11 @@
       "sourceDirectory": "packages/review-ui",
       "stable": false,
       "validationCommands": {
-        "build": "npm run clean && tsc -p tsconfig.build.json",
         "clean": "node ./scripts/clean.mjs",
-        "smoke": "node ./scripts/smoke.mjs",
-        "test": "node ./scripts/test.mjs",
         "typecheck": "tsc -p tsconfig.json --noEmit",
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "test": "node ./scripts/test.mjs",
+        "smoke": "node ./scripts/smoke.mjs",
         "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
       },
       "peerDependencies": {
@@ -465,13 +465,13 @@
       "sourceDirectory": "packages/tool-controls",
       "stable": false,
       "validationCommands": {
-        "build": "npm run clean && tsc -p tsconfig.build.json",
-        "check": "npm run typecheck && npm run test && npm run smoke && npm run pack:check",
         "clean": "node ./scripts/clean.mjs",
-        "pack:check": "npm pack --dry-run",
-        "smoke": "npm run build && node ./scripts/smoke.mjs",
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
         "test": "npm run build && node --test tests/*.test.mjs",
-        "typecheck": "tsc -p tsconfig.json --noEmit"
+        "smoke": "npm run build && node ./scripts/smoke.mjs",
+        "pack:check": "npm pack --dry-run",
+        "check": "npm run typecheck && npm run test && npm run smoke && npm run pack:check"
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
@@ -538,12 +538,13 @@
       "sourceDirectory": "packages/herdr-status",
       "stable": false,
       "validationCommands": {
-        "build": "npm run clean && tsc -p tsconfig.build.json",
         "clean": "node ./scripts/clean.mjs",
-        "smoke": "npm run build && node ./test/smoke-load.mjs",
-        "test": "npm run build && node --test dist/test/*.test.js",
         "typecheck": "tsc -p tsconfig.json --noEmit",
-        "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "test": "npm run build && node --test dist/test/*.test.js",
+        "smoke": "npm run build && node ./test/smoke-load.mjs",
+        "validate": "npm run typecheck && npm test && npm run smoke",
+        "prepack": "npm run build"
       },
       "peerDependencies": {},
       "peerDependenciesMeta": {},

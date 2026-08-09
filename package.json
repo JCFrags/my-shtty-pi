@@ -1,8 +1,16 @@
 {
   "name": "my-shtty-pi",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "description": "Source-only repository for small Pi extensions and local tools.",
   "type": "module",
-  "workspaces": ["packages/*"]
+  "engines": { "node": ">=22.19.0" },
+  "packageManager": "npm@10.9.2",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "check:public-tree": "node scripts/check-public-tree.mjs",
+    "check:catalog": "node scripts/check-catalog.mjs",
+    "test:repo": "node --test scripts/test/*.test.mjs",
+    "inventory": "node scripts/inventory.mjs"
+  }
 }
