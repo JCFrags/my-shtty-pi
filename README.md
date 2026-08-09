@@ -1,52 +1,51 @@
-# my-shtty-pi
+# Pi Package Incubator
 
-Source-only repository for reusable Pi extensions and small local tools.
+`my-shtty-pi` is an independent community Pi package incubator. This public repository contains seven products and fifteen release units. It is not endorsed by Pi.
 
-This is an independent project. It is not an official Pi project.
+The root is a private npm control plane, not a workspace or install boundary. npm `private: true` prevents accidental publication of the root package. It does not make this GitHub repository private.
 
-## Status
+## Package status
 
-The project is early and experimental. Package APIs may change. Review each package before use.
-Extensions run with the permissions of the Pi process. Do not install source that you have not reviewed.
+The lifecycle status describes review state. It is not a release, installation, or publication approval. See [status definitions](docs/package-status.md).
 
-Included packages:
+| Product | Status | Package source |
+|---|---|---|
+| ChronoCompact | quarantined | [source](packages/chrono-compact) |
+| Grounded Tools | experimental | [source](packages/grounded-tools) |
+| Progressive Tools | experimental | [source](packages/progressive-tools) |
+| Tool Controls | host-dependent | [source](packages/tool-controls) |
+| Review UI | blocked | [source](packages/review-ui) |
+| Files UI | candidate | [source](packages/files-ui) |
+| Herdr Status | candidate | [source](packages/herdr-status) |
 
-- `pi-chrono-compact` — chronological context compaction. Experimental. Pi 0.83-compatible source boundary.
-- `pi-grounded-tools` — evidence-first tools and coordination extensions. Experimental. Pi 0.83-compatible source boundary.
-- `pi-progressive-tools` — conservative tool discovery and lazy activation. Experimental. Pi 0.83–0.84-compatible package boundary.
-- `pi-tool-controls` — tool-output display controls. Experimental.
-- `pi-review-ui` — approval UI for edit and write tools. Experimental.
-- `pi-files-ui` — file and context browser. Experimental.
-- `pi-herdr-status` — display-only Herdr metadata. Experimental. It does not replace official Herdr integration.
+No package is stable, generally recommended, or publication-approved. This repository does not make a general installation recommendation. Files UI is the intended first stabilization pilot.
 
-## Installation
+## Root commands
 
-No installation is provided by this repository. Use a pinned local path or a pinned Git reference.
-Do not use an unpinned remote source.
+Run the repository checks without installing dependencies:
 
-Each package has its own manifest and package instructions. Build output is intentionally absent from this source-only tree.
-
-`pi-progressive-tools` keeps approved optional tools out of model context until search activates them. It is package-only and does not provide accepted Pi-core integration. See `packages/progressive-tools/README.md` for setup and limits.
-
-## Development
-
-Use the package's documented offline checks. Do not install dependencies in this repository during review.
-The repository-level public-tree check is:
-
-```text
-node scripts/check-public-tree.mjs
+```sh
+npm run test:repo
+npm run check:catalog
+npm run check:public-tree
+npm run inventory
+npm run check
 ```
 
-## Safety
+These commands check repository structure and policy. They do not prove package behavior or Pi compatibility.
 
-These packages can read files, run commands, use Pi session state, or connect to a local Herdr endpoint as documented by the individual package.
-Review permissions, configuration, and source before use. Never commit credentials, tokens, cookies, private keys, sessions, logs, or machine-specific paths.
+## Working order
 
-## Provenance
+See the [roadmap](docs/roadmap.md) for the broad stabilization order and [release gates](docs/release.md) for package-specific release decisions.
 
-See `NOTICE` and `docs/provenance.md`. Source custody records stay outside this repository.
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Read [SECURITY.md](SECURITY.md) before reporting a security concern. Do not post secrets or exploit details in public issues.
+
+## Safety and provenance
+
+Extensions run with Pi process permissions. Review source and pin exact inputs before use. Never commit credentials, tokens, cookies, private keys, sessions, logs, machine paths, or private state. See [NOTICE](NOTICE) and [provenance guidance](docs/provenance.md).
 
 ## License
 
-Original package source uses the package license shown in its manifest. The repository documentation is MIT-licensed where marked.
-Third-party dependencies are not bundled in this repository and remain the responsibility of each package's dependency and peer-dependency metadata.
+Original package source uses the package license shown in its manifest. Repository documentation is MIT-licensed where marked.
