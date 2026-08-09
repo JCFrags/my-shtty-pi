@@ -1,0 +1,1370 @@
+{
+  "catalogPurpose": "Foundation incubator package catalog and lifecycle model. It is descriptive and is not release or installation approval.",
+  "products": [
+    {
+      "buildModel": "TypeScript build to dist/src; tests execute compiled dist",
+      "displayName": "ChronoCompact",
+      "extensionEntries": [
+        {
+          "path": "./dist/src/pi-extension.js",
+          "entryKind": "build-entry",
+          "existsInSource": false
+        }
+      ],
+      "externalCommands": [
+        "Node.js",
+        "current Pi",
+        "benchmark reads a regular .jsonl fixture",
+        "no other external command documented"
+      ],
+      "id": "chrono-compact",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "its current product scope and failure domain need decomposition.",
+        "status": "quarantined"
+      },
+      "lockfile": {
+        "path": "packages/chrono-compact/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "its current product scope and failure domain need decomposition.",
+        "status": "quarantined"
+      },
+      "nodeRequirement": ">=20",
+      "operatingSystemBoundary": "POSIX-like Node.js 20+; no OS-specific claim",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "published package with compiled dist entry and CLI; Pi extension package",
+        "peerDependencies": [
+          "@earendil-works/pi-ai:* (optional)",
+          "@earendil-works/pi-coding-agent:* (optional)",
+          "typebox:* (optional)"
+        ]
+      },
+      "primaryPackage": "pi-chrono-compact",
+      "publicationAllowed": false,
+      "purpose": "Progressive chronological event compaction for long-running Pi sessions.",
+      "releaseUnitIds": [
+        "pi-chrono-compact"
+      ],
+      "sourceDirectory": "packages/chrono-compact",
+      "stable": false,
+      "validationCommands": {
+        "benchmark": "npm run build && node scripts/benchmark-v2.mjs",
+        "build": "tsc -p tsconfig.json",
+        "check": "tsc -p tsconfig.json --noEmit",
+        "clean": "rm -rf dist",
+        "demo": "npm run build && node dist/src/cli.js compact examples/synthetic-session.jsonl --target 2500",
+        "prepack": "npm test",
+        "test": "npm run build && node --test dist/test/*.test.js"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*"
+      },
+      "peerDependenciesMeta": {
+        "@earendil-works/pi-ai": {
+          "optional": true
+        },
+        "@earendil-works/pi-coding-agent": {
+          "optional": true
+        },
+        "typebox": {
+          "optional": true
+        }
+      },
+      "dependencies": {},
+      "filesBoundary": [
+        "dist/src",
+        "README.md",
+        "BUILD_REPORT.md",
+        "LICENSE",
+        "docs",
+        "examples"
+      ],
+      "developmentPiVersion": "^0.83.0",
+      "private": false
+    },
+    {
+      "buildModel": "Source TypeScript loaded directly; tests use tsx; no build script",
+      "displayName": "Grounded Tools",
+      "extensionEntries": [
+        {
+          "path": "./packages/files/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/process/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/lsp/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/dialog/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/tasks/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/notes/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/workplan/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "rg",
+        "fd",
+        "Python 3 for PTY",
+        "pdfinfo and pdftotext for PDF mode",
+        "configured language servers: typescript-language-server, pyright-langserver, gopls, rust-analyzer, clangd"
+      ],
+      "id": "grounded-tools",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "it has a broad privileged tool surface.",
+        "status": "experimental"
+      },
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "it has a broad privileged tool surface.",
+        "status": "experimental"
+      },
+      "nodeRequirement": ">=22",
+      "operatingSystemBoundary": "Current POSIX Node.js 22+; external executable availability is environment-dependent",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "umbrella package plus independently publishable workspace units",
+        "peerDependencies": [
+          "@earendil-works/pi-ai:*",
+          "@earendil-works/pi-coding-agent:*",
+          "@earendil-works/pi-tui:*",
+          "typebox:*",
+          "@grounded/pi-core dependency"
+        ]
+      },
+      "primaryPackage": "pi-grounded-tools",
+      "publicationAllowed": false,
+      "purpose": "Full-fidelity, evidence-first tools and coordination extensions for Pi.",
+      "releaseUnitIds": [
+        "pi-grounded-tools",
+        "grounded-pi-core",
+        "grounded-pi-dialog",
+        "grounded-pi-files",
+        "grounded-pi-lsp",
+        "grounded-pi-notes",
+        "grounded-pi-process",
+        "grounded-pi-tasks",
+        "grounded-pi-workplan"
+      ],
+      "sourceDirectory": "packages/grounded-tools",
+      "stable": false,
+      "validationCommands": {
+        "check": "npm run typecheck && npm test && npm run pack:check",
+        "pack:check": "npm pack --dry-run --json > /dev/null && npm pack --workspaces --dry-run --json > /dev/null",
+        "test": "node --import tsx --test tests/*.test.ts",
+        "typecheck": "tsc --noEmit"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*",
+        "typebox": "*"
+      },
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      },
+      "filesBoundary": [
+        "packages",
+        "docs",
+        "README.md",
+        "LICENSE"
+      ],
+      "developmentPiVersion": "0.83.0",
+      "private": false
+    },
+    {
+      "buildModel": "Direct TypeScript source; no build step",
+      "displayName": "Progressive Tools",
+      "extensionEntries": [
+        {
+          "path": "./extensions/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "Pi CLI for install/run",
+        "no other external command"
+      ],
+      "id": "progressive-tools",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "it has not completed the same public stabilization and deployment-boundary review.",
+        "status": "experimental"
+      },
+      "lockfile": {
+        "path": "packages/progressive-tools/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "it has not completed the same public stabilization and deployment-boundary review.",
+        "status": "experimental"
+      },
+      "nodeRequirement": ">=22.19.0",
+      "operatingSystemBoundary": "Node.js 22.19+; Pi 0.83.x–0.84.x",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "package-only Pi extension",
+        "peerDependencies": [
+          "@earendil-works/pi-coding-agent:>=0.83.0 <0.85.0",
+          "@earendil-works/pi-tui:>=0.83.0 <0.85.0",
+          "typebox:>=1.3.0 <2.0.0"
+        ]
+      },
+      "primaryPackage": "pi-progressive-tools",
+      "publicationAllowed": false,
+      "purpose": "Conservative progressive discovery and lazy activation for Pi tools.",
+      "releaseUnitIds": [
+        "pi-progressive-tools"
+      ],
+      "sourceDirectory": "packages/progressive-tools",
+      "stable": false,
+      "validationCommands": {
+        "prepack": "npm run syntax && npm test",
+        "syntax": "node --experimental-strip-types --check extensions/index.ts",
+        "test": "node --experimental-strip-types --test tests/*.test.ts"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": ">=0.83.0 <0.85.0",
+        "@earendil-works/pi-tui": ">=0.83.0 <0.85.0",
+        "typebox": ">=1.3.0 <2.0.0"
+      },
+      "peerDependenciesMeta": {},
+      "dependencies": {},
+      "filesBoundary": [
+        "extensions",
+        "tests",
+        "docs",
+        "examples",
+        "CHANGELOG.md",
+        "LICENSE",
+        "MANIFEST.sha256",
+        "README.md",
+        "progressive-tools.config.json",
+        "progressive-tools.schema.json"
+      ],
+      "developmentPiVersion": "0.84.1",
+      "private": false
+    },
+    {
+      "buildModel": "TypeScript build to dist; smoke validates packed output",
+      "displayName": "Files UI",
+      "extensionEntries": [
+        {
+          "path": "./extensions",
+          "entryKind": "source-directory",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "Node.js filesystem APIs",
+        "no shell command required by package behavior"
+      ],
+      "id": "files-ui",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "it is the intended first stabilization pilot.",
+        "status": "candidate"
+      },
+      "lockfile": {
+        "path": "packages/files-ui/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "it is the intended first stabilization pilot.",
+        "status": "candidate"
+      },
+      "nodeRequirement": ">=22.19.0",
+      "operatingSystemBoundary": "Node.js 22.19+; interactive Pi TUI",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "published package with source and compiled extension directory",
+        "peerDependencies": [
+          "@earendil-works/pi-coding-agent:*",
+          "@earendil-works/pi-tui:* (optional false)"
+        ]
+      },
+      "primaryPackage": "pi-files-ui",
+      "publicationAllowed": false,
+      "purpose": "Mouse-first repository tree and context-selection browser for Pi.",
+      "releaseUnitIds": [
+        "pi-files-ui"
+      ],
+      "sourceDirectory": "packages/files-ui",
+      "stable": false,
+      "validationCommands": {
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.tmp-smoke']) fs.rmSync(path,{recursive:true,force:true})\"",
+        "prepack": "npm run validate",
+        "smoke": "npm run build && node dist/scripts/smoke.js",
+        "test": "npm run build && node --test dist/test/*.test.js",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "validate": "npm run typecheck && npm test && npm run smoke"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*"
+      },
+      "peerDependenciesMeta": {
+        "@earendil-works/pi-tui": {
+          "optional": false
+        }
+      },
+      "dependencies": {},
+      "filesBoundary": [
+        "extensions",
+        "src",
+        "dist/extensions",
+        "dist/src",
+        "README.md",
+        "LICENSE"
+      ],
+      "developmentPiVersion": null,
+      "private": false
+    },
+    {
+      "buildModel": "TypeScript build to dist; extension entry is source JS",
+      "displayName": "Review UI",
+      "extensionEntries": [
+        {
+          "path": "./extensions/review-ui.js",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "Node.js filesystem APIs",
+        "interactive Pi TUI",
+        "no shell command requirement in package behavior"
+      ],
+      "id": "review-ui",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "its clean source, build, package, and loading boundary needs a dedicated correction.",
+        "status": "blocked"
+      },
+      "lockfile": {
+        "path": "packages/review-ui/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "its clean source, build, package, and loading boundary needs a dedicated correction.",
+        "status": "blocked"
+      },
+      "nodeRequirement": ">=22.19.0",
+      "operatingSystemBoundary": "Node.js 22.19+; Pi 0.83+",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "published package with JavaScript extension and exported compiled library",
+        "peerDependencies": [
+          "@earendil-works/pi-coding-agent:*",
+          "@earendil-works/pi-tui:*"
+        ]
+      },
+      "primaryPackage": "pi-review-ui",
+      "publicationAllowed": false,
+      "purpose": "Pre-execution approval UI for Pi's built-in edit and write tools.",
+      "releaseUnitIds": [
+        "pi-review-ui"
+      ],
+      "sourceDirectory": "packages/review-ui",
+      "stable": false,
+      "validationCommands": {
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "clean": "node ./scripts/clean.mjs",
+        "smoke": "node ./scripts/smoke.mjs",
+        "test": "node ./scripts/test.mjs",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*"
+      },
+      "peerDependenciesMeta": {},
+      "dependencies": {},
+      "filesBoundary": [
+        "dist",
+        "src",
+        "extensions",
+        "README.md",
+        "LICENSE"
+      ],
+      "developmentPiVersion": null,
+      "private": false
+    },
+    {
+      "buildModel": "TypeScript build to dist; manifest points to source TS",
+      "displayName": "Tool Controls",
+      "extensionEntries": [
+        {
+          "path": "./extensions/tool-controls.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "Node.js",
+        "interactive Pi TUI",
+        "patched Pi UI capability APIs required for full mode"
+      ],
+      "id": "tool-controls",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "full behavior relies on patched Pi capabilities.",
+        "status": "host-dependent"
+      },
+      "lockfile": {
+        "path": "packages/tool-controls/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "full behavior relies on patched Pi capabilities.",
+        "status": "host-dependent"
+      },
+      "nodeRequirement": ">=22.19.0",
+      "operatingSystemBoundary": "Node.js 22.19+; interactive patched Pi TUI",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "published package with source TypeScript extension",
+        "peerDependencies": [
+          "@earendil-works/pi-coding-agent:* (optional)",
+          "@earendil-works/pi-tui:* (optional)"
+        ]
+      },
+      "primaryPackage": "pi-tool-controls",
+      "publicationAllowed": false,
+      "purpose": "Mouse-first bulk expansion controls for Pi tool output cards.",
+      "releaseUnitIds": [
+        "pi-tool-controls"
+      ],
+      "sourceDirectory": "packages/tool-controls",
+      "stable": false,
+      "validationCommands": {
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "check": "npm run typecheck && npm run test && npm run smoke && npm run pack:check",
+        "clean": "node ./scripts/clean.mjs",
+        "pack:check": "npm pack --dry-run",
+        "smoke": "npm run build && node ./scripts/smoke.mjs",
+        "test": "npm run build && node --test tests/*.test.mjs",
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*"
+      },
+      "peerDependenciesMeta": {
+        "@earendil-works/pi-coding-agent": {
+          "optional": true
+        },
+        "@earendil-works/pi-tui": {
+          "optional": true
+        }
+      },
+      "dependencies": {},
+      "filesBoundary": [
+        "extensions",
+        "README.md",
+        "LICENSE"
+      ],
+      "developmentPiVersion": null,
+      "private": false
+    },
+    {
+      "buildModel": "TypeScript build to dist; smoke uses fake Herdr CLI",
+      "displayName": "Herdr Status",
+      "extensionEntries": [
+        {
+          "path": "./extensions",
+          "entryKind": "source-directory",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "Herdr CLI supplied by HERDR_BIN_PATH",
+        "commands herdr api schema --json and herdr pane report-metadata --help",
+        "Herdr official Pi integration"
+      ],
+      "id": "herdr-status",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "it is a later candidate that still needs real compatibility testing.",
+        "status": "candidate"
+      },
+      "lockfile": {
+        "path": "packages/herdr-status/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "it is a later candidate that still needs real compatibility testing.",
+        "status": "candidate"
+      },
+      "nodeRequirement": ">=22.19.0",
+      "operatingSystemBoundary": "Node.js 22.19+; Herdr-launched Pi with required environment",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "published package with source and compiled extension directory",
+        "peerDependencies": []
+      },
+      "primaryPackage": "pi-herdr-status",
+      "publicationAllowed": false,
+      "purpose": "Display-only Herdr metadata for Pi panes without competing with Herdr's official Pi integration.",
+      "releaseUnitIds": [
+        "pi-herdr-status"
+      ],
+      "sourceDirectory": "packages/herdr-status",
+      "stable": false,
+      "validationCommands": {
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "clean": "node ./scripts/clean.mjs",
+        "smoke": "npm run build && node ./test/smoke-load.mjs",
+        "test": "npm run build && node --test dist/test/*.test.js",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+      },
+      "peerDependencies": {},
+      "peerDependenciesMeta": {},
+      "dependencies": {},
+      "filesBoundary": [
+        "extensions",
+        "src",
+        "dist/extensions",
+        "dist/src",
+        "README.md",
+        "LICENSE"
+      ],
+      "developmentPiVersion": null,
+      "private": false
+    }
+  ],
+  "releaseUnits": [
+    {
+      "buildModel": "TypeScript build to dist/src; tests execute compiled dist",
+      "developmentPiVersion": "^0.83.0",
+      "filesBoundary": [
+        "dist/src",
+        "README.md",
+        "BUILD_REPORT.md",
+        "LICENSE",
+        "docs",
+        "examples"
+      ],
+      "id": "pi-chrono-compact",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "its current product scope and failure domain need decomposition.",
+      "lifecycleStatus": "quarantined",
+      "lockfile": {
+        "path": "packages/chrono-compact/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/chrono-compact/package.json",
+      "nodeEngine": ">=20",
+      "npmName": "pi-chrono-compact",
+      "packageModel": "published package with compiled dist entry and CLI; Pi extension package",
+      "parentProductId": "chrono-compact",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./dist/src/pi-extension.js",
+          "entryKind": "build-entry",
+          "existsInSource": false
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "clean": "rm -rf dist",
+        "check": "tsc -p tsconfig.json --noEmit",
+        "build": "tsc -p tsconfig.json",
+        "test": "npm run build && node --test dist/test/*.test.js",
+        "demo": "npm run build && node dist/src/cli.js compact examples/synthetic-session.jsonl --target 2500",
+        "benchmark": "npm run build && node scripts/benchmark-v2.mjs",
+        "prepack": "npm test"
+      },
+      "sourceDirectory": "packages/chrono-compact",
+      "stable": false,
+      "validationCommands": [
+        "check",
+        "test",
+        "demo",
+        "benchmark",
+        "prepack"
+      ],
+      "version": "2.0.0",
+      "peerDependenciesMeta": {
+        "@earendil-works/pi-ai": {
+          "optional": true
+        },
+        "@earendil-works/pi-coding-agent": {
+          "optional": true
+        },
+        "typebox": {
+          "optional": true
+        }
+      },
+      "dependencies": {}
+    },
+    {
+      "buildModel": "Source TypeScript loaded directly; tests use tsx; no build script",
+      "developmentPiVersion": "0.83.0",
+      "filesBoundary": [
+        "packages",
+        "docs",
+        "README.md",
+        "LICENSE"
+      ],
+      "id": "pi-grounded-tools",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/grounded-tools/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "pi-grounded-tools",
+      "packageModel": "umbrella package plus independently publishable workspace units",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*",
+        "typebox": "*"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./packages/files/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/process/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/lsp/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/dialog/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/tasks/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/notes/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        },
+        {
+          "path": "./packages/workplan/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "check": "npm run typecheck && npm test && npm run pack:check",
+        "typecheck": "tsc --noEmit",
+        "test": "node --import tsx --test tests/*.test.ts",
+        "pack:check": "npm pack --dry-run --json > /dev/null && npm pack --workspaces --dry-run --json > /dev/null"
+      },
+      "sourceDirectory": "packages/grounded-tools",
+      "stable": false,
+      "validationCommands": [
+        "check",
+        "typecheck",
+        "test",
+        "pack:check"
+      ],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      }
+    },
+    {
+      "buildModel": "Source TypeScript; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "src"
+      ],
+      "id": "grounded-pi-core",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/core/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-core",
+      "packageModel": "shared library package; independently publishable",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*"
+      },
+      "piExtensionEntries": [],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/core",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {}
+    },
+    {
+      "buildModel": "Source TypeScript direct entry; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "index.ts"
+      ],
+      "id": "grounded-pi-dialog",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/dialog/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-dialog",
+      "packageModel": "independently publishable Pi extension",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+        "@earendil-works/pi-tui": ">=0.83.0 <1",
+        "typebox": ">=1.3.0 <2"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/dialog",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {}
+    },
+    {
+      "buildModel": "Source TypeScript direct entry; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "index.ts"
+      ],
+      "id": "grounded-pi-files",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/files/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-files",
+      "packageModel": "independently publishable Pi extension",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": ">=0.83.0 <1",
+        "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+        "typebox": ">=1.3.0 <2"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/files",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      }
+    },
+    {
+      "buildModel": "Source TypeScript direct entry; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "index.ts"
+      ],
+      "id": "grounded-pi-lsp",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/lsp/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-lsp",
+      "packageModel": "independently publishable Pi extension",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": ">=0.83.0 <1",
+        "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+        "typebox": ">=1.3.0 <2"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/lsp",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      }
+    },
+    {
+      "buildModel": "Source TypeScript direct entry; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "index.ts",
+        "README.md",
+        "LICENSE"
+      ],
+      "id": "grounded-pi-notes",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/notes/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-notes",
+      "packageModel": "independently publishable Pi extension",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/notes",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      }
+    },
+    {
+      "buildModel": "Source TypeScript direct entry; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "index.ts"
+      ],
+      "id": "grounded-pi-process",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/process/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-process",
+      "packageModel": "independently publishable Pi extension",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": ">=0.83.0 <1",
+        "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+        "typebox": ">=1.3.0 <2"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/process",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      }
+    },
+    {
+      "buildModel": "Source TypeScript direct entry; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "index.ts"
+      ],
+      "id": "grounded-pi-tasks",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/tasks/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-tasks",
+      "packageModel": "independently publishable Pi extension",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": ">=0.83.0 <1",
+        "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+        "@earendil-works/pi-tui": ">=0.83.0 <1",
+        "typebox": ">=1.3.0 <2"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/tasks",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      }
+    },
+    {
+      "buildModel": "Source TypeScript direct entry; no build script",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "index.ts",
+        "README.md",
+        "LICENSE"
+      ],
+      "id": "grounded-pi-workplan",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has a broad privileged tool surface.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/grounded-tools/package-lock.json",
+        "scope": "workspace"
+      },
+      "manifestPath": "packages/grounded-tools/packages/workplan/package.json",
+      "nodeEngine": ">=22",
+      "npmName": "@grounded/pi-workplan",
+      "packageModel": "independently publishable Pi extension",
+      "parentProductId": "grounded-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {},
+      "sourceDirectory": "packages/grounded-tools/packages/workplan",
+      "stable": false,
+      "validationCommands": [],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {
+        "@grounded/pi-core": "0.1.0"
+      }
+    },
+    {
+      "buildModel": "Direct TypeScript source; no build step",
+      "developmentPiVersion": "0.84.1",
+      "filesBoundary": [
+        "extensions",
+        "tests",
+        "docs",
+        "examples",
+        "CHANGELOG.md",
+        "LICENSE",
+        "MANIFEST.sha256",
+        "README.md",
+        "progressive-tools.config.json",
+        "progressive-tools.schema.json"
+      ],
+      "id": "pi-progressive-tools",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has not completed the same public stabilization and deployment-boundary review.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/progressive-tools/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/progressive-tools/package.json",
+      "nodeEngine": ">=22.19.0",
+      "npmName": "pi-progressive-tools",
+      "packageModel": "package-only Pi extension",
+      "parentProductId": "progressive-tools",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": ">=0.83.0 <0.85.0",
+        "@earendil-works/pi-tui": ">=0.83.0 <0.85.0",
+        "typebox": ">=1.3.0 <2.0.0"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./extensions/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "test": "node --experimental-strip-types --test tests/*.test.ts",
+        "syntax": "node --experimental-strip-types --check extensions/index.ts",
+        "prepack": "npm run syntax && npm test"
+      },
+      "sourceDirectory": "packages/progressive-tools",
+      "stable": false,
+      "validationCommands": [
+        "test",
+        "syntax",
+        "prepack"
+      ],
+      "version": "0.1.2",
+      "peerDependenciesMeta": {},
+      "dependencies": {}
+    },
+    {
+      "buildModel": "TypeScript build to dist; smoke validates packed output",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "extensions",
+        "src",
+        "dist/extensions",
+        "dist/src",
+        "README.md",
+        "LICENSE"
+      ],
+      "id": "pi-files-ui",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it is the intended first stabilization pilot.",
+      "lifecycleStatus": "candidate",
+      "lockfile": {
+        "path": "packages/files-ui/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/files-ui/package.json",
+      "nodeEngine": ">=22.19.0",
+      "npmName": "pi-files-ui",
+      "packageModel": "published package with source and compiled extension directory",
+      "parentProductId": "files-ui",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./extensions",
+          "entryKind": "source-directory",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.tmp-smoke']) fs.rmSync(path,{recursive:true,force:true})\"",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "test": "npm run build && node --test dist/test/*.test.js",
+        "smoke": "npm run build && node dist/scripts/smoke.js",
+        "validate": "npm run typecheck && npm test && npm run smoke",
+        "prepack": "npm run validate"
+      },
+      "sourceDirectory": "packages/files-ui",
+      "stable": false,
+      "validationCommands": [
+        "typecheck",
+        "test",
+        "smoke",
+        "validate",
+        "prepack"
+      ],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {
+        "@earendil-works/pi-tui": {
+          "optional": false
+        }
+      },
+      "dependencies": {}
+    },
+    {
+      "buildModel": "TypeScript build to dist; extension entry is source JS",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "dist",
+        "src",
+        "extensions",
+        "README.md",
+        "LICENSE"
+      ],
+      "id": "pi-review-ui",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "its clean source, build, package, and loading boundary needs a dedicated correction.",
+      "lifecycleStatus": "blocked",
+      "lockfile": {
+        "path": "packages/review-ui/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/review-ui/package.json",
+      "nodeEngine": ">=22.19.0",
+      "npmName": "pi-review-ui",
+      "packageModel": "published package with JavaScript extension and exported compiled library",
+      "parentProductId": "review-ui",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./extensions/review-ui.js",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "clean": "node ./scripts/clean.mjs",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "test": "node ./scripts/test.mjs",
+        "smoke": "node ./scripts/smoke.mjs",
+        "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+      },
+      "sourceDirectory": "packages/review-ui",
+      "stable": false,
+      "validationCommands": [
+        "typecheck",
+        "test",
+        "smoke",
+        "validate"
+      ],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {}
+    },
+    {
+      "buildModel": "TypeScript build to dist; manifest points to source TS",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "extensions",
+        "README.md",
+        "LICENSE"
+      ],
+      "id": "pi-tool-controls",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "full behavior relies on patched Pi capabilities.",
+      "lifecycleStatus": "host-dependent",
+      "lockfile": {
+        "path": "packages/tool-controls/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/tool-controls/package.json",
+      "nodeEngine": ">=22.19.0",
+      "npmName": "pi-tool-controls",
+      "packageModel": "published package with source TypeScript extension",
+      "parentProductId": "tool-controls",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./extensions/tool-controls.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "clean": "node ./scripts/clean.mjs",
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "test": "npm run build && node --test tests/*.test.mjs",
+        "smoke": "npm run build && node ./scripts/smoke.mjs",
+        "pack:check": "npm pack --dry-run",
+        "check": "npm run typecheck && npm run test && npm run smoke && npm run pack:check"
+      },
+      "sourceDirectory": "packages/tool-controls",
+      "stable": false,
+      "validationCommands": [
+        "typecheck",
+        "test",
+        "smoke",
+        "pack:check",
+        "check"
+      ],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {
+        "@earendil-works/pi-coding-agent": {
+          "optional": true
+        },
+        "@earendil-works/pi-tui": {
+          "optional": true
+        }
+      },
+      "dependencies": {}
+    },
+    {
+      "buildModel": "TypeScript build to dist; smoke uses fake Herdr CLI",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "extensions",
+        "src",
+        "dist/extensions",
+        "dist/src",
+        "README.md",
+        "LICENSE"
+      ],
+      "id": "pi-herdr-status",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it is a later candidate that still needs real compatibility testing.",
+      "lifecycleStatus": "candidate",
+      "lockfile": {
+        "path": "packages/herdr-status/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/herdr-status/package.json",
+      "nodeEngine": ">=22.19.0",
+      "npmName": "pi-herdr-status",
+      "packageModel": "published package with source and compiled extension directory",
+      "parentProductId": "herdr-status",
+      "peerDependencies": {},
+      "piExtensionEntries": [
+        {
+          "path": "./extensions",
+          "entryKind": "source-directory",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "clean": "node ./scripts/clean.mjs",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "build": "npm run clean && tsc -p tsconfig.build.json",
+        "test": "npm run build && node --test dist/test/*.test.js",
+        "smoke": "npm run build && node ./test/smoke-load.mjs",
+        "validate": "npm run typecheck && npm test && npm run smoke",
+        "prepack": "npm run build"
+      },
+      "sourceDirectory": "packages/herdr-status",
+      "stable": false,
+      "validationCommands": [
+        "typecheck",
+        "test",
+        "smoke",
+        "validate"
+      ],
+      "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {}
+    }
+  ],
+  "schemaVersion": 1
+}
