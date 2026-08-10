@@ -61,6 +61,7 @@
           "pattern": "^(?!/)[^\\\\]*$"
         },
         "entryKind": {
+          "type": "string",
           "enum": [
             "source-file",
             "source-directory",
@@ -260,7 +261,8 @@
         "publicationAllowed",
         "stable",
         "peerDependenciesMeta",
-        "dependencies"
+        "dependencies",
+        "lockfile"
       ],
       "properties": {
         "id": {

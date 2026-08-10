@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const statuses = new Set(['quarantined', 'experimental', 'host-dependent', 'blocked', 'candidate']);
+const allowedStatuses = [...statuses].sort();
 const productOrder = ['chrono-compact', 'grounded-tools', 'progressive-tools', 'files-ui', 'review-ui', 'tool-controls', 'herdr-status'];
 const releaseOrder = ['pi-chrono-compact', 'pi-grounded-tools', 'grounded-pi-core', 'grounded-pi-dialog', 'grounded-pi-files', 'grounded-pi-lsp', 'grounded-pi-notes', 'grounded-pi-process', 'grounded-pi-tasks', 'grounded-pi-workplan', 'pi-progressive-tools', 'pi-files-ui', 'pi-review-ui', 'pi-tool-controls', 'pi-herdr-status'];
 const rootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,9 +16,10 @@ export function validateCatalog(root = rootDefault) {
   const rawCatalog = fs.readFileSync(catalogFile, 'utf8');
   const catalog = JSON.parse(rawCatalog);
   const schema = json(path.join(root, 'docs/package-catalog.schema.json'));
-  const allowedStatuses = [...statuses].sort();
+  validateSchemaContract(schema);
   if (rawCatalog !== `${JSON.stringify(catalog, null, 2)}\n`) throw new Error('catalog: non-normalized bytes');
   if (catalog.schemaVersion !== 1 || schema.properties?.schemaVersion?.const !== 1) throw new Error('catalog: unsupported schema');
+  validateCatalogObjects(catalog, schema);
   if (schema.properties?.products?.minItems !== 7 || schema.properties?.products?.maxItems !== 7 || schema.properties?.releaseUnits?.minItems !== 15 || schema.properties?.releaseUnits?.maxItems !== 15) throw new Error('catalog: schema counts');
   if (JSON.stringify(schema.$defs?.status?.enum?.slice().sort()) !== JSON.stringify(allowedStatuses)) throw new Error('catalog: schema statuses');
   if (catalog.products?.length !== 7 || JSON.stringify(catalog.products.map(p => p.id)) !== JSON.stringify(productOrder)) throw new Error('catalog: product count/order');
@@ -50,6 +52,8 @@ export function validateCatalog(root = rootDefault) {
     for (const [field, value] of Object.entries(expected)) if (!equal(unit[field], value)) throw new Error(`catalog: manifest drift ${unit.id}:${field}`);
     const devPi = manifest.devDependencies?.['@earendil-works/pi-coding-agent'] ?? null;
     if (unit.developmentPiVersion !== devPi) throw new Error(`catalog: development Pi drift ${unit.id}`);
+    if (!Array.isArray(unit.validationCommands) || new Set(unit.validationCommands).size !== unit.validationCommands.length || unit.validationCommands.some(command => typeof command !== 'string' || !Object.hasOwn(manifest.scripts ?? {}, command))) throw new Error(`catalog: invalid validation commands ${unit.id}`);
+    if (unit.validationCommands.length === 0 && Object.keys(manifest.scripts ?? {}).length !== 0) throw new Error(`catalog: empty validation commands ${unit.id}`);
     const extensionPaths = (manifest.pi?.extensions ?? []);
     if (!equal(unit.piExtensionEntries.map(e => e.path), extensionPaths)) throw new Error(`catalog: extension drift ${unit.id}`);
     for (const entry of unit.piExtensionEntries) validateEntry(entry, path.join(root, unit.sourceDirectory));
@@ -78,6 +82,56 @@ export function validateCatalog(root = rootDefault) {
   walkStrings(catalog, value => { if (typeof value === 'string' && /(?<![A-Za-z0-9_])(?:\/home\/|\/root\/|\/Users\/|[A-Z]:\\Users\\)/.test(value)) throw new Error('catalog: private machine path'); });
   return catalog;
 }
+function validateCatalogObjects(catalog, schema) {
+  validateFixedObject(catalog, schema, 'top-level catalog');
+  if (!Array.isArray(catalog.products) || !Array.isArray(catalog.releaseUnits)) throw new Error('catalog: invalid top-level arrays');
+  const defs = schema.$defs;
+  for (const product of catalog.products) {
+    validateFixedObject(product, defs.product, `product ${product.id}`);
+    validateFixedObject(product.lifecycle, defs.lifecycle, `product ${product.id} lifecycle`);
+    for (const entry of product.extensionEntries ?? []) validateFixedObject(entry, defs.entry, `product ${product.id} entry`);
+    validateFixedObject(product.lockfile, defs.product.properties.lockfile, `product ${product.id} lockfile`);
+  }
+  for (const unit of catalog.releaseUnits) {
+    validateFixedObject(unit, defs.releaseUnit, `release unit ${unit.id}`);
+    for (const entry of unit.piExtensionEntries ?? []) validateFixedObject(entry, defs.entry, `release unit ${unit.id} entry`);
+    validateFixedObject(unit.lockfile, defs.releaseUnit.properties.lockfile, `release unit ${unit.id} lockfile`);
+  }
+}
+function validateFixedObject(value, schemaNode, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`catalog: invalid object ${label}`);
+  for (const field of schemaNode.required ?? []) if (!Object.hasOwn(value, field)) throw new Error(`catalog: missing required field ${label}:${field}`);
+  if (schemaNode.additionalProperties === false) for (const field of Object.keys(value)) if (!Object.hasOwn(schemaNode.properties ?? {}, field)) throw new Error(`catalog: unknown field ${label}:${field}`);
+}
+function validateSchemaContract(schema) {
+  const required = (value, expected, label) => { if (JSON.stringify(value) !== JSON.stringify(expected)) throw new Error(`catalog: schema ${label}`); };
+  if (schema.type !== 'object' || schema.additionalProperties !== false) throw new Error('catalog: schema top-level shape');
+  required(schema.required, ['schemaVersion', 'catalogPurpose', 'products', 'releaseUnits'], 'top-level required fields');
+  const defs = schema.$defs ?? {};
+  for (const [name, fields] of Object.entries({
+    entry: ['path', 'entryKind', 'existsInSource'], lifecycle: ['status', 'reason'],
+    product: ['id', 'displayName', 'sourceDirectory', 'primaryPackage', 'releaseUnitIds', 'purpose', 'lifecycle', 'installationRecommended', 'publicationAllowed', 'stable', 'nodeRequirement', 'piPeerRangeOrPackageModel', 'validationCommands', 'buildModel', 'lockfile', 'extensionEntries', 'externalCommands', 'operatingSystemBoundary', 'nextGate', 'peerDependencies', 'peerDependenciesMeta', 'dependencies', 'filesBoundary', 'developmentPiVersion', 'private'],
+    releaseUnit: ['id', 'parentProductId', 'sourceDirectory', 'manifestPath', 'npmName', 'version', 'license', 'private', 'nodeEngine', 'piExtensionEntries', 'peerDependencies', 'developmentPiVersion', 'filesBoundary', 'scripts', 'validationCommands', 'packageModel', 'buildModel', 'lifecycleStatus', 'lifecycleReason', 'installationRecommended', 'publicationAllowed', 'stable', 'peerDependenciesMeta', 'dependencies', 'lockfile']
+  })) { if (!defs[name] || defs[name].type !== 'object' || defs[name].additionalProperties !== false) throw new Error(`catalog: schema ${name} shape`); required(defs[name].required, fields, `${name} required fields`); }
+  const lockfiles = [defs.product?.properties?.lockfile, defs.releaseUnit?.properties?.lockfile];
+  for (const lockfile of lockfiles) { if (!lockfile || lockfile.type !== 'object' || lockfile.additionalProperties !== false) throw new Error('catalog: schema lockfile shape'); required(lockfile.required, ['path', 'scope'], 'lockfile required fields'); }
+  const expect = (condition, label) => { if (!condition) throw new Error(`catalog: schema ${label}`); };
+  expect(schema.properties?.schemaVersion?.const === 1 && schema.properties?.catalogPurpose?.type === 'string', 'schema version shape');
+  for (const [name, count, ref] of [['products', 7, '#/$defs/product'], ['releaseUnits', 15, '#/$defs/releaseUnit']]) { const property = schema.properties?.[name]; expect(property?.type === 'array' && property.minItems === count && property.maxItems === count && property.items?.$ref === ref, `${name} array shape`); }
+  expect(defs.falseFlag?.const === false, 'false flag contract');
+  expect(defs.product.properties?.lifecycle?.$ref === '#/$defs/lifecycle', 'product lifecycle link');
+  expect(defs.lifecycle.properties?.status?.$ref === '#/$defs/status', 'lifecycle status link');
+  expect(defs.releaseUnit.properties?.lifecycleStatus?.$ref === '#/$defs/status', 'release lifecycle status link');
+  expect(defs.lifecycle.properties?.reason?.type === 'string' && defs.lifecycle.properties.reason.minLength === 1, 'lifecycle reason shape');
+  for (const name of ['product', 'releaseUnit']) for (const flag of ['installationRecommended', 'publicationAllowed', 'stable']) expect(defs[name].properties?.[flag]?.$ref === '#/$defs/falseFlag', `${name} approval flag ${flag}`);
+  expect(defs.entry.properties?.path?.type === 'string' && defs.entry.properties.path.pattern === '^(?!/)[^\\\\]*$', 'entry path shape');
+  expect(defs.entry.properties?.entryKind?.type === 'string', 'entry kind type');
+  expect(defs.entry.properties?.entryKind?.enum?.slice().sort().join('|') === 'build-entry|source-directory|source-file', 'entry kinds');
+  expect(defs.entry.properties?.existsInSource?.type === 'boolean', 'entry source flag shape');
+  const validation = defs.releaseUnit.properties?.validationCommands; expect(validation?.type === 'array' && validation.items?.type === 'string', 'validation command shape');
+  for (const lockfile of [defs.product.properties?.lockfile, defs.releaseUnit.properties?.lockfile]) { expect(lockfile?.type === 'object' && lockfile.additionalProperties === false, 'lockfile shape'); expect(lockfile.properties?.path?.type === 'string' && lockfile.properties.path.pattern === '^(?!/)[^\\\\]*$', 'lockfile path shape'); expect(lockfile.properties?.scope?.enum?.slice().sort().join('|') === 'package|workspace', 'lockfile scope'); }
+  if (defs.status.enum?.slice().sort().join('|') !== allowedStatuses.join('|')) throw new Error('catalog: schema statuses');
+}
 function validateEntry(entry, base) {
   if (!entry || !relativeSafe(entry.path) || !['source-file', 'source-directory', 'build-entry'].includes(entry.entryKind)) throw new Error(`catalog: bad extension entry ${entry?.path}`);
   const target = path.join(base, entry.path.replace(/^\.\//, ''));
@@ -92,4 +146,4 @@ function discoverManifests(directory, root) {
   visit(directory); return found;
 }
 function walkStrings(value, visit) { visit(value); if (Array.isArray(value)) for (const item of value) walkStrings(item, visit); else if (value && typeof value === 'object') for (const item of Object.values(value)) walkStrings(item, visit); }
-if (import.meta.url === `file://${process.argv[1]}`) { try { validateCatalog(process.env.CATALOG_ROOT ? path.resolve(process.env.CATALOG_ROOT) : rootDefault); console.log('catalog: ok'); } catch (error) { console.error(error.message); process.exitCode = 1; } }
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) { try { validateCatalog(process.env.CATALOG_ROOT ? path.resolve(process.env.CATALOG_ROOT) : rootDefault); console.log('catalog: ok'); } catch (error) { console.error(error.message); process.exitCode = 1; } }

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const LIMITS = { fileBytes: 2 * 1024 * 1024, totalBytes: 32 * 1024 * 1024, entries: 100000, pathBytes: 4096 };
 const generated = new Set(['node_modules', 'dist', 'target', 'coverage']);
@@ -95,4 +95,4 @@ export function scanPublicTree(directory, limits = LIMITS, hooks = {}) {
 
 export function renderFindings(findings) { return findings.map(item => `${item.category}\t${item.path}\t${item.line}`).join('\n'); }
 const defaultRoot = process.env.PUBLIC_TREE_ROOT ? path.resolve(process.env.PUBLIC_TREE_ROOT) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-if (import.meta.url === `file://${process.argv[1]}`) { const findings = scanPublicTree(defaultRoot); process.stdout.write(findings.length ? `${renderFindings(findings)}\n` : 'public-tree: ok\n'); process.exitCode = findings.length ? 1 : 0; }
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) { const findings = scanPublicTree(defaultRoot); process.stdout.write(findings.length ? `${renderFindings(findings)}\n` : 'public-tree: ok\n'); process.exitCode = findings.length ? 1 : 0; }

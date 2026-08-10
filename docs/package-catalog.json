@@ -32,7 +32,7 @@
         "status": "quarantined"
       },
       "nodeRequirement": ">=20",
-      "operatingSystemBoundary": "POSIX-like Node.js 20+; no OS-specific claim",
+      "operatingSystemBoundary": "Node.js 20 or later; editable-memory lock recovery uses Linux /proc process identity and fails closed on platforms without that identity; no broader cross-platform production claim",
       "piPeerRangeOrPackageModel": {
         "packageModel": "published package with compiled dist entry and CLI; Pi extension package",
         "peerDependencies": [
