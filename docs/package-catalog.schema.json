@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "package-catalog.schema.json",
+  "title": "Foundation package catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "catalogPurpose",
+    "products",
+    "releaseUnits"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "catalogPurpose": {
+      "type": "string"
+    },
+    "products": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {
+        "$ref": "#/$defs/product"
+      }
+    },
+    "releaseUnits": {
+      "type": "array",
+      "minItems": 15,
+      "maxItems": 15,
+      "items": {
+        "$ref": "#/$defs/releaseUnit"
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "enum": [
+        "quarantined",
+        "experimental",
+        "host-dependent",
+        "blocked",
+        "candidate"
+      ]
+    },
+    "falseFlag": {
+      "const": false
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "entryKind",
+        "existsInSource"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)[^\\\\]*$"
+        },
+        "entryKind": {
+          "type": "string",
+          "enum": [
+            "source-file",
+            "source-directory",
+            "build-entry"
+          ]
+        },
+        "buildClassification": {
+          "type": "string"
+        },
+        "existsInSource": {
+          "type": "boolean"
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "displayName",
+        "sourceDirectory",
+        "primaryPackage",
+        "releaseUnitIds",
+        "purpose",
+        "lifecycle",
+        "installationRecommended",
+        "publicationAllowed",
+        "stable",
+        "nodeRequirement",
+        "piPeerRangeOrPackageModel",
+        "validationCommands",
+        "buildModel",
+        "lockfile",
+        "extensionEntries",
+        "externalCommands",
+        "operatingSystemBoundary",
+        "nextGate",
+        "peerDependencies",
+        "peerDependenciesMeta",
+        "dependencies",
+        "filesBoundary",
+        "developmentPiVersion",
+        "private"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "sourceDirectory": {
+          "type": "string",
+          "pattern": "^(?!/)[^\\\\]*$"
+        },
+        "primaryPackage": {
+          "type": "string"
+        },
+        "releaseUnitIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle"
+        },
+        "installationRecommended": {
+          "$ref": "#/$defs/falseFlag"
+        },
+        "publicationAllowed": {
+          "$ref": "#/$defs/falseFlag"
+        },
+        "stable": {
+          "$ref": "#/$defs/falseFlag"
+        },
+        "nodeRequirement": {
+          "type": "string"
+        },
+        "piPeerRangeOrPackageModel": {
+          "type": "object"
+        },
+        "validationCommands": {
+          "type": "object"
+        },
+        "buildModel": {
+          "type": "string"
+        },
+        "lockfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "scope"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^(?!/)[^\\\\]*$"
+            },
+            "scope": {
+              "enum": [
+                "package",
+                "workspace"
+              ]
+            }
+          }
+        },
+        "extensionEntries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        },
+        "externalCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operatingSystemBoundary": {
+          "type": "string"
+        },
+        "nextGate": {
+          "type": "object"
+        },
+        "peerDependencies": {
+          "type": "object"
+        },
+        "peerDependenciesMeta": {
+          "type": "object"
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "filesBoundary": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "developmentPiVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "private": {
+          "type": "boolean"
+        }
+      }
+    },
+    "releaseUnit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "parentProductId",
+        "sourceDirectory",
+        "manifestPath",
+        "npmName",
+        "version",
+        "license",
+        "private",
+        "nodeEngine",
+        "piExtensionEntries",
+        "peerDependencies",
+        "developmentPiVersion",
+        "filesBoundary",
+        "scripts",
+        "validationCommands",
+        "packageModel",
+        "buildModel",
+        "lifecycleStatus",
+        "lifecycleReason",
+        "installationRecommended",
+        "publicationAllowed",
+        "stable",
+        "peerDependenciesMeta",
+        "dependencies",
+        "lockfile"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "parentProductId": {
+          "type": "string"
+        },
+        "sourceDirectory": {
+          "type": "string",
+          "pattern": "^(?!/)[^\\\\]*$"
+        },
+        "manifestPath": {
+          "type": "string",
+          "pattern": "^(?!/)[^\\\\]*$"
+        },
+        "npmName": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "private": {
+          "type": "boolean"
+        },
+        "nodeEngine": {
+          "type": "string"
+        },
+        "piExtensionEntries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        },
+        "peerDependencies": {
+          "type": "object"
+        },
+        "developmentPiVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filesBoundary": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scripts": {
+          "type": "object"
+        },
+        "validationCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lockfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "scope"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^(?!/)[^\\\\]*$"
+            },
+            "scope": {
+              "enum": [
+                "package",
+                "workspace"
+              ]
+            }
+          }
+        },
+        "packageModel": {
+          "type": "string"
+        },
+        "buildModel": {
+          "type": "string"
+        },
+        "lifecycleStatus": {
+          "$ref": "#/$defs/status"
+        },
+        "lifecycleReason": {
+          "type": "string"
+        },
+        "installationRecommended": {
+          "$ref": "#/$defs/falseFlag"
+        },
+        "publicationAllowed": {
+          "$ref": "#/$defs/falseFlag"
+        },
+        "stable": {
+          "$ref": "#/$defs/falseFlag"
+        },
+        "peerDependenciesMeta": {
+          "type": "object"
+        },
+        "dependencies": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

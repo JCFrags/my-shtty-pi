@@ -1,0 +1,33 @@
+name: Feature or package proposal
+description: Propose a clearly scoped improvement or package for review.
+title: "[Proposal]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, tokens, cookies, private keys, session files, prompts, private endpoints, or private project content. A proposal does not imply acceptance.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Clear scope
+      description: State what is in scope and out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: User value
+      description: Explain who benefits and how.
+    validations:
+      required: true
+  - type: textarea
+    id: package
+    attributes:
+      label: Affected package or proposed package
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence and limitations
