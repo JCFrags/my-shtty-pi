@@ -1,5 +1,11 @@
 # GitHub administration handoff
 
+## Status
+
+Applied on 2026-08-09. See the [applied administration state](github-admin-state.md). The original plan remains below.
+
+## Original Foundation 0 handoff
+
 This is a plan only. Do not apply these settings as part of Foundation 0.
 
 1. Protect `main`.
