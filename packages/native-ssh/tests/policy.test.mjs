@@ -10,4 +10,6 @@ test("clear destructive, trust, and credential actions are classified", () => {
   assert.equal(classifyCommand("rm -rf /tmp/example").kind, "destructive");
   assert.equal(classifyCommand("ssh-keygen -R host").kind, "trust");
   assert.equal(classifyCommand("cat ~/.ssh/id_ed25519").kind, "credential");
+  assert.equal(classifyCommand("grep . ~/.ssh/id_ed25519").kind, "credential");
+  assert.equal(classifyCommand("cat ~/.ssh/id_ed25519.pub"), null);
 });
