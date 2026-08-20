@@ -16,3 +16,6 @@ source identities.
 
 Mouse-TUI's upstream/reference Pi source is not included. Dependency source is not copied.
 The source roots and private evidence remain outside this repository.
+
+The latest local-source comparison is recorded in
+[`local-source-sync-2026-08-20.md`](local-source-sync-2026-08-20.md).
