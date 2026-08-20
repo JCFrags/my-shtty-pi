@@ -13,6 +13,7 @@ source identities.
 | `pi-grounded-tools` | Accepted Gate A source tree, package version `0.1.0` | MIT | Source package; no Goal runtime or private orchestration records |
 | `pi-progressive-tools` | Independently reviewed release candidate, package version `0.1.2` | MIT | Package-only source; no accepted Pi-core integration or private records |
 | `pi-chrono-compact` | Accepted V2 correction `020`, package version `2.0.0` | MIT | Source package; generated output and private session benchmark omitted |
+| `pi-native-ssh` | Accepted native remote read-only 0.3.0 evolved through installed live acceptance, package version `1.0.0` | MIT | Public-safe package source; private SSH configuration, logs, sessions, and live evidence omitted |
 
 Mouse-TUI's upstream/reference Pi source is not included. Dependency source is not copied.
 The source roots and private evidence remain outside this repository.

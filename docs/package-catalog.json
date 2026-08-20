@@ -559,6 +559,73 @@
       ],
       "developmentPiVersion": null,
       "private": false
+    },
+    {
+      "buildModel": "Source TypeScript and JavaScript loaded directly; Python helper executes from memory; Node tests run without a build",
+      "displayName": "Native SSH",
+      "extensionEntries": [
+        {
+          "path": "./src/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "OpenSSH client /usr/bin/ssh",
+        "remote Python 3 and /bin/sh",
+        "remote rg and fd",
+        "existing OpenSSH configuration, authentication, and host trust"
+      ],
+      "id": "native-ssh",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "live installed acceptance passed on one configured host; broader host compatibility and public review remain.",
+        "status": "candidate"
+      },
+      "lockfile": {
+        "path": "packages/native-ssh/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "live installed acceptance passed on one configured host; broader host compatibility and public review remain.",
+        "status": "candidate"
+      },
+      "nodeRequirement": ">=22.19.0",
+      "operatingSystemBoundary": "Pi 0.84.1 on a POSIX local host with OpenSSH; POSIX-like remote host with Python 3, /bin/sh, rg, and fd",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "Pi package with a direct source extension and in-memory remote helper",
+        "peerDependencies": [
+          "@earendil-works/pi-coding-agent:0.84.1"
+        ]
+      },
+      "primaryPackage": "pi-native-ssh",
+      "publicationAllowed": false,
+      "purpose": "Route Pi native tools to explicitly configured OpenSSH hosts with bounded command, file, transfer, logging, cancellation, and rollback behavior.",
+      "releaseUnitIds": [
+        "pi-native-ssh"
+      ],
+      "sourceDirectory": "packages/native-ssh",
+      "stable": false,
+      "validationCommands": {
+        "test": "node --test tests/*.test.mjs"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "0.84.1"
+      },
+      "peerDependenciesMeta": {},
+      "dependencies": {},
+      "filesBoundary": [
+        "src",
+        "tests",
+        "acceptance",
+        "README.md",
+        "SECURITY.md",
+        "PROVENANCE.md",
+        "LICENSE",
+        "config.example.json"
+      ],
+      "developmentPiVersion": null,
+      "private": false
     }
   ],
   "releaseUnits": [
@@ -1363,6 +1430,57 @@
         "validate"
       ],
       "version": "0.1.0",
+      "peerDependenciesMeta": {},
+      "dependencies": {}
+    },
+    {
+      "buildModel": "Source TypeScript and JavaScript loaded directly; Python helper executes from memory; Node tests run without a build",
+      "developmentPiVersion": null,
+      "filesBoundary": [
+        "src",
+        "tests",
+        "acceptance",
+        "README.md",
+        "SECURITY.md",
+        "PROVENANCE.md",
+        "LICENSE",
+        "config.example.json"
+      ],
+      "id": "pi-native-ssh",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "live installed acceptance passed on one configured host; broader host compatibility and public review remain.",
+      "lifecycleStatus": "candidate",
+      "lockfile": {
+        "path": "packages/native-ssh/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/native-ssh/package.json",
+      "nodeEngine": ">=22.19.0",
+      "npmName": "pi-native-ssh",
+      "packageModel": "Pi package with a direct source extension and in-memory remote helper",
+      "parentProductId": "native-ssh",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "0.84.1"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./src/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "test": "node --test tests/*.test.mjs"
+      },
+      "sourceDirectory": "packages/native-ssh",
+      "stable": false,
+      "validationCommands": [
+        "test"
+      ],
+      "version": "1.0.0",
       "peerDependenciesMeta": {},
       "dependencies": {}
     }
