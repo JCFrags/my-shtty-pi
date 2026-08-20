@@ -1,6 +1,6 @@
 # Pi Package Incubator
 
-`my-shtty-pi` is an independent community Pi package incubator. This public repository contains seven products and fifteen release units. It is not endorsed by Pi.
+`my-shtty-pi` is an independent community Pi package incubator. This public repository contains eight products and sixteen release units. It is not endorsed by Pi.
 
 The root is a private npm control plane, not a workspace or install boundary. npm `private: true` prevents accidental publication of the root package. It does not make this GitHub repository private.
 
@@ -17,6 +17,7 @@ The lifecycle status describes review state. It is not a release, installation, 
 | Review UI | blocked | [source](packages/review-ui) |
 | Files UI | candidate | [source](packages/files-ui) |
 | Herdr Status | candidate | [source](packages/herdr-status) |
+| Native SSH | candidate | [source](packages/native-ssh) |
 
 No package is stable, generally recommended, or publication-approved. This repository does not make a general installation recommendation. Files UI is the intended first stabilization pilot.
 

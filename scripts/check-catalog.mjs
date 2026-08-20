@@ -4,8 +4,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const statuses = new Set(['quarantined', 'experimental', 'host-dependent', 'blocked', 'candidate']);
 const allowedStatuses = [...statuses].sort();
-const productOrder = ['chrono-compact', 'grounded-tools', 'progressive-tools', 'files-ui', 'review-ui', 'tool-controls', 'herdr-status'];
-const releaseOrder = ['pi-chrono-compact', 'pi-grounded-tools', 'grounded-pi-core', 'grounded-pi-dialog', 'grounded-pi-files', 'grounded-pi-lsp', 'grounded-pi-notes', 'grounded-pi-process', 'grounded-pi-tasks', 'grounded-pi-workplan', 'pi-progressive-tools', 'pi-files-ui', 'pi-review-ui', 'pi-tool-controls', 'pi-herdr-status'];
+const productOrder = ['chrono-compact', 'grounded-tools', 'progressive-tools', 'files-ui', 'review-ui', 'tool-controls', 'herdr-status', 'native-ssh'];
+const releaseOrder = ['pi-chrono-compact', 'pi-grounded-tools', 'grounded-pi-core', 'grounded-pi-dialog', 'grounded-pi-files', 'grounded-pi-lsp', 'grounded-pi-notes', 'grounded-pi-process', 'grounded-pi-tasks', 'grounded-pi-workplan', 'pi-progressive-tools', 'pi-files-ui', 'pi-review-ui', 'pi-tool-controls', 'pi-herdr-status', 'pi-native-ssh'];
 const rootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const json = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -20,10 +20,10 @@ export function validateCatalog(root = rootDefault) {
   if (rawCatalog !== `${JSON.stringify(catalog, null, 2)}\n`) throw new Error('catalog: non-normalized bytes');
   if (catalog.schemaVersion !== 1 || schema.properties?.schemaVersion?.const !== 1) throw new Error('catalog: unsupported schema');
   validateCatalogObjects(catalog, schema);
-  if (schema.properties?.products?.minItems !== 7 || schema.properties?.products?.maxItems !== 7 || schema.properties?.releaseUnits?.minItems !== 15 || schema.properties?.releaseUnits?.maxItems !== 15) throw new Error('catalog: schema counts');
+  if (schema.properties?.products?.minItems !== 8 || schema.properties?.products?.maxItems !== 8 || schema.properties?.releaseUnits?.minItems !== 16 || schema.properties?.releaseUnits?.maxItems !== 16) throw new Error('catalog: schema counts');
   if (JSON.stringify(schema.$defs?.status?.enum?.slice().sort()) !== JSON.stringify(allowedStatuses)) throw new Error('catalog: schema statuses');
-  if (catalog.products?.length !== 7 || JSON.stringify(catalog.products.map(p => p.id)) !== JSON.stringify(productOrder)) throw new Error('catalog: product count/order');
-  if (catalog.releaseUnits?.length !== 15 || JSON.stringify(catalog.releaseUnits.map(u => u.id)) !== JSON.stringify(releaseOrder)) throw new Error('catalog: release-unit count/order');
+  if (catalog.products?.length !== 8 || JSON.stringify(catalog.products.map(p => p.id)) !== JSON.stringify(productOrder)) throw new Error('catalog: product count/order');
+  if (catalog.releaseUnits?.length !== 16 || JSON.stringify(catalog.releaseUnits.map(u => u.id)) !== JSON.stringify(releaseOrder)) throw new Error('catalog: release-unit count/order');
   if (catalog.products.some(p => !productOrder.includes(p.id))) throw new Error('catalog: missing required product');
   const productIds = new Set(); const releaseIds = new Set(); const npmNames = new Set();
   const releaseById = new Map(); const manifests = new Set();
@@ -117,7 +117,7 @@ function validateSchemaContract(schema) {
   for (const lockfile of lockfiles) { if (!lockfile || lockfile.type !== 'object' || lockfile.additionalProperties !== false) throw new Error('catalog: schema lockfile shape'); required(lockfile.required, ['path', 'scope'], 'lockfile required fields'); }
   const expect = (condition, label) => { if (!condition) throw new Error(`catalog: schema ${label}`); };
   expect(schema.properties?.schemaVersion?.const === 1 && schema.properties?.catalogPurpose?.type === 'string', 'schema version shape');
-  for (const [name, count, ref] of [['products', 7, '#/$defs/product'], ['releaseUnits', 15, '#/$defs/releaseUnit']]) { const property = schema.properties?.[name]; expect(property?.type === 'array' && property.minItems === count && property.maxItems === count && property.items?.$ref === ref, `${name} array shape`); }
+  for (const [name, count, ref] of [['products', 8, '#/$defs/product'], ['releaseUnits', 16, '#/$defs/releaseUnit']]) { const property = schema.properties?.[name]; expect(property?.type === 'array' && property.minItems === count && property.maxItems === count && property.items?.$ref === ref, `${name} array shape`); }
   expect(defs.falseFlag?.const === false, 'false flag contract');
   expect(defs.product.properties?.lifecycle?.$ref === '#/$defs/lifecycle', 'product lifecycle link');
   expect(defs.lifecycle.properties?.status?.$ref === '#/$defs/status', 'lifecycle status link');
