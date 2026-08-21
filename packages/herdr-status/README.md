@@ -19,6 +19,8 @@ This package only calls Herdr's metadata interface, using source ID `user:pi-ric
 - Herdr with `pane report-metadata`, metadata tokens, token clearing, and TTL support
 - A Pi process launched by Herdr with `HERDR_ENV`, `HERDR_PANE_ID`, and `HERDR_BIN_PATH`
 
+The accepted runtime pair is Pi 0.84.1 with Herdr 0.8.2 and the official Herdr Pi integration v8. See the [real compatibility acceptance](https://github.com/JCFrags/my-shtty-pi/blob/main/docs/herdr-status-compatibility-2026-08-21.md).
+
 The extension probes the exact binary supplied in `HERDR_BIN_PATH` with:
 
 ```text
@@ -188,11 +190,13 @@ For an npm installation:
 pi remove npm:pi-herdr-status
 ```
 
-For a local installation, run this from the checkout used during installation:
+For a local installation, remove the same path that was installed:
 
 ```bash
-pi remove ./
+pi remove /absolute/path/to/packages/herdr-status
 ```
+
+If installation also changed Herdr sidebar rows, restore the prior row block from its protected configuration backup. Then run `herdr config check` and `herdr server reload-config`.
 
 The extension clears its tokens during normal session shutdown; otherwise Herdr's 15-second TTL removes stale metadata.
 

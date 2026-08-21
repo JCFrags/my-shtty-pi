@@ -20,6 +20,6 @@ This catalog describes the Foundation incubator. No lifecycle status is release 
 | Tool Controls | host-dependent | [`packages/tool-controls`](../packages/tool-controls) | Validate patched Pi capability compatibility. |
 | Review UI | blocked | [`packages/review-ui`](../packages/review-ui) | Correct its clean source, build, package, and loading boundary. |
 | Files UI | candidate | [`packages/files-ui`](../packages/files-ui) | Use it as the intended first stabilization pilot. |
-| Herdr Status | candidate | [`packages/herdr-status`](../packages/herdr-status) | Run real compatibility testing as a later candidate. |
+| Herdr Status | candidate | [`packages/herdr-status`](../packages/herdr-status) | Review its completed Pi 0.84.1 and Herdr 0.8.2 compatibility evidence before a package release decision. |
 
 The machine-readable catalog is [`package-catalog.json`](package-catalog.json). Its structure is defined by [`package-catalog.schema.json`](package-catalog.schema.json).

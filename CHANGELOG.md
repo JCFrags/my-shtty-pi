@@ -13,3 +13,4 @@
 - Recorded the applied GitHub repository administration state.
 - Added repository integrity automation, contribution templates, and governance documentation.
 - Defined package lifecycle, release gates, and the staged stabilization roadmap.
+- Validated Herdr Status with direct Pi 0.84.1 and Herdr 0.8.2 acceptance while preserving official integration ownership.
