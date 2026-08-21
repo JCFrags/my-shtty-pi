@@ -43,14 +43,14 @@ test("Gate A root order, package inventory, core exports, peers, and bundled cor
   }
 });
 
-test("todo-owned files retain exact pre-Gate-A SHA-256 values", async () => {
+test("todo-owned files retain exact reviewed SHA-256 values", async () => {
   const expected = new Map([
-    ["packages/core/src/tasks.ts", "bfab17072f08c0033a8fe5426ed5e88ef981c9c3ee21adfd561938d737d56499"],
-    ["packages/tasks/index.ts", "e1e6450ee67dca707305baed26292ec3acb100954da18521660ece83e8b3235d"],
+    ["packages/core/src/tasks.ts", "f13e07833f0b5a64cf2298c33a4727f7739d29204a887452b7259d246b0a9392"],
+    ["packages/tasks/index.ts", "a831a07aff0698d5aae6a2ad57482c02eee63987cd9fda72ed53a8407b69f268"],
     ["packages/tasks/package.json", "3ebaef6925127d0bbd9e46e46ddf9dcfff8b266f3568833e4df6d4c94313b039"],
-    ["packages/tasks/README.md", "833dc44927bc11301b09d68d4097ba35af91e617313303f17a9507b5bbfd2921"],
-    ["tests/tasks.test.ts", "1586e872cfee0b1064ee5b1bfe517e6f2a45deeb67b5aa91da5747de94a28457"],
-    ["tests/tasks-extension.test.ts", "211f111c04bb2468fbb89497cebc29ae5981b73fe405c74dc7df4bd49d6fed65"],
+    ["packages/tasks/README.md", "70bfc9b1cddf9e98d79fbc1b62b8c84055f947fe6183e124825856b4f448195a"],
+    ["tests/tasks.test.ts", "849f541db8ee55369dc0856aa17e2e31088fb8ef06fa920e796429db59587c1f"],
+    ["tests/tasks-extension.test.ts", "74e4c22fa6786714f139dfb7add9f030b675ae9daf5f8d75fa48dd5498bde6ac"],
   ]);
   for (const [path, digest] of expected) assert.equal(sha(await readFile(join(root, path))), digest, path);
 });

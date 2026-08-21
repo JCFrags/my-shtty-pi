@@ -6,6 +6,7 @@ export interface Task {
   description?: string;
   status: TaskStatus;
   blockedBy: string[];
+  waitReason?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -34,6 +35,7 @@ export function validateTaskState(state: TaskState): void {
       || (task.description !== undefined && typeof task.description !== "string")
       || !validStatuses.has(task.status) || !Array.isArray(task.blockedBy)
       || !task.blockedBy.every((id): id is string => typeof id === "string")
+      || (task.waitReason !== undefined && (typeof task.waitReason !== "string" || !task.waitReason.trim()))
       || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt)) {
       throw new Error("Malformed task entry");
     }
@@ -69,7 +71,7 @@ export function refreshBlockedStatuses(state: TaskState): void {
   const done = new Set(state.tasks.filter((task) => task.status === "done").map((task) => task.id));
   for (const task of state.tasks) {
     if (task.status === "done") continue;
-    const blocked = task.blockedBy.some((id) => !done.has(id));
+    const blocked = Boolean(task.waitReason) || task.blockedBy.some((id) => !done.has(id));
     if (blocked) task.status = "blocked";
     else if (task.status === "blocked") task.status = "pending";
   }
@@ -77,7 +79,7 @@ export function refreshBlockedStatuses(state: TaskState): void {
 
 export function addTask(
   state: TaskState,
-  input: { text: string; description?: string; blockedBy?: string[]; id?: string },
+  input: { text: string; description?: string; blockedBy?: string[]; waitReason?: string; id?: string },
   now = Date.now(),
 ): Task {
   const text = input.text.trim();
@@ -92,6 +94,7 @@ export function addTask(
     ...(input.description?.trim() ? { description: input.description.trim() } : {}),
     status: "pending",
     blockedBy: [...(input.blockedBy ?? [])],
+    ...(input.waitReason?.trim() ? { waitReason: input.waitReason.trim() } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -116,6 +119,7 @@ export function taskById(state: TaskState, id: string): Task {
 export function startTask(state: TaskState, id: string, now = Date.now()): Task {
   refreshBlockedStatuses(state);
   const task = taskById(state, id);
+  if (task.waitReason) throw new Error(`Task ${id} is waiting: ${task.waitReason}`);
   if (task.blockedBy.some((blocker) => taskById(state, blocker).status !== "done")) {
     throw new Error(`Task ${id} is blocked by unfinished dependencies`);
   }
@@ -131,6 +135,7 @@ export function startTask(state: TaskState, id: string, now = Date.now()): Task 
 
 export function completeTask(state: TaskState, id: string, now = Date.now()): Task {
   const task = taskById(state, id);
+  if (task.waitReason) throw new Error(`Task ${id} is waiting: ${task.waitReason}`);
   if (task.blockedBy.some((blocker) => taskById(state, blocker).status !== "done")) {
     throw new Error(`Task ${id} is blocked by unfinished dependencies`);
   }
@@ -143,7 +148,7 @@ export function completeTask(state: TaskState, id: string, now = Date.now()): Ta
 export function updateTask(
   state: TaskState,
   id: string,
-  input: { text?: string; description?: string; blockedBy?: string[] },
+  input: { text?: string; description?: string; blockedBy?: string[]; waitReason?: string },
   now = Date.now(),
 ): Task {
   const task = taskById(state, id);
@@ -157,6 +162,10 @@ export function updateTask(
     else delete task.description;
   }
   if (input.blockedBy !== undefined) task.blockedBy = [...input.blockedBy];
+  if (input.waitReason !== undefined) {
+    if (input.waitReason.trim()) task.waitReason = input.waitReason.trim();
+    else delete task.waitReason;
+  }
   task.updatedAt = now;
   try {
     validateTaskState(state);
@@ -165,6 +174,7 @@ export function updateTask(
   } catch (error) {
     Object.assign(task, previous);
     task.blockedBy = previous.blockedBy;
+    if (previous.waitReason === undefined) delete task.waitReason;
     throw error;
   }
 }
