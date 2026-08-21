@@ -158,6 +158,18 @@ test("mouse wheel scrolls and explicit press/release clicks activate buttons", (
   assert.deepEqual(click.results, ["approve"]);
 });
 
+test("owned Pi local mouse coordinates activate only the explicit button", () => {
+  const click = createDialog();
+  const rendered = click.dialog.render(80);
+  const actionRow = rendered.findIndex((line) => line.includes("Approve once"));
+  const actionCol = rendered[actionRow]?.indexOf("Approve once") ?? -1;
+  assert.ok(actionRow >= 0 && actionCol >= 0);
+
+  click.dialog.handleMouse({ kind: "press", button: "left", x: 999, y: 999, localRow: actionRow, localCol: actionCol });
+  click.dialog.handleMouse({ kind: "release", button: "left", x: 999, y: 999, localRow: actionRow, localCol: actionCol });
+  assert.deepEqual(click.results, ["approve"]);
+});
+
 test("long optional approve-all action wraps into a pinned clickable row", () => {
   const click = createDialog({ includeApproveTurn: true });
   const rendered = click.dialog.render(52);

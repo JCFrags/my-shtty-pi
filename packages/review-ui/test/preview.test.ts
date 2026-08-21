@@ -10,11 +10,15 @@ const simpleSemantics: BuiltinSemantics = {
   async constructEdit({ input, current }) {
     let content = current.toString("utf8");
     for (const edit of input.edits) {
+      if (typeof edit.oldText !== "string" || typeof edit.newText !== "string") throw new Error("unsupported edit");
       const index = content.indexOf(edit.oldText);
       if (index < 0) throw new Error("not found");
       content = content.slice(0, index) + edit.newText + content.slice(index + edit.oldText.length);
     }
     return content;
+  },
+  async constructWrite({ input }) {
+    return input.content;
   },
   generateUnifiedDiff(path, oldContent, newContent) {
     return `--- ${path}\n+++ ${path}\n-${oldContent}\n+${newContent}`;

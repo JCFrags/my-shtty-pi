@@ -27,6 +27,8 @@ export interface FirstClassMouseEvent {
   button?: string | number;
   row?: number;
   col?: number;
+  localRow?: number;
+  localCol?: number;
   column?: number;
   x?: number;
   y?: number;
@@ -530,8 +532,8 @@ type NormalizedMouseEvent =
 
 function normalizeMouseEvent(event: FirstClassMouseEvent): NormalizedMouseEvent | undefined {
   const rawKind = (event.kind ?? event.type ?? event.action ?? "").toLowerCase();
-  const row = integerCoordinate(event.row ?? event.y);
-  const col = integerCoordinate(event.col ?? event.column ?? event.x);
+  const row = integerCoordinate(event.localRow ?? event.row ?? event.y);
+  const col = integerCoordinate(event.localCol ?? event.col ?? event.column ?? event.x);
 
   const rawButton = typeof event.button === "string" ? event.button.toLowerCase() : "";
   if (rawKind.includes("wheel") || rawButton.includes("wheel") || event.deltaY !== undefined) {

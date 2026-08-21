@@ -1,6 +1,6 @@
 # pi-review-ui
 
-`pi-review-ui` is a Pi package that intercepts Pi's built-in `edit` and `write` tool calls before execution, constructs the exact proposed file content, displays a unified diff, and requires an explicit decision.
+`pi-review-ui` is a Pi package that intercepts the active `edit` and `write` tool calls before execution. It constructs the exact proposed file content, displays a unified diff, and requires an explicit decision.
 
 > **This is an approval user interface, not a sandbox.** Approval allows Pi's original built-in tool to run normally. Pi and the approved tool still run with the user's operating-system permissions.
 
@@ -9,7 +9,8 @@ Version one approves or rejects the entire tool call. It does not apply individu
 ## Requirements
 
 - Node.js 22.19.0 or later
-- Pi with the asynchronous `tool_call` extension event and custom overlay UI (Pi 0.83.0 or later)
+- Pi 0.84.1 with `tool_call`, `getAllTools()` source metadata, the shared extension event bus, and custom overlay UI
+- The owned Pi 0.84.1 mouse patch when first-class mouse input is required
 
 ## Install
 
@@ -23,10 +24,16 @@ For a project-local installation:
 pi install -l npm:pi-review-ui
 ```
 
+A clean local source checkout loads through the TypeScript manifest entry. It does not require a pre-existing `dist` directory:
+
+```bash
+pi install /absolute/path/to/my-shtty-pi/packages/review-ui
+```
+
 To test a local checkout without installing it permanently:
 
 ```bash
-pi -e /absolute/path/to/pi-review-ui
+pi -e /absolute/path/to/my-shtty-pi/packages/review-ui
 ```
 
 ## Behavior
@@ -42,7 +49,14 @@ By default, every built-in `edit` and `write` call follows this sequence:
 7. Return no block result after approval, allowing the original Pi tool to execute.
 8. Return `{ block: true, reason: "Rejected by user" }` after rejection.
 
-The extension never writes the target file. It also does not mutate the tool arguments. Control-character escaping is display-only and does not alter the arguments or the content used to construct the preview. The preview of an `edit` call invokes Pi's built-in edit implementation with in-memory read/write operations and captures the content that implementation would write. A `write` preview uses the proposed `content` string exactly as supplied.
+The extension never writes the target file. It also does not mutate the tool arguments. Control-character escaping is display-only and does not alter the arguments or the content used to construct the preview.
+
+Review UI resolves the active tool owner from Pi's `getAllTools()` source metadata for every call. It supports these owners:
+
+- Pi's exact `<builtin:edit>` and `<builtin:write>` definitions. The edit preview invokes Pi's built-in edit implementation with in-memory operations.
+- The exact active `pi-grounded-tools/packages/files/index.ts` owner when that extension registers the versioned `pi-grounded-tools/files-v1` preview adapter. Grounded Tools uses the same pure content-construction functions for preview and execution.
+
+Review UI fails closed when ownership is missing, ambiguous, forged, or unsupported. It does not infer ownership from the tool name alone. A built-in `write` preview uses the proposed `content` string exactly as supplied. The Grounded adapter also enforces its `expectedDigest`, BOM, CRLF, anchored edit, and strict replacement semantics before review.
 
 ### Review dialog
 
@@ -92,7 +106,7 @@ That state is limited to the active Pi turn and is cleared at `turn_end` and eve
 
 ### Mouse behavior
 
-Stock Pi remains keyboard-first. `pi-review-ui` does not enable raw terminal mouse reporting and does not depend on private overlay geometry.
+Keyboard operation remains complete. `pi-review-ui` does not enable or parse raw terminal mouse reporting and does not depend on private overlay geometry. Mouse input uses only the decoded component-local events from the owned Pi 0.84.1 patch.
 
 The dialog exposes a first-class component mouse hook for Pi versions that dispatch local mouse events to custom overlay components. On such versions:
 

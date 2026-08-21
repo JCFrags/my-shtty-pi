@@ -38,14 +38,17 @@ function makeDependencies(options: {
     buildPreview:
       options.buildPreview ??
       (async () => options.preview ?? makePreview()),
-    semantics: {
+    resolveSemantics: () => ({
       async constructEdit() {
         return "edited";
+      },
+      async constructWrite({ input }) {
+        return input.content;
       },
       generateUnifiedDiff() {
         return "diff";
       },
-    },
+    }),
     showReview:
       options.showReview ??
       (async (_ctx, preview) => {

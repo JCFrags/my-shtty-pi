@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { fileURLToPath } from "node:url";
 import {
   createReadTool,
   generateDiffString,
@@ -108,6 +109,24 @@ const FuzzyFindParams = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
 });
 
+export interface GroundedEditInput {
+  path: string;
+  edits: Array<{
+    oldText?: string;
+    newText?: string;
+    startAnchor?: string;
+    endAnchor?: string;
+    contentLines?: string[];
+  }>;
+  expectedDigest?: string;
+}
+
+export interface GroundedWriteInput {
+  path: string;
+  content: string;
+  expectedDigest?: string;
+}
+
 export interface Replacement {
   editIndex: number;
   start: number;
@@ -198,6 +217,44 @@ export function applyReplacements(content: string, replacements: Replacement[]):
   return result;
 }
 
+export function constructGroundedEditContent(current: string, input: GroundedEditInput): {
+  content: string;
+  normalizedBefore: string;
+  normalizedAfter: string;
+  digestBefore: string;
+} {
+  const { bom, text } = stripBom(current);
+  const ending = detectLineEnding(text);
+  const normalizedBefore = normalizeLf(text);
+  const digestBefore = sha256(normalizedBefore);
+  if (input.expectedDigest && input.expectedDigest !== digestBefore) {
+    throw new Error(`File snapshot is stale: expected ${input.expectedDigest}, current ${digestBefore}`);
+  }
+  const replacements = strictReplacements(normalizedBefore, input.edits, input.expectedDigest);
+  const normalizedAfter = applyReplacements(normalizedBefore, replacements);
+  if (normalizedAfter === normalizedBefore) throw new Error("No changes made; replacement content is identical");
+  return {
+    content: bom + restoreLineEndings(normalizedAfter, ending),
+    normalizedBefore,
+    normalizedAfter,
+    digestBefore,
+  };
+}
+
+export function constructGroundedWriteContent(
+  current: string | undefined,
+  input: GroundedWriteInput,
+): string {
+  if (input.expectedDigest) {
+    if (current === undefined) throw new Error("expectedDigest was supplied but the file does not exist");
+    const actual = sha256(normalizeLf(stripBom(current).text));
+    if (actual !== input.expectedDigest) {
+      throw new Error(`File snapshot is stale: expected ${input.expectedDigest}, current ${actual}`);
+    }
+  }
+  return input.content;
+}
+
 export function outline(text: string): string {
   const patterns = [
     /^\s*(?:export\s+)?(?:async\s+)?function\s+\w+/,
@@ -217,6 +274,42 @@ export function outline(text: string): string {
 }
 
 export default function groundedFiles(pi: ExtensionAPI) {
+  const previewAdapter = {
+    protocolVersion: 1 as const,
+    id: "pi-grounded-tools/files-v1",
+    ownerSourcePath: fileURLToPath(import.meta.url),
+    tools: ["edit", "write"] as const,
+    semantics: {
+      async constructEdit(request: {
+        input: GroundedEditInput;
+        current: Buffer;
+        currentExists: boolean;
+        signal?: AbortSignal;
+      }): Promise<string> {
+        throwIfAborted(request.signal);
+        if (!request.currentExists) throw Object.assign(new Error("file does not exist"), { code: "ENOENT" });
+        return constructGroundedEditContent(request.current.toString("utf8"), request.input).content;
+      },
+      async constructWrite(request: {
+        input: GroundedWriteInput;
+        current: Buffer;
+        currentExists: boolean;
+        signal?: AbortSignal;
+      }): Promise<string> {
+        throwIfAborted(request.signal);
+        const current = request.currentExists ? request.current.toString("utf8") : undefined;
+        return constructGroundedWriteContent(current, request.input);
+      },
+      generateUnifiedDiff(path: string, oldContent: string, newContent: string): string {
+        return generateUnifiedPatch(path, oldContent, newContent);
+      },
+    },
+  };
+  pi.events.on("pi-review-ui:request-preview-adapters-v1", (reply) => {
+    if (typeof reply === "function") (reply as (value: unknown) => void)(previewAdapter);
+  });
+  pi.events.emit("pi-review-ui:register-preview-adapter-v1", previewAdapter);
+
   pi.registerTool({
     name: fileToolName("read"),
     label: "read (grounded)",
@@ -347,32 +440,22 @@ export default function groundedFiles(pi: ExtensionAPI) {
         throwIfAborted(signal);
         await access(absolute, constants.R_OK | constants.W_OK);
         const raw = await readFile(absolute, "utf8");
-        const { bom, text } = stripBom(raw);
-        const ending = detectLineEnding(text);
-        const normalized = normalizeLf(text);
-        const currentDigest = sha256(normalized);
-        if (params.expectedDigest && params.expectedDigest !== currentDigest) {
-          throw new Error(`File snapshot is stale: expected ${params.expectedDigest}, current ${currentDigest}`);
-        }
-        const replacements = strictReplacements(normalized, params.edits, params.expectedDigest);
-        const next = applyReplacements(normalized, replacements);
-        if (next === normalized) throw new Error("No changes made; replacement content is identical");
-
-        const syntax = await checkSyntax(absolute, restoreLineEndings(next, ending), signal);
+        const proposed = constructGroundedEditContent(raw, params);
+        const syntax = await checkSyntax(absolute, proposed.content, signal);
         if (!syntax.ok && syntaxGuard() === "block") {
           throw new Error(`Syntax guard blocked the edit (${syntax.engine}): ${syntax.message ?? "invalid syntax"}`);
         }
         throwIfAborted(signal);
-        const write = await atomicWriteText(absolute, bom + restoreLineEndings(next, ending));
-        const diff = generateDiffString(normalized, next);
-        const patch = generateUnifiedPatch(params.path, normalized, next);
+        const write = await atomicWriteText(absolute, proposed.content);
+        const diff = generateDiffString(proposed.normalizedBefore, proposed.normalizedAfter);
+        const patch = generateUnifiedPatch(params.path, proposed.normalizedBefore, proposed.normalizedAfter);
         const warning = !syntax.ok ? `\nSyntax warning (${syntax.engine}): ${syntax.message ?? "invalid syntax"}` : "";
         return textResult(`Successfully replaced ${params.edits.length} block(s) in ${params.path}.${warning}`, {
           diff: diff.diff,
           patch,
           firstChangedLine: diff.firstChangedLine,
-          digestBefore: currentDigest,
-          digestAfter: sha256(next),
+          digestBefore: proposed.digestBefore,
+          digestAfter: sha256(proposed.normalizedAfter),
           syntax,
           atomic: write.atomic,
           preservedHardLinks: write.preservedHardLinks,
@@ -398,26 +481,22 @@ export default function groundedFiles(pi: ExtensionAPI) {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-        if (params.expectedDigest) {
-          if (previous === undefined) throw new Error("expectedDigest was supplied but the file does not exist");
-          const actual = sha256(normalizeLf(stripBom(previous).text));
-          if (actual !== params.expectedDigest) throw new Error(`File snapshot is stale: expected ${params.expectedDigest}, current ${actual}`);
-        }
-        const syntax = await checkSyntax(absolute, params.content, signal);
+        const proposed = constructGroundedWriteContent(previous, params);
+        const syntax = await checkSyntax(absolute, proposed, signal);
         if (!syntax.ok && syntaxGuard() === "block") {
           throw new Error(`Syntax guard blocked the write (${syntax.engine}): ${syntax.message ?? "invalid syntax"}`);
         }
         throwIfAborted(signal);
-        const result = await atomicWriteText(absolute, params.content);
+        const result = await atomicWriteText(absolute, proposed);
         const oldText = previous ?? "";
-        const diff = generateDiffString(oldText, params.content);
-        const patch = generateUnifiedPatch(params.path, oldText, params.content);
+        const diff = generateDiffString(oldText, proposed);
+        const patch = generateUnifiedPatch(params.path, oldText, proposed);
         const warning = !syntax.ok ? `\nSyntax warning (${syntax.engine}): ${syntax.message ?? "invalid syntax"}` : "";
         return textResult(`Wrote ${params.content.length} characters to ${params.path}.${warning}`, {
           diff: diff.diff,
           patch,
           firstChangedLine: diff.firstChangedLine,
-          digestAfter: sha256(normalizeLf(stripBom(params.content).text)),
+          digestAfter: sha256(normalizeLf(stripBom(proposed).text)),
           syntax,
           atomic: result.atomic,
           preservedHardLinks: result.preservedHardLinks,
