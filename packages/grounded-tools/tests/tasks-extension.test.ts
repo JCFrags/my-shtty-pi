@@ -60,3 +60,53 @@ test("failed todo operations leave live extension state unchanged", async () => 
   assert.equal(listed.details.state.tasks.length, 2);
   assert.deepEqual(listed.details.state.tasks[0].blockedBy, []);
 });
+
+test("todo supports dependency blocks and truthful external waits across reload", async () => {
+  const { todo, handlers } = loadTodo();
+  const replaced = await todo.execute("replace", {
+    action: "replace",
+    tasks: [
+      { id: "T1", text: "first" },
+      { id: "T2", text: "dependent", blockedBy: ["T1"] },
+    ],
+  });
+  assert.equal(replaced.details.state.tasks[1].status, "blocked");
+  assert.deepEqual(replaced.details.state.tasks[1].blockedBy, ["T1"]);
+
+  await todo.execute("start", { action: "start", id: "T1" });
+  const added = await todo.execute("add", { action: "add", text: "external" });
+  const externalId = added.details.state.tasks.at(-1).id;
+  const waiting = await todo.execute("block", {
+    action: "block",
+    id: externalId,
+    waitReason: "reviewer response",
+  });
+  const waitingTask = waiting.details.state.tasks.find((task: any) => task.id === externalId);
+  assert.equal(waitingTask.status, "blocked");
+  assert.deepEqual(waitingTask.blockedBy, []);
+  assert.equal(waitingTask.waitReason, "reviewer response");
+  await assert.rejects(todo.execute("blocked-start", { action: "start", id: externalId }), /waiting/);
+
+  await todo.execute("clear-wait", { action: "update", id: externalId, waitReason: "" });
+  await todo.execute("external-start", { action: "start", id: externalId });
+  await todo.execute("external-done", { action: "done", id: externalId });
+  await todo.execute("first-done", { action: "done", id: "T1" });
+  await todo.execute("dependent-start", { action: "start", id: "T2" });
+  await todo.execute("dependent-done", { action: "done", id: "T2" });
+
+  const listed = await todo.execute("list", { action: "list" });
+  const theme = { fg: (_name: string, text: string) => text, bold: (text: string) => text };
+  const rendered = todo.renderResult(listed, { expanded: true }, theme).render(120).join("\n");
+  assert.equal((rendered.match(/T1 first/g) ?? []).length, 1);
+  assert.equal(listed.details.state.tasks.filter((task: any) => task.id === "T1").length, 1);
+
+  handlers.get("session_start")?.({}, {
+    hasUI: false,
+    sessionManager: { getBranch: () => [{
+      type: "message",
+      message: { role: "toolResult", toolName: "todo", details: listed.details },
+    }] },
+  });
+  const reloaded = await todo.execute("reloaded-list", { action: "list" });
+  assert.deepEqual(reloaded.details.state, listed.details.state);
+});

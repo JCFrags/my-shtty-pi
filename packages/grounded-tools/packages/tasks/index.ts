@@ -25,6 +25,7 @@ const ReplacementTaskSchema = Type.Object({
   description: Type.Optional(Type.String()),
   status: Type.Optional(StringEnum(["pending", "in_progress", "blocked", "done"] as const)),
   blockedBy: Type.Optional(Type.Array(Type.String())),
+  waitReason: Type.Optional(Type.String({ description: "External condition that must clear before work can continue" })),
 });
 
 const TodoParams = Type.Object({
@@ -33,6 +34,7 @@ const TodoParams = Type.Object({
   text: Type.Optional(Type.String()),
   description: Type.Optional(Type.String()),
   blockedBy: Type.Optional(Type.Array(Type.String())),
+  waitReason: Type.Optional(Type.String({ description: "External condition that must clear before work can continue; use an empty string to clear it" })),
   position: Type.Optional(Type.Number({ minimum: 0, description: "Zero-based target position for reorder" })),
   tasks: Type.Optional(Type.Array(ReplacementTaskSchema, { description: "Complete desired task list for replace" })),
 });
@@ -45,7 +47,8 @@ interface TodoDetails {
 function formatTask(task: Task): string {
   const marker = task.status === "done" ? "✓" : task.status === "in_progress" ? "●" : task.status === "blocked" ? "⊘" : "○";
   const blockers = task.blockedBy.length ? ` [blockedBy: ${task.blockedBy.join(", ")}]` : "";
-  return `${marker} ${task.id} ${task.text}${blockers}`;
+  const waiting = task.waitReason ? ` [waiting: ${task.waitReason}]` : "";
+  return `${marker} ${task.id} ${task.text}${blockers}${waiting}`;
 }
 
 class TodoListView {
@@ -126,7 +129,7 @@ export default function groundedTasks(pi: ExtensionAPI) {
   pi.registerTool({
     name: "todo",
     label: "Todo",
-    description: "Manage a visible, branch-aware task plan. Supports dependencies with cycle validation, one in-progress task, completion, blocking, reordering, and complete replacement.",
+    description: "Manage a visible, branch-aware task plan. Supports valid task dependencies, external wait reasons, one in-progress task, completion, blocking, reordering, and complete replacement.",
     promptSnippet: "Track multi-step work in a branch-aware task plan",
     promptGuidelines: [
       "Use todo for work with multiple meaningful steps; do not create todos for trivial one-step requests.",
@@ -145,6 +148,7 @@ export default function groundedTasks(pi: ExtensionAPI) {
           text: params.text,
           ...(params.description !== undefined ? { description: params.description } : {}),
           ...(params.blockedBy !== undefined ? { blockedBy: params.blockedBy } : {}),
+          ...(params.waitReason !== undefined ? { waitReason: params.waitReason } : {}),
         });
         message = `Added ${task.id}: ${task.text}`;
       } else if (params.action === "update" || params.action === "block") {
@@ -153,9 +157,10 @@ export default function groundedTasks(pi: ExtensionAPI) {
           ...(params.text !== undefined ? { text: params.text } : {}),
           ...(params.description !== undefined ? { description: params.description } : {}),
           ...(params.blockedBy !== undefined ? { blockedBy: params.blockedBy } : {}),
+          ...(params.waitReason !== undefined ? { waitReason: params.waitReason } : {}),
         });
         if (params.action === "block" && task.status !== "blocked") {
-          throw new Error("block requires at least one unfinished blocker in blockedBy");
+          throw new Error("block requires an unfinished dependency in blockedBy or a waitReason");
         }
         message = `Updated ${task.id}: ${task.text}`;
       } else if (params.action === "start") {
@@ -188,6 +193,7 @@ export default function groundedTasks(pi: ExtensionAPI) {
             ...(replacement.description?.trim() ? { description: replacement.description.trim() } : {}),
             status: replacement.status ?? "pending",
             blockedBy: [...(replacement.blockedBy ?? [])],
+            ...(replacement.waitReason?.trim() ? { waitReason: replacement.waitReason.trim() } : {}),
             createdAt: now,
             updatedAt: now,
           })),
@@ -209,9 +215,10 @@ export default function groundedTasks(pi: ExtensionAPI) {
     renderResult(result, { expanded }, theme) {
       const details = result.details as TodoDetails | undefined;
       if (!details) return new Text("", 0, 0);
-      const tasks = expanded ? details.state.tasks : details.state.tasks.filter((task) => task.status !== "done").slice(0, 5);
       const first = result.content[0];
       const message = first?.type === "text" ? first.text : "";
+      if (details.action === "list") return new Text(`${theme.fg("success", "✓")} ${message}`, 0, 0);
+      const tasks = expanded ? details.state.tasks : details.state.tasks.filter((task) => task.status !== "done").slice(0, 5);
       return new Text(`${theme.fg("success", "✓")} ${message}${tasks.length ? `\n${tasks.map(formatTask).join("\n")}` : ""}`, 0, 0);
     },
   });

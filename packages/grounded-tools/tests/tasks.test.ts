@@ -54,3 +54,19 @@ test("clearing completed tasks removes satisfied references", () => {
   assert.equal(clearDone(state), 1);
   assert.deepEqual(second.blockedBy, []);
 });
+
+test("external wait reasons block without fake task dependencies", () => {
+  const state = emptyTaskState();
+  const task = addTask(state, { text: "wait for review", waitReason: "reviewer response" });
+  assert.equal(task.status, "blocked");
+  assert.deepEqual(task.blockedBy, []);
+  assert.throws(() => startTask(state, task.id), /waiting: reviewer response/);
+  assert.throws(() => completeTask(state, task.id), /waiting: reviewer response/);
+
+  updateTask(state, task.id, { waitReason: "" });
+  assert.equal(task.status, "pending");
+  assert.equal(task.waitReason, undefined);
+  startTask(state, task.id);
+  completeTask(state, task.id);
+  assert.equal(task.status, "done");
+});
