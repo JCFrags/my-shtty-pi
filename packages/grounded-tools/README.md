@@ -131,7 +131,7 @@ Project config cannot supply commands, arguments, or executable paths.
 
 `ask_user_question` accepts 1–4 questions with 2–4 options each. Stable values, descriptions, previews, and free-form responses are returned structurally. The tool deactivates when Pi has no UI; RPC uses Pi's extension UI protocol.
 
-`todo` keeps one in-progress task, validates dependencies and cycles, and stores snapshots in Pi's session tree. A blocked task can name unfinished task IDs in `blockedBy`, an external condition in `waitReason`, or both. Set `waitReason` to an empty string to clear the external wait. Restoring or forking a branch restores that branch's task list. No project file or database is created.
+`todo` keeps one in-progress task, validates dependencies and cycles, and stores snapshots in Pi's session tree. A blocked task can name unfinished task IDs in `blockedBy`, an external condition in `waitReason`, or both. Set `waitReason` to an empty string to clear the external wait. Restoring or forking a branch restores that branch's task list. No project file or database is created. Use `/todos` for the full scrollable overlay. Use `/todos compact`, `/todos plan`, or `Ctrl+Shift+U` to select and save the persistent widget size.
 
 `notes` stores only explicit scratchpad mutations in the active session tree. It is not memory, trusted facts, or instruction storage. It does not capture, embed, rank semantically, import, or inject note prose automatically.
 

@@ -1,6 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { loadTodoDisplayMode, saveTodoDisplayMode, type TodoDisplayMode } from "./settings.ts";
 import { Type } from "typebox";
 import {
   addTask,
@@ -51,28 +52,87 @@ function formatTask(task: Task): string {
   return `${marker} ${task.id} ${task.text}${blockers}${waiting}`;
 }
 
+function taskMarker(task: Task, theme: Theme): string {
+  if (task.status === "done") return theme.fg("success", "✓");
+  if (task.status === "in_progress") return theme.fg("accent", "●");
+  if (task.status === "blocked") return theme.fg("warning", "⊘");
+  return theme.fg("dim", "○");
+}
+
+function taskStateText(task: Task): string {
+  const parts: string[] = [];
+  if (task.blockedBy.length) parts.push(`needs ${task.blockedBy.join(", ")}`);
+  if (task.waitReason) parts.push(`wait: ${task.waitReason}`);
+  return parts.length ? ` — ${parts.join(" • ")}` : "";
+}
+
+function renderTaskRow(task: Task, theme: Theme, width: number): string {
+  const line = `${taskMarker(task, theme)} ${theme.fg("dim", task.id)} ${task.text}${theme.fg("warning", taskStateText(task))}`;
+  return truncateToWidth(line, Math.max(1, width));
+}
+
 class TodoListView {
-  constructor(private readonly state: TaskState, private readonly theme: Theme, private readonly close: () => void) {}
+  private scrollOffset = 0;
+  private pageSize = 1;
+
+  constructor(
+    private readonly state: TaskState,
+    private readonly theme: Theme,
+    private readonly terminalRows: () => number,
+    private readonly requestRender: () => void,
+    private readonly close: () => void,
+  ) {}
+
   handleInput(data: string) {
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) this.close();
+    const last = Math.max(0, this.state.tasks.length - this.pageSize);
+    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+      this.close();
+      return;
+    }
+    if (matchesKey(data, Key.up)) this.scrollOffset -= 1;
+    else if (matchesKey(data, Key.down)) this.scrollOffset += 1;
+    else if (matchesKey(data, Key.pageUp)) this.scrollOffset -= this.pageSize;
+    else if (matchesKey(data, Key.pageDown)) this.scrollOffset += this.pageSize;
+    else if (matchesKey(data, Key.home)) this.scrollOffset = 0;
+    else if (matchesKey(data, Key.end)) this.scrollOffset = last;
+    else return;
+    this.scrollOffset = Math.max(0, Math.min(last, this.scrollOffset));
+    this.requestRender();
   }
+
   render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
     const done = this.state.tasks.filter((task) => task.status === "done").length;
+    const active = this.state.tasks.filter((task) => task.status === "in_progress").length;
+    const blocked = this.state.tasks.filter((task) => task.status === "blocked").length;
+    const maxRows = Math.max(6, Math.floor(this.terminalRows() * 0.9) - 2);
+    this.pageSize = Math.max(1, maxRows - 3);
+    const last = Math.max(0, this.state.tasks.length - this.pageSize);
+    this.scrollOffset = Math.max(0, Math.min(last, this.scrollOffset));
+    const visible = this.state.tasks.slice(this.scrollOffset, this.scrollOffset + this.pageSize);
+    const range = this.state.tasks.length
+      ? `${this.scrollOffset + 1}-${this.scrollOffset + visible.length}/${this.state.tasks.length}`
+      : "0/0";
     const lines = [
-      this.theme.fg("accent", `Todos (${done}/${this.state.tasks.length})`),
-      "",
-      ...(this.state.tasks.length ? this.state.tasks.map((task) => formatTask(task)) : [this.theme.fg("dim", "No todos")]),
-      "",
-      this.theme.fg("dim", "Esc to close"),
+      this.theme.fg("accent", `Todos ${done}/${this.state.tasks.length}`)
+        + this.theme.fg("dim", ` • ${range} • active ${active} • blocked ${blocked}`),
+      ...(visible.length ? visible.map((task) => renderTaskRow(task, this.theme, safeWidth)) : [this.theme.fg("dim", "No todos")]),
+      this.theme.fg("dim", "↑/↓ scroll • PgUp/PgDn page • Home/End jump • Esc close • Ctrl+Shift+U size"),
     ];
-    return lines.map((line) => truncateToWidth(line, width));
+    return lines.slice(0, maxRows).map((line) => truncateToWidth(line, safeWidth));
   }
+
   invalidate() {}
 }
 
-export default function groundedTasks(pi: ExtensionAPI) {
+interface GroundedTasksOptions {
+  settingsPath?: string;
+}
+
+export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOptions = {}) {
   let state = emptyTaskState();
   let currentContext: ExtensionContext | undefined;
+  let displayMode: TodoDisplayMode = "compact";
 
   const snapshot = () => cloneTaskState(state);
 
@@ -102,18 +162,43 @@ export default function groundedTasks(pi: ExtensionAPI) {
       currentContext.ui.setWidget("grounded-tasks", undefined);
       return;
     }
-    currentContext.ui.setWidget("grounded-tasks", (_tui, theme) => {
-      const current = unfinished.find((task) => task.status === "in_progress")
-        ?? unfinished.find((task) => task.status === "pending")
-        ?? unfinished[0]!;
-      const done = state.tasks.filter((task) => task.status === "done").length;
-      const line = `${theme.fg("accent", "● Todo")} ${current.text} ${theme.fg("dim", `${done}/${state.tasks.length}`)}`;
-      return { render: (width) => [truncateToWidth(line, width)], invalidate() {} };
-    });
+    currentContext.ui.setWidget("grounded-tasks", (_tui, theme) => ({
+      render(width: number) {
+        const safeWidth = Math.max(1, width);
+        const done = state.tasks.filter((task) => task.status === "done").length;
+        const blocked = unfinished.filter((task) => task.status === "blocked").length;
+        const current = unfinished.find((task) => task.status === "in_progress")
+          ?? unfinished.find((task) => task.status === "pending")
+          ?? unfinished[0]!;
+        if (displayMode === "compact" || safeWidth < 36) {
+          const summary = `${theme.fg("accent", "Todos")} ${done}/${state.tasks.length}`
+            + (blocked ? theme.fg("warning", ` • ${blocked} blocked`) : "")
+            + theme.fg("dim", " • /todos")
+            + ` • ${taskMarker(current, theme)} ${current.text}`;
+          return [truncateToWidth(summary, safeWidth)];
+        }
+        const visible = unfinished.slice(0, 5);
+        const hidden = unfinished.length - visible.length;
+        const header = `${theme.fg("accent", "Todos")} ${done}/${state.tasks.length}`
+          + (blocked ? theme.fg("warning", ` • ${blocked} blocked`) : "")
+          + theme.fg("dim", " • Ctrl+Shift+U size • /todos full");
+        const lines = [header, ...visible.map((task) => renderTaskRow(task, theme, safeWidth))];
+        if (hidden) lines.push(theme.fg("dim", `… ${hidden} more • /todos full`));
+        return lines.map((line) => truncateToWidth(line, safeWidth));
+      },
+      invalidate() {},
+    }));
+  };
+
+  const setDisplayMode = (mode: TodoDisplayMode) => {
+    saveTodoDisplayMode(mode, options.settingsPath);
+    displayMode = mode;
+    renderWidget();
   };
 
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;
+    displayMode = loadTodoDisplayMode(options.settingsPath);
     restore(ctx);
     renderWidget();
   });
@@ -123,6 +208,7 @@ export default function groundedTasks(pi: ExtensionAPI) {
     renderWidget();
   });
   pi.on("session_shutdown", () => {
+    currentContext?.ui.setWidget("grounded-tasks", undefined);
     currentContext = undefined;
   });
 
@@ -224,13 +310,52 @@ export default function groundedTasks(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("todos", {
-    description: "Show the current branch-aware todo plan",
-    handler: async (_args, ctx) => {
+    description: "Open all todos, or set widget size: /todos [full|compact|plan]",
+    handler: async (args, ctx) => {
+      const choice = args.trim().toLowerCase();
+      if (choice === "compact" || choice === "plan") {
+        try {
+          setDisplayMode(choice);
+          ctx.ui.notify(`Todo widget: ${choice}`, "info");
+        } catch (error) {
+          ctx.ui.notify(`Could not save todo widget size: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+        return;
+      }
+      if (choice && choice !== "full") {
+        ctx.ui.notify("Usage: /todos [full|compact|plan]", "warning");
+        return;
+      }
       if (ctx.mode !== "tui") {
         ctx.ui.notify(state.tasks.length ? state.tasks.map(formatTask).join("\n") : "No todos", "info");
         return;
       }
-      await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => new TodoListView(snapshot(), theme, () => done()));
+      await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+        const terminal = tui as typeof tui & { terminal?: { rows?: number } };
+        return new TodoListView(
+          snapshot(),
+          theme,
+          () => terminal.terminal?.rows ?? 24,
+          () => tui.requestRender(),
+          () => done(),
+        );
+      }, {
+        overlay: true,
+        overlayOptions: { width: "96%", minWidth: 20, maxHeight: "90%", anchor: "center", margin: 1 },
+      });
+    },
+  });
+
+  pi.registerShortcut("ctrl+shift+u", {
+    description: "Toggle compact and plan todo widget sizes",
+    handler: async (ctx) => {
+      const next = displayMode === "compact" ? "plan" : "compact";
+      try {
+        setDisplayMode(next);
+        ctx.ui.notify(`Todo widget: ${next}`, "info");
+      } catch (error) {
+        ctx.ui.notify(`Could not save todo widget size: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
     },
   });
 

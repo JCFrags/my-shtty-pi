@@ -1,17 +1,26 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import groundedTasks from "../packages/tasks/index.ts";
+import { loadTodoDisplayMode, saveTodoDisplayMode } from "../packages/tasks/settings.ts";
 
-function loadTodo() {
+function loadTodo(settingsPath?: string) {
   let todo: any;
   const handlers = new Map<string, Function>();
+  const commands = new Map<string, any>();
+  const shortcuts = new Map<string, any>();
   groundedTasks({
     registerTool(value: any) { if (value.name === "todo") todo = value; },
-    registerCommand() {},
+    registerCommand(name: string, value: any) { commands.set(name, value); },
+    registerShortcut(name: string, value: any) { shortcuts.set(name, value); },
     on(name: string, handler: Function) { handlers.set(name, handler); },
     appendEntry() {},
-  } as any);
-  return { todo, handlers };
+  } as any, settingsPath ? { settingsPath } : {});
+  return { todo, handlers, commands, shortcuts };
 }
 
 test("session-tree changes restore only the active branch task snapshot", async () => {
@@ -109,4 +118,115 @@ test("todo supports dependency blocks and truthful external waits across reload"
   });
   const reloaded = await todo.execute("reloaded-list", { action: "list" });
   assert.deepEqual(reloaded.details.state, listed.details.state);
+});
+
+test("todo settings persist a valid display mode and preserve other keys", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "grounded-todo-settings-"));
+  const path = join(directory, "settings.json");
+  assert.equal(loadTodoDisplayMode(path), "compact");
+  saveTodoDisplayMode("plan", path);
+  const first = JSON.parse(readFileSync(path, "utf8"));
+  first.futureSetting = true;
+  await import("node:fs/promises").then(({ writeFile }) => writeFile(path, JSON.stringify(first)));
+  saveTodoDisplayMode("compact", path);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { displayMode: "compact", futureSetting: true });
+});
+
+test("responsive todo UI updates, persists size, scrolls the full overlay, and restores branches", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "grounded-todo-ui-"));
+  const settingsPath = join(directory, "settings.json");
+  const runtime = loadTodo(settingsPath);
+  let branch: any[] = [];
+  let widgetFactory: any;
+  let overlay: any;
+  let overlayOptions: any;
+  let renders = 0;
+  const notices: string[] = [];
+  const theme = { fg: (_name: string, text: string) => text, bold: (text: string) => text };
+  const tui = { terminal: { rows: 10 }, requestRender: () => { renders += 1; } };
+  const context = {
+    hasUI: true,
+    mode: "tui",
+    sessionManager: { getBranch: () => branch },
+    ui: {
+      setWidget(_key: string, value: any) { widgetFactory = value; },
+      notify(message: string) { notices.push(message); },
+      async custom(factory: any, options: any) {
+        overlayOptions = options;
+        overlay = factory(tui, theme, {}, () => {});
+      },
+    },
+  };
+
+  runtime.handlers.get("session_start")?.({}, context);
+  await runtime.todo.execute("replace", {
+    action: "replace",
+    tasks: [
+      { id: "T1", text: "first active task" },
+      { id: "T2", text: "dependency task", blockedBy: ["T1"] },
+      { id: "T3", text: "external task", waitReason: "reviewer response" },
+      { id: "T4", text: "long ".repeat(30) },
+      { id: "T5", text: "fifth" },
+      { id: "T6", text: "sixth" },
+      { id: "T7", text: "seventh" },
+      { id: "T8", text: "eighth" },
+    ],
+  });
+  await runtime.todo.execute("start", { action: "start", id: "T1" });
+
+  await runtime.commands.get("todos").handler("plan", context);
+  assert.equal(loadTodoDisplayMode(settingsPath), "plan");
+  const plan = widgetFactory(tui, theme).render(80);
+  assert.ok(plan.length > 2);
+  assert.ok(plan.some((line: string) => line.includes("needs T1")));
+  assert.ok(plan.some((line: string) => line.includes("wait: reviewer response")));
+  assert.equal(plan.filter((line: string) => line.includes("T1 ")).length, 1);
+  assert.ok(plan.every((line: string) => visibleWidth(line) <= 80));
+
+  const narrow = widgetFactory(tui, theme).render(20);
+  assert.equal(narrow.length, 1);
+  assert.ok(visibleWidth(narrow[0]) <= 20);
+  assert.match(narrow[0], /^Todos 0\/8/);
+
+  await runtime.shortcuts.get("ctrl+shift+u").handler(context);
+  assert.equal(loadTodoDisplayMode(settingsPath), "compact");
+  assert.equal(widgetFactory(tui, theme).render(80).length, 1);
+  await runtime.shortcuts.get("ctrl+shift+u").handler(context);
+  assert.equal(loadTodoDisplayMode(settingsPath), "plan");
+
+  await runtime.commands.get("todos").handler("full", context);
+  assert.equal(overlayOptions.overlay, true);
+  assert.equal(overlayOptions.overlayOptions.width, "96%");
+  const firstPage = overlay.render(32);
+  assert.ok(firstPage.every((line: string) => visibleWidth(line) <= 32));
+  assert.ok(firstPage[0].includes("1-4/8"));
+  overlay.handleInput("\x1b[F");
+  const lastPage = overlay.render(32);
+  assert.ok(lastPage[0].includes("5-8/8"));
+  assert.ok(renders > 0);
+
+  await runtime.todo.execute("done-one", { action: "done", id: "T1" });
+  await runtime.todo.execute("start-two", { action: "start", id: "T2" });
+  await runtime.todo.execute("done-two", { action: "done", id: "T2" });
+  const updated = widgetFactory(tui, theme).render(80).join("\n");
+  assert.match(updated, /Todos 2\/8/);
+  assert.doesNotMatch(updated, /T1 first active task/);
+
+  const saved = (await runtime.todo.execute("saved", { action: "list" })).details;
+  branch = [{ type: "message", message: { role: "toolResult", toolName: "todo", details: saved } }];
+  runtime.handlers.get("session_tree")?.({}, context);
+  assert.match(widgetFactory(tui, theme).render(80).join("\n"), /Todos 2\/8/);
+  branch = [];
+  runtime.handlers.get("session_tree")?.({}, context);
+  assert.equal(widgetFactory, undefined);
+
+  const reloaded = loadTodo(settingsPath);
+  let reloadedWidget: any;
+  reloaded.handlers.get("session_start")?.({}, {
+    ...context,
+    sessionManager: { getBranch: () => [{ type: "message", message: { role: "toolResult", toolName: "todo", details: saved } }] },
+    ui: { ...context.ui, setWidget(_key: string, value: any) { reloadedWidget = value; } },
+  });
+  assert.ok(reloadedWidget(tui, theme).render(80).length > 2);
+  assert.ok(notices.includes("Todo widget: plan"));
 });
