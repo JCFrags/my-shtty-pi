@@ -26,7 +26,6 @@
     "extensions/**/*.ts",
     "src/**/*.ts",
     "test/**/*.ts",
-    "scripts/**/*.ts",
-    "types/**/*.d.ts"
+    "scripts/**/*.ts"
   ]
 }
