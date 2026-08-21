@@ -6,7 +6,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, relative, resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config.mjs";
+import { loadConfig, selectTransferTarget } from "./config.mjs";
 import { Controller } from "./controller.mjs";
 import { SshTransport } from "./transport.mjs";
 import { PrivateAudit } from "./audit.mjs";
@@ -80,8 +80,15 @@ export default function nativeSsh(pi: ExtensionAPI) {
   pi.on("session_tree", async (_event, ctx) => { controller.restore(ctx); registerForState(ctx); });
   pi.on("session_shutdown", async () => { controller.sessionShutdown(); await audit.flush(); });
 
-  pi.registerTool({ name: "ssh_transfer", label: "SSH Transfer", description: "Upload or download one bounded file through the active configured SSH host, or roll back the latest remote write for a path. Local paths stay inside Pi's current working directory. Upload keeps one remote rollback copy.", parameters: Type.Object({ action: Type.Union([Type.Literal("upload"), Type.Literal("download"), Type.Literal("rollback")]), localPath: Type.Optional(Type.String()), remotePath: Type.String(), overwrite: Type.Optional(Type.Boolean()) }), async execute(_id, p, signal, _update, ctx) {
-    if (controller.status().mode !== "remote") throw fail("LOCAL_MODE", "No SSH target is active");
+  pi.registerTool({ name: "ssh_transfer", label: "SSH Transfer", description: "Upload or download one bounded file through the active configured SSH host, or roll back the latest remote write for a path. In local mode, target selects and activates a configured route; the only configured target is selected automatically when unambiguous. Local paths stay inside Pi's current working directory. Upload keeps one remote rollback copy.", parameters: Type.Object({ action: Type.Union([Type.Literal("upload"), Type.Literal("download"), Type.Literal("rollback")]), target: Type.Optional(Type.String({ description: "Configured target name. Optional when a route is active or exactly one target is configured." })), localPath: Type.Optional(Type.String()), remotePath: Type.String(), overwrite: Type.Optional(Type.Boolean()) }), async execute(_id, p, signal, _update, ctx) {
+    const state = controller.status();
+    if (state.mode === "remote" && p.target !== undefined && p.target !== state.target?.name) throw fail("TARGET_INVALID", `Active SSH target is ${state.target?.name}. Use /remote clear before selecting another target.`);
+    if (state.mode !== "remote") {
+      const target = selectTransferTarget(config.targets, p.target);
+      await runtime.negotiate(target);
+      controller.use(target.name, undefined, ctx);
+      registerRemote(ctx);
+    }
     if (p.action === "rollback") { const result = await runtime.rollback(p.remotePath, signal, ctx); return { content: [{ type: "text", text: `Remote rollback completed: ${result.action}` }], details: { action: result.action } }; }
     if (!p.localPath) throw new Error("localPath is required for upload and download");
     const localPath = confinedLocal(ctx.cwd, p.localPath);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, readFile, chmod, symlink, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, AUTHORIZATION_STATEMENT } from "../src/config.mjs";
+import { loadConfig, AUTHORIZATION_STATEMENT, selectTransferTarget } from "../src/config.mjs";
 import { PrivateAudit } from "../src/audit.mjs";
 
 test("package pins the Pi peer and compatibility to exactly 0.84.1", async () => {
@@ -21,6 +21,21 @@ function document(root, overrides = {}) {
     ...overrides,
   };
 }
+
+test("transfer target selection is automatic only when unambiguous and gives discoverable guidance", () => {
+  const alpha = { name: "alpha" };
+  const beta = { name: "beta" };
+  assert.equal(selectTransferTarget({ alpha }, undefined), alpha);
+  assert.equal(selectTransferTarget({ beta, alpha }, "beta"), beta);
+  assert.throws(
+    () => selectTransferTarget({ beta, alpha }, undefined),
+    error => error.code === "LOCAL_MODE" && /Supply target/.test(error.safeMessage) && /alpha, beta/.test(error.safeMessage),
+  );
+  assert.throws(
+    () => selectTransferTarget({ alpha }, "missing"),
+    error => error.code === "TARGET_INVALID" && /Available targets: alpha/.test(error.safeMessage),
+  );
+});
 
 test("configuration requires private bytes and explicit remote-account authorization", async t => {
   const root = await mkdtemp(join(tmpdir(), "pi-remote-config-"));
