@@ -4,6 +4,17 @@ import { strictJsonParse, fail } from "./protocol.mjs";
 
 export const AUTHORIZATION_STATEMENT = "OpenSSH configuration, host trust, and remote account permissions are the authority boundary.";
 
+export function selectTransferTarget(targets, requestedName) {
+  const names = Object.keys(targets).sort();
+  if (requestedName !== undefined) {
+    if (typeof requestedName !== "string" || !targets[requestedName]) throw fail("TARGET_INVALID", `SSH target is not configured. Available targets: ${names.join(", ") || "none"}`);
+    return targets[requestedName];
+  }
+  if (names.length === 1) return targets[names[0]];
+  if (names.length === 0) throw fail("LOCAL_MODE", "No SSH targets are configured. Add a target to the private pi-native-ssh configuration.");
+  throw fail("LOCAL_MODE", `No SSH target is active. Supply target with one of: ${names.join(", ")}, or use /remote use TARGET.`);
+}
+
 function exact(value, keys, label) {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== [...keys].sort().join(",")) throw fail("SSH_CONFIG_INVALID", `${label} fields are invalid`, { routeAffecting: true });
 }

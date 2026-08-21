@@ -58,7 +58,7 @@ Restart Pi or run `/reload`.
 /remote clear
 ```
 
-After `use`, the normal Pi file and shell tools operate on the selected host. `ssh_transfer` uploads, downloads, or rolls back one bounded file. Download paths must remain under Pi's local working directory. Downloads do not overwrite an existing local file unless `overwrite` is true.
+After `use`, the normal Pi file and shell tools operate on the selected host. `ssh_transfer` uploads, downloads, or rolls back one bounded file. An agent can supply its optional `target` parameter to activate a configured route. If exactly one target is configured, `ssh_transfer` selects it automatically when no route is active. If several targets are configured, the tool error lists the valid names and asks for `target` or `/remote use TARGET`. Download paths must remain under Pi's local working directory. Downloads do not overwrite an existing local file unless `overwrite` is true.
 
 Ordinary non-interactive commands run directly. The extension asks for visible confirmation when a command clearly changes trust or appears broadly destructive. It refuses command forms that can expose credentials. Use a visible user-controlled terminal for credentials, MFA, host trust, or interactive prompts.
 
