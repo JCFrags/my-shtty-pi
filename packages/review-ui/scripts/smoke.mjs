@@ -26,7 +26,15 @@ try {
   const extensionPath = packageJson.pi?.extensions?.[0];
   if (typeof extensionPath !== "string") throw new Error("packed package has no Pi extension manifest entry");
 
-  await readFile(resolve(packageRoot, extensionPath), "utf8");
+  const declaredEntry = resolve(packageRoot, extensionPath);
+  await readFile(declaredEntry, "utf8");
+  const piMain = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const loader = await import(pathToFileURL(resolve(dirname(piMain), "core/extensions/index.js")).href);
+  const loaded = await loader.loadExtensions([declaredEntry], packageRoot);
+  if (loaded.errors.length > 0 || loaded.extensions.length !== 1) {
+    throw new Error(`Pi loader rejected the declared extension entry: ${loaded.errors.join("; ")}`);
+  }
+
   const module = await import(pathToFileURL(resolve(packageRoot, "dist/extension.js")).href + `?t=${Date.now()}`);
   if (typeof module.default !== "function") throw new Error("packed compiled extension default export is not a function");
 
