@@ -36,6 +36,7 @@ export default function nativeSsh(pi: ExtensionAPI) {
   function registerLocal(cwd: string) {
     pi.registerTool(createReadToolDefinition(cwd)); pi.registerTool(createLsToolDefinition(cwd)); pi.registerTool(createFindToolDefinition(cwd)); pi.registerTool(createGrepToolDefinition(cwd));
     pi.registerTool(createWriteToolDefinition(cwd)); pi.registerTool(createEditToolDefinition(cwd)); pi.registerTool(createBashToolDefinition(cwd));
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), "ls"])]);
   }
 
   function registerRemote(ctx: ExtensionContext) {
