@@ -489,6 +489,7 @@
       "dependencies": {},
       "filesBoundary": [
         "extensions",
+        "integration",
         "README.md",
         "LICENSE"
       ],
@@ -1320,6 +1321,7 @@
       "developmentPiVersion": null,
       "filesBoundary": [
         "extensions",
+        "integration",
         "README.md",
         "LICENSE"
       ],

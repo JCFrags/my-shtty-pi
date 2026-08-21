@@ -59,12 +59,12 @@ export function detectCapabilities(ui: ExtensionUIContextLike): CapabilityDetect
     mouseCapabilityAdvertised = ui.capabilities.componentHandleMouse;
   }
 
-  if (hasFull && mouseCapabilityAdvertised !== false) {
+  if (hasFull && mouseCapabilityAdvertised === true) {
     return { mode: "full", missing: [], mouseCapabilityAdvertised };
   }
 
   const missing = [
-    ...(mouseCapabilityAdvertised === false || !hasFull ? ["Component.handleMouse"] : []),
+    ...(mouseCapabilityAdvertised !== true ? ["Component.handleMouse"] : []),
     ...missingMethods,
   ];
   return {

@@ -9,7 +9,7 @@ The package does not render individual tool cards, inspect transcript text, synt
 - Node.js **22.19.0 or newer**.
 - Pi running in interactive TUI mode.
 - A patched Pi build exposing the following capabilities on the extension UI/component surface:
-  - first-class `Component.handleMouse` dispatch;
+  - first-class `Component.handleMouse` dispatch with a positive `supportsComponentMouse` advertisement;
   - `getToolExpansionStates()`;
   - `setToolExpanded()`;
   - `setToolGroupExpanded()`;
@@ -27,7 +27,7 @@ Pi core packages are peer dependencies and are not bundled:
 
 ### Older Pi compatibility
 
-Capability checks are structural and occur at runtime. An older Pi can load the package without importing or copying Pi internals. When the patched API is incomplete, the package names the missing capability and retains a keyboard-accessible compatibility overlay using `getToolsExpanded()` and `setToolsExpanded()`.
+Capability checks are structural and occur at runtime. Mouse dispatch must be advertised positively. An absent or false advertisement keeps the package in compatibility mode. An older Pi can load the package without importing or copying Pi internals. When the patched API is incomplete, the package names the missing capability and retains a keyboard-accessible compatibility overlay using `getToolsExpanded()` and `setToolsExpanded()`.
 
 Compatibility mode is intentionally global: it cannot show per-card counts, groups, status filters, or multi-selection.
 
@@ -66,6 +66,16 @@ For a one-run manual check without writing package settings:
 
 ```sh
 pi -e "$PWD"
+```
+
+The owned Pi 0.84.1 patch is in `integration/pi-0.84.1/`. Its manager verifies exact stock or patched hashes and keeps reversible installed bytes:
+
+```sh
+export PI_ROOT=/absolute/path/to/pi-coding-agent-0.84.1
+./integration/pi-0.84.1/manage-patch.sh verify
+./integration/pi-0.84.1/manage-patch.sh install
+# Restore stock bytes when needed:
+./integration/pi-0.84.1/manage-patch.sh rollback
 ```
 
 ## Usage
@@ -152,9 +162,9 @@ The widget refreshes when:
 
 If Pi rejects a stale or unknown tool ID, the package notifies once for that operation and refreshes state instead of throwing into Pi. A component render or event failure disables and removes the widget, closes the overlay, disposes subscriptions, and emits one error notification.
 
-## Regular-mode limitation
+## TUI mode limitation
 
-The package does not create or manage an alternate-screen transcript. In Pi regular mode, terminal scrollback remains controlled by the terminal emulator. The overlay is height-bounded and its own list scrolls only when Pi delivers a first-class wheel event over that list; the extension cannot prevent the terminal emulator from moving its external scrollback. Fullscreen mode therefore provides the most predictable mouse-wheel behavior.
+The owned Pi 0.84.1 integration patch advertises component mouse dispatch only in fullscreen mode. Regular mode stays in honest global keyboard compatibility mode because Pi does not retain stable component bounds for terminal scrollback. The package does not create or manage an alternate-screen transcript. Fullscreen mode provides component-local pointer coordinates and predictable mouse-wheel behavior.
 
 ## Troubleshooting
 

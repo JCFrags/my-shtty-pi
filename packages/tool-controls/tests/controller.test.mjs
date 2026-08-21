@@ -126,6 +126,16 @@ test("unknown tool IDs notify and refresh instead of throwing", async () => {
   assert.ok(ui.getStateCalls.length >= 4, "operation completion performs a refresh");
 });
 
+test("full mode requires a positive component mouse advertisement", () => {
+  const ui = new MockUI();
+  ui.supportsComponentMouse = undefined;
+  ui.capabilities = undefined;
+
+  const detection = detectCapabilities(ui);
+  assert.equal(detection.mode, "legacy");
+  assert.ok(detection.missing.includes("Component.handleMouse"));
+});
+
 test("legacy fallback is detected structurally and controls global state", async () => {
   const ui = createLegacyUI({ globalExpanded: false });
   const detection = detectCapabilities(ui);
