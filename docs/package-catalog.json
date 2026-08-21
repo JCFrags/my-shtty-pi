@@ -274,6 +274,70 @@
       "private": false
     },
     {
+      "buildModel": "Direct TypeScript source; no build step",
+      "displayName": "Agent Context",
+      "extensionEntries": [
+        {
+          "path": "./extensions/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "externalCommands": [
+        "Pi CLI for install/run",
+        "no other external command"
+      ],
+      "id": "agent-context",
+      "installationRecommended": false,
+      "lifecycle": {
+        "reason": "it has not completed public stabilization and deployment-boundary review.",
+        "status": "experimental"
+      },
+      "lockfile": {
+        "path": "packages/pi-agent-context/package-lock.json",
+        "scope": "package"
+      },
+      "nextGate": {
+        "action": "it has not completed public stabilization and deployment-boundary review.",
+        "status": "experimental"
+      },
+      "nodeRequirement": ">=22.19.0",
+      "operatingSystemBoundary": "Node.js 22.19+; Pi 0.84.x; OS description uses Node.js and /etc/os-release on Linux",
+      "piPeerRangeOrPackageModel": {
+        "packageModel": "package-only Pi extension",
+        "peerDependencies": [
+          "@earendil-works/pi-coding-agent:>=0.84.0 <0.85.0",
+          "@earendil-works/pi-tui:>=0.84.0 <0.85.0"
+        ]
+      },
+      "primaryPackage": "pi-agent-context",
+      "publicationAllowed": false,
+      "purpose": "Cache-conscious date and environment grounding with private context observability.",
+      "releaseUnitIds": [
+        "pi-agent-context"
+      ],
+      "sourceDirectory": "packages/pi-agent-context",
+      "stable": false,
+      "validationCommands": {
+        "test": "node --experimental-strip-types --test tests/*.test.ts",
+        "syntax": "node --experimental-strip-types --check extensions/index.ts && node --experimental-strip-types --check extensions/snapshot.ts",
+        "prepack": "npm run syntax && npm test"
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": ">=0.84.0 <0.85.0",
+        "@earendil-works/pi-tui": ">=0.84.0 <0.85.0"
+      },
+      "peerDependenciesMeta": {},
+      "dependencies": {},
+      "filesBoundary": [
+        "extensions",
+        "tests",
+        "README.md"
+      ],
+      "developmentPiVersion": "0.84.1",
+      "private": false
+    },
+    {
       "buildModel": "TypeScript build to dist; smoke validates packed output",
       "displayName": "Files UI",
       "extensionEntries": [
@@ -1192,6 +1256,57 @@
         "prepack"
       ],
       "version": "0.1.2",
+      "peerDependenciesMeta": {},
+      "dependencies": {}
+    },
+    {
+      "buildModel": "Direct TypeScript source; no build step",
+      "developmentPiVersion": "0.84.1",
+      "filesBoundary": [
+        "extensions",
+        "tests",
+        "README.md"
+      ],
+      "id": "pi-agent-context",
+      "installationRecommended": false,
+      "license": "MIT",
+      "lifecycleReason": "it has not completed public stabilization and deployment-boundary review.",
+      "lifecycleStatus": "experimental",
+      "lockfile": {
+        "path": "packages/pi-agent-context/package-lock.json",
+        "scope": "package"
+      },
+      "manifestPath": "packages/pi-agent-context/package.json",
+      "nodeEngine": ">=22.19.0",
+      "npmName": "pi-agent-context",
+      "packageModel": "package-only Pi extension",
+      "parentProductId": "agent-context",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": ">=0.84.0 <0.85.0",
+        "@earendil-works/pi-tui": ">=0.84.0 <0.85.0"
+      },
+      "piExtensionEntries": [
+        {
+          "path": "./extensions/index.ts",
+          "entryKind": "source-file",
+          "existsInSource": true
+        }
+      ],
+      "private": false,
+      "publicationAllowed": false,
+      "scripts": {
+        "test": "node --experimental-strip-types --test tests/*.test.ts",
+        "syntax": "node --experimental-strip-types --check extensions/index.ts && node --experimental-strip-types --check extensions/snapshot.ts",
+        "prepack": "npm run syntax && npm test"
+      },
+      "sourceDirectory": "packages/pi-agent-context",
+      "stable": false,
+      "validationCommands": [
+        "test",
+        "syntax",
+        "prepack"
+      ],
+      "version": "0.2.0",
       "peerDependenciesMeta": {},
       "dependencies": {}
     },

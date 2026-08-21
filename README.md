@@ -1,6 +1,6 @@
 # Pi Package Incubator
 
-`my-shtty-pi` is an independent community Pi package incubator. This public repository contains eight products and sixteen release units. It is not endorsed by Pi.
+`my-shtty-pi` is an independent community Pi package incubator. This public repository contains nine products and seventeen release units. It is not endorsed by Pi.
 
 The root is a private npm control plane, not a workspace or install boundary. npm `private: true` prevents accidental publication of the root package. It does not make this GitHub repository private.
 
@@ -13,6 +13,7 @@ The lifecycle status describes review state. It is not a release, installation, 
 | ChronoCompact | quarantined | [source](packages/chrono-compact) |
 | Grounded Tools | experimental | [source](packages/grounded-tools) |
 | Progressive Tools | experimental | [source](packages/progressive-tools) |
+| Agent Context | experimental | [source](packages/pi-agent-context) |
 | Tool Controls | host-dependent | [source](packages/tool-controls) |
 | Review UI | blocked | [source](packages/review-ui) |
 | Files UI | candidate | [source](packages/files-ui) |
