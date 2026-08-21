@@ -33,10 +33,11 @@ export async function exactGrep(options: {
   limit?: number;
   signal?: AbortSignal;
 }): Promise<SearchPage> {
-  const args = ["--line-number", "--column", "--no-heading", "--color=never", "--with-filename", "--sort", "path"];
+  const args = ["--line-number", "--column", "--no-heading", "--color=never", "--with-filename", "--sort", "path", "--hidden"];
   if (options.ignoreCase) args.push("--ignore-case");
   if (options.literal) args.push("--fixed-strings");
   if (options.glob) args.push("--glob", options.glob);
+  args.push("--glob", "!**/.git/**");
   if (options.context && options.context > 0) args.push("--context", String(options.context));
   appendIgnoreFiles(args, options.cwd, options.path);
   args.push("--", options.pattern, options.path);
@@ -68,9 +69,9 @@ export async function exactFind(options: {
   limit?: number;
   signal?: AbortSignal;
 }): Promise<SearchPage> {
-  const args = ["--glob", options.pattern, "--color=never", "--type", "f", "--type", "d"];
+  const args = ["--glob", options.pattern, "--color=never", "--type", "f", "--type", "d", "--hidden", "--exclude", ".git"];
   appendIgnoreFiles(args, options.cwd, options.path);
-  args.push(".", options.path);
+  args.push(options.path);
   const result = await capture("fd", args, {
     cwd: options.cwd,
     ...(options.signal ? { signal: options.signal } : {}),
@@ -116,7 +117,7 @@ export async function fuzzyFiles(options: {
   limit?: number;
   signal?: AbortSignal;
 }): Promise<Array<{ path: string; score: number; gitChanged: boolean }>> {
-  const fileArgs = ["--type", "f", "--color=never"];
+  const fileArgs = ["--type", "f", "--color=never", "--hidden", "--exclude", ".git"];
   appendIgnoreFiles(fileArgs, options.cwd, options.path);
   fileArgs.push(".", options.path);
   const files = await capture("fd", fileArgs, {

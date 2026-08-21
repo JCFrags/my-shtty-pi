@@ -89,7 +89,7 @@ Mutations preserve BOM and dominant CRLF/LF style. Replacements use same-directo
 
 ### Search
 
-`grep` and `find` keep source ordering and use exact cursor offsets. If a page omits later results, the response gives both the next cursor and a complete-output artifact. `fuzzy_find` is explicitly exploratory and reports ranking scores and Git-change boosts.
+`grep` and `find` keep source ordering and use exact cursor offsets. If a page omits later results, the response gives both the next cursor and a complete-output artifact. `grep`, `find`, and `fuzzy_find` include hidden files while they still exclude Git-ignored paths and `.git` metadata. `fuzzy_find` is explicitly exploratory and reports ranking scores and Git-change boosts.
 
 ## Processes
 
