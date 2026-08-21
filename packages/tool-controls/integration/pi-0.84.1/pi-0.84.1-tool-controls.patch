@@ -1,0 +1,382 @@
+--- a/node_modules/@earendil-works/pi-tui/dist/tui.js
++++ b/node_modules/@earendil-works/pi-tui/dist/tui.js
+@@ -38,6 +38,7 @@
+  */
+ export class Container {
+     children = [];
++    lastRenderWidth = 0;
+     addChild(component) {
+         this.children.push(component);
+     }
+@@ -56,6 +57,7 @@
+         }
+     }
+     render(width) {
++        this.lastRenderWidth = width;
+         const lines = [];
+         for (const child of this.children) {
+             const childLines = child.render(width);
+@@ -64,6 +66,18 @@
+             }
+         }
+         return lines;
++    }
++    handleMouse(event) {
++        let row = event.localRow;
++        for (const child of this.children) {
++            const height = child.render(this.lastRenderWidth).length;
++            if (row >= 0 && row < height) {
++                if (typeof child.handleMouse === "function")
++                    child.handleMouse({ ...event, localRow: row });
++                return;
++            }
++            row -= height;
++        }
+     }
+ }
+ /**
+@@ -553,6 +567,9 @@
+         if (this.consumeTerminalColorSchemeReport(data)) {
+             return;
+         }
++        if (this.dispatchMouseToFocusedOverlay(data)) {
++            return;
++        }
+         if (this.inputListeners.size > 0) {
+             let current = data;
+             for (const listener of this.inputListeners) {
+@@ -619,6 +636,44 @@
+             // where even setTimeout(0) can take a full 16 ms tick on Windows.
+             this.requestImmediateRender();
+         }
++    }
++    parseComponentMouseEvent(data) {
++        const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
++        if (!match)
++            return undefined;
++        const code = Number.parseInt(match[1], 10);
++        const x = Number.parseInt(match[2], 10) - 1;
++        const y = Number.parseInt(match[3], 10) - 1;
++        if ((code & 64) !== 0) {
++            const direction = code & 3;
++            if (direction !== 0 && direction !== 1)
++                return undefined;
++            return { kind: "wheel", button: "none", x, y, localCol: x, localRow: y, deltaY: direction === 0 ? -1 : 1 };
++        }
++        const baseButton = code & 3;
++        const button = baseButton === 0 ? "left" : baseButton === 1 ? "middle" : baseButton === 2 ? "right" : "none";
++        const kind = match[4] === "m" ? "release" : (code & 32) !== 0 ? "move" : "press";
++        return { kind, button, x, y, localCol: x, localRow: y };
++    }
++    dispatchMouseToFocusedOverlay(data) {
++        const event = this.parseComponentMouseEvent(data);
++        if (!event || !this.focusedComponent?.handleMouse)
++            return false;
++        const entry = this.overlayStack.find((candidate) => candidate.component === this.focusedComponent);
++        if (!entry || !this.isOverlayVisible(entry))
++            return false;
++        const termWidth = this.terminal.columns;
++        const termHeight = this.terminal.rows;
++        const first = this.resolveOverlayLayout(entry.options, 0, termWidth, termHeight);
++        let lines = entry.component.render(first.width);
++        if (first.maxHeight !== undefined && lines.length > first.maxHeight)
++            lines = lines.slice(0, first.maxHeight);
++        const layout = this.resolveOverlayLayout(entry.options, lines.length, termWidth, termHeight);
++        if (event.x < layout.col || event.x >= layout.col + first.width || event.y < layout.row || event.y >= layout.row + lines.length)
++            return true;
++        entry.component.handleMouse({ ...event, localCol: event.x - layout.col, localRow: event.y - layout.row });
++        this.requestImmediateRender();
++        return true;
+     }
+     consumeOsc11BackgroundResponse(data) {
+         if (this.pendingOsc11BackgroundReplies <= 0) {
+--- a/node_modules/@earendil-works/pi-tui/dist/tui.d.ts
++++ b/node_modules/@earendil-works/pi-tui/dist/tui.d.ts
+@@ -4,6 +4,17 @@
+ import type { Terminal } from "./terminal.ts";
+ import { type RgbColor, type TerminalColorScheme } from "./terminal-colors.ts";
+ import { visibleWidth } from "./utils.ts";
++export interface ComponentMouseEvent {
++    kind: "press" | "release" | "move" | "wheel";
++    button: "left" | "middle" | "right" | "none";
++    /** Zero-based terminal coordinates. */
++    x: number;
++    y: number;
++    /** Zero-based coordinates relative to the receiving component. */
++    localCol: number;
++    localRow: number;
++    deltaY?: number;
++}
+ /**
+  * Component interface - all components must implement this
+  */
+@@ -18,6 +29,8 @@
+      * Optional handler for keyboard input when component has focus
+      */
+     handleInput?(data: string): void;
++    /** Receive an already-decoded mouse event when the pointer is inside this component. */
++    handleMouse?(event: ComponentMouseEvent): void;
+     /**
+      * If true, component receives key release events (Kitty protocol).
+      * Default is false - release events are filtered out.
+@@ -128,11 +141,13 @@
+  */
+ export declare class Container implements Component {
+     children: Component[];
++    private lastRenderWidth;
+     addChild(component: Component): void;
+     removeChild(component: Component): void;
+     clear(): void;
+     invalidate(): void;
+     render(width: number): string[];
++    handleMouse(event: ComponentMouseEvent): void;
+ }
+ /** Composite overlay content into a terminal line at a fixed column. */
+ export declare function compositeTuiLine(baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number): string;
+--- a/node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js
++++ b/node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js
+@@ -278,6 +278,8 @@
+         }
+         if (data === FOCUS_IN)
+             return { consume: true };
++        if (this.dispatchComponentMouse(data))
++            return { consume: true };
+         const wheelEvent = this.parseWheelEvent(data);
+         if (wheelEvent) {
+             this.routeWheel(wheelEvent);
+@@ -341,6 +343,29 @@
+             return { consume: true };
+         }
+         return undefined;
++    }
++    dispatchComponentMouse(data) {
++        if (this.hasOverlay() || !this.currentLayout)
++            return false;
++        const event = this.parseComponentMouseEvent(data);
++        if (!event)
++            return false;
++        let target;
++        const visit = (box) => {
++            const inside = event.x >= box.clip.x && event.x < box.clip.x + box.clip.width && event.y >= box.clip.y && event.y < box.clip.y + box.clip.height;
++            if (!inside)
++                return;
++            for (const child of box.children)
++                visit(child);
++            if (!target && typeof box.component.handleMouse === "function")
++                target = box;
++        };
++        visit(this.currentLayout.root);
++        if (!target)
++            return false;
++        target.component.handleMouse({ ...event, localCol: event.x - target.rect.x, localRow: event.y - target.rect.y });
++        this.requestRender();
++        return true;
+     }
+     parseWheelEvent(data) {
+         const sgr = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(data);
+--- a/dist/core/extensions/types.d.ts
++++ b/dist/core/extensions/types.d.ts
+@@ -65,6 +65,16 @@
+  * UI context for extensions to request interactive UI.
+  * Each mode (interactive, RPC, print) provides its own implementation.
+  */
++export interface ToolExpansionState {
++    toolCallId: string;
++    toolName: string;
++    turnIndex: number;
++    status: "pending" | "running" | "success" | "error";
++    expanded: boolean;
++}
++export interface ToolExpansionSelector {
++    scope?: "currentTurn";
++}
+ export interface ExtensionUIContext {
+     /** Show a selector and return the user's choice. */
+     select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
+@@ -185,10 +195,20 @@
+         success: boolean;
+         error?: string;
+     };
++    /** True only when Pi dispatches decoded component mouse events in this TUI mode. */
++    readonly supportsComponentMouse?: boolean;
+     /** Get current tool output expansion state. */
+     getToolsExpanded(): boolean;
+     /** Set tool output expansion state. */
+     setToolsExpanded(expanded: boolean): void;
++    /** Read per-tool expansion state from the active transcript. */
++    getToolExpansionStates(selector?: ToolExpansionSelector): ToolExpansionState[];
++    /** Set one tool card. Throws when the tool call ID is stale or unknown. */
++    setToolExpanded(toolCallId: string, expanded: boolean): void;
++    /** Set all tool cards selected by the group. */
++    setToolGroupExpanded(selector: ToolExpansionSelector, expanded: boolean): void;
++    /** Subscribe to expansion changes. Returns an idempotent unsubscribe function. */
++    onToolExpansionChange(listener: () => void): () => void;
+ }
+ export interface ContextUsage {
+     /** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
+--- a/dist/core/extensions/runner.js
++++ b/dist/core/extensions/runner.js
+@@ -114,8 +114,13 @@
+     getAllThemes: () => [],
+     getTheme: () => undefined,
+     setTheme: (_theme) => ({ success: false, error: "UI not available" }),
++    supportsComponentMouse: false,
+     getToolsExpanded: () => false,
+     setToolsExpanded: () => { },
++    getToolExpansionStates: () => [],
++    setToolExpanded: () => { },
++    setToolGroupExpanded: () => { },
++    onToolExpansionChange: () => () => { },
+ };
+ export class ExtensionRunner {
+     extensions;
+--- a/dist/modes/interactive/interactive-mode.js
++++ b/dist/modes/interactive/interactive-mode.js
+@@ -260,6 +260,8 @@
+     pendingTools = new Map();
+     // Tool output expansion state
+     toolOutputExpanded = false;
++    toolControlsTurnIndex = 0;
++    toolExpansionListeners = new Set();
+     // Thinking block visibility state
+     hideThinkingBlock = false;
+     outputPad = 1;
+@@ -1887,8 +1889,13 @@
+                 }
+                 return result;
+             },
++            supportsComponentMouse: this.ui.mode === "fullscreen",
+             getToolsExpanded: () => this.toolOutputExpanded,
+             setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
++            getToolExpansionStates: (selector) => this.getToolExpansionStates(selector),
++            setToolExpanded: (toolCallId, expanded) => this.setToolExpanded(toolCallId, expanded),
++            setToolGroupExpanded: (selector, expanded) => this.setToolGroupExpanded(selector, expanded),
++            onToolExpansionChange: (listener) => this.onToolExpansionChange(listener),
+         };
+     }
+     /**
+@@ -2536,6 +2543,7 @@
+                     this.ui.requestRender();
+                 }
+                 else if (event.message.role === "assistant") {
++                    this.toolControlsTurnIndex += 1;
+                     this.streamingComponent = new AssistantMessageComponent(undefined, this.hideThinkingBlock, this.getMarkdownThemeWithSettings(), this.hiddenThinkingLabel, this.outputPad, this.getMarkdownTransformers());
+                     this.streamingMessage = event.message;
+                     this.chatContainer.addChild(this.streamingComponent);
+@@ -2554,6 +2562,7 @@
+                                     showImages: this.settingsManager.getShowImages(),
+                                     imageWidthCells: this.settingsManager.getImageWidthCells(),
+                                 }, this.getRegisteredToolDefinition(content.name), this.ui, this.sessionManager.getCwd());
++                                component.toolControlsTurnIndex = this.toolControlsTurnIndex;
+                                 component.setExpanded(this.toolOutputExpanded);
+                                 this.chatContainer.addChild(component);
+                                 this.pendingTools.set(content.id, component);
+@@ -2619,6 +2628,7 @@
+                         showImages: this.settingsManager.getShowImages(),
+                         imageWidthCells: this.settingsManager.getImageWidthCells(),
+                     }, this.getRegisteredToolDefinition(event.toolName), this.ui, this.sessionManager.getCwd());
++                    component.toolControlsTurnIndex = this.toolControlsTurnIndex;
+                     component.setExpanded(this.toolOutputExpanded);
+                     this.chatContainer.addChild(component);
+                     this.pendingTools.set(event.toolCallId, component);
+@@ -2887,6 +2897,7 @@
+     }
+     renderSessionItems(items, options = {}) {
+         this.pendingTools.clear();
++        this.toolControlsTurnIndex = 0;
+         const renderedPendingTools = new Map();
+         // Cache-miss notices are not persisted; re-derive them from the full entry
+         // list and re-inject them after the assistant messages that paid for them.
+@@ -2905,6 +2916,7 @@
+             const message = item;
+             // Assistant messages need special handling for tool calls
+             if (message.role === "assistant") {
++                this.toolControlsTurnIndex += 1;
+                 this.addMessageToChat(message);
+                 // Render tool call components
+                 for (const content of message.content) {
+@@ -2913,6 +2925,7 @@
+                             showImages: this.settingsManager.getShowImages(),
+                             imageWidthCells: this.settingsManager.getImageWidthCells(),
+                         }, this.getRegisteredToolDefinition(content.name), this.ui, this.sessionManager.getCwd());
++                        component.toolControlsTurnIndex = this.toolControlsTurnIndex;
+                         component.setExpanded(this.toolOutputExpanded);
+                         this.chatContainer.addChild(component);
+                         if (message.stopReason === "aborted" || message.stopReason === "error") {
+@@ -3302,6 +3315,68 @@
+             this.showError(error instanceof Error ? error.message : String(error));
+         }
+     }
++    getToolComponents() {
++        return this.chatContainer.children.filter((child) => child instanceof ToolExecutionComponent);
++    }
++    getToolExpansionStates(selector) {
++        const components = this.getToolComponents();
++        const currentTurn = components.reduce((latest, component) => Math.max(latest, component.toolControlsTurnIndex ?? -1), -1);
++        return components
++            .filter((component) => selector?.scope !== "currentTurn" || (component.toolControlsTurnIndex ?? -1) === currentTurn)
++            .map((component) => ({
++            toolCallId: component.toolCallId,
++            toolName: component.toolName,
++            turnIndex: component.toolControlsTurnIndex ?? -1,
++            status: component.result && !component.isPartial
++                ? component.result.isError ? "error" : "success"
++                : component.executionStarted ? "running" : "pending",
++            expanded: component.expanded,
++        }));
++    }
++    emitToolExpansionChange() {
++        for (const listener of [...this.toolExpansionListeners]) {
++            try {
++                listener();
++            }
++            catch {
++                // Expansion notifications are advisory and isolated per extension.
++            }
++        }
++        this.ui.requestRender();
++    }
++    onToolExpansionChange(listener) {
++        this.toolExpansionListeners.add(listener);
++        let active = true;
++        return () => {
++            if (!active)
++                return;
++            active = false;
++            this.toolExpansionListeners.delete(listener);
++        };
++    }
++    setToolExpanded(toolCallId, expanded) {
++        const component = this.getToolComponents().find((candidate) => candidate.toolCallId === toolCallId);
++        if (!component) {
++            const error = new Error(`Unknown tool call ID: ${toolCallId}`);
++            error.code = "UNKNOWN_TOOL";
++            throw error;
++        }
++        if (component.expanded === expanded)
++            return;
++        component.setExpanded(expanded);
++        this.emitToolExpansionChange();
++    }
++    setToolGroupExpanded(selector, expanded) {
++        const ids = this.getToolExpansionStates(selector).filter((state) => state.expanded !== expanded).map((state) => state.toolCallId);
++        if (ids.length === 0)
++            return;
++        const selected = new Set(ids);
++        for (const component of this.getToolComponents()) {
++            if (selected.has(component.toolCallId))
++                component.setExpanded(expanded);
++        }
++        this.emitToolExpansionChange();
++    }
+     toggleToolOutputExpansion() {
+         this.setToolsExpanded(!this.toolOutputExpanded);
+     }
+@@ -3320,6 +3395,7 @@
+                 }
+             }
+         }
++        this.emitToolExpansionChange();
+         this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
+     }
+     toggleThinkingBlockVisibility() {
