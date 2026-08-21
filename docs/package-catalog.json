@@ -302,9 +302,9 @@
         "status": "candidate"
       },
       "nodeRequirement": ">=22.19.0",
-      "operatingSystemBoundary": "Node.js 22.19+; interactive Pi TUI",
+      "operatingSystemBoundary": "Node.js 22.19+; stock Pi 0.84.1 interactive TUI; keyboard input only on the current host",
       "piPeerRangeOrPackageModel": {
-        "packageModel": "published package with source and compiled extension directory",
+        "packageModel": "source extension package with compiled library export and an exact Pi 0.84.1 declaration gate",
         "peerDependencies": [
           "@earendil-works/pi-coding-agent:*",
           "@earendil-works/pi-tui:* (optional false)"
@@ -312,7 +312,7 @@
       },
       "primaryPackage": "pi-files-ui",
       "publicationAllowed": false,
-      "purpose": "Mouse-first repository tree and context-selection browser for Pi.",
+      "purpose": "Keyboard-first repository tree and context-selection browser for stock Pi 0.84.1.",
       "releaseUnitIds": [
         "pi-files-ui"
       ],
@@ -320,7 +320,8 @@
       "stable": false,
       "validationCommands": {
         "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.tmp-smoke']) fs.rmSync(path,{recursive:true,force:true})\"",
-        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "typecheck": "npm run typecheck:pi-0.84.1",
+        "typecheck:pi-0.84.1": "tsc -p tsconfig.json --noEmit",
         "build": "npm run clean && tsc -p tsconfig.build.json",
         "test": "npm run build && node --test dist/test/*.test.js",
         "smoke": "npm run build && node dist/scripts/smoke.js",
@@ -345,7 +346,7 @@
         "README.md",
         "LICENSE"
       ],
-      "developmentPiVersion": null,
+      "developmentPiVersion": "0.84.1",
       "private": false
     },
     {
@@ -1193,8 +1194,8 @@
       "dependencies": {}
     },
     {
-      "buildModel": "TypeScript build to dist; smoke validates packed output",
-      "developmentPiVersion": null,
+      "buildModel": "exact Pi 0.84.1 declaration typecheck, TypeScript build, tests, and packed-output smoke",
+      "developmentPiVersion": "0.84.1",
       "filesBoundary": [
         "extensions",
         "src",
@@ -1215,7 +1216,7 @@
       "manifestPath": "packages/files-ui/package.json",
       "nodeEngine": ">=22.19.0",
       "npmName": "pi-files-ui",
-      "packageModel": "published package with source and compiled extension directory",
+      "packageModel": "source extension entry with compiled library export",
       "parentProductId": "files-ui",
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
@@ -1232,7 +1233,8 @@
       "publicationAllowed": false,
       "scripts": {
         "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.tmp-smoke']) fs.rmSync(path,{recursive:true,force:true})\"",
-        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "typecheck": "npm run typecheck:pi-0.84.1",
+        "typecheck:pi-0.84.1": "tsc -p tsconfig.json --noEmit",
         "build": "npm run clean && tsc -p tsconfig.build.json",
         "test": "npm run build && node --test dist/test/*.test.js",
         "smoke": "npm run build && node dist/scripts/smoke.js",
@@ -1248,7 +1250,7 @@
         "validate",
         "prepack"
       ],
-      "version": "0.1.0",
+      "version": "0.1.1",
       "peerDependenciesMeta": {
         "@earendil-works/pi-tui": {
           "optional": false

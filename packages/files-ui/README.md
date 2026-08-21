@@ -1,14 +1,16 @@
 # pi-files-ui
 
-`pi-files-ui` is a standalone Pi package that adds `/files`: a fullscreen repository tree, text preview, and context-selection browser rooted at the active session's `ctx.cwd`.
+`pi-files-ui` is a standalone Pi package that adds `/files`: a keyboard-first fullscreen repository tree, text preview, and context-selection browser rooted at the active session's `ctx.cwd`.
 
 The browser only edits the existing Pi editor buffer through `ctx.ui.pasteToEditor`. Opening it, selecting files, previewing files, and inserting text never submits the editor or starts an agent turn.
 
 ## Requirements
 
 - Node.js 22.19 or newer
-- Pi with `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` available as core peer packages
+- Pi 0.84.1 with its bundled `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` peer packages
 - An interactive Pi TUI session
+
+The compile gate uses the exact public declarations from both Pi packages at version 0.84.1. It does not use a local ambient declaration shim.
 
 ## Install
 
@@ -48,9 +50,11 @@ On wide terminals the overlay renders independent Tree and Preview panes. On ter
 
 The header reports the selected-file count and an approximate context cost. Header cost uses known selected-file sizes divided by four. The insertion budget uses the exact decoded Unicode character count and reports `ceil(characterCount / 4)` as **approximate tokens**.
 
-## Mouse controls
+## Current stock-host mouse limit
 
-Pi's first-class mouse API is used when the host exposes it. The package does not enable a raw terminal mouse mode as a fallback because that would interfere with Pi's application-owned text selection. Keyboard operation remains complete when a first-class mouse API is unavailable.
+Stock Pi 0.84.1 does not dispatch mouse events to extension components. Therefore, mouse actions are unavailable on the supported stock host. The package does not claim or emulate mouse support there.
+
+The structural mouse handlers remain ready for a future host that exposes a public first-class mouse API. The package does not enable a raw terminal mouse mode as a fallback because that would interfere with Pi's application-owned text selection. Keyboard operation is the supported acceptance path on Pi 0.84.1.
 
 | Action | Mouse behavior |
 |---|---|
@@ -183,8 +187,7 @@ pi-files-ui/
 ├── test/                         # temporary-tree and UI behavior tests
 ├── scripts/
 │   └── smoke.ts                  # packed-tarball load smoke test
-├── types/pi.d.ts                 # compile-time Pi API surface used by the package
-├── package.json
+├── package.json                  # exact Pi 0.84.1 declaration gate in devDependencies
 ├── tsconfig.json
 └── tsconfig.build.json
 ```
@@ -192,7 +195,7 @@ pi-files-ui/
 ## Validation
 
 ```bash
-npm run typecheck
+npm run typecheck:pi-0.84.1
 npm test
 npm run build
 npm run smoke
