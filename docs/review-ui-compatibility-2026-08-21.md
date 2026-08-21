@@ -53,12 +53,14 @@ Evidence was written under disposable `/tmp/review-tui-*` directories. Consolida
 
 ## Activation and rollback
 
-Activation uses the merged main checkout as the clean package source:
+Activation uses a versioned installed-source directory created from the exact merged commit. This keeps generated dependencies outside the clean repository:
 
-- Grounded Tools: `<repo>/packages/grounded-tools`
-- Review UI: `<repo>/packages/review-ui`
+- Grounded Tools: `~/.pi/agent/installed-sources/<merge>/grounded-tools`
+- Review UI: `~/.pi/agent/installed-sources/<merge>/review-ui`
 
-Before activation, copy `~/.pi/agent/settings.json` to a mode-0600 timestamped file under `~/.pi/agent/activation-backups/`. Record its SHA-256. Replace the old `../../pi-grounded-tools` package entry with the merged Grounded package path. Add the merged Review UI package path once. Keep the installed Pi patch backup unchanged.
+Create each installed source from the merged Git archive. Run `npm ci --ignore-scripts` in each package before activation. Protect the source bytes after installation, but keep dependency modes usable.
+
+Before activation, copy `~/.pi/agent/settings.json` to a mode-0600 timestamped file under `~/.pi/agent/activation-backups/`. Record its SHA-256. Replace the old Grounded package entry with the versioned installed source. Add the versioned Review UI source once. Keep the installed Pi patch backup unchanged.
 
 Rollback:
 
@@ -66,4 +68,5 @@ Rollback:
 2. Restore the recorded settings file bytes atomically.
 3. Run `pi list` and confirm that Review UI is absent and the prior Grounded source is active.
 4. Reload Pi.
-5. Do not run `pi update`. The installed Tool Controls patch has its separate `.tool-controls-patch-backup-0.84.1` rollback.
+5. After rollback verification, remove the versioned installed-source directory only if it is not referenced by other settings.
+6. Do not run `pi update`. The installed Tool Controls patch has its separate `.tool-controls-patch-backup-0.84.1` rollback.
