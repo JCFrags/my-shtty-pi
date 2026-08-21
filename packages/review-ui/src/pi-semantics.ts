@@ -50,6 +50,10 @@ export async function constructEditWithBuiltin(
 
 export const piBuiltinSemantics: BuiltinSemantics = {
   constructEdit: constructEditWithBuiltin,
+  async constructWrite({ input }): Promise<string> {
+    if (typeof input.content !== "string") throw new Error("write content must be a string");
+    return input.content;
+  },
   generateUnifiedDiff(path, oldContent, newContent): string {
     return generateUnifiedPatch(path, oldContent, newContent);
   },

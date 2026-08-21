@@ -22,7 +22,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/review-ui.js"
+      "./extensions/review-ui.ts"
     ]
   },
   "scripts": {
@@ -31,7 +31,8 @@
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "test": "node ./scripts/test.mjs",
     "smoke": "node ./scripts/smoke.mjs",
-    "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+    "validate": "npm run typecheck && npm test && npm run build && npm run smoke",
+    "prepack": "npm run build"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

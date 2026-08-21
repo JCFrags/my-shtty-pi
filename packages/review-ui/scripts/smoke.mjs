@@ -26,11 +26,30 @@ try {
   const extensionPath = packageJson.pi?.extensions?.[0];
   if (typeof extensionPath !== "string") throw new Error("packed package has no Pi extension manifest entry");
 
-  const module = await import(pathToFileURL(resolve(packageRoot, extensionPath)).href + `?t=${Date.now()}`);
-  if (typeof module.default !== "function") throw new Error("packed extension default export is not a function");
+  await readFile(resolve(packageRoot, extensionPath), "utf8");
+  const module = await import(pathToFileURL(resolve(packageRoot, "dist/extension.js")).href + `?t=${Date.now()}`);
+  if (typeof module.default !== "function") throw new Error("packed compiled extension default export is not a function");
 
   const handlers = new Map();
+  const bus = new Map();
   module.default({
+    events: {
+      on(name, handler) {
+        const list = bus.get(name) ?? [];
+        list.push(handler);
+        bus.set(name, list);
+        return () => bus.set(name, (bus.get(name) ?? []).filter((value) => value !== handler));
+      },
+      emit(name, value) {
+        for (const handler of bus.get(name) ?? []) handler(value);
+      },
+    },
+    getAllTools() {
+      return [
+        { name: "edit", sourceInfo: { path: "<builtin:edit>", source: "builtin", scope: "temporary", origin: "top-level" } },
+        { name: "write", sourceInfo: { path: "<builtin:write>", source: "builtin", scope: "temporary", origin: "top-level" } },
+      ];
+    },
     on(name, handler) {
       const list = handlers.get(name) ?? [];
       list.push(handler);

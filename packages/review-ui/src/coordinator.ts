@@ -28,7 +28,7 @@ export interface ReviewCoordinatorDependencies {
   queue: ReviewQueue;
   loadConfig: typeof loadConfig;
   buildPreview: (request: ReviewInput, options: BuildPreviewOptions) => Promise<ReviewPreview>;
-  semantics: BuiltinSemantics;
+  resolveSemantics: (tool: "edit" | "write") => BuiltinSemantics;
   showReview: (
     ctx: ExtensionContext,
     preview: ReviewPreview,
@@ -47,7 +47,7 @@ const DEFAULT_DEPENDENCIES: ReviewCoordinatorDependencies = {
   queue: new ReviewQueue(),
   loadConfig,
   buildPreview: buildReviewPreview,
-  semantics: piBuiltinSemantics,
+  resolveSemantics: () => piBuiltinSemantics,
   showReview: (ctx, preview, allowApproveAllForTurn, queueContext) =>
     showReviewDialog(ctx.ui, preview, allowApproveAllForTurn, queueContext),
   showRisk: (ctx, preview, kind, queueContext) =>
@@ -57,8 +57,15 @@ const DEFAULT_DEPENDENCIES: ReviewCoordinatorDependencies = {
 export class ReviewCoordinator {
   private currentTurnIndex: number | undefined;
   private approvedTurnIndex: number | undefined;
+  private readonly dependencies: ReviewCoordinatorDependencies;
 
-  constructor(private readonly dependencies: ReviewCoordinatorDependencies = DEFAULT_DEPENDENCIES) {}
+  constructor(dependencies: Partial<ReviewCoordinatorDependencies> = {}) {
+    this.dependencies = {
+      ...DEFAULT_DEPENDENCIES,
+      queue: dependencies.queue ?? new ReviewQueue(),
+      ...dependencies,
+    };
+  }
 
   onTurnStart(turnIndex: number): void {
     this.currentTurnIndex = turnIndex;
@@ -145,7 +152,7 @@ export class ReviewCoordinator {
       cwd: ctx.cwd,
       maxPreviewBytes: config.maxPreviewBytes,
       signal: queueContext.signal,
-      semantics: this.dependencies.semantics,
+      semantics: this.dependencies.resolveSemantics(request.tool),
     });
     throwIfReviewAborted(queueContext.signal);
 
@@ -188,7 +195,7 @@ export class ReviewCoordinator {
       cwd: ctx.cwd,
       maxPreviewBytes: config.maxPreviewBytes,
       signal: queueContext.signal,
-      semantics: this.dependencies.semantics,
+      semantics: this.dependencies.resolveSemantics(request.tool),
     });
     throwIfReviewAborted(queueContext.signal);
 

@@ -14,6 +14,13 @@ export interface BuiltinSemantics {
     currentExists: boolean;
     signal?: AbortSignal;
   }): Promise<string>;
+  constructWrite(request: {
+    cwd: string;
+    input: WriteToolInput;
+    current: Buffer;
+    currentExists: boolean;
+    signal?: AbortSignal;
+  }): Promise<string>;
   generateUnifiedDiff(path: string, oldContent: string, newContent: string): string;
 }
 
@@ -80,16 +87,21 @@ export async function buildReviewPreview(
   throwIfAborted(options.signal);
 
   const currentText = currentBuffer.toString("utf8");
-  const proposedContent =
-    request.tool === "write"
-      ? validateWriteContent(request.input.content)
-      : await options.semantics.constructEdit({
-          cwd: options.cwd,
-          input: request.input,
-          current: currentBuffer,
-          currentExists: path.targetExists,
-          ...(options.signal ? { signal: options.signal } : {}),
-        });
+  const proposedContent = request.tool === "write"
+    ? await options.semantics.constructWrite({
+        cwd: options.cwd,
+        input: request.input,
+        current: currentBuffer,
+        currentExists: path.targetExists,
+        ...(options.signal ? { signal: options.signal } : {}),
+      })
+    : await options.semantics.constructEdit({
+        cwd: options.cwd,
+        input: request.input,
+        current: currentBuffer,
+        currentExists: path.targetExists,
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
   throwIfAborted(options.signal);
 
   const proposedBuffer = Buffer.from(proposedContent, "utf8");
@@ -132,13 +144,6 @@ export async function buildReviewPreview(
     oversized,
     changed,
   };
-}
-
-function validateWriteContent(content: unknown): string {
-  if (typeof content !== "string") {
-    throw new Error("write content must be a string");
-  }
-  return content;
 }
 
 function makeMetadata(buffer: Buffer, exists: boolean): ContentMetadata {

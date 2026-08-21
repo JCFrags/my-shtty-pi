@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Review UI 0.1.0
+
+- Added exact active-owner selection and fail-closed unsupported-owner behavior.
+- Added the Grounded Tools files-v1 preview adapter with shared edit/write byte construction.
+- Corrected clean source loading, prepack build behavior, and owned Pi local mouse coordinates.
+- Passed real Pi 0.84.1 TUI approval, rejection, risk, FIFO, cleanup, and exact-byte acceptance.
+
 ### Files UI 0.1.1
 
 - Made the stock Pi 0.84.1 keyboard path the supported acceptance target.

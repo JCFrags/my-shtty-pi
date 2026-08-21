@@ -350,11 +350,11 @@
       "private": false
     },
     {
-      "buildModel": "TypeScript build to dist; extension entry is source JS",
+      "buildModel": "Clean-loadable TypeScript extension source with compiled dist library and prepack build",
       "displayName": "Review UI",
       "extensionEntries": [
         {
-          "path": "./extensions/review-ui.js",
+          "path": "./extensions/review-ui.ts",
           "entryKind": "source-file",
           "existsInSource": true
         }
@@ -367,21 +367,21 @@
       "id": "review-ui",
       "installationRecommended": false,
       "lifecycle": {
-        "reason": "its clean source, build, package, and loading boundary needs a dedicated correction.",
-        "status": "blocked"
+        "reason": "clean packaging and Pi 0.84.1 active-owner preview acceptance completed.",
+        "status": "candidate"
       },
       "lockfile": {
         "path": "packages/review-ui/package-lock.json",
         "scope": "package"
       },
       "nextGate": {
-        "action": "its clean source, build, package, and loading boundary needs a dedicated correction.",
-        "status": "blocked"
+        "action": "Review completed real-TUI and active Grounded Tools evidence before a package release decision.",
+        "status": "candidate"
       },
       "nodeRequirement": ">=22.19.0",
-      "operatingSystemBoundary": "Node.js 22.19+; Pi 0.83+",
+      "operatingSystemBoundary": "Node.js 22.19+; Pi 0.84.1; owned Pi patch for component mouse input",
       "piPeerRangeOrPackageModel": {
-        "packageModel": "published package with JavaScript extension and exported compiled library",
+        "packageModel": "published package with TypeScript extension source and exported compiled library",
         "peerDependencies": [
           "@earendil-works/pi-coding-agent:*",
           "@earendil-works/pi-tui:*"
@@ -389,7 +389,7 @@
       },
       "primaryPackage": "pi-review-ui",
       "publicationAllowed": false,
-      "purpose": "Pre-execution approval UI for Pi's built-in edit and write tools.",
+      "purpose": "Pre-execution approval UI for supported active edit and write tool owners.",
       "releaseUnitIds": [
         "pi-review-ui"
       ],
@@ -401,7 +401,8 @@
         "build": "npm run clean && tsc -p tsconfig.build.json",
         "test": "node ./scripts/test.mjs",
         "smoke": "node ./scripts/smoke.mjs",
-        "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+        "validate": "npm run typecheck && npm test && npm run build && npm run smoke",
+        "prepack": "npm run build"
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
@@ -1260,7 +1261,7 @@
       "dependencies": {}
     },
     {
-      "buildModel": "TypeScript build to dist; extension entry is source JS",
+      "buildModel": "Clean-loadable TypeScript extension source with compiled dist library and prepack build",
       "developmentPiVersion": null,
       "filesBoundary": [
         "dist",
@@ -1272,8 +1273,8 @@
       "id": "pi-review-ui",
       "installationRecommended": false,
       "license": "MIT",
-      "lifecycleReason": "its clean source, build, package, and loading boundary needs a dedicated correction.",
-      "lifecycleStatus": "blocked",
+      "lifecycleReason": "clean packaging and Pi 0.84.1 active-owner preview acceptance completed.",
+      "lifecycleStatus": "candidate",
       "lockfile": {
         "path": "packages/review-ui/package-lock.json",
         "scope": "package"
@@ -1281,7 +1282,7 @@
       "manifestPath": "packages/review-ui/package.json",
       "nodeEngine": ">=22.19.0",
       "npmName": "pi-review-ui",
-      "packageModel": "published package with JavaScript extension and exported compiled library",
+      "packageModel": "published package with TypeScript extension source and exported compiled library",
       "parentProductId": "review-ui",
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
@@ -1289,7 +1290,7 @@
       },
       "piExtensionEntries": [
         {
-          "path": "./extensions/review-ui.js",
+          "path": "./extensions/review-ui.ts",
           "entryKind": "source-file",
           "existsInSource": true
         }
@@ -1302,7 +1303,8 @@
         "build": "npm run clean && tsc -p tsconfig.build.json",
         "test": "node ./scripts/test.mjs",
         "smoke": "node ./scripts/smoke.mjs",
-        "validate": "npm run typecheck && npm test && npm run build && npm run smoke"
+        "validate": "npm run typecheck && npm test && npm run build && npm run smoke",
+        "prepack": "npm run build"
       },
       "sourceDirectory": "packages/review-ui",
       "stable": false,

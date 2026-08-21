@@ -3,12 +3,20 @@ declare module "@earendil-works/pi-coding-agent" {
 
   export interface EditToolInput {
     path: string;
-    edits: Array<{ oldText: string; newText: string }>;
+    edits: Array<{
+      oldText?: string;
+      newText?: string;
+      startAnchor?: string;
+      endAnchor?: string;
+      contentLines?: string[];
+    }>;
+    expectedDigest?: string;
   }
 
   export interface WriteToolInput {
     path: string;
     content: string;
+    expectedDigest?: string;
   }
 
   export interface EditToolCallEvent {
@@ -117,7 +125,27 @@ declare module "@earendil-works/pi-coding-agent" {
     reason: "startup" | "reload";
   }
 
+  export interface SourceInfo {
+    path: string;
+    source: string;
+    scope: "user" | "project" | "temporary";
+    origin: "package" | "top-level";
+    baseDir?: string;
+  }
+
+  export interface ToolInfo {
+    name: string;
+    sourceInfo: SourceInfo;
+  }
+
+  export interface EventBus {
+    emit(channel: string, data: unknown): void;
+    on(channel: string, handler: (data: unknown) => void): () => void;
+  }
+
   export interface ExtensionAPI {
+    events: EventBus;
+    getAllTools(): ToolInfo[];
     on(event: "tool_call", handler: (event: ToolCallEvent, ctx: ExtensionContext) => Promise<ToolCallEventResult | void> | ToolCallEventResult | void): void;
     on(event: "turn_start", handler: (event: TurnStartEvent, ctx: ExtensionContext) => void | Promise<void>): void;
     on(event: "turn_end", handler: (event: TurnEndEvent, ctx: ExtensionContext) => void | Promise<void>): void;

@@ -3,11 +3,15 @@ import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import groundedFiles from "../packages/files/index.ts";
+import groundedFiles, {
+  constructGroundedEditContent,
+  constructGroundedWriteContent,
+} from "../packages/files/index.ts";
 
 function loadTools() {
   const tools = new Map<string, any>();
   const pi = {
+    events: { on() { return () => {}; }, emit() {} },
     registerTool(tool: any) { tools.set(tool.name, tool); },
     registerCommand() {},
   };
@@ -56,6 +60,44 @@ test("file extension performs strict edits while preserving BOM, CRLF, and mode"
   assert.equal(raw, "\ufeffconst a = 1;\r\nconst b = 3;\r\n");
   assert.equal((await stat(path)).mode & 0o777, 0o640);
   assert.equal(edited.details.syntax.ok, true);
+});
+
+test("preview construction matches Grounded edit and write bytes for BOM and CRLF", async () => {
+  const original = "\ufeffone\r\ntwo\r\n";
+  const editInput = { path: "sample.txt", edits: [{ oldText: "two\n", newText: "TWO\n" }] };
+  const preview = constructGroundedEditContent(original, editInput).content;
+  assert.equal(preview, "\ufeffone\r\nTWO\r\n");
+
+  const cwd = await mkdtemp(join(tmpdir(), "grounded-preview-bytes-"));
+  const path = join(cwd, "sample.txt");
+  await writeFile(path, original);
+  const tools = loadTools();
+  await tools.get("edit").execute("e1", editInput, undefined, undefined, context(cwd));
+  assert.deepEqual(await readFile(path), Buffer.from(preview, "utf8"));
+
+  const writeInput = { path: "sample.txt", content: "\ufeffliteral\r\nbytes\r\n" };
+  const writePreview = constructGroundedWriteContent(preview, writeInput);
+  await tools.get("write").execute("w1", writeInput, undefined, undefined, context(cwd));
+  assert.deepEqual(await readFile(path), Buffer.from(writePreview, "utf8"));
+});
+
+test("Grounded preview adapter is explicit and uses the files extension owner path", () => {
+  let registered: any;
+  const pi = {
+    events: {
+      on() { return () => {}; },
+      emit(channel: string, value: unknown) {
+        if (channel === "pi-review-ui:register-preview-adapter-v1") registered = value;
+      },
+    },
+    registerTool() {},
+    registerCommand() {},
+  };
+  groundedFiles(pi as any);
+  assert.equal(registered.protocolVersion, 1);
+  assert.equal(registered.id, "pi-grounded-tools/files-v1");
+  assert.match(registered.ownerSourcePath, /packages\/files\/index\.ts$/);
+  assert.deepEqual(registered.tools, ["edit", "write"]);
 });
 
 test("full reads expose complete exact bytes when visible output is truncated", async () => {
