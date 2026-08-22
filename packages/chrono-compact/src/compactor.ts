@@ -28,7 +28,7 @@ import type {
 import { DEFAULT_COMPACTOR_CONFIG } from "./types.js";
 import { measureTokenTelemetry, retentionSignalsFromFeedback, type RetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, stableStringify, truncateToTokens } from "./utils.js";
-import { pruneUnsafeCandidates, validatePlan } from "./validate.js";
+import { buildValidationIndex, pruneUnsafeCandidates, validatePlan } from "./validate.js";
 
 const RENDER_OVERHEAD_RESERVE = 180;
 const MAX_BUDGET_REPLANS = 8;
@@ -317,8 +317,9 @@ export async function compactEntries(
     coldCueTokens: config.coldCueTokens,
     ...retentionSignals,
   });
-  const initialPruned = pruneUnsafeCandidates(gradient.units, blocks);
-  const repeatPruned = pruneUnsafeCandidates(addRepeatedObservationCandidates(initialPruned.units, blocks), blocks);
+  const validationIndex = buildValidationIndex(blocks);
+  const initialPruned = pruneUnsafeCandidates(gradient.units, blocks, validationIndex);
+  const repeatPruned = pruneUnsafeCandidates(addRepeatedObservationCandidates(initialPruned.units, blocks), blocks, validationIndex);
   candidateUnits = [...repeatPruned.units];
 
   // Pi has already selected this prefix for compaction. Do not spend a large
@@ -332,14 +333,14 @@ export async function compactEntries(
   if (shouldMergeEpisodes(candidateUnits, rawTokens, renderedTarget, config) || plan.estimatedTokens > planningTarget) {
     const merged = mergeOldCompletedEpisodes(candidateUnits, blocks, config);
     if (merged.length < candidateUnits.length) {
-      candidateUnits = [...pruneUnsafeCandidates(merged, blocks).units];
+      candidateUnits = [...pruneUnsafeCandidates(merged, blocks, validationIndex).units];
       plan = planCompression(candidateUnits, planningTarget, config);
     }
   }
   if (candidateUnits.length > config.maxIndividualUnits || plan.estimatedTokens > planningTarget) {
     const segmented = mergeRoutineActivitySegments(candidateUnits, blocks, config, planningTarget);
     if (segmented.length < candidateUnits.length) {
-      candidateUnits = [...pruneUnsafeCandidates(segmented, blocks).units];
+      candidateUnits = [...pruneUnsafeCandidates(segmented, blocks, validationIndex).units];
       plan = planCompression(candidateUnits, planningTarget, config);
     }
   }
@@ -386,6 +387,7 @@ export async function compactEntries(
 
   let validation = validatePlan(plan, blocks, Math.min(replayRenderedTarget, Math.max(128, hardOutputTokens - pinnedMemoryTokens)), {
     allowOmittedPrefix: hardCap.omittedUnits > 0,
+    validationIndex,
   });
   const additionalIssues: ValidationIssue[] = [
     ...initialPruned.rejectedIssues.map((issue) => ({ ...issue, severity: "warning" as const })),

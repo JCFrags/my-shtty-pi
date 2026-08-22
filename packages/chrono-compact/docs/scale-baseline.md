@@ -77,3 +77,21 @@ The corrected selector orders bounded state items by value. It places conflicts,
 At 1,000 tasks, median compaction time was 0.04% lower than the 5,003.4 ms baseline. Median maximum resident memory was 0.22% lower than the 367,160 KiB baseline. These differences are within normal run variation.
 
 This correction does not solve full-session processing cost. The original Results table remains the before-change baseline.
+
+## Validation index correction
+
+The validation index correction started from commit `40727e63c822f407104629e8dc86523d802ddf40`. Candidate validation previously searched the complete source block list for source text, unresolved state, and failure state for each candidate. Final tool-pair validation also filtered all planned units once for each source tool pair.
+
+One immutable validation index now retains references to the existing blocks. It provides maps and sets for exact and entry-level source references, valid references, unresolved and failed entries, source order, and tool-pair state. The normal compaction path builds it once and reuses it for candidate pruning and final plan validation.
+
+| Tasks | Runs | Source tokens | Rendered tokens | Protected fact rate | False completion | Exact recovery | Median compaction | Median index | Median wall | Median max RSS | Validation warnings |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 250 | 3 | 132,042 | 10,636 | 100% | 0 | 100% | 206.8 ms | 73.2 ms | 0.82 s | 292,124 KiB | 1 |
+| 500 | 3 | 264,042 | 19,429 | 100% | 0 | 100% | 366.9 ms | 133.2 ms | 1.09 s | 316,388 KiB | 2 |
+| 1,000 | 3 | 528,043 | 24,978 | 100% | 0 | 100% | 752.5 ms | 255.7 ms | 1.78 s | 363,220 KiB | 2 |
+
+At 1,000 tasks, median compaction time decreased by 84.95%, from 5,001.5 ms to 752.5 ms. The 500-to-1,000-task compaction growth ratio changed from 3.55 to 2.05. Median maximum resident memory changed from 366,340 KiB to 363,220 KiB, a decrease of 0.85%.
+
+One compaction-only 2,000-task run measured 1,057,043 source tokens, 24,985 rendered tokens, 1,762.6 ms compaction time, 2.30 s wall time, and 377,568 KiB maximum resident memory. Its protected-fact rate was 100%, and it had no validation errors.
+
+All normal benchmark sizes retained 100% protected facts and exact recovery, with zero false completions and zero validation errors. This change does not remove other full-session processing. The original Results table remains the before-change baseline.
