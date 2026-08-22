@@ -59,3 +59,16 @@ The series output reports requested and actual generation counts, final and cumu
 The concurrent output reports worker count, source tokens, wall and worker times, summed child peak RSS, timer delay, and quality fields. `sumWorkerPeakRssKiB` is the sum of child peak values. It is not a measured host peak.
 
 `maximumTimerDelayMs` is a process-level timer probe around compaction. It is not a complete Pi UI latency measurement. All timing and memory measurements are advisory.
+
+## Source-ledger benchmark
+
+`scripts/benchmark-source-ledger.mjs` measures the isolated incremental source ledger with synthetic Pi JSONL data. It creates and removes one temporary session and sidecar. It does not inspect real Pi sessions.
+
+Build and run it with:
+
+```bash
+npm run benchmark:source-ledger -- --final-tasks 2000 --batches 20
+node scripts/benchmark-source-ledger.mjs --final-tasks 5000 --batches 50
+```
+
+The benchmark reports initial build, warm append, exact-hit, cold sidecar-load, exact-retrieval, memory, and integrity fields. `sourceReadAmplification` is the source bytes read by the initial build and append updates divided by final source bytes. It excludes cold sidecar reads. `exactHitSourceBytesRead` is the bounded tail anchor read. `exactRetrievalBytesRead` is the sum of the selected early, middle, and late entry lengths. Timing and memory fields are advisory.

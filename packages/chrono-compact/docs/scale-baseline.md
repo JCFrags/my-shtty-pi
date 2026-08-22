@@ -126,3 +126,15 @@ From one to four workers, median command wall time increased from 1.31 to 1.45 s
 In the 2,000-task CPU profile, the largest project-linked JavaScript self-tick entries were a repeated-observation callback at 3.1%, a causal-memory callback at 1.8%, and `addRepeatedObservationCandidates` at 1.7%. No other linked project function reached 1% self ticks.
 
 These measurements do not prove behavior at 25 million or 50 million source tokens. They do not measure a complete Pi UI process, and they do not propose a design correction.
+
+## Source-ledger component baseline
+
+These results measure the source ledger in isolation. Each row is the median of three serial command runs. Normal compaction is not incremental yet.
+
+| Tasks / batches | Final source bytes | Estimated source tokens | Sidecar bytes | Initial build | Total append | Median append | Final append | Exact hit | Cold ledger load | Wall time | Maximum RSS | Source-read amplification | Exact-hit bytes read | Exact-retrieval bytes read | Integrity |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: |
+| 1,000 / 10 | 2,739,773 | 684,944 | 1,416,491 | 7.8 ms | 26.1 ms | 2.8 ms | 2.8 ms | 0.12 ms | 13.0 ms | 0.57 s | 230,044 KiB | 1.0074 | 250 | 671 | yes |
+| 2,000 / 20 | 5,485,422 | 1,371,356 | 2,843,467 | 5.4 ms | 57.6 ms | 3.0 ms | 3.1 ms | 0.12 ms | 29.9 ms | 0.64 s | 283,524 KiB | 1.0077 | 250 | 674 | yes |
+| 5,000 / 50 | 13,720,922 | 3,430,231 | 7,134,881 | 6.2 ms | 162.1 ms | 2.9 ms | 2.5 ms | 0.10 ms | 58.9 ms | 0.82 s | 373,688 KiB | 1.0081 | 250 | 674 | yes |
+
+All runs reported valid integrity. Warm updates read appended source bytes plus one bounded anchor. Exact hits read 250 source bytes. The three exact retrievals read only 671 to 674 source bytes in total. Source-read amplification remained between 1.0074 and 1.0081 as batch count increased from 10 to 50. Cold startup still read the complete sidecar.

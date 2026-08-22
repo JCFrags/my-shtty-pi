@@ -18,6 +18,7 @@ export * from "./recall.js";
 export * from "./resource-lineage.js";
 export * from "./retention-gradient.js";
 export * from "./search-index.js";
+export * from "./source-ledger.js";
 export * from "./summary-rebase.js";
 export * from "./telemetry.js";
 export * from "./retrieval.js";

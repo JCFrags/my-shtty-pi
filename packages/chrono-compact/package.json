@@ -50,6 +50,7 @@
     "demo": "npm run build && node dist/src/cli.js compact examples/synthetic-session.jsonl --target 2500",
     "benchmark": "npm run build && node scripts/benchmark-v2.mjs",
     "benchmark:generations": "npm run build && node scripts/benchmark-generations.mjs",
+    "benchmark:source-ledger": "npm run build && node scripts/benchmark-source-ledger.mjs",
     "prepack": "npm test"
   },
   "peerDependencies": {
