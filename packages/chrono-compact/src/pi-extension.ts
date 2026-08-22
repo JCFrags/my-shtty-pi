@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { env } from "node:process";
+import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import {
   cachePathForSession,
   hashCompactionConfig,
@@ -69,7 +71,7 @@ import {
   type RawTailSelection,
 } from "./tail-selection.js";
 import { decideCompactionTrigger } from "./trigger.js";
-import type { CompactorConfig, ParsedSession, SessionEntryLike } from "./types.js";
+import type { CompactorConfig, CompressionResult, ParsedSession, SessionEntryLike } from "./types.js";
 import {
   applyConfigCommand,
   defaultUserConfigPath,
@@ -79,6 +81,8 @@ import {
 } from "./user-config.js";
 import { emptyRetrievalFeedback, recordRetrievalFeedback, type RetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, safeErrorMessage, stableStringify, truncateToTokens } from "./utils.js";
+import { runCompactionWorker, type WorkerClientResult } from "./compaction-worker-client.js";
+import type { CandidateUpdateWorkerRequest, ReplayWorkerRequest, WorkerSourceExpectation } from "./compaction-worker-protocol.js";
 
 const EXTENSION_VERSION = "2.0.0";
 export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
@@ -108,6 +112,10 @@ export interface RuntimeSettings {
   readonly historyEditorMaxInputTokens: number;
   readonly historyEditorMaxOutputTokens: number;
   readonly incrementalPrecomputeEnabled: boolean;
+  readonly isolatedWorkerEnabled: boolean;
+  readonly hostWorkerSlots: number;
+  readonly workerTimeoutSeconds: number;
+  readonly workerNiceLevel: number;
   readonly toolResultProjectionMode: ToolResultProjectionMode;
   readonly cacheEnabled: boolean;
   readonly rankedSearchEnabled: boolean;
@@ -181,6 +189,10 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
     historyEditorMaxInputTokens: numberSetting("PI_CHRONO_HISTORY_EDITOR_MAX_INPUT", DEFAULT_HISTORY_EDITOR_MAX_INPUT_TOKENS, 1_000, 50_000),
     historyEditorMaxOutputTokens: numberSetting("PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT", 16_000, 256, 25_000),
     incrementalPrecomputeEnabled: booleanSetting("PI_CHRONO_INCREMENTAL_PRECOMPUTE", false, overrides.incrementalPrecomputeEnabled),
+    isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
+    hostWorkerSlots: numberSetting("PI_CHRONO_HOST_WORKER_SLOTS", 1, 1, 4, overrides.hostWorkerSlots),
+    workerTimeoutSeconds: numberSetting("PI_CHRONO_WORKER_TIMEOUT_SECONDS", 900, 30, 3_600, overrides.workerTimeoutSeconds),
+    workerNiceLevel: numberSetting("PI_CHRONO_WORKER_NICE", 10, 0, 19, overrides.workerNiceLevel),
     toolResultProjectionMode: projectionModeSetting(overrides.toolResultProjectionMode),
     cacheEnabled: booleanSetting("PI_CHRONO_CACHE", true),
     rankedSearchEnabled: booleanSetting("PI_CHRONO_RANKED_SEARCH", true, overrides.rankedSearchEnabled),
@@ -203,6 +215,11 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
       coldCueTokens: numberSetting("PI_CHRONO_COLD_CUE_TOKENS", 56, 24, 160),
     },
   };
+}
+
+async function workerSourceExpectation(sessionPath: string): Promise<WorkerSourceExpectation> {
+  const value = await stat(sessionPath);
+  return { deviceId: String(value.dev), inodeId: String(value.ino), size: value.size, mtimeMs: value.mtimeMs };
 }
 
 function rawTailDescription(settings: RuntimeSettings): string {
@@ -252,6 +269,7 @@ async function openChronoCompactSettings(
       `Regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
       `Experimental LLM history classifier · ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
       `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+      `Isolated local compaction worker · ${settings.isolatedWorkerEnabled ? `enabled · ${settings.hostWorkerSlots} host slot(s) · nice ${settings.workerNiceLevel}` : "disabled"}`,
       `Request-local tool-result projection · ${settings.toolResultProjectionMode}`,
       `Ranked local history search · ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
       `Editable working memory · ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,
@@ -354,10 +372,21 @@ async function openChronoCompactSettings(
       if (selected === "Enabled") draft = applyConfigCommand(draft, "history-classifier on").config;
       continue;
     }
-    if (choice.startsWith("Incremental deterministic precompute")) {
+    if (choice.startsWith("Segmented incremental deterministic precompute")) {
       const selected = await ctx.ui.select("Incremental deterministic precompute", ["Enabled", "Disabled"]);
       if (selected === "Disabled") draft = applyConfigCommand(draft, "incremental-precompute off").config;
       if (selected === "Enabled") draft = applyConfigCommand(draft, "incremental-precompute on").config;
+      continue;
+    }
+    if (choice.startsWith("Isolated local compaction worker")) {
+      const selected = await ctx.ui.select("Isolated local compaction worker", ["Enabled", "Disabled"]);
+      if (selected === "Disabled") draft = applyConfigCommand(draft, "isolated-worker off").config;
+      if (selected === "Enabled") {
+        draft = applyConfigCommand(draft, "isolated-worker on").config;
+        draft = await tokenInput(ctx, "Host-wide ChronoCompact worker slots (one prevents simultaneous CPU jobs by default)", settings.hostWorkerSlots, "worker-slots", draft);
+        draft = await tokenInput(ctx, "Local worker timeout in seconds", settings.workerTimeoutSeconds, "worker-timeout", draft);
+        draft = await tokenInput(ctx, "Local worker nice level (the worker does not call a model)", settings.workerNiceLevel, "worker-nice", draft);
+      }
       continue;
     }
     if (choice.startsWith("Request-local tool-result projection")) {
@@ -887,10 +916,24 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       void (async () => {
         try {
           if (!store.manifest) await loadCandidateSegmentManifest(store);
-          const metrics = await updateCandidateSegmentStore(store, config, { signal: controller.signal });
-          if (controller.signal.aborted || generation !== incrementalGeneration) return;
-          incrementalStore = store;
-          incrementalStatus = { state: "ready", ...metrics };
+          if (settings.isolatedWorkerEnabled) {
+            const request: CandidateUpdateWorkerRequest = { schemaVersion: 1, jobId: randomUUID(), jobType: "candidate-store-update", sessionPath,
+              expectedSource: await workerSourceExpectation(sessionPath), deadlineMs: Date.now() + settings.workerTimeoutSeconds * 1_000,
+              niceLevel: settings.workerNiceLevel, config };
+            const worker = await runCompactionWorker(request, { slots: settings.hostWorkerSlots, workerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
+              schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000, signal: controller.signal, priority: "low" });
+            if (controller.signal.aborted || generation !== incrementalGeneration) return;
+            if (worker.response.status !== "ok" || !worker.response.candidateUpdate) {
+              incrementalStatus = { state: "fallback", failureCode: worker.response.status === "failed" ? worker.response.failureCode : "worker-protocol-error", worker: worker.clientMetrics };
+              return;
+            }
+            await loadCandidateSegmentManifest(store); incrementalStore = store;
+            incrementalStatus = { state: "ready", ...worker.response.candidateUpdate, worker: worker.clientMetrics, workerRuntime: worker.response.metrics };
+          } else {
+            const metrics = await updateCandidateSegmentStore(store, config, { signal: controller.signal });
+            if (controller.signal.aborted || generation !== incrementalGeneration) return;
+            incrementalStore = store; incrementalStatus = { state: "ready", ...metrics };
+          }
         } catch (error) {
           if (!controller.signal.aborted) incrementalStatus = { state: "fallback", reason: safeErrorMessage(error) };
         } finally {
@@ -1150,6 +1193,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       });
       const retentionHints = retentionHintsFromBranch(branchEntries, event.customInstructions);
       const sessionPath = ctx.sessionManager.getSessionFile();
+      const useIsolatedWorker = settings.isolatedWorkerEnabled && !!sessionPath && !settings.historyEditorEnabled;
       const currentRetrievalFeedback = sessionPath ? retrievalFeedback.get(sessionPath) : undefined;
       const memory = settings.editableMemoryEnabled && sessionPath
         ? await readMemoryEvents(memorySidecarPath(sessionPath))
@@ -1160,7 +1204,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       const pinnedMemoryText = memory?.status === "ready" ? renderPinnedMemory(memory.memories, branchEntries.length) : "";
       const previousPiSummary = previousRegularPiSummary(branchEntries, event.preparation.previousSummary);
       const summaryRebase = decideRegularSummaryRebase(branchEntries, previousPiSummary, { intervalGenerations: settings.summaryRebaseInterval });
-      const generationHash = computeGenerationHash(sourceEntries, config, retentionHints, retainedEntries, pinnedMemoryText, currentRetrievalFeedback);
+      let generationHash: string | undefined = useIsolatedWorker
+        ? undefined
+        : computeGenerationHash(sourceEntries, config, retentionHints, retainedEntries, pinnedMemoryText, currentRetrievalFeedback);
       const configHash = hashCompactionConfig({
         extensionVersion: EXTENSION_VERSION,
         config,
@@ -1190,10 +1236,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       });
       const cachePath = sessionPath ? cachePathForSession(sessionPath) : undefined;
 
-      if (settings.cacheEnabled && cachePath) {
+      if (!useIsolatedWorker && settings.cacheEnabled && cachePath) {
         const cached = await readCompactionCache(cachePath);
         if (
-          cached?.sourceHash === generationHash &&
+          cached && cached.sourceHash === generationHash &&
           cached.configHash === configHash &&
           cached.renderedTokens + retainedTailTokens <= HARD_COMBINED_CONTEXT_CAP_TOKENS
         ) {
@@ -1209,7 +1255,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
               details: {
                 kind: "chrono-compact-event-stream-context-compaction",
                 version: EXTENSION_VERSION,
-                cache: { hit: true, generation: cached.generation, sourceHash: generationHash },
+                cache: { hit: true, generation: cached.generation, sourceHash: generationHash! },
                 ...(cached.piSummary === undefined ? {} : { piSummary: cached.piSummary }),
                 retainedTail: tailSelection,
                 replayTargetMode: settings.replayTargetTokens === undefined ? "derived-active-context" : "fixed",
@@ -1235,6 +1281,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       }
 
       let piSummary: Awaited<ReturnType<typeof createPiRegularSummary>>;
+      let workerRebaseTargetTokens: number | undefined;
       if (settings.hybridSummaryEnabled) {
         try {
           const piSummaryTargetTokens = Math.min(
@@ -1242,16 +1289,15 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             Math.max(512, targetTokens - 512),
           );
           if (summaryRebase.rebase) {
-            const text = buildDeterministicSummaryRebase(
-              parseHistoricalBlocks(sourceEntries, { includeHistoricalCompactions: false, includeMetadata: false }),
-              undefined,
-              piSummaryTargetTokens,
-            );
-            piSummary = {
-              text,
-              tokens: estimateTokensFromText(text),
-              model: "deterministic-local-rebase",
-            };
+            if (useIsolatedWorker) workerRebaseTargetTokens = piSummaryTargetTokens;
+            else {
+              const text = buildDeterministicSummaryRebase(
+                parseHistoricalBlocks(sourceEntries, { includeHistoricalCompactions: false, includeMetadata: false }),
+                undefined,
+                piSummaryTargetTokens,
+              );
+              piSummary = { text, tokens: estimateTokensFromText(text), model: "deterministic-local-rebase" };
+            }
           } else {
             piSummary = await createPiRegularSummary(ctx, event.preparation, {
               targetTokens: piSummaryTargetTokens,
@@ -1281,7 +1327,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
 
       const hybridWrapperTokens = piSummary
         ? estimateTokensFromText(renderHybridCompaction(piSummary.text, "")) - piSummary.tokens
-        : 0;
+        : workerRebaseTargetTokens !== undefined
+          ? estimateTokensFromText(renderHybridCompaction("", ""))
+          : 0;
       const replayCeilingTokens = Math.max(
         128,
         historicalCeilingTokens - (piSummary?.tokens ?? 0) - Math.max(0, hybridWrapperTokens),
@@ -1295,7 +1343,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       const replayConfig = resolveCompactorConfig({ ...config, targetTokens: replayTargetTokens });
       let precomputedCandidates: ReadonlyMap<string, import("./candidates.js").CandidatePrecomputeRecord> | undefined;
       let officialIncremental: Record<string, unknown> = { state: "disabled" };
-      if (settings.incrementalPrecomputeEnabled && sessionPath) {
+      if (!useIsolatedWorker && settings.incrementalPrecomputeEnabled && sessionPath) {
         try {
           const store = incrementalStore?.sessionPath === sessionPath ? incrementalStore : createCandidateSegmentStore(sessionPath);
           incrementalStore = store; if (!store.manifest) await loadCandidateSegmentManifest(store);
@@ -1310,19 +1358,43 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         }
       }
       const historyEditor = settings.historyEditorEnabled && ctx.model ? createPiHistoryEditor(ctx) : undefined;
-      const result = await compactEntries(sourceEntries, {
-        config: replayConfig,
-        ...(precomputedCandidates === undefined ? {} : { precomputedCandidates }),
-        historyEditor,
-        historyEditorMaxInputTokens: settings.historyEditorMaxInputTokens,
-        historyEditorMaxOutputTokens: settings.historyEditorMaxOutputTokens,
-        hardOutputTokens: replayCeilingTokens,
-        signal: event.signal,
-        retentionHints,
-        futureEntries: retainedEntries,
-        pinnedMemoryText,
-        retrievalFeedback: currentRetrievalFeedback,
-      });
+      let result: CompressionResult; let workerExecution: WorkerClientResult | undefined;
+      if (useIsolatedWorker && sessionPath) {
+        const leafId = branchEntries.at(-1)?.id; if (typeof leafId !== "string") throw new Error("Isolated worker failed: branch-not-persisted");
+        const request: ReplayWorkerRequest = { schemaVersion: 1, jobId: randomUUID(), jobType: "replay-compaction", sessionPath,
+          expectedSource: await workerSourceExpectation(sessionPath), deadlineMs: Date.now() + settings.workerTimeoutSeconds * 1_000,
+          niceLevel: settings.workerNiceLevel, branchLeafId: leafId, firstKeptEntryId, config: replayConfig,
+          hardOutputTokens: replayCeilingTokens, retentionHints, pinnedMemoryText,
+          ...(currentRetrievalFeedback === undefined ? {} : { retrievalFeedback: currentRetrievalFeedback }),
+          candidateStoreEnabled: settings.incrementalPrecomputeEnabled, cacheEnabled: settings.cacheEnabled,
+          ...(workerRebaseTargetTokens === undefined ? {} : { deterministicRebase: { targetTokens: workerRebaseTargetTokens,
+            combinedTargetTokens: targetTokens, historicalCeilingTokens } }) };
+        workerExecution = await runCompactionWorker(request, { slots: settings.hostWorkerSlots,
+          workerTimeoutMs: settings.workerTimeoutSeconds * 1_000, schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
+          signal: event.signal, priority: "high" });
+        if (workerExecution.response.status !== "ok" || !workerExecution.response.replay) {
+          const code = workerExecution.response.status === "failed" ? workerExecution.response.failureCode : "worker-protocol-error";
+          throw new Error(`Isolated worker failed: ${code}`);
+        }
+        const replay = workerExecution.response.replay; generationHash = replay.generationHash;
+        if (replay.deterministicRebaseText !== undefined) piSummary = { text: replay.deterministicRebaseText,
+          tokens: estimateTokensFromText(replay.deterministicRebaseText), model: "deterministic-local-rebase" };
+        result = { summary: replay.summary, rawTokens: replay.rawTokens, renderedTokens: replay.renderedTokens,
+          targetTokens: replay.targetTokens, validation: replay.validation,
+          plan: { targetTokens: replay.targetTokens, estimatedTokens: replay.renderedTokens, rawTokens: replay.rawTokens, units: [], warnings: [] },
+          details: replay.details };
+        officialIncremental = settings.incrementalPrecomputeEnabled
+          ? { state: "worker-snapshot", background: incrementalStatus, cacheState: workerExecution.response.metrics.cacheState }
+          : { state: "disabled" };
+      } else {
+        result = await compactEntries(sourceEntries, {
+          config: replayConfig, ...(precomputedCandidates === undefined ? {} : { precomputedCandidates }), historyEditor,
+          historyEditorMaxInputTokens: settings.historyEditorMaxInputTokens, historyEditorMaxOutputTokens: settings.historyEditorMaxOutputTokens,
+          hardOutputTokens: replayCeilingTokens, signal: event.signal, retentionHints, futureEntries: retainedEntries,
+          pinnedMemoryText, retrievalFeedback: currentRetrievalFeedback,
+        });
+        generationHash ??= result.details.generationHash;
+      }
       const combinedSummary = piSummary
         ? renderHybridCompaction(piSummary.text, result.summary)
         : result.summary;
@@ -1335,13 +1407,13 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       }
 
       let generation: number | undefined;
-      if (settings.cacheEnabled && cachePath) {
+      if (!useIsolatedWorker && settings.cacheEnabled && cachePath) {
         try {
           generation = await nextCacheGeneration(cachePath);
           await writeCompactionCache(cachePath, {
             schemaVersion: 4,
             generation,
-            sourceHash: generationHash,
+            sourceHash: generationHash!,
             configHash,
             summary: combinedSummary,
             ...(piSummary === undefined ? {} : { piSummary: piSummary.text }),
@@ -1370,7 +1442,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           details: {
             kind: "chrono-compact-event-stream-context-compaction",
             version: EXTENSION_VERSION,
-            cache: { hit: false, generation, sourceHash: generationHash },
+            cache: { hit: useIsolatedWorker ? workerExecution?.response.metrics.cacheState === "hit" : false, generation, sourceHash: generationHash! },
             retainedTail: tailSelection,
             retainedTailTokens,
             replayTargetMode: settings.replayTargetTokens === undefined ? "derived-active-context" : "fixed",
@@ -1386,6 +1458,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             summaryRebase,
             editableMemory: { enabled: settings.editableMemoryEnabled, status: memory?.status ?? "unavailable", generationHash: memory?.generationHash, pinnedTokens: estimateTokensFromText(pinnedMemoryText) },
             incrementalPrecompute: officialIncremental,
+            isolatedWorker: workerExecution === undefined ? { enabled: settings.isolatedWorkerEnabled, used: false }
+              : { enabled: true, used: true, client: workerExecution.clientMetrics, runtime: workerExecution.response.metrics },
             toolResultProjection: lastProjectionMetrics ?? { mode: settings.toolResultProjectionMode, state: "no request metrics" },
             ...(piSummary === undefined ? {} : { piSummary: piSummary.text }),
             hybrid: piSummary
@@ -1449,6 +1523,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             `Regular Pi summary: ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
             `Experimental LLM history classifier: ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
             `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+            `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
             `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,
             `Ranked local history search: ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
             `Editable working memory: ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,

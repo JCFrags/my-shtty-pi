@@ -78,6 +78,12 @@ Official compaction validates the persistent key, dependency class, candidate sh
 
 The unkeyed integrity hash is corruption detection. It is not cryptographic authentication against a same-owner actor who can rewrite content and hash.
 
+## Isolated deterministic worker
+
+`compaction-worker-client.ts` and `compaction-worker-entry.ts` provide the default-off child-process boundary. One child reads one persisted JSONL source, reconstructs the exact requested leaf and cut, performs deterministic replay work, returns a strict bounded response, and exits. It has no model or network client. Provider-backed regular summary creation remains in the extension process. On success, the extension does not run `compactEntries` or calculate the complete replay generation hash.
+
+`host-worker-scheduler.ts` limits replay and candidate-update CPU jobs across local Pi processes. It uses owner-only temporary tickets and slots. Replay has priority over waiting candidate updates. Linux stale recovery binds the PID to `/proc` process-start identity. The files contain no session or project identity. See [compaction-worker.md](compaction-worker.md).
+
 ## Retained V1.2 tool-result projection
 
 `context-projection.ts` provides `off`, `safe`, and `aggressive` modes. The default is `off`. The `context` hook creates a request-local message array. It does not write the source messages or session JSONL.

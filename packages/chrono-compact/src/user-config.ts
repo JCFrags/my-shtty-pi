@@ -16,6 +16,10 @@ export interface UserConfig {
   readonly hybridSummaryTargetTokens?: number;
   readonly historyEditorEnabled?: boolean;
   readonly incrementalPrecomputeEnabled?: boolean;
+  readonly isolatedWorkerEnabled?: boolean;
+  readonly hostWorkerSlots?: number;
+  readonly workerTimeoutSeconds?: number;
+  readonly workerNiceLevel?: number;
   readonly toolResultProjectionMode?: "off" | "safe" | "aggressive";
   readonly rankedSearchEnabled?: boolean;
   readonly editableMemoryEnabled?: boolean;
@@ -42,6 +46,10 @@ const CONFIG_KEYS = [
   "hybridSummaryTargetTokens",
   "historyEditorEnabled",
   "incrementalPrecomputeEnabled",
+  "isolatedWorkerEnabled",
+  "hostWorkerSlots",
+  "workerTimeoutSeconds",
+  "workerNiceLevel",
   "toolResultProjectionMode",
   "rankedSearchEnabled",
   "editableMemoryEnabled",
@@ -64,6 +72,10 @@ const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
   "hybrid-tokens": "hybridSummaryTargetTokens",
   "history-classifier": "historyEditorEnabled",
   "incremental-precompute": "incrementalPrecomputeEnabled",
+  "isolated-worker": "isolatedWorkerEnabled",
+  "worker-slots": "hostWorkerSlots",
+  "worker-timeout": "workerTimeoutSeconds",
+  "worker-nice": "workerNiceLevel",
   "tool-result-projection": "toolResultProjectionMode",
   "ranked-search": "rankedSearchEnabled",
   memory: "editableMemoryEnabled",
@@ -120,6 +132,10 @@ export function validateUserConfig(value: unknown): UserConfig {
   if (input.hybridSummaryTargetTokens !== undefined) config.hybridSummaryTargetTokens = boundedInteger(input.hybridSummaryTargetTokens, "hybridSummaryTargetTokens", 512, 16_000);
   if (input.historyEditorEnabled !== undefined) config.historyEditorEnabled = booleanValue(input.historyEditorEnabled, "historyEditorEnabled");
   if (input.incrementalPrecomputeEnabled !== undefined) config.incrementalPrecomputeEnabled = booleanValue(input.incrementalPrecomputeEnabled, "incrementalPrecomputeEnabled");
+  if (input.isolatedWorkerEnabled !== undefined) config.isolatedWorkerEnabled = booleanValue(input.isolatedWorkerEnabled, "isolatedWorkerEnabled");
+  if (input.hostWorkerSlots !== undefined) config.hostWorkerSlots = boundedInteger(input.hostWorkerSlots, "hostWorkerSlots", 1, 4);
+  if (input.workerTimeoutSeconds !== undefined) config.workerTimeoutSeconds = boundedInteger(input.workerTimeoutSeconds, "workerTimeoutSeconds", 30, 3_600);
+  if (input.workerNiceLevel !== undefined) config.workerNiceLevel = boundedInteger(input.workerNiceLevel, "workerNiceLevel", 0, 19);
   if (input.toolResultProjectionMode !== undefined) config.toolResultProjectionMode = projectionModeValue(input.toolResultProjectionMode);
   if (input.rankedSearchEnabled !== undefined) config.rankedSearchEnabled = booleanValue(input.rankedSearchEnabled, "rankedSearchEnabled");
   if (input.editableMemoryEnabled !== undefined) config.editableMemoryEnabled = booleanValue(input.editableMemoryEnabled, "editableMemoryEnabled");
@@ -203,6 +219,10 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     case "hybridSummaryTargetTokens": value = boundedInteger(raw, command, 512, 16_000); break;
     case "historyEditorEnabled": value = booleanValue(raw, command); break;
     case "incrementalPrecomputeEnabled": value = booleanValue(raw, command); break;
+    case "isolatedWorkerEnabled": value = booleanValue(raw, command); break;
+    case "hostWorkerSlots": value = boundedInteger(raw, command, 1, 4); break;
+    case "workerTimeoutSeconds": value = boundedInteger(raw, command, 30, 3_600); break;
+    case "workerNiceLevel": value = boundedInteger(raw, command, 0, 19); break;
     case "toolResultProjectionMode": value = projectionModeValue(raw); break;
     case "rankedSearchEnabled": value = booleanValue(raw, command); break;
     case "editableMemoryEnabled": value = booleanValue(raw, command); break;

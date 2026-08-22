@@ -66,3 +66,7 @@ The [explicit session-set benchmark](local-session-benchmark.md) can measure loc
 ## Long-session outcome metrics
 
 Benchmark outcomes now use safe code categories. `no-net-savings` is separate from a validation defect. All-history protected visibility is separate from heuristic state-model restriction coverage. Current-state rendering keeps complete source-linked lines within its bounded share of the unchanged hard output limit. Private numeric results remain outside the repository.
+
+## Local CPU isolation correction
+
+The default-off isolated worker moves deterministic replay compaction, replay generation hashing, candidate snapshot loading, deterministic summary rebase, and enabled candidate updates to one-job local child processes. A host-wide owner-only scheduler permits 1 through 4 jobs and defaults to one. Waiting replay has priority over waiting candidate updates. This change limits simultaneous host pressure and main-process event-loop delay. It does not reduce total deterministic work. Pi JSONL remains authoritative, and provider-backed summary work remains in Pi. See [compaction-worker.md](compaction-worker.md).

@@ -127,3 +127,15 @@ The manifest lists explicit session JSONL paths. The command keeps sources read-
 Historical protected fields count all blocks, exact duplicates, and unique text groups. State-model restriction fields count deterministic restriction cells, exact value visibility, source-cue visibility, conflicts, and current-state selection. The state model is heuristic, not a perfect authority model. Final-plan fields separate plan representation, current-state coverage, and history-only recovery. Current-state line fields detect any rendered line without its complete source-link suffix.
 
 Private manifests and reports must remain outside the repository and must not be committed.
+
+## Isolated-worker benchmark
+
+`scripts/benchmark-compaction-worker.mjs` uses generated synthetic JSONL only. It has no private fixture or discovery option. The `compare`, `queue`, `update`, and `generations` modes report aggregate numeric results without source text or identifiers.
+
+The 5,000-task compare case ran three times on the baseline machine. Medians were 5,909.0 ms in process and 5,935.5 ms in the worker. Worker overhead was 0.45%. Every summary, generation hash, validation report, plan source set, and rendered token count was equivalent. Median main-process timer delay changed from 5,900.1 ms in process to 0.6 ms with the worker. Median worker peak RSS was 521,864 KiB. The complete response was 611,802 bytes, below the 8 MiB protocol limit. Every run reported zero model and network calls.
+
+Five queued synthetic jobs reached maximum active counts of exactly 1, 2, and 4 for configured limits 1, 2, and 4. Each run ended with zero ticket and slot files. The 5,000-task candidate update took 1,191.1 ms, created eight segments, read 13,747,773 source bytes, had 0.9 ms main-process timer delay, and reported zero model and network calls.
+
+These values show event-loop isolation and scheduler limits. They do not show lower total CPU work. Timing remains machine-specific.
+
+A five-generation isolated series at 1,000 through 5,000 tasks measured worker wall times of 1,054.5, 2,019.6, 3,172.1, 4,501.2, and 6,110.8 ms. Main-process timer delay remained from 0.4 through 2.1 ms. Complete responses remained from 450,959 through 611,802 bytes.

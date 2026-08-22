@@ -4,7 +4,7 @@ An installable Pi extension and standalone TypeScript library for **bounded long
 
 The implementation follows the hand-off in [`docs/hand-off.md`](docs/hand-off.md): new information reaches the primary model normally; only historical active-context representations are compacted. Pi's JSONL is never rewritten and remains the authoritative record.
 
-This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted, installed, activated, reaudited, or production-ready. External semantic processing, the experimental history classifier, incremental preprocessing, and request-local projection remain default-off.
+This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted, installed, activated, reaudited, or production-ready. External semantic processing, the experimental history classifier, incremental preprocessing, isolated local worker processes, and request-local projection remain default-off.
 
 ## Implemented behavior
 
@@ -103,7 +103,8 @@ Run `/chrono-compact-settings` in Pi to configure:
 - automatic or fixed chronological replay maximum; and
 - regular Pi summary enablement and token target; and
 - the separate, default-off `Experimental LLM history classifier` setting;
-- default-off deterministic incremental preprocessing; and
+- default-off deterministic incremental preprocessing;
+- a default-off one-job local child process for replay and candidate updates, with a host-wide priority scheduler; and
 - default-off request-local tool-result projection with `off`, `safe`, and `aggressive` modes;
 - ranked local search and editable working memory enablement;
 - hot and warm source-token retention bands; and
@@ -138,6 +139,10 @@ Environment variables remain available for advanced deployment. They take preced
 | `PI_CHRONO_HISTORY_EDITOR_MAX_INPUT` | `50000` | Maximum estimated editor input. Larger generations use deterministic compaction without a model job. |
 | `PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT` | `16000` | Adaptive upper bound. Normal generations stay at or below 8,000 tokens. High-value ultra-long history can use more. |
 | `PI_CHRONO_INCREMENTAL_PRECOMPUTE` | `false` | Enable segmented deterministic background candidate preprocessing. The owner-only store is `<session.jsonl>.chrono-candidate-segments-v1`. Old `.chrono-incremental-v2.json` files are ignored. |
+| `PI_CHRONO_ISOLATED_WORKER` | `false` | Move deterministic replay and enabled candidate updates to one-job local child processes. See [`docs/compaction-worker.md`](docs/compaction-worker.md). |
+| `PI_CHRONO_HOST_WORKER_SLOTS` | `1` | Limit host-wide ChronoCompact CPU jobs to 1–4. Waiting replay has priority over waiting updates. |
+| `PI_CHRONO_WORKER_TIMEOUT_SECONDS` | `900` | Bound scheduler and child work from 30 through 3,600 seconds. |
+| `PI_CHRONO_WORKER_NICE` | `10` | Set child nice level from 0 through 19. A permission failure is nonfatal. |
 | `PI_CHRONO_TOOL_RESULT_PROJECTION` | `off` | Select `off`, `safe`, or `aggressive` request-local projection. Uncertainty keeps all messages unchanged. |
 | `PI_CHRONO_RANKED_SEARCH` | `true` | Use normalized BM25 as the normal `history_search` path. Exact and regex remain available. |
 | `PI_CHRONO_EDITABLE_MEMORY` | `true` | Enable owner-only append-only ordinary working memory. |
@@ -314,7 +319,8 @@ The repository includes an end-to-end Pi-like fixture and automated tests for:
 - semantic candidate rejection for unsupported facts;
 - exact-repeat canonical retention and conservative repeated-observation deltas; and
 - experimental-classifier default, persistence, environment precedence, and zero-call disabled paths;
-- segmented incremental transitions, immutable append behavior, cold-equivalent output, final-use tamper rejection, protected-data omission, cross-segment pairing, bounded runtime loading, malformed fallback, cancellation, and extension integration; and
+- segmented incremental transitions, immutable append behavior, cold-equivalent output, final-use tamper rejection, protected-data omission, cross-segment pairing, bounded runtime loading, malformed fallback, cancellation, and extension integration;
+- isolated-worker protocol rejection, exact branch and cut reconstruction, source stability, replay equality, cache behavior, candidate updates, process failure, cancellation, scheduler limits and priority, stale-owner recovery, privacy, cleanup, and extension integration; and
 - projection modes, first use, recency, protected evidence, source binding, pair validation, exact recovery, deterministic output, request-local immutability, and extension fail-closed behavior;
 - hot, warm, and cold retention with protected-age override and bounded cold cues;
 - declared and inferred file versions, normal-read overlap union, conflicting-overlap supersession, product-connected near-duplicate factoring, and marker-only repeat safety;
@@ -340,6 +346,7 @@ npm test
 - Visible reasoning is preserved only when it exists in session data. The system does not reconstruct unavailable private reasoning.
 - Historical images are represented by explicit opaque-image markers and remain exactly recoverable from JSONL; the text-only compaction message does not embed original image bytes.
 - Segmented incremental reuse reduces repeated persistent candidate work. It does not avoid authoritative branch parsing, future-sensitive computation, resource and causal analysis, planning, or final validation.
+- Isolated child work keeps deterministic replay CPU work off Pi's main event loop. It does not reduce total CPU work. The default one-slot scheduler limits simultaneous ChronoCompact memory and CPU pressure.
 - Projection is request-local and process-local. A restart resets first-consumption tracking and therefore preserves more full results until later requests.
 
 See [`docs/architecture.md`](docs/architecture.md) for implementation details and [`docs/hand-off.md`](docs/hand-off.md) for the authoritative product definition.

@@ -48,3 +48,13 @@ The parent writes one owner-only JSON report outside the repository and prints t
 ## Current limits
 
 The benchmark trusts only its explicit manifest and does not provide discovery. Snapshot stability uses file identity, size, and modification time with one retry. The working-set gate is conservative but does not reserve memory. Historical protected visibility is an archival diagnostic and does not prove current restriction coverage. Private results need a separate privacy review before sharing. The source ledger remains disconnected from normal compaction.
+
+## Isolated-worker private verification
+
+The isolated-worker verification wrapper is private and uncommitted. It accepts only an explicit private path list. It does not discover sessions. It reads stable source identity before and after work, uses `nice -n 10` and `ionice -c3` where available, disables worker replay sidecars for real sources, and writes an aggregate owner-only report outside the repository. Committed documentation records no private path, session ID, source ID, hash, text, mapping, snapshot, ledger, store, or report.
+
+The final read-only replay verification attempted 20 explicit private fixtures. All 20 worker runs succeeded and matched the in-process summary, generation hash, rendered count, plan source references, and validation result. All 20 original source identities remained stable. Worker main-process timer-delay p90 was 4.6 ms. The largest complete response was 1,621,317 bytes, and the largest child peak RSS was 1,103,212 KiB. The runs made zero model and network calls. The owner-only report remained outside Git.
+
+Five isolated candidate-update checks used temporary stable branch snapshots because candidate stores are derived sidecars. All five succeeded. All five original sources remained unchanged. Maximum main-process timer delay was 1.2 ms. The checks made zero model and network calls and removed each temporary snapshot, ledger, store, cache, and scheduler directory.
+
+Four explicit private replay fixtures also ran under scheduler limits 1, 2, and 4. Every group completed 4/4 jobs with zero model or network calls. Group wall times were 42.8, 29.2, and 17.9 seconds. Maximum main-process timer delays were 22.5, 13.2, and 10.9 ms. Every group ended with zero scheduler tickets and slots. Public scheduler instrumentation and automated tests separately confirmed that maximum active jobs equal, and never exceed, each configured limit.

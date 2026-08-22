@@ -38,3 +38,7 @@ The source ledger passes newly parsed entry text through a request-local callbac
 The store reports new, exact-hit, append, source replacement, truncation, tail rewrite, configuration change, reducer change, corruption, orphan recovery, and stale-ready conditions. A missing, stale, busy, unfinished, or corrupt store cannot block compaction. Compaction reads the last ready snapshot when possible and otherwise computes candidates cold.
 
 Both the source ledger and candidate store are deletable. Removing either sidecar causes a safe rebuild from Pi JSONL.
+
+## Isolated update process
+
+When both segmented precompute and the default-off isolated-worker setting are enabled, the extension schedules candidate updates as low-priority one-job child processes. Replay jobs have priority over waiting updates. Readers continue to use the last complete manifest and do not wait for the worker. A worker failure leaves that manifest unchanged. With worker isolation off, the existing same-process update path remains active.

@@ -171,3 +171,16 @@ The immutable candidate segment store was measured on 2026-08-22. The source-led
 All nine compare runs matched summary bytes, plan selections, validation, generation hash, and rendered tokens. All warm ratios were within 15% of cold. One 25,000-entry run accepted all entries and produced 13 segments in a 17,251,387-byte store. Thus, the retired 20,000-entry and 16 MiB whole-checkpoint limits do not apply.
 
 Candidate preprocessing is append-incremental. Full branch parsing, resource lineage, causal analysis, future-sensitive candidate computation, planning, and final validation remain non-incremental. Timing and memory remain environment-specific advisory measurements.
+
+## Isolated local worker correction
+
+A temporary phase probe on the 5,000-task synthetic case measured 14,286.3 ms main-process timer delay. It attributed 9,099.1 ms to JSONL branch preparation and 3,952.6 ms to `compactEntries`. The probe exposed repeated parent-chain cycle scans in JSONL assembly. Linear resolved-chain cycle validation replaced those repeated scans before the final worker comparison. Temporary timing code was then removed.
+
+The default-off child-process path reconstructs the exact persisted branch and cut, performs deterministic replay and generation hashing, and returns a bounded response. The final three-run 5,000-task public comparison had these medians:
+
+| Path | Wall time | Main-process maximum timer delay | Peak worker RSS | Complete response | Exact output |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Existing in-process replay | 5,909.0 ms | 5,900.1 ms | not applicable | not applicable | reference |
+| Isolated child replay | 5,935.5 ms | 0.6 ms | 521,864 KiB | 611,802 bytes | equivalent |
+
+Worker wall overhead was 0.45%, below the 30% concern threshold. Worker main-process timer delay was below the 150 ms target. Queue checks reached exactly the configured 1, 2, and 4 active jobs and left no ticket or slot files. This correction moves deterministic work; it does not remove it. The original baseline tables remain historical results.

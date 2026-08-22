@@ -30,14 +30,19 @@ test("experimental high-impact features default off and environment overrides ha
     editor: process.env.PI_CHRONO_HISTORY_EDITOR,
     incremental: process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE,
     projection: process.env.PI_CHRONO_TOOL_RESULT_PROJECTION,
+    worker: process.env.PI_CHRONO_ISOLATED_WORKER,
   };
   try {
     delete process.env.PI_CHRONO_HISTORY_EDITOR;
     delete process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE;
     delete process.env.PI_CHRONO_TOOL_RESULT_PROJECTION;
+    delete process.env.PI_CHRONO_ISOLATED_WORKER;
     assert.equal(resolveExtensionSettings().historyEditorEnabled, false);
     assert.equal(resolveExtensionSettings().incrementalPrecomputeEnabled, false);
     assert.equal(resolveExtensionSettings().toolResultProjectionMode, "off");
+    assert.equal(resolveExtensionSettings().isolatedWorkerEnabled, false);
+    assert.equal(resolveExtensionSettings().hostWorkerSlots, 1);
+    assert.equal(resolveExtensionSettings().workerNiceLevel, 10);
     assert.equal(resolveExtensionSettings({ historyEditorEnabled: true }).historyEditorEnabled, true);
     assert.equal(resolveExtensionSettings({ incrementalPrecomputeEnabled: true }).incrementalPrecomputeEnabled, true);
     assert.equal(resolveExtensionSettings({ toolResultProjectionMode: "safe" }).toolResultProjectionMode, "safe");
@@ -50,6 +55,8 @@ test("experimental high-impact features default off and environment overrides ha
     assert.equal(resolveExtensionSettings({ historyEditorEnabled: false }).historyEditorEnabled, true);
     process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE = "false";
     assert.equal(resolveExtensionSettings({ incrementalPrecomputeEnabled: true }).incrementalPrecomputeEnabled, false);
+    process.env.PI_CHRONO_ISOLATED_WORKER = "true";
+    assert.equal(resolveExtensionSettings({ isolatedWorkerEnabled: false }).isolatedWorkerEnabled, true);
     process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = "aggressive";
     assert.equal(resolveExtensionSettings({ toolResultProjectionMode: "off" }).toolResultProjectionMode, "aggressive");
   } finally {
@@ -57,6 +64,8 @@ test("experimental high-impact features default off and environment overrides ha
     else process.env.PI_CHRONO_HISTORY_EDITOR = previous.editor;
     if (previous.incremental === undefined) delete process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE;
     else process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE = previous.incremental;
+    if (previous.worker === undefined) delete process.env.PI_CHRONO_ISOLATED_WORKER;
+    else process.env.PI_CHRONO_ISOLATED_WORKER = previous.worker;
     if (previous.projection === undefined) delete process.env.PI_CHRONO_TOOL_RESULT_PROJECTION;
     else process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = previous.projection;
   }
@@ -734,4 +743,10 @@ test("uniform continuation follows unresolved turns across successful compaction
   if (previousTriggerTokens === undefined) delete process.env.PI_CHRONO_TRIGGER_TOKENS;
   else process.env.PI_CHRONO_TRIGGER_TOKENS = previousTriggerTokens;
   rmSync(configPath, { force: true });
+});
+
+test("isolated worker extension path uses persisted source and returns exact bounded replay", async () => {
+  const directory=mkdtempSync(join(tmpdir(),"chrono-extension-worker-"));const sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});
+  const names=["PI_CHRONO_CONFIG_PATH","PI_CHRONO_ISOLATED_WORKER","PI_CHRONO_CACHE"];const previous=new Map(names.map(name=>[name,process.env[name]]));process.env.PI_CHRONO_CONFIG_PATH=join(directory,"config.json");process.env.PI_CHRONO_ISOLATED_WORKER="true";process.env.PI_CHRONO_CACHE="false";
+  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result.compaction);assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
 });
