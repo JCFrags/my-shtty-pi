@@ -58,3 +58,7 @@ The current normal compaction path rebuilds important derived data from the full
 ## First scale component
 
 The [source ledger](source-ledger.md) is the first scale component. It indexes exact source byte locations and supports incremental append updates. It is not yet active in normal compaction.
+
+## Private real-session measurement
+
+The [explicit session-set benchmark](local-session-benchmark.md) can measure local real sessions from a supplied manifest. The script does not discover files. Private benchmark results stay outside the repository. These measurements guide later scale work.

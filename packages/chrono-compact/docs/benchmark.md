@@ -75,3 +75,22 @@ node scripts/benchmark-source-ledger.mjs large-entry --tokens 500000
 The task mode reports initial build, warm append, exact-hit, cold sidecar-load, exact-retrieval, memory, and integrity fields. `sourceReadAmplification` is the source bytes read by the initial build and append updates divided by final source bytes. It excludes cold sidecar reads. `exactHitSourceBytesRead` is the bounded tail anchor read. `exactRetrievalBytesRead` is the sum of the selected early, middle, and late entry lengths. Timing and memory fields are advisory.
 
 Large-entry mode builds one synthetic tool-result entry, runs an exact hit, appends one small entry, retrieves the complete large entry, and loads the sidecar cold. `sourceLineAssemblyBytes` reports bytes copied when chunk parts are joined once. `maximumSourceLineBytes` reports the largest complete line. `exactHitAnchorBytesRead` and `appendAnchorBytesRead` are fixed-size tail checks. `appendNewSourceBytesRead` is the small suffix. `exactRetrievalBytesRead` is the complete requested entry and is not an anchor read.
+
+## Explicit session-set benchmark
+
+The [explicit session-set benchmark](local-session-benchmark.md) accepts only a private manifest. It never discovers session files.
+
+```bash
+npm run benchmark:sessions -- run \
+  --manifest PRIVATE_MANIFEST.json \
+  --output PRIVATE_REPORT.json \
+  --minimum-bytes 1048576 \
+  --minimum-count 12 \
+  --maximum-files 100 \
+  --maximum-minutes 120 \
+  --per-session-timeout-seconds 900
+```
+
+The manifest lists explicit session JSONL paths. The command keeps sources read-only and benchmarks stable temporary snapshots. Output contains anonymous fixture IDs, aggregate numeric measurements, safe result counts, numeric distributions, and bounded failure categories. It excludes paths, file names, session IDs, source hashes, source references, source text, tool arguments, commands, URLs, and recovered text.
+
+A `memory-gate` result means the source-ledger checks ran but conservative memory limits prevented full compaction. It is not a compaction failure. Private manifests and reports must remain outside the repository and must not be committed.
