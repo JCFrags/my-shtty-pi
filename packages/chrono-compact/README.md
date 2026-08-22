@@ -45,7 +45,7 @@ This is not a `memory.md` authority file and not only one conversation summary. 
 - The product does not deduplicate a historical AGENTS.md against Pi's active instruction injection because source identity equivalence is not proved.
 - Protected ingestion supports configured `project:` and `skill:` regular files only. It does not discover scope applicability or verify other authority types.
 - Lock owner-death verification uses Linux `/proc/<pid>/stat` process-start identity. On a platform where ownership cannot be verified, recovery fails closed.
-- Lock publication briefly gives the candidate inode two links before the unique candidate name is removed. A concurrent contender can fail closed on that transient state and must retry the rejected append. Successful appends remain serialized; the observed failure did not silently accept or lose an event.
+- Lock publication briefly gives the candidate inode two links before the unique candidate name is removed. A concurrent contender retries this transient state within the existing lock limits. A persistent multi-link lock still fails closed; this does not claim that all lock races are impossible.
 
 ## Installation
 

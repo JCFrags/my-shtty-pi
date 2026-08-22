@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, readFile, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -291,6 +291,36 @@ test("concurrent successful memory appends preserve every event in one hash chai
     assert.equal(rebuilt.events.length, 40);
     assert.equal(rebuilt.memories.length, 40);
     assert.equal(new Set(rebuilt.events.map((event) => event.eventId)).size, 40);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("append retries a transient two-link lock publication", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "chrono-v2-memory-publishing-lock-"));
+  const path = join(directory, "memory.jsonl");
+  const lockPath = `${path}.lock`;
+  const candidatePath = `${lockPath}.candidate-${"b".repeat(32)}`;
+  try {
+    const dead = await lockOwner({ pid: 99_999_999, processStart: "1", nonce: "b".repeat(32) });
+    await writeFile(candidatePath, `${JSON.stringify(dead)}\n`, { mode: 0o600 });
+    await link(candidatePath, lockPath);
+
+    let settled = false;
+    const pending = appendMemoryEvent(path, {
+      action: "remember",
+      timestamp: at(1),
+      turn: 1,
+      sourceRef: "memory-tool:publishing-lock",
+      text: "Retry the publishing lock.",
+    }).finally(() => { settled = true; });
+    await new Promise<void>((resolveWait) => setImmediate(resolveWait));
+    assert.equal(settled, false);
+
+    await unlink(candidatePath);
+    const result = await pending;
+    assert.equal(result.events.length, 1);
+    assert.equal(result.memories.length, 1);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
