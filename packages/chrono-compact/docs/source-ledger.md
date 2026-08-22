@@ -2,7 +2,7 @@
 
 ## Status
 
-This is a personal-project component. It is not release approval. It is not yet connected to normal ChronoCompact compaction.
+This is a personal-project component. It is not release approval. The default-off isolated worker and exact history tools can use it. Pi JSONL remains authoritative.
 
 ## Purpose
 
@@ -32,9 +32,17 @@ The parser retains references to unread chunk parts. It joins those parts once w
 
 A final incomplete JSON line remains unindexed until a later update completes it. Invalid JSON in a complete line fails closed.
 
+## Exact branch reconstruction
+
+The branch API starts at one required leaf and walks ledger parent metadata to one root. It returns root-to-leaf source order. Missing leaves, missing or invalid parents, cycles, duplicate IDs, and parents that occur after children fail closed. The cut API requires the exact first-kept entry on that branch. It never selects another leaf or cut.
+
+Selected entries use coalesced source ranges. The defaults permit a 64 KiB gap, a 4 MiB normal range, and 2,048 entries per range. One oversized entry remains one range and is never split. Each selected slice must match its source hash, UTF-8 JSON value, entry ID, parent ID, and type. Metrics report exact selected bytes, total bytes read, gaps, unrelated bytes inside gaps, range counts, maximum sizes, and `1 - bytes read / source file bytes` as the clamped source-byte avoidance rate.
+
 ## Exact retrieval
 
-Exact retrieval is separate from tail-anchor verification. It finds entry metadata in the runtime map and reads the complete selected byte range. It verifies the content hash, JSON entry ID, and UTF-8 JSON before returning the exact JSON object text. Changed bytes produce a stale-ledger error and no text.
+Exact retrieval is separate from tail-anchor verification. `history_get` reads only its selected entry body. Neighbor information comes from ledger line and type metadata. `history_range` selects a parent-chain or file-order range from metadata before it reads selected small bodies. It can omit an oversized body from the range without reading it.
+
+The extension uses one current-session in-memory ledger or loads an existing valid sidecar read-only. It does not create a ledger only because an exact history tool ran. Missing, busy, stale, corrupt, incomplete, or unsuitable ledgers use the existing parsed-session implementation. Session switch, fork, and shutdown clear the reference. `history_search` and `history_recall` are unchanged.
 
 ## Integrity
 
@@ -52,4 +60,4 @@ A new build reads the available source once. A normal append reads new bytes plu
 
 ## Current limits
 
-The default-off candidate segment store uses the ledger for append preprocessing and exact source verification. Normal compaction still parses the authoritative full branch and does not use the ledger as its replay representation. The suffix and schema version remain V1. A checkpoint without valid fixed-anchor fields is rejected. A later update safely rebuilds the derived sidecar instead of migrating it. It does not replace the current parser or retrieval tools. File identity and a bounded tail anchor detect common replacement and rewrite cases, but they are not a full old-prefix verification. The one-writer lock has no process-identity recovery. A cold load remains proportional to sidecar size.
+The default-off candidate segment store and isolated replay worker use the ledger. The worker still parses every entry on the selected active branch, then rebuilds resource state, causal state, candidates, planning, and validation. It does not parse unrelated branches after a valid ledger is available. The suffix and schema version remain V1. A checkpoint without valid fixed-anchor fields is rejected. A later update safely rebuilds the derived sidecar instead of migrating it. It does not replace the current parser or retrieval tools. File identity and a bounded tail anchor detect common replacement and rewrite cases, but they are not a full old-prefix verification. The one-writer lock has no process-identity recovery. A cold load remains proportional to sidecar size.

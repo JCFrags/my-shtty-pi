@@ -36,7 +36,7 @@ import {
   type CandidateSegmentStore,
 } from "./candidate-segment-store.js";
 import { getSourceEntriesBefore, parseBranchEntries, readSessionJsonl } from "./jsonl.js";
-import { loadSourceLedger } from "./source-ledger.js";
+import { loadSourceLedger, sourceLedgerIsBusy, sourceLedgerMatchesSource, sourceLedgerPath, type SourceLedger } from "./source-ledger.js";
 import {
   createPiRegularSummary,
   previousRegularPiSummary,
@@ -46,7 +46,9 @@ import {
 import { createPiHistoryEditor, DEFAULT_HISTORY_EDITOR_MAX_INPUT_TOKENS } from "./history-editor.js";
 import {
   historyGet,
+  historyGetFromLedger,
   historyRange,
+  historyRangeFromLedger,
   historySearch,
 } from "./retrieval.js";
 import { buildLocalSearchIndex, renderRankedSearch, searchLocalHistory, type LocalSearchIndex } from "./search-index.js";
@@ -524,6 +526,7 @@ function registerHistoryTools(
   pi: ExtensionAPI,
   settings: () => RuntimeSettings,
   retrievalFeedback: Map<string, RetrievalFeedback>,
+  availableLedger: (ctx: ExtensionContext) => Promise<{ sessionPath: string; ledger: SourceLedger } | undefined>,
 ): void {
   pi.registerTool({
     name: "history_get",
@@ -538,14 +541,16 @@ function registerHistoryTools(
       maxChars: Type.Optional(Type.Number({ minimum: 1, maximum: 12_000 })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const session = await loadSession(ctx);
-      const text = historyGet(session, params.entryId, {
+      const options = {
         blockIndex: params.blockIndex,
         contextBefore: params.contextBefore,
         contextAfter: params.contextAfter,
         startChar: params.startChar,
         maxChars: params.maxChars,
-      });
+      };
+      const ledger = await availableLedger(ctx);
+      const text = ledger ? await historyGetFromLedger(ledger.sessionPath, ledger.ledger, params.entryId, options).catch(async () => historyGet(await loadSession(ctx), params.entryId, options))
+        : historyGet(await loadSession(ctx), params.entryId, options);
       return toolText(text, { entryId: params.entryId, blockIndex: params.blockIndex });
     },
   });
@@ -698,8 +703,10 @@ function registerHistoryTools(
       maxEntries: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const session = await loadSession(ctx);
-      const text = historyRange(session, params.startEntryId, params.endEntryId, { maxEntries: params.maxEntries });
+      const options = { maxEntries: params.maxEntries };
+      const ledger = await availableLedger(ctx);
+      const text = ledger ? await historyRangeFromLedger(ledger.sessionPath, ledger.ledger, params.startEntryId, params.endEntryId, options).catch(async () => historyRange(await loadSession(ctx), params.startEntryId, params.endEntryId, options))
+        : historyRange(await loadSession(ctx), params.startEntryId, params.endEntryId, options);
       return toolText(text, { startEntryId: params.startEntryId, endEntryId: params.endEntryId });
     },
   });
@@ -857,9 +864,6 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   let userConfig = loadedUserConfig.config;
   let userConfigWarning = loadedUserConfig.warning;
   const retrievalFeedback = new Map<string, RetrievalFeedback>();
-  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback);
-  registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
-  registerRetentionHintTool(pi);
   let triggerPending = false;
   let lastTriggerAttemptTokens: number | undefined;
   let forcedCompactionReason: string | undefined;
@@ -867,12 +871,31 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   let continueAfterSuccessfulCompaction = false;
   let warningLevel = 0;
   let incrementalStore: CandidateSegmentStore | undefined;
+  let historyLedger: { sessionPath: string; ledger: SourceLedger } | undefined;
   let incrementalAbort: AbortController | undefined;
   let incrementalTimer: ReturnType<typeof setTimeout> | undefined;
   let incrementalGeneration = 0;
   let incrementalStatus: Record<string, unknown> = { state: "disabled" };
   let projectionSeenToolCallIds = new Set<string>();
   let lastProjectionMetrics: ToolResultProjectionMetrics | undefined;
+
+  const availableHistoryLedger = async (ctx: ExtensionContext): Promise<{ sessionPath: string; ledger: SourceLedger } | undefined> => {
+    const sessionPath = ctx.sessionManager.getSessionFile();
+    if (!sessionPath) { historyLedger = undefined; return undefined; }
+    const sidecar = sourceLedgerPath(sessionPath);
+    if (await sourceLedgerIsBusy(sidecar)) return undefined;
+    const candidateLedger = incrementalStore?.sessionPath === sessionPath ? incrementalStore.ledger : undefined;
+    if (candidateLedger && await sourceLedgerMatchesSource(sessionPath, candidateLedger)) return historyLedger = { sessionPath, ledger: candidateLedger };
+    if (historyLedger?.sessionPath === sessionPath && await sourceLedgerMatchesSource(sessionPath, historyLedger.ledger)) return historyLedger;
+    try {
+      const ledger = await loadSourceLedger(sessionPath, sidecar);
+      if (!await sourceLedgerMatchesSource(sessionPath, ledger)) return undefined;
+      return historyLedger = { sessionPath, ledger };
+    } catch { return undefined; }
+  };
+  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger);
+  registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
+  registerRetentionHintTool(pi);
 
   const incrementalConfig = (settings: RuntimeSettings): CompactorConfig => resolveCompactorConfig({
     ...settings.config,
@@ -1014,6 +1037,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     cancelIncrementalWork(true);
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
     lastProjectionMetrics = undefined;
     scheduleIncrementalWork(ctx);
@@ -1021,16 +1045,19 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
 
   pi.on("session_before_switch", () => {
     cancelIncrementalWork(true);
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 
   pi.on("session_before_fork", () => {
     cancelIncrementalWork(true);
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 
   pi.on("session_shutdown", () => {
     cancelIncrementalWork(true);
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 

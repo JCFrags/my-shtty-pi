@@ -93,10 +93,12 @@ export interface SourceLedgerUpdateOptions {
 
 export class SourceLedgerError extends Error {
   readonly lineNumber?: number;
-  constructor(message: string, lineNumber?: number) {
+  readonly code?: "branch-parent-missing" | "branch-cycle";
+  constructor(message: string, lineNumber?: number, code?: "branch-parent-missing" | "branch-cycle") {
     super(lineNumber === undefined ? message : `${message} (line ${lineNumber})`);
     this.name = "SourceLedgerError";
     this.lineNumber = lineNumber;
+    this.code = code;
   }
 }
 
@@ -170,6 +172,7 @@ async function parseSourceRange(path: string, start: number, end: number, firstL
       header = object;
     } else {
       if (typeof object.id !== "string" || object.id.length === 0) throw new SourceLedgerError(`Entry of type ${String(object.type)} is missing an id`, lineNumber);
+      if (object.parentId !== undefined && object.parentId !== null && (typeof object.parentId !== "string" || object.parentId.length === 0)) throw new SourceLedgerError(`Entry ${object.id} has an invalid parent id`, lineNumber, "branch-parent-missing");
       entries.push({ recordType: "entry", entryId: object.id, parentId: typeof object.parentId === "string" ? object.parentId : null,
         entryType: object.type as string, lineNumber, sourceByteOffset: offset, sourceByteLength: content.length,
         nextSourceByteOffset: nextOffset, sourceContentHash: hashBytes(content) });
@@ -260,7 +263,7 @@ async function rebuild(sessionPath: string, sidecar: string, transition: SourceL
     sourceSessionIdentity: sessionIdentity(parsed.header), createdAt: new Date().toISOString(), firstIntegrityChainValue: ZERO_HASH }, previous);
   previous = header.ledgerRecordHash;
   const entries: SourceLedgerEntry[] = parsed.entries.map((item) => {
-    if (seen.has(item.entryId)) throw new SourceLedgerError(`Duplicate entry id ${item.entryId}`, item.lineNumber);
+    if (seen.has(item.entryId)) throw new SourceLedgerError(`Duplicate entry id ${item.entryId}`, item.lineNumber, "branch-cycle");
     seen.add(item.entryId); const record = withHash(item, previous); previous = record.ledgerRecordHash; return record;
   });
   const checkpoint = checkpointRecord(previous, parsed.completePosition, Number(metadata.size), entries, transition, Buffer.from(parsed.committedAnchor));
@@ -330,7 +333,7 @@ async function appendUpdate(sessionPath: string, sidecar: string, ledger: Source
   let previous = ledger.integrityChainState;
   const appended: SourceLedgerEntry[] = [];
   for (const item of parsed.entries) {
-    if (ledger.entryById.has(item.entryId) || appended.some((entry) => entry.entryId === item.entryId)) throw new SourceLedgerError(`Duplicate entry id ${item.entryId}`, item.lineNumber);
+    if (ledger.entryById.has(item.entryId) || appended.some((entry) => entry.entryId === item.entryId)) throw new SourceLedgerError(`Duplicate entry id ${item.entryId}`, item.lineNumber, "branch-cycle");
     const record = withHash(item, previous); previous = record.ledgerRecordHash; appended.push(record);
   }
   if (parsed.completePosition === ledger.checkpoint.sourceBytePosition && appended.length === 0) {
@@ -423,6 +426,18 @@ export async function readExactSourceEntry(sessionPath: string, ledger: SourceLe
     if (value === null || typeof value !== "object" || (value as Record<string, unknown>).id !== entryId) throw new SourceLedgerError(`Stale source ledger entry ${entryId}; source identity failed verification.`);
     return { text: bytes.toString("utf8"), bytesRead: read.bytesRead };
   } finally { await handle.close(); }
+}
+
+export async function sourceLedgerIsBusy(sidecar: string): Promise<boolean> {
+  try { return (await stat(`${sidecar}.lock`)).isFile(); } catch { return false; }
+}
+
+export async function sourceLedgerMatchesSource(sessionPath: string, ledger: SourceLedger): Promise<boolean> {
+  try {
+    const metadata = await stat(sessionPath, { bigint: true });
+    if (!metadata.isFile() || !sameIdentity(ledger.sourceIdentity, identity(metadata)) || Number(metadata.size) !== ledger.checkpoint.sourceFileSize) return false;
+    return (await anchorMatches(sessionPath, ledger)).matches;
+  } catch { return false; }
 }
 
 export function getSourceLedgerMetrics(ledger: SourceLedger): SourceLedgerMetrics { return ledger.metrics; }

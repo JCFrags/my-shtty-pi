@@ -184,3 +184,23 @@ The default-off child-process path reconstructs the exact persisted branch and c
 | Isolated child replay | 5,935.5 ms | 0.6 ms | 521,864 KiB | 611,802 bytes | equivalent |
 
 Worker wall overhead was 0.45%, below the 30% concern threshold. Worker main-process timer delay was below the 150 ms target. Queue checks reached exactly the configured 1, 2, and 4 active jobs and left no ticket or slot files. This correction moves deterministic work; it does not remove it. The original baseline tables remain historical results.
+
+## Ledger-backed branch-load correction
+
+On 2026-08-22, each public synthetic case ran three times serially. The table contains medians. Timing and RSS remain machine-specific.
+
+| Active tasks | Abandoned tasks | Complete source | Exact active bytes | Ledger source read | Avoidance | Ledger cold load | Branch read |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 4,000 | 4,731,550 | 2,736,607 | 2,739,691 | 42.10% | 29.09 ms | 13.27 ms |
+| 2,000 | 8,000 | 9,483,300 | 5,485,507 | 5,491,675 | 42.09% | 53.16 ms | 20.31 ms |
+| 5,000 | 20,000 | 23,759,300 | 13,732,207 | 13,747,627 | 42.14% | 127.30 ms | 60.44 ms |
+
+At 5,000 active tasks, coalescing read 0.11% above exact active bytes and no indexed abandoned entry body. The worker reference took 5,035.0 ms. The ledger worker took 5,683.6 ms, a 12.9% increase. Worker peak RSS changed from 593,332 KiB to 572,420 KiB. Main-process timer delay was 0.35 ms. Exact summary, generation hash, validation, plan sources, and branch JSON all matched.
+
+| Linear tasks | Sidecar bytes | Bytes / source entry | Cold load | Old worker | Ledger worker | Change |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1,411,876 | 455.30 | 14.41 ms | 682.1 ms | 1,221.2 ms | +79.0% |
+| 2,000 | 2,832,676 | 456.81 | 25.77 ms | 1,470.7 ms | 2,065.2 ms | +40.4% |
+| 5,000 | 7,109,024 | 458.62 | 58.19 ms | 4,978.5 ms | 5,669.1 ms | +13.9% |
+
+Small linear runs show material process-start and ledger overhead above 15%. The 5,000-task linear run remained below the 15% concern threshold. Retrieval produced exact equal text in 100 of 100 and 500 of 500 samples. The 500-sample case read about 249 KiB of selected ledger ranges after one cold ledger load. Cold sidecar loading remains linear and is not removed by this correction.

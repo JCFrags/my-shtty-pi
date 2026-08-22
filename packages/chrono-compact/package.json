@@ -53,6 +53,7 @@
     "benchmark:source-ledger": "npm run build && node scripts/benchmark-source-ledger.mjs",
     "benchmark:candidate-segments": "npm run build && node scripts/benchmark-candidate-segments.mjs",
     "benchmark:worker": "npm run build && node scripts/benchmark-compaction-worker.mjs",
+    "benchmark:ledger-branch": "npm run build && node scripts/benchmark-ledger-branch.mjs",
     "benchmark:sessions": "npm run build && node scripts/benchmark-session-set.mjs",
     "prepack": "npm test"
   },

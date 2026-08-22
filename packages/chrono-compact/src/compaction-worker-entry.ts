@@ -1,33 +1,169 @@
 import { randomBytes } from "node:crypto";
-import { chmod, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { setPriority } from "node:os";
 import { createCandidateSegmentStore, loadCandidateRecordsForBranch, loadCandidateSegmentManifest, updateCandidateSegmentStore } from "./candidate-segment-store.js";
 import { validateWorkerRequest, validateWorkerResponse, MAX_WORKER_RESPONSE_BYTES, type CompactionWorkerRequest, type CompactionWorkerResponse, type WorkerFailureCode, type WorkerRuntimeMetrics } from "./compaction-worker-protocol.js";
 import { compactEntries, computeGenerationHash, resolveCompactorConfig } from "./compactor.js";
-import { getActiveBranch, getSourceEntriesBefore, parseSessionJsonl } from "./jsonl.js";
-import { loadSourceLedger } from "./source-ledger.js";
+import { loadSourceLedgerBranch, splitLedgerBranchAtEntry, type LedgerBranchReadMetrics } from "./ledger-branch.js";
+import { updateSourceLedger } from "./source-ledger.js";
 import { buildDeterministicSummaryRebase } from "./summary-rebase.js";
 import { renderHybridCompaction } from "./pi-hybrid.js";
 import { parseHistoricalBlocks } from "./blocks.js";
 import { estimateTokensFromText, hashText, stableStringify } from "./utils.js";
 import type { CompressionResult } from "./types.js";
 
-interface SourceState { deviceId:string;inodeId:string;size:number;mtimeMs:number; }
-function sourceState(value:Awaited<ReturnType<typeof stat>>):SourceState{return{deviceId:String(value.dev),inodeId:String(value.ino),size:Number(value.size),mtimeMs:Number(value.mtimeMs)};}
-function same(a:SourceState,b:SourceState):boolean{return a.deviceId===b.deviceId&&a.inodeId===b.inodeId&&a.size===b.size&&a.mtimeMs===b.mtimeMs;}
-async function stableRead(request:CompactionWorkerRequest):Promise<{text:string;state:SourceState}>{let changed=false;for(let attempt=0;attempt<2;attempt++){let before:SourceState;try{before=sourceState(await stat(request.sessionPath));}catch{throw Object.assign(new Error(),{code:"no-session-file"});}if(before.deviceId!==request.expectedSource.deviceId||before.inodeId!==request.expectedSource.inodeId||before.size!==request.expectedSource.size||before.mtimeMs!==request.expectedSource.mtimeMs)throw Object.assign(new Error(),{code:"source-changed"});const text=await readFile(request.sessionPath,"utf8");const after=sourceState(await stat(request.sessionPath));if(same(before,after))return{text,state:after};changed=true;}throw Object.assign(new Error(),{code:changed?"source-changed":"no-session-file"});}
-function cachePath(sessionPath:string):string{return`${sessionPath}.chrono-worker-replay-v1.json`;}
-async function readReplayCache(path:string,key:string):Promise<CompressionResult|undefined>{try{const value=JSON.parse(await readFile(path,"utf8")) as {schemaVersion?:number;key?:string;payloadHash?:string;result?:CompressionResult};const payload=value.result===undefined?undefined:JSON.stringify(value.result);return value.schemaVersion===1&&value.key===key&&payload!==undefined&&value.payloadHash===hashText(payload)?value.result:undefined;}catch{return undefined;}}
-async function writeReplayCache(path:string,key:string,result:CompressionResult):Promise<void>{const temp=`${path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;await writeFile(temp,`${JSON.stringify({schemaVersion:1,key,payloadHash:hashText(JSON.stringify(result)),result})}\n`,{mode:0o600});await rename(temp,path);await chmod(path,0o600);}
-function baseMetrics(start:number,compactionMs:number,priorityApplied:boolean,cacheState:WorkerRuntimeMetrics["cacheState"]):WorkerRuntimeMetrics{const cpu=process.cpuUsage();return{workerPid:process.pid,totalWallMs:performance.now()-start,compactionMs,cpuUserMicros:cpu.user,cpuSystemMicros:cpu.system,peakRssKiB:process.resourceUsage().maxRSS,priorityApplied,cacheState,modelCalls:0,networkCalls:0,secretSentinelPresent:false};}
-function failureCode(error:unknown):WorkerFailureCode{const code=(error as {code?:unknown})?.code;if(typeof code==="string"&&["no-session-file","branch-not-persisted","invalid-cut","source-changed","candidate-store-unavailable","replay-validation-rejected","worker-timeout","worker-aborted"].includes(code))return code as WorkerFailureCode;return"unknown-worker-failure";}
-async function replay(request:Extract<CompactionWorkerRequest,{jobType:"replay-compaction"}>,signal?:AbortSignal):Promise<{result:CompressionResult;rebase?:string;compactionMs:number;cacheState:WorkerRuntimeMetrics["cacheState"];sourceCount:number}>{
- const snapshot=await stableRead(request);const session=parseSessionJsonl(snapshot.text);let branch;try{branch=getActiveBranch(session,request.branchLeafId);}catch{throw Object.assign(new Error(),{code:"branch-not-persisted"});}if(!branch.some(x=>x.id===request.firstKeptEntryId))throw Object.assign(new Error(),{code:"invalid-cut"});const source=getSourceEntriesBefore(branch,request.firstKeptEntryId);const cut=branch.findIndex(x=>x.id===request.firstKeptEntryId);const future=branch.slice(cut);let candidates;
- if(request.candidateStoreEnabled){try{const store=createCandidateSegmentStore(request.sessionPath);await loadCandidateSegmentManifest(store);if(store.manifest){store.ledger=await loadSourceLedger(request.sessionPath,store.ledgerPath);candidates=await loadCandidateRecordsForBranch(store,source.flatMap(x=>typeof x.id==="string"?[x.id]:[]));}}catch{candidates=undefined;}}
- let rebase:string|undefined;let hardOutputTokens=request.hardOutputTokens;let config=resolveCompactorConfig(request.config);
- if(request.deterministicRebase){rebase=buildDeterministicSummaryRebase(parseHistoricalBlocks(source,{includeHistoricalCompactions:false,includeMetadata:false}),undefined,request.deterministicRebase.targetTokens);const rebaseTokens=estimateTokensFromText(rebase);const wrapperTokens=Math.max(0,estimateTokensFromText(renderHybridCompaction(rebase,""))-rebaseTokens);hardOutputTokens=Math.max(128,request.deterministicRebase.historicalCeilingTokens-rebaseTokens-wrapperTokens);const replayTarget=Math.min(hardOutputTokens,Math.max(256,request.deterministicRebase.combinedTargetTokens-rebaseTokens-wrapperTokens));config=resolveCompactorConfig({...request.config,targetTokens:replayTarget});}
- const generationHash=computeGenerationHash(source,config,request.retentionHints,future,request.pinnedMemoryText,request.retrievalFeedback);const key=hashText(stableStringify({generationHash,hardOutputTokens}));let result:CompressionResult|undefined;let cacheState:WorkerRuntimeMetrics["cacheState"]=request.cacheEnabled?"miss":"disabled";if(request.cacheEnabled){result=await readReplayCache(cachePath(request.sessionPath),key);if(result)cacheState="hit";}let compactionMs=0;if(!result){const at=performance.now();try{result=await compactEntries(source,{config,hardOutputTokens,retentionHints:request.retentionHints,futureEntries:future,pinnedMemoryText:request.pinnedMemoryText,retrievalFeedback:request.retrievalFeedback,signal,...(candidates&&candidates.size?{precomputedCandidates:candidates}:{})});}catch(error){if((error as {report?:unknown}).report)throw Object.assign(new Error(),{code:"replay-validation-rejected"});throw error;}compactionMs=performance.now()-at;if(request.cacheEnabled){try{await writeReplayCache(cachePath(request.sessionPath),key,result);}catch{cacheState="write-failed";}}}
- const after=sourceState(await stat(request.sessionPath));if(!same(snapshot.state,after))throw Object.assign(new Error(),{code:"source-changed"});return{result,rebase,compactionMs,cacheState,sourceCount:source.length};
+interface SourceState { deviceId: string; inodeId: string; size: number; mtimeMs: number; }
+interface ReplayLoadMetrics {
+  sourceLedgerTransition: string;
+  ledgerColdLoadMs: number;
+  branchResolveMs: number;
+  branchReadMs: number;
+  branchEntryCount: number;
+  branchSourceBytes: number;
+  sourceRangeCount: number;
+  sourceBytesRead: number;
+  sourceByteAvoidanceRate: number;
+  completeSessionReadAvoided: boolean;
+  candidateLedgerReused: boolean;
 }
-async function run(requestValue:unknown,signal?:AbortSignal):Promise<CompactionWorkerResponse>{let request:CompactionWorkerRequest;try{request=validateWorkerRequest(requestValue);}catch{return{schemaVersion:1,jobId:"invalid",status:"failed",jobType:"replay-compaction",failureCode:"worker-protocol-error",metrics:baseMetrics(performance.now(),0,false,"disabled")};}const started=performance.now();let priorityApplied=false;try{try{setPriority(0,request.niceLevel);priorityApplied=true;}catch{}if(Date.now()>request.deadlineMs)throw Object.assign(new Error(),{code:"worker-timeout"});if(request.jobType==="candidate-store-update"){const snapshot=await stableRead(request);const store=createCandidateSegmentStore(request.sessionPath);const metrics=await updateCandidateSegmentStore(store,resolveCompactorConfig(request.config),{...(request.storeSettings??{}),signal});const after=sourceState(await stat(request.sessionPath));if(!same(snapshot.state,after))throw Object.assign(new Error(),{code:"source-changed"});return{schemaVersion:1,jobId:request.jobId,status:"ok",jobType:request.jobType,candidateUpdate:metrics,metrics:baseMetrics(started,0,priorityApplied,"disabled")};}const value=await replay(request,signal);return{schemaVersion:1,jobId:request.jobId,status:"ok",jobType:request.jobType,replay:{summary:value.result.summary,...(value.rebase===undefined?{}:{deterministicRebaseText:value.rebase}),rawTokens:value.result.rawTokens,renderedTokens:value.result.renderedTokens,targetTokens:value.result.targetTokens,validation:value.result.validation,details:value.result.details,generationHash:value.result.details.generationHash,planSources:value.result.plan.units.map(x=>({unitId:x.id,sourceRefs:x.sourceRefs})),sourceEntryCount:value.sourceCount},metrics:baseMetrics(started,value.compactionMs,priorityApplied,value.cacheState)};}catch(error){return{schemaVersion:1,jobId:request.jobId,status:"failed",jobType:request.jobType,failureCode:failureCode(error),metrics:baseMetrics(started,0,priorityApplied,"disabled")};}}
-let handled=false;const workAbort=new AbortController();let forcedExit:ReturnType<typeof setTimeout>|undefined;const abortWork=()=>{workAbort.abort(Object.assign(new Error("worker-aborted"),{code:"worker-aborted"}));forcedExit??=setTimeout(()=>process.exit(1),1_000);forcedExit.unref();};process.on("disconnect",abortWork);process.on("SIGTERM",abortWork);process.on("message",(value)=>{if(handled)return;handled=true;void run(value,workAbort.signal).then(response=>{let checked:CompactionWorkerResponse;try{checked=validateWorkerResponse(response);if(Buffer.byteLength(JSON.stringify(checked))>MAX_WORKER_RESPONSE_BYTES)throw new Error();}catch(error){checked={schemaVersion:1,jobId:(value as {jobId?:string})?.jobId??"invalid",status:"failed",jobType:(value as {jobType?:"replay-compaction"|"candidate-store-update"})?.jobType??"replay-compaction",failureCode:String((error as Error)?.message).includes("response-too-large")?"worker-response-too-large":"worker-protocol-error",metrics:baseMetrics(performance.now(),0,false,"disabled")};}if(process.connected&&process.send)process.send(checked,()=>process.exit(0));else process.exit(1);}).catch(()=>process.exit(1));});
+const EMPTY_LOAD_METRICS: ReplayLoadMetrics = { sourceLedgerTransition: "none", ledgerColdLoadMs: 0, branchResolveMs: 0,
+  branchReadMs: 0, branchEntryCount: 0, branchSourceBytes: 0, sourceRangeCount: 0, sourceBytesRead: 0,
+  sourceByteAvoidanceRate: 0, completeSessionReadAvoided: false, candidateLedgerReused: false };
+function sourceState(value: Awaited<ReturnType<typeof stat>>): SourceState { return { deviceId: String(value.dev), inodeId: String(value.ino), size: Number(value.size), mtimeMs: Number(value.mtimeMs) }; }
+function same(a: SourceState, b: SourceState): boolean { return a.deviceId === b.deviceId && a.inodeId === b.inodeId && a.size === b.size && a.mtimeMs === b.mtimeMs; }
+async function expectedState(request: CompactionWorkerRequest): Promise<SourceState> {
+  let current: SourceState;
+  try { current = sourceState(await stat(request.sessionPath)); } catch { throw Object.assign(new Error(), { code: "no-session-file" }); }
+  const expected: SourceState = { deviceId: request.expectedSource.deviceId, inodeId: request.expectedSource.inodeId, size: request.expectedSource.size, mtimeMs: request.expectedSource.mtimeMs };
+  if (!same(current, expected)) throw Object.assign(new Error(), { code: "source-changed" });
+  return current;
+}
+function cachePath(sessionPath: string): string { return `${sessionPath}.chrono-worker-replay-v1.json`; }
+async function readReplayCache(path: string, key: string): Promise<CompressionResult | undefined> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as { schemaVersion?: number; key?: string; payloadHash?: string; result?: CompressionResult };
+    const payload = value.result === undefined ? undefined : JSON.stringify(value.result);
+    return value.schemaVersion === 1 && value.key === key && payload !== undefined && value.payloadHash === hashText(payload) ? value.result : undefined;
+  } catch { return undefined; }
+}
+async function writeReplayCache(path: string, key: string, result: CompressionResult): Promise<void> {
+  const temporary = `${path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+  await writeFile(temporary, `${JSON.stringify({ schemaVersion: 1, key, payloadHash: hashText(JSON.stringify(result)), result })}\n`, { mode: 0o600 });
+  await rename(temporary, path); await chmod(path, 0o600);
+}
+function baseMetrics(start: number, compactionMs: number, priorityApplied: boolean, cacheState: WorkerRuntimeMetrics["cacheState"], load: ReplayLoadMetrics = EMPTY_LOAD_METRICS): WorkerRuntimeMetrics {
+  const cpu = process.cpuUsage();
+  return { workerPid: process.pid, totalWallMs: performance.now() - start, compactionMs, cpuUserMicros: cpu.user,
+    cpuSystemMicros: cpu.system, peakRssKiB: process.resourceUsage().maxRSS, priorityApplied, cacheState,
+    modelCalls: 0, networkCalls: 0, secretSentinelPresent: false, ...load };
+}
+function failureCode(error: unknown): WorkerFailureCode {
+  const code = (error as { code?: unknown })?.code;
+  const allowed: WorkerFailureCode[] = ["no-session-file", "branch-not-persisted", "branch-parent-missing", "branch-cycle",
+    "branch-source-order", "invalid-cut", "source-changed", "candidate-store-unavailable", "replay-validation-rejected",
+    "worker-timeout", "worker-aborted"];
+  return typeof code === "string" && allowed.includes(code as WorkerFailureCode) ? code as WorkerFailureCode : "unknown-worker-failure";
+}
+function loadMetrics(transition: string, ledgerLoadMs: number, resolveMs: number, read: LedgerBranchReadMetrics, candidateLedgerReused: boolean): ReplayLoadMetrics {
+  return { sourceLedgerTransition: transition, ledgerColdLoadMs: ledgerLoadMs, branchResolveMs: resolveMs,
+    branchReadMs: read.elapsedLoadMs, branchEntryCount: read.selectedEntryCount, branchSourceBytes: read.selectedSourceBytes,
+    sourceRangeCount: read.sourceRangeCount, sourceBytesRead: read.totalSourceBytesRead,
+    sourceByteAvoidanceRate: read.sourceByteAvoidanceRate, completeSessionReadAvoided: true, candidateLedgerReused };
+}
+async function replay(request: Extract<CompactionWorkerRequest, { jobType: "replay-compaction" }>, signal?: AbortSignal): Promise<{ result: CompressionResult; rebase?: string; compactionMs: number; cacheState: WorkerRuntimeMetrics["cacheState"]; sourceCount: number; load: ReplayLoadMetrics }> {
+  const boundState = await expectedState(request);
+  const ledgerAt = performance.now();
+  const ledger = await updateSourceLedger(request.sessionPath);
+  const ledgerLoadMs = performance.now() - ledgerAt;
+  if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+  const loaded = await loadSourceLedgerBranch(request.sessionPath, ledger, request.branchLeafId);
+  if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+  const split = splitLedgerBranchAtEntry(loaded.ledgerEntries, request.firstKeptEntryId);
+  const source = loaded.entries.slice(0, split.cutIndex);
+  const future = loaded.entries.slice(split.cutIndex);
+  let candidates;
+  let candidateLedgerReused = false;
+  if (request.candidateStoreEnabled) {
+    try {
+      const store = createCandidateSegmentStore(request.sessionPath);
+      store.ledger = ledger;
+      candidateLedgerReused = true;
+      await loadCandidateSegmentManifest(store);
+      if (store.manifest) candidates = await loadCandidateRecordsForBranch(store, source.flatMap((entry) => typeof entry.id === "string" ? [entry.id] : []));
+    } catch { candidates = undefined; }
+  }
+  let rebase: string | undefined;
+  let hardOutputTokens = request.hardOutputTokens;
+  let config = resolveCompactorConfig(request.config);
+  if (request.deterministicRebase) {
+    rebase = buildDeterministicSummaryRebase(parseHistoricalBlocks(source, { includeHistoricalCompactions: false, includeMetadata: false }), undefined, request.deterministicRebase.targetTokens);
+    const rebaseTokens = estimateTokensFromText(rebase);
+    const wrapperTokens = Math.max(0, estimateTokensFromText(renderHybridCompaction(rebase, "")) - rebaseTokens);
+    hardOutputTokens = Math.max(128, request.deterministicRebase.historicalCeilingTokens - rebaseTokens - wrapperTokens);
+    const replayTarget = Math.min(hardOutputTokens, Math.max(256, request.deterministicRebase.combinedTargetTokens - rebaseTokens - wrapperTokens));
+    config = resolveCompactorConfig({ ...request.config, targetTokens: replayTarget });
+  }
+  const generationHash = computeGenerationHash(source, config, request.retentionHints, future, request.pinnedMemoryText, request.retrievalFeedback);
+  const key = hashText(stableStringify({ generationHash, hardOutputTokens }));
+  let result: CompressionResult | undefined;
+  let cacheState: WorkerRuntimeMetrics["cacheState"] = request.cacheEnabled ? "miss" : "disabled";
+  if (request.cacheEnabled) { result = await readReplayCache(cachePath(request.sessionPath), key); if (result) cacheState = "hit"; }
+  let compactionMs = 0;
+  if (!result) {
+    const at = performance.now();
+    try { result = await compactEntries(source, { config, hardOutputTokens, retentionHints: request.retentionHints, futureEntries: future,
+      pinnedMemoryText: request.pinnedMemoryText, retrievalFeedback: request.retrievalFeedback, signal,
+      ...(candidates && candidates.size ? { precomputedCandidates: candidates } : {}) }); }
+    catch (error) { if ((error as { report?: unknown }).report) throw Object.assign(new Error(), { code: "replay-validation-rejected" }); throw error; }
+    compactionMs = performance.now() - at;
+    if (request.cacheEnabled) { try { await writeReplayCache(cachePath(request.sessionPath), key, result); } catch { cacheState = "write-failed"; } }
+  }
+  if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+  return { result, rebase, compactionMs, cacheState, sourceCount: source.length,
+    load: loadMetrics(ledger.metrics.transition, ledgerLoadMs, loaded.resolveMs, loaded.metrics, candidateLedgerReused) };
+}
+async function run(requestValue: unknown, signal?: AbortSignal): Promise<CompactionWorkerResponse> {
+  let request: CompactionWorkerRequest;
+  try { request = validateWorkerRequest(requestValue); }
+  catch { return { schemaVersion: 1, jobId: "invalid", status: "failed", jobType: "replay-compaction", failureCode: "worker-protocol-error", metrics: baseMetrics(performance.now(), 0, false, "disabled") }; }
+  const started = performance.now(); let priorityApplied = false;
+  try {
+    try { setPriority(0, request.niceLevel); priorityApplied = true; } catch {}
+    if (Date.now() > request.deadlineMs) throw Object.assign(new Error(), { code: "worker-timeout" });
+    if (request.jobType === "candidate-store-update") {
+      const boundState = await expectedState(request);
+      const store = createCandidateSegmentStore(request.sessionPath);
+      const metrics = await updateCandidateSegmentStore(store, resolveCompactorConfig(request.config), { ...(request.storeSettings ?? {}), signal });
+      if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+      return { schemaVersion: 1, jobId: request.jobId, status: "ok", jobType: request.jobType, candidateUpdate: metrics,
+        metrics: baseMetrics(started, 0, priorityApplied, "disabled") };
+    }
+    const value = await replay(request, signal);
+    return { schemaVersion: 1, jobId: request.jobId, status: "ok", jobType: request.jobType,
+      replay: { summary: value.result.summary, ...(value.rebase === undefined ? {} : { deterministicRebaseText: value.rebase }),
+        rawTokens: value.result.rawTokens, renderedTokens: value.result.renderedTokens, targetTokens: value.result.targetTokens,
+        validation: value.result.validation, details: value.result.details, generationHash: value.result.details.generationHash,
+        planSources: value.result.plan.units.map((unit) => ({ unitId: unit.id, sourceRefs: unit.sourceRefs })), sourceEntryCount: value.sourceCount },
+      metrics: baseMetrics(started, value.compactionMs, priorityApplied, value.cacheState, value.load) };
+  } catch (error) {
+    return { schemaVersion: 1, jobId: request.jobId, status: "failed", jobType: request.jobType,
+      failureCode: failureCode(error), metrics: baseMetrics(started, 0, priorityApplied, "disabled") };
+  }
+}
+let handled = false;
+const workAbort = new AbortController();
+let forcedExit: ReturnType<typeof setTimeout> | undefined;
+const abortWork = (): void => { workAbort.abort(Object.assign(new Error("worker-aborted"), { code: "worker-aborted" })); forcedExit ??= setTimeout(() => process.exit(1), 1_000); forcedExit.unref(); };
+process.on("disconnect", abortWork); process.on("SIGTERM", abortWork);
+process.on("message", (value) => {
+  if (handled) return; handled = true;
+  void run(value, workAbort.signal).then((response) => {
+    let checked: CompactionWorkerResponse;
+    try { checked = validateWorkerResponse(response); if (Buffer.byteLength(JSON.stringify(checked)) > MAX_WORKER_RESPONSE_BYTES) throw new Error("worker-response-too-large"); }
+    catch (error) { checked = { schemaVersion: 1, jobId: (value as { jobId?: string })?.jobId ?? "invalid", status: "failed",
+      jobType: (value as { jobType?: "replay-compaction" | "candidate-store-update" })?.jobType ?? "replay-compaction",
+      failureCode: String((error as Error)?.message).includes("response-too-large") ? "worker-response-too-large" : "worker-protocol-error",
+      metrics: baseMetrics(performance.now(), 0, false, "disabled") }; }
+    if (process.connected && process.send) process.send(checked, () => process.exit(0)); else process.exit(1);
+  }).catch(() => process.exit(1));
+});

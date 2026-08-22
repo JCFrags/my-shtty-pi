@@ -7,7 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import extension, { resolveExtensionSettings } from "../src/pi-extension.js";
 import { getActiveBranch, readSessionJsonl } from "../src/jsonl.js";
 import { candidateSegmentStorePath } from "../src/candidate-segment-store.js";
-import { sourceLedgerPath } from "../src/source-ledger.js";
+import { sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
 
 type Hook = (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, context: Record<string, unknown>) => unknown | Promise<unknown>;
@@ -744,6 +744,8 @@ test("uniform continuation follows unresolved turns across successful compaction
   else process.env.PI_CHRONO_TRIGGER_TOKENS = previousTriggerTokens;
   rmSync(configPath, { force: true });
 });
+
+test("exact history tools reuse an existing ledger but never create one alone",async()=>{const directory=mkdtempSync(join(tmpdir(),"chrono-extension-retrieval-")),sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});const tools=new Map<string,(...args:any[])=>Promise<any>>(),pi={registerTool(tool:{name:string;execute:(...args:any[])=>Promise<any>}){tools.set(tool.name,tool.execute);},registerCommand(){},on(){},appendEntry(){},sendMessage(){}};try{extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath),entries=session.entries,context={hasUI:false,model:undefined,thinkingLevel:"medium",sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>entries,getBranch:()=>entries},getContextUsage:()=>undefined,isIdle:()=>true,abort(){},compact(){},ui:{notify(){}},modelRegistry:{}};const get=tools.get("history_get"),range=tools.get("history_range");assert.ok(get&&range);const first=await get("get-no-ledger",{entryId:"e123"},undefined,undefined,context),firstText=first.content[0].text;assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await range("range-no-ledger",{startEntryId:"e123",endEntryId:"e124"},undefined,undefined,context);assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await updateSourceLedger(sessionPath);const ledgerText=(await get("get-ledger",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(ledgerText,firstText);writeFileSync(`${sourceLedgerPath(sessionPath)}.lock`,"busy",{mode:0o600});const busyText=(await get("get-busy",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(busyText,firstText);}finally{rmSync(directory,{recursive:true,force:true});}});
 
 test("isolated worker extension path uses persisted source and returns exact bounded replay", async () => {
   const directory=mkdtempSync(join(tmpdir(),"chrono-extension-worker-"));const sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});

@@ -13,6 +13,7 @@ export * from "./incremental-context.js";
 export * from "./history-analysis.js";
 export * from "./history-editor.js";
 export * from "./jsonl.js";
+export * from "./ledger-branch.js";
 export * from "./memory-store.js";
 export * from "./plain-renderer.js";
 export * from "./planner.js";

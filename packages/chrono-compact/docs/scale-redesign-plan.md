@@ -59,6 +59,10 @@ The normal compaction path still rebuilds full-branch parsing, resource lineage,
 
 The [source ledger](source-ledger.md) indexes exact source byte locations and supports incremental append updates. The default-off [candidate segment store](candidate-segment-store.md) uses it to persist only source-local and verified pairing-dependent candidates in immutable segments. Warm append preprocessing reads only appended source plus bounded pairing context. Future-sensitive work remains current at compaction time.
 
+## Ledger-backed branch reads
+
+The isolated worker resolves one exact selected branch from source-ledger parent metadata and reads verified source ranges for that branch. It does not parse abandoned branches after a valid ledger is available. Exact `history_get` and `history_range` calls can use one already-existing valid ledger and otherwise keep the current parser fallback. Search and recall do not use this path. Cold ledger loading remains linear in ledger size. Full active-branch analysis and final replay planning remain non-incremental.
+
 ## Private real-session measurement
 
 The [explicit session-set benchmark](local-session-benchmark.md) can measure local real sessions from a supplied manifest. The script does not discover files. Private benchmark results stay outside the repository. These measurements guide later scale work.

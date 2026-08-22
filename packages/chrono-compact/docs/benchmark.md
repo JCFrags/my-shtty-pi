@@ -105,6 +105,19 @@ On 2026-08-22, three serial runs per size gave these medians. Timing and memory 
 
 All compare runs were byte-equivalent and remained within 15% of cold compaction. The maximum median timer delay in the series table was 1.65 ms. One 25,000-entry run accepted all entries, built 13 segments and a 17,251,387-byte store, and loaded only the manifest in 0.39 ms. This exceeds both retired checkpoint limits without reintroducing them. One 50-generation run reported 1.0000 block-parse and persistent-work amplification, a 0.9671 candidate hit rate, and exact output equivalence.
 
+## Ledger-branch benchmark
+
+`scripts/benchmark-ledger-branch.mjs` uses synthetic sessions only. It creates owner-only temporary source, ledger, cache, and scheduler data and removes it after each run.
+
+```bash
+npm run benchmark:ledger-branch -- linear --tasks 5000
+node scripts/benchmark-ledger-branch.mjs branched --active-tasks 5000 --abandoned-tasks 20000 --branches 4
+node scripts/benchmark-ledger-branch.mjs retrieval --tasks 5000 --samples 500
+node scripts/benchmark-ledger-branch.mjs worker --active-tasks 5000 --abandoned-tasks 20000 --branches 4
+```
+
+`linear` compares complete-file parsing with ledger cold load, branch resolution, and verified branch reads. It reports sidecar bytes and bytes per entry. `branched` adds abandoned source and source-byte avoidance. Source-byte avoidance is `1 - ledger source bytes read / complete source bytes`. Coalescing-gap bytes are bytes between selected entries that one bounded range also reads. `retrieval` requires exact text equality for record, block, page, ancestor-range, and file-order operations. `worker` compares the full-file reference replay with the normal ledger-backed child and reports output equality, wall time, RSS, source bytes, response bytes, and main-process timer delay. Timing and RSS are advisory.
+
 ## Explicit session-set benchmark
 
 The [explicit session-set benchmark](local-session-benchmark.md) accepts only a private manifest. It never discovers session files.
