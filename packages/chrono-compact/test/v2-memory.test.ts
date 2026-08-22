@@ -281,8 +281,11 @@ test("concurrent successful memory appends preserve every event in one hash chai
       sourceRef: `memory-tool:concurrent-${index}`,
       text: `Concurrent ordinary memory ${index}.`,
     }));
-    const results = await Promise.all(writes);
+    const results = await Promise.allSettled(writes);
     assert.equal(results.length, 40);
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    const firstRejection = rejected[0];
+    if (firstRejection) throw firstRejection.reason;
     const rebuilt = await readMemoryEvents(path);
     assert.equal(rebuilt.status, "ready");
     assert.equal(rebuilt.events.length, 40);
