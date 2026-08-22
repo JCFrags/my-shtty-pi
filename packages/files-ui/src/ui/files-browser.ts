@@ -28,7 +28,7 @@ import type {
 } from "../types.ts";
 import { computeBrowserLayout, pointInRect } from "./layout.ts";
 import { decodeBrowserKey, isPrintableInput } from "./key.ts";
-import { attachFirstClassMouse, normalizeMouseEvent, type MouseAttachment } from "./mouse.ts";
+import { attachFirstClassMouse, normalizeMouseEvent, parseSgrMouse, type MouseAttachment } from "./mouse.ts";
 import { alignRight, cellWidth, padToCells, sanitizeTerminalText, truncateToCells } from "./text.ts";
 
 const REVERSE = "\u001b[7m";
@@ -747,6 +747,11 @@ export class FilesBrowserComponent {
 
   handleInput(data: string): void {
     if (this.disposed) return;
+    const mouse = parseSgrMouse(data);
+    if (mouse) {
+      this.handleMouse(mouse);
+      return;
+    }
     if (this.budget) {
       this.handleBudgetInput(data);
       this.requestRender();
