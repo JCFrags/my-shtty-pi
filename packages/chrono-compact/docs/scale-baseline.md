@@ -61,3 +61,19 @@ This baseline does not yet measure repeated compaction generations or concurrent
 The 1,000-task case contains about 528,000 source tokens. The generator is synthetic. The CPU profile represents one run. Exact provider token counts can differ from the current estimator.
 
 These results do not prove behavior at 25 million or 50 million source tokens. They also do not establish how repeated generations or concurrent agents will change time or memory use.
+
+## Current-state priority correction
+
+The correction started from commit `bc80adf6341c23ac0246a370aaeb119e2f025b8f`. The diagnostic found that the four synthetic facts remained in parsed source and the causal model. The current-state renderer selected the first state cells in category and key order. Later routine cells displaced the active restriction and open-work line. The hard-cap step then removed their old chronological replay units. The unresolved failure was present in the causal model, but it had no current-state item and no pre-cap chronological replay text.
+
+The corrected selector orders bounded state items by value. It places conflicts, restrictions, goals, open work, and bounded unresolved-failure cues before routine current state. Every selected item remains source-linked.
+
+| Tasks | Runs | Source tokens | Rendered tokens | Protected fact rate | False completion | Exact recovery | Median compaction | Median index | Median wall | Median max RSS | Validation warnings |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 250 | 3 | 132,042 | 10,636 | 100% | 0 | 100% | 431.8 ms | 67.0 ms | 1.04 s | 292,492 KiB | 1 |
+| 500 | 3 | 264,042 | 19,429 | 100% | 0 | 100% | 1,409.9 ms | 129.6 ms | 2.12 s | 314,052 KiB | 2 |
+| 1,000 | 3 | 528,043 | 24,978 | 100% | 0 | 100% | 5,001.5 ms | 255.9 ms | 6.03 s | 366,340 KiB | 2 |
+
+At 1,000 tasks, median compaction time was 0.04% lower than the 5,003.4 ms baseline. Median maximum resident memory was 0.22% lower than the 367,160 KiB baseline. These differences are within normal run variation.
+
+This correction does not solve full-session processing cost. The original Results table remains the before-change baseline.
