@@ -45,6 +45,53 @@ interface TodoDetails {
   state: TaskState;
 }
 
+export const TODO_SUMMARY_REQUEST_EVENT = "pi-todo:request-summary-v1" as const;
+export const TODO_SUMMARY_EVENT = "pi-todo:summary-v1" as const;
+export const TODO_SUMMARY_CHANGED_EVENT = "pi-todo:summary-changed-v1" as const;
+export const TODO_ACTION_REQUEST_EVENT = "pi-todo:request-action-v1" as const;
+export const TODO_ACTION_RESPONSE_EVENT = "pi-todo:action-response-v1" as const;
+
+/** v1 request: { version: 1, requestId: string, action: "start"|"done"|"clear_wait", taskId: string }. */
+export interface TodoActionRequest { version: 1; requestId: string; action: "start" | "done" | "clear_wait"; taskId: string; }
+export interface TodoActionResponse { version: 1; requestId: string; ok: boolean; action: TodoActionRequest["action"]; taskId: string; message?: string; error?: string; }
+
+export interface TodoTaskSummary {
+  id: string;
+  text: string;
+  status: Task["status"];
+  waitReason?: string;
+}
+
+export interface TodoSummarySnapshot {
+  version: 1;
+  currentUsefulTask?: TodoTaskSummary;
+  unfinishedTasks: TodoTaskSummary[];
+  countsByState: Record<Task["status"], number>;
+  externalWaits: Array<{ id: string; reason: string }>;
+  planSize: number;
+}
+
+interface TodoSummaryRequest {
+  requestId?: string;
+}
+
+const SUMMARY_TASK_LIMIT = 5;
+const SUMMARY_TEXT_LIMIT = 240;
+const SUMMARY_WAIT_LIMIT = 240;
+
+function bounded(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function taskSummary(task: Task): TodoTaskSummary {
+  return {
+    id: bounded(task.id, 64),
+    text: bounded(task.text, SUMMARY_TEXT_LIMIT),
+    status: task.status,
+    ...(task.waitReason ? { waitReason: bounded(task.waitReason, SUMMARY_WAIT_LIMIT) } : {}),
+  };
+}
+
 function formatTask(task: Task): string {
   const marker = task.status === "done" ? "✓" : task.status === "in_progress" ? "●" : task.status === "blocked" ? "⊘" : "○";
   const blockers = task.blockedBy.length ? ` [blockedBy: ${task.blockedBy.join(", ")}]` : "";
@@ -135,6 +182,59 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
   let displayMode: TodoDisplayMode = "compact";
 
   const snapshot = () => cloneTaskState(state);
+  const eventBus = pi.events;
+  let removeSummaryListener: (() => void) | undefined;
+
+  const summary = (): TodoSummarySnapshot => {
+    const unfinished = state.tasks.filter((task) => task.status !== "done");
+    const countsByState: TodoSummarySnapshot["countsByState"] = {
+      pending: 0,
+      in_progress: 0,
+      blocked: 0,
+      done: 0,
+    };
+    for (const task of state.tasks) countsByState[task.status] += 1;
+    const current = unfinished.find((task) => task.status === "in_progress")
+      ?? unfinished.find((task) => task.status === "pending")
+      ?? unfinished[0];
+    return {
+      version: 1,
+      ...(current ? { currentUsefulTask: taskSummary(current) } : {}),
+      unfinishedTasks: unfinished.slice(0, SUMMARY_TASK_LIMIT).map(taskSummary),
+      countsByState,
+      externalWaits: unfinished.filter((task) => task.waitReason).slice(0, SUMMARY_TASK_LIMIT)
+        .map((task) => ({ id: bounded(task.id, 64), reason: bounded(task.waitReason!, SUMMARY_WAIT_LIMIT) })),
+      planSize: state.tasks.length,
+    };
+  };
+  const emitSummary = (event: string, requestId?: string) => {
+    eventBus.emit(event, { version: 1, ...(requestId ? { requestId } : {}), snapshot: summary() });
+  };
+  removeSummaryListener = eventBus.on(TODO_SUMMARY_REQUEST_EVENT, (data: unknown) => {
+    const request = data && typeof data === "object" ? data as TodoSummaryRequest : {};
+    emitSummary(TODO_SUMMARY_EVENT, typeof request.requestId === "string" ? bounded(request.requestId, 128) : undefined);
+  });
+
+  let removeActionListener = eventBus.on(TODO_ACTION_REQUEST_EVENT, (data: unknown) => {
+    const request = data && typeof data === "object" ? data as Partial<TodoActionRequest> : {};
+    const requestId = typeof request.requestId === "string" ? bounded(request.requestId, 128) : "";
+    const taskId = typeof request.taskId === "string" ? bounded(request.taskId, 64) : "";
+    const action = request.action;
+    if (!requestId || !taskId || (action !== "start" && action !== "done" && action !== "clear_wait")) return;
+    try {
+      const working = cloneTaskState(state);
+      let message: string;
+      if (action === "start") message = `Started ${startTask(working, taskId).id}: ${taskById(working, taskId).text}`;
+      else if (action === "done") message = `Completed ${completeTask(working, taskId).id}: ${taskById(working, taskId).text}`;
+      else message = `Cleared external wait for ${updateTask(working, taskId, { waitReason: "" }).id}`;
+      state = working;
+      emitSummary(TODO_SUMMARY_CHANGED_EVENT);
+      renderWidget();
+      eventBus.emit(TODO_ACTION_RESPONSE_EVENT, { version: 1, requestId, ok: true, action, taskId, message } satisfies TodoActionResponse);
+    } catch (error) {
+      eventBus.emit(TODO_ACTION_RESPONSE_EVENT, { version: 1, requestId, ok: false, action, taskId, error: bounded(error instanceof Error ? error.message : String(error), 240) } satisfies TodoActionResponse);
+    }
+  });
 
   const restore = (ctx: ExtensionContext) => {
     state = emptyTaskState();
@@ -201,14 +301,20 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
     displayMode = loadTodoDisplayMode(options.settingsPath);
     restore(ctx);
     renderWidget();
+    emitSummary(TODO_SUMMARY_EVENT);
   });
   pi.on("session_tree", (_event, ctx) => {
     currentContext = ctx;
     restore(ctx);
     renderWidget();
+    emitSummary(TODO_SUMMARY_CHANGED_EVENT);
   });
   pi.on("session_shutdown", () => {
     currentContext?.ui.setWidget("grounded-tasks", undefined);
+    removeSummaryListener?.();
+    removeSummaryListener = undefined;
+    removeActionListener();
+    removeActionListener = () => {};
     currentContext = undefined;
   });
 
@@ -291,7 +397,10 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
         if (inProgress[0]) startTask(working, inProgress[0].id);
         message = `Replaced task plan with ${working.tasks.length} task(s)`;
       }
-      if (params.action !== "list") state = working;
+      if (params.action !== "list") {
+        state = working;
+        emitSummary(TODO_SUMMARY_CHANGED_EVENT);
+      }
       renderWidget();
       return { content: [{ type: "text", text: message }], details: { action: params.action, state: snapshot() } satisfies TodoDetails };
     },
@@ -368,6 +477,7 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
       }
       const task = addTask(state, { text: args });
       pi.appendEntry("grounded-tasks-state", snapshot());
+      emitSummary(TODO_SUMMARY_CHANGED_EVENT);
       renderWidget();
       ctx.ui.notify(`Added ${task.id}: ${task.text}`, "info");
     },

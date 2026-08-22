@@ -46,6 +46,59 @@ Run:
 /files
 ```
 
+## Same-process provider capability
+
+The provider exposes a same-process event action that calls the existing `/files` handler in the active Pi session. This is not remote command invocation. It never injects terminal keys and never submits the editor.
+
+The package exposes a read-only capability contract:
+
+- Request: `pi-files-ui:request-capability-v1` with `{ "requestId"?: string }`.
+- Response: `pi-files-ui:capability-v1` with `{ "version": 1, "requestId"?: string, "capability": ... }`.
+
+The exact capability snapshot is:
+
+```json
+{
+  "version": 1,
+  "command": "/files",
+  "interactiveTuiRequired": true,
+  "canOpenViaEventBus": true,
+  "reason": "Provider-owned same-process request-open-v1 action calls the existing /files handler in the active Pi session"
+}
+```
+
+The listeners respond after session startup and are removed on session shutdown or reload. The open action uses:
+
+- Request: `pi-files-ui:request-open-v1` with `{ "version": 1, "requestId": string }`.
+- Response: `pi-files-ui:open-response-v1` with `{ "version": 1, "requestId": string, "ok": boolean, "error"?: string }`.
+
+`requestId` is trimmed and bounded to 128 characters. Errors are bounded to 240 characters. Use the registered `/files` command for user-driven opening.
+
+## Side-panel provider contract
+
+The provider is a same-process Files service for a separate Pi Herd side panel. It does not import or start Herdr. It does not open the native `/files` overlay. The provider owns `ctx.cwd`, path normalization, repository-root checks, symlink checks, ignore handling, all filesystem reads, selection, limits, and `ctx.ui.pasteToEditor`.
+
+### Events
+
+All names and payloads are versioned:
+
+- Request: `pi-files-ui:provider-request-v1`.
+- Correlated response: `pi-files-ui:provider-response-v1`.
+- Bounded summary: `pi-files-ui:provider-summary-v1`.
+- Bounded view change: `pi-files-ui:provider-view-change-v1`.
+
+A request is `{ "version": 1, "requestId": "panel-1", "action": "..." }`. `requestId` is required, trimmed, and limited to 128 characters. Every response contains the same `requestId`, `version: 1`, and `ok`. Errors are limited to 240 characters.
+
+Supported actions are `snapshot`, `list`, `navigate`, `expand`, `preview`, `toggle-selection`, `clear-selection`, `insert-paths`, `prepare-contents`, and `insert-contents`.
+
+`list`, `navigate`, and `expand` accept a provider-relative `path`. `expand` also accepts `expanded`. `preview` accepts a file path. `toggle-selection` accepts a file or directory path and optional `selected`; directory selection is bounded by the provider's directory entry limit. `insert-paths` inserts the current selected paths. `prepare-contents` returns the bounded insertion budget. `insert-contents` inserts the provider-selected eligible contents and may accept `includedPaths` to apply a side-panel budget choice. The provider revalidates every path and limit before editor mutation.
+
+The summary contains `cwd`, `currentPath`, sorted `selectedPaths`, `selectedCount`, and the exact active limits. The view contains `cwd`, `currentPath`, at most 256 rows, and an optional bounded UTF-8 preview. Rows contain relative path, kind, depth, selection state, expansion state, hidden/ignored state, and truncation state. No event contains a file's unbounded contents.
+
+Summary and view-change events are emitted after every successful action. Initialization emits both events. The response also includes the current summary and view. The side panel must treat the provider as authoritative and must not send an absolute path or a second cwd.
+
+The native `/files` UI remains unchanged. Native-only behavior that is not remote-controlled is fullscreen overlay presentation, keyboard focus and range selection, mouse handling, filtering/search, the native insertion budget dialog, and its close lifecycle. A side panel uses provider actions instead of opening that overlay.
+
 On wide terminals the overlay renders independent Tree and Preview panes. On terminals narrower than 78 columns, it switches to one pane with `Tree` and `Preview` tabs rather than producing unusably narrow columns.
 
 The header reports the selected-file count and an approximate context cost. Header cost uses known selected-file sizes divided by four. The insertion budget uses the exact decoded Unicode character count and reports `ceil(characterCount / 4)` as **approximate tokens**.

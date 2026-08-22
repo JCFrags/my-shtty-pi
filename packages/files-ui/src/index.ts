@@ -6,6 +6,7 @@ export * from "./gitignore.ts";
 export * from "./insertion.ts";
 export * from "./path-utils.ts";
 export * from "./preview.ts";
+export * from "./provider.ts";
 export * from "./types.ts";
 export * from "./ui/files-browser.ts";
 export * from "./ui/key.ts";

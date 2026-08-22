@@ -163,8 +163,12 @@ export function createTui(rows = 24, columns = 120, mode = "fullscreen") {
     mode,
     terminal: { rows, columns },
     renderRequests: 0,
+    mouseCapture: [],
     requestRender() {
       this.renderRequests += 1;
+    },
+    setMouseCapture(enabled) {
+      this.mouseCapture.push(enabled);
     },
   };
 }
