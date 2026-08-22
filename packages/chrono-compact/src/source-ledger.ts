@@ -87,6 +87,8 @@ export interface SourceLedger {
 export interface SourceLedgerUpdateOptions {
   readonly sidecarPath?: string;
   readonly lockAcquired?: () => void | Promise<void>;
+  /** Request-local parsed source seam for derived append processors. Text is not persisted by the ledger. */
+  readonly entryParsed?: (entry: { readonly entryId: string; readonly lineNumber: number; readonly text: string }) => void;
 }
 
 export class SourceLedgerError extends Error {
@@ -145,7 +147,7 @@ function nextAnchor(previous: Buffer, raw: Buffer, newline: Buffer): Buffer {
   return Buffer.concat([previous.subarray(previous.length - neededFromPrevious), raw.subarray(raw.length - neededFromRaw), newline]);
 }
 
-async function parseSourceRange(path: string, start: number, end: number, firstLine: number, requireHeader: boolean, initialAnchor: Uint8Array = Buffer.alloc(0)): Promise<ParsedSource> {
+async function parseSourceRange(path: string, start: number, end: number, firstLine: number, requireHeader: boolean, initialAnchor: Uint8Array = Buffer.alloc(0), entryParsed?: SourceLedgerUpdateOptions["entryParsed"]): Promise<ParsedSource> {
   const handle = await open(path, noFollowFlags());
   let bytesRead = 0; let position = start; let lineNumber = firstLine; let pendingOffset = start; let pendingLength = 0;
   let maximumSourceLineBytes = 0; let sourceLineAssemblyBytes = 0; let committedAnchor: Buffer = Buffer.from(initialAnchor);
@@ -171,6 +173,7 @@ async function parseSourceRange(path: string, start: number, end: number, firstL
       entries.push({ recordType: "entry", entryId: object.id, parentId: typeof object.parentId === "string" ? object.parentId : null,
         entryType: object.type as string, lineNumber, sourceByteOffset: offset, sourceByteLength: content.length,
         nextSourceByteOffset: nextOffset, sourceContentHash: hashBytes(content) });
+      entryParsed?.({ entryId: object.id, lineNumber, text: content.toString("utf8") });
     }
     committedAnchor = nextAnchor(committedAnchor, raw, newline);
     lineNumber += 1;
@@ -248,10 +251,10 @@ async function atomicWrite(path: string, bytes: Buffer): Promise<void> {
   try { await directory.sync(); } finally { await directory.close(); }
 }
 
-async function rebuild(sessionPath: string, sidecar: string, transition: SourceLedgerTransition): Promise<SourceLedger> {
+async function rebuild(sessionPath: string, sidecar: string, transition: SourceLedgerTransition, entryParsed?: SourceLedgerUpdateOptions["entryParsed"]): Promise<SourceLedger> {
   const metadata = await stat(sessionPath, { bigint: true });
   if (!metadata.isFile()) throw new SourceLedgerError("Source session must be a regular file.");
-  const parsed = await parseSourceRange(sessionPath, 0, Number(metadata.size), 1, true);
+  const parsed = await parseSourceRange(sessionPath, 0, Number(metadata.size), 1, true, Buffer.alloc(0), entryParsed);
   const seen = new Set<string>(); let previous = ZERO_HASH;
   const header = withHash({ recordType: "header" as const, schemaVersion: SCHEMA_VERSION as 1, sourceFileIdentity: identity(metadata),
     sourceSessionIdentity: sessionIdentity(parsed.header), createdAt: new Date().toISOString(), firstIntegrityChainValue: ZERO_HASH }, previous);
@@ -321,9 +324,9 @@ export async function loadSourceLedger(sessionPath: string, explicitSidecar = so
       { entriesIndexed: committedEntries.length, ledgerBytesRead: bytesRead, ledgerRecordsReplayed: records }) };
 }
 
-async function appendUpdate(sessionPath: string, sidecar: string, ledger: SourceLedger, sourceSize: number, transition: SourceLedgerTransition, anchorBytes: Buffer): Promise<SourceLedger> {
+async function appendUpdate(sessionPath: string, sidecar: string, ledger: SourceLedger, sourceSize: number, transition: SourceLedgerTransition, anchorBytes: Buffer, entryParsed?: SourceLedgerUpdateOptions["entryParsed"]): Promise<SourceLedger> {
   const parsed = await parseSourceRange(sessionPath, ledger.checkpoint.sourceBytePosition, sourceSize,
-    ledger.checkpoint.sourceBytePosition === 0 ? 1 : ledger.sourceOrder.length + 2, ledger.checkpoint.sourceBytePosition === 0, anchorBytes);
+    ledger.checkpoint.sourceBytePosition === 0 ? 1 : ledger.sourceOrder.length + 2, ledger.checkpoint.sourceBytePosition === 0, anchorBytes, entryParsed);
   let previous = ledger.integrityChainState;
   const appended: SourceLedgerEntry[] = [];
   for (const item of parsed.entries) {
@@ -362,8 +365,8 @@ export async function updateSourceLedger(sessionPath: string, prior?: SourceLedg
     if (!ledger) {
       try { ledger = await loadSourceLedger(sessionPath, sidecar); recovery = ledger.incompleteSidecarTail; }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT" || /Cannot load source ledger: ENOENT/.test(String(error))) return await rebuild(sessionPath, sidecar, "new");
-        return await rebuild(sessionPath, sidecar, "rebuild-replacement");
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" || /Cannot load source ledger: ENOENT/.test(String(error))) return await rebuild(sessionPath, sidecar, "new", options.entryParsed);
+        return await rebuild(sessionPath, sidecar, "rebuild-replacement", options.entryParsed);
       }
     }
     if (ledger.incompleteSidecarTail) {
@@ -374,17 +377,37 @@ export async function updateSourceLedger(sessionPath: string, prior?: SourceLedg
     }
     const metadata = await stat(sessionPath, { bigint: true });
     const sourceSize = Number(metadata.size);
-    if (!sameIdentity(ledger.sourceIdentity, identity(metadata))) return await rebuild(sessionPath, sidecar, "rebuild-replacement");
-    if (sourceSize < ledger.checkpoint.sourceBytePosition) return await rebuild(sessionPath, sidecar, "rebuild-truncation");
+    if (!sameIdentity(ledger.sourceIdentity, identity(metadata))) return await rebuild(sessionPath, sidecar, "rebuild-replacement", options.entryParsed);
+    if (sourceSize < ledger.checkpoint.sourceBytePosition) return await rebuild(sessionPath, sidecar, "rebuild-truncation", options.entryParsed);
     const anchor = await anchorMatches(sessionPath, ledger);
-    if (!anchor.matches) return await rebuild(sessionPath, sidecar, "rebuild-tail-rewrite");
+    if (!anchor.matches) return await rebuild(sessionPath, sidecar, "rebuild-tail-rewrite", options.entryParsed);
     if (sourceSize === ledger.checkpoint.sourceBytePosition) {
       return { ...ledger, metrics: metric(recovery ? "recover-incomplete-ledger-tail" : "exact-hit", sourceSize,
         { sourceBytesRead: anchor.bytesRead, entriesIndexed: ledger.sourceOrder.length, ledgerBytesRead: ledger.metrics.ledgerBytesRead,
           ledgerRecordsReplayed: ledger.metrics.ledgerRecordsReplayed, tailAnchorBytesRead: anchor.bytesRead }) };
     }
-    return await appendUpdate(sessionPath, sidecar, ledger, sourceSize, recovery ? "recover-incomplete-ledger-tail" : "append", anchor.bytes);
+    return await appendUpdate(sessionPath, sidecar, ledger, sourceSize, recovery ? "recover-incomplete-ledger-tail" : "append", anchor.bytes, options.entryParsed);
   } finally { await release(); }
+}
+
+export async function readSourceEntryRange(sessionPath: string, ledger: SourceLedger, startIndex: number, endIndex: number): Promise<{ entries: readonly { ledger: SourceLedgerEntry; text: string }[]; bytesRead: number }> {
+  const start = Math.max(0, Math.floor(startIndex)); const end = Math.min(ledger.sourceOrder.length, Math.max(start, Math.floor(endIndex)));
+  if (start === end) return { entries: [], bytesRead: 0 };
+  const selected = ledger.sourceOrder.slice(start, end); const first = selected[0]!; const last = selected.at(-1)!;
+  const rangeEnd = last.sourceByteOffset + last.sourceByteLength; const bytes = Buffer.alloc(rangeEnd - first.sourceByteOffset);
+  const handle = await open(sessionPath, noFollowFlags());
+  try {
+    const read = await handle.read(bytes, 0, bytes.length, first.sourceByteOffset);
+    if (read.bytesRead !== bytes.length) throw new SourceLedgerError("Source range ended before the indexed byte boundary.");
+    const output = selected.map((entry) => {
+      const relative = entry.sourceByteOffset - first.sourceByteOffset; const content = bytes.subarray(relative, relative + entry.sourceByteLength);
+      if (hashBytes(content) !== entry.sourceContentHash) throw new SourceLedgerError(`Stale source ledger entry ${entry.entryId}; source bytes failed verification.`);
+      let value: unknown; try { value = JSON.parse(content.toString("utf8")); } catch { throw new SourceLedgerError(`Stale source ledger entry ${entry.entryId}; source JSON is invalid.`); }
+      if (value === null || typeof value !== "object" || (value as Record<string, unknown>).id !== entry.entryId) throw new SourceLedgerError(`Stale source ledger entry ${entry.entryId}; source identity failed verification.`);
+      return { ledger: entry, text: content.toString("utf8") };
+    });
+    return { entries: output, bytesRead: read.bytesRead };
+  } finally { await handle.close(); }
 }
 
 export async function readExactSourceEntry(sessionPath: string, ledger: SourceLedger, entryId: string): Promise<{ text: string; bytesRead: number }> {

@@ -7,7 +7,7 @@ import type {
   SemanticCompressor,
 } from "./types.js";
 import { analyzeBlockHistory, type BlockHistoryAnalysis } from "./history-analysis.js";
-import { normalizeBlock, reduceBlock, REDUCER_VERSIONS } from "./reducers/index.js";
+import { normalizeBlock, reduceBlock, reducePersistentBlock, REDUCER_VERSIONS } from "./reducers/index.js";
 import {
   compactWhitespace,
   directInstructionText,
@@ -63,9 +63,12 @@ const GENERIC_RETENTION_TERMS = new Set([
   "work",
 ]);
 
+export type CandidateDependency = "source-local" | "pairing-dependent";
+
 export interface CandidatePrecomputeRecord {
   readonly blockId: string;
   readonly key: string;
+  readonly dependency: CandidateDependency;
   readonly integrityHash: string;
   readonly candidates: readonly RepresentationCandidate[];
 }
@@ -75,7 +78,7 @@ function candidateRecordIntegrityHash(
   key: string,
   candidates: readonly RepresentationCandidate[],
 ): string {
-  return hashText(stableStringify({ schema: 1, blockId, key, candidates }));
+  return hashText(stableStringify({ schema: 2, blockId, key, candidates }));
 }
 
 export interface CandidatePrecomputeResult {
@@ -350,17 +353,22 @@ export function candidatePrecomputeKey(
   laterText: string,
   config: CompactorConfig,
 ): string {
-  return hashText(stableStringify({
-    schema: 1,
-    block,
-    laterText,
-    config: {
-      semanticMaxTokens: config.semanticMaxTokens,
-      enableSemanticCompression: config.enableSemanticCompression,
-      emergencyAllowAbsent: config.emergencyAllowAbsent,
-    },
-    reducerVersions: REDUCER_VERSIONS,
-  }));
+  return hashText(stableStringify({ schema: 1, block, laterText, config: {
+    semanticMaxTokens: config.semanticMaxTokens, enableSemanticCompression: config.enableSemanticCompression,
+    emergencyAllowAbsent: config.emergencyAllowAbsent }, reducerVersions: REDUCER_VERSIONS }));
+}
+
+export function persistentCandidateKey(block: HistoricalBlock, config: CompactorConfig): string {
+  return hashText(stableStringify({ schema: 1, dependency: candidateDependency(block), block, config: {
+    semanticMaxTokens: config.semanticMaxTokens, emergencyAllowAbsent: config.emergencyAllowAbsent }, reducerVersions: REDUCER_VERSIONS }));
+}
+
+export function candidateDependency(block: HistoricalBlock): CandidateDependency {
+  return block.kind === "tool_result" && typeof block.attributes.pairedCallEntryId === "string" ? "pairing-dependent" : "source-local";
+}
+
+export function isFutureSensitiveReducer(reducer: string): boolean {
+  return reducer === "file-read" || reducer === "search-results" || reducer === "llm-semantic";
 }
 
 function sourceRefsMatchBlock(candidate: RepresentationCandidate, block: HistoricalBlock): boolean {
@@ -417,7 +425,7 @@ function validatedPrecomputedRecord(
   config: CompactorConfig,
 ): CandidatePrecomputeRecord | undefined {
   if (!precomputed || block.protectedExact) return undefined;
-  if (precomputed.blockId !== block.id || precomputed.key !== expectedKey) return undefined;
+  if (precomputed.blockId !== block.id || precomputed.key !== expectedKey || precomputed.dependency !== candidateDependency(block)) return undefined;
   if (!Array.isArray(precomputed.candidates) || precomputed.candidates.length > MAX_PRECOMPUTED_CANDIDATES_PER_BLOCK) {
     return undefined;
   }
@@ -453,6 +461,7 @@ async function candidatesForBlock(
   semanticCompressor: SemanticCompressor | undefined,
   signal: AbortSignal | undefined,
   precomputed?: CandidatePrecomputeRecord,
+  persistentOnly = false,
 ): Promise<RepresentationCandidate[]> {
   const containsOpaqueImage = block.attributes.containsImage === true || block.attributes.image === true;
   const candidates: RepresentationCandidate[] = [
@@ -473,10 +482,9 @@ async function candidatesForBlock(
         : { lossy: false },
     ),
   ];
-  const precomputeKey = candidatePrecomputeKey(block, laterText, config);
+  const precomputeKey = persistentCandidateKey(block, config);
   const usablePrecomputed = validatedPrecomputedRecord(precomputed, block, precomputeKey, config);
   if (block.protectedExact) {
-    if (usablePrecomputed) return dedupeCandidates([...candidates, ...usablePrecomputed.candidates]);
     const directText = directInstructionText(block.exactText);
     if (directText !== block.exactText && estimateTokensFromText(directText) < block.rawTokens * 0.9) {
       candidates.push(
@@ -508,7 +516,7 @@ async function candidatesForBlock(
       }),
     );
   }
-  if (usablePrecomputed) return dedupeCandidates([...candidates, ...usablePrecomputed.candidates]);
+  if (usablePrecomputed) candidates.push(...usablePrecomputed.candidates);
 
   if (block.kind === "tool_call") {
     const reducedCall = reduceToolCall(block);
@@ -526,8 +534,8 @@ async function candidatesForBlock(
 
   const maxTokens = reducedBudget(block, config);
   if (block.rawTokens > Math.max(80, maxTokens * 1.15)) {
-    const reduced = reduceBlock({ block, maxTokens, laterText });
-    if (estimateTokensFromText(reduced.text) < block.rawTokens * 0.95) {
+    const reduced = persistentOnly ? reducePersistentBlock({ block, maxTokens, laterText }) : reduceBlock({ block, maxTokens, laterText });
+    if (reduced && estimateTokensFromText(reduced.text) < block.rawTokens * 0.95) {
       const semanticLevel = block.kind === "assistant_reasoning" || block.kind === "assistant_text" ? "semantic" : "reduced";
       candidates.push(
         candidate(block, semanticLevel, reduced.text, semanticLevel === "semantic" ? 0.76 : 0.82, {
@@ -657,22 +665,20 @@ export async function precomputeCandidateRepresentations(
       continue;
     }
     const laterText = laterTextForBlock(block, index, blocks, analysisIndexById);
-    const key = candidatePrecomputeKey(block, laterText, config);
+    const key = persistentCandidateKey(block, config);
     const cached = validatedPrecomputedRecord(previous.get(block.id), block, key, config);
     if (cached) {
       records.set(block.id, cached);
       reused += 1;
       continue;
     }
-    const all = await candidatesForBlock(block, laterText, config, undefined, signal);
+    const all = await candidatesForBlock(block, "", config, undefined, signal, undefined, true);
     const candidates = all
-      .filter((item) => item.level !== "raw" && item.level !== "normalized")
+      .filter((item) => item.level !== "raw" && item.level !== "normalized" && item.level !== "semantic" && typeof item.reducer === "string" && !isFutureSensitiveReducer(item.reducer))
       .map(cacheSafeCandidate);
     records.set(block.id, {
-      blockId: block.id,
-      key,
-      integrityHash: candidateRecordIntegrityHash(block.id, key, candidates),
-      candidates,
+      blockId: block.id, key, dependency: candidateDependency(block),
+      integrityHash: candidateRecordIntegrityHash(block.id, key, candidates), candidates,
     });
     recomputed += 1;
   }

@@ -68,13 +68,13 @@ Ordinary tools cannot create protected memory from a source label and cannot upd
 
 The ranked search index is in-memory and rebuilds from parsed JSONL. It has no persisted ranked-index schema. Memory and cache integrity checks fail closed on an unsupported schema. Automatic schema migration is not implemented. The 220-generation simulation rebuilds the in-memory search index but does not simulate a schema migration.
 
-## Retained V1.2 preprocessing
+## Segmented candidate preprocessing
 
-`incremental-context.ts` provides a default-off deterministic preprocessing path. It classifies the current input as `new`, `exact-hit`, `append`, `session-replacement`, `config-change`, `reducer-change`, `truncation`, or `rewrite-or-branch-switch`. A runtime checkpoint can parse only an appended suffix. Pair reconciliation then joins a call before the boundary to a result after it.
+`candidate-segment-store.ts` provides the default-off deterministic preprocessing path. It uses the source ledger to process only appended entries plus bounded verified tool-pair context. It publishes an owner-only manifest over immutable content-hashed segment files. An append creates new segments without rewriting old segments. Readers use the last complete manifest without taking the writer lock.
 
-Persisted records omit runtime blocks, raw candidates, normalized candidates, and all candidates for protected exact blocks. The sidecar has a byte and entry bound. Writes use an owner-only temporary file and atomic rename. Session or configuration replacement cancels stale background work.
+Persistent records are explicitly source-local or pairing-dependent. They omit runtime blocks, raw candidates, normalized candidates, semantic candidates, future-sensitive reductions, and all candidates for protected exact blocks. File-read and search reductions remain live because later history can change them. Semantic assistant candidates also remain live and are never persisted.
 
-Official compaction validates source IDs, parent order, source hashes, session identity, configuration identity, reducer identity, candidate key, candidate shape, token count, source references, reducer version, and integrity immediately before use. A failed check causes deterministic cold computation. Warm and cold paths produce the same model-facing replay for the same authoritative input.
+Official compaction validates the persistent key, dependency class, candidate shape, token count, source references, reducer version, and integrity immediately before use. A failed record causes deterministic cold computation for that block. Warm and cold paths produce the same model-facing replay, plan, validation, generation hash, rendered token count, and current-state text for the same authoritative input. Full branch parsing, resource lineage, causal analysis, planning, and final validation remain non-incremental. See [candidate-segment-store.md](candidate-segment-store.md).
 
 The unkeyed integrity hash is corruption detection. It is not cryptographic authentication against a same-owner actor who can rewrite content and hash.
 
@@ -264,7 +264,8 @@ Exceptions and validation failures return `undefined`, allowing Pi's normal comp
 | `src/render.ts` | Stable chronological text replay |
 | `src/retrieval.ts` | Exact history retrieval/search/range |
 | `src/cache.ts` | Atomic generation sidecar |
-| `src/incremental-context.ts` | Default-off deterministic candidate preprocessing and bounded sidecar |
+| `src/candidate-segment-store.ts` | Default-off source-ledger-backed immutable candidate segment store |
+| `src/incremental-context.ts` | Retired whole-branch checkpoint API; not used by the Pi extension |
 | `src/context-projection.ts` | Default-off request-local tool-result projection and source binding |
 | `src/pi-semantic.ts` | Optional Pi-backed per-block semantic compressor |
 | `src/pi-hybrid.ts` | Independent regular Pi summary stream and combined rendering |

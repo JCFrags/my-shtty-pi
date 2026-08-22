@@ -53,11 +53,11 @@ The goal is better long-session working memory than a normal single summary.
 
 The current V2 design has useful typed reducers, source references, exact retrieval tools, resource tracking, and validation.
 
-The current normal compaction path rebuilds important derived data from the full selected historical prefix. The optional incremental checkpoint still walks and hashes the complete branch. These full-history operations do not meet the scale targets.
+The normal compaction path still rebuilds full-branch parsing, resource lineage, causal analysis, planning, and final validation from the selected historical prefix. This preserves authoritative current-history behavior.
 
-## First scale component
+## Implemented scale components
 
-The [source ledger](source-ledger.md) is the first scale component. It indexes exact source byte locations and supports incremental append updates. It is not yet active in normal compaction.
+The [source ledger](source-ledger.md) indexes exact source byte locations and supports incremental append updates. The default-off [candidate segment store](candidate-segment-store.md) uses it to persist only source-local and verified pairing-dependent candidates in immutable segments. Warm append preprocessing reads only appended source plus bounded pairing context. Future-sensitive work remains current at compaction time.
 
 ## Private real-session measurement
 

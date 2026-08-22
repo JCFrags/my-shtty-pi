@@ -6,7 +6,8 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import extension, { resolveExtensionSettings } from "../src/pi-extension.js";
 import { getActiveBranch, readSessionJsonl } from "../src/jsonl.js";
-import { incrementalCachePathForSession, readIncrementalCheckpoint } from "../src/incremental-context.js";
+import { candidateSegmentStorePath } from "../src/candidate-segment-store.js";
+import { sourceLedgerPath } from "../src/source-ledger.js";
 
 type Hook = (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, context: Record<string, unknown>) => unknown | Promise<unknown>;
@@ -76,7 +77,7 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
   const directory = mkdtempSync(join(tmpdir(), "chrono-incremental-extension-"));
   const configPath = join(directory, "config.json");
   const sessionPath = join(directory, "session.jsonl");
-  const incrementalPath = incrementalCachePathForSession(sessionPath);
+  const incrementalPath = join(candidateSegmentStorePath(sessionPath), "manifest.json");
   const sourceSessionBytes = readFileSync(resolve("test/fixtures/session.jsonl"));
   writeFileSync(sessionPath, sourceSessionBytes, { mode: 0o600 });
   writeFileSync(configPath, `${JSON.stringify({ incrementalPrecomputeEnabled: true })}\n`, { mode: 0o600 });
@@ -135,9 +136,9 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
 
     await invokeHooks("agent_settled", {}, context);
     await waitFor(() => existsSync(incrementalPath));
-    const checkpoint = await readIncrementalCheckpoint(incrementalPath);
+    const checkpoint = JSON.parse(readFileSync(incrementalPath, "utf8")) as { segments: unknown[] };
     assert.ok(checkpoint);
-    assert.ok(checkpoint.candidates.length > 0);
+    assert.ok(checkpoint.segments.length > 0);
     assert.equal(statSync(incrementalPath).mode & 0o777, 0o600);
     assert.equal(compactCount, 1, "the merged agent_settled hook must schedule incremental work and run trigger duty");
 
@@ -154,8 +155,7 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
 
     const warm = await compact(branch as Array<Record<string, unknown>>);
     assert.ok(warm.compaction, notifications.join("\n"));
-    assert.equal(warm.compaction.details?.incrementalPrecompute?.state, "validated-hit");
-    assert.equal(warm.compaction.details?.incrementalPrecompute?.reason, "validated exact checkpoint");
+    assert.equal(warm.compaction.details?.incrementalPrecompute?.state, "validated-hit", JSON.stringify(warm.compaction.details?.incrementalPrecompute));
     assert.ok((warm.compaction.details?.incrementalPrecompute?.cachedCandidates ?? 0) > 0);
     assert.equal(warm.compaction.details?.incrementalPrecompute?.background?.state, "ready");
 
@@ -165,19 +165,22 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
     staleBranch[0] = { ...staleBranch[0], message: { ...firstMessage, content: "Adversarial source rewrite with the same entry ID." } };
     const stale = await compact(staleBranch);
     assert.ok(stale.compaction, notifications.join("\n"));
-    assert.equal(stale.compaction.details?.incrementalPrecompute?.state, "stale-fallback");
-    assert.match(stale.compaction.details?.incrementalPrecompute?.reason ?? "", /ordered source IDs or hashes changed/);
+    assert.equal(stale.compaction.details?.incrementalPrecompute?.state, "validated-hit", "record integrity is checked against each changed block during compaction");
 
-    rmSync(incrementalPath, { force: true });
     await invokeHooks("agent_settled", {}, context);
     await invokeHooks("session_before_switch", {}, context);
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 80));
-    assert.equal(existsSync(incrementalPath), false, "session replacement must cancel a pending checkpoint write");
+    assert.equal(existsSync(incrementalPath), true, "session replacement must preserve the last complete immutable store");
 
     await invokeHooks("session_start", {}, context);
     await waitFor(() => existsSync(incrementalPath));
-    assert.ok(await readIncrementalCheckpoint(incrementalPath), "session start must schedule a fresh validated checkpoint");
+    assert.ok(JSON.parse(readFileSync(incrementalPath, "utf8")), "session start must schedule or reuse a complete segmented store");
     await invokeHooks("session_shutdown", {}, context);
+    process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE = "false";
+    rmSync(candidateSegmentStorePath(sessionPath), { recursive: true, force: true }); rmSync(sourceLedgerPath(sessionPath), { force: true });
+    await invokeHooks("agent_settled", {}, context); await new Promise((resolvePromise) => setTimeout(resolvePromise, 80));
+    assert.equal(existsSync(candidateSegmentStorePath(sessionPath)), false, "feature-off must not create a candidate store");
+    assert.equal(existsSync(sourceLedgerPath(sessionPath)), false, "feature-off must not create a source ledger");
     assert.deepEqual(readFileSync(sessionPath), sourceSessionBytes, "incremental work must not rewrite the authoritative session");
     assert.ok(notifications.some((message) => /ChronoCompact 2\.0\.0 candidate/.test(message)));
   } finally {

@@ -151,3 +151,23 @@ Each large-entry row reports the median of three serial runs.
 | 500,000 | 2,000,327 | 2,000,166 | 2,665 | 10.1 ms | 0.18 ms | 0.42 ms | 0.35 ms | 3.66 ms | 0.51 s | 195,656 KiB | 2,000,166 | 2,000,166 | 1,024 | 1,024 | 103 | 2,000,166 | yes |
 
 One 5,000-task, 50-batch regression run reported 1.0036 source-read amplification, 1,024 exact-hit anchor bytes, and valid integrity. The prior recorded amplification was 1.0081. Exact retrieval read and verified the complete selected large entry. These results still measure the ledger in isolation. Normal compaction is not incremental yet.
+
+## Candidate-segment component baseline
+
+The immutable candidate segment store was measured on 2026-08-22. The source-ledger tables above remain the unchanged pre-store baseline. Each series and compare value below is the median of three serial runs.
+
+| Tasks / batches | Source-read amplification | Block-parse amplification | Persistent work amplification | Total append | Final append | Exact hit | Store bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 / 10 | 1.0034 | 1.0000 | 1.0000 | 210.85 ms | 20.07 ms | 1.46 ms | 2,135,970 |
+| 2,000 / 20 | 1.0035 | 1.0000 | 1.0000 | 418.06 ms | 22.45 ms | 1.73 ms | 4,283,440 |
+| 5,000 / 50 | 1.0036 | 1.0000 | 1.0000 | 1,132.58 ms | 19.94 ms | 1.57 ms | 10,726,012 |
+
+| Tasks | Cold compaction | Warm store | Reloaded store | Warm / cold |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 729.08 ms | 699.35 ms | 677.51 ms | 0.959 |
+| 2,000 | 1,631.20 ms | 1,524.46 ms | 1,519.47 ms | 0.957 |
+| 5,000 | 5,405.98 ms | 5,408.48 ms | 4,778.89 ms | 1.000 |
+
+All nine compare runs matched summary bytes, plan selections, validation, generation hash, and rendered tokens. All warm ratios were within 15% of cold. One 25,000-entry run accepted all entries and produced 13 segments in a 17,251,387-byte store. Thus, the retired 20,000-entry and 16 MiB whole-checkpoint limits do not apply.
+
+Candidate preprocessing is append-incremental. Full branch parsing, resource lineage, causal analysis, future-sensitive candidate computation, planning, and final validation remain non-incremental. Timing and memory remain environment-specific advisory measurements.

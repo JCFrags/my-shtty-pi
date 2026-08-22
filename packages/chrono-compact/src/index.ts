@@ -3,6 +3,7 @@ export * from "./causal-memory.js";
 export * from "./cache.js";
 export * from "./candidates.js";
 export * from "./compactor.js";
+export * from "./candidate-segment-store.js";
 export * from "./context-projection.js";
 export * from "./episodes.js";
 export * from "./incremental-context.js";

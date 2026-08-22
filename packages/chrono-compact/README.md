@@ -27,7 +27,7 @@ This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted,
 - Labels every lossy representation, reports omissions and token reduction, and emits exact recovery references.
 - Rebuilds each generation from original branch entries, ignoring prior compaction control entries, to prevent summary-of-summary drift.
 - Caches byte-stable compaction generations in a sidecar file.
-- Optionally preprocesses deterministic block candidates in the background. The incremental sidecar supports exact hit, append, replacement, configuration or reducer change, truncation, and rewrite or branch-switch transitions. Final use validates the full source order, configuration, reducers, candidate shape, token count, references, and integrity. Stale or invalid data causes a cold recomputation.
+- Optionally preprocesses source-local and verified tool-pair candidates in a source-ledger-backed immutable segment store. Appends read only new source plus bounded pair context and do not rewrite old segments. Future-sensitive candidates remain live computations. Missing, stale, busy, or corrupt data causes a cold per-block recomputation without delaying compaction.
 - Optionally projects old tool results only in a model-request copy. Modes are `off`, `safe`, and `aggressive`. The feature keeps first consumption and recent results exact. It also keeps failures, unknown terminal outcomes, images, restrictions, unresolved work, and later user-cited evidence exact.
 - Rejects unsafe semantic candidates that introduce unsupported identifiers, quotations, numeric facts, success states, or outcomes.
 
@@ -137,7 +137,7 @@ Environment variables remain available for advanced deployment. They take preced
 | `PI_CHRONO_HISTORY_EDITOR` | `false` | Enable the experimental one-job V1.1 importance and treatment classifier. It uses Pi's current provider and model. This environment value overrides the persistent setting. |
 | `PI_CHRONO_HISTORY_EDITOR_MAX_INPUT` | `50000` | Maximum estimated editor input. Larger generations use deterministic compaction without a model job. |
 | `PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT` | `16000` | Adaptive upper bound. Normal generations stay at or below 8,000 tokens. High-value ultra-long history can use more. |
-| `PI_CHRONO_INCREMENTAL_PRECOMPUTE` | `false` | Enable deterministic background candidate preprocessing. The bounded owner-only sidecar is `<session.jsonl>.chrono-incremental-v2.json`. |
+| `PI_CHRONO_INCREMENTAL_PRECOMPUTE` | `false` | Enable segmented deterministic background candidate preprocessing. The owner-only store is `<session.jsonl>.chrono-candidate-segments-v1`. Old `.chrono-incremental-v2.json` files are ignored. |
 | `PI_CHRONO_TOOL_RESULT_PROJECTION` | `off` | Select `off`, `safe`, or `aggressive` request-local projection. Uncertainty keeps all messages unchanged. |
 | `PI_CHRONO_RANKED_SEARCH` | `true` | Use normalized BM25 as the normal `history_search` path. Exact and regex remain available. |
 | `PI_CHRONO_EDITABLE_MEMORY` | `true` | Enable owner-only append-only ordinary working memory. |
@@ -245,7 +245,7 @@ A generation hash covers model-facing raw source entries, retained future entrie
 <session.jsonl>.chrono-compact.json
 ```
 
-The sidecar is secondary data and can be deleted or rebuilt from JSONL. Incremental candidate sidecars are also secondary. They omit raw and normalized candidates and skip protected exact blocks. Writes are bounded, atomic, and owner-only. The editable-memory sidecar additionally uses an owner-only exclusive lock. Lock ownership binds a random nonce, inode, PID, and Linux process-start identity. Age never proves owner death. Dead main locks and dead recovery guards use race-safe recovery. Release cannot remove a replacement owner. A synced temporary chain, atomic rename, and directory sync prevent concurrent successful appends from overwriting one another. A session, configuration, reducer, truncation, rewrite, or branch change invalidates cache reuse. Cancellation prevents replaced background work from becoming current.
+The sidecar is secondary data and can be deleted or rebuilt from JSONL. The source ledger and immutable candidate segment store are also secondary. Candidate segments omit raw, normalized, semantic, future-sensitive, and protected exact candidates. Manifest publication is atomic and owner-only. See [`docs/candidate-segment-store.md`](docs/candidate-segment-store.md). The editable-memory sidecar additionally uses an owner-only exclusive lock. Lock ownership binds a random nonce, inode, PID, and Linux process-start identity. Age never proves owner death. Dead main locks and dead recovery guards use race-safe recovery. Release cannot remove a replacement owner. A synced temporary chain, atomic rename, and directory sync prevent concurrent successful appends from overwriting one another. A session, configuration, reducer, truncation, rewrite, or branch change invalidates cache reuse. Cancellation prevents replaced background work from becoming current.
 
 The unkeyed integrity hash is corruption detection. It is not cryptographic authentication against a same-owner actor who can rewrite content and hash.
 
@@ -314,7 +314,7 @@ The repository includes an end-to-end Pi-like fixture and automated tests for:
 - semantic candidate rejection for unsupported facts;
 - exact-repeat canonical retention and conservative repeated-observation deltas; and
 - experimental-classifier default, persistence, environment precedence, and zero-call disabled paths;
-- incremental transitions, cold-equivalent output, final-use tamper rejection, protected-data omission, pairing, bounded atomic persistence, malformed fallback, cancellation, and extension integration; and
+- segmented incremental transitions, immutable append behavior, cold-equivalent output, final-use tamper rejection, protected-data omission, cross-segment pairing, bounded runtime loading, malformed fallback, cancellation, and extension integration; and
 - projection modes, first use, recency, protected evidence, source binding, pair validation, exact recovery, deterministic output, request-local immutability, and extension fail-closed behavior;
 - hot, warm, and cold retention with protected-age override and bounded cold cues;
 - declared and inferred file versions, normal-read overlap union, conflicting-overlap supersession, product-connected near-duplicate factoring, and marker-only repeat safety;
@@ -339,7 +339,7 @@ npm test
 - Ranked search and staged recall use only the selected active branch. At very small budgets, optional explanatory text can be absent because complete cursor and recovery fields have priority. `history_range` prefers a parent-chain path and labels file-order fallback when entries are not ancestor/descendant.
 - Visible reasoning is preserved only when it exists in session data. The system does not reconstruct unavailable private reasoning.
 - Historical images are represented by explicit opaque-image markers and remain exactly recoverable from JSONL; the text-only compaction message does not embed original image bytes.
-- Incremental reuse can reduce repeated deterministic candidate work. It does not avoid authoritative branch parsing and final validation.
+- Segmented incremental reuse reduces repeated persistent candidate work. It does not avoid authoritative branch parsing, future-sensitive computation, resource and causal analysis, planning, or final validation.
 - Projection is request-local and process-local. A restart resets first-consumption tracking and therefore preserves more full results until later requests.
 
 See [`docs/architecture.md`](docs/architecture.md) for implementation details and [`docs/hand-off.md`](docs/hand-off.md) for the authoritative product definition.

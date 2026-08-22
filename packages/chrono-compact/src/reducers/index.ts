@@ -40,6 +40,22 @@ export function normalizeBlock(block: HistoricalBlock): ReducerResult | undefine
   };
 }
 
+export function reducePersistentBlock(context: ReducerContext): ReducerResult | undefined {
+  const { block } = context;
+  if (block.kind === "assistant_reasoning" || block.kind === "assistant_text" || block.kind === "branch_summary") return undefined;
+  if (block.kind === "tool_result" || block.kind === "bash_execution") {
+    if (looksLikeDiff(block.exactText)) return reduceDiff(context);
+    if (/^read$/i.test(block.toolName ?? "")) return undefined;
+    if (/^(?:bash|shell|terminal|exec)$/i.test(block.toolName ?? "") || block.kind === "bash_execution") return reduceTerminalOutput(context);
+    if (looksLikeSearchOutput(context)) return undefined;
+    const parsed = parseStructuredJson(block.exactText);
+    if (parsed !== undefined) return reduceStructuredJson(context, parsed) ?? reduceGenericText(context);
+    return reduceGenericText(context);
+  }
+  if (block.kind === "custom_message" || block.kind === "user") return reduceAssistantProse(context);
+  return reduceGenericText(context);
+}
+
 export function reduceBlock(context: ReducerContext): ReducerResult {
   const { block } = context;
   if (block.kind === "assistant_reasoning" || block.kind === "assistant_text" || block.kind === "branch_summary") {

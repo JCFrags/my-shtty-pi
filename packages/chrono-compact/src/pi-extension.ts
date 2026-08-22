@@ -27,17 +27,14 @@ import {
   type ToolResultProjectionMode,
 } from "./context-projection.js";
 import {
-  buildIncrementalCheckpoint,
-  incrementalCachePathForSession,
-  incrementalConfigHash,
-  incrementalReducerHash,
-  readIncrementalCheckpoint,
-  validateIncrementalCheckpoint,
-  writeIncrementalCheckpoint,
-  type IncrementalCacheIdentity,
-  type IncrementalRuntimeCheckpoint,
-} from "./incremental-context.js";
+  createCandidateSegmentStore,
+  loadCandidateRecordsForBranch,
+  loadCandidateSegmentManifest,
+  updateCandidateSegmentStore,
+  type CandidateSegmentStore,
+} from "./candidate-segment-store.js";
 import { getSourceEntriesBefore, parseBranchEntries, readSessionJsonl } from "./jsonl.js";
+import { loadSourceLedger } from "./source-ledger.js";
 import {
   createPiRegularSummary,
   previousRegularPiSummary,
@@ -254,7 +251,7 @@ async function openChronoCompactSettings(
       `Chronological replay maximum · ${settings.replayTargetTokens === undefined ? "automatic" : `${settings.replayTargetTokens.toLocaleString()} tokens`}`,
       `Regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
       `Experimental LLM history classifier · ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
-      `Incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+      `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
       `Request-local tool-result projection · ${settings.toolResultProjectionMode}`,
       `Ranked local history search · ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
       `Editable working memory · ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,
@@ -840,7 +837,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   let forcedContinuationPending = false;
   let continueAfterSuccessfulCompaction = false;
   let warningLevel = 0;
-  let incrementalCheckpoint: IncrementalRuntimeCheckpoint | undefined;
+  let incrementalStore: CandidateSegmentStore | undefined;
   let incrementalAbort: AbortController | undefined;
   let incrementalTimer: ReturnType<typeof setTimeout> | undefined;
   let incrementalGeneration = 0;
@@ -856,19 +853,13 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
     enableSemanticCompression: false,
   });
 
-  const incrementalIdentity = (sessionPath: string, config: CompactorConfig): IncrementalCacheIdentity => ({
-    sessionPath,
-    configHash: incrementalConfigHash(config),
-    reducerHash: incrementalReducerHash(),
-  });
-
   const cancelIncrementalWork = (clearCheckpoint: boolean): void => {
     incrementalGeneration += 1;
     if (incrementalTimer) clearTimeout(incrementalTimer);
     incrementalTimer = undefined;
     incrementalAbort?.abort(new Error("ChronoCompact incremental work was cancelled for session state replacement."));
     incrementalAbort = undefined;
-    if (clearCheckpoint) incrementalCheckpoint = undefined;
+    if (clearCheckpoint) incrementalStore = undefined;
   };
 
   const scheduleIncrementalWork = (ctx: ExtensionContext): void => {
@@ -883,34 +874,23 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       incrementalStatus = { state: "refused", reason: "session path unavailable" };
       return;
     }
-    let entries: SessionEntryLike[];
-    try {
-      entries = [...asEntries(ctx.sessionManager.getBranch())];
-    } catch (error) {
-      incrementalStatus = { state: "refused", reason: safeErrorMessage(error) };
-      return;
-    }
     cancelIncrementalWork(false);
     const generation = incrementalGeneration;
     const controller = new AbortController();
     incrementalAbort = controller;
     const config = incrementalConfig(settings);
-    const identity = incrementalIdentity(sessionPath, config);
-    incrementalStatus = { state: "scheduled", sourceEntries: entries.length };
+    const store = incrementalStore?.sessionPath === sessionPath ? incrementalStore : createCandidateSegmentStore(sessionPath);
+    incrementalStore = store;
+    incrementalStatus = { state: "scheduled" };
     incrementalTimer = setTimeout(() => {
       incrementalTimer = undefined;
       void (async () => {
         try {
-          const disk = incrementalCheckpoint ?? await readIncrementalCheckpoint(incrementalCachePathForSession(sessionPath));
-          const checkpoint = await buildIncrementalCheckpoint(entries, identity, config, {
-            previous: disk,
-            signal: controller.signal,
-          });
+          if (!store.manifest) await loadCandidateSegmentManifest(store);
+          const metrics = await updateCandidateSegmentStore(store, config, { signal: controller.signal });
           if (controller.signal.aborted || generation !== incrementalGeneration) return;
-          await writeIncrementalCheckpoint(incrementalCachePathForSession(sessionPath), checkpoint);
-          if (controller.signal.aborted || generation !== incrementalGeneration) return;
-          incrementalCheckpoint = checkpoint;
-          incrementalStatus = { state: "ready", ...checkpoint.metrics };
+          incrementalStore = store;
+          incrementalStatus = { state: "ready", ...metrics };
         } catch (error) {
           if (!controller.signal.aborted) incrementalStatus = { state: "fallback", reason: safeErrorMessage(error) };
         } finally {
@@ -1313,23 +1293,21 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           : targetTokens,
       );
       const replayConfig = resolveCompactorConfig({ ...config, targetTokens: replayTargetTokens });
-      let precomputedCandidates: ReturnType<typeof validateIncrementalCheckpoint>["candidates"] | undefined;
+      let precomputedCandidates: ReadonlyMap<string, import("./candidates.js").CandidatePrecomputeRecord> | undefined;
       let officialIncremental: Record<string, unknown> = { state: "disabled" };
       if (settings.incrementalPrecomputeEnabled && sessionPath) {
-        const checkpoint = incrementalCheckpoint
-          ?? await readIncrementalCheckpoint(incrementalCachePathForSession(sessionPath));
-        const validated = validateIncrementalCheckpoint(
-          checkpoint,
-          branchEntries,
-          incrementalIdentity(sessionPath, replayConfig),
-        );
-        officialIncremental = {
-          state: validated.ok ? "validated-hit" : "stale-fallback",
-          reason: validated.reason,
-          cachedCandidates: validated.candidates.size,
-          background: incrementalStatus,
-        };
-        if (validated.ok) precomputedCandidates = validated.candidates;
+        try {
+          const store = incrementalStore?.sessionPath === sessionPath ? incrementalStore : createCandidateSegmentStore(sessionPath);
+          incrementalStore = store; if (!store.manifest) await loadCandidateSegmentManifest(store);
+          if (!store.ledger && store.manifest) store.ledger = await loadSourceLedger(sessionPath, store.ledgerPath);
+          const branchIds = sourceEntries.flatMap((entry) => typeof entry.id === "string" ? [entry.id] : []);
+          const candidates = await loadCandidateRecordsForBranch(store, branchIds);
+          if (candidates.size > 0) precomputedCandidates = candidates;
+          officialIncremental = { state: candidates.size > 0 ? "validated-hit" : "stale-fallback", cachedCandidates: candidates.size,
+            background: incrementalStatus, metrics: store.metrics };
+        } catch (error) {
+          officialIncremental = { state: "stale-fallback", reason: safeErrorMessage(error), background: incrementalStatus };
+        }
       }
       const historyEditor = settings.historyEditorEnabled && ctx.model ? createPiHistoryEditor(ctx) : undefined;
       const result = await compactEntries(sourceEntries, {
@@ -1470,7 +1448,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             `Replay maximum: ${settings.replayTargetTokens === undefined ? "automatic" : settings.replayTargetTokens.toLocaleString()}`,
             `Regular Pi summary: ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
             `Experimental LLM history classifier: ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
-            `Incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+            `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
             `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,
             `Ranked local history search: ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
             `Editable working memory: ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,

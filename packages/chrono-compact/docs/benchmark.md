@@ -76,6 +76,35 @@ The task mode reports initial build, warm append, exact-hit, cold sidecar-load, 
 
 Large-entry mode builds one synthetic tool-result entry, runs an exact hit, appends one small entry, retrieves the complete large entry, and loads the sidecar cold. `sourceLineAssemblyBytes` reports bytes copied when chunk parts are joined once. `maximumSourceLineBytes` reports the largest complete line. `exactHitAnchorBytesRead` and `appendAnchorBytesRead` are fixed-size tail checks. `appendNewSourceBytesRead` is the small suffix. `exactRetrievalBytesRead` is the complete requested entry and is not an anchor read.
 
+## Candidate-segment benchmark
+
+`scripts/benchmark-candidate-segments.mjs` measures the source-ledger-backed immutable candidate store with synthetic Pi JSONL. It creates and removes owner-only temporary sessions, ledgers, manifests, and segments. It does not inspect real Pi sessions.
+
+```bash
+npm run benchmark:candidate-segments -- series --final-tasks 5000 --batches 50
+npm run benchmark:candidate-segments -- compare --tasks 5000
+npm run benchmark:candidate-segments -- entries --entries 25000
+npm run benchmark:candidate-segments -- generations --final-tasks 1000 --generations 50
+```
+
+`series` reports source-read, block-parse, and persistent-candidate work amplification. It also reports immutable segment reuse, store sizes, timer delay, exact-hit time, and cold manifest and segment load times. `compare` checks exact summary, plan, validation, generation-hash, and rendered-token equivalence for warm and reloaded stores. `entries` checks limits independently of the retired 20,000-entry and 16 MiB whole-checkpoint caps. `generations` reports cumulative work and output equivalence across repeated appends and compactions.
+
+On 2026-08-22, three serial runs per size gave these medians. Timing and memory are advisory.
+
+| Tasks / batches | Source-read amplification | Block-parse amplification | Candidate-work amplification | Total append ms | Final append ms | Exact hit ms | Store bytes |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1,000 / 10 | 1.0034 | 1.0000 | 1.0000 | 210.85 | 20.07 | 1.46 | 2,135,970 |
+| 2,000 / 20 | 1.0035 | 1.0000 | 1.0000 | 418.06 | 22.45 | 1.73 | 4,283,440 |
+| 5,000 / 50 | 1.0036 | 1.0000 | 1.0000 | 1,132.58 | 19.94 | 1.57 | 10,726,012 |
+
+| Tasks | Cold compaction ms | Warm store ms | Reloaded store ms | Candidate load ms | Warm / cold |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | 729.08 | 699.35 | 677.51 | 38.26 | 0.959 |
+| 2,000 | 1,631.20 | 1,524.46 | 1,519.47 | 74.46 | 0.957 |
+| 5,000 | 5,405.98 | 5,408.48 | 4,778.89 | 185.71 | 1.000 |
+
+All compare runs were byte-equivalent and remained within 15% of cold compaction. The maximum median timer delay in the series table was 1.65 ms. One 25,000-entry run accepted all entries, built 13 segments and a 17,251,387-byte store, and loaded only the manifest in 0.39 ms. This exceeds both retired checkpoint limits without reintroducing them. One 50-generation run reported 1.0000 block-parse and persistent-work amplification, a 0.9671 candidate hit rate, and exact output equivalence.
+
 ## Explicit session-set benchmark
 
 The [explicit session-set benchmark](local-session-benchmark.md) accepts only a private manifest. It never discovers session files.
