@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rename, rm, stat, writeFile, appendFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadSourceLedger, readExactSourceEntry, sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
+import { loadSourceLedger, readExactSourceEntry, SOURCE_LEDGER_TAIL_ANCHOR_BYTES, sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
+import { stableStringify } from "../src/utils.js";
 
 const header = { type: "session", version: 3, id: "session-test" };
 const entry = (id: string, parentId: string | null, text = `message-${id}`) => ({ type: "message", id, parentId, message: { role: "user", content: text } });
 const line = (value: unknown) => JSON.stringify(value);
+const largeEntry = (id: string, parentId: string | null, tokens: number) => entry(id, parentId, `LARGE-${id}-` + "x".repeat(tokens * 4));
 async function temporary(t: test.TestContext): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "chrono-source-ledger-"));
   t.after(() => rm(path, { recursive: true, force: true }));
@@ -59,17 +62,18 @@ test("warm append and exact hit read bounded source bytes and reuse maps", async
   const directory = await temporary(t); const session = join(directory, "session.jsonl");
   await writeFile(session, `${line(header)}\n${line(entry("a", null))}\n`);
   let ledger = await updateSourceLedger(session); const map = ledger.entryById;
-  await appendFile(session, `${line(entry("b", "a"))}\n`);
+  const suffix = `${line(entry("b", "a"))}\n`;
+  await appendFile(session, suffix);
   ledger = await updateSourceLedger(session, ledger);
   assert.equal(ledger.entryById, map);
   assert.equal(ledger.metrics.transition, "append");
-  assert.ok(ledger.metrics.sourceBytesRead < (await stat(session)).size);
+  assert.equal(ledger.metrics.sourceBytesRead, ledger.metrics.tailAnchorBytesRead + Buffer.byteLength(suffix));
   const sidecarBefore = await stat(sourceLedgerPath(session));
   const exact = await updateSourceLedger(session, ledger);
   const sidecarAfter = await stat(sourceLedgerPath(session));
   assert.equal(exact.metrics.transition, "exact-hit");
   assert.equal(exact.metrics.ledgerBytesWritten, 0);
-  assert.ok(exact.metrics.sourceBytesRead < exact.metrics.sourceFileSize);
+  assert.ok(exact.metrics.sourceBytesRead <= SOURCE_LEDGER_TAIL_ANCHOR_BYTES);
   assert.equal(sidecarAfter.size, sidecarBefore.size);
   assert.equal(sidecarAfter.mtimeMs, sidecarBefore.mtimeMs);
 });
@@ -152,4 +156,72 @@ test("sidecar contains bounded metadata but no source text or source path", asyn
   assert.doesNotMatch(sidecar, /secret-session|messageText|tool output/);
   const metadata = await stat(sourceLedgerPath(session)); assert.equal(metadata.mode & 0o077, 0);
   assert.equal(ledger.sourceSessionIdentity, "session-test");
+});
+
+test("large source lines are assembled once and retain exact offsets, hashes, and retrieval", async (t) => {
+  const directory = await temporary(t);
+  for (const tokens of [250_000, 500_000]) {
+    const session = join(directory, `large-${tokens}.jsonl`); const value = largeEntry(`large-${tokens}`, null, tokens);
+    const raw = line(value); const text = `${line(header)}\n${raw}\n`;
+    await writeFile(session, text);
+    const ledger = await updateSourceLedger(session); const metadata = ledger.sourceOrder[0]!;
+    assert.equal(text.slice(metadata.sourceByteOffset, metadata.sourceByteOffset + metadata.sourceByteLength), raw);
+    assert.equal(metadata.sourceContentHash, createHash("sha256").update(raw).digest("hex"));
+    assert.equal((await readExactSourceEntry(session, ledger, metadata.entryId)).text, raw);
+    assert.equal(ledger.metrics.maximumSourceLineBytes, Buffer.byteLength(raw));
+    assert.ok(ledger.metrics.sourceLineAssemblyBytes >= Buffer.byteLength(raw));
+    assert.ok(ledger.metrics.sourceLineAssemblyBytes <= Buffer.byteLength(raw) + 1024);
+    assert.doesNotMatch(await readFile(sourceLedgerPath(session), "utf8"), /LARGE-large-/);
+  }
+});
+
+test("fixed tail anchor bounds exact hits and small appends after a large final entry", async (t) => {
+  const directory = await temporary(t); const session = join(directory, "large-tail.jsonl");
+  const large = line(largeEntry("large", null, 500_000));
+  await writeFile(session, `${line(header)}\n${large}\n`);
+  let ledger = await updateSourceLedger(session);
+  ledger = await updateSourceLedger(session, ledger);
+  assert.ok(ledger.metrics.tailAnchorBytesRead <= SOURCE_LEDGER_TAIL_ANCHOR_BYTES);
+  assert.equal(ledger.metrics.tailAnchorBytesRead, SOURCE_LEDGER_TAIL_ANCHOR_BYTES);
+  const suffix = `${line(entry("small", "large"))}\n`; await appendFile(session, suffix);
+  ledger = await updateSourceLedger(session, ledger);
+  assert.equal(ledger.metrics.tailAnchorBytesRead, SOURCE_LEDGER_TAIL_ANCHOR_BYTES);
+  assert.equal(ledger.metrics.appendedSourceBytesRead, Buffer.byteLength(suffix));
+  assert.equal(ledger.metrics.sourceBytesRead, SOURCE_LEDGER_TAIL_ANCHOR_BYTES + Buffer.byteLength(suffix));
+  assert.ok(ledger.metrics.sourceBytesRead < Buffer.byteLength(large));
+});
+
+test("anchor changes rebuild while old-prefix changes wait for exact retrieval", async (t) => {
+  const directory = await temporary(t); const session = join(directory, "anchor-change.jsonl");
+  const old = line(entry("old", null, "OLD-CONTENT")); const large = line(largeEntry("large", "old", 250_000));
+  const original = `${line(header)}\n${old}\n${large}\n`; await writeFile(session, original);
+  let ledger = await updateSourceLedger(session);
+  const anchorChanged = Buffer.from(original); const anchorIndex = anchorChanged.length - 10;
+  anchorChanged.writeUInt8(anchorChanged.readUInt8(anchorIndex) ^ 1, anchorIndex); await writeFile(session, anchorChanged);
+  ledger = await updateSourceLedger(session, ledger); assert.equal(ledger.metrics.transition, "rebuild-tail-rewrite");
+  const oldMetadata = ledger.entryById.get("old")!;
+  const prefixChanged = Buffer.from(anchorChanged); const prefixIndex = oldMetadata.sourceByteOffset + oldMetadata.sourceByteLength - 3;
+  prefixChanged.writeUInt8(prefixChanged.readUInt8(prefixIndex) ^ 1, prefixIndex); await writeFile(session, prefixChanged);
+  const exact = await updateSourceLedger(session, ledger); assert.equal(exact.metrics.transition, "exact-hit");
+  await assert.rejects(readExactSourceEntry(session, exact, "old"), /Stale source ledger entry/);
+});
+
+test("a large incomplete final line is indexed once after completion", async (t) => {
+  const directory = await temporary(t); const session = join(directory, "large-incomplete.jsonl");
+  const raw = line(largeEntry("large", null, 250_000)); const cut = raw.length - 20;
+  await writeFile(session, `${line(header)}\n${raw.slice(0, cut)}`);
+  let ledger = await updateSourceLedger(session); assert.equal(ledger.sourceOrder.length, 0);
+  await appendFile(session, `${raw.slice(cut)}\n`); ledger = await updateSourceLedger(session, ledger);
+  assert.deepEqual(ledger.sourceOrder.map((item) => item.entryId), ["large"]);
+});
+
+test("a checkpoint without fixed anchor fields is not accepted", async (t) => {
+  const directory = await temporary(t); const session = join(directory, "old-schema.jsonl");
+  await writeFile(session, `${line(header)}\n${line(entry("a", null))}\n`); await updateSourceLedger(session);
+  const sidecar = sourceLedgerPath(session); const records = (await readFile(sidecar, "utf8")).trim().split("\n").map((item) => JSON.parse(item));
+  const checkpoint = records.at(-1); delete checkpoint.anchorSourceOffset; delete checkpoint.anchorByteLength; delete checkpoint.anchorContentHash;
+  const base = { ...checkpoint }; delete base.ledgerRecordHash;
+  checkpoint.ledgerRecordHash = createHash("sha256").update(stableStringify(base)).digest("hex");
+  await writeFile(sidecar, `${records.map((item) => JSON.stringify(item)).join("\n")}\n`);
+  await assert.rejects(loadSourceLedger(session), /fixed tail anchor|hash chain/);
 });

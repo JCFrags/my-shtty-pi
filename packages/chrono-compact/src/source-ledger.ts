@@ -8,6 +8,7 @@ export const SOURCE_LEDGER_SUFFIX = ".chrono-source-ledger-v1.jsonl";
 const SCHEMA_VERSION = 1;
 const ZERO_HASH = "0".repeat(64);
 const READ_CHUNK = 64 * 1024;
+export const SOURCE_LEDGER_TAIL_ANCHOR_BYTES = 1024;
 
 export type SourceLedgerTransition = "new" | "exact-hit" | "append" | "rebuild-truncation" | "rebuild-replacement" | "rebuild-tail-rewrite" | "recover-incomplete-ledger-tail";
 
@@ -44,6 +45,9 @@ export interface SourceLedgerCheckpoint {
   readonly lastIndexedEntryId: string | null;
   readonly lastIndexedSourceContentHash: string | null;
   readonly integrityChainState: string;
+  readonly anchorSourceOffset: number;
+  readonly anchorByteLength: number;
+  readonly anchorContentHash: string;
   readonly transition: SourceLedgerTransition;
   readonly previousLedgerRecordHash: string;
   readonly ledgerRecordHash: string;
@@ -62,6 +66,10 @@ export interface SourceLedgerMetrics {
   readonly ledgerBytesWritten: number;
   readonly ledgerRecordsReplayed: number;
   readonly exactRetrievalBytesRead: number;
+  readonly maximumSourceLineBytes: number;
+  readonly sourceLineAssemblyBytes: number;
+  readonly tailAnchorBytesRead: number;
+  readonly appendedSourceBytesRead: number;
 }
 
 export interface SourceLedger {
@@ -126,18 +134,26 @@ interface ParsedSource {
   completePosition: number;
   lines: number;
   bytesRead: number;
+  maximumSourceLineBytes: number;
+  sourceLineAssemblyBytes: number;
+  committedAnchor: Buffer;
 }
 
-async function parseSourceRange(path: string, start: number, end: number, firstLine: number, requireHeader: boolean): Promise<ParsedSource> {
+function nextAnchor(previous: Buffer, raw: Buffer, newline: Buffer): Buffer {
+  const neededFromRaw = Math.min(raw.length, SOURCE_LEDGER_TAIL_ANCHOR_BYTES - newline.length);
+  const neededFromPrevious = Math.min(previous.length, SOURCE_LEDGER_TAIL_ANCHOR_BYTES - newline.length - neededFromRaw);
+  return Buffer.concat([previous.subarray(previous.length - neededFromPrevious), raw.subarray(raw.length - neededFromRaw), newline]);
+}
+
+async function parseSourceRange(path: string, start: number, end: number, firstLine: number, requireHeader: boolean, initialAnchor: Uint8Array = Buffer.alloc(0)): Promise<ParsedSource> {
   const handle = await open(path, noFollowFlags());
-  let bytesRead = 0;
-  let pending = Buffer.alloc(0);
-  let pendingOffset = start;
-  let position = start;
-  let lineNumber = firstLine;
+  let bytesRead = 0; let position = start; let lineNumber = firstLine; let pendingOffset = start; let pendingLength = 0;
+  let maximumSourceLineBytes = 0; let sourceLineAssemblyBytes = 0; let committedAnchor: Buffer = Buffer.from(initialAnchor);
   let header: Record<string, unknown> | undefined;
+  let parts: Buffer[] = [];
   const entries: ParsedSource["entries"] = [];
-  const parseComplete = (raw: Buffer, offset: number, nextOffset: number): void => {
+  const parseComplete = (raw: Buffer, offset: number, nextOffset: number, newline: Buffer): void => {
+    maximumSourceLineBytes = Math.max(maximumSourceLineBytes, raw.length - (raw.at(-1) === 13 ? 1 : 0));
     let content = raw;
     if (content.at(-1) === 13) content = content.subarray(0, -1);
     let value: unknown;
@@ -156,7 +172,13 @@ async function parseSourceRange(path: string, start: number, end: number, firstL
         entryType: object.type as string, lineNumber, sourceByteOffset: offset, sourceByteLength: content.length,
         nextSourceByteOffset: nextOffset, sourceContentHash: hashBytes(content) });
     }
+    committedAnchor = nextAnchor(committedAnchor, raw, newline);
     lineNumber += 1;
+  };
+  const assemble = (): Buffer => {
+    if (parts.length === 1) return parts[0]!;
+    sourceLineAssemblyBytes += pendingLength;
+    return Buffer.concat(parts, pendingLength);
   };
   try {
     while (position < end) {
@@ -164,49 +186,55 @@ async function parseSourceRange(path: string, start: number, end: number, firstL
       const buffer = Buffer.allocUnsafe(requested);
       const read = await handle.read(buffer, 0, requested, position);
       if (read.bytesRead === 0) break;
+      const chunk = buffer.subarray(0, read.bytesRead);
       bytesRead += read.bytesRead; position += read.bytesRead;
-      pending = Buffer.concat([pending, buffer.subarray(0, read.bytesRead)]);
-      let cut;
-      while ((cut = pending.indexOf(10)) >= 0) {
-        parseComplete(pending.subarray(0, cut), pendingOffset, pendingOffset + cut + 1);
-        pending = pending.subarray(cut + 1); pendingOffset += cut + 1;
+      let cursor = 0; let cut: number;
+      while ((cut = chunk.indexOf(10, cursor)) >= 0) {
+        const part = chunk.subarray(cursor, cut); parts.push(part); pendingLength += part.length;
+        const raw = assemble();
+        parseComplete(raw, pendingOffset, pendingOffset + pendingLength + 1, Buffer.from([10]));
+        pendingOffset += pendingLength + 1; parts = []; pendingLength = 0; cursor = cut + 1;
       }
+      if (cursor < chunk.length) { const part = chunk.subarray(cursor); parts.push(part); pendingLength += part.length; }
     }
-    if (position === end && pending.length > 0) {
-      try { parseComplete(pending, pendingOffset, end); pending = Buffer.alloc(0); pendingOffset = end; }
+    if (position === end && pendingLength > 0) {
+      const raw = assemble();
+      try { parseComplete(raw, pendingOffset, end, Buffer.alloc(0)); parts = []; pendingLength = 0; pendingOffset = end; }
       catch (error) {
         if (!(error instanceof SourceLedgerError) || !/^Invalid JSON:/.test(error.message)) throw error;
       }
     }
   } finally { await handle.close(); }
   if (requireHeader && !header) throw new SourceLedgerError("The source has no complete session header.");
-  return { header: header ?? {}, entries, completePosition: pendingOffset, lines: lineNumber - firstLine, bytesRead };
+  return { header: header ?? {}, entries, completePosition: pendingOffset, lines: lineNumber - firstLine, bytesRead,
+    maximumSourceLineBytes, sourceLineAssemblyBytes, committedAnchor };
 }
 
 function sessionIdentity(header: Record<string, unknown>): string | null {
   for (const key of ["id", "sessionId", "session_id"]) if (typeof header[key] === "string" && (header[key] as string).length > 0) return header[key] as string;
   return null;
 }
-function sourceAnchor(ledger: SourceLedger): SourceLedgerEntry | undefined { return ledger.sourceOrder.at(-1); }
-async function anchorMatches(path: string, ledger: SourceLedger): Promise<{ matches: boolean; bytesRead: number }> {
-  const anchor = sourceAnchor(ledger);
-  if (!anchor) return { matches: true, bytesRead: 0 };
+async function anchorMatches(path: string, ledger: SourceLedger): Promise<{ matches: boolean; bytesRead: number; bytes: Buffer }> {
+  const checkpoint = ledger.checkpoint;
+  const bytes = Buffer.alloc(checkpoint.anchorByteLength);
   const handle = await open(path, noFollowFlags());
   try {
-    const bytes = Buffer.alloc(anchor.sourceByteLength);
-    const read = await handle.read(bytes, 0, bytes.length, anchor.sourceByteOffset);
-    return { matches: read.bytesRead === bytes.length && hashBytes(bytes) === anchor.sourceContentHash, bytesRead: read.bytesRead };
+    const read = await handle.read(bytes, 0, bytes.length, checkpoint.anchorSourceOffset);
+    return { matches: read.bytesRead === bytes.length && hashBytes(bytes) === checkpoint.anchorContentHash,
+      bytesRead: read.bytesRead, bytes: bytes.subarray(0, read.bytesRead) };
   } finally { await handle.close(); }
 }
 function metric(transition: SourceLedgerTransition, size: number, patch: Partial<SourceLedgerMetrics> = {}): SourceLedgerMetrics {
   return { transition, sourceFileSize: size, sourceBytesRead: 0, sourceCompleteLinesParsed: 0, entriesIndexed: 0,
-    entriesAppended: 0, ledgerBytesRead: 0, ledgerBytesWritten: 0, ledgerRecordsReplayed: 0, exactRetrievalBytesRead: 0, ...patch };
+    entriesAppended: 0, ledgerBytesRead: 0, ledgerBytesWritten: 0, ledgerRecordsReplayed: 0, exactRetrievalBytesRead: 0,
+    maximumSourceLineBytes: 0, sourceLineAssemblyBytes: 0, tailAnchorBytesRead: 0, appendedSourceBytesRead: 0, ...patch };
 }
-function checkpointRecord(previous: string, sourcePosition: number, sourceSize: number, entries: SourceLedgerEntry[], transition: SourceLedgerTransition): SourceLedgerCheckpoint {
+function checkpointRecord(previous: string, sourcePosition: number, sourceSize: number, entries: SourceLedgerEntry[], transition: SourceLedgerTransition, anchor: Buffer): SourceLedgerCheckpoint {
   const last = entries.at(-1);
   return withHash({ recordType: "checkpoint" as const, sourceBytePosition: sourcePosition, sourceFileSize: sourceSize,
     indexedEntryCount: entries.length, lastIndexedEntryId: last?.entryId ?? null, lastIndexedSourceContentHash: last?.sourceContentHash ?? null,
-    integrityChainState: previous, transition }, previous);
+    integrityChainState: previous, anchorSourceOffset: sourcePosition - anchor.length, anchorByteLength: anchor.length,
+    anchorContentHash: hashBytes(anchor), transition }, previous);
 }
 function encode(records: readonly LedgerRecord[]): Buffer { return Buffer.from(`${records.map((record) => stableStringify(record)).join("\n")}\n`); }
 
@@ -232,14 +260,16 @@ async function rebuild(sessionPath: string, sidecar: string, transition: SourceL
     if (seen.has(item.entryId)) throw new SourceLedgerError(`Duplicate entry id ${item.entryId}`, item.lineNumber);
     seen.add(item.entryId); const record = withHash(item, previous); previous = record.ledgerRecordHash; return record;
   });
-  const checkpoint = checkpointRecord(previous, parsed.completePosition, Number(metadata.size), entries, transition);
+  const checkpoint = checkpointRecord(previous, parsed.completePosition, Number(metadata.size), entries, transition, Buffer.from(parsed.committedAnchor));
   const bytes = encode([header, ...entries, checkpoint]);
   await atomicWrite(sidecar, bytes);
   return { sourceIdentity: header.sourceFileIdentity, sourceSessionIdentity: header.sourceSessionIdentity,
     entryById: new Map(entries.map((entry) => [entry.entryId, entry])), sourceOrder: entries, checkpoint,
     integrityChainState: checkpoint.ledgerRecordHash, sidecarCommittedBytes: bytes.length, incompleteSidecarTail: false,
     metrics: metric(transition, Number(metadata.size), { sourceBytesRead: parsed.bytesRead, sourceCompleteLinesParsed: parsed.lines,
-      entriesIndexed: entries.length, entriesAppended: entries.length, ledgerBytesWritten: bytes.length }) };
+      entriesIndexed: entries.length, entriesAppended: entries.length, ledgerBytesWritten: bytes.length,
+      maximumSourceLineBytes: parsed.maximumSourceLineBytes, sourceLineAssemblyBytes: parsed.sourceLineAssemblyBytes,
+      appendedSourceBytesRead: parsed.bytesRead }) };
 }
 
 export async function loadSourceLedger(sessionPath: string, explicitSidecar = sourceLedgerPath(sessionPath)): Promise<SourceLedger> {
@@ -273,6 +303,13 @@ export async function loadSourceLedger(sessionPath: string, explicitSidecar = so
   const committedEntries = entries.slice(0, committed.index);
   if (committed.checkpoint.indexedEntryCount !== committedEntries.length) throw new SourceLedgerError("Source ledger checkpoint entry count is invalid.");
   if (committed.checkpoint.integrityChainState !== committed.checkpoint.previousLedgerRecordHash) throw new SourceLedgerError("Source ledger checkpoint integrity state is invalid.");
+  if (!Number.isSafeInteger(committed.checkpoint.anchorSourceOffset) || committed.checkpoint.anchorSourceOffset < 0
+    || !Number.isSafeInteger(committed.checkpoint.anchorByteLength) || committed.checkpoint.anchorByteLength < 0
+    || committed.checkpoint.anchorByteLength > SOURCE_LEDGER_TAIL_ANCHOR_BYTES
+    || committed.checkpoint.anchorSourceOffset + committed.checkpoint.anchorByteLength !== committed.checkpoint.sourceBytePosition
+    || typeof committed.checkpoint.anchorContentHash !== "string" || !/^[a-f0-9]{64}$/.test(committed.checkpoint.anchorContentHash)) {
+    throw new SourceLedgerError("Source ledger checkpoint has no valid fixed tail anchor.");
+  }
   const committedText = text.split("\n").slice(0, records).join("\n");
   // Determine the committed byte boundary by locating the committed checkpoint line.
   const checkpointLine = stableStringify(committed.checkpoint);
@@ -284,8 +321,9 @@ export async function loadSourceLedger(sessionPath: string, explicitSidecar = so
       { entriesIndexed: committedEntries.length, ledgerBytesRead: bytesRead, ledgerRecordsReplayed: records }) };
 }
 
-async function appendUpdate(sessionPath: string, sidecar: string, ledger: SourceLedger, sourceSize: number, transition: SourceLedgerTransition, anchorBytesRead: number): Promise<SourceLedger> {
-  const parsed = await parseSourceRange(sessionPath, ledger.checkpoint.sourceBytePosition, sourceSize, ledger.checkpoint.sourceBytePosition === 0 ? 1 : ledger.sourceOrder.length + 2, ledger.checkpoint.sourceBytePosition === 0);
+async function appendUpdate(sessionPath: string, sidecar: string, ledger: SourceLedger, sourceSize: number, transition: SourceLedgerTransition, anchorBytes: Buffer): Promise<SourceLedger> {
+  const parsed = await parseSourceRange(sessionPath, ledger.checkpoint.sourceBytePosition, sourceSize,
+    ledger.checkpoint.sourceBytePosition === 0 ? 1 : ledger.sourceOrder.length + 2, ledger.checkpoint.sourceBytePosition === 0, anchorBytes);
   let previous = ledger.integrityChainState;
   const appended: SourceLedgerEntry[] = [];
   for (const item of parsed.entries) {
@@ -293,11 +331,13 @@ async function appendUpdate(sessionPath: string, sidecar: string, ledger: Source
     const record = withHash(item, previous); previous = record.ledgerRecordHash; appended.push(record);
   }
   if (parsed.completePosition === ledger.checkpoint.sourceBytePosition && appended.length === 0) {
-    return { ...ledger, metrics: metric("exact-hit", sourceSize, { sourceBytesRead: parsed.bytesRead + anchorBytesRead,
-      sourceCompleteLinesParsed: 0, entriesIndexed: ledger.sourceOrder.length }) };
+    return { ...ledger, metrics: metric("exact-hit", sourceSize, { sourceBytesRead: parsed.bytesRead + anchorBytes.length,
+      sourceCompleteLinesParsed: 0, entriesIndexed: ledger.sourceOrder.length, maximumSourceLineBytes: parsed.maximumSourceLineBytes,
+      sourceLineAssemblyBytes: parsed.sourceLineAssemblyBytes, tailAnchorBytesRead: anchorBytes.length,
+      appendedSourceBytesRead: parsed.bytesRead }) };
   }
   const all = [...ledger.sourceOrder, ...appended];
-  const checkpoint = checkpointRecord(previous, parsed.completePosition, sourceSize, all, transition);
+  const checkpoint = checkpointRecord(previous, parsed.completePosition, sourceSize, all, transition, Buffer.from(parsed.committedAnchor));
   const bytes = encode([...appended, checkpoint]);
   const handle = await open(sidecar, "a", 0o600);
   try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
@@ -306,8 +346,10 @@ async function appendUpdate(sessionPath: string, sidecar: string, ledger: Source
   ledger.sourceOrder.push(...appended);
   return { ...ledger, entryById: map, sourceOrder: ledger.sourceOrder, checkpoint, integrityChainState: checkpoint.ledgerRecordHash,
     sidecarCommittedBytes: ledger.sidecarCommittedBytes + bytes.length, incompleteSidecarTail: false,
-    metrics: metric(transition, sourceSize, { sourceBytesRead: parsed.bytesRead + anchorBytesRead, sourceCompleteLinesParsed: parsed.lines,
-      entriesIndexed: all.length, entriesAppended: appended.length, ledgerBytesWritten: bytes.length }) };
+    metrics: metric(transition, sourceSize, { sourceBytesRead: parsed.bytesRead + anchorBytes.length, sourceCompleteLinesParsed: parsed.lines,
+      entriesIndexed: all.length, entriesAppended: appended.length, ledgerBytesWritten: bytes.length,
+      maximumSourceLineBytes: parsed.maximumSourceLineBytes, sourceLineAssemblyBytes: parsed.sourceLineAssemblyBytes,
+      tailAnchorBytesRead: anchorBytes.length, appendedSourceBytesRead: parsed.bytesRead }) };
 }
 
 export async function updateSourceLedger(sessionPath: string, prior?: SourceLedger, options: SourceLedgerUpdateOptions = {}): Promise<SourceLedger> {
@@ -339,9 +381,9 @@ export async function updateSourceLedger(sessionPath: string, prior?: SourceLedg
     if (sourceSize === ledger.checkpoint.sourceBytePosition) {
       return { ...ledger, metrics: metric(recovery ? "recover-incomplete-ledger-tail" : "exact-hit", sourceSize,
         { sourceBytesRead: anchor.bytesRead, entriesIndexed: ledger.sourceOrder.length, ledgerBytesRead: ledger.metrics.ledgerBytesRead,
-          ledgerRecordsReplayed: ledger.metrics.ledgerRecordsReplayed }) };
+          ledgerRecordsReplayed: ledger.metrics.ledgerRecordsReplayed, tailAnchorBytesRead: anchor.bytesRead }) };
     }
-    return await appendUpdate(sessionPath, sidecar, ledger, sourceSize, recovery ? "recover-incomplete-ledger-tail" : "append", anchor.bytesRead);
+    return await appendUpdate(sessionPath, sidecar, ledger, sourceSize, recovery ? "recover-incomplete-ledger-tail" : "append", anchor.bytes);
   } finally { await release(); }
 }
 

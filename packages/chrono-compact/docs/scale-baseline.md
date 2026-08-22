@@ -138,3 +138,16 @@ These results measure the source ledger in isolation. Each row is the median of 
 | 5,000 / 50 | 13,720,922 | 3,430,231 | 7,134,881 | 6.2 ms | 162.1 ms | 2.9 ms | 2.5 ms | 0.10 ms | 58.9 ms | 0.82 s | 373,688 KiB | 1.0081 | 250 | 674 | yes |
 
 All runs reported valid integrity. Warm updates read appended source bytes plus one bounded anchor. Exact hits read 250 source bytes. The three exact retrievals read only 671 to 674 source bytes in total. Source-read amplification remained between 1.0074 and 1.0081 as batch count increased from 10 to 50. Cold startup still read the complete sidecar.
+
+## Large-entry source-ledger correction
+
+The starting commit was `9f8845fd3eca48fc33014e142402467fabd8552d`. The prior parser concatenated the complete pending line with each 64 KiB chunk. The prior tail check read the complete final entry. The corrected parser joins retained chunk parts once per complete line. Checkpoints now store a fixed tail anchor of at most 1,024 bytes.
+
+Each large-entry row reports the median of three serial runs.
+
+| Requested content tokens | Source bytes | Large entry bytes | Sidecar bytes | Initial build | Exact hit | Small append | Cold ledger load | Exact retrieval | Wall time | Maximum RSS | Assembly bytes | Maximum line bytes | Exact-hit anchor | Append anchor | Appended bytes | Retrieval bytes | Integrity |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: |
+| 250,000 | 1,000,327 | 1,000,166 | 2,665 | 7.9 ms | 0.19 ms | 0.41 ms | 0.34 ms | 1.89 ms | 0.51 s | 184,192 KiB | 1,000,166 | 1,000,166 | 1,024 | 1,024 | 103 | 1,000,166 | yes |
+| 500,000 | 2,000,327 | 2,000,166 | 2,665 | 10.1 ms | 0.18 ms | 0.42 ms | 0.35 ms | 3.66 ms | 0.51 s | 195,656 KiB | 2,000,166 | 2,000,166 | 1,024 | 1,024 | 103 | 2,000,166 | yes |
+
+One 5,000-task, 50-batch regression run reported 1.0036 source-read amplification, 1,024 exact-hit anchor bytes, and valid integrity. The prior recorded amplification was 1.0081. Exact retrieval read and verified the complete selected large entry. These results still measure the ledger in isolation. Normal compaction is not incremental yet.

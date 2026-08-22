@@ -16,7 +16,9 @@ The ledger operates only on source that Pi already stored. It does not process a
 
 The default sidecar suffix is `.chrono-source-ledger-v1.jsonl`. The append-only sidecar contains typed `header`, `entry`, and `checkpoint` records. Entry records contain IDs, source order, exact byte ranges, and hashes. They do not contain source text, message text, tool output, tool arguments, or the source path.
 
-Only records through the last valid checkpoint are committed. The runtime object keeps an entry-ID map and source-order array. Average entry lookup is constant time.
+Only records through the last valid checkpoint are committed. Each checkpoint stores a 1,024-byte maximum tail anchor. The runtime object keeps an entry-ID map and source-order array. Average entry lookup is constant time.
+
+The parser retains references to unread chunk parts. It joins those parts once when a complete line is ready. It does not copy the growing pending line after each 64 KiB read. This supports very large JSONL entries without a line-size limit.
 
 ## Update transitions
 
@@ -32,13 +34,13 @@ A final incomplete JSON line remains unindexed until a later update completes it
 
 ## Exact retrieval
 
-Exact retrieval finds entry metadata in the runtime map and reads only its byte range. It verifies the content hash, JSON entry ID, and UTF-8 JSON before returning the exact JSON object text. Changed bytes produce a stale-ledger error and no text.
+Exact retrieval is separate from tail-anchor verification. It finds entry metadata in the runtime map and reads the complete selected byte range. It verifies the content hash, JSON entry ID, and UTF-8 JSON before returning the exact JSON object text. Changed bytes produce a stale-ledger error and no text.
 
 ## Integrity
 
 Every source entry has a source-content hash. Every sidecar record links to the previous record hash. New builds and rebuilds use an owner-only temporary file and atomic rename. Normal updates append entry records and a checkpoint, then flush the file. A broken committed chain is not accepted.
 
-The append and exact-hit check verifies a bounded tail anchor. This does not prove that every old source byte remains unchanged. An old-prefix change that does not affect the anchor is found when exact retrieval verifies that entry.
+The append and exact-hit check reads and verifies at most 1,024 bytes immediately before the committed source position. This does not prove that every old source byte remains unchanged. An old-prefix change that does not affect the anchor is found when exact retrieval verifies that entry.
 
 ## Writer boundary
 
@@ -46,8 +48,8 @@ This version permits one writer per session. A small exclusive sidecar lock prev
 
 ## Performance model
 
-A new build reads the available source once. A normal append reads new bytes plus a bounded anchor. An exact hit reads only the anchor. Exact retrieval reads only one selected record. Cold startup still replays the complete sidecar to rebuild runtime maps.
+A new build reads the available source once. A normal append reads new bytes plus the 1,024-byte maximum anchor. An exact hit reads only that anchor. Its cost does not depend on the prior final entry size. Exact retrieval reads the complete selected record and can therefore be much larger than an anchor read. Cold startup still replays the complete sidecar to rebuild runtime maps.
 
 ## Current limits
 
-The ledger is not connected to normal compaction. It does not replace the current parser or retrieval tools. File identity and a bounded tail anchor detect common replacement and rewrite cases, but they are not a full old-prefix verification. The one-writer lock has no process-identity recovery. A cold load remains proportional to sidecar size.
+The ledger is not connected to normal compaction. The suffix and schema version remain V1. A checkpoint without valid fixed-anchor fields is rejected. A later update safely rebuilds the derived sidecar instead of migrating it. It does not replace the current parser or retrieval tools. File identity and a bounded tail anchor detect common replacement and rewrite cases, but they are not a full old-prefix verification. The one-writer lock has no process-identity recovery. A cold load remains proportional to sidecar size.

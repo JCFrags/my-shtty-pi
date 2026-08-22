@@ -69,6 +69,9 @@ Build and run it with:
 ```bash
 npm run benchmark:source-ledger -- --final-tasks 2000 --batches 20
 node scripts/benchmark-source-ledger.mjs --final-tasks 5000 --batches 50
+node scripts/benchmark-source-ledger.mjs large-entry --tokens 500000
 ```
 
-The benchmark reports initial build, warm append, exact-hit, cold sidecar-load, exact-retrieval, memory, and integrity fields. `sourceReadAmplification` is the source bytes read by the initial build and append updates divided by final source bytes. It excludes cold sidecar reads. `exactHitSourceBytesRead` is the bounded tail anchor read. `exactRetrievalBytesRead` is the sum of the selected early, middle, and late entry lengths. Timing and memory fields are advisory.
+The task mode reports initial build, warm append, exact-hit, cold sidecar-load, exact-retrieval, memory, and integrity fields. `sourceReadAmplification` is the source bytes read by the initial build and append updates divided by final source bytes. It excludes cold sidecar reads. `exactHitSourceBytesRead` is the bounded tail anchor read. `exactRetrievalBytesRead` is the sum of the selected early, middle, and late entry lengths. Timing and memory fields are advisory.
+
+Large-entry mode builds one synthetic tool-result entry, runs an exact hit, appends one small entry, retrieves the complete large entry, and loads the sidecar cold. `sourceLineAssemblyBytes` reports bytes copied when chunk parts are joined once. `maximumSourceLineBytes` reports the largest complete line. `exactHitAnchorBytesRead` and `appendAnchorBytesRead` are fixed-size tail checks. `appendNewSourceBytesRead` is the small suffix. `exactRetrievalBytesRead` is the complete requested entry and is not an anchor read.
