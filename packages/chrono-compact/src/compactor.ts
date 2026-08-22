@@ -6,7 +6,7 @@ import {
   type HistoryEditorObservation,
 } from "./history-editor.js";
 import { buildCandidateUnits, type CandidatePrecomputeRecord } from "./candidates.js";
-import { buildCausalMemory, renderCurrentStateRegister } from "./causal-memory.js";
+import { buildCausalMemory, renderCurrentStateRegisterWithinTokens } from "./causal-memory.js";
 import { mergeOldCompletedEpisodes, mergeRoutineActivitySegments } from "./episodes.js";
 import { planCompression } from "./planner.js";
 import { addRepeatedObservationCandidates } from "./repeated-observations.js";
@@ -286,9 +286,14 @@ export async function compactEntries(
   });
   if (blocks.length === 0) return emptyResult(entries, config, options.retentionHints, options.futureEntries);
 
+  const hardOutputTokens = Math.min(
+    HARD_REPLAY_CAP_TOKENS,
+    Math.max(128, Math.floor(options.hardOutputTokens ?? HARD_REPLAY_CAP_TOKENS)),
+  );
+  const currentStateTokenBudget = Math.max(128, Math.min(5_000, Math.floor(hardOutputTokens * 0.2)));
   const lineage = buildResourceLineage(blocks);
   const causal = buildCausalMemory(blocks, lineage);
-  const derivedState = truncateToTokens(renderCurrentStateRegister(causal, 32), 900, "\n…[additional state cells remain searchable]…");
+  const derivedState = renderCurrentStateRegisterWithinTokens(causal, 250, currentStateTokenBudget);
   const pinnedMemoryText = [options.pinnedMemoryText?.trim(), derivedState.trim()].filter(Boolean).join("\n\n");
   const pinnedMemoryTokens = estimateTokensFromText(pinnedMemoryText);
   const generationHash = computeGenerationHash(entries, config, options.retentionHints, options.futureEntries, pinnedMemoryText, options.retrievalFeedback);
@@ -356,10 +361,6 @@ export async function compactEntries(
     rendered = renderCompressionPlan(plan, generationHash, config.includeHeader);
   }
 
-  const hardOutputTokens = Math.min(
-    HARD_REPLAY_CAP_TOKENS,
-    Math.max(128, Math.floor(options.hardOutputTokens ?? HARD_REPLAY_CAP_TOKENS)),
-  );
   const hardCap = capPlanToRecentSuffix(plan, generationHash, config.includeHeader, Math.max(128, hardOutputTokens - pinnedMemoryTokens));
   plan = hardCap.plan;
   rendered = hardCap.rendered;

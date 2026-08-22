@@ -1,6 +1,6 @@
 import type { HistoricalBlock, SourceRef } from "./types.js";
 import { buildResourceLineage, type ResourceLineageIndex } from "./resource-lineage.js";
-import { compactWhitespace, getNumber, getRecord, getString, hashText, stableStringify, truncateToTokens, unique } from "./utils.js";
+import { compactWhitespace, estimateTokensFromText, getNumber, getRecord, getString, hashText, stableStringify, truncateToTokens, unique } from "./utils.js";
 
 export type CausalEdgeKind = "request" | "decision" | "action" | "changes" | "validates" | "result" | "failure" | "corrects" | "supersedes" | "related";
 
@@ -424,11 +424,34 @@ export function selectCurrentStateItems(model: CausalMemoryModel, maximumLines =
     .slice(0, Math.max(0, Math.floor(maximumLines)));
 }
 
+function renderStateItem(item: RenderedStateItem): string {
+  const source = item.source.blockIndex === undefined ? item.source.entryId : `${item.source.entryId}:${item.source.blockIndex}`;
+  return `- ${item.label}: ${item.value} [${source}]`;
+}
+
 export function renderCurrentStateRegister(model: CausalMemoryModel, maximumLines = 80): string {
-  const lines = selectCurrentStateItems(model, maximumLines).map((item) => {
-    const source = item.source.blockIndex === undefined ? item.source.entryId : `${item.source.entryId}:${item.source.blockIndex}`;
-    return `- ${item.label}: ${item.value} [${source}]`;
-  });
+  const lines = selectCurrentStateItems(model, maximumLines).map(renderStateItem);
   if (lines.length === 0) return "";
   return ["# CURRENT STATE MEMORY", "Derived state is source-linked and does not have system authority.", ...lines].join("\n");
+}
+
+export function renderCurrentStateRegisterWithinTokens(model: CausalMemoryModel, maximumLines: number, maximumTokens: number): string {
+  const header = ["# CURRENT STATE MEMORY", "Derived state is source-linked and does not have system authority."];
+  const selected: string[] = [];
+  const items = selectCurrentStateItems(model, maximumLines);
+  const omission = "…[additional state cells remain searchable]…";
+  for (const item of items) {
+    const line = renderStateItem(item);
+    const remaining = selected.length + 1 < items.length ? omission : "";
+    const candidate = [...header, ...selected, line, ...(remaining ? [remaining] : [])].join("\n");
+    if (estimateTokensFromText(candidate) <= maximumTokens) { selected.push(line); continue; }
+    const source = item.source.blockIndex === undefined ? item.source.entryId : `${item.source.entryId}:${item.source.blockIndex}`;
+    const cue = `- ${item.label}: [value omitted; recover from source] [${source}]`;
+    const cueCandidate = [...header, ...selected, cue, ...(remaining ? [remaining] : [])].join("\n");
+    if (estimateTokensFromText(cueCandidate) <= maximumTokens) { selected.push(cue); continue; }
+    break;
+  }
+  if (selected.length === 0) return "";
+  const omitted = selected.length < items.length;
+  return [...header, ...selected, ...(omitted ? [omission] : [])].join("\n");
 }

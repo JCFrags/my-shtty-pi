@@ -12,6 +12,7 @@ import {
   hasFailureLanguage,
   hasSuccessLanguage,
   orderedIncludes,
+  estimateTokensFromText,
   unique,
 } from "./utils.js";
 
@@ -214,8 +215,16 @@ export function pruneUnsafeCandidates(
     });
     if (safe.length > 0) return { ...unit, candidates: safe };
     const raw = unit.candidates.find((candidate) => candidate.level === "raw");
-    if (!raw) throw new Error(`Validation removed every candidate for unit ${unit.id}, and no raw fallback exists.`);
-    return { ...unit, candidates: [raw] };
+    if (raw) return { ...unit, candidates: [raw] };
+    if (unit.protectedExact) throw new Error(`Validation removed every candidate for protected unit ${unit.id}, and no raw fallback exists.`);
+    const text = "Historical unit omitted from active detail. Exact source remains recoverable.";
+    const recovery: RepresentationCandidate = {
+      id: `${unit.id}:validated-recovery`, level: "marker", text, tokens: estimateTokensFromText(text), rawTokens: unit.rawTokens,
+      utility: 0.05, lossy: true, reducer: "validated-recovery-marker", reducerVersion: "1.0.0",
+      omissions: [{ description: "Unsafe reduced candidates replaced by a source-linked recovery marker" }], sourceRefs: unit.sourceRefs,
+      metadata: { validationFallback: true },
+    };
+    return { ...unit, candidates: [recovery] };
   });
   return { units: safeUnits, rejectedIssues };
 }

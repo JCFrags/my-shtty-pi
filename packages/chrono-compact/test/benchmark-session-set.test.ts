@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 // @ts-expect-error Executable benchmark module has no declarations.
-import { aggregateRows, benchmarkSnapshot, distribution, loadExplicitManifest, lossySourceCoverage, mapFailure, memoryGate, parseSessionSetArguments, protectedVisibility, runSessionSet, selectSessionFiles } from "../../scripts/benchmark-session-set.mjs";
+import { aggregateRows, benchmarkSnapshot, classifyCompactionOutcome, distribution, loadExplicitManifest, lossySourceCoverage, mapFailure, memoryGate, parseSessionSetArguments, protectedStateAudit, protectedVisibility, runSessionSet, selectSessionFiles } from "../../scripts/benchmark-session-set.mjs";
 // @ts-expect-error Public synthetic generator has no declarations.
 import { syntheticEntries } from "../../scripts/benchmark-v2.mjs";
 
@@ -41,6 +41,36 @@ test("numeric distributions and aggregate quality are deterministic", () => {
   assert.deepEqual(distribution([1, 2, 3, 4]), { minimum: 1, p50: 3, p90: 4, maximum: 4 });
   const report = aggregateRows([{ fixtureId: "fixture-001", sourceBytes: 10, status: "ok", activeSourceTokens: 5, validationErrors: 0, exactRecoverySamples: 2, exactRecoverySuccesses: 2, ledgerIntegrityOk: true }]);
   assert.equal(report.fullBenchmarkCount, 1); assert.equal(report.quality.exactRecoverySuccesses, 2); assert.equal(report.fixtures[0].fixtureId, "fixture-001");
+});
+
+test("validation outcomes use safe codes without messages or source data", () => {
+  const outcome = (codes: string[]) => classifyCompactionOutcome({ report: { issues: codes.map((code) => ({ severity: "error", code, message: "PRIVATE MESSAGE unit-private [entry-private]" })) } });
+  assert.equal(outcome(["no-net-savings"]).compactionOutcome, "not-applicable-no-savings");
+  assert.equal(outcome(["chronology"]).compactionOutcome, "rejected-structural-validation");
+  assert.equal(outcome(["protected-exact"]).compactionOutcome, "rejected-factual-validation");
+  assert.equal(outcome(["hard-output-cap"]).compactionOutcome, "rejected-hard-output-cap");
+  assert.equal(classifyCompactionOutcome(new Error("PRIVATE PATH")).compactionOutcome, "runtime-failure");
+  assert.doesNotMatch(JSON.stringify(outcome(["chronology"])), /PRIVATE|entry-private|message|sourceRefs/);
+});
+
+test("protected-state audit separates duplicates, restrictions, plan coverage, and complete lines", () => {
+  const blocks = [
+    { id: "b1", entryId: "e1", blockIndex: 0, exactText: "SENTINEL", protectedExact: true },
+    { id: "b2", entryId: "e2", blockIndex: 0, exactText: "SENTINEL", protectedExact: true },
+    { id: "b3", entryId: "e3", blockIndex: 0, exactText: "OLD", protectedExact: true },
+  ];
+  const model = { stateCells: [{ category: "restriction", state: "active", value: "SENTINEL", source: { entryId: "e1", blockIndex: 0 } }] };
+  const selected = [{ kind: "state", label: "restriction", value: "SENTINEL", source: { entryId: "e1", blockIndex: 0 } }];
+  const summary = "# CURRENT STATE MEMORY\nDerived state is source-linked and does not have system authority.\n- restriction: SENTINEL [e1:0]\n\nreplay";
+  const plan = { units: [{ sourceRefs: [{ entryId: "e2", blockIndex: 0 }] }] };
+  const audit = protectedStateAudit(blocks, summary, plan, model, selected, (text: string) => text);
+  assert.equal(audit.exactDuplicateProtectedBlocks, 2); assert.equal(audit.exactDuplicateProtectedGroups, 1); assert.equal(audit.uniqueProtectedTextGroups, 2);
+  assert.equal(audit.stateRestrictionCells, 1); assert.equal(audit.stateRestrictionExactVisible, 1); assert.equal(audit.stateRestrictionCueVisible, 1);
+  assert.equal(audit.protectedBlocksRepresentedByPlan, 1); assert.equal(audit.protectedBlocksCoveredByCurrentState, 1); assert.equal(audit.protectedBlocksOnlyRecoverableFromHistory, 1);
+  assert.equal(audit.currentStateLinesComplete, 1); assert.equal(audit.currentStateLinesCut, 0);
+  assert.doesNotMatch(JSON.stringify(audit), /SENTINEL|OLD|e1|[a-f0-9]{64}/);
+  const cut = protectedStateAudit(blocks, summary.replace(" [e1:0]", ""), plan, model, selected, (text: string) => text);
+  assert.equal(cut.currentStateLinesCut, 1);
 });
 
 test("quality helpers count protected visibility and lossy source links without returning text", () => {

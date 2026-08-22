@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // @ts-nocheck
 import { constants, createReadStream, createWriteStream } from "node:fs";
+import { createHash } from "node:crypto";
 import { appendFile, chmod, lstat, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { availableParallelism, freemem, totalmem } from "node:os";
 import { tmpdir } from "node:os";
@@ -108,6 +109,60 @@ export function protectedVisibility(blocks, summary, directInstructionText) {
   return { protectedSourceBlocks: protectedBlocks.length, protectedVisibleBlocks: visible,
     protectedVisibilityRate: protectedBlocks.length ? visible / protectedBlocks.length : 1 };
 }
+const STRUCTURAL_CODES = new Set(["chronology", "invalid-source-ref", "tool-pair-missing", "source-order"]);
+const FACTUAL_CODES = new Set(["protected-exact", "loss-without-notice", "unsupported-identifier", "unsupported-quote", "unsupported-number", "unresolved-became-complete", "failure-became-success"]);
+export function classifyCompactionOutcome(error) {
+  const issues = Array.isArray(error?.report?.issues) ? error.report.issues : undefined;
+  if (!issues) return { compactionOutcome: "runtime-failure", validationFailureCodes: [], validationFailureCodeCounts: {}, validationFailureErrorCount: 0, validationFailureWarningCount: 0 };
+  const errors = issues.filter((issue) => issue?.severity === "error" && typeof issue.code === "string");
+  const warnings = issues.filter((issue) => issue?.severity === "warning");
+  const codes = [...new Set(errors.map((issue) => issue.code))].sort();
+  const counts = Object.fromEntries(codes.map((code) => [code, errors.filter((issue) => issue.code === code).length]));
+  let compactionOutcome = codes.length === 1 && codes[0] === "no-net-savings" ? "not-applicable-no-savings"
+    : codes.includes("hard-output-cap") ? "rejected-hard-output-cap"
+    : codes.some((code) => STRUCTURAL_CODES.has(code)) ? "rejected-structural-validation"
+    : codes.some((code) => FACTUAL_CODES.has(code)) ? "rejected-factual-validation" : "runtime-failure";
+  return { compactionOutcome, validationFailureCodes: codes, validationFailureCodeCounts: counts,
+    validationFailureErrorCount: errors.length, validationFailureWarningCount: warnings.length };
+}
+function sourceSuffix(ref) { return `[${ref.entryId}${ref.blockIndex === undefined ? "" : `:${ref.blockIndex}`}]`; }
+export function protectedStateAudit(blocks, summary, plan, model, selectedStateItems, directInstructionText) {
+  const protectedBlocks = blocks.filter((block) => block.protectedExact);
+  const groups = new Map();
+  for (const block of protectedBlocks) { const direct = directInstructionText(block.exactText); const hash = createHash("sha256").update(direct).digest("hex"); const group = groups.get(hash) ?? []; group.push(block); groups.set(hash, group); }
+  const visibleGroups = [...groups.values()].filter((group) => group.some((block) => { const direct = directInstructionText(block.exactText); return direct && summary.includes(direct); })).length;
+  const duplicateGroups = [...groups.values()].filter((group) => group.length > 1);
+  const restrictions = model.stateCells.filter((cell) => cell.category === "restriction");
+  const restrictionSources = new Set(restrictions.map((cell) => refKey(cell.source)));
+  const planSources = new Set(plan.units.flatMap((unit) => unit.sourceRefs.map(refKey)));
+  const actualLines = summary.split("\n"); const heading = actualLines.indexOf("# CURRENT STATE MEMORY");
+  const stateLines = heading < 0 ? [] : actualLines.slice(heading + 2, actualLines.findIndex((line, index) => index > heading + 1 && line === "") < 0 ? actualLines.length : actualLines.findIndex((line, index) => index > heading + 1 && line === "")).filter((line) => line.startsWith("- "));
+  const complete = stateLines.filter((line) => /\[[^\]]+\]$/.test(line)).length;
+  const stateText = stateLines.join("\n");
+  const selectedRestrictions = restrictions.filter((cell) => stateText.includes(sourceSuffix(cell.source))).length;
+  const isCovered = (sources, block) => sources.has(refKey({ entryId: block.entryId })) || sources.has(refKey({ entryId: block.entryId, blockIndex: block.blockIndex }));
+  const representedBlocks = protectedBlocks.filter((block) => isCovered(planSources, block));
+  const coveredBlocks = protectedBlocks.filter((block) => isCovered(restrictionSources, block));
+  const represented = representedBlocks.length; const covered = coveredBlocks.length;
+  const representedOrCovered = new Set([...representedBlocks, ...coveredBlocks].map((block) => block.id)).size;
+  return { historicalProtectedBlocks: protectedBlocks.length,
+    historicalProtectedVisibleBlocks: protectedBlocks.filter((block) => { const direct = directInstructionText(block.exactText); return direct && summary.includes(direct); }).length,
+    historicalProtectedVisibilityRate: protectedBlocks.length ? protectedBlocks.filter((block) => { const direct = directInstructionText(block.exactText); return direct && summary.includes(direct); }).length / protectedBlocks.length : 1,
+    exactDuplicateProtectedBlocks: duplicateGroups.reduce((sum, group) => sum + group.length, 0), exactDuplicateProtectedGroups: duplicateGroups.length,
+    uniqueProtectedTextGroups: groups.size, visibleUniqueProtectedTextGroups: visibleGroups, uniqueProtectedVisibilityRate: groups.size ? visibleGroups / groups.size : 1,
+    stateRestrictionCells: restrictions.length, stateRestrictionSourceBlocks: restrictionSources.size,
+    stateRestrictionExactVisible: restrictions.filter((cell) => summary.includes(cell.value)).length,
+    stateRestrictionExactVisibilityRate: restrictions.length ? restrictions.filter((cell) => summary.includes(cell.value)).length / restrictions.length : 1,
+    stateRestrictionCueVisible: restrictions.filter((cell) => summary.includes(sourceSuffix(cell.source))).length,
+    stateRestrictionCueVisibilityRate: restrictions.length ? restrictions.filter((cell) => summary.includes(sourceSuffix(cell.source))).length / restrictions.length : 1,
+    conflictingRestrictionCells: restrictions.filter((cell) => cell.state === "conflict").length,
+    restrictionCellsSelectedForCurrentState: selectedRestrictions, restrictionCellsOmittedFromCurrentState: Math.max(0, restrictions.length - selectedRestrictions),
+    currentStateTextWasTruncated: summary.includes("additional state cells remain searchable"),
+    protectedBlocksRepresentedByPlan: represented, protectedBlocksOutsideFinalPlan: protectedBlocks.length - represented,
+    protectedBlocksCoveredByCurrentState: covered, protectedBlocksOnlyRecoverableFromHistory: Math.max(0, protectedBlocks.length - representedOrCovered),
+    currentStateLinesSelected: stateLines.length, currentStateLinesComplete: complete, currentStateLinesCut: Math.max(0, stateLines.length - complete) };
+}
+
 export function lossySourceCoverage(plan) {
   const lossy = plan.units.filter((unit) => unit.selected.level !== "raw");
   const withRefs = lossy.filter((unit) => unit.sourceRefs.length > 0).length;
@@ -132,22 +187,25 @@ async function ledgerMetrics(snapshot, fixtureId) {
 
 export async function benchmarkSnapshot(snapshot, fixtureId, full) {
   const api = await runtime(); const sourceBytes = (await stat(snapshot)).size;
-  let ledger; try { ledger = await ledgerMetrics(snapshot, fixtureId); } catch { return { fixtureId, sourceBytes, status: "failed", failureCategory: "ledger-failed" }; }
-  if (!full) return { fixtureId, sourceBytes, ...ledger, status: "ledger-only", failureCategory: "memory-gate" };
+  let ledger; try { ledger = await ledgerMetrics(snapshot, fixtureId); } catch { return { fixtureId, sourceBytes, status: "failed", failureCategory: "ledger-failed", compactionOutcome: "runtime-failure" }; }
+  if (!full) return { fixtureId, sourceBytes, ...ledger, status: "ledger-only", failureCategory: "memory-gate", compactionOutcome: "memory-gate" };
   let text, session, branch, blocks;
   try { text = await readFile(snapshot, "utf8"); session = api.parseSessionJsonl(text); branch = api.getActiveBranch(session); blocks = api.parseHistoricalBlocks(branch); }
-  catch { return { fixtureId, sourceBytes, ...ledger, status: "failed", failureCategory: "invalid-session" }; }
+  catch { return { fixtureId, sourceBytes, ...ledger, status: "failed", failureCategory: "invalid-session", compactionOutcome: "invalid-session" }; }
+  const rawSourceTokensBeforeCompaction = blocks.reduce((sum, block) => sum + block.rawTokens, 0);
+  const model = api.buildCausalMemory(blocks, api.buildResourceLineage(blocks)); const selectedStateItems = api.selectCurrentStateItems(model, 250);
   try {
     const scheduled = performance.now(); let timerAt; const timer = new Promise((resolveTimer) => setTimeout(() => { timerAt = performance.now(); resolveTimer(); }, 0));
     const started = performance.now(); const result = await api.compactEntries(branch, { config: { targetTokens: 20_000, enableSemanticCompression: false }, hardOutputTokens: 25_000 }); const compactionMs = performance.now() - started; await timer;
     const indexStarted = performance.now(); const index = api.buildLocalSearchIndex(blocks); const searchIndexMs = performance.now() - indexStarted;
     const safeSearchHitCount = ["error", "failed", "unresolved", "todo"].reduce((sum, query) => sum + api.searchLocalHistory(index, query, { limit: 10, tokenBudget: 800 }).hits.length, 0);
-    const model = api.buildCausalMemory(blocks, api.buildResourceLineage(blocks)); const state = api.selectCurrentStateItems(model, 80);
+    const state = api.selectCurrentStateItems(model, 80);
     const refs = new Set(blocks.map((block) => refKey({ entryId: block.entryId, blockIndex: block.blockIndex })));
     const currentStateRefsValid = state.filter((item) => refs.has(refKey(item.source))).length;
     const recovery = exactRecoverySamples(blocks); let recoverySuccess = 0; let recoveryBytes = 0;
     for (const block of recovery) { try { const value = api.historyGet(session, block.entryId, block.blockIndex === undefined ? {} : { blockIndex: block.blockIndex, maxChars: 20_000 }); recoverySuccess += 1; recoveryBytes += Buffer.byteLength(JSON.stringify(value)); } catch {} }
     const visibility = protectedVisibility(blocks, result.summary, api.directInstructionText); const loss = lossySourceCoverage(result.plan);
+    const protectedAudit = protectedStateAudit(blocks, result.summary, result.plan, model, selectedStateItems, api.directInstructionText);
     const records = session.records.length; const maxEntry = Math.max(0, ...session.records.slice(1).map((record) => Buffer.byteLength(record.rawLine)));
     const toolRecords = session.records.slice(1).filter((record) => record.data?.message?.role === "toolResult");
     return { fixtureId, sourceBytes, sourceRecords: records, activeBranchEntries: branch.length,
@@ -157,13 +215,20 @@ export async function benchmarkSnapshot(snapshot, fixtureId, full) {
       compactionMs, searchIndexMs, maximumTimerDelayMs: Math.max(0, timerAt - scheduled), peakRssKiB: process.resourceUsage().maxRSS,
       validationWarnings: result.validation.issues.filter((issue) => issue.severity === "warning").length,
       validationErrors: result.validation.issues.filter((issue) => issue.severity === "error").length,
-      ...visibility, unresolvedBlocks: blocks.filter((block) => block.unresolved).length, failedBlocks: blocks.filter((block) => block.isError).length,
+      ...visibility, ...protectedAudit, unresolvedBlocks: blocks.filter((block) => block.unresolved).length, failedBlocks: blocks.filter((block) => block.isError).length,
       currentStateItems: state.length, currentStateRefsChecked: state.length, currentStateRefsValid,
       exactRecoverySamples: recovery.length, exactRecoverySuccesses: recoverySuccess, exactRecoveryBytesRead: recoveryBytes,
       ...loss, maximumSourceEntryBytes: maxEntry,
       maximumToolResultEntryBytes: Math.max(0, ...toolRecords.map((record) => Buffer.byteLength(record.rawLine))), safeSearchHitCount,
-      ...ledger, status: "ok", failureCategory: null };
-  } catch { return { fixtureId, sourceBytes, ...ledger, status: "failed", failureCategory: "compaction-failed" }; }
+      ...ledger, rawSourceTokensBeforeCompaction, effectiveTargetTokens: 20_000, hardOutputTokens: 25_000,
+      compactionOutcome: "ok", validationFailureCodes: [], validationFailureCodeCounts: {}, validationFailureErrorCount: 0, validationFailureWarningCount: 0,
+      status: "ok", failureCategory: null };
+  } catch (error) {
+    const classified = classifyCompactionOutcome(error);
+    return { fixtureId, sourceBytes, ...ledger, rawSourceTokensBeforeCompaction, effectiveTargetTokens: 20_000, hardOutputTokens: 25_000,
+      ...classified, status: classified.compactionOutcome === "not-applicable-no-savings" ? "not-applicable" : "failed",
+      failureCategory: classified.compactionOutcome === "runtime-failure" ? "compaction-failed" : null };
+  }
 }
 
 function childProcess(snapshot, fixtureId, full, timeoutMs) {
@@ -176,17 +241,20 @@ function childProcess(snapshot, fixtureId, full, timeoutMs) {
   });
 }
 export function aggregateRows(rows) {
-  const numeric = ["sourceBytes", "activeSourceTokens", "maximumSourceEntryBytes", "maximumToolResultEntryBytes", "compactionMs", "searchIndexMs", "maximumTimerDelayMs", "peakRssKiB", "protectedVisibilityRate", "ledgerBuildMs", "ledgerColdLoadMs"];
+  const numeric = ["sourceBytes", "activeSourceTokens", "maximumSourceEntryBytes", "maximumToolResultEntryBytes", "compactionMs", "searchIndexMs", "maximumTimerDelayMs", "peakRssKiB", "protectedVisibilityRate", "historicalProtectedVisibilityRate", "uniqueProtectedVisibilityRate", "stateRestrictionExactVisibilityRate", "stateRestrictionCueVisibilityRate", "currentStateLinesCut", "ledgerBuildMs", "ledgerColdLoadMs"];
   const distributions = Object.fromEntries(numeric.map((key) => [key, distribution(rows.map((row) => row[key]).filter(Number.isFinite))]));
   const sum = (key) => rows.reduce((total, row) => total + (Number.isFinite(row[key]) ? row[key] : 0), 0);
-  return { schemaVersion: 1, selectedCount: rows.length, fullBenchmarkCount: rows.filter((row) => row.status === "ok").length,
+  const outcomes = Object.fromEntries([...new Set(rows.map((row) => row.compactionOutcome).filter(Boolean))].sort().map((outcome) => [outcome, rows.filter((row) => row.compactionOutcome === outcome).length]));
+  const validationCodeCounts = {};
+  for (const row of rows) for (const [code, count] of Object.entries(row.validationFailureCodeCounts ?? {})) validationCodeCounts[code] = (validationCodeCounts[code] ?? 0) + count;
+  return { schemaVersion: 2, selectedCount: rows.length, fullBenchmarkCount: rows.filter((row) => row.status === "ok").length,
     ledgerOnlyCount: rows.filter((row) => row.status === "ledger-only").length, skippedCount: rows.filter((row) => row.status === "skipped").length,
     failureCount: rows.filter((row) => row.status === "failed").length, totalSourceBytes: sum("sourceBytes"), totalActiveSourceTokens: sum("activeSourceTokens"),
     totalCompactionMs: sum("compactionMs"), totalSearchIndexMs: sum("searchIndexMs"), totalLedgerBuildMs: sum("ledgerBuildMs"),
     quality: { validationErrors: sum("validationErrors"), protectedSourceBlocks: sum("protectedSourceBlocks"), protectedVisibleBlocks: sum("protectedVisibleBlocks"),
       currentStateRefsChecked: sum("currentStateRefsChecked"), currentStateRefsValid: sum("currentStateRefsValid"), exactRecoverySamples: sum("exactRecoverySamples"),
       exactRecoverySuccesses: sum("exactRecoverySuccesses"), lossyUnitsWithoutSourceRefs: sum("lossyUnitsWithoutSourceRefs"), ledgerIntegritySuccesses: rows.filter((row) => row.ledgerIntegrityOk).length },
-    distributions, fixtures: rows };
+    outcomes, validationCodeCounts, distributions, fixtures: rows };
 }
 
 export async function runSessionSet(args, seams = {}) {

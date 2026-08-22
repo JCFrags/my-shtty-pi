@@ -33,6 +33,10 @@ Files at or above the minimum size are selected first. When this does not meet t
 
 Each full fixture runs in a separate child process. Measurements cover source and active-branch size, compaction, search indexing, timer delay, peak memory, validation, protected visibility, current-state source linkage, lossy source links, exact recovery, and source-ledger behavior. Fixed searches report counts only. Timer delay is a process-level probe, not complete Pi UI latency.
 
+Compaction outcomes are `ok`, `not-applicable-no-savings`, `rejected-hard-output-cap`, `rejected-structural-validation`, `rejected-factual-validation`, `runtime-failure`, `memory-gate`, `invalid-session`, or `timeout`. `no-net-savings` is not applicable because the candidate replay would not reduce the source. Structural and factual rejections include safe validation code counts. The report excludes validation messages, unit IDs, and source references.
+
+Historical protected visibility measures all protected source blocks and separately groups exact duplicate instruction text. State-model restriction coverage measures exact values and source-link cues for restriction cells in the deterministic causal state model. This model is heuristic. It is not a perfect authority model. Final-plan relation counts distinguish plan representation, current-state coverage, and history-only recovery. Complete-line checks require every rendered state line to end with its complete source-link suffix.
+
 ## Safety gates
 
 A stable owner-only temporary snapshot is created for each fixture. Real source files remain read-only. Full compaction requires an estimated working set within the source-size, available-memory, and physical-memory gates. Source-ledger checks can still run when full compaction is skipped. Serial work stops starting new children after the total time limit. A child is killed only after its per-session timeout.
@@ -43,4 +47,4 @@ The parent writes one owner-only JSON report outside the repository and prints t
 
 ## Current limits
 
-The benchmark trusts only its explicit manifest and does not provide discovery. Snapshot stability uses file identity, size, and modification time with one retry. The working-set gate is conservative but does not reserve memory. Private results need a separate privacy review before sharing. The source ledger remains disconnected from normal compaction.
+The benchmark trusts only its explicit manifest and does not provide discovery. Snapshot stability uses file identity, size, and modification time with one retry. The working-set gate is conservative but does not reserve memory. Historical protected visibility is an archival diagnostic and does not prove current restriction coverage. Private results need a separate privacy review before sharing. The source ledger remains disconnected from normal compaction.

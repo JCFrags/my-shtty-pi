@@ -62,3 +62,7 @@ The [source ledger](source-ledger.md) is the first scale component. It indexes e
 ## Private real-session measurement
 
 The [explicit session-set benchmark](local-session-benchmark.md) can measure local real sessions from a supplied manifest. The script does not discover files. Private benchmark results stay outside the repository. These measurements guide later scale work.
+
+## Long-session outcome metrics
+
+Benchmark outcomes now use safe code categories. `no-net-savings` is separate from a validation defect. All-history protected visibility is separate from heuristic state-model restriction coverage. Current-state rendering keeps complete source-linked lines within its bounded share of the unchanged hard output limit. Private numeric results remain outside the repository.

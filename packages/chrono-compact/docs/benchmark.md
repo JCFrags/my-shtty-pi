@@ -91,6 +91,10 @@ npm run benchmark:sessions -- run \
   --per-session-timeout-seconds 900
 ```
 
-The manifest lists explicit session JSONL paths. The command keeps sources read-only and benchmarks stable temporary snapshots. Output contains anonymous fixture IDs, aggregate numeric measurements, safe result counts, numeric distributions, and bounded failure categories. It excludes paths, file names, session IDs, source hashes, source references, source text, tool arguments, commands, URLs, and recovered text.
+The manifest lists explicit session JSONL paths. The command keeps sources read-only and benchmarks stable temporary snapshots. Output contains anonymous fixture IDs, aggregate numeric measurements, safe result counts, numeric distributions, and bounded failure categories. It excludes paths, file names, session IDs, source hashes, source references, source text, tool arguments, commands, URLs, recovered text, validation messages, and unit IDs.
 
-A `memory-gate` result means the source-ledger checks ran but conservative memory limits prevented full compaction. It is not a compaction failure. Private manifests and reports must remain outside the repository and must not be committed.
+`compactionOutcome` distinguishes success, no savings, hard-cap rejection, structural rejection, factual rejection, runtime failure, memory gating, invalid input, and timeout. `validationFailureCodes` and `validationFailureCodeCounts` contain safe codes only. Token fields record the raw source, effective target, and unchanged hard output limit. A `memory-gate` result means the source-ledger checks ran but conservative memory limits prevented full compaction. It is not a compaction failure.
+
+Historical protected fields count all blocks, exact duplicates, and unique text groups. State-model restriction fields count deterministic restriction cells, exact value visibility, source-cue visibility, conflicts, and current-state selection. The state model is heuristic, not a perfect authority model. Final-plan fields separate plan representation, current-state coverage, and history-only recovery. Current-state line fields detect any rendered line without its complete source-link suffix.
+
+Private manifests and reports must remain outside the repository and must not be committed.
