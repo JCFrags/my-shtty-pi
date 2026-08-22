@@ -78,6 +78,12 @@ Official compaction validates the persistent key, dependency class, candidate sh
 
 The unkeyed integrity hash is corruption detection. It is not cryptographic authentication against a same-owner actor who can rewrite content and hash.
 
+## Isolated hierarchical history rollup prototype
+
+`history-value.ts`, `history-rollup-store.ts`, and `history-rollup-renderer.ts` form a separate research path. They derive typed values from one exact source-ledger branch, publish immutable content-addressed leaf and rollup nodes, and render a bounded four-section context through a lazy byte-bounded cache. Same-branch appends process new source and a stored typed open leaf. Branch switches verify and reuse only sealed common-prefix nodes.
+
+This prototype is not in the core data flow above. The extension, normal replay, retrieval tools, candidate store, memory store, reducers, planner, isolated compaction worker, and source-ledger behavior do not call it. Pi JSONL remains authoritative. See [history-rollup-store.md](history-rollup-store.md).
+
 ## Isolated deterministic worker
 
 `compaction-worker-client.ts` and `compaction-worker-entry.ts` provide the default-off child-process boundary. One child reads one persisted JSONL source, reconstructs the exact requested leaf and cut, performs deterministic replay work, returns a strict bounded response, and exits. It has no model or network client. Provider-backed regular summary creation remains in the extension process. On success, the extension does not run `compactEntries` or calculate the complete replay generation hash.

@@ -1,5 +1,28 @@
 # ChronoCompact scale baseline
 
+## Selected-branch analysis phase measurement
+
+A temporary synthetic probe measured the linear analysis that the prototype targets. The 5,000-task branch had 15,501 entries and an estimated 2,644,043 tokens. Historical-block parsing took 132.1 ms, resource lineage took 599.7 ms, causal memory took 843.7 ms, and complete current replay took 5.43 s. Peak RSS was 655,352 KiB. A separate approximately 5-million-token branch with one large entry took 65.3 ms for block parsing, 2.4 ms for lineage, 10.9 ms for causal memory, and 498.8 ms for replay. Peak RSS was 741,728 KiB. This temporary instrumentation was not committed.
+
+## Hierarchical history rollup prototype
+
+A separate public synthetic run measured the isolated history rollup prototype. It used 50 append batches, a 20,000-token render target, `nice -n 10`, and idle I/O priority. The scale mode used 128 KiB source leaves after initial measurement showed that smaller leaves reduce changed-path node work for these batch sizes. Production defaults remain 4 MiB.
+
+| Source tokens | Leaves | Tree levels | Store | Total update | Final append | Node work amplification | Render | Render source read | Render node read | Peak RSS | Max timer delay |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000,000 | 31 | 2 | 4.81 MiB | 320.7 ms | 4.3 ms | 4.69 | 2.1 ms | 15.8 KiB | 91.0 KiB | 195.9 MiB | 1.5 ms |
+| 5,000,000 | 151 | 3 | 6.22 MiB | 614.2 ms | 11.5 ms | 1.99 | 4.1 ms | 15.8 KiB | 96.5 KiB | 252.6 MiB | 1.9 ms |
+| 25,000,000 | 781 | 4 | 12.37 MiB | 1.61 s | 37.1 ms | 1.23 | 2.7 ms | 15.8 KiB | 91.0 KiB | 363.9 MiB | 2.3 ms |
+| 50,000,000 | 1,563 | 4 | 20.05 MiB | 2.99 s | 65.4 ms | 1.13 | 3.4 ms | 15.8 KiB | 92.8 KiB | 396.4 MiB | 3.4 ms |
+
+All four runs had source-read amplification 1.00 and block-parse amplification 1.00. Every render had complete restriction, blocker, unresolved-failure, and current-resource coverage. Each run reported zero invalid references, cut lines, false completions, and unsupported facts. Every lossy record had recovery. The 5-million-token and larger trees met the node-work target after hierarchical levels were established.
+
+The 5,000-task series used 50 batches. It read 13,732,207 exact branch bytes once, parsed each of 15,501 entries once, created 202 leaves and 31 rollup nodes, and had node-work amplification 1.77. The final append took 84.3 ms. The store used 59.0 MiB.
+
+The 5,000-task comparator measured current replay at 5.48 s and 24,978 tokens. Prototype build took 1.32 s. Warm render took 13.9 ms and produced 11,408 tokens. The measured rollup resident set was 379.7 MiB. Both paths retained complete restriction and unresolved-failure coverage, valid recovery, zero false completions, and zero cut lines.
+
+The 5,000-task branch probe reused 60 common leaves and seven common rollup nodes. It created 74 divergent nodes, switched in 1.77 s, rendered zero abandoned-branch records, and passed output integrity.
+
 ## Status
 
 This is an advisory baseline for a personal project. It measured commit `62dc53e279a3897d88bda615f6561794590c1017`. The results are not a release decision.

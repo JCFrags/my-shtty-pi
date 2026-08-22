@@ -28,6 +28,7 @@ This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted,
 - Rebuilds each generation from original branch entries, ignoring prior compaction control entries, to prevent summary-of-summary drift.
 - Caches byte-stable compaction generations in a sidecar file.
 - Optionally preprocesses source-local and verified tool-pair candidates in a source-ledger-backed immutable segment store. Appends read only new source plus bounded pair context and do not rewrite old segments. Future-sensitive candidates remain live computations. Missing, stale, busy, or corrupt data causes a cold per-block recomputation without delaying compaction.
+- Includes an isolated hierarchical history rollup prototype. It builds typed, branch-aware immutable nodes and renders bounded research context without loading every old leaf. It is not connected to the extension, replay, retrieval, candidate store, worker, or production compaction. See [`docs/history-rollup-store.md`](docs/history-rollup-store.md).
 - Optionally projects old tool results only in a model-request copy. Modes are `off`, `safe`, and `aggressive`. The feature keeps first consumption and recent results exact. It also keeps failures, unknown terminal outcomes, images, restrictions, unresolved work, and later user-cited evidence exact.
 - Rejects unsafe semantic candidates that introduce unsupported identifiers, quotations, numeric facts, success states, or outcomes.
 

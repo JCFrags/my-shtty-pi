@@ -28,7 +28,21 @@ The fixture must be one regular, non-symlinked `.jsonl` file no larger than 16 M
 
 The command prints one aggregate JSON object. It does not print fixture paths, source text, queries, probes, recovered text, identifiers, or input fingerprints. Timing fields are advisory and can vary. The schema version and non-timing aggregate fields are intended to remain stable.
 
-The public benchmark has no comparator mode. Historical evaluation, private fixtures, and private wrappers remain outside this repository.
+The V2 replay benchmark has no comparator mode. Historical evaluation, private fixtures, and private wrappers remain outside this repository.
+
+## Hierarchical history rollup benchmark
+
+`scripts/benchmark-history-rollups.mjs` measures the isolated rollup prototype with synthetic data. It has strict `series`, `render`, `scale`, `branch`, and `compare` modes. It uses owner-only temporary files and no network. It does not discover or read private sessions.
+
+```bash
+npm run benchmark:history-rollups -- series --final-tasks 5000 --batches 50
+npm run benchmark:history-rollups -- render --tasks 1000 --target-tokens 20000
+npm run benchmark:history-rollups -- scale --source-tokens 50000000 --batches 50 --target-tokens 20000
+npm run benchmark:history-rollups -- branch --common-tasks 5000 --left-tasks 5000 --right-tasks 5000
+npm run benchmark:history-rollups -- compare --tasks 5000
+```
+
+The comparator reports current replay and prototype render measures for the same synthetic branch. It does not change either path. See [history-rollup-store.md](history-rollup-store.md).
 
 ## Repeated-generation and concurrent-process benchmark
 

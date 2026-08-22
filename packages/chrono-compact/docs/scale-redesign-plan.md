@@ -31,6 +31,10 @@ The goal is better long-session working memory than a normal single summary.
 - Optional LLM failure must not block compaction.
 - Normal processing must depend mainly on new data, not all old data.
 
+## Prototype milestone
+
+The isolated hierarchical history rollup prototype is complete. It adds typed static values, render-time dynamic values, immutable branch-aware nodes, incremental open-leaf append, verified common-prefix branch reuse, bounded lazy rendering, validation, and synthetic benchmark modes. It remains outside the extension and normal replay. Integration is a separate decision after review of prototype quality and measurements. See [history-rollup-store.md](history-rollup-store.md) and [scale-baseline.md](scale-baseline.md).
+
 ## Scale targets
 
 - The first or second compaction can include 250,000 to 500,000 source tokens.
