@@ -95,3 +95,34 @@ At 1,000 tasks, median compaction time decreased by 84.95%, from 5,001.5 ms to 7
 One compaction-only 2,000-task run measured 1,057,043 source tokens, 24,985 rendered tokens, 1,762.6 ms compaction time, 2.30 s wall time, and 377,568 KiB maximum resident memory. Its protected-fact rate was 100%, and it had no validation errors.
 
 All normal benchmark sizes retained 100% protected facts and exact recovery, with zero false completions and zero validation errors. This change does not remove other full-session processing. The original Results table remains the before-change baseline.
+
+## Repeated-generation and concurrent-process baseline
+
+The generation benchmark repeatedly compacts original synthetic prefixes. It does not use a prior rendered replay as source. Each row reports the median of three serial command runs.
+
+| Generations | Final source tokens | Cumulative source tokens | Work amplification | Median total compaction | Median final compaction | Median peak RSS | Median maximum timer delay | Protected facts | False completion | Exact recovery | Validation errors |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 528,043 | 2,904,407 | 5.50 | 3,673.9 ms | 678.1 ms | 466,188 KiB | 678.7 ms | 100% | 0 | 100% | 0 |
+| 25 | 528,043 | 6,865,001 | 13.00 | 8,565.7 ms | 698.0 ms | 516,960 KiB | 698.7 ms | 100% | 0 | 100% | 0 |
+| 50 | 528,043 | 13,466,005 | 25.50 | 16,357.9 ms | 688.5 ms | 532,972 KiB | 689.1 ms | 100% | 0 | 100% | 0 |
+
+The concurrent rows also report medians from three command runs. Summed peak RSS is the sum of child process peak values. It is not a measured host peak.
+
+| Workers | Source tokens per worker | Median total wall | Median worker compaction | Median slowest worker | Median sum peak RSS | Median maximum timer delay | Protected facts | False completion | Validation errors |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 528,043 | 1,312.5 ms | 789.5 ms | 789.5 ms | 317,536 KiB | 789.8 ms | 100% | 0 | 0 |
+| 2 | 528,043 | 1,344.7 ms | 799.0 ms | 811.3 ms | 636,248 KiB | 811.6 ms | 100% | 0 | 0 |
+| 4 | 528,043 | 1,454.1 ms | 844.3 ms | 858.0 ms | 1,279,836 KiB | 858.4 ms | 100% | 0 | 0 |
+
+| Tasks | Source tokens | Median compaction | Median wall | Median peak RSS | Median timer delay | Protected facts | False completion | Validation errors |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 528,043 | 790.3 ms | 1,226.5 ms | 317,540 KiB | 790.7 ms | 100% | 0 | 0 |
+| 2,000 | 1,057,043 | 1,640.0 ms | 2,093.1 ms | 368,956 KiB | 1,640.4 ms | 100% | 0 | 0 |
+
+Total compaction work increased from 3.67 seconds at 10 generations to 16.36 seconds at 50 generations as cumulative processed source increased from 2.90 million to 13.47 million estimated tokens. Final-generation time stayed between 678.1 and 698.0 ms for the same final source size.
+
+From one to four workers, median command wall time increased from 1.31 to 1.45 seconds. The sum of child peak RSS increased from 317,536 KiB to 1,279,836 KiB. One compaction delayed its own process timer by about the measured compaction duration. This process-level probe is not a complete Pi UI latency measurement.
+
+In the 2,000-task CPU profile, the largest project-linked JavaScript self-tick entries were a repeated-observation callback at 3.1%, a causal-memory callback at 1.8%, and `addRepeatedObservationCandidates` at 1.7%. No other linked project function reached 1% self ticks.
+
+These measurements do not prove behavior at 25 million or 50 million source tokens. They do not measure a complete Pi UI process, and they do not propose a design correction.
