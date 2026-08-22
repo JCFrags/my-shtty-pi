@@ -197,6 +197,23 @@ test("mouse checkbox selection matches Space and directory row activation matche
 });
 
 
+test("raw SGR mouse input expands directory rows when Pi dispatches mouse through handleInput", async () => {
+  await withTempDirectory("pi-files-sgr-input", async (root) => {
+    await writeFile(root, "dir/file.txt", "value");
+    const fixture = await createBrowser(root);
+    fixture.browser.render(120);
+    const tree = fixture.browser.currentLayout.tree;
+    assert.ok(tree);
+    const x = (tree?.x ?? 0) + 8;
+    const y = (tree?.y ?? 0) + 1;
+    fixture.browser.handleInput(`\u001b[<0;${x + 1};${y + 1}M`);
+    fixture.browser.handleInput(`\u001b[<0;${x + 1};${y + 1}m`);
+    await fixture.browser.settle();
+    assert.equal(fixture.tree.getNode("dir").expanded, true);
+    fixture.browser.dispose();
+  });
+});
+
 test("clicking a file opens the Preview tab on narrow terminals", async () => {
   await withTempDirectory("pi-files-narrow-preview", async (root) => {
     await writeFile(root, "file.txt", "preview me");
