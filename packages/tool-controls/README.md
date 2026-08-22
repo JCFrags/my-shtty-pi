@@ -164,7 +164,7 @@ If Pi rejects a stale or unknown tool ID, the package notifies once for that ope
 
 ## TUI mode limitation
 
-The owned Pi 0.84.1 integration patch advertises component mouse dispatch only in fullscreen mode. Regular mode stays in honest global keyboard compatibility mode because Pi does not retain stable component bounds for terminal scrollback. The package does not create or manage an alternate-screen transcript. Fullscreen mode provides component-local pointer coordinates and predictable mouse-wheel behavior.
+The owned Pi 0.84.1 integration patch advertises component mouse dispatch only in fullscreen mode. The package disables mouse reporting in regular mode, so terminal scrollback and ordinary text selection remain native. It enables mouse capture only while the fullscreen controls overlay is open, then disables it on every close, reload, and failure path. The package does not create or manage an alternate-screen transcript.
 
 ## Troubleshooting
 

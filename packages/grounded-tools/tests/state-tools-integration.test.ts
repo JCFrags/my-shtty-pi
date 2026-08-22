@@ -14,7 +14,7 @@ async function json(path: string) { return JSON.parse(await readFile(join(root, 
 async function absent(path: string) { await assert.rejects(access(join(root, path))); }
 function load(factory: Function, name: string) {
   let tool: any;
-  factory({ registerTool(value: any) { if (value.name === name) tool = value; }, registerCommand() {}, registerShortcut() {}, on() {}, appendEntry() {} } as any);
+  factory({ registerTool(value: any) { if (value.name === name) tool = value; }, registerCommand() {}, registerShortcut() {}, on() {}, events: { on() { return () => {}; }, emit() {} }, appendEntry() {} } as any);
   return tool;
 }
 
@@ -46,12 +46,12 @@ test("Gate A root order, package inventory, core exports, peers, and bundled cor
 test("todo-owned files retain exact reviewed SHA-256 values", async () => {
   const expected = new Map([
     ["packages/core/src/tasks.ts", "f13e07833f0b5a64cf2298c33a4727f7739d29204a887452b7259d246b0a9392"],
-    ["packages/tasks/index.ts", "f21312b642ed4388b5fcbb34cc303a431b849c5a278ea04c4ccab49ee97beb02"],
+    ["packages/tasks/index.ts", "3060113e41c7f8a385dee07394677fb3c5e0556be476e23c3a50f3fb2c6a2ab0"],
     ["packages/tasks/settings.ts", "d99804e2d7e6138b2f6aadbd377ca0034727654948df9266fe284cd915aeb581"],
     ["packages/tasks/package.json", "3ebaef6925127d0bbd9e46e46ddf9dcfff8b266f3568833e4df6d4c94313b039"],
-    ["packages/tasks/README.md", "d8300ed2d28a8b589607f7b55c02da68ad65d07d6dffba4d100d659e9d9a0a64"],
+    ["packages/tasks/README.md", "4a2f6a07f125225bfb5bc0f6683bf60d95dc1607ae30c244a5c04c79dc43f3f1"],
     ["tests/tasks.test.ts", "849f541db8ee55369dc0856aa17e2e31088fb8ef06fa920e796429db59587c1f"],
-    ["tests/tasks-extension.test.ts", "7941d0edba69bf434d940e9437eec55547e8aa5948f94859f11794cd4b21a697"],
+    ["tests/tasks-extension.test.ts", "838fc1dcba1ddc38c7f33f8266783a6071629d1a4dbe22a7986e1cc6fc2e0cb2"],
   ]);
   for (const [path, digest] of expected) assert.equal(sha(await readFile(join(root, path))), digest, path);
 });

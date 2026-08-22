@@ -23,6 +23,7 @@ export class ToolControlsRuntime {
   private widget: ComponentLike | undefined;
   private overlay: ComponentLike | undefined;
   private overlayDone: (() => void) | undefined;
+  private overlayTui: TuiLike | undefined;
   private overlayOpen = false;
   private started = false;
   private cleaned = false;
@@ -47,6 +48,7 @@ export class ToolControlsRuntime {
       this.context.ui.setWidget(
         WIDGET_KEY,
         (tui, theme) => {
+          if (tui.mode === "fullscreen") tui.setMouseCapture?.(false);
           const widget = new CompactToolStrip({
             controller: this.controller,
             tui,
@@ -93,6 +95,8 @@ export class ToolControlsRuntime {
             done(undefined);
           };
           this.overlayDone = close;
+          this.overlayTui = tui;
+          if (tui.mode === "fullscreen") tui.setMouseCapture?.(true);
           const component = this.createOverlayComponent(tui, theme, keybindings, close);
           this.overlay = component;
           return component;
@@ -122,6 +126,8 @@ export class ToolControlsRuntime {
       this.overlay?.dispose?.();
       this.overlay = undefined;
       this.overlayDone = undefined;
+      if (this.overlayTui?.mode === "fullscreen") this.overlayTui.setMouseCapture?.(false);
+      this.overlayTui = undefined;
       this.overlayOpen = false;
       this.widget?.invalidate();
     }

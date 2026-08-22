@@ -16,11 +16,10 @@
          const lines = [];
          for (const child of this.children) {
              const childLines = child.render(width);
-@@ -64,6 +66,18 @@
-             }
+@@ -65,6 +67,18 @@
          }
          return lines;
-+    }
+     }
 +    handleMouse(event) {
 +        let row = event.localRow;
 +        for (const child of this.children) {
@@ -32,9 +31,10 @@
 +            }
 +            row -= height;
 +        }
-     }
++    }
  }
  /**
+  * TUI - Main class for managing terminal UI with differential rendering
 @@ -553,6 +567,9 @@
          if (this.consumeTerminalColorSchemeReport(data)) {
              return;
@@ -45,11 +45,10 @@
          if (this.inputListeners.size > 0) {
              let current = data;
              for (const listener of this.inputListeners) {
-@@ -619,6 +636,44 @@
-             // where even setTimeout(0) can take a full 16 ms tick on Windows.
+@@ -620,6 +637,44 @@
              this.requestImmediateRender();
          }
-+    }
+     }
 +    parseComponentMouseEvent(data) {
 +        const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
 +        if (!match)
@@ -87,9 +86,10 @@
 +        entry.component.handleMouse({ ...event, localCol: event.x - layout.col, localRow: event.y - layout.row });
 +        this.requestImmediateRender();
 +        return true;
-     }
++    }
      consumeOsc11BackgroundResponse(data) {
          if (this.pendingOsc11BackgroundReplies <= 0) {
+             return false;
 --- a/node_modules/@earendil-works/pi-tui/dist/tui.d.ts
 +++ b/node_modules/@earendil-works/pi-tui/dist/tui.d.ts
 @@ -4,6 +4,17 @@
@@ -135,7 +135,67 @@
  export declare function compositeTuiLine(baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number): string;
 --- a/node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js
 +++ b/node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js
-@@ -278,6 +278,8 @@
+@@ -46,6 +46,7 @@
+     selectionFocus;
+     selectionGranularity = "character";
+     selectionInitialRange;
++    processExitCleanup;
+     lastClick;
+     selectionDragPointer;
+     selectionAutoScrollDirection = 0;
+@@ -74,8 +75,35 @@
+         this.mouseEnabled = options.mouse ?? true;
+         this.openUrl = options.openUrl;
+         this.onRightClickPaste = options.onRightClickPaste;
++        this.processExitCleanup = () => {
++            try {
++                this.terminal.write(`${DISABLE_MOUSE}${ENABLE_AUTOWRAP}${EXIT_ALT_SCREEN}\x1b[?25h`);
++            }
++            catch {
++                // Process exit cleanup is best effort.
++            }
++        };
+         this.addInputListener((data) => this.handleViewportInput(data));
+     }
++    setMouseCapture(enabled) {
++        if (this.mouseEnabled === enabled)
++            return;
++        this.mouseEnabled = enabled;
++        if (!this.altScreenActive)
++            return;
++        if (!enabled) {
++            this.terminal.write(DISABLE_MOUSE);
++            return;
++        }
++        const term = process.env.TERM ?? "";
++        const mouseSequence = process.env.TMUX !== undefined ||
++            process.env.STY !== undefined ||
++            term.startsWith("tmux") ||
++            term.startsWith("screen")
++            ? ENABLE_BUTTON_MOTION_MOUSE
++            : ENABLE_ALL_MOTION_MOUSE;
++        this.terminal.write(mouseSequence);
++    }
+     get viewportTop() {
+         return this.getPrimaryScrollView().scrollTop;
+     }
+@@ -99,6 +127,7 @@
+         return this.currentLayout?.primaryScrollView ?? this.implicitScrollView;
+     }
+     beforeTerminalStart() {
++        process.once("exit", this.processExitCleanup);
+         this.stopSelectionAutoScroll();
+         this.selectionPressActive = false;
+         this.stopScrollbarHover();
+@@ -146,6 +175,7 @@
+         this.uploadedKittyImages.clear();
+     }
+     afterTerminalStop(options) {
++        process.removeListener("exit", this.processExitCleanup);
+         if (!this.altScreenActive)
+             return;
+         this.altScreenActive = false;
+@@ -278,6 +308,8 @@
          }
          if (data === FOCUS_IN)
              return { consume: true };
@@ -144,13 +204,12 @@
          const wheelEvent = this.parseWheelEvent(data);
          if (wheelEvent) {
              this.routeWheel(wheelEvent);
-@@ -341,6 +343,29 @@
-             return { consume: true };
+@@ -342,6 +374,29 @@
          }
          return undefined;
-+    }
+     }
 +    dispatchComponentMouse(data) {
-+        if (this.hasOverlay() || !this.currentLayout)
++        if (!this.mouseEnabled || this.hasOverlay() || !this.currentLayout)
 +            return false;
 +        const event = this.parseComponentMouseEvent(data);
 +        if (!event)
@@ -171,9 +230,10 @@
 +        target.component.handleMouse({ ...event, localCol: event.x - target.rect.x, localRow: event.y - target.rect.y });
 +        this.requestRender();
 +        return true;
-     }
++    }
      parseWheelEvent(data) {
          const sgr = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(data);
+         if (sgr) {
 --- a/dist/core/extensions/types.d.ts
 +++ b/dist/core/extensions/types.d.ts
 @@ -65,6 +65,16 @@

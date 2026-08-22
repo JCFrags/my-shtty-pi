@@ -34,7 +34,7 @@ The patch adds:
 
 Pi owns SGR mouse parsing and component-local coordinate conversion. The extension does not parse raw terminal input or transcript text.
 
-Mouse dispatch is advertised only in fullscreen mode. Fullscreen has a retained layout frame that supports stable component hit testing. Regular mode stays in the stock global keyboard compatibility product.
+Mouse dispatch is advertised only in fullscreen mode. The extension explicitly disables mouse capture in regular mode and enables it only while its fullscreen overlay is active. The capture is released on Escape, Ctrl+C, reload, normal close, and error cleanup. Fullscreen has a retained layout frame that supports stable component hit testing. Regular mode keeps native terminal scrollback and ordinary text selection.
 
 Per-tool state comes from live `ToolExecutionComponent` instances. A rebuilt session assigns increasing assistant-turn indexes. A stale tool call ID throws `UNKNOWN_TOOL`. Group changes emit one expansion notification.
 

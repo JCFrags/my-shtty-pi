@@ -36,6 +36,8 @@ test("registers /files, loads a package component, never pastes automatically, a
     await writeFile(root, "file.txt", "value");
     const commands = new Map<string, RegisteredCommand>();
     const handlers = new Map<string, Array<(event: unknown, ctx: TestContext) => Promise<void> | void>>();
+    const eventHandlers = new Map<string, Array<(data: unknown) => void>>();
+    const emitted: Array<{ channel: string; data: unknown }> = [];
     const pi = {
       registerCommand(name: string, command: RegisteredCommand): void {
         commands.set(name, command);
@@ -45,11 +47,33 @@ test("registers /files, loads a package component, never pastes automatically, a
         list.push(handler);
         handlers.set(event, list);
       },
+      events: {
+        on(channel: string, handler: (data: unknown) => void) {
+          const list = eventHandlers.get(channel) ?? [];
+          list.push(handler);
+          eventHandlers.set(channel, list);
+          return () => eventHandlers.set(channel, list.filter((entry) => entry !== handler));
+        },
+        emit(channel: string, data: unknown) {
+          emitted.push({ channel, data });
+          for (const handler of eventHandlers.get(channel) ?? []) handler(data);
+        },
+      },
     };
     filesExtension(pi as never);
     const command = commands.get("files");
     assert.ok(command);
     assert.match(command?.description ?? "", /Browse repository files/);
+    const capabilityRequest = eventHandlers.get("pi-files-ui:request-capability-v1")?.[0];
+    assert.ok(capabilityRequest);
+    capabilityRequest?.({ requestId: "cap-1" });
+    assert.deepEqual((emitted.at(-1)?.data as any).capability, {
+      version: 1,
+      command: "/files",
+      interactiveTuiRequired: true,
+      canOpenViaEventBus: true,
+      reason: "Provider-owned same-process request-open-v1 action calls the existing /files handler in the active Pi session",
+    });
 
     let component: FilesBrowserComponent | undefined;
     let markComponentReady: (() => void) | undefined;
@@ -94,6 +118,17 @@ test("registers /files, loads a package component, never pastes automatically, a
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
     await commandPromise;
     assert.equal(component?.isDisposed, true);
+
+    // The host can reuse this extension instance for a new session. Provider
+    // listeners must remain live and bind to the new provider.
+    for (const handler of handlers.get("session_start") ?? []) await handler({}, context);
+    const providerRequest = eventHandlers.get("pi-files-ui:provider-request-v1")?.[0];
+    assert.ok(providerRequest);
+    providerRequest?.({ version: 1, requestId: "reload-1", action: "snapshot" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const providerResponse = emitted.find((entry) => (entry.data as any)?.requestId === "reload-1");
+    assert.equal((providerResponse?.data as any)?.ok, true);
+    assert.notEqual((providerResponse?.data as any)?.error, "No active Files provider");
   });
 });
 
@@ -104,6 +139,7 @@ test("/files refuses non-interactive mode without touching the editor", async ()
       commands.set(name, command);
     },
     on(): void {},
+    events: { on(): () => void { return () => {}; }, emit(): void {} },
   };
   filesExtension(pi as never);
   const notifications: string[] = [];

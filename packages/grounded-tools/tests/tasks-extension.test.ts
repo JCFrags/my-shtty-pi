@@ -11,6 +11,8 @@ import { loadTodoDisplayMode, saveTodoDisplayMode } from "../packages/tasks/sett
 function loadTodo(settingsPath?: string) {
   let todo: any;
   const handlers = new Map<string, Function>();
+  const eventHandlers = new Map<string, Function[]>();
+  const emitted: Array<{ channel: string; data: unknown }> = [];
   const commands = new Map<string, any>();
   const shortcuts = new Map<string, any>();
   groundedTasks({
@@ -18,10 +20,45 @@ function loadTodo(settingsPath?: string) {
     registerCommand(name: string, value: any) { commands.set(name, value); },
     registerShortcut(name: string, value: any) { shortcuts.set(name, value); },
     on(name: string, handler: Function) { handlers.set(name, handler); },
+    events: {
+      on(name: string, handler: Function) {
+        const list = eventHandlers.get(name) ?? [];
+        list.push(handler);
+        eventHandlers.set(name, list);
+        return () => eventHandlers.set(name, list.filter((entry) => entry !== handler));
+      },
+      emit(channel: string, data: unknown) {
+        emitted.push({ channel, data });
+        for (const handler of eventHandlers.get(channel) ?? []) handler(data);
+      },
+    },
     appendEntry() {},
   } as any, settingsPath ? { settingsPath } : {});
-  return { todo, handlers, commands, shortcuts };
+  return { todo, handlers, commands, shortcuts, emitted, eventHandlers };
 }
+
+test("todo summary events are bounded, read-only, and cleaned up on shutdown", async () => {
+  const runtime = loadTodo();
+  const context = { hasUI: false, sessionManager: { getBranch: () => [] }, ui: { setWidget() {} } };
+  runtime.handlers.get("session_start")?.({}, context);
+  const requestHandlers = runtime.eventHandlers.get("pi-todo:request-summary-v1") ?? [];
+  assert.equal(requestHandlers.length, 1);
+  await runtime.todo.execute("add", { action: "add", text: "current task" });
+  await runtime.todo.execute("wait", { action: "update", id: "T1", waitReason: "external review" });
+  for (const handler of requestHandlers) handler({ requestId: "req-1" });
+  const response = runtime.emitted.filter((entry) => entry.channel === "pi-todo:summary-v1").at(-1);
+  assert.ok(response);
+  const snapshot = (response?.data as any).snapshot;
+  assert.deepEqual(Object.keys(snapshot).sort(), ["countsByState", "currentUsefulTask", "externalWaits", "planSize", "unfinishedTasks", "version"]);
+  assert.equal(snapshot.planSize, 1);
+  assert.equal(snapshot.currentUsefulTask.id, "T1");
+  assert.equal(snapshot.externalWaits[0].reason, "external review");
+  assert.ok(snapshot.countsByState.blocked === 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "history"), false);
+  assert.equal((response?.data as any).requestId, "req-1");
+  runtime.handlers.get("session_shutdown")?.({}, context);
+  assert.equal((runtime.eventHandlers.get("pi-todo:request-summary-v1") ?? []).length, 0);
+});
 
 test("session-tree changes restore only the active branch task snapshot", async () => {
   const { todo, handlers } = loadTodo();
