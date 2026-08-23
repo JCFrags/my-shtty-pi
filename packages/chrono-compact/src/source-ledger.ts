@@ -3,6 +3,7 @@ import { open, rename, rm, stat } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { stableStringify } from "./utils.js";
+import { acquireDerivedStoreLock } from "./derived-store-lock.js";
 
 export const SOURCE_LEDGER_SUFFIX = ".chrono-source-ledger-v1.jsonl";
 const SCHEMA_VERSION = 1;
@@ -122,14 +123,7 @@ function verifyRecord(record: LedgerRecord, expectedPrevious: string): boolean {
 function noFollowFlags(): number { return fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0); }
 
 async function acquireLock(sidecar: string): Promise<() => Promise<void>> {
-  const lockPath = `${sidecar}.lock`;
-  let handle;
-  try { handle = await open(lockPath, "wx", 0o600); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new SourceLedgerError("Source ledger is busy; another writer holds the sidecar lock.");
-    throw error;
-  }
-  return async () => { await handle.close(); await rm(lockPath, { force: true }); };
+  return acquireDerivedStoreLock(`${sidecar}.lock`);
 }
 
 interface ParsedSource {

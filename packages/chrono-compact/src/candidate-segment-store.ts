@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseHistoricalBlocks } from "./blocks.js";
 import { precomputeCandidateRepresentations, type CandidatePrecomputeRecord } from "./candidates.js";
@@ -7,6 +7,7 @@ import { REDUCER_VERSIONS } from "./reducers/index.js";
 import { readExactSourceEntry, readSourceEntryRange, sourceLedgerPath, updateSourceLedger, type SourceLedger, type SourceLedgerTransition } from "./source-ledger.js";
 import type { CompactorConfig, HistoricalBlock, SessionEntryLike } from "./types.js";
 import { hashText, stableStringify } from "./utils.js";
+import { acquireDerivedStoreLock } from "./derived-store-lock.js";
 
 export const CANDIDATE_SEGMENT_STORE_SUFFIX = ".chrono-candidate-segments-v1";
 export const CANDIDATE_SEGMENT_SCHEMA_VERSION = 1;
@@ -100,9 +101,8 @@ export async function loadCandidateSegmentManifest(store: CandidateSegmentStore)
 }
 
 async function acquireLock(path: string): Promise<() => Promise<void>> {
-  await mkdir(path, { recursive: true, mode: 0o700 }); await chmod(path, 0o700); const lockPath = join(path, ".writer.lock");
-  let handle; try { handle = await open(lockPath, "wx", 0o600); } catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Candidate segment store is busy."); throw error; }
-  return async () => { await handle.close(); await rm(lockPath, { force: true }); };
+  await mkdir(path, { recursive: true, mode: 0o700 }); await chmod(path, 0o700);
+  return acquireDerivedStoreLock(join(path, ".writer.lock"));
 }
 async function atomicPrivateWrite(path: string, text: string): Promise<number> {
   const temp = `${path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`; await writeFile(temp, text, { mode: 0o600 }); await chmod(temp, 0o600);
