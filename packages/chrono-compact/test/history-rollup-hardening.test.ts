@@ -240,3 +240,39 @@ test("bounded dynamic query finds old evidence omitted from the root in numeric 
   assert.doesNotMatch(nodeText, /PROTECTED_EXACT_SENTINEL/);
   assert.doesNotMatch(nodeText, /old-critical-evidence zirconium retention marker/);
 });
+
+test("deep rollups deduplicate propagated state and keep query indexes byte bounded", async t => {
+  const entries: SessionEntryLike[] = [];
+  let parent: string | null = null;
+  for (let index = 0; index < 800; index += 1) {
+    const id = `pressure-${index}`;
+    entries.push(message(id, parent, index % 2 ? "assistant" : "user",
+      `Task ${index} remains open. Blocker failure-${index} affects resource-${index}.ts. Next action validate task-${index}.`));
+    parent = id;
+  }
+  const fixture = await sourceFixture(t, entries, { targetLeafEntries: 2, targetLeafBlocks: 4, fanout: 4 });
+  const metrics = await updateHistoryRollupStore(fixture.runtime, parent!);
+  assert.equal(metrics.integrityOk, true);
+  assert.ok(metrics.treeLevels > 2);
+  const root = await loadHistoryNode(fixture.runtime, fixture.runtime.branchManifest!.rootRollupNodeId);
+  assert.equal(root.nodeType, "rollup");
+  if (root.nodeType !== "rollup") return;
+  const ids = [
+    ...root.currentStateRecords,
+    ...root.conflictRecords,
+    ...root.unresolvedFailureRecords,
+    ...root.currentResourceRecords,
+    ...root.openTaskRecords,
+    ...root.selectedImportantEvidence,
+    ...root.closedEpisodeCapsules,
+    ...root.archiveRangeRecords,
+  ].map(value => value.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(root.queryIndex.termHashes.length <= 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(root.queryIndex.resourceIdentities)) <= 32 * 1024 + 2);
+  assert.ok(Buffer.byteLength(JSON.stringify(root.queryIndex.taskIdentities)) <= 32 * 1024 + 2);
+  assert.ok(Buffer.byteLength(JSON.stringify(root.queryIndex.failureIdentities)) <= 32 * 1024 + 2);
+  const nodeDirectory = join(historyRollupStorePath(fixture.sessionPath), "nodes");
+  const { readdir } = await import("node:fs/promises");
+  for (const name of await readdir(nodeDirectory)) assert.ok((await stat(join(nodeDirectory, name))).size <= 1024 * 1024);
+});

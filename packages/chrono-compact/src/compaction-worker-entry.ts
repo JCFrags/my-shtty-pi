@@ -11,7 +11,8 @@ import { renderHybridCompaction } from "./pi-hybrid.js";
 import { parseHistoricalBlocks } from "./blocks.js";
 import { estimateTokensFromText, hashText, stableStringify } from "./utils.js";
 import type { CompressionResult } from "./types.js";
-import { appendRollupShadowRecord, runRollupShadowEvaluation } from "./history-rollup-shadow.js";
+import { appendRollupShadowFailureRecord, appendRollupShadowRecord, runRollupShadowEvaluation } from "./history-rollup-shadow.js";
+import { classifyRollupShadowFailure, safeFailureContext, type RollupShadowFailureContext, type RollupShadowFailureStage } from "./rollup-shadow-failure.js";
 
 interface SourceState { deviceId: string; inodeId: string; size: number; mtimeMs: number; }
 interface ReplayLoadMetrics {
@@ -126,12 +127,27 @@ async function replay(request: Extract<CompactionWorkerRequest, { jobType: "repl
 async function run(requestValue: unknown, signal?: AbortSignal): Promise<CompactionWorkerResponse> {
   let request: CompactionWorkerRequest;
   try { request = validateWorkerRequest(requestValue); }
-  catch { return { schemaVersion: 1, jobId: "invalid", status: "failed", jobType: "replay-compaction", failureCode: "worker-protocol-error", metrics: baseMetrics(performance.now(), 0, false, "disabled") }; }
+  catch {
+    const shadow = (requestValue as { jobType?: unknown })?.jobType === "rollup-shadow";
+    return { schemaVersion: 1, jobId: typeof (requestValue as { jobId?: unknown })?.jobId === "string" ? (requestValue as { jobId: string }).jobId : "invalid",
+      status: "failed", jobType: shadow ? "rollup-shadow" : "replay-compaction",
+      failureCode: shadow ? "shadow-protocol-error" : "worker-protocol-error",
+      ...(shadow ? { failureStage: "request-validation" as const } : {}),
+      metrics: baseMetrics(performance.now(), 0, false, "disabled") };
+  }
   const started = performance.now(); let priorityApplied = false;
+  let shadowStage: RollupShadowFailureStage = "source-bind";
+  let shadowContext: RollupShadowFailureContext | undefined;
+  const reportShadowStage = (stage: RollupShadowFailureStage, context?: RollupShadowFailureContext): void => {
+    shadowStage = stage;
+    shadowContext = safeFailureContext(context);
+    if (process.connected && process.send) process.send({ kind: "shadow-stage", stage, ...(shadowContext ? { context: shadowContext } : {}) });
+  };
   try {
     try { setPriority(0, request.niceLevel); priorityApplied = true; } catch {}
     if (Date.now() > request.deadlineMs) throw Object.assign(new Error(), { code: "worker-timeout" });
     if (request.jobType === "rollup-shadow") {
+      reportShadowStage("source-bind", { sourceFileBytes: request.expectedSource.size, currentMemoryBytes: process.memoryUsage().rss });
       const boundState = await expectedState(request);
       const shadow = await runRollupShadowEvaluation({
         sessionPath: request.sessionPath,
@@ -144,17 +160,26 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
         dynamicContext: request.dynamicContext,
         signal,
         persist: false,
+        onStage: reportShadowStage,
       });
       if (!same(boundState, sourceState(await stat(request.sessionPath)))) {
         throw Object.assign(new Error(), { code: "source-changed" });
       }
-      await appendRollupShadowRecord(request.sessionPath, shadow);
+      if (shadow.safeStatus === "validation-failed") {
+        reportShadowStage("rollup-validation", shadowContext);
+        throw Object.assign(new Error("history-rollup-validation-failed"), { code: "history-rollup-validation-failed" });
+      }
+      reportShadowStage("shadow-sidecar-write", shadowContext);
+      let shadowWarning: { readonly stage: "shadow-sidecar-write"; readonly code: "shadow-sidecar-write-failed" } | undefined;
+      try { await appendRollupShadowRecord(request.sessionPath, shadow); }
+      catch { shadowWarning = { stage: "shadow-sidecar-write", code: "shadow-sidecar-write-failed" }; }
       return {
         schemaVersion: 1,
         jobId: request.jobId,
         status: "ok",
         jobType: request.jobType,
         shadow,
+        ...(shadowWarning ? { shadowWarning } : {}),
         metrics: baseMetrics(started, 0, priorityApplied, "disabled"),
       };
     }
@@ -174,6 +199,30 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
         planSources: value.result.plan.units.map((unit) => ({ unitId: unit.id, sourceRefs: unit.sourceRefs })), sourceEntryCount: value.sourceCount },
       metrics: baseMetrics(started, value.compactionMs, priorityApplied, value.cacheState, value.load) };
   } catch (error) {
+    if (request.jobType === "rollup-shadow") {
+      const classified = classifyRollupShadowFailure(shadowStage, error,
+        safeFailureContext({ ...shadowContext, ...(error as { context?: RollupShadowFailureContext })?.context }));
+      if (classified.stage !== "shadow-sidecar-write") {
+        try {
+          await appendRollupShadowFailureRecord(request.sessionPath, {
+            schemaVersion: 2,
+            recordType: "failure",
+            generation: 1,
+            timestampMs: Date.now(),
+            safeStatus: "failed",
+            failureStage: classified.stage,
+            failureCode: classified.code,
+            ...(classified.context ? { context: classified.context } : {}),
+          });
+        } catch {
+          // Failure diagnostics never replace the classified worker result.
+        }
+      }
+      return { schemaVersion: 1, jobId: request.jobId, status: "failed", jobType: request.jobType,
+        failureStage: classified.stage, failureCode: classified.code,
+        ...(classified.context ? { failureContext: classified.context } : {}),
+        metrics: baseMetrics(started, 0, priorityApplied, "disabled") };
+    }
     return { schemaVersion: 1, jobId: request.jobId, status: "failed", jobType: request.jobType,
       failureCode: failureCode(error), metrics: baseMetrics(started, 0, priorityApplied, "disabled") };
   }
@@ -188,10 +237,15 @@ process.on("message", (value) => {
   void run(value, workAbort.signal).then((response) => {
     let checked: CompactionWorkerResponse;
     try { checked = validateWorkerResponse(response); if (Buffer.byteLength(JSON.stringify(checked)) > MAX_WORKER_RESPONSE_BYTES) throw new Error("worker-response-too-large"); }
-    catch (error) { checked = { schemaVersion: 1, jobId: (value as { jobId?: string })?.jobId ?? "invalid", status: "failed",
-      jobType: (value as { jobType?: "replay-compaction" | "candidate-store-update" | "rollup-shadow" })?.jobType ?? "replay-compaction",
-      failureCode: String((error as Error)?.message).includes("response-too-large") ? "worker-response-too-large" : "worker-protocol-error",
-      metrics: baseMetrics(performance.now(), 0, false, "disabled") }; }
+    catch (error) {
+      const jobType = (value as { jobType?: "replay-compaction" | "candidate-store-update" | "rollup-shadow" })?.jobType ?? "replay-compaction";
+      const tooLarge = String((error as Error)?.message).includes("response-too-large");
+      checked = { schemaVersion: 1, jobId: (value as { jobId?: string })?.jobId ?? "invalid", status: "failed",
+        jobType,
+        failureCode: jobType === "rollup-shadow" ? (tooLarge ? "shadow-response-too-large" : "shadow-protocol-error") : (tooLarge ? "worker-response-too-large" : "worker-protocol-error"),
+        ...(jobType === "rollup-shadow" ? { failureStage: "response-validation" as const } : {}),
+        metrics: baseMetrics(performance.now(), 0, false, "disabled") };
+    }
     if (process.connected && process.send) process.send(checked, () => process.exit(0)); else process.exit(1);
   }).catch(() => process.exit(1));
 });

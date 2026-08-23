@@ -51,7 +51,7 @@ The default-off public shadow benchmark uses a local low-priority child. Compare
 | 50 generations, 1,000 final tasks | 14.69 s total | 2.54 s total | 1.77 s total | All 150 jobs passed final validation. Median maximum main timer delay was 0.87 ms. |
 | 20 generations, 5,000 final tasks | 41.44 s total | 3.23 s total | 707.1 ms total | All 60 jobs passed final validation. Median maximum main timer delay was 0.67 ms. |
 
-The 5-million-token, 100-restriction pressure case produced 4,014 tokens. The 50-million-token, 1,000-restriction case produced 20,808 tokens. Both had complete restriction, blocker, unresolved-failure, and current-resource coverage. Both had zero invalid references, cut lines, false completions, unsupported facts, missing recovery routes, model calls, and network calls. All compare and generation runs had the same zero-defect quality totals. See [rollup-shadow.md](rollup-shadow.md).
+The 5-million-token, 100-restriction pressure case produced 4,014 tokens. The 50-million-token, 1,000-restriction case produced 20,808 tokens. Both had complete restriction, blocker, unresolved-failure, and current-resource coverage. Both had zero invalid references, cut lines, false completions, unsupported facts, missing recovery routes, model calls, and network calls. All compare and generation runs had the same zero-defect quality totals. The public failure case covered all 15 stages and all 22 safe codes. It found zero unexpected unknown failures, raw errors, stack traces, paths, IDs, references, output text, model calls, or network calls. See [rollup-shadow.md](rollup-shadow.md).
 
 ## Status
 

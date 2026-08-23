@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { renderHistoryRollupPrototype } from "../src/history-rollup-renderer.js";
+import { renderHistoryLossyCue, renderHistoryRollupPrototype } from "../src/history-rollup-renderer.js";
 import { createHistoryRollupRuntime, updateHistoryRollupStore } from "../src/history-rollup-store.js";
 import { validateHistoryRollupPlan, type HistoryRenderPlanLine } from "../src/history-rollup-validation.js";
 import { createHistoryValueRecord } from "../src/history-value.js";
@@ -112,6 +112,27 @@ test("duplicate source claims render once", async t => {
   const matching = result.plan.filter(line => line.included && line.record?.cue === "identical routine observation");
   assert.ok(matching.length <= 1, JSON.stringify(matching.map(line => ({ section: line.section, id: line.record?.id, group: line.record?.duplicateGroupIdentity }))));
   assert.equal(result.quality.duplicateRenderedRecords, 0);
+});
+
+test("failure cues cannot turn source success wording into a false completion", () => {
+  const failure = createHistoryValueRecord({
+    id: "failure-cue",
+    entryId: "failure-entry",
+    entryIndex: 1,
+    kind: "tool_result",
+    label: "tool",
+    exactText: "Expected success, but validation failed.",
+    rawTokens: 8,
+    sourceRefs: [{ entryId: "failure-entry" }],
+    protectedExact: false,
+    reproducible: false,
+    unresolved: true,
+    exactIdentifiers: [],
+    attributes: { isError: true },
+  });
+  const text = renderHistoryLossyCue(failure);
+  assert.equal(/\b(passed|success)\b/i.test(text), false);
+  assert.match(text, /failure/i);
 });
 
 test("typed validator rejects unsupported facts and final-plan defects", async t => {

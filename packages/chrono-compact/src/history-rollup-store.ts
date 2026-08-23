@@ -428,7 +428,9 @@ async function writeNode(
 ): Promise<{ created: boolean; bytes: number }> {
   const text = `${stableStringify(node)}\n`;
   const bytes = Buffer.byteLength(text);
-  if (bytes > runtime.config.maximumNodeBytes) throw new Error("history-rollup-node-too-large");
+  if (bytes > runtime.config.maximumNodeBytes) {
+    throw Object.assign(new Error("history-rollup-node-too-large"), { code: "history-rollup-node-too-large", context: { nodeBytes: bytes, nodeTypeCode: node.nodeType === "leaf" ? 1 : 2 } });
+  }
   const path = join(runtime.directory, "nodes", `${node.nodeId}.json`);
   try {
     const existingText = await readFile(path, "utf8");
@@ -474,14 +476,27 @@ function makeQueryIndex(
       (a, b) => priorityOrder.indexOf(a) - priorityOrder.indexOf(b),
     )[0] ?? "E",
     lifecycleFlags: [...new Set(records.map(record => record.lifecycle))].sort(),
-    resourceIdentities: [...new Set(records.flatMap(record => record.resourceIdentity ? [record.resourceIdentity] : []))].slice(0, 256).sort(),
-    taskIdentities: [...new Set(records.flatMap(record => record.taskIdentity ? [record.taskIdentity] : []))].slice(0, 256).sort(),
-    failureIdentities: [...new Set(records.flatMap(record => record.failureIdentity ? [record.failureIdentity] : []))].slice(0, 256).sort(),
+    resourceIdentities: boundedIndexValues(records.flatMap(record => record.resourceIdentity ? [record.resourceIdentity] : []), 256, 32 * 1024),
+    taskIdentities: boundedIndexValues(records.flatMap(record => record.taskIdentity ? [record.taskIdentity] : []), 256, 32 * 1024),
+    failureIdentities: boundedIndexValues(records.flatMap(record => record.failureIdentity ? [record.failureIdentity] : []), 256, 32 * 1024),
     sourceOrderRange: { start, end },
     recordCount: records.length,
     hasCurrentState: records.some(record => ["current", "unresolved", "open", "conflict"].includes(record.lifecycle)),
   };
   return { ...base, hash: fullHash(stableStringify(base)) };
+}
+
+function boundedIndexValues(values: readonly string[], maximumCount: number, maximumBytes: number): string[] {
+  const output: string[] = [];
+  let bytes = 0;
+  for (const value of [...new Set(values)].sort()) {
+    const valueBytes = Buffer.byteLength(value) + 4;
+    if (output.length >= maximumCount) break;
+    if (bytes + valueBytes > maximumBytes) continue;
+    output.push(value);
+    bytes += valueBytes;
+  }
+  return output;
 }
 
 function makeRollupQueryIndex(
@@ -494,12 +509,12 @@ function makeRollupQueryIndex(
   const local = makeQueryIndex(records, start, end, querySalt);
   const base = {
     ...local,
-    termHashes: [...new Set(children.flatMap(child => child.queryIndex.termHashes))].slice(0, 2048).sort(),
+    termHashes: boundedIndexValues(children.flatMap(child => child.queryIndex.termHashes), 1024, 96 * 1024),
     categories: [...new Set(children.flatMap(child => child.queryIndex.categories))].sort(),
     lifecycleFlags: [...new Set(children.flatMap(child => child.queryIndex.lifecycleFlags))].sort(),
-    resourceIdentities: [...new Set(children.flatMap(child => child.queryIndex.resourceIdentities))].slice(0, 512).sort(),
-    taskIdentities: [...new Set(children.flatMap(child => child.queryIndex.taskIdentities))].slice(0, 512).sort(),
-    failureIdentities: [...new Set(children.flatMap(child => child.queryIndex.failureIdentities))].slice(0, 512).sort(),
+    resourceIdentities: boundedIndexValues(children.flatMap(child => child.queryIndex.resourceIdentities), 128, 32 * 1024),
+    taskIdentities: boundedIndexValues(children.flatMap(child => child.queryIndex.taskIdentities), 128, 32 * 1024),
+    failureIdentities: boundedIndexValues(children.flatMap(child => child.queryIndex.failureIdentities), 128, 32 * 1024),
     recordCount: children.reduce((sum, child) => sum + child.queryIndex.recordCount, 0),
     hasCurrentState: children.some(child => child.queryIndex.hasCurrentState),
   };
@@ -737,7 +752,8 @@ function makeRollup(
   config: HistoryRollupConfig,
   querySalt: string,
 ): HistoryRollupNode {
-  const records = resolveHistoryLifecycles(combinedRecords(children));
+  const combined = combinedRecords(children);
+  const records = resolveHistoryLifecycles([...new Map(combined.map(record => [record.id, record])).values()]);
   const state = aggregateHistoryState(records.filter(record => record.category !== "archive-range"));
   const stateSelected = selectRecords(state.current, config, 0.25);
   const conflictSelected = selectRecords(state.conflicts, config, 0.15);
@@ -768,7 +784,7 @@ function makeRollup(
     conflictRecords: conflictSelected.kept,
     unresolvedFailureRecords: stateSelected.kept.filter(record => record.category === "failure" && record.lifecycle === "unresolved"),
     currentResourceRecords: stateSelected.kept.filter(record => record.category === "resource-state"),
-    openTaskRecords: stateSelected.kept.filter(record => record.lifecycle === "open" || ["goal", "next-action"].includes(record.category)),
+    openTaskRecords: stateSelected.kept.filter(record => record.category === "task-episode" && record.lifecycle === "open"),
     selectedImportantEvidence: evidenceSelected.kept.filter(record => !["restriction", "goal", "decision", "next-action", "blocker", "status", "failure", "resource-state", "task-episode", "archive-range"].includes(record.category)),
     closedEpisodeCapsules: stateSelected.kept.filter(record => record.category === "task-episode" && record.lifecycle === "closed"),
     archiveRangeRecords: [...archiveSelected.kept, ...archiveSelected.archives, ...stateSelected.archives, ...conflictSelected.archives, ...evidenceSelected.archives],
@@ -829,9 +845,17 @@ function makeLeaf(
   const completedToolCallIds = new Set(blocks
     .filter(block => block.kind === "tool_result" && block.toolCallId)
     .map(block => block.toolCallId!));
-  const openCalls = blocks
-    .filter(block => block.kind === "tool_call" && block.toolCallId && !completedToolCallIds.has(block.toolCallId))
-    .map(block => ({ entryId: block.entryId }));
+  const openCalls: Array<{ entryId: string }> = [];
+  let openCallBytes = 0;
+  for (const block of blocks.slice().reverse()) {
+    if (block.kind !== "tool_call" || !block.toolCallId || completedToolCallIds.has(block.toolCallId)) continue;
+    const bytes = Buffer.byteLength(block.entryId) + 16;
+    if (openCalls.length >= 256) break;
+    if (openCallBytes + bytes > 32 * 1024) continue;
+    openCalls.push({ entryId: block.entryId });
+    openCallBytes += bytes;
+  }
+  openCalls.reverse();
   const base = {
     schemaVersion: 2 as const,
     nodeType: "leaf" as const,
@@ -846,8 +870,8 @@ function makeLeaf(
     valueRecords: records,
     archiveCoverage: selected.archives.map(record => structuredClone(record)),
     openContext: {
-      openTaskIds: records.filter(record => record.lifecycle === "open").flatMap(record => record.taskIdentity ? [record.taskIdentity] : []),
-      unresolvedFailureKeys: records.filter(record => record.lifecycle === "unresolved").map(record => record.failureIdentity ?? record.stateKey),
+      openTaskIds: boundedIndexValues(records.filter(record => record.lifecycle === "open").flatMap(record => record.taskIdentity ? [record.taskIdentity] : []), 256, 32 * 1024),
+      unresolvedFailureKeys: boundedIndexValues(records.filter(record => record.lifecycle === "unresolved").map(record => record.failureIdentity ?? record.stateKey), 256, 32 * 1024),
       openToolCallRefs: openCalls,
     },
     childCount: 0 as const,

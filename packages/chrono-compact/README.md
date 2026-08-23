@@ -352,4 +352,4 @@ npm test
 - Isolated child work keeps deterministic replay CPU work off Pi's main event loop. It does not reduce total CPU work. The default one-slot scheduler limits simultaneous ChronoCompact memory and CPU pressure.
 - Projection is request-local and process-local. A restart resets first-consumption tracking and therefore preserves more full results until later requests.
 
-See [`docs/architecture.md`](docs/architecture.md) for implementation details and [`docs/hand-off.md`](docs/hand-off.md) for the authoritative product definition.
+See [`docs/architecture.md`](docs/architecture.md) for implementation details, [`docs/hand-off.md`](docs/hand-off.md) for the authoritative product definition, and [`docs/local-development.md`](docs/local-development.md) for the required local deployment checklist.

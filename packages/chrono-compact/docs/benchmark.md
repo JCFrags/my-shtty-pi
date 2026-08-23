@@ -46,15 +46,16 @@ The comparator reports current replay and prototype render measures for the same
 
 ## Rollup shadow benchmark
 
-`scripts/benchmark-rollup-shadow.mjs` uses synthetic source only. It schedules the same low-priority one-job worker used by the default-off shadow setting. It has strict `compare`, `generations`, and `pressure` modes.
+`scripts/benchmark-rollup-shadow.mjs` uses synthetic source only. It schedules the same low-priority one-job worker used by the default-off shadow setting. It has strict `compare`, `generations`, `pressure`, and `failures` modes.
 
 ```bash
 npm run benchmark:rollup-shadow -- compare --tasks 5000
 npm run benchmark:rollup-shadow -- generations --final-tasks 1000 --generations 50
 npm run benchmark:rollup-shadow -- pressure --source-tokens 50000000 --restrictions 1000
+npm run benchmark:rollup-shadow -- failures
 ```
 
-Compare mode runs the current replay, then measures rollup update, render, final quality, worker delay, and unchanged current bytes. Generations mode measures repeated replay and post-result shadows with one bounded sidecar. Pressure mode skips the current full replay and measures only bounded rollup work. Reports contain aggregate public values. They contain no output text, source text, path, entry ID, source reference, or hash. See [rollup-shadow.md](rollup-shadow.md).
+Compare mode runs the current replay, then measures rollup update, render, final quality, worker delay, and unchanged current bytes. Generations mode measures repeated replay and post-result shadows with one bounded sidecar. Pressure mode skips the current full replay and measures only bounded rollup work. Failure mode checks every strict stage and safe code and reports counts only. Reports contain aggregate public values. They contain no output text, source text, path, entry ID, source reference, or hash. See [rollup-shadow.md](rollup-shadow.md).
 
 ## Repeated-generation and concurrent-process benchmark
 

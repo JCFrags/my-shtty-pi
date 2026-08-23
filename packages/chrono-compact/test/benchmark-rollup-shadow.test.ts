@@ -10,6 +10,7 @@ test("rollup shadow benchmark validates bounded public arguments", () => {
   assert.equal(parseRollupShadowBenchmarkArgs(["compare", "--tasks", "10000"]).tasks, 10000);
   assert.equal(parseRollupShadowBenchmarkArgs(["generations", "--final-tasks", "5000", "--generations", "20"]).generations, 20);
   assert.equal(parseRollupShadowBenchmarkArgs(["pressure", "--source-tokens", "50000000", "--restrictions", "1000"])["source-tokens"], 50000000);
+  assert.equal(parseRollupShadowBenchmarkArgs(["failures"]).mode, "failures");
   for (const input of [
     ["unknown"],
     ["compare", "--tasks", "0"],
@@ -35,4 +36,10 @@ test("small shadow compare, generations, and pressure modes preserve isolation a
   assert.equal(pressure.missingRecoveryRoutes, 0);
   assert.equal(pressure.modelCalls, 0);
   assert.equal(pressure.networkCalls, 0);
+  const failures = await runRollupShadowBenchmark(parseRollupShadowBenchmarkArgs(["failures"]));
+  assert.equal(failures.integrity, true);
+  assert.equal(failures.unexpectedUnknownFailures, 0);
+  assert.equal(failures.rawErrors, 0);
+  assert.equal(failures.modelCalls, 0);
+  assert.equal(failures.networkCalls, 0);
 });

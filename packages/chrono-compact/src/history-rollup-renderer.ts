@@ -129,10 +129,14 @@ function planLine(
   };
 }
 
-function lossyText(record: HistoryValueRecord): string {
-  const cue = record.lifecycle === "unresolved"
-    ? "Unresolved failure or blocker retained; source detail omitted."
-    : record.cue ?? "Typed history record";
+export function renderHistoryLossyCue(record: HistoryValueRecord): string {
+  const cue = record.category === "failure"
+    ? record.lifecycle === "unresolved"
+      ? "Unresolved failure retained; source detail omitted."
+      : "Failure state retained; source detail omitted."
+    : record.lifecycle === "unresolved"
+      ? "Unresolved blocker retained; source detail omitted."
+      : record.cue ?? "Typed history record";
   return `[deterministic reduced ${record.category} ${record.lifecycle}; omitted detail] ${cue} — Exact recovery: ${recovery(record)}`;
 }
 
@@ -316,7 +320,7 @@ export async function renderHistoryRollupPrototype(
   }
   const currentOther = deduplicate(current.filter(record => record.category !== "restriction"))
     .sort((a, b) => currentRank(a) - currentRank(b) || a.sourceOrder.start - b.sourceOrder.start || a.id.localeCompare(b.id))
-    .map(record => planLine("current", record, lossyText(record), "derived", true));
+    .map(record => planLine("current", record, renderHistoryLossyCue(record), "derived", true));
   const protectedCurrent = currentOther.filter(line =>
     line.record?.category === "blocker" ||
     line.record?.category === "next-action" ||
@@ -336,7 +340,7 @@ export async function renderHistoryRollupPrototype(
     !plan.some(line => line.record && (line.record.id === record.id || duplicateKey(line.record) === duplicateKey(record)))));
   plan.push(...includeWithinBudget(
     recentRecords.sort((a, b) => a.sourceOrder.start - b.sourceOrder.start || a.id.localeCompare(b.id))
-      .map(record => planLine("recent", record, lossyText(record), "derived", true)),
+      .map(record => planLine("recent", record, renderHistoryLossyCue(record), "derived", true)),
     budgets.recent,
   ));
   const query = await queryHistoryRollups(runtime, { context: options.dynamicContext });
@@ -367,13 +371,13 @@ export async function renderHistoryRollupPrototype(
     record.category !== "archive-range" &&
     !plan.some(line => line.record && (line.record.id === record.id || duplicateKey(line.record) === duplicateKey(record)))));
   plan.push(...includeWithinBudget(
-    olderRecords.map(record => planLine("older", record, lossyText(record), "derived", true)),
+    olderRecords.map(record => planLine("older", record, renderHistoryLossyCue(record), "derived", true)),
     budgets.older,
   ));
   const archiveRecords = deduplicate(rootSet.filter(record => record.category === "archive-range"))
     .sort((a, b) => a.sourceOrder.start - b.sourceOrder.start || a.id.localeCompare(b.id));
   const archiveLines = archiveRecords.length
-    ? archiveRecords.map(record => planLine("archive", record, lossyText(record), "derived", true))
+    ? archiveRecords.map(record => planLine("archive", record, renderHistoryLossyCue(record), "derived", true))
     : [planLine(
         "archive",
         {

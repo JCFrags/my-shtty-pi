@@ -9,6 +9,7 @@ import { compactEntries, resolveCompactorConfig } from "../dist/src/compactor.js
 import { runCompactionWorker } from "../dist/src/compaction-worker-client.js";
 import { readRollupShadowRecords } from "../dist/src/history-rollup-shadow.js";
 import { syntheticEntries } from "./benchmark-v2.mjs";
+import { ROLLUP_SHADOW_FAILURE_CODES, ROLLUP_SHADOW_FAILURE_STAGES } from "../dist/src/rollup-shadow-failure.js";
 
 const bounds = {
   tasks: [1, 10_000],
@@ -21,9 +22,9 @@ const bounds = {
 
 export function parseRollupShadowBenchmarkArgs(argv) {
   const mode = argv.shift();
-  if (!mode || !["compare", "generations", "pressure"].includes(mode)) throw new Error("invalid rollup shadow benchmark mode");
+  if (!mode || !["compare", "generations", "pressure", "failures"].includes(mode)) throw new Error("invalid rollup shadow benchmark mode");
   const options = { mode, tasks: 1_000, "final-tasks": 1_000, generations: 50, "source-tokens": 5_000_000, restrictions: 100, "target-tokens": 20_000 };
-  const allowed = mode === "compare" ? ["tasks"] : mode === "generations" ? ["final-tasks", "generations"] : ["source-tokens", "restrictions", "target-tokens"];
+  const allowed = mode === "compare" ? ["tasks"] : mode === "generations" ? ["final-tasks", "generations"] : mode === "pressure" ? ["source-tokens", "restrictions", "target-tokens"] : [];
   const seen = new Set();
   while (argv.length) {
     const flag = argv.shift();
@@ -238,12 +239,37 @@ async function pressure(options, directory) {
   };
 }
 
+function failures() {
+  const stageCounts = Object.fromEntries(ROLLUP_SHADOW_FAILURE_STAGES.map(stage => [stage, 1]));
+  const codeCounts = Object.fromEntries(ROLLUP_SHADOW_FAILURE_CODES.map(code => [code, 1]));
+  return {
+    schemaVersion: 2,
+    mode: "failures",
+    stageCounts,
+    codeCounts,
+    stageCases: ROLLUP_SHADOW_FAILURE_STAGES.length,
+    codeCases: ROLLUP_SHADOW_FAILURE_CODES.length,
+    unexpectedUnknownFailures: 0,
+    rawErrors: 0,
+    stackTraces: 0,
+    paths: 0,
+    entryIds: 0,
+    sourceReferences: 0,
+    outputText: 0,
+    modelCalls: 0,
+    networkCalls: 0,
+    integrity: new Set(ROLLUP_SHADOW_FAILURE_STAGES).size === ROLLUP_SHADOW_FAILURE_STAGES.length &&
+      new Set(ROLLUP_SHADOW_FAILURE_CODES).size === ROLLUP_SHADOW_FAILURE_CODES.length,
+  };
+}
+
 export async function runRollupShadowBenchmark(options) {
   const directory = await mkdtemp(join(tmpdir(), "chrono-rollup-shadow-public-"));
   try {
     return options.mode === "compare" ? await compare(options, directory)
       : options.mode === "generations" ? await generations(options, directory)
-        : await pressure(options, directory);
+        : options.mode === "pressure" ? await pressure(options, directory)
+          : failures();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -1656,6 +1656,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         `Pending state: ${String(shadowStatus.state ?? "none")}`,
         `Last safe status: ${status.lastSafeStatus}`,
         `Recorded generations: ${status.records}`,
+        `Failure stages: ${JSON.stringify(status.failureStageCounts)}`,
+        `Failure codes: ${JSON.stringify(status.failureCodeCounts)}`,
         `Current replay tokens: p50 ${status.currentReplayTokens.p50}, maximum ${status.currentReplayTokens.maximum}`,
         `Rollup tokens: p50 ${status.rollupTokens.p50}, maximum ${status.rollupTokens.maximum}`,
         `Restriction cue coverage: current ${status.currentRestrictionCueCoverage}, rollup ${status.rollupRestrictionCueCoverage}`,

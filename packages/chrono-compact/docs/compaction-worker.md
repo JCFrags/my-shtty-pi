@@ -37,6 +37,8 @@ The request binds the source device, inode, exact size, and modification time. T
 
 The IPC request and response have strict fields, bounded text, and an 8 MiB complete-response limit. Unknown fields, wrong job types, invalid values, unexpected payloads, and malformed metrics are rejected. A response never includes a source path, raw exception, stack trace, or child stderr. Safe failure codes include branch, cut, source, scheduler, timeout, abort, crash, protocol, response-size, candidate-store, and validation failures.
 
+Each failed rollup-shadow response also contains one strict failure stage and one shadow-specific safe code. The child sends bounded stage progress so a crash keeps the last safe operation name. Optional context is numeric only. Explicit private diagnostic mode writes owner-only safe JSON outside Git and is not enabled by normal Pi use. Child stderr remains private and bounded. A failed metric-sidecar write returns a safe warning without replacing a successful rollup evaluation.
+
 The child receives only `PATH`, `HOME`, temporary-directory variables, locale variables, and time zone. Common API keys, access tokens, cloud credentials, email credentials, Git credentials, provider credentials, and the rest of the parent environment are not inherited. Nice level defaults to 10 and accepts 0 through 19. A priority permission failure is nonfatal. The client kills the child on cancellation or timeout. The child exits when its parent IPC connection closes.
 
 A failure after worker work starts does not immediately repeat heavy replay in the Pi process. The extension returns control to Pi's normal compaction fallback. Candidate-update failure keeps the last complete candidate manifest.

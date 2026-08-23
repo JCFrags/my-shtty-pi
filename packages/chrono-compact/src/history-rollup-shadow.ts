@@ -12,6 +12,13 @@ import { renderHistoryRollupPrototype } from "./history-rollup-renderer.js";
 import { updateSourceLedger } from "./source-ledger.js";
 import { estimateTokensFromText } from "./utils.js";
 import type { HistoryDynamicContext } from "./history-value.js";
+import {
+  ROLLUP_SHADOW_FAILURE_CODES,
+  ROLLUP_SHADOW_FAILURE_STAGES,
+  type RollupShadowFailureCode,
+  type RollupShadowFailureContext,
+  type RollupShadowFailureStage,
+} from "./rollup-shadow-failure.js";
 
 export const ROLLUP_SHADOW_SCHEMA_VERSION = 2;
 export const ROLLUP_SHADOW_SUFFIX = ".chrono-rollup-shadow-v2.jsonl";
@@ -66,10 +73,25 @@ export interface RollupShadowRequestInput {
   readonly dynamicContext?: Omit<HistoryDynamicContext, "retentionHints">;
   readonly signal?: AbortSignal;
   readonly persist?: boolean;
+  readonly onStage?: (stage: RollupShadowFailureStage, context?: RollupShadowFailureContext) => void;
+  readonly memoryLimitBytes?: number;
+}
+
+export interface RollupShadowFailureRecord {
+  readonly schemaVersion: 2;
+  readonly recordType: "failure";
+  readonly generation: number;
+  readonly timestampMs: number;
+  readonly safeStatus: "failed";
+  readonly failureStage: RollupShadowFailureStage;
+  readonly failureCode: RollupShadowFailureCode;
+  readonly context?: RollupShadowFailureContext;
 }
 
 export interface RollupShadowStatus {
   readonly records: number;
+  readonly failureStageCounts: Readonly<Record<string, number>>;
+  readonly failureCodeCounts: Readonly<Record<string, number>>;
   readonly lastSafeStatus: string;
   readonly currentReplayTokens: { readonly p50: number; readonly maximum: number };
   readonly rollupTokens: { readonly p50: number; readonly maximum: number };
@@ -191,6 +213,20 @@ function safeQuality(value: unknown): value is RollupShadowQualityMetrics {
     typeof record[key] === "number" && Number.isFinite(record[key]) && (record[key] as number) >= 0);
 }
 
+function safeFailureRecord(value: unknown): value is RollupShadowFailureRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const context = record.context;
+  return exactKeys(record, ["schemaVersion", "recordType", "generation", "timestampMs", "safeStatus", "failureStage", "failureCode", "context"]) &&
+    record.schemaVersion === 2 && record.recordType === "failure" && record.safeStatus === "failed" &&
+    Number.isSafeInteger(record.generation) && (record.generation as number) >= 0 &&
+    Number.isSafeInteger(record.timestampMs) && (record.timestampMs as number) >= 0 &&
+    ROLLUP_SHADOW_FAILURE_STAGES.includes(record.failureStage as RollupShadowFailureStage) &&
+    ROLLUP_SHADOW_FAILURE_CODES.includes(record.failureCode as RollupShadowFailureCode) &&
+    (context === undefined || (!!context && typeof context === "object" && !Array.isArray(context) &&
+      Object.entries(context).every(([key, item]) => ["sourceFileBytes", "sourceLedgerEntries", "branchEntries", "treeLevels", "leafCount", "rollupCount", "reachableNodeBytes", "currentMemoryBytes", "sourceBytesRead", "nodeBytesRead", "nodeBytes", "nodeTypeCode", "responseBytes"].includes(key) && Number.isSafeInteger(item) && (item as number) >= 0)));
+}
+
 function safePayload(value: unknown): value is RollupShadowPayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -209,13 +245,13 @@ function safePayload(value: unknown): value is RollupShadowPayload {
     record.modelCalls === 0 && record.networkCalls === 0;
 }
 
-export async function readRollupShadowRecords(sessionPath: string): Promise<RollupShadowPayload[]> {
+async function readSidecarRecords(sessionPath: string): Promise<Array<RollupShadowPayload | RollupShadowFailureRecord>> {
   try {
     const text = await readFile(sidecarPath(sessionPath), "utf8");
     return text.split("\n").filter(Boolean).flatMap(line => {
       try {
         const value: unknown = JSON.parse(line);
-        return safePayload(value) ? [value] : [];
+        return safePayload(value) || safeFailureRecord(value) ? [value] : [];
       } catch {
         return [];
       }
@@ -223,6 +259,19 @@ export async function readRollupShadowRecords(sessionPath: string): Promise<Roll
   } catch {
     return [];
   }
+}
+
+export async function readRollupShadowRecords(sessionPath: string): Promise<RollupShadowPayload[]> {
+  return (await readSidecarRecords(sessionPath)).filter((record): record is RollupShadowPayload => safePayload(record));
+}
+
+export async function appendRollupShadowFailureRecord(sessionPath: string, record: RollupShadowFailureRecord): Promise<void> {
+  if (!safeFailureRecord(record)) throw new Error("rollup-shadow-failure-record-invalid");
+  const path = sidecarPath(sessionPath);
+  const records = await readSidecarRecords(sessionPath);
+  const retained = [...records, record].slice(-MAX_ROLLUP_SHADOW_RECORDS);
+  while (retained.length > 1 && Buffer.byteLength(`${retained.map(item => JSON.stringify(item)).join("\n")}\n`) > MAX_ROLLUP_SHADOW_BYTES) retained.shift();
+  await atomicWrite(path, `${retained.map(item => JSON.stringify(item)).join("\n")}\n`);
 }
 
 export async function appendRollupShadowRecord(sessionPath: string, payload: RollupShadowPayload): Promise<void> {
@@ -265,15 +314,35 @@ export async function appendRollupShadowRecord(sessionPath: string, payload: Rol
   await atomicWrite(path, `${JSON.stringify(retained[0])}\n`);
 }
 
+export const DEFAULT_ROLLUP_SHADOW_MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024;
+
+export function projectedRollupMemoryBytes(currentMemoryBytes: number, largestEntryBytes: number): number {
+  return currentMemoryBytes + largestEntryBytes * 28;
+}
+
 export async function runRollupShadowEvaluation(input: RollupShadowRequestInput): Promise<RollupShadowPayload> {
   if (input.signal?.aborted) throw Object.assign(new Error("worker-aborted"), { code: "worker-aborted" });
   const runtime = createHistoryRollupRuntime(input.sessionPath);
+  input.onStage?.("source-ledger-update");
   const ledger = runtime.ledger = await updateSourceLedger(input.sessionPath);
+  const currentMemoryBytes = process.memoryUsage().rss;
+  const largestEntryBytes = ledger.sourceOrder.reduce((maximum, entry) => Math.max(maximum, entry.sourceByteLength), 0);
+  let context: RollupShadowFailureContext = {
+    sourceFileBytes: ledger.metrics.sourceFileSize,
+    sourceLedgerEntries: ledger.sourceOrder.length,
+    currentMemoryBytes,
+  };
+  input.onStage?.("prefix-validation", context);
   const firstKept = ledger.entryById.get(input.firstKeptEntryId);
   if (!firstKept || firstKept.parentId !== input.branchLeafId) {
     throw Object.assign(new Error("invalid-cut"), { code: "invalid-cut" });
   }
   const branch = resolveSourceLedgerBranch(ledger, input.branchLeafId);
+  context = { ...context, branchEntries: branch.entries.length };
+  const memoryLimit = input.memoryLimitBytes ?? DEFAULT_ROLLUP_SHADOW_MEMORY_LIMIT_BYTES;
+  if (largestEntryBytes >= 32 * 1024 * 1024 && projectedRollupMemoryBytes(currentMemoryBytes, largestEntryBytes) > memoryLimit) {
+    throw Object.assign(new Error("shadow-memory-gate"), { code: "shadow-memory-gate", context });
+  }
   if (branch.entries.length === 0) {
     const empty: RollupShadowPayload = {
       schemaVersion: 2,
@@ -303,16 +372,19 @@ export async function runRollupShadowEvaluation(input: RollupShadowRequestInput)
   let sourceBytesRead = 0;
   let safeStatus: RollupShadowPayload["safeStatus"] = "ok";
   try {
+    input.onStage?.("rollup-update", context);
     const updated = await updateHistoryRollupStore(runtime, input.branchLeafId, { signal: input.signal });
     updateTimeMs = updated.updateElapsedMs;
     sourceBytesRead = updated.sourceBytesRead;
   } catch (error) {
     if (!String((error as Error).message).includes("busy")) throw error;
+    input.onStage?.("rollup-manifest-load", context);
     const manifest = await loadHistoryRollupManifest(runtime);
     const branchManifest = manifest ? await loadHistoryBranchManifest(runtime) : undefined;
     if (!manifest || !branchManifest || branchManifest.branchLeafId !== input.branchLeafId) throw error;
     safeStatus = "store-busy-snapshot";
   }
+  input.onStage?.("rollup-render", context);
   const result = await renderHistoryRollupPrototype(runtime, ledger, {
     targetTokens: input.targetTokenBound,
     hardTokens: input.hardTokenBound,
@@ -321,10 +393,13 @@ export async function runRollupShadowEvaluation(input: RollupShadowRequestInput)
       ...input.dynamicContext,
     },
   });
+  input.onStage?.("rollup-validation", context);
   if (!result.validation.ok) safeStatus = "validation-failed";
+  input.onStage?.("shadow-sidecar-read", context);
+  const generation = (await readRollupShadowRecords(input.sessionPath)).length + 1;
   const payload: RollupShadowPayload = {
     schemaVersion: 2,
-    generation: (await readRollupShadowRecords(input.sessionPath)).length + 1,
+    generation,
     sourceTokenCount: runtime.branchManifest?.sourceEntryCount
       ? Math.ceil((runtime.branchManifest.sourceByteCoverage ?? 0) / 4)
       : 0,
@@ -345,7 +420,10 @@ export async function runRollupShadowEvaluation(input: RollupShadowRequestInput)
     modelCalls: 0,
     networkCalls: 0,
   };
-  if (input.persist !== false) await appendRollupShadowRecord(input.sessionPath, payload);
+  if (input.persist !== false) {
+    input.onStage?.("shadow-sidecar-write", context);
+    await appendRollupShadowRecord(input.sessionPath, payload);
+  }
   return payload;
 }
 
@@ -360,9 +438,21 @@ function latest(records: readonly RollupShadowPayload[], select: (record: Rollup
 }
 
 export async function getRollupShadowStatus(sessionPath: string): Promise<RollupShadowStatus> {
-  const records = await readRollupShadowRecords(sessionPath);
+  const sidecarRecords = await readSidecarRecords(sessionPath);
+  const records = sidecarRecords.filter((record): record is RollupShadowPayload => safePayload(record));
+  const failures = sidecarRecords.filter((record): record is RollupShadowFailureRecord => safeFailureRecord(record));
+  const count = (select: (record: RollupShadowFailureRecord) => string): Record<string, number> => {
+    const output: Record<string, number> = {};
+    for (const failure of failures) {
+      const key = select(failure);
+      output[key] = (output[key] ?? 0) + 1;
+    }
+    return output;
+  };
   return {
-    records: records.length,
+    records: sidecarRecords.length,
+    failureStageCounts: count(record => record.failureStage),
+    failureCodeCounts: count(record => record.failureCode),
     lastSafeStatus: records.at(-1)?.safeStatus ?? "none",
     currentReplayTokens: distribution(records.map(record => record.currentReplayTokenCount)),
     rollupTokens: distribution(records.map(record => record.rollupTokenCount)),

@@ -36,7 +36,7 @@ Metrics include token counts, final restriction cue coverage, blocker coverage, 
 
 The sidecar is `<session.jsonl>.chrono-rollup-shadow-v2.jsonl`. It is owner-only and append-logical. Atomic compaction keeps at most the newest 1,000 records and at most 4 MiB.
 
-A valid record contains only schema and generation numbers, safe aggregate metrics, safe validation issue counts, safe status, and complete SHA-256 hashes of the two local outputs. Hashes support local change detection and are not shown in the UI. The reader rejects unknown or malformed record fields before a rewrite.
+A successful record contains only schema and generation numbers, safe aggregate metrics, safe validation issue counts, safe status, and complete SHA-256 hashes of the two local outputs. A failed record contains only a timestamp, generation, strict failure stage, strict safe code, and optional numeric context. Hashes support local change detection and are not shown in the UI. The reader rejects unknown or malformed record fields before a rewrite.
 
 ## Privacy
 
@@ -44,7 +44,11 @@ Private replay and rollup text are never stored. Public benchmarks use synthetic
 
 ## Failure behavior
 
-Feature-off mode creates no V2 rollup store or shadow sidecar. Empty historical prefixes are not scheduled. Invalid cuts, source changes, corruption, worker timeout, crash, cancellation, or unavailable matching snapshots fail only the shadow job. They do not change or delay the current compaction result.
+Feature-off mode creates no V2 rollup store or shadow sidecar. Empty historical prefixes are not scheduled. Invalid cuts, source changes, corruption, worker timeout, crash, cancellation, or unavailable matching snapshots fail only the shadow job. Each failed shadow response uses one strict safe stage and one strict safe code. It contains no raw error, stack, path, source identifier, source reference, or output text.
+
+The worker sends safe stage progress to its parent. A child crash can therefore retain its last known operation without exposing private content. Private diagnostic mode is explicit and writes owner-only safe records outside Git. It never runs during normal Pi use.
+
+A measured memory gate uses current resident memory and the largest indexed source entry. It runs before the heavy rollup update. A memory-gate result is a safety result, not a core rollup failure. A sidecar write failure returns a safe warning and does not replace a successful evaluation. None of these results change or delay the current compaction result.
 
 ## Current limits
 

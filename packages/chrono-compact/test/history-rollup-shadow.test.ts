@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -179,11 +179,48 @@ test("shadow worker fails safely for invalid cuts and changed source", async () 
     };
     const invalid = await runCompactionWorker(request, { schedulerDirectory: join(value.directory, "invalid") });
     assert.equal(invalid.response.status, "failed");
-    if (invalid.response.status === "failed") assert.equal(invalid.response.failureCode, "invalid-cut");
+    if (invalid.response.status === "failed") {
+      assert.equal(invalid.response.failureCode, "shadow-invalid-cut");
+      assert.equal(invalid.response.failureStage, "prefix-validation");
+    }
     const changed = await runCompactionWorker({ ...request, jobId: "shadow-changed", branchLeafId: "entry-6", expectedSource: { ...request.expectedSource, size: request.expectedSource.size + 1 } }, { schedulerDirectory: join(value.directory, "changed") });
     assert.equal(changed.response.status, "failed");
-    if (changed.response.status === "failed") assert.equal(changed.response.failureCode, "source-changed");
-    assert.equal(existsSync(rollupShadowSidecarPath(value.sessionPath)), false);
+    if (changed.response.status === "failed") {
+      assert.equal(changed.response.failureCode, "shadow-source-changed");
+      assert.equal(changed.response.failureStage, "source-bind");
+    }
+    assert.equal(existsSync(rollupShadowSidecarPath(value.sessionPath)), true);
+  } finally {
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+
+test("sidecar write failure returns a safe warning without losing successful evaluation", async () => {
+  const value = await fixture();
+  try {
+    await mkdir(rollupShadowSidecarPath(value.sessionPath));
+    const source = await stat(value.sessionPath);
+    const expectedSource: WorkerSourceExpectation = { deviceId: String(source.dev), inodeId: String(source.ino), size: source.size, mtimeMs: source.mtimeMs };
+    const response = await runCompactionWorker({
+      schemaVersion: 1,
+      jobId: "sidecar-warning",
+      jobType: "rollup-shadow",
+      sessionPath: value.sessionPath,
+      expectedSource,
+      deadlineMs: Date.now() + 60_000,
+      niceLevel: 10,
+      branchLeafId: "entry-7",
+      firstKeptEntryId: "entry-8",
+      currentReplayText: "authoritative replay",
+      hardTokenBound: 25_000,
+      targetTokenBound: 20_000,
+      retentionHints: "",
+    }, { schedulerDirectory: join(value.directory, "scheduler") });
+    assert.equal(response.response.status, "ok");
+    if (response.response.status === "ok") {
+      assert.ok(response.response.shadow);
+      assert.deepEqual(response.response.shadowWarning, { stage: "shadow-sidecar-write", code: "shadow-sidecar-write-failed" });
+    }
   } finally {
     await rm(value.directory, { recursive: true, force: true });
   }
