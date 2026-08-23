@@ -310,17 +310,127 @@ test("Insert contents uses the budget dialog and never submits the editor", asyn
   });
 });
 
-test("refresh removes deleted stale selections with a notification", async () => {
+test("scheduled refreshes render only when the visible Files model changes", async () => {
+  await withTempDirectory("pi-files-refresh-render", async (root) => {
+    await writeFile(root, "a.txt", "a");
+    const fixture = await createBrowser(root);
+    const baseline = fixture.tui.renderRequests;
+
+    await fixture.browser.refreshNow();
+    assert.equal(fixture.tui.renderRequests, baseline, "an unchanged refresh must not repaint");
+
+    await writeFile(root, "b.txt", "b");
+    await fixture.browser.refreshNow();
+    assert.equal(fixture.tui.renderRequests, baseline + 1, "a visible tree change must repaint once");
+    fixture.browser.dispose();
+  });
+});
+
+test("refresh renders a changed in-root symlink target", async () => {
+  await withTempDirectory("pi-files-symlink-refresh", async (root) => {
+    await writeFile(root, "one.txt", "one");
+    await writeFile(root, "two.txt", "two");
+    await fs.symlink("one.txt", path.join(root, "link.txt"));
+    const fixture = await createBrowser(root);
+    assert.match(fixture.browser.render(120).join("\n"), /→ one\.txt/);
+    const baseline = fixture.tui.renderRequests;
+
+    await fs.unlink(path.join(root, "link.txt"));
+    await fs.symlink("two.txt", path.join(root, "link.txt"));
+    await fixture.browser.refreshNow();
+    assert.match(fixture.browser.render(120).join("\n"), /→ two\.txt/);
+    assert.equal(fixture.tui.renderRequests, baseline + 1);
+    fixture.browser.dispose();
+  });
+});
+
+test("refresh renders a selected non-previewed file size change in the header", async () => {
+  await withTempDirectory("pi-files-selected-size-refresh", async (root) => {
+    await writeFile(root, "file.txt", "1234");
+    const fixture = await createBrowser(root);
+    fixture.browser.handleInput(" ");
+    await fixture.browser.settle();
+    assert.equal(fixture.browser.currentPreview, undefined);
+    const before = fixture.browser.render(120)[0];
+    const baseline = fixture.tui.renderRequests;
+
+    await writeFile(root, "file.txt", "1234567890123456");
+    await fixture.browser.refreshNow();
+    const after = fixture.browser.render(120)[0];
+    assert.notEqual(after, before);
+    assert.equal(fixture.tui.renderRequests, baseline + 1);
+    fixture.browser.dispose();
+  });
+});
+
+test("refresh removes deleted stale selections with a notification and render", async () => {
   await withTempDirectory("pi-files-stale", async (root) => {
     await writeFile(root, "gone.txt", "value");
     const fixture = await createBrowser(root);
     fixture.browser.handleInput(" ");
     await fixture.browser.settle();
+    const baseline = fixture.tui.renderRequests;
     await fs.unlink(path.join(root, "gone.txt"));
     await fixture.browser.refreshNow();
     assert.deepEqual([...fixture.state.selectedPaths], []);
     assert.ok(fixture.ui.notifications.some((entry) => /Removed deleted selection/.test(entry.message)));
+    assert.equal(fixture.tui.renderRequests, baseline + 1);
     fixture.browser.dispose();
+  });
+});
+
+test("refresh renders changed preview content and direct operations still render", async () => {
+  await withTempDirectory("pi-files-preview-refresh-render", async (root) => {
+    await writeFile(root, "file.txt", "before");
+    const fixture = await createBrowser(root);
+    const initial = fixture.tui.renderRequests;
+    fixture.browser.handleInput("\r");
+    await fixture.browser.settle();
+    assert.ok(fixture.tui.renderRequests > initial, "direct preview action must render");
+    const baseline = fixture.tui.renderRequests;
+
+    await writeFile(root, "file.txt", "after");
+    await fixture.browser.refreshNow();
+    assert.equal(fixture.browser.currentPreview?.rawText, "after");
+    assert.equal(fixture.tui.renderRequests, baseline + 1);
+    fixture.browser.dispose();
+  });
+});
+
+test("failed direct and scheduled operations each render one visible error", async () => {
+  await withTempDirectory("pi-files-error-render", async (root) => {
+    await writeFile(root, "dir/file.txt", "value");
+    const direct = await createBrowser(root);
+    direct.tree.expand = async () => {
+      throw new Error("direct failure");
+    };
+    direct.browser.handleInput("\u001b[C");
+    const directBaseline = direct.tui.renderRequests;
+    await direct.browser.settle();
+    assert.ok(direct.ui.notifications.some((entry) => /direct failure/.test(entry.message)));
+    assert.equal(direct.tui.renderRequests, directBaseline + 1);
+    direct.browser.dispose();
+
+    const scheduled = await createBrowser(root);
+    scheduled.tree.refreshBounded = async () => {
+      throw new Error("scheduled failure");
+    };
+    const scheduledBaseline = scheduled.tui.renderRequests;
+    await scheduled.browser.runScheduledRefreshCycle();
+    assert.ok(scheduled.ui.notifications.some((entry) => /scheduled failure/.test(entry.message)));
+    assert.equal(scheduled.tui.renderRequests, scheduledBaseline + 1);
+    scheduled.browser.dispose();
+  });
+});
+
+test("disposed browser ignores later refresh cycles", async () => {
+  await withTempDirectory("pi-files-disposed-refresh", async (root) => {
+    await writeFile(root, "file.txt", "value");
+    const fixture = await createBrowser(root);
+    fixture.browser.dispose();
+    const baseline = fixture.tui.renderRequests;
+    await fixture.browser.refreshNow();
+    assert.equal(fixture.tui.renderRequests, baseline);
   });
 });
 
