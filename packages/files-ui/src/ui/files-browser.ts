@@ -255,13 +255,18 @@ export class FilesBrowserComponent {
     if (!this.disposed) this.tui.requestRender();
   }
 
-  private enqueue(operation: () => Promise<void>): void {
+  private enqueue(operation: () => Promise<void>, renderOnComplete = true): void {
     this.operationChain = this.operationChain
       .then(operation)
       .catch((error: unknown) => {
-        if (!this.disposed) this.ui.notify(sanitizeTerminalText(error instanceof Error ? error.message : String(error)), "error");
+        if (!this.disposed) {
+          this.ui.notify(sanitizeTerminalText(error instanceof Error ? error.message : String(error)), "error");
+          this.requestRender();
+        }
       })
-      .finally(() => this.requestRender());
+      .finally(() => {
+        if (renderOnComplete) this.requestRender();
+      });
   }
 
   async settle(): Promise<void> {
@@ -307,13 +312,14 @@ export class FilesBrowserComponent {
         } finally {
           this.scheduleRefresh();
         }
-      });
+      }, false);
     }, this.refreshIntervalMs);
     this.refreshTimer.unref?.();
   }
 
   async refreshNow(): Promise<void> {
     if (this.disposed) return;
+    const before = this.visibleModelSignature();
     const result = await this.tree.refreshSelected(this.sessionState.selectedPaths);
     if (this.disposed) return;
     if (result.removed.length > 0) {
@@ -331,6 +337,40 @@ export class FilesBrowserComponent {
       if (refreshedPreview.error && result.removed.includes(this.previewPath)) this.previewPath = undefined;
     }
     this.rebuildRows(this.previewPath);
+    if (this.visibleModelSignature() !== before) this.requestRender();
+  }
+
+  private visibleModelSignature(): string {
+    return JSON.stringify({
+      rows: this.rows.map((row) => ({
+        key: row.key,
+        kind: row.kind,
+        label: row.label,
+        depth: row.depth,
+        selected: row.selected,
+        partiallySelected: row.partiallySelected,
+        supplemental: row.supplemental,
+        node: row.node
+          ? {
+              path: row.node.relativePath,
+              name: row.node.name,
+              kind: row.node.kind,
+              expanded: row.node.expanded,
+              loaded: row.node.loaded,
+              loading: row.node.loading,
+              truncated: row.node.truncated,
+              error: row.node.error,
+              symlinkTargetKind: row.node.symlinkTargetKind,
+              symlinkWithinRoot: row.node.symlinkWithinRoot,
+            }
+          : undefined,
+      })),
+      searchTruncated: this.searchTruncated,
+      searchLoading: this.searchLoading,
+      previewPath: this.previewPath,
+      previewLoading: this.previewLoading,
+      preview: this.previewResult,
+    });
   }
 
   private firstNodeIndex(start = 0, direction: 1 | -1 = 1): number {
