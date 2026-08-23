@@ -12,6 +12,7 @@ import { parseHistoricalBlocks } from "./blocks.js";
 import { estimateTokensFromText, hashText, stableStringify } from "./utils.js";
 import type { CompressionResult } from "./types.js";
 import { appendRollupShadowFailureRecord, appendRollupShadowRecord, runRollupShadowEvaluation } from "./history-rollup-shadow.js";
+import { loadStoredAdvice, readValueAdviceManifest, valueAdviceStorePath } from "./value-advice-store.js";
 import { classifyRollupShadowFailure, safeFailureContext, type RollupShadowFailureContext, type RollupShadowFailureStage } from "./rollup-shadow-failure.js";
 
 interface SourceState { deviceId: string; inodeId: string; size: number; mtimeMs: number; }
@@ -94,6 +95,16 @@ async function replay(request: Extract<CompactionWorkerRequest, { jobType: "repl
       if (store.manifest) candidates = await loadCandidateRecordsForBranch(store, source.flatMap((entry) => typeof entry.id === "string" ? [entry.id] : []));
     } catch { candidates = undefined; }
   }
+  let valueAdvice;
+  let adviceSnapshotHash: string | undefined;
+  if (request.valueWorkerMode === "advisory" && request.valueWorkerConfigurationHash && candidates?.size) {
+    const manifest = await readValueAdviceManifest(valueAdviceStorePath(request.sessionPath));
+    if (manifest?.configurationHash === request.valueWorkerConfigurationHash) {
+      const validHashes = new Map([...candidates].map(([blockId, record]) => [blockId, record.integrityHash]));
+      valueAdvice = await loadStoredAdvice(valueAdviceStorePath(request.sessionPath), manifest, validHashes);
+      adviceSnapshotHash = manifest.integrityHash;
+    }
+  }
   let rebase: string | undefined;
   let hardOutputTokens = request.hardOutputTokens;
   let config = resolveCompactorConfig(request.config);
@@ -106,7 +117,7 @@ async function replay(request: Extract<CompactionWorkerRequest, { jobType: "repl
     config = resolveCompactorConfig({ ...request.config, targetTokens: replayTarget });
   }
   const generationHash = computeGenerationHash(source, config, request.retentionHints, future, request.pinnedMemoryText, request.retrievalFeedback);
-  const key = hashText(stableStringify({ generationHash, hardOutputTokens }));
+  const key = hashText(stableStringify({ generationHash, hardOutputTokens, ...(adviceSnapshotHash ? { adviceSnapshotHash } : {}) }));
   let result: CompressionResult | undefined;
   let cacheState: WorkerRuntimeMetrics["cacheState"] = request.cacheEnabled ? "miss" : "disabled";
   if (request.cacheEnabled) { result = await readReplayCache(cachePath(request.sessionPath), key); if (result) cacheState = "hit"; }
@@ -115,7 +126,7 @@ async function replay(request: Extract<CompactionWorkerRequest, { jobType: "repl
     const at = performance.now();
     try { result = await compactEntries(source, { config, hardOutputTokens, retentionHints: request.retentionHints, futureEntries: future,
       pinnedMemoryText: request.pinnedMemoryText, retrievalFeedback: request.retrievalFeedback, signal,
-      ...(candidates && candidates.size ? { precomputedCandidates: candidates } : {}) }); }
+      ...(candidates && candidates.size ? { precomputedCandidates: candidates } : {}), ...(valueAdvice?.size ? { valueAdvice, valueWorkerMode: "advisory" as const } : {}) }); }
     catch (error) { if ((error as { report?: unknown }).report) throw Object.assign(new Error(), { code: "replay-validation-rejected" }); throw error; }
     compactionMs = performance.now() - at;
     if (request.cacheEnabled) { try { await writeReplayCache(cachePath(request.sessionPath), key, result); } catch { cacheState = "write-failed"; } }

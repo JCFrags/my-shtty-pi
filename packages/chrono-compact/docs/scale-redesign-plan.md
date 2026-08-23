@@ -84,3 +84,7 @@ Benchmark outcomes now use safe code categories. `no-net-savings` is separate fr
 ## Local CPU isolation correction
 
 The default-off isolated worker moves deterministic replay compaction, replay generation hashing, candidate snapshot loading, deterministic summary rebase, and enabled candidate updates to one-job local child processes. A host-wide owner-only scheduler permits 1 through 4 jobs and defaults to one. Waiting replay has priority over waiting candidate updates. This change limits simultaneous host pressure and main-process event-loop delay. It does not reduce total deterministic work. Pi JSONL remains authoritative, and provider-backed summary work remains in Pi. See [compaction-worker.md](compaction-worker.md).
+
+## Background value advice
+
+Value advice is segmented and asynchronous. It runs only after immutable candidate preprocessing and uses a selectable `main` or exact `provider/model` with a Pi-supported thinking level. `shadow` stores normalized advice without changing replay. `advisory` changes only bounded deterministic value scores. Deterministic safety floors, source references, hard limits, exact recovery, and final validation remain authoritative. Live advice remains off by default. Real-provider quality needs a later explicitly funded evaluation.

@@ -48,3 +48,9 @@ Write an owner-only receipt outside Git. Include the repository commit, package 
 - Do not replace real session JSONL files.
 - Do not use the network for local deployment or smoke tests.
 - Keep one private backup of a copied package until verification passes. Remove it after success.
+
+## Background value-worker deployment check
+
+Keep `value-worker mode` off during deployment and smoke testing. Preserve `.chrono-value-advice-v1`, candidate stores, source ledgers, rollup stores, and every real session sidecar. A copied-package smoke test must register `/chrono-value-worker-status` and `/chrono-value-worker-reset` without creating an advice store or value-model scheduler file. Do not make a provider call for deployment verification.
+
+The repository catalog classifies `dist/src/pi-extension.js` as a build entry. Package tests require `packages/chrono-compact/dist`, but the repository classification check expects generated build entries to be absent. Run package tests first. Remove only the generated package `dist` directory before the repository classification check. Rebuild from the clean committed package before copied-package staging.

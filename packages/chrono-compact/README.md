@@ -4,7 +4,7 @@ An installable Pi extension and standalone TypeScript library for **bounded long
 
 The implementation follows the hand-off in [`docs/hand-off.md`](docs/hand-off.md): new information reaches the primary model normally; only historical active-context representations are compacted. Pi's JSONL is never rewritten and remains the authoritative record.
 
-This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted, installed, activated, reaudited, or production-ready. External semantic processing, the experimental history classifier, incremental preprocessing, isolated local worker processes, hierarchical rollup shadow evaluation, and request-local projection remain default-off.
+This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted, installed, activated, reaudited, or production-ready. External semantic processing, the background value worker, incremental preprocessing, isolated local worker processes, hierarchical rollup shadow evaluation, and request-local projection remain default-off.
 
 ## Implemented behavior
 
@@ -14,7 +14,7 @@ This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted,
 - Detects a conservative discovery-to-execution phase transition and retains the boundary result while reducing older discovery detail.
 - Preserves chronological placement and tool call/result pairing.
 - Rejects raw-tail cuts that retain an orphan tool result. This can occur when a running tool finishes after its assistant call was lost during an abort or compaction.
-- Runs deterministic reducers before one optional experimental V1.1 LLM classification job. The classifier is off by default. The model returns typed per-item importance and treatment advice. Deterministic code selects and renders only prebuilt local candidates.
+- Runs deterministic reducers before optional segmented background value advice. The worker is off by default and runs only after immutable candidate segments are ready. It can use the main model or an exact `provider/model` with a supported thinking level. `shadow` stores normalized advice without changing replay. `advisory` changes only bounded deterministic importance scores. Deterministic code selects and renders only prebuilt local candidates, and compaction never starts or waits for a value-model call.
 - Uses source-token retention bands: approximately 10,000 hot tokens, the preceding 75,000 warm tokens, and cold cue capsules. Authority, unresolved work, causality, novelty, reuse, and reproducibility override age.
 - Tracks file and evidence paths as versioned observations. Normal Pi reads without a synthetic revision union when overlapping bytes agree. Conflicting overlaps and writes start a new inferred version. Structured URLs, commands, tests, services, settings, packages, processes, and agents have narrower observed identities; they do not share full file-style lifecycle behavior.
 - Renders plain source text without repeated JSON envelopes, ANSI, protocol fields, IDs, path prefixes, or decorative boilerplate.

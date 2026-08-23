@@ -149,10 +149,10 @@ test("one-writer lock rejects a concurrent writer with a clear busy result", asy
 
 test("sidecar contains bounded metadata but no source text or source path", async (t) => {
   const directory = await temporary(t); const session = join(directory, "secret-session.jsonl");
-  const secret = "UNIQUE-SOURCE-MESSAGE";
-  await writeFile(session, `${line(header)}\n${line(entry("a", null, secret))}\n`);
+  const sourceSentinel = "UNIQUE-SOURCE-MESSAGE";
+  await writeFile(session, `${line(header)}\n${line(entry("a", null, sourceSentinel))}\n`);
   const ledger = await updateSourceLedger(session); const sidecar = await readFile(sourceLedgerPath(session), "utf8");
-  assert.doesNotMatch(sidecar, new RegExp(secret));
+  assert.doesNotMatch(sidecar, new RegExp(sourceSentinel));
   assert.doesNotMatch(sidecar, /secret-session|messageText|tool output/);
   const metadata = await stat(sourceLedgerPath(session)); assert.equal(metadata.mode & 0o077, 0);
   assert.equal(ledger.sourceSessionIdentity, "session-test");

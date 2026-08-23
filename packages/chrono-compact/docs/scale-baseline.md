@@ -53,6 +53,20 @@ The default-off public shadow benchmark uses a local low-priority child. Compare
 
 The 5-million-token, 100-restriction pressure case produced 4,014 tokens. The 50-million-token, 1,000-restriction case produced 20,808 tokens. Both had complete restriction, blocker, unresolved-failure, and current-resource coverage. Both had zero invalid references, cut lines, false completions, unsupported facts, missing recovery routes, model calls, and network calls. All compare and generation runs had the same zero-defect quality totals. The public failure case covered all 15 stages and all 22 safe codes. It found zero unexpected unknown failures, raw errors, stack traces, paths, IDs, references, output text, model calls, or network calls. See [rollup-shadow.md](rollup-shadow.md).
 
+## Background value-worker gate
+
+The default-off value worker used an offline fake model through the production call seam. Each series and advisory size ran three times. No provider or network call occurred. The table reports median times. Other listed values were stable.
+
+| Tasks / candidate batches | Advice files | Provider attempts | Input tokens | Output tokens | Total update | Exact hit | Work amplification | Store bytes | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 / 10 | 10 | 30 | 110,726 | 13,230 | 38.85 ms | 0.11 ms | 1.00 | 95,200 | 97,628 KiB |
+| 5,000 / 50 | 50 | 150 | 554,636 | 66,150 | 159.89 ms | 0.15 ms | 1.00 | 472,499 | 110,180 KiB |
+| 10,000 / 100 | 100 | 300 | 1,109,541 | 132,300 | 342.56 ms | 0.22 ms | 1.00 | 944,215 | 144,124 KiB |
+
+Every exact-hit run made zero calls and rewrote no advice. The 1,000, 5,000, and 10,000-item advisory runs changed 217, 1,083, and 2,167 eligible scores. They rejected 25, 125, and 250 protected changes and 8, 42, and 83 unresolved-failure changes. All nine advisory runs kept exact shadow equality, complete protected and failure coverage, valid exact recovery, zero false completions, and zero validation errors. Advisory validation used real deterministic compaction after the fake-model orchestration.
+
+The failure mode passed 18 safe cases. These included model resolution, authentication, thinking support, structured retry failures, repair, hard budgets, unknown pricing, open and half-open circuit state, cancellation, advice-store contention, and advice-file corruption. The 1,000-segment budget run permitted three calls, blocked the fourth, kept the circuit closed, and reused exact advice without another call. These results test offline implementation behavior. They do not measure real-provider advice quality.
+
 ## Status
 
 This is an advisory baseline for a personal project. It measured commit `62dc53e279a3897d88bda615f6561794590c1017`. The results are not a release decision.

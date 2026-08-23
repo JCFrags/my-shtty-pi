@@ -1,8 +1,10 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { env } from "node:process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import {
   cachePathForSession,
   hashCompactionConfig,
@@ -43,7 +45,9 @@ import {
   regularSummaryMessagesForCut,
   renderHybridCompaction,
 } from "./pi-hybrid.js";
-import { createPiHistoryEditor, DEFAULT_HISTORY_EDITOR_MAX_INPUT_TOKENS } from "./history-editor.js";
+import { DEFAULT_VALUE_WORKER_SETTINGS, type ValueWorkerSettings } from "./value-worker-types.js";
+import { runValueWorker, loadCompatibleAdvice, valueWorkerConfigurationHash, type ValueWorkerRunResult } from "./value-worker.js";
+import { readValueAdviceManifest, resetAdviceCircuit, valueAdviceStorePath } from "./value-advice-store.js";
 import {
   historyGet,
   historyGetFromLedger,
@@ -111,9 +115,10 @@ export interface RuntimeSettings {
   readonly dynamicRawTailMaxTokens: number;
   readonly hybridSummaryEnabled: boolean;
   readonly hybridSummaryTargetTokens: number;
-  readonly historyEditorEnabled: boolean;
-  readonly historyEditorMaxInputTokens: number;
-  readonly historyEditorMaxOutputTokens: number;
+  readonly legacyHistoryEditorEnabled: boolean;
+  /** Always false. The extension history editor is retired. */
+  readonly historyEditorEnabled: false;
+  readonly valueWorker: ValueWorkerSettings;
   readonly incrementalPrecomputeEnabled: boolean;
   readonly isolatedWorkerEnabled: boolean;
   readonly rollupShadowEnabled: boolean;
@@ -154,6 +159,11 @@ function booleanSetting(name: string, fallback: boolean, override?: unknown): bo
   return fallback;
 }
 
+function stringSetting(name: string, fallback: string, override?: unknown): string {
+  const raw = String(configuredValue(name, override) ?? "").trim();
+  return raw || fallback;
+}
+
 function projectionModeSetting(override?: unknown): ToolResultProjectionMode {
   const raw = String(configuredValue("PI_CHRONO_TOOL_RESULT_PROJECTION", override) ?? "").trim().toLowerCase();
   return raw === "safe" || raw === "aggressive" ? raw : "off";
@@ -189,9 +199,25 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
     dynamicRawTailMaxTokens: numberSetting("PI_CHRONO_RAW_TAIL_MAX", 6_000, 1_000, 200_000, overrides.dynamicRawTailMaxTokens),
     hybridSummaryEnabled: booleanSetting("PI_CHRONO_PI_SUMMARY", true, overrides.hybridSummaryEnabled),
     hybridSummaryTargetTokens: numberSetting("PI_CHRONO_PI_SUMMARY_TOKENS", 2_500, 512, 16_000, overrides.hybridSummaryTargetTokens),
-    historyEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
-    historyEditorMaxInputTokens: numberSetting("PI_CHRONO_HISTORY_EDITOR_MAX_INPUT", DEFAULT_HISTORY_EDITOR_MAX_INPUT_TOKENS, 1_000, 50_000),
-    historyEditorMaxOutputTokens: numberSetting("PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT", 16_000, 256, 25_000),
+    legacyHistoryEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
+    historyEditorEnabled: false,
+    valueWorker: {
+      mode: (["shadow", "advisory"].includes(String(env.PI_CHRONO_VALUE_WORKER_MODE ?? overrides.valueWorkerMode)) ? (env.PI_CHRONO_VALUE_WORKER_MODE ?? overrides.valueWorkerMode) : "off") as ValueWorkerSettings["mode"],
+      model: stringSetting("PI_CHRONO_VALUE_WORKER_MODEL", DEFAULT_VALUE_WORKER_SETTINGS.model, overrides.valueWorkerModel),
+      thinking: (["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(env.PI_CHRONO_VALUE_WORKER_THINKING ?? overrides.valueWorkerThinking)) ? (env.PI_CHRONO_VALUE_WORKER_THINKING ?? overrides.valueWorkerThinking) : "inherit") as ValueWorkerSettings["thinking"],
+      maxInputTokensPerJob: numberSetting("PI_CHRONO_VALUE_WORKER_JOB_INPUT", 6_000, 1_000, 12_000, overrides.valueWorkerMaxInputTokensPerJob),
+      maxOutputTokensPerJob: numberSetting("PI_CHRONO_VALUE_WORKER_JOB_OUTPUT", 1_500, 256, 4_000, overrides.valueWorkerMaxOutputTokensPerJob),
+      maxItemsPerJob: numberSetting("PI_CHRONO_VALUE_WORKER_JOB_ITEMS", 40, 5, 100, overrides.valueWorkerMaxItemsPerJob),
+      timeoutSeconds: numberSetting("PI_CHRONO_VALUE_WORKER_TIMEOUT", 90, 10, 600, overrides.valueWorkerTimeoutSeconds),
+      retries: numberSetting("PI_CHRONO_VALUE_WORKER_RETRIES", 1, 0, 2, overrides.valueWorkerRetries),
+      hostSlots: numberSetting("PI_CHRONO_VALUE_WORKER_SLOTS", 1, 1, 4, overrides.valueWorkerHostSlots),
+      maxCallsPerSession: numberSetting("PI_CHRONO_VALUE_WORKER_SESSION_CALLS", 100, 1, 2_000, overrides.valueWorkerMaxCallsPerSession),
+      maxInputTokensPerSession: numberSetting("PI_CHRONO_VALUE_WORKER_SESSION_INPUT", 250_000, 1_000, 10_000_000, overrides.valueWorkerMaxInputTokensPerSession),
+      maxOutputTokensPerSession: numberSetting("PI_CHRONO_VALUE_WORKER_SESSION_OUTPUT", 50_000, 1_000, 2_000_000, overrides.valueWorkerMaxOutputTokensPerSession),
+      ...(() => { const raw = env.PI_CHRONO_VALUE_WORKER_COST; if (raw && ["off", "disabled", "none"].includes(raw.trim().toLowerCase())) return {}; const usd = raw === undefined || raw.trim() === "" ? overrides.valueWorkerMaxEstimatedCostUsd : Number(raw); if (usd === undefined || usd === null) return {}; if (!Number.isFinite(usd) || usd < 0.01 || usd > 1000) throw new Error("PI_CHRONO_VALUE_WORKER_COST must be off or 0.01 through 1000."); return { maxEstimatedCostMicroUsd: Math.ceil(usd * 1_000_000) }; })(),
+      circuitFailureLimit: numberSetting("PI_CHRONO_VALUE_WORKER_CIRCUIT_FAILURES", 3, 1, 20, overrides.valueWorkerCircuitFailureLimit),
+      circuitCooldownSeconds: numberSetting("PI_CHRONO_VALUE_WORKER_CIRCUIT_COOLDOWN", 1_800, 30, 86_400, overrides.valueWorkerCircuitCooldownSeconds),
+    },
     incrementalPrecomputeEnabled: booleanSetting("PI_CHRONO_INCREMENTAL_PRECOMPUTE", false, overrides.incrementalPrecomputeEnabled),
     isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
     rollupShadowEnabled: booleanSetting("PI_CHRONO_ROLLUP_SHADOW", false, overrides.rollupShadowEnabled),
@@ -272,7 +298,8 @@ async function openChronoCompactSettings(
       `Active context target · ${settings.targetContextTokens.toLocaleString()} tokens`,
       `Chronological replay maximum · ${settings.replayTargetTokens === undefined ? "automatic" : `${settings.replayTargetTokens.toLocaleString()} tokens`}`,
       `Regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
-      `Experimental LLM history classifier · ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
+      `Background value worker · ${settings.valueWorker.mode} · ${settings.valueWorker.model} · thinking ${settings.valueWorker.thinking}`,
+      "Retrospective only. Bounded assistant and tool excerpts can be sent only after enablement. Protected exact, user, and project instruction text is never sent. Final replay remains deterministic. Compaction never waits. Shadow does not change replay.",
       `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
       `Isolated local compaction worker · ${settings.isolatedWorkerEnabled ? `enabled · ${settings.hostWorkerSlots} host slot(s) · nice ${settings.workerNiceLevel}` : "disabled"}`,
       `Hierarchical rollup shadow evaluation · ${settings.rollupShadowEnabled ? "enabled · output does not reach the model · current replay authoritative · local isolated low-priority worker · metrics only" : "disabled"}`,
@@ -372,10 +399,29 @@ async function openChronoCompactSettings(
       }
       continue;
     }
-    if (choice.startsWith("Experimental LLM history classifier")) {
-      const selected = await ctx.ui.select("Experimental LLM history classifier", ["Enabled", "Disabled"]);
-      if (selected === "Disabled") draft = applyConfigCommand(draft, "history-classifier off").config;
-      if (selected === "Enabled") draft = applyConfigCommand(draft, "history-classifier on").config;
+    if (choice.startsWith("Background value worker")) {
+      const mode = await ctx.ui.select("Background value-worker mode", ["off", "shadow", "advisory"]);
+      if (!mode) continue;
+      draft = applyConfigCommand(draft, `value-worker-mode ${mode}`).config;
+      const model = await ctx.ui.input("Value model: main or provider/model", settings.valueWorker.model);
+      if (model !== undefined) draft = applyConfigCommand(draft, `value-worker-model ${model.trim()}`).config;
+      const selectedModel = settings.valueWorker.model === "main" ? ctx.model : (() => { const slash = settings.valueWorker.model.indexOf("/"); return slash > 0 ? ctx.modelRegistry.find(settings.valueWorker.model.slice(0, slash), settings.valueWorker.model.slice(slash + 1)) : undefined; })();
+      const thinkingOptions = selectedModel ? ["inherit", ...getSupportedThinkingLevels(selectedModel)] : ["inherit"];
+      const thinking = await ctx.ui.select("Value-model thinking level", thinkingOptions);
+      if (thinking) draft = applyConfigCommand(draft, `value-worker-thinking ${thinking}`).config;
+      draft = await tokenInput(ctx, "Maximum input tokens per value job", settings.valueWorker.maxInputTokensPerJob, "value-worker-job-input", draft);
+      draft = await tokenInput(ctx, "Maximum output tokens per value job", settings.valueWorker.maxOutputTokensPerJob, "value-worker-job-output", draft);
+      draft = await tokenInput(ctx, "Maximum items per value job", settings.valueWorker.maxItemsPerJob, "value-worker-job-items", draft);
+      draft = await tokenInput(ctx, "Value-job timeout seconds", settings.valueWorker.timeoutSeconds, "value-worker-timeout", draft);
+      draft = await tokenInput(ctx, "Value-job retries", settings.valueWorker.retries, "value-worker-retries", draft);
+      draft = await tokenInput(ctx, "Host-wide value-model slots", settings.valueWorker.hostSlots, "value-worker-slots", draft);
+      draft = await tokenInput(ctx, "Maximum value calls per session", settings.valueWorker.maxCallsPerSession, "value-worker-session-calls", draft);
+      draft = await tokenInput(ctx, "Maximum value input tokens per session", settings.valueWorker.maxInputTokensPerSession, "value-worker-session-input", draft);
+      draft = await tokenInput(ctx, "Maximum value output tokens per session", settings.valueWorker.maxOutputTokensPerSession, "value-worker-session-output", draft);
+      const cost = await ctx.ui.input("Maximum estimated value cost in USD, or off", draft.valueWorkerMaxEstimatedCostUsd == null ? "off" : String(draft.valueWorkerMaxEstimatedCostUsd));
+      if (cost !== undefined) draft = applyConfigCommand(draft, `value-worker-cost ${cost.trim()}`).config;
+      draft = await tokenInput(ctx, "Circuit failure limit", settings.valueWorker.circuitFailureLimit, "value-worker-circuit-failures", draft);
+      draft = await tokenInput(ctx, "Circuit cooldown seconds", settings.valueWorker.circuitCooldownSeconds, "value-worker-circuit-cooldown", draft);
       continue;
     }
     if (choice.startsWith("Segmented incremental deterministic precompute")) {
@@ -890,6 +936,11 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   let shadowTimer: ReturnType<typeof setTimeout> | undefined;
   let shadowGeneration = 0;
   let shadowStatus: Record<string, unknown> = { state: "disabled" };
+  let valueWorkerAbort: AbortController | undefined;
+  let valueWorkerStatus: ValueWorkerRunResult | { status: string } = { status: "off" };
+  let valueWorkerActive = false;
+  let valueWorkerRerun = false;
+  let legacyHistoryEditorWarningShown = false;
   let projectionSeenToolCallIds = new Set<string>();
   let lastProjectionMetrics: ToolResultProjectionMetrics | undefined;
 
@@ -926,6 +977,22 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
     incrementalAbort?.abort(new Error("ChronoCompact incremental work was cancelled for session state replacement."));
     incrementalAbort = undefined;
     if (clearCheckpoint) incrementalStore = undefined;
+  };
+
+  const cancelValueWorker = (): void => {
+    valueWorkerRerun = false;
+    valueWorkerAbort?.abort(new Error("Value worker cancelled for session state replacement."));
+    valueWorkerAbort = undefined;
+  };
+
+  const scheduleValueWorker = (ctx: ExtensionContext, store: CandidateSegmentStore): void => {
+    const settings = resolveExtensionSettings(userConfig);
+    if (settings.valueWorker.mode === "off") { cancelValueWorker(); valueWorkerStatus = { status: "off" }; return; }
+    if (!settings.incrementalPrecomputeEnabled) { valueWorkerStatus = { status: "candidate-store-required" }; return; }
+    if (valueWorkerActive) { valueWorkerRerun = true; return; }
+    valueWorkerActive = true; valueWorkerStatus = { status: "scheduled" };
+    const controller = new AbortController(); valueWorkerAbort = controller;
+    queueMicrotask(() => { void runValueWorker({ ctx, settings: settings.valueWorker, store, signal: controller.signal }).then((result) => { valueWorkerStatus = result; }).catch(() => { if (!controller.signal.aborted) valueWorkerStatus = { status: "unknown-value-worker-failure" }; }).finally(() => { valueWorkerActive = false; if (valueWorkerAbort === controller) valueWorkerAbort = undefined; if (valueWorkerRerun && !controller.signal.aborted) { valueWorkerRerun = false; scheduleValueWorker(ctx, store); } }); });
   };
 
   const scheduleIncrementalWork = (ctx: ExtensionContext): void => {
@@ -966,10 +1033,12 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             }
             await loadCandidateSegmentManifest(store); incrementalStore = store;
             incrementalStatus = { state: "ready", ...worker.response.candidateUpdate, worker: worker.clientMetrics, workerRuntime: worker.response.metrics };
+            scheduleValueWorker(ctx, store);
           } else {
             const metrics = await updateCandidateSegmentStore(store, config, { signal: controller.signal });
             if (controller.signal.aborted || generation !== incrementalGeneration) return;
             incrementalStore = store; incrementalStatus = { state: "ready", ...metrics };
+            scheduleValueWorker(ctx, store);
           }
         } catch (error) {
           if (!controller.signal.aborted) incrementalStatus = { state: "fallback", reason: safeErrorMessage(error) };
@@ -1129,15 +1198,19 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     cancelIncrementalWork(true);
     cancelShadowWork();
+    cancelValueWorker();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
     lastProjectionMetrics = undefined;
+    const settings = resolveExtensionSettings(userConfig);
+    if (settings.legacyHistoryEditorEnabled && !legacyHistoryEditorWarningShown && ctx.hasUI) { legacyHistoryEditorWarningShown = true; ctx.ui.notify("The old ChronoCompact history-classifier setting is retired and cannot start a model call. Use the background value-worker settings for explicit opt-in.", "warning"); }
     scheduleIncrementalWork(ctx);
   });
 
   pi.on("session_before_switch", () => {
     cancelIncrementalWork(true);
     cancelShadowWork();
+    cancelValueWorker();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
@@ -1145,6 +1218,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   pi.on("session_before_fork", () => {
     cancelIncrementalWork(true);
     cancelShadowWork();
+    cancelValueWorker();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
@@ -1152,6 +1226,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     cancelIncrementalWork(true);
     cancelShadowWork();
+    cancelValueWorker();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
@@ -1315,7 +1390,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       });
       const retentionHints = retentionHintsFromBranch(branchEntries, event.customInstructions);
       const sessionPath = ctx.sessionManager.getSessionFile();
-      const useIsolatedWorker = settings.isolatedWorkerEnabled && !!sessionPath && !settings.historyEditorEnabled;
+      const useIsolatedWorker = settings.isolatedWorkerEnabled && !!sessionPath;
       const currentRetrievalFeedback = sessionPath ? retrievalFeedback.get(sessionPath) : undefined;
       const memory = settings.editableMemoryEnabled && sessionPath
         ? await readMemoryEvents(memorySidecarPath(sessionPath))
@@ -1333,10 +1408,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         extensionVersion: EXTENSION_VERSION,
         config,
         retentionHints,
-        historyEditorEnabled: settings.historyEditorEnabled,
-        historyEditorMaxInputTokens: settings.historyEditorMaxInputTokens,
-        historyEditorMaxOutputTokens: settings.historyEditorMaxOutputTokens,
-        historyEditorModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+        historyEditorEnabled: false,
+        historyEditorMaxInputTokens: 0,
+        historyEditorMaxOutputTokens: 0,
+        historyEditorModel: undefined,
         hardCombinedContextCapTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS,
         rawTailMode: settings.rawTailMode,
         rawTailTokens: settings.rawTailTokens,
@@ -1358,7 +1433,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       });
       const cachePath = sessionPath ? cachePathForSession(sessionPath) : undefined;
 
-      if (!useIsolatedWorker && settings.cacheEnabled && cachePath) {
+      if (!useIsolatedWorker && settings.cacheEnabled && settings.valueWorker.mode !== "advisory" && cachePath) {
         const cached = await readCompactionCache(cachePath);
         if (
           cached && cached.sourceHash === generationHash &&
@@ -1492,7 +1567,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           officialIncremental = { state: "stale-fallback", reason: safeErrorMessage(error), background: incrementalStatus };
         }
       }
-      const historyEditor = settings.historyEditorEnabled && ctx.model ? createPiHistoryEditor(ctx) : undefined;
+      const validAdviceRecordHashes = precomputedCandidates ? new Map([...precomputedCandidates].map(([blockId, record]) => [blockId, record.integrityHash])) : undefined;
+      const valueAdvice = sessionPath ? await loadCompatibleAdvice(sessionPath, settings.valueWorker, validAdviceRecordHashes) : new Map();
       let result: CompressionResult; let workerExecution: WorkerClientResult | undefined;
       if (useIsolatedWorker && sessionPath) {
         const leafId = branchEntries.at(-1)?.id; if (typeof leafId !== "string") throw new Error("Isolated worker failed: branch-not-persisted");
@@ -1502,6 +1578,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           hardOutputTokens: replayCeilingTokens, retentionHints, pinnedMemoryText,
           ...(currentRetrievalFeedback === undefined ? {} : { retrievalFeedback: currentRetrievalFeedback }),
           candidateStoreEnabled: settings.incrementalPrecomputeEnabled, cacheEnabled: settings.cacheEnabled,
+          valueWorkerMode: settings.valueWorker.mode, valueWorkerConfigurationHash: valueWorkerConfigurationHash(settings.valueWorker),
           ...(workerRebaseTargetTokens === undefined ? {} : { deterministicRebase: { targetTokens: workerRebaseTargetTokens,
             combinedTargetTokens: targetTokens, historicalCeilingTokens } }) };
         workerExecution = await runCompactionWorker(request, { slots: settings.hostWorkerSlots,
@@ -1523,8 +1600,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           : { state: "disabled" };
       } else {
         result = await compactEntries(sourceEntries, {
-          config: replayConfig, ...(precomputedCandidates === undefined ? {} : { precomputedCandidates }), historyEditor,
-          historyEditorMaxInputTokens: settings.historyEditorMaxInputTokens, historyEditorMaxOutputTokens: settings.historyEditorMaxOutputTokens,
+          config: replayConfig, ...(precomputedCandidates === undefined ? {} : { precomputedCandidates }),
+          valueAdvice, valueWorkerMode: settings.valueWorker.mode,
           hardOutputTokens: replayCeilingTokens, signal: event.signal, retentionHints, futureEntries: retainedEntries,
           pinnedMemoryText, retrievalFeedback: currentRetrievalFeedback,
         });
@@ -1542,7 +1619,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       }
 
       let generation: number | undefined;
-      if (!useIsolatedWorker && settings.cacheEnabled && cachePath) {
+      if (!useIsolatedWorker && settings.cacheEnabled && settings.valueWorker.mode !== "advisory" && cachePath) {
         try {
           generation = await nextCacheGeneration(cachePath);
           await writeCompactionCache(cachePath, {
@@ -1563,9 +1640,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         }
       }
 
-      const editorStatus = result.details.historyEditor;
       ctx.ui.notify(
-        `ChronoCompact 2.0.0 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; editor ${editorStatus?.status ?? "disabled"} (${editorStatus?.calls ?? 0} job).`,
+        `ChronoCompact 2.0.0 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`,
         "info",
       );
       const shadowBranchLeafId = sourceEntries.at(-1)?.id;
@@ -1672,6 +1748,31 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("chrono-value-worker-status", {
+    description: "Show aggregate background value-worker status",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) return;
+      const settings = resolveExtensionSettings(userConfig); const sessionPath = ctx.sessionManager.getSessionFile();
+      const manifest = sessionPath ? await readValueAdviceManifest(valueAdviceStorePath(sessionPath)) : undefined;
+      const adviceStoreState = manifest ? "ready" : sessionPath ? await stat(join(valueAdviceStorePath(sessionPath), "manifest.json")).then(() => "corrupt" as const).catch(() => "none" as const) : "none";
+      const candidateManifest = incrementalStore && incrementalStore.sessionPath === sessionPath ? incrementalStore.manifest : undefined;
+      const pendingSegments = candidateManifest ? candidateManifest.segments.filter((segment) => !manifest?.processedSegmentIdentities.includes(segment.segmentContentHash)).length : 0;
+      const budgetState = manifest && (manifest.usage.calls >= settings.valueWorker.maxCallsPerSession || manifest.usage.inputTokens >= settings.valueWorker.maxInputTokensPerSession || manifest.usage.outputTokens >= settings.valueWorker.maxOutputTokensPerSession || (settings.valueWorker.maxEstimatedCostMicroUsd !== undefined && manifest.usage.costMicroUsd >= settings.valueWorker.maxEstimatedCostMicroUsd)) ? "exhausted" : "available";
+      ctx.ui.notify([
+        `Mode: ${settings.valueWorker.mode}`, `Configured model: ${settings.valueWorker.model}`, `Resolved model: ${manifest?.resolvedModelIdentity ?? "none"}`, `Thinking: ${settings.valueWorker.thinking}`,
+        `Candidate store: ${String(incrementalStatus.state ?? "unknown")}`, `Advice store: ${adviceStoreState}`, `Pending segments: ${pendingSegments}`, `Pending batches: ${pendingSegments === 0 ? 0 : "bounded at run time"}`, `Active job: ${valueWorkerActive ? "running" : "idle"}`, `Model slot limit: ${settings.valueWorker.hostSlots}`, `Budget state: ${budgetState}`, `Last safe status: ${String((valueWorkerStatus as {status:string}).status)}`,
+        `Completed segments: ${manifest?.processedSegmentIdentities.length ?? 0}`, `Valid advice records: ${manifest?.adviceFiles.filter((item) => item.configurationHash === valueWorkerConfigurationHash(settings.valueWorker)).reduce((n,x)=>n+x.records,0) ?? 0}`, `Ignored advice records: ${manifest?.adviceFiles.filter((item) => item.configurationHash !== valueWorkerConfigurationHash(settings.valueWorker)).reduce((n,x)=>n+x.records,0) ?? 0}`, `Calls: ${manifest?.usage.calls ?? 0}`, `Repair calls: ${manifest?.usage.repairCalls ?? 0}`,
+        `Input tokens: ${manifest?.usage.inputTokens ?? 0}`, `Output tokens: ${manifest?.usage.outputTokens ?? 0}`, `Cache-read tokens: ${manifest?.usage.cacheReadTokens ?? 0}`, `Cache-write tokens: ${manifest?.usage.cacheWriteTokens ?? 0}`, `Estimated cost: ${manifest?.usage.costAvailable ? `$${((manifest.usage.costMicroUsd ?? 0) / 1_000_000).toFixed(6)}` : "unavailable"}`, `Provider attempts: ${valueWorkerStatus && "providerAttempts" in valueWorkerStatus ? valueWorkerStatus.providerAttempts ?? 0 : 0}`,
+        `Consecutive failures: ${manifest?.consecutiveFailures ?? 0}`, `Circuit: ${manifest?.circuitState ?? "closed"}`, `Circuit reopen time: ${manifest?.circuitReopenTime ?? "none"}`, `Last successful update: ${manifest?.lastSuccessTime ?? "none"}`,
+      ].join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("chrono-value-worker-reset", {
+    description: "Cancel pending value work and reset its persisted circuit",
+    handler: async (_args, ctx) => { cancelValueWorker(); const sessionPath = ctx.sessionManager.getSessionFile(); const reset = sessionPath ? await resetAdviceCircuit(valueAdviceStorePath(sessionPath)).catch(() => false) : false; valueWorkerStatus = { status: "off" }; ctx.ui.notify(`${reset ? "Reset the persisted circuit. " : "No compatible persisted circuit was found. "}Pending value work was cancelled. Stored advice and source files were preserved.`, "info"); },
+  });
+
   pi.registerCommand("chrono-compact-settings", {
     description: "Open interactive ChronoCompact settings",
     handler: async (_args, ctx) => {
@@ -1688,6 +1789,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         userConfigWarning = undefined;
         lastTriggerAttemptTokens = undefined;
         cancelIncrementalWork(true);
+        cancelShadowWork();
+        cancelValueWorker();
         projectionSeenToolCallIds = new Set();
         const settings = resolveExtensionSettings(userConfig);
         scheduleIncrementalWork(ctx);
@@ -1701,7 +1804,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             `Active target: ${settings.targetContextTokens.toLocaleString()} tokens`,
             `Replay maximum: ${settings.replayTargetTokens === undefined ? "automatic" : settings.replayTargetTokens.toLocaleString()}`,
             `Regular Pi summary: ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
-            `Experimental LLM history classifier: ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
+            `Background value worker: ${settings.valueWorker.mode}; model ${settings.valueWorker.model}; thinking ${settings.valueWorker.thinking}`,
+            ...(settings.legacyHistoryEditorEnabled ? ["Warning: the old history classifier setting is retired and cannot start a model call. Use the value-worker controls."] : []),
             `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
             `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
             `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,

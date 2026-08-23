@@ -23,7 +23,7 @@ immutable session JSONL
                                      └─ plain-renderer.ts + render.ts: pinned state and chronological replay
 ```
 
-`compactor.ts` builds every generation from original branch entries. It never uses a prior replay as evidence. The optional history classifier remains default-off and can select only prebuilt local candidates.
+`compactor.ts` builds every generation from original branch entries. It never uses a prior replay as evidence. The old compaction-time history classifier is retired from extension use. A default-off background value worker runs asynchronously after candidate-store publication. It can use a separate model and supported thinking level. It persists normalized score advice only. Compaction reads the last complete compatible snapshot without scheduling, waiting, retrying, or receiving credentials. `shadow` changes no replay bytes. `advisory` changes bounded importance scores before deterministic planning and validation.
 
 `compactor.ts` coordinates the pipeline and always starts from supplied raw entries. It does not accept a previous rendered replay as source. It can inspect the retained future raw tail for cross-event importance and activity-phase analysis, but it renders only the selected historical prefix.
 
@@ -47,6 +47,7 @@ immutable session JSONL
 - reducer metadata
 - cached replay and plan details
 - advisory retention hints
+- immutable normalized value-advice files and their integrity-checked active manifest
 
 The cache sidecar is never read as authoritative event history. A cache entry is reusable only when both the raw-source generation hash and configuration hash match. The generation hash excludes unrelated runtime metadata entries that do not affect the replay, retained-tail analysis, or regular summary.
 

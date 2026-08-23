@@ -26,6 +26,7 @@ export interface ReplayWorkerRequest extends WorkerBaseRequest {
   readonly jobType: "replay-compaction"; readonly branchLeafId: string; readonly firstKeptEntryId: string;
   readonly config: CompactorConfig; readonly hardOutputTokens: number; readonly retentionHints: string; readonly pinnedMemoryText: string;
   readonly retrievalFeedback?: RetrievalFeedback; readonly candidateStoreEnabled: boolean; readonly cacheEnabled: boolean;
+  readonly valueWorkerMode?: "off" | "shadow" | "advisory"; readonly valueWorkerConfigurationHash?: string;
   readonly deterministicRebase?: { readonly targetTokens: number; readonly combinedTargetTokens: number; readonly historicalCeilingTokens: number };
 }
 export interface RollupShadowWorkerRequest extends WorkerBaseRequest {
@@ -93,14 +94,14 @@ export function validateWorkerRequest(value: unknown): CompactionWorkerRequest {
   if (!object(value) || value.schemaVersion !== 1 || !["replay-compaction", "candidate-store-update", "rollup-shadow"].includes(String(value.jobType))) throw new Error("worker-protocol-error");
   const common=["schemaVersion","jobId","jobType","sessionPath","expectedSource","deadlineMs","niceLevel"];
   const allowed = value.jobType === "replay-compaction"
-    ? [...common, "branchLeafId", "firstKeptEntryId", "config", "hardOutputTokens", "retentionHints", "pinnedMemoryText", "retrievalFeedback", "candidateStoreEnabled", "cacheEnabled", "deterministicRebase"]
+    ? [...common, "branchLeafId", "firstKeptEntryId", "config", "hardOutputTokens", "retentionHints", "pinnedMemoryText", "retrievalFeedback", "candidateStoreEnabled", "cacheEnabled", "valueWorkerMode", "valueWorkerConfigurationHash", "deterministicRebase"]
     : value.jobType === "candidate-store-update"
       ? [...common, "config", "storeSettings"]
       : [...common, "branchLeafId", "firstKeptEntryId", "currentReplayText", "hardTokenBound", "targetTokenBound", "retentionHints", "dynamicContext"];
   if (!exactKeys(value, allowed) || !boundedId(value.jobId, 256) || !boundedId(value.sessionPath, 4096) || !validExpectation(value.expectedSource) || !integer(value.deadlineMs, Date.now() - 1, Date.now() + 3_600_000) || !integer(value.niceLevel, 0, 19)) throw new Error("worker-protocol-error");
   if (value.jobType !== "rollup-shadow" && !validConfig(value.config)) throw new Error("worker-protocol-error");
   if (value.jobType==="replay-compaction") {
-    if (!boundedId(value.branchLeafId,1024)||!boundedId(value.firstKeptEntryId,1024)||!integer(value.hardOutputTokens,128,30_000)||!boundedText(value.retentionHints)||!boundedText(value.pinnedMemoryText)||typeof value.candidateStoreEnabled!=="boolean"||typeof value.cacheEnabled!=="boolean") throw new Error("worker-protocol-error");
+    if (!boundedId(value.branchLeafId,1024)||!boundedId(value.firstKeptEntryId,1024)||!integer(value.hardOutputTokens,128,30_000)||!boundedText(value.retentionHints)||!boundedText(value.pinnedMemoryText)||typeof value.candidateStoreEnabled!=="boolean"||typeof value.cacheEnabled!=="boolean" || (value.valueWorkerMode !== undefined && !["off","shadow","advisory"].includes(String(value.valueWorkerMode))) || (value.valueWorkerConfigurationHash !== undefined && (typeof value.valueWorkerConfigurationHash !== "string" || !/^[a-f0-9]{64}$/.test(value.valueWorkerConfigurationHash)))) throw new Error("worker-protocol-error");
     if (value.retrievalFeedback!==undefined && (!object(value.retrievalFeedback)||Buffer.byteLength(JSON.stringify(value.retrievalFeedback))>MAX_WORKER_TEXT_BYTES)) throw new Error("worker-protocol-error");
     if (value.deterministicRebase!==undefined && (!object(value.deterministicRebase)||!exactKeys(value.deterministicRebase,["targetTokens","combinedTargetTokens","historicalCeilingTokens"])||!integer(value.deterministicRebase.targetTokens,256,16_000)||!integer(value.deterministicRebase.combinedTargetTokens,256,30_000)||!integer(value.deterministicRebase.historicalCeilingTokens,256,30_000))) throw new Error("worker-protocol-error");
   } else if (value.jobType === "rollup-shadow") {

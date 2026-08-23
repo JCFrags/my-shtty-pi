@@ -30,6 +30,19 @@ The command prints one aggregate JSON object. It does not print fixture paths, s
 
 The V2 replay benchmark has no comparator mode. Historical evaluation, private fixtures, and private wrappers remain outside this repository.
 
+## Background value-worker benchmark
+
+`scripts/benchmark-value-worker.mjs` is an offline measured harness over the built value-worker modules. It creates real owner-only candidate and advice files, uses real batching, scheduling, retry, repair, circuit, budget, advice-loading, and score-application code, and injects a deterministic fake model through the production call seam. The fake records prompts, thinking, attempts, repairs, and usage. It never opens its invalid example URL and makes no network call.
+
+```bash
+node scripts/benchmark-value-worker.mjs series --final-tasks 5000 --batches 50
+node scripts/benchmark-value-worker.mjs advisory --tasks 5000
+node scripts/benchmark-value-worker.mjs failures
+node scripts/benchmark-value-worker.mjs budget --segments 1000
+```
+
+`series` reports measured incremental work and an exact-hit second run. `advisory` measures production advice application and runs deterministic off, shadow, and advisory compaction validation after real fake-model orchestration. `failures` invokes 18 safe model-resolution, retry, repair, budget, circuit, cancellation, contention, and corruption cases. `budget` stops real orchestration at a hard call boundary. These synthetic results establish implementation behavior, not real-provider advice quality.
+
 ## Hierarchical history rollup benchmark
 
 `scripts/benchmark-history-rollups.mjs` measures the isolated rollup prototype with synthetic data. It has strict `series`, `render`, `scale`, `metadata`, `query`, `restrictions`, `branch`, and `compare` modes. It uses owner-only temporary files and no network. It does not discover or read private sessions.

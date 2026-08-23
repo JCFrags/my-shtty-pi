@@ -47,7 +47,9 @@ test("experimental high-impact features default off and environment overrides ha
     assert.equal(resolveExtensionSettings().rollupShadowEnabled, false);
     assert.equal(resolveExtensionSettings().hostWorkerSlots, 1);
     assert.equal(resolveExtensionSettings().workerNiceLevel, 10);
-    assert.equal(resolveExtensionSettings({ historyEditorEnabled: true }).historyEditorEnabled, true);
+    assert.equal(resolveExtensionSettings({ historyEditorEnabled: true }).historyEditorEnabled, false);
+    assert.equal(resolveExtensionSettings({ historyEditorEnabled: true }).legacyHistoryEditorEnabled, true);
+    assert.equal(resolveExtensionSettings().valueWorker.mode, "off");
     assert.equal(resolveExtensionSettings({ incrementalPrecomputeEnabled: true }).incrementalPrecomputeEnabled, true);
     assert.equal(resolveExtensionSettings({ toolResultProjectionMode: "safe" }).toolResultProjectionMode, "safe");
     const separateSettings = resolveExtensionSettings({ hybridSummaryEnabled: true, historyEditorEnabled: false });
@@ -56,7 +58,8 @@ test("experimental high-impact features default off and environment overrides ha
     process.env.PI_CHRONO_HISTORY_EDITOR = "false";
     assert.equal(resolveExtensionSettings({ historyEditorEnabled: true }).historyEditorEnabled, false);
     process.env.PI_CHRONO_HISTORY_EDITOR = "true";
-    assert.equal(resolveExtensionSettings({ historyEditorEnabled: false }).historyEditorEnabled, true);
+    assert.equal(resolveExtensionSettings({ historyEditorEnabled: false }).historyEditorEnabled, false);
+    assert.equal(resolveExtensionSettings({ historyEditorEnabled: false }).legacyHistoryEditorEnabled, true);
     process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE = "false";
     assert.equal(resolveExtensionSettings({ incrementalPrecomputeEnabled: true }).incrementalPrecomputeEnabled, false);
     process.env.PI_CHRONO_ISOLATED_WORKER = "true";
@@ -318,7 +321,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "history_retention_hint",
     "request_compaction",
   ]);
-  assert.deepEqual(commandNames, ["chrono-rollup-shadow-status", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
@@ -407,15 +410,17 @@ test("Pi extension hook returns a validated deterministic replay through the nor
   assert.ok(notifications.some((notification) => /ChronoCompact/.test(notification.message)));
 
   let settingsMenuVisits = 0;
+  (context.ui as { input?: () => Promise<string | undefined> }).input = async () => undefined;
   context.ui.select = async (title: string, choices: string[]) => {
     if (title === "ChronoCompact settings") {
       settingsMenuVisits += 1;
-      if (settingsMenuVisits === 1) return choices.find((choice) => choice.startsWith("Experimental LLM history classifier"));
+      if (settingsMenuVisits === 1) return choices.find((choice) => choice.startsWith("Background value worker"));
       if (settingsMenuVisits === 2) return choices.find((choice) => choice.startsWith("Hierarchical rollup shadow evaluation"));
       if (settingsMenuVisits === 3) return choices.find((choice) => choice.startsWith("Raw history retained"));
       return "Save and close";
     }
-    if (title === "Experimental LLM history classifier") return "Enabled";
+    if (title === "Background value-worker mode") return "shadow";
+    if (title === "Value-model thinking level") return "inherit";
     if (title === "Hierarchical rollup shadow evaluation") return "Enabled";
     if (title === "How much recent history should remain raw?") return "Short · 8,000 tokens";
     return undefined;
@@ -425,9 +430,9 @@ test("Pi extension hook returns a validated deterministic replay through the nor
   await configure("", context);
   const persisted = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
   assert.equal(persisted.rawTail, "short");
-  assert.equal(persisted.historyEditorEnabled, true);
+  assert.equal(persisted.valueWorkerMode, "shadow");
   assert.equal(persisted.rollupShadowEnabled, true);
-  assert.ok(notifications.some((notification) => /Experimental LLM history classifier: enabled/.test(notification.message)));
+  assert.ok(notifications.some((notification) => /Background value worker: shadow/.test(notification.message)));
   rmSync(configPath, { force: true });
 });
 
@@ -804,5 +809,5 @@ test("shadow-on extension output equals shadow-off output and completes after re
 test("isolated worker extension path uses persisted source and returns exact bounded replay", async () => {
   const directory=mkdtempSync(join(tmpdir(),"chrono-extension-worker-"));const sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});
   const names=["PI_CHRONO_CONFIG_PATH","PI_CHRONO_ISOLATED_WORKER","PI_CHRONO_CACHE"];const previous=new Map(names.map(name=>[name,process.env[name]]));process.env.PI_CHRONO_CONFIG_PATH=join(directory,"config.json");process.env.PI_CHRONO_ISOLATED_WORKER="true";process.env.PI_CHRONO_CACHE="false";
-  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result.compaction);assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
+  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result?.compaction, notifications.join("\n"));assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
 });

@@ -29,6 +29,8 @@ import { DEFAULT_COMPACTOR_CONFIG } from "./types.js";
 import { measureTokenTelemetry, retentionSignalsFromFeedback, type RetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, stableStringify, truncateToTokens } from "./utils.js";
 import { buildValidationIndex, pruneUnsafeCandidates, validatePlan } from "./validate.js";
+import { applyValueAdvice } from "./value-advice-application.js";
+import type { StoredValueAdvice } from "./value-advice-store.js";
 
 const RENDER_OVERHEAD_RESERVE = 180;
 const MAX_BUDGET_REPLANS = 8;
@@ -43,6 +45,9 @@ export interface CompactEntriesOptions {
   readonly historyEditor?: HistoryEditor;
   readonly historyEditorMaxInputTokens?: number;
   readonly historyEditorMaxOutputTokens?: number;
+  /** Last complete non-authoritative advice snapshot. Never starts or waits for a model call. */
+  readonly valueAdvice?: ReadonlyMap<string, StoredValueAdvice>;
+  readonly valueWorkerMode?: "off" | "shadow" | "advisory";
   readonly hardOutputTokens?: number;
   /** Validated deterministic candidates from the request-local incremental checkpoint. */
   readonly precomputedCandidates?: ReadonlyMap<string, CandidatePrecomputeRecord>;
@@ -334,6 +339,8 @@ export async function compactEntries(
   const renderedTarget = Math.min(config.targetTokens, usefulSavingsTarget);
   const replayRenderedTarget = Math.max(128, renderedTarget - pinnedMemoryTokens);
   const planningTarget = Math.max(32, replayRenderedTarget - (config.includeHeader ? RENDER_OVERHEAD_RESERVE : 24));
+  const advised = applyValueAdvice(candidateUnits, options.valueAdvice ?? new Map(), options.valueWorkerMode ?? "off");
+  candidateUnits = [...advised.units];
   let plan = planCompression(candidateUnits, planningTarget, config);
   if (shouldMergeEpisodes(candidateUnits, rawTokens, renderedTarget, config) || plan.estimatedTokens > planningTarget) {
     const merged = mergeOldCompletedEpisodes(candidateUnits, blocks, config);

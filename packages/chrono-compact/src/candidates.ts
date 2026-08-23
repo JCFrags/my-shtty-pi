@@ -70,6 +70,12 @@ export interface CandidatePrecomputeRecord {
   readonly key: string;
   readonly dependency: CandidateDependency;
   readonly integrityHash: string;
+  /** Safe metadata for retrospective background value advice. No source text. */
+  readonly blockKind?: HistoricalBlock["kind"];
+  readonly isError?: boolean;
+  readonly unresolved?: boolean;
+  readonly reproducible?: boolean;
+  readonly identifierCount?: number;
   readonly candidates: readonly RepresentationCandidate[];
 }
 
@@ -77,8 +83,9 @@ function candidateRecordIntegrityHash(
   blockId: string,
   key: string,
   candidates: readonly RepresentationCandidate[],
+  metadata?: Pick<CandidatePrecomputeRecord, "blockKind" | "isError" | "unresolved" | "reproducible" | "identifierCount">,
 ): string {
-  return hashText(stableStringify({ schema: 2, blockId, key, candidates }));
+  return hashText(stableStringify({ schema: 3, blockId, key, candidates, metadata }));
 }
 
 export interface CandidatePrecomputeResult {
@@ -429,9 +436,10 @@ function validatedPrecomputedRecord(
   if (!Array.isArray(precomputed.candidates) || precomputed.candidates.length > MAX_PRECOMPUTED_CANDIDATES_PER_BLOCK) {
     return undefined;
   }
-  if (
-    typeof precomputed.integrityHash !== "string"
-    || precomputed.integrityHash !== candidateRecordIntegrityHash(precomputed.blockId, precomputed.key, precomputed.candidates)
+  const safeMetadata = { blockKind: precomputed.blockKind, isError: precomputed.isError, unresolved: precomputed.unresolved, reproducible: precomputed.reproducible, identifierCount: precomputed.identifierCount };
+  if (precomputed.blockKind !== block.kind || precomputed.isError !== Boolean(block.isError) || precomputed.unresolved !== block.unresolved || precomputed.reproducible !== block.reproducible || precomputed.identifierCount !== block.exactIdentifiers.length
+    || typeof precomputed.integrityHash !== "string"
+    || precomputed.integrityHash !== candidateRecordIntegrityHash(precomputed.blockId, precomputed.key, precomputed.candidates, safeMetadata)
   ) {
     return undefined;
   }
@@ -678,7 +686,9 @@ export async function precomputeCandidateRepresentations(
       .map(cacheSafeCandidate);
     records.set(block.id, {
       blockId: block.id, key, dependency: candidateDependency(block),
-      integrityHash: candidateRecordIntegrityHash(block.id, key, candidates), candidates,
+      blockKind: block.kind, isError: Boolean(block.isError), unresolved: block.unresolved,
+      reproducible: block.reproducible, identifierCount: block.exactIdentifiers.length,
+      integrityHash: candidateRecordIntegrityHash(block.id, key, candidates, { blockKind: block.kind, isError: Boolean(block.isError), unresolved: block.unresolved, reproducible: block.reproducible, identifierCount: block.exactIdentifiers.length }), candidates,
     });
     recomputed += 1;
   }

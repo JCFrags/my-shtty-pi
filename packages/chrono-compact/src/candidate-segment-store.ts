@@ -70,7 +70,7 @@ function sha(value: Uint8Array | string): string { return createHash("sha256").u
 function manifestHash(value: Omit<CandidateSegmentManifest, "manifestIntegrityHash">): string { return sha(stableStringify(value)); }
 function segmentHash(value: Omit<CandidateSegmentFile, "contentHash">): string { return sha(stableStringify(value)); }
 function configHash(config: CompactorConfig): string { return hashText(stableStringify({ semanticMaxTokens: config.semanticMaxTokens, emergencyAllowAbsent: config.emergencyAllowAbsent })); }
-function reducerHash(): string { return hashText(stableStringify({ schema: 1, reducers: REDUCER_VERSIONS, persistentCandidateSchema: 1 })); }
+function reducerHash(): string { return hashText(stableStringify({ schema: 1, reducers: REDUCER_VERSIONS, persistentCandidateSchema: 2 })); }
 function emptyMetrics(transition: CandidateStoreTransition = "new", ledgerTransition: SourceLedgerTransition = "new"): CandidateStoreMetrics {
   return { transition, sourceLedgerTransition: ledgerTransition, sourceBytesRead: 0, ledgerBytesRead: 0, ledgerBytesWritten: 0,
     entriesParsed: 0, blocksParsed: 0, segmentsCreated: 0, segmentsReused: 0, segmentsLoaded: 0, segmentBytesRead: 0,
@@ -234,6 +234,10 @@ async function loadSegment(store: CandidateSegmentStore, descriptor: CandidateSe
     if (bytes <= store.cacheByteLimit) { store.cache.set(descriptor.fileName,{bytes,records:parsed.records}); store.cacheBytes += bytes; }
     store.metrics = addMetrics(store.metrics,{segmentsLoaded:1,segmentBytesRead:bytes,persistentCandidateRecordsLoaded:parsed.records.length}); return parsed.records;
   } catch { store.metrics = addMetrics(store.metrics,{candidateIntegrityRejections:1}); return undefined; }
+}
+
+export async function loadCandidateSegmentRecords(store: CandidateSegmentStore, descriptor: CandidateSegmentDescriptor): Promise<readonly CandidatePrecomputeRecord[] | undefined> {
+  return loadSegment(store, descriptor);
 }
 
 export async function loadCandidateRecordsForBranch(store: CandidateSegmentStore, branchEntryIds: readonly string[]): Promise<ReadonlyMap<string,CandidatePrecomputeRecord>> {

@@ -14,7 +14,23 @@ export interface UserConfig {
   readonly dynamicRawTailMaxTokens?: number;
   readonly hybridSummaryEnabled?: boolean;
   readonly hybridSummaryTargetTokens?: number;
+  /** Retired. Kept only so old configuration files load safely. */
   readonly historyEditorEnabled?: boolean;
+  readonly valueWorkerMode?: "off" | "shadow" | "advisory";
+  readonly valueWorkerModel?: string;
+  readonly valueWorkerThinking?: "inherit" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  readonly valueWorkerMaxInputTokensPerJob?: number;
+  readonly valueWorkerMaxOutputTokensPerJob?: number;
+  readonly valueWorkerMaxItemsPerJob?: number;
+  readonly valueWorkerTimeoutSeconds?: number;
+  readonly valueWorkerRetries?: number;
+  readonly valueWorkerHostSlots?: number;
+  readonly valueWorkerMaxCallsPerSession?: number;
+  readonly valueWorkerMaxInputTokensPerSession?: number;
+  readonly valueWorkerMaxOutputTokensPerSession?: number;
+  readonly valueWorkerMaxEstimatedCostUsd?: number | null;
+  readonly valueWorkerCircuitFailureLimit?: number;
+  readonly valueWorkerCircuitCooldownSeconds?: number;
   readonly incrementalPrecomputeEnabled?: boolean;
   readonly isolatedWorkerEnabled?: boolean;
   readonly rollupShadowEnabled?: boolean;
@@ -46,6 +62,7 @@ const CONFIG_KEYS = [
   "hybridSummaryEnabled",
   "hybridSummaryTargetTokens",
   "historyEditorEnabled",
+  "valueWorkerMode", "valueWorkerModel", "valueWorkerThinking", "valueWorkerMaxInputTokensPerJob", "valueWorkerMaxOutputTokensPerJob", "valueWorkerMaxItemsPerJob", "valueWorkerTimeoutSeconds", "valueWorkerRetries", "valueWorkerHostSlots", "valueWorkerMaxCallsPerSession", "valueWorkerMaxInputTokensPerSession", "valueWorkerMaxOutputTokensPerSession", "valueWorkerMaxEstimatedCostUsd", "valueWorkerCircuitFailureLimit", "valueWorkerCircuitCooldownSeconds",
   "incrementalPrecomputeEnabled",
   "isolatedWorkerEnabled",
   "rollupShadowEnabled",
@@ -73,6 +90,7 @@ const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
   hybrid: "hybridSummaryEnabled",
   "hybrid-tokens": "hybridSummaryTargetTokens",
   "history-classifier": "historyEditorEnabled",
+  "value-worker-mode": "valueWorkerMode", "value-worker-model": "valueWorkerModel", "value-worker-thinking": "valueWorkerThinking", "value-worker-job-input": "valueWorkerMaxInputTokensPerJob", "value-worker-job-output": "valueWorkerMaxOutputTokensPerJob", "value-worker-job-items": "valueWorkerMaxItemsPerJob", "value-worker-timeout": "valueWorkerTimeoutSeconds", "value-worker-retries": "valueWorkerRetries", "value-worker-slots": "valueWorkerHostSlots", "value-worker-session-calls": "valueWorkerMaxCallsPerSession", "value-worker-session-input": "valueWorkerMaxInputTokensPerSession", "value-worker-session-output": "valueWorkerMaxOutputTokensPerSession", "value-worker-cost": "valueWorkerMaxEstimatedCostUsd", "value-worker-circuit-failures": "valueWorkerCircuitFailureLimit", "value-worker-circuit-cooldown": "valueWorkerCircuitCooldownSeconds",
   "incremental-precompute": "incrementalPrecomputeEnabled",
   "isolated-worker": "isolatedWorkerEnabled",
   "rollup-shadow": "rollupShadowEnabled",
@@ -134,6 +152,21 @@ export function validateUserConfig(value: unknown): UserConfig {
   if (input.hybridSummaryEnabled !== undefined) config.hybridSummaryEnabled = booleanValue(input.hybridSummaryEnabled, "hybridSummaryEnabled");
   if (input.hybridSummaryTargetTokens !== undefined) config.hybridSummaryTargetTokens = boundedInteger(input.hybridSummaryTargetTokens, "hybridSummaryTargetTokens", 512, 16_000);
   if (input.historyEditorEnabled !== undefined) config.historyEditorEnabled = booleanValue(input.historyEditorEnabled, "historyEditorEnabled");
+  if (input.valueWorkerMode !== undefined) { const v=String(input.valueWorkerMode); if(!["off","shadow","advisory"].includes(v)) throw new Error("valueWorkerMode must be off, shadow, or advisory."); config.valueWorkerMode=v; }
+  if (input.valueWorkerModel !== undefined) { const v=String(input.valueWorkerModel).trim(); if(!v||v.length>512) throw new Error("valueWorkerModel must be main or provider/model."); config.valueWorkerModel=v; }
+  if (input.valueWorkerThinking !== undefined) { const v=String(input.valueWorkerThinking); if(!["inherit","off","minimal","low","medium","high","xhigh","max"].includes(v)) throw new Error("valueWorkerThinking is unsupported."); config.valueWorkerThinking=v; }
+  if (input.valueWorkerMaxInputTokensPerJob !== undefined) config.valueWorkerMaxInputTokensPerJob=boundedInteger(input.valueWorkerMaxInputTokensPerJob,"valueWorkerMaxInputTokensPerJob",1000,12000);
+  if (input.valueWorkerMaxOutputTokensPerJob !== undefined) config.valueWorkerMaxOutputTokensPerJob=boundedInteger(input.valueWorkerMaxOutputTokensPerJob,"valueWorkerMaxOutputTokensPerJob",256,4000);
+  if (input.valueWorkerMaxItemsPerJob !== undefined) config.valueWorkerMaxItemsPerJob=boundedInteger(input.valueWorkerMaxItemsPerJob,"valueWorkerMaxItemsPerJob",5,100);
+  if (input.valueWorkerTimeoutSeconds !== undefined) config.valueWorkerTimeoutSeconds=boundedInteger(input.valueWorkerTimeoutSeconds,"valueWorkerTimeoutSeconds",10,600);
+  if (input.valueWorkerRetries !== undefined) config.valueWorkerRetries=boundedInteger(input.valueWorkerRetries,"valueWorkerRetries",0,2);
+  if (input.valueWorkerHostSlots !== undefined) config.valueWorkerHostSlots=boundedInteger(input.valueWorkerHostSlots,"valueWorkerHostSlots",1,4);
+  if (input.valueWorkerMaxCallsPerSession !== undefined) config.valueWorkerMaxCallsPerSession=boundedInteger(input.valueWorkerMaxCallsPerSession,"valueWorkerMaxCallsPerSession",1,2000);
+  if (input.valueWorkerMaxInputTokensPerSession !== undefined) config.valueWorkerMaxInputTokensPerSession=boundedInteger(input.valueWorkerMaxInputTokensPerSession,"valueWorkerMaxInputTokensPerSession",1000,10000000);
+  if (input.valueWorkerMaxOutputTokensPerSession !== undefined) config.valueWorkerMaxOutputTokensPerSession=boundedInteger(input.valueWorkerMaxOutputTokensPerSession,"valueWorkerMaxOutputTokensPerSession",1000,2000000);
+  if (input.valueWorkerMaxEstimatedCostUsd !== undefined) { if(input.valueWorkerMaxEstimatedCostUsd===null) config.valueWorkerMaxEstimatedCostUsd=null; else {const v=Number(input.valueWorkerMaxEstimatedCostUsd);if(!Number.isFinite(v)||v<0.01||v>1000)throw new Error("valueWorkerMaxEstimatedCostUsd must be null or 0.01 through 1000.");config.valueWorkerMaxEstimatedCostUsd=Math.round(v*1000000)/1000000;} }
+  if (input.valueWorkerCircuitFailureLimit !== undefined) config.valueWorkerCircuitFailureLimit=boundedInteger(input.valueWorkerCircuitFailureLimit,"valueWorkerCircuitFailureLimit",1,20);
+  if (input.valueWorkerCircuitCooldownSeconds !== undefined) config.valueWorkerCircuitCooldownSeconds=boundedInteger(input.valueWorkerCircuitCooldownSeconds,"valueWorkerCircuitCooldownSeconds",30,86400);
   if (input.incrementalPrecomputeEnabled !== undefined) config.incrementalPrecomputeEnabled = booleanValue(input.incrementalPrecomputeEnabled, "incrementalPrecomputeEnabled");
   if (input.isolatedWorkerEnabled !== undefined) config.isolatedWorkerEnabled = booleanValue(input.isolatedWorkerEnabled, "isolatedWorkerEnabled");
   if (input.rollupShadowEnabled !== undefined) config.rollupShadowEnabled = booleanValue(input.rollupShadowEnabled, "rollupShadowEnabled");
@@ -222,6 +255,21 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     case "hybridSummaryEnabled": value = booleanValue(raw, command); break;
     case "hybridSummaryTargetTokens": value = boundedInteger(raw, command, 512, 16_000); break;
     case "historyEditorEnabled": value = booleanValue(raw, command); break;
+    case "valueWorkerMode": if(!["off","shadow","advisory"].includes(raw)) throw new Error("value-worker-mode must be off, shadow, or advisory."); value=raw; break;
+    case "valueWorkerModel": value=raw; break;
+    case "valueWorkerThinking": if(!["inherit","off","minimal","low","medium","high","xhigh","max"].includes(raw)) throw new Error("unsupported thinking level"); value=raw; break;
+    case "valueWorkerMaxInputTokensPerJob": value=boundedInteger(raw,command,1000,12000); break;
+    case "valueWorkerMaxOutputTokensPerJob": value=boundedInteger(raw,command,256,4000); break;
+    case "valueWorkerMaxItemsPerJob": value=boundedInteger(raw,command,5,100); break;
+    case "valueWorkerTimeoutSeconds": value=boundedInteger(raw,command,10,600); break;
+    case "valueWorkerRetries": value=boundedInteger(raw,command,0,2); break;
+    case "valueWorkerHostSlots": value=boundedInteger(raw,command,1,4); break;
+    case "valueWorkerMaxCallsPerSession": value=boundedInteger(raw,command,1,2000); break;
+    case "valueWorkerMaxInputTokensPerSession": value=boundedInteger(raw,command,1000,10000000); break;
+    case "valueWorkerMaxOutputTokensPerSession": value=boundedInteger(raw,command,1000,2000000); break;
+    case "valueWorkerMaxEstimatedCostUsd": value=["off","disabled","none"].includes(raw)?null:Number(raw); break;
+    case "valueWorkerCircuitFailureLimit": value=boundedInteger(raw,command,1,20); break;
+    case "valueWorkerCircuitCooldownSeconds": value=boundedInteger(raw,command,30,86400); break;
     case "incrementalPrecomputeEnabled": value = booleanValue(raw, command); break;
     case "isolatedWorkerEnabled": value = booleanValue(raw, command); break;
     case "rollupShadowEnabled": value = booleanValue(raw, command); break;
