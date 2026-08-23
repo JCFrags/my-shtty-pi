@@ -3,6 +3,7 @@ import type {
   CompressionPlan,
   HistoricalBlock,
   RepresentationCandidate,
+  SourceRef,
   ValidationIssue,
   ValidationReport,
 } from "./types.js";
@@ -29,6 +30,7 @@ interface ToolPairState {
 export interface ValidationIndex {
   readonly blocks: readonly HistoricalBlock[];
   readonly exactBlockByRef: ReadonlyMap<string, HistoricalBlock>;
+  readonly blocksByEntryId: ReadonlyMap<string, readonly HistoricalBlock[]>;
   readonly firstBlockByEntry: ReadonlyMap<string, HistoricalBlock>;
   readonly validEntryIds: ReadonlySet<string>;
   readonly validExactSourceRefs: ReadonlySet<string>;
@@ -40,6 +42,7 @@ export interface ValidationIndex {
 
 export function buildValidationIndex(blocks: readonly HistoricalBlock[]): ValidationIndex {
   const exactBlockByRef = new Map<string, HistoricalBlock>();
+  const mutableBlocksByEntryId = new Map<string, HistoricalBlock[]>();
   const firstBlockByEntry = new Map<string, HistoricalBlock>();
   const validEntryIds = new Set<string>();
   const validExactSourceRefs = new Set<string>();
@@ -51,6 +54,9 @@ export function buildValidationIndex(blocks: readonly HistoricalBlock[]): Valida
   for (const block of blocks) {
     const exactKey = refKey(block.entryId, block.blockIndex);
     if (!exactBlockByRef.has(exactKey)) exactBlockByRef.set(exactKey, block);
+    const entryBlocks = mutableBlocksByEntryId.get(block.entryId);
+    if (entryBlocks) entryBlocks.push(block);
+    else mutableBlocksByEntryId.set(block.entryId, [block]);
     if (!firstBlockByEntry.has(block.entryId)) firstBlockByEntry.set(block.entryId, block);
     validEntryIds.add(block.entryId);
     validExactSourceRefs.add(exactKey);
@@ -67,9 +73,15 @@ export function buildValidationIndex(blocks: readonly HistoricalBlock[]): Valida
     }
   }
 
+  const blocksByEntryId = new Map<string, readonly HistoricalBlock[]>();
+  for (const [entryId, entryBlocks] of mutableBlocksByEntryId) {
+    blocksByEntryId.set(entryId, Object.freeze(entryBlocks));
+  }
+
   return {
     blocks,
     exactBlockByRef,
+    blocksByEntryId,
     firstBlockByEntry,
     validEntryIds,
     validExactSourceRefs,
@@ -80,16 +92,37 @@ export function buildValidationIndex(blocks: readonly HistoricalBlock[]): Valida
   };
 }
 
-function blockForSourceRef(index: ValidationIndex, entryId: string, blockIndex?: number): HistoricalBlock | undefined {
-  return blockIndex === undefined
-    ? index.firstBlockByEntry.get(entryId)
-    : index.exactBlockByRef.get(refKey(entryId, blockIndex));
+export interface ValidationLookupStats {
+  entryLookups: number;
+  exactLookups: number;
+}
+
+const EMPTY_BLOCKS: readonly HistoricalBlock[] = Object.freeze([]);
+
+function blocksForSourceRef(
+  index: ValidationIndex,
+  ref: SourceRef,
+  stats?: ValidationLookupStats,
+): readonly HistoricalBlock[] {
+  if (ref.blockIndex === undefined) {
+    if (stats) stats.entryLookups += 1;
+    return index.blocksByEntryId.get(ref.entryId) ?? EMPTY_BLOCKS;
+  }
+  if (stats) stats.exactLookups += 1;
+  const block = index.exactBlockByRef.get(refKey(ref.entryId, ref.blockIndex));
+  return block ? [block] : EMPTY_BLOCKS;
+}
+
+function blockForSourceText(index: ValidationIndex, ref: SourceRef): HistoricalBlock | undefined {
+  return ref.blockIndex === undefined
+    ? index.firstBlockByEntry.get(ref.entryId)
+    : index.exactBlockByRef.get(refKey(ref.entryId, ref.blockIndex));
 }
 
 export function sourceTextForCandidate(candidate: RepresentationCandidate, index: ValidationIndex): string {
   const pieces: string[] = [];
   for (const ref of candidate.sourceRefs) {
-    const block = blockForSourceRef(index, ref.entryId, ref.blockIndex);
+    const block = blockForSourceText(index, ref);
     if (block) pieces.push(block.exactText);
   }
   return pieces.join("\n");
@@ -232,6 +265,7 @@ export function pruneUnsafeCandidates(
 export interface ValidatePlanOptions {
   readonly allowOmittedPrefix?: boolean;
   readonly validationIndex?: ValidationIndex;
+  readonly lookupStats?: ValidationLookupStats;
 }
 
 export function validatePlan(
@@ -258,9 +292,8 @@ export function validatePlan(
     previousStart = unit.startEntryIndex;
     previousEnd = Math.max(previousEnd, unit.endEntryIndex);
     for (const ref of unit.sourceRefs) {
-      const exactKeys = ref.blockIndex === undefined
-        ? validationIndex.blocks.filter((block) => block.entryId === ref.entryId).map((block) => refKey(block.entryId, block.blockIndex))
-        : [refKey(ref.entryId, ref.blockIndex)];
+      const exactKeys = blocksForSourceRef(validationIndex, ref, options.lookupStats)
+        .map((block) => refKey(block.entryId, block.blockIndex));
       if (exactKeys.some((key) => coveredSourceOrdinals.has(key))) {
         issues.push({ severity: "error", code: "source-overlap", message: `Unit ${unit.id} repeats source coverage from an earlier unit.`, unitId: unit.id });
       }
@@ -284,9 +317,7 @@ export function validatePlan(
   for (const unit of plan.units) {
     if (unit.selected.level === "absent") continue;
     for (const ref of unit.selected.sourceRefs) {
-      const referencedBlocks = ref.blockIndex === undefined
-        ? validationIndex.blocks.filter((block) => block.entryId === ref.entryId)
-        : [validationIndex.exactBlockByRef.get(refKey(ref.entryId, ref.blockIndex))].filter((block): block is HistoricalBlock => block !== undefined);
+      const referencedBlocks = blocksForSourceRef(validationIndex, ref, options.lookupStats);
       for (const block of referencedBlocks) {
         if (!block.toolCallId) continue;
         const previous = representedToolPairs.get(block.toolCallId) ?? { call: false, result: false };

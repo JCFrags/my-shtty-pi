@@ -75,6 +75,21 @@ function reports(blocks: readonly HistoricalBlock[], value: CompressionPlan) {
   };
 }
 
+function trackedBlocks(values: readonly HistoricalBlock[]): {
+  readonly blocks: readonly HistoricalBlock[];
+  readonly reset: () => void;
+  readonly indexedReads: () => number;
+} {
+  let reads = 0;
+  const blocks = new Proxy([...values], {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) reads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  return { blocks, reset: () => { reads = 0; }, indexedReads: () => reads };
+}
+
 function assertEquivalent(blocks: readonly HistoricalBlock[], value: CompressionPlan, expectedCode?: string): void {
   const result = reports(blocks, value);
   assert.deepEqual(result.indexedReport, result.defaultReport);
@@ -128,6 +143,135 @@ test("indexed and default validation reports match for unresolved and failed sou
   const failure = block({ id: "failed", entryId: "failed", entryIndex: 0, kind: "tool_result", exactText: "ERROR operation failed", isError: true });
   const success = candidate([{ entryId: "failed" }], { level: "semantic", text: "Operation completed successfully.", lossy: true, omissions: [{ description: "compressed" }] });
   assertEquivalent([failure], plan([unit(success)]), "failure-became-success");
+});
+
+test("entry-level overlap expansion does not scan historical blocks per reference", () => {
+  const history = Array.from({ length: 1_000 }, (_, index) => block({
+    id: `entry-${index}:0`, entryId: `entry-${index}`, entryIndex: index, blockIndex: 0,
+    kind: "assistant_text", exactText: `source ${index}`,
+  }));
+  const tracked = trackedBlocks(history);
+  const index = buildValidationIndex(tracked.blocks);
+  const units = Array.from({ length: 100 }, (_, value) => unit(candidate([{ entryId: `entry-${value * 10}` }]), {
+    id: `unit-${value}`, startEntryIndex: value * 10, endEntryIndex: value * 10,
+  }));
+  tracked.reset();
+  const report = validatePlan(plan(units), tracked.blocks, 1_000, { validationIndex: index });
+  assert.equal(report.ok, true);
+  assert.equal(tracked.indexedReads(), 0);
+});
+
+test("block-level validation uses exact lookup without scanning historical blocks", () => {
+  const history = Array.from({ length: 1_000 }, (_, index) => block({
+    id: `entry-${index}:0`, entryId: `entry-${index}`, entryIndex: index, blockIndex: 0,
+    kind: "assistant_text", exactText: `source ${index}`,
+  }));
+  const tracked = trackedBlocks(history);
+  const index = buildValidationIndex(tracked.blocks);
+  const selected = candidate([{ entryId: "entry-500", blockIndex: 0 }]);
+  tracked.reset();
+  assert.equal(validatePlan(plan([unit(selected, { startEntryIndex: 500, endEntryIndex: 500 })]), tracked.blocks, 1_000, { validationIndex: index }).ok, true);
+  assert.equal(tracked.indexedReads(), 0);
+});
+
+test("tool-pair coverage does not scan historical blocks per entry reference", () => {
+  const history: HistoricalBlock[] = [];
+  const units: ReturnType<typeof unit>[] = [];
+  for (let pair = 0; pair < 200; pair += 1) {
+    const callIndex = pair * 2;
+    const resultIndex = callIndex + 1;
+    history.push(
+      block({ id: `call-${pair}:0`, entryId: `call-${pair}`, entryIndex: callIndex, blockIndex: 0, kind: "tool_call", exactText: "call", toolCallId: `tool-${pair}` }),
+      block({ id: `result-${pair}:0`, entryId: `result-${pair}`, entryIndex: resultIndex, blockIndex: 0, kind: "tool_result", exactText: "result", toolCallId: `tool-${pair}` }),
+    );
+    if (pair >= 100) {
+      const selected = candidate([{ entryId: `call-${pair}` }, { entryId: `result-${pair}` }]);
+      units.push(unit(selected, { id: `pair-${pair}`, kind: "tool_result", startEntryIndex: callIndex, endEntryIndex: resultIndex }));
+    }
+  }
+  const tracked = trackedBlocks(history);
+  const index = buildValidationIndex(tracked.blocks);
+  tracked.reset();
+  const report = validatePlan(plan(units), tracked.blocks, 1_000, { validationIndex: index, allowOmittedPrefix: true });
+  assert.equal(report.ok, true);
+  assert.equal(tracked.indexedReads(), 0);
+});
+
+test("one validation index serves several large-reference plans without scans or mutation", () => {
+  const history = Array.from({ length: 2_000 }, (_, index) => block({
+    id: `entry-${index}:0`, entryId: `entry-${index}`, entryIndex: index, blockIndex: 0,
+    kind: "assistant_text", exactText: `source ${index}`,
+  }));
+  const tracked = trackedBlocks(history);
+  const index = buildValidationIndex(tracked.blocks);
+  const before = [index.exactBlockByRef.size, index.firstBlockByEntry.size, index.validEntryIds.size, index.validExactSourceRefs.size];
+  for (let pass = 0; pass < 3; pass += 1) {
+    const units = Array.from({ length: 150 }, (_, value) => {
+      const entryIndex = value * 10 + pass;
+      return unit(candidate([{ entryId: `entry-${entryIndex}` }]), { id: `pass-${pass}-${value}`, startEntryIndex: entryIndex, endEntryIndex: entryIndex });
+    });
+    tracked.reset();
+    assert.equal(validatePlan(plan(units), tracked.blocks, 1_000, { validationIndex: index }).ok, true);
+    assert.equal(tracked.indexedReads(), 0);
+  }
+  assert.deepEqual([index.exactBlockByRef.size, index.firstBlockByEntry.size, index.validEntryIds.size, index.validExactSourceRefs.size], before);
+});
+
+test("indexed expansion preserves overlap and tool-pair validation semantics", () => {
+  const call = block({ id: "call:0", entryId: "call", entryIndex: 0, blockIndex: 0, kind: "tool_call", exactText: "call", toolCallId: "pair" });
+  const result = block({ id: "result:0", entryId: "result", entryIndex: 1, blockIndex: 0, kind: "tool_result", exactText: "result", toolCallId: "pair" });
+  const multi = [
+    block({ id: "multi:0", entryId: "multi", entryIndex: 2, blockIndex: 0, kind: "assistant_reasoning", exactText: "reason" }),
+    block({ id: "multi:1", entryId: "multi", entryIndex: 2, blockIndex: 1, kind: "assistant_text", exactText: "answer" }),
+  ];
+  const blocks = [call, result, ...multi];
+  const makeUnit = (id: string, refs: readonly SourceRef[], startEntryIndex: number, endEntryIndex = startEntryIndex) =>
+    unit(candidate(refs), { id, startEntryIndex, endEntryIndex });
+
+  const completePair = validatePlan(plan([
+    makeUnit("call", [{ entryId: "call" }], 0),
+    makeUnit("result", [{ entryId: "result", blockIndex: 0 }], 1),
+  ]), blocks);
+  assert.equal(completePair.ok, true);
+
+  for (const refs of [[{ entryId: "call" }], [{ entryId: "result" }]] as const) {
+    assert.ok(validatePlan(plan([makeUnit("partial", refs, refs[0].entryId === "call" ? 0 : 1)]), blocks)
+      .issues.some((issue) => issue.code === "tool-pair-partial"));
+  }
+
+  const omittedPair = validatePlan(plan([makeUnit("multi", [{ entryId: "multi" }], 2)]), blocks, 1_000, { allowOmittedPrefix: true });
+  assert.equal(omittedPair.ok, true);
+
+  const sameEntryBlocks = validatePlan(plan([
+    makeUnit("multi-0", [{ entryId: "multi", blockIndex: 0 }], 2),
+    makeUnit("multi-1", [{ entryId: "multi", blockIndex: 1 }], 2),
+  ]), blocks, 1_000, { allowOmittedPrefix: true });
+  assert.equal(sameEntryBlocks.issues.some((issue) => issue.code === "source-overlap"), false);
+
+  const merged = validatePlan(plan([makeUnit("merged", [
+    { entryId: "multi", blockIndex: 0 }, { entryId: "multi", blockIndex: 1 },
+  ], 2)]), blocks, 1_000, { allowOmittedPrefix: true });
+  assert.equal(merged.ok, true);
+
+  for (const overlapUnits of [
+    [makeUnit("entry", [{ entryId: "multi" }], 2), makeUnit("block", [{ entryId: "multi", blockIndex: 1 }], 2)],
+    [makeUnit("block", [{ entryId: "multi", blockIndex: 1 }], 2), makeUnit("entry", [{ entryId: "multi" }], 2)],
+    [makeUnit("duplicate-1", [{ entryId: "multi", blockIndex: 0 }], 2), makeUnit("duplicate-2", [{ entryId: "multi", blockIndex: 0 }], 2)],
+  ]) {
+    assert.ok(validatePlan(plan(overlapUnits), blocks, 1_000, { allowOmittedPrefix: true })
+      .issues.some((issue) => issue.code === "source-overlap"));
+  }
+
+  const nested = validatePlan(plan([
+    makeUnit("outer", [{ entryId: "call" }], 0, 3),
+    makeUnit("inner", [{ entryId: "multi", blockIndex: 0 }], 2),
+  ]), blocks);
+  assert.ok(nested.issues.some((issue) => issue.code === "chronology"));
+  const partial = validatePlan(plan([
+    makeUnit("left", [{ entryId: "call" }], 0, 2),
+    makeUnit("right", [{ entryId: "result" }], 1, 3),
+  ]), blocks);
+  assert.ok(partial.issues.some((issue) => issue.code === "chronology"));
 });
 
 test("indexed and default validation reports match for plan structure failures", () => {
