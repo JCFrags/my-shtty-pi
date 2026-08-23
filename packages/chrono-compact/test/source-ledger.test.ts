@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rename, rm, stat, writeFile, appendFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, symlink, writeFile, appendFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +56,20 @@ test("waits for an incomplete final line and appends after completion", async (t
   ledger = await updateSourceLedger(session, ledger);
   assert.equal(ledger.metrics.transition, "append");
   assert.equal(ledger.sourceOrder[0]?.entryId, "a");
+});
+
+test("append refuses a symlinked source-ledger sidecar", async (t) => {
+  const directory = await temporary(t); const session = join(directory, "session.jsonl");
+  await writeFile(session, `${line(header)}\n${line(entry("a", null))}\n`);
+  const ledger = await updateSourceLedger(session);
+  const sidecar = sourceLedgerPath(session);
+  const target = join(directory, "unrelated.txt");
+  await writeFile(target, "unchanged");
+  await rm(sidecar);
+  await symlink(target, sidecar);
+  await appendFile(session, `${line(entry("b", "a"))}\n`);
+  await assert.rejects(updateSourceLedger(session, ledger));
+  assert.equal(await readFile(target, "utf8"), "unchanged");
 });
 
 test("warm append and exact hit read bounded source bytes and reuse maps", async (t) => {

@@ -121,6 +121,7 @@ function verifyRecord(record: LedgerRecord, expectedPrevious: string): boolean {
   return hashBytes(stableStringify(base)) === ledgerRecordHash;
 }
 function noFollowFlags(): number { return fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0); }
+function appendNoFollowFlags(): number { return fsConstants.O_WRONLY | fsConstants.O_APPEND | (fsConstants.O_NOFOLLOW ?? 0); }
 
 async function acquireLock(sidecar: string): Promise<() => Promise<void>> {
   return acquireDerivedStoreLock(`${sidecar}.lock`);
@@ -339,7 +340,7 @@ async function appendUpdate(sessionPath: string, sidecar: string, ledger: Source
   const all = [...ledger.sourceOrder, ...appended];
   const checkpoint = checkpointRecord(previous, parsed.completePosition, sourceSize, all, transition, Buffer.from(parsed.committedAnchor));
   const bytes = encode([...appended, checkpoint]);
-  const handle = await open(sidecar, "a", 0o600);
+  const handle = await open(sidecar, appendNoFollowFlags(), 0o600);
   try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
   const map = ledger.entryById;
   for (const entry of appended) map.set(entry.entryId, entry);
