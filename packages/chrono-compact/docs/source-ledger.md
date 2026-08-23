@@ -20,6 +20,10 @@ Only records through the last valid checkpoint are committed. Each checkpoint st
 
 The parser retains references to unread chunk parts. It joins those parts once when a complete line is ready. It does not copy the growing pending line after each 64 KiB read. This supports very large JSONL entries without a line-size limit.
 
+## Writer lock recovery
+
+The ledger writer uses an owner-only lock record with a PID, Linux process-start identity, nonce, creation time, and inode. A proven dead owner or reused PID can be replaced after two stable owner and inode reads. Live, unverifiable, malformed, and old empty locks fail closed. Release checks the inode and complete owner identity, so it cannot remove a replacement lock. An old empty pre-owner lock requires manual recovery after the operator proves no writer is active.
+
 ## Update transitions
 
 - `new` streams the source and atomically creates a sidecar.

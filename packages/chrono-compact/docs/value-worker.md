@@ -14,7 +14,7 @@ The worker is retrospective only. It does not change tool results before the mai
 
 ## Modes
 
-`off` creates no advice work. `shadow` stores advice but does not change replay. `advisory` changes only bounded deterministic value scores. Compaction never waits for the worker.
+`off` creates no advice work. `shadow` stores advice but does not change replay. `advisory` changes only bounded deterministic value scores. At the start of compaction, a process-local gate cancels queued scheduling, aborts the active value-model signal, and prevents reruns. The gate closes before Pi summary or replay work starts. Compaction never waits for provider cancellation. Normal scheduling can resume after a later settled turn.
 
 ## Model selection
 

@@ -12,7 +12,7 @@ This tree is a **2.0.0 candidate** for staged compatibility and stabilization re
 - Decomposes messages into user content, visible assistant reasoning, assistant text, tool calls, tool results, bash executions, branch summaries, and control metadata.
 - Generates independent candidate representations for each block: raw, normalized, reduced, semantic, merged episode, marker, or absent.
 - Detects a conservative discovery-to-execution phase transition and retains the boundary result while reducing older discovery detail.
-- Preserves chronological placement and tool call/result pairing.
+- Preserves chronological placement and complete tool call/result interactions. The hard-cap suffix boundary cannot split a represented pair. A pair that cannot fit is fully omitted behind one exact recovery range. Validation rejects call-only, result-only, and overlapping source coverage.
 - Rejects raw-tail cuts that retain an orphan tool result. This can occur when a running tool finishes after its assistant call was lost during an abort or compaction.
 - Runs deterministic reducers before optional segmented background value advice. The worker is off by default and runs only after immutable candidate segments are ready. It can use the main model or an exact `provider/model` with a supported thinking level. `shadow` stores normalized advice without changing replay. `advisory` changes only bounded deterministic importance scores. Deterministic code selects and renders only prebuilt local candidates, and compaction never starts or waits for a value-model call.
 - Uses source-token retention bands: approximately 10,000 hot tokens, the preceding 75,000 warm tokens, and cold cue capsules. Authority, unresolved work, causality, novelty, reuse, and reproducibility override age.
@@ -32,7 +32,7 @@ This tree is a **2.0.0 candidate** for staged compatibility and stabilization re
 - Optionally projects old tool results only in a model-request copy. Modes are `off`, `safe`, and `aggressive`. The feature keeps first consumption and recent results exact. It also keeps failures, unknown terminal outcomes, images, restrictions, unresolved work, and later user-cited evidence exact.
 - Rejects unsafe semantic candidates that introduce unsupported identifiers, quotations, numeric facts, success states, or outcomes.
 
-This is not a `memory.md` authority file and not only one conversation summary. Each eligible compaction produces pinned source-linked memory, a chronological replay, and Pi's retained raw tail. At the configured interval, the extension uses the deterministic local rebase builder on normalized original messages instead of carrying or calling the prior-summary path. It never uses the ChronoCompact replay as rebase input.
+This is not a `memory.md` authority file and not only one conversation summary. Each eligible compaction produces a regular Pi summary, pinned source-linked memory, a chronological replay, and Pi's retained raw tail. At a rebase generation, the extension still uses Pi's regular summary logic over original raw messages and passes no previous summary. It never uses the ChronoCompact replay or a prior combined output as summary input.
 
 ### V2 scope limits
 
@@ -71,11 +71,11 @@ The package manifest declares `dist/src/pi-extension.js` as its Pi extension ent
 
 The extension listens to `session_before_compact`. The same pipeline runs for manual `/compact`, Pi context pressure, and an optional user-configured proactive threshold.
 
-For an ordinary eligible generation, the extension invokes Pi's regular compaction summarizer with raw messages ending at the final ChronoCompact tail boundary and the previous Pi-only summary. At a configured rebase generation, it uses the deterministic local rebase over normalized original messages and does not call the regular provider-summary path. It independently rebuilds the ChronoCompact event replay from immutable raw branch entries ending at the same boundary. It combines the regular-memory layer and replay into Pi's one replacement compaction message. The retained raw tail follows normally.
+For an ordinary eligible generation, the extension invokes Pi's regular compaction summarizer with only newly eligible raw messages ending at the final ChronoCompact tail boundary and the previous Pi-only summary. At a rebase generation, it invokes the same Pi summary logic with original raw source messages and no previous summary. It independently rebuilds the ChronoCompact event replay from immutable raw branch entries ending at the same boundary. It combines the regular Pi summary and replay into Pi's one replacement compaction message. The retained raw tail follows normally. If the Pi summary is unavailable, the extension reports degraded mode and returns replay alone without inventing a local regular summary.
 
 The regular Pi summary never receives the ChronoCompact replay. The replay never uses a prior compacted replay as source. New user messages and first-consumption tool results remain unchanged. Optional projection can replace only an older tool result in one request-local message copy. It never changes the stored message or JSONL.
 
-Malformed top-level V1.1 model output uses the complete deterministic replay fallback. Invalid or missing per-item decisions keep those items unchanged. Protected exact text, required exact evidence, chronology, recovery references, final validation, and token limits stay under deterministic control. If final replay validation fails, Pi's default compactor remains the safety fallback.
+Malformed background value-worker output cannot change deterministic replay text. Invalid or missing advice keeps those items unchanged. Protected exact text, required exact evidence, chronology, recovery references, final validation, and token limits stay under deterministic control. If final replay validation fails, Pi's default compactor remains the safety fallback.
 
 ### Registered tools
 
@@ -102,8 +102,8 @@ Run `/chrono-compact-settings` in Pi to configure:
 - minimum and maximum bounds for dynamic raw-tail selection;
 - target active-context size;
 - automatic or fixed chronological replay maximum; and
-- regular Pi summary enablement and token target; and
-- the separate, default-off `Experimental LLM history classifier` setting;
+- the required regular Pi summary token target; and
+- retired compatibility status for the old history-classifier inputs;
 - default-off deterministic incremental preprocessing;
 - a default-off one-job local child process for replay and candidate updates, with a host-wide priority scheduler; and
 - default-off request-local tool-result projection with `off`, `safe`, and `aggressive` modes;
@@ -136,9 +136,9 @@ Environment variables remain available for advanced deployment. They take preced
 | `PI_CHRONO_MAX_UNITS` | `600` | Unit-count pressure limit. |
 | `PI_CHRONO_MIN_EPISODE_TOKENS` | `1200` | Minimum source size for an episode. |
 | `PI_CHRONO_MAX_EPISODE_TOKENS` | `420` | Maximum episode body size. |
-| `PI_CHRONO_HISTORY_EDITOR` | `false` | Enable the experimental one-job V1.1 importance and treatment classifier. It uses Pi's current provider and model. This environment value overrides the persistent setting. |
-| `PI_CHRONO_HISTORY_EDITOR_MAX_INPUT` | `50000` | Maximum estimated editor input. Larger generations use deterministic compaction without a model job. |
-| `PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT` | `16000` | Adaptive upper bound. Normal generations stay at or below 8,000 tokens. High-value ultra-long history can use more. |
+| `PI_CHRONO_HISTORY_EDITOR` | retired | Compatibility input only. It can load, but the extension never starts the old compaction-time classifier. |
+| `PI_CHRONO_HISTORY_EDITOR_MAX_INPUT` | retired | Compatibility input only. It has no active extension behavior. |
+| `PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT` | retired | Compatibility input only. It has no active extension behavior. |
 | `PI_CHRONO_INCREMENTAL_PRECOMPUTE` | `false` | Enable segmented deterministic background candidate preprocessing. The owner-only store is `<session.jsonl>.chrono-candidate-segments-v1`. Old `.chrono-incremental-v2.json` files are ignored. |
 | `PI_CHRONO_ISOLATED_WORKER` | `false` | Move deterministic replay and enabled candidate updates to one-job local child processes. See [`docs/compaction-worker.md`](docs/compaction-worker.md). |
 | `PI_CHRONO_ROLLUP_SHADOW` | `false` | Run post-result hierarchical rollup evaluation in a low-priority local worker. Output does not reach the model. The current replay remains authoritative. Only metrics and hashes are stored. |
@@ -173,7 +173,7 @@ Pi's regular summary is generated first through Pi's normal summary implementati
 
 The raw-tail presets are 8,000, 16,000, and 24,000 tokens. Dynamic mode is the default. It uses the estimated current-turn size plus a 1,500-token continuity margin and applies the 3,000–6,000-token default bounds. A valid Pi boundary or one crossing tool call/result pair can change the actual size.
 
-V1.1 records whether the experimental classifier was applied, skipped, disabled, or rejected. It also records the model identity, one-job count, input items, accepted, rejected, and missing decisions, changed items, and layer token estimates in compaction details. The classifier setting is independent of the regular Pi summary setting. The environment value has precedence over the persistent setting. New cache files use owner-only mode `0600`.
+The old compaction-time history editor is retired from extension use. Legacy configuration can load, but even a true value starts no model call. The background value worker is the only active optional value-advice design. It remains off by default, and compaction cancels active value work without waiting. New cache files use owner-only mode `0600`.
 
 ## Standalone CLI
 
@@ -330,7 +330,7 @@ The repository includes an end-to-end Pi-like fixture and automated tests for:
 - local BM25, exact, regex, fuzzy path, filtering, current-version preference, diversity, complete 120-token cursor paging, all-level recall recovery cues, long-field fail-closed retry, and byte-identical cache-repeat rendering;
 - editable ordinary memory create, update, list, search, promotion, decay, demotion, supersession, 40-way same-process and separate-process concurrent append, independently loaded configured authority, spoof and ordinary mutation refusal, old-live-owner protection, PID-start mismatch, dead-owner and dead-recovery-guard recovery, replacement-safe release, rebuild, and corruption refusal;
 - plain terminal and structured JSON reducers with exact failure evidence and first-five/last-five unknown-output fallback;
-- causal episodes, completion certificates, command outcomes, extension-path deterministic original-history summary rebase, retrieval feedback, and token telemetry; and
+- causal episodes, completion certificates, command outcomes, original-source Pi summary rebase, retrieval feedback, and token telemetry; and
 - a deterministic 220-generation long-run simulation with resource changes, search, memory promotion, protected restrictions, and generated-compaction exclusion.
 
 ```bash

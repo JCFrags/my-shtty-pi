@@ -50,6 +50,10 @@ The worker sends safe stage progress to its parent. A child crash can therefore 
 
 A measured memory gate uses current resident memory and the largest indexed source entry. It runs before the heavy rollup update. A memory-gate result is a safety result, not a core rollup failure. A sidecar write failure returns a safe warning and does not replace a successful evaluation. None of these results change or delay the current compaction result.
 
+## Preservation benchmark boundary
+
+The public compare and generation benchmarks clone the complete authoritative extension response before post-result shadow scheduling. They compare that frozen response with the returned response after shadow completion. A malicious fake shadow mutates its supplied clone and returns a replacement object. The integration helper ignores both. This measures the extension compaction response before and after post-result scheduling and proves that the shadow result does not enter that returned response. It does not prove unrelated integration properties.
+
 ## Current limits
 
 This path measures a deterministic prototype. It does not provide live rollup context, fallback context, persistent ranked search, a daemon, remote work, or model-generated rollup records. The current replay and current retrieval tools remain unchanged. A later decision needs measured quality evidence and a separate review.

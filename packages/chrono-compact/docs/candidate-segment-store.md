@@ -31,6 +31,10 @@ The directory is mode `0700`. The manifest, lock, and segment files are mode `06
 
 A cold manifest load does not read segment files. Branch lookup loads only descriptors whose source-entry range can contain requested IDs. A byte-bounded least-recently-used cache limits loaded segment data.
 
+## Writer lock recovery
+
+The candidate-store writer uses the shared derived-store owner lock. A proven dead Linux owner or reused PID can recover. Live, unverifiable, malformed, and old empty locks remain protected. Release verifies the lock inode, PID, process-start identity, and nonce before removal. An old empty pre-owner lock requires manual recovery after the operator proves no writer is active. Readers continue to use the last complete manifest while a writer is active.
+
 ## Updates and fallback
 
 The source ledger passes newly parsed entry text through a request-local callback. This avoids reading the appended source range a second time. The callback text is not written to the ledger.

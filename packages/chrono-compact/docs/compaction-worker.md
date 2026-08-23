@@ -2,7 +2,7 @@
 
 ## Status and boundary
 
-The isolated worker is default-off. Set `PI_CHRONO_ISOLATED_WORKER=true` or enable it in the ChronoCompact settings screen. The existing in-process path remains unchanged when this setting is off. The experimental model-based history classifier also keeps the in-process path because the worker cannot call a model.
+The isolated worker is default-off. Set `PI_CHRONO_ISOLATED_WORKER=true` or enable it in the ChronoCompact settings screen. The existing in-process replay path remains unchanged when this setting is off. The worker cannot call a model. Required regular Pi summary generation stays in the main Pi process. The old compaction-time history classifier is retired from extension use.
 
 The worker processes retrospective history only. It does not intercept or change a tool result before the main model receives it. Pi JSONL remains authoritative. Worker replay caches, source ledgers, candidate segments, scheduler files, and responses are derived data.
 
@@ -16,7 +16,6 @@ The child can perform these deterministic tasks:
 - candidate-segment snapshot loading;
 - replay compaction and final validation;
 - complete replay generation hashing;
-- deterministic regular-summary rebase;
 - worker-specific replay cache reads and writes;
 - candidate-store updates; and
 - default-off post-result V2 rollup shadow evaluation.

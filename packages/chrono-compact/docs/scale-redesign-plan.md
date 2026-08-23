@@ -83,7 +83,7 @@ Benchmark outcomes now use safe code categories. `no-net-savings` is separate fr
 
 ## Local CPU isolation correction
 
-The default-off isolated worker moves deterministic replay compaction, replay generation hashing, candidate snapshot loading, deterministic summary rebase, and enabled candidate updates to one-job local child processes. A host-wide owner-only scheduler permits 1 through 4 jobs and defaults to one. Waiting replay has priority over waiting candidate updates. This change limits simultaneous host pressure and main-process event-loop delay. It does not reduce total deterministic work. Pi JSONL remains authoritative, and provider-backed summary work remains in Pi. See [compaction-worker.md](compaction-worker.md).
+The default-off isolated worker moves deterministic replay compaction, replay generation hashing, candidate snapshot loading, and enabled candidate updates to one-job local child processes. A host-wide owner-only scheduler permits 1 through 4 jobs and defaults to one. Waiting replay has priority over waiting candidate updates. This change limits simultaneous host pressure and main-process event-loop delay. It does not reduce total deterministic work. Pi JSONL remains authoritative, and provider-backed summary work remains in Pi. See [compaction-worker.md](compaction-worker.md).
 
 ## Background value advice
 

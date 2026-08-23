@@ -193,17 +193,15 @@ The semantic candidate validator rejects:
 
 Rejected LLM candidates are not repaired by another LLM call. The planner falls back to deterministic or raw alternatives.
 
-## V1.1 experimental global history classification
+## Retired history editor and background value advice
 
-`history-editor.ts` can run one optional model job after deterministic planning. The persistent `Experimental LLM history classifier` setting and `PI_CHRONO_HISTORY_EDITOR` environment variable control this path. The default is off. The environment value has precedence. This setting is independent of the regular Pi summary setting. The request contains ordered item metadata, full protected text, and bounded excerpts for large unprotected text. It asks only for typed importance and `keep` or `compress` advice. The provider request uses `cacheRetention: "none"`.
+The old compaction-time history editor is retired from extension use. Legacy persistent configuration and `PI_CHRONO_HISTORY_EDITOR` can load for compatibility, but no value starts that classifier or a model call. The old maximum input and output settings are also compatibility-only.
 
-The model cannot write replay text. A valid `compress` action selects one prebuilt local candidate. Deterministic code keeps protected text, direct user text, decisive user-facing failure evidence, the first large duplicate copy, omitted decisions, and invalid decisions unchanged. It then validates the complete plan and enforces the adaptive output bound. A result that saves fewer than 100 estimated tokens uses the byte-identical deterministic fallback.
-
-The response contract accepts an ordered subset. This prevents one uncertain item from rejecting useful independent decisions. Malformed top-level output, no accepted compression, failed validation, or an output-bound error uses the complete deterministic fallback. New cache sidecars use owner-only mode `0600`.
+The background value worker is the only active optional value-advice path. It runs only after source history is stored and immutable candidate segments are ready. It remains off by default. It can advise bounded scores for prebuilt candidates, but deterministic code owns selection, rendering, validation, and output limits. Compaction closes a process-local gate, cancels queued and active value work, and continues without waiting.
 
 ## Combined compaction context
 
-On normal non-rebase generations, `pi-hybrid.ts` invokes Pi's regular summary implementation with raw messages ending at ChronoCompact's final tail boundary and can continue the previous Pi-only summary. On a rebase generation, `pi-extension.ts` instead uses the deterministic original-history rebase. The prior combined ChronoCompact output is never used as regular-summary input.
+On normal non-rebase generations, `pi-hybrid.ts` invokes Pi's regular summary implementation with only newly eligible raw messages ending at ChronoCompact's final tail boundary and can continue the previous Pi-only summary. On a rebase generation, it invokes the same Pi summary logic with original raw source messages and no previous summary. The prior replay and prior combined ChronoCompact output are never used as regular-summary input.
 
 After Pi's summary completes, the deterministic event compactor independently rebuilds its replay from immutable raw branch entries. The regular summary's actual token count is removed from the total historical budget, and the replay planner receives the remainder. The model-facing order is:
 
