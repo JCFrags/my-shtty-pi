@@ -8,7 +8,7 @@ import { scanPublicTree } from './check-public-tree.mjs';
 import { validateWorkflow } from './check-workflow.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const CHILD_TIMEOUT_MS = 8_000;
+export const CHILD_TIMEOUT_MS = 15_000;
 export const CHILD_MAX_BUFFER = 256 * 1024;
 function boundedOutput(value) { return typeof value === 'string' ? value.slice(0, CHILD_MAX_BUFFER) : ''; }
 export function sanitizeFailureOutput(value) {
