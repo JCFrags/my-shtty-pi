@@ -2,6 +2,8 @@ import type { ParsedSession, SessionEntryLike, SourceRecord } from "./types.js";
 import { exactBlockContent } from "./blocks.js";
 import { readSessionJsonl } from "./jsonl.js";
 import { getRecord, getString, stableStringify } from "./utils.js";
+import { readSourceLedgerEntries, resolveSourceLedgerBranch } from "./ledger-branch.js";
+import type { SourceLedger, SourceLedgerEntry } from "./source-ledger.js";
 
 // These character limits remain below Pi's 50 KB tool-output limit even when
 // each JavaScript character needs four UTF-8 bytes. Retrieval stays exact, but
@@ -212,6 +214,72 @@ export function historyRange(
         ? `Range output reached a safety limit. Continue with history_range("${String(next)}", "${endEntryId}").`
         : "Range output reached a safety limit.",
     );
+  }
+  return [...header, "", ...renderedRecords].join("\n");
+}
+
+export async function historyGetFromLedger(sessionPath: string, ledger: SourceLedger, entryId: string, options: HistoryGetOptions = {}): Promise<string> {
+  const indexed = ledger.entryById.get(entryId);
+  if (!indexed) throw new Error(`Unknown history entry: ${entryId}`);
+  const loaded = await readSourceLedgerEntries(sessionPath, ledger, [indexed]);
+  const entry = loaded.entries[0]!;
+  const rawLine = loaded.rawTexts[0]!;
+  const position = ledger.sourceOrder.findIndex((candidate) => candidate.entryId === entryId);
+  const before = Math.max(0, options.contextBefore ?? 1);
+  const after = Math.max(0, options.contextAfter ?? 1);
+  const neighbors = ledger.sourceOrder.slice(Math.max(0, position - before), Math.min(ledger.sourceOrder.length, position + after + 1));
+  const sections: string[] = [`Entry ${entryId} (${entrySummary(entry)}), JSONL line ${indexed.lineNumber}`];
+  const maxChars = Math.min(MAX_EXACT_CHARACTERS, Math.max(1, options.maxChars ?? MAX_EXACT_CHARACTERS));
+  if (options.blockIndex !== undefined) {
+    const block = exactBlockContent(entry, options.blockIndex);
+    if (block === undefined) throw new Error(`Entry ${entryId} has no block at index ${options.blockIndex}`);
+    const exact = sliceExact(block, options.startChar, maxChars);
+    sections.push(`Exact block ${options.blockIndex}:\n${exact.text}`);
+    if (exact.nextStart !== undefined) sections.push(getContinuation(entryId, options.blockIndex, exact.nextStart));
+    if (rawLine.length <= 4_000) sections.push(`Exact containing JSONL record:\n${rawLine}`);
+    else sections.push(`Containing JSONL record has ${rawLine.length} characters. Use history_get("${entryId}") for exact record slices.`);
+  } else {
+    const exact = sliceExact(rawLine, options.startChar, maxChars);
+    sections.push(`Exact JSONL record:\n${exact.text}`);
+    if (exact.nextStart !== undefined) sections.push(getContinuation(entryId, undefined, exact.nextStart));
+  }
+  if (neighbors.length > 1) sections.push(`Neighboring chronological file records:\n${neighbors.map((neighbor) => `${neighbor.entryId === entryId ? "*" : " "} [line ${neighbor.lineNumber}] ${neighbor.entryId} ${neighbor.entryType}`).join("\n")}`);
+  return sections.join("\n\n");
+}
+
+function ledgerRangeEntries(ledger: SourceLedger, startEntryId: string, endEntryId: string): { range: readonly SourceLedgerEntry[]; rangeKind: string } {
+  const startEntry = ledger.entryById.get(startEntryId); const endEntry = ledger.entryById.get(endEntryId);
+  if (!startEntry) throw new Error(`Unknown start entry: ${startEntryId}`);
+  if (!endEntry) throw new Error(`Unknown end entry: ${endEntryId}`);
+  const endBranch = resolveSourceLedgerBranch(ledger, endEntryId).entries;
+  const ancestorIndex = endBranch.findIndex((entry) => entry.entryId === startEntryId);
+  if (ancestorIndex >= 0) return { range: endBranch.slice(ancestorIndex), rangeKind: "parent-chain chronological path" };
+  const start = ledger.sourceOrder.findIndex((entry) => entry.entryId === startEntryId);
+  const end = ledger.sourceOrder.findIndex((entry) => entry.entryId === endEntryId);
+  if (end < start) throw new Error(`End entry ${endEntryId} occurs before start entry ${startEntryId} in JSONL file order`);
+  return { range: ledger.sourceOrder.slice(start, end + 1), rangeKind: "JSONL file order (start is not an ancestor of end; unrelated branch records may appear)" };
+}
+
+export async function historyRangeFromLedger(sessionPath: string, ledger: SourceLedger, startEntryId: string, endEntryId: string, options: HistoryRangeOptions = {}): Promise<string> {
+  const { range, rangeKind } = ledgerRangeEntries(ledger, startEntryId, endEntryId);
+  const maxEntries = Math.min(MAX_RANGE_ENTRIES, Math.max(1, options.maxEntries ?? 200));
+  const candidates = range.slice(0, maxEntries);
+  const readable = candidates.filter((entry) => entry.sourceByteLength <= MAX_RANGE_CHARACTERS);
+  const loaded = await readSourceLedgerEntries(sessionPath, ledger, readable);
+  const textById = new Map(loaded.ledgerEntries.map((entry, index) => [entry.entryId, loaded.rawTexts[index]!]));
+  const selected: SourceLedgerEntry[] = []; const renderedRecords: string[] = []; let usedCharacters = 0;
+  for (const entry of candidates) {
+    const raw = textById.get(entry.entryId);
+    const rendered = raw === undefined
+      ? `[${entry.entryId} | JSONL line ${entry.lineNumber} has ${entry.sourceByteLength} characters and is omitted from this range. Use history_get("${entry.entryId}") for exact slices.]`
+      : raw;
+    if (renderedRecords.length > 0 && usedCharacters + rendered.length + 1 > MAX_RANGE_CHARACTERS) break;
+    selected.push(entry); renderedRecords.push(rendered); usedCharacters += rendered.length + 1;
+  }
+  const header = [`Bounded JSONL range ${startEntryId}–${endEntryId}`, `Traversal: ${rangeKind}`, `Requested entries: ${range.length}`, `Returned entries: ${selected.length}`];
+  if (selected.length < range.length) {
+    const next = range[selected.length]?.entryId;
+    header.push(next ? `Range output reached a safety limit. Continue with history_range("${String(next)}", "${endEntryId}").` : "Range output reached a safety limit.");
   }
   return [...header, "", ...renderedRecords].join("\n");
 }

@@ -3,6 +3,7 @@ import type {
   CompressionPlan,
   HistoricalBlock,
   RepresentationCandidate,
+  SourceRef,
   ValidationIssue,
   ValidationReport,
 } from "./types.js";
@@ -12,6 +13,7 @@ import {
   hasFailureLanguage,
   hasSuccessLanguage,
   orderedIncludes,
+  estimateTokensFromText,
   unique,
 } from "./utils.js";
 
@@ -19,13 +21,109 @@ function refKey(entryId: string, blockIndex?: number): string {
   return `${entryId}:${blockIndex ?? "*"}`;
 }
 
-function sourceTextForCandidate(candidate: RepresentationCandidate, blocks: readonly HistoricalBlock[]): string {
+interface ToolPairState {
+  readonly call: boolean;
+  readonly result: boolean;
+  readonly latestEntryIndex: number;
+}
+
+export interface ValidationIndex {
+  readonly blocks: readonly HistoricalBlock[];
+  readonly exactBlockByRef: ReadonlyMap<string, HistoricalBlock>;
+  readonly blocksByEntryId: ReadonlyMap<string, readonly HistoricalBlock[]>;
+  readonly firstBlockByEntry: ReadonlyMap<string, HistoricalBlock>;
+  readonly validEntryIds: ReadonlySet<string>;
+  readonly validExactSourceRefs: ReadonlySet<string>;
+  readonly unresolvedEntryIds: ReadonlySet<string>;
+  readonly failedEntryIds: ReadonlySet<string>;
+  readonly toolPairs: ReadonlyMap<string, ToolPairState>;
+  readonly entryOrder: readonly string[];
+}
+
+export function buildValidationIndex(blocks: readonly HistoricalBlock[]): ValidationIndex {
+  const exactBlockByRef = new Map<string, HistoricalBlock>();
+  const mutableBlocksByEntryId = new Map<string, HistoricalBlock[]>();
+  const firstBlockByEntry = new Map<string, HistoricalBlock>();
+  const validEntryIds = new Set<string>();
+  const validExactSourceRefs = new Set<string>();
+  const unresolvedEntryIds = new Set<string>();
+  const failedEntryIds = new Set<string>();
+  const toolPairs = new Map<string, ToolPairState>();
+  const entryOrder: string[] = [];
+
+  for (const block of blocks) {
+    const exactKey = refKey(block.entryId, block.blockIndex);
+    if (!exactBlockByRef.has(exactKey)) exactBlockByRef.set(exactKey, block);
+    const entryBlocks = mutableBlocksByEntryId.get(block.entryId);
+    if (entryBlocks) entryBlocks.push(block);
+    else mutableBlocksByEntryId.set(block.entryId, [block]);
+    if (!firstBlockByEntry.has(block.entryId)) firstBlockByEntry.set(block.entryId, block);
+    validEntryIds.add(block.entryId);
+    validExactSourceRefs.add(exactKey);
+    entryOrder.push(block.entryId);
+    if (block.unresolved) unresolvedEntryIds.add(block.entryId);
+    if (block.isError || hasFailureLanguage(block.exactText)) failedEntryIds.add(block.entryId);
+    if (block.toolCallId) {
+      const previous = toolPairs.get(block.toolCallId) ?? { call: false, result: false, latestEntryIndex: -1 };
+      toolPairs.set(block.toolCallId, {
+        call: previous.call || block.kind === "tool_call",
+        result: previous.result || block.kind === "tool_result",
+        latestEntryIndex: Math.max(previous.latestEntryIndex, block.entryIndex),
+      });
+    }
+  }
+
+  const blocksByEntryId = new Map<string, readonly HistoricalBlock[]>();
+  for (const [entryId, entryBlocks] of mutableBlocksByEntryId) {
+    blocksByEntryId.set(entryId, Object.freeze(entryBlocks));
+  }
+
+  return {
+    blocks,
+    exactBlockByRef,
+    blocksByEntryId,
+    firstBlockByEntry,
+    validEntryIds,
+    validExactSourceRefs,
+    unresolvedEntryIds,
+    failedEntryIds,
+    toolPairs,
+    entryOrder,
+  };
+}
+
+export interface ValidationLookupStats {
+  entryLookups: number;
+  exactLookups: number;
+}
+
+const EMPTY_BLOCKS: readonly HistoricalBlock[] = Object.freeze([]);
+
+function blocksForSourceRef(
+  index: ValidationIndex,
+  ref: SourceRef,
+  stats?: ValidationLookupStats,
+): readonly HistoricalBlock[] {
+  if (ref.blockIndex === undefined) {
+    if (stats) stats.entryLookups += 1;
+    return index.blocksByEntryId.get(ref.entryId) ?? EMPTY_BLOCKS;
+  }
+  if (stats) stats.exactLookups += 1;
+  const block = index.exactBlockByRef.get(refKey(ref.entryId, ref.blockIndex));
+  return block ? [block] : EMPTY_BLOCKS;
+}
+
+function blockForSourceText(index: ValidationIndex, ref: SourceRef): HistoricalBlock | undefined {
+  return ref.blockIndex === undefined
+    ? index.firstBlockByEntry.get(ref.entryId)
+    : index.exactBlockByRef.get(refKey(ref.entryId, ref.blockIndex));
+}
+
+export function sourceTextForCandidate(candidate: RepresentationCandidate, index: ValidationIndex): string {
   const pieces: string[] = [];
   for (const ref of candidate.sourceRefs) {
-    const exact = blocks.find(
-      (block) => block.entryId === ref.entryId && (ref.blockIndex === undefined || block.blockIndex === ref.blockIndex),
-    );
-    if (exact) pieces.push(exact.exactText);
+    const block = blockForSourceText(index, ref);
+    if (block) pieces.push(block.exactText);
   }
   return pieces.join("\n");
 }
@@ -53,10 +151,10 @@ function numericFacts(text: string): string[] {
 function candidateIssues(
   unit: CandidateUnit,
   candidate: RepresentationCandidate,
-  blocks: readonly HistoricalBlock[],
+  index: ValidationIndex,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const sourceText = sourceTextForCandidate(candidate, blocks);
+  const sourceText = sourceTextForCandidate(candidate, index);
   if (unit.protectedExact && candidate.level !== "raw") {
     const directTextIsExact =
       candidate.metadata.protectedDirectText === true && candidate.text === directInstructionText(sourceText);
@@ -110,9 +208,7 @@ function candidateIssues(
       }
     }
   }
-  const sourceUnresolved = blocks.some(
-    (block) => candidate.sourceRefs.some((ref) => ref.entryId === block.entryId) && block.unresolved,
-  );
+  const sourceUnresolved = candidate.sourceRefs.some((ref) => index.unresolvedEntryIds.has(ref.entryId));
   if (sourceUnresolved && hasSuccessLanguage(candidate.text) && !hasSuccessLanguage(sourceText)) {
     issues.push({
       severity: "error",
@@ -121,9 +217,7 @@ function candidateIssues(
       unitId: unit.id,
     });
   }
-  const sourceFailed = blocks.some(
-    (block) => candidate.sourceRefs.some((ref) => ref.entryId === block.entryId) && (block.isError || hasFailureLanguage(block.exactText)),
-  );
+  const sourceFailed = candidate.sourceRefs.some((ref) => index.failedEntryIds.has(ref.entryId));
   if (sourceFailed && hasSuccessLanguage(candidate.text) && !hasFailureLanguage(candidate.text) && !hasSuccessLanguage(sourceText)) {
     issues.push({
       severity: "error",
@@ -143,41 +237,51 @@ export interface PrunedCandidatesResult {
 export function pruneUnsafeCandidates(
   units: readonly CandidateUnit[],
   blocks: readonly HistoricalBlock[],
+  validationIndex: ValidationIndex = buildValidationIndex(blocks),
 ): PrunedCandidatesResult {
   const rejectedIssues: ValidationIssue[] = [];
   const safeUnits = units.map((unit) => {
     const safe = unit.candidates.filter((candidate) => {
-      const issues = candidateIssues(unit, candidate, blocks);
+      const issues = candidateIssues(unit, candidate, validationIndex);
       if (issues.length > 0) rejectedIssues.push(...issues);
       return issues.length === 0;
     });
     if (safe.length > 0) return { ...unit, candidates: safe };
     const raw = unit.candidates.find((candidate) => candidate.level === "raw");
-    if (!raw) throw new Error(`Validation removed every candidate for unit ${unit.id}, and no raw fallback exists.`);
-    return { ...unit, candidates: [raw] };
+    if (raw) return { ...unit, candidates: [raw] };
+    if (unit.protectedExact) throw new Error(`Validation removed every candidate for protected unit ${unit.id}, and no raw fallback exists.`);
+    const text = "Historical unit omitted from active detail. Exact source remains recoverable.";
+    const recovery: RepresentationCandidate = {
+      id: `${unit.id}:validated-recovery`, level: "marker", text, tokens: estimateTokensFromText(text), rawTokens: unit.rawTokens,
+      utility: 0.05, lossy: true, reducer: "validated-recovery-marker", reducerVersion: "1.0.0",
+      omissions: [{ description: "Unsafe reduced candidates replaced by a source-linked recovery marker" }], sourceRefs: unit.sourceRefs,
+      metadata: { validationFallback: true },
+    };
+    return { ...unit, candidates: [recovery] };
   });
   return { units: safeUnits, rejectedIssues };
+}
+
+export interface ValidatePlanOptions {
+  readonly allowOmittedPrefix?: boolean;
+  readonly validationIndex?: ValidationIndex;
+  readonly lookupStats?: ValidationLookupStats;
 }
 
 export function validatePlan(
   plan: CompressionPlan,
   blocks: readonly HistoricalBlock[],
   targetTokens = plan.targetTokens,
-  options: { readonly allowOmittedPrefix?: boolean } = {},
+  options: ValidatePlanOptions = {},
 ): ValidationReport {
   const issues: ValidationIssue[] = [];
-  const validRefs = new Set<string>();
-  const validEntries = new Set<string>();
-  for (const block of blocks) {
-    validEntries.add(block.entryId);
-    validRefs.add(refKey(block.entryId, block.blockIndex));
-    validRefs.add(refKey(block.entryId));
-  }
+  const validationIndex = options.validationIndex ?? buildValidationIndex(blocks);
 
   let previousStart = -1;
   let previousEnd = -1;
+  const coveredSourceOrdinals = new Set<string>();
   for (const unit of plan.units) {
-    if (unit.startEntryIndex < previousStart || unit.endEntryIndex < unit.startEntryIndex) {
+    if (unit.startEntryIndex < previousStart || unit.startEntryIndex < previousEnd || unit.endEntryIndex < unit.startEntryIndex) {
       issues.push({
         severity: "error",
         code: "chronology",
@@ -188,7 +292,15 @@ export function validatePlan(
     previousStart = unit.startEntryIndex;
     previousEnd = Math.max(previousEnd, unit.endEntryIndex);
     for (const ref of unit.sourceRefs) {
-      if (!validEntries.has(ref.entryId) || !validRefs.has(refKey(ref.entryId, ref.blockIndex))) {
+      const exactKeys = blocksForSourceRef(validationIndex, ref, options.lookupStats)
+        .map((block) => refKey(block.entryId, block.blockIndex));
+      if (exactKeys.some((key) => coveredSourceOrdinals.has(key))) {
+        issues.push({ severity: "error", code: "source-overlap", message: `Unit ${unit.id} repeats source coverage from an earlier unit.`, unitId: unit.id });
+      }
+      for (const key of exactKeys) coveredSourceOrdinals.add(key);
+      const valid = validationIndex.validEntryIds.has(ref.entryId)
+        && (ref.blockIndex === undefined || validationIndex.validExactSourceRefs.has(refKey(ref.entryId, ref.blockIndex)));
+      if (!valid) {
         issues.push({
           severity: "error",
           code: "invalid-source-ref",
@@ -197,23 +309,37 @@ export function validatePlan(
         });
       }
     }
-    issues.push(...candidateIssues(unit, unit.selected, blocks));
+    issues.push(...candidateIssues(unit, unit.selected, validationIndex));
   }
 
   const firstRepresentedEntryIndex = plan.units[0]?.startEntryIndex ?? Number.POSITIVE_INFINITY;
-  const originalCallIds = new Map<string, { call: boolean; result: boolean; latestEntryIndex: number }>();
-  for (const block of blocks) {
-    if (!block.toolCallId) continue;
-    const state = originalCallIds.get(block.toolCallId) ?? { call: false, result: false, latestEntryIndex: -1 };
-    if (block.kind === "tool_call") state.call = true;
-    if (block.kind === "tool_result") state.result = true;
-    state.latestEntryIndex = Math.max(state.latestEntryIndex, block.entryIndex);
-    originalCallIds.set(block.toolCallId, state);
+  const representedToolPairs = new Map<string, { call: boolean; result: boolean }>();
+  for (const unit of plan.units) {
+    if (unit.selected.level === "absent") continue;
+    for (const ref of unit.selected.sourceRefs) {
+      const referencedBlocks = blocksForSourceRef(validationIndex, ref, options.lookupStats);
+      for (const block of referencedBlocks) {
+        if (!block.toolCallId) continue;
+        const previous = representedToolPairs.get(block.toolCallId) ?? { call: false, result: false };
+        representedToolPairs.set(block.toolCallId, {
+          call: previous.call || block.kind === "tool_call",
+          result: previous.result || block.kind === "tool_result",
+        });
+      }
+    }
   }
-  for (const [toolCallId, pair] of originalCallIds) {
+  for (const [toolCallId, pair] of validationIndex.toolPairs) {
     if (!pair.call || !pair.result) continue;
-    const represented = plan.units.filter((unit) => unit.toolCallIds.includes(toolCallId));
-    if (represented.length === 0 || represented.every((unit) => unit.selected.level === "absent")) {
+    const represented = representedToolPairs.get(toolCallId) ?? { call: false, result: false };
+    if (represented.call !== represented.result) {
+      issues.push({
+        severity: "error",
+        code: "tool-pair-partial",
+        message: `Tool interaction ${toolCallId} has only one source side in the compacted replay.`,
+      });
+      continue;
+    }
+    if (!represented.call) {
       if (options.allowOmittedPrefix === true && pair.latestEntryIndex < firstRepresentedEntryIndex) continue;
       issues.push({
         severity: "error",
@@ -223,9 +349,8 @@ export function validatePlan(
     }
   }
 
-  const entryOrder = blocks.map((block) => block.entryId);
   const renderedOrder = plan.units.flatMap((unit) => unit.sourceRefs.map((ref) => ref.entryId));
-  if (!orderedIncludes(entryOrder, unique(renderedOrder))) {
+  if (!orderedIncludes(validationIndex.entryOrder, unique(renderedOrder))) {
     issues.push({
       severity: "error",
       code: "source-order",

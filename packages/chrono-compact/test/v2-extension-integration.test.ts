@@ -11,7 +11,7 @@ import { estimateTokensFromText } from "../src/utils.js";
 
 type Hook = (event: any, context: any) => Promise<any> | any;
 
-test("extension search feedback, recall promotion, and deterministic periodic rebase are product-connected", async () => {
+test("extension search feedback, recall promotion, and replay-only summary fallback are product-connected", async () => {
   const directory = await mkdtemp(join(tmpdir(), "chrono-v2-extension-connected-"));
   const sessionPath = join(directory, "session.jsonl");
   const previous = new Map<string, string | undefined>();
@@ -170,8 +170,9 @@ test("extension search feedback, recall promotion, and deterministic periodic re
       signal: new AbortController().signal,
     }, context);
     assert.ok(result?.compaction);
-    assert.match(result.compaction.summary, /# REGULAR MEMORY REBASE/);
-    assert.equal(result.compaction.details.hybrid.model, "deterministic-local-rebase");
+    assert.doesNotMatch(result.compaction.summary, /# REGULAR MEMORY REBASE/);
+    assert.match(result.compaction.summary, /# CHRONOCOMPACT MEMORY REPLAY/);
+    assert.equal(result.compaction.details.hybrid.enabled, false);
     assert.ok(result.compaction.details.compaction.plan.some((item: { importanceReasons: string[] }) =>
       item.importanceReasons.some((reason) => /reused [2-9]\d* time/.test(reason))));
   } finally {

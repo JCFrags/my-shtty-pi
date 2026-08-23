@@ -70,7 +70,7 @@ export function parseArgs(argv) {
     } else if (argument === "--synthetic-tasks") {
       const value = argv[index + 1];
       const count = Number(value);
-      if (!value || !Number.isSafeInteger(count) || count < 1 || count > 1_000) throw new Error("synthetic-tasks");
+      if (!value || !Number.isSafeInteger(count) || count < 1 || count > 5_000) throw new Error("synthetic-tasks");
       args.syntheticTasks = count;
       index += 1;
     } else if (argument === "--help" || argument === "-h") {
