@@ -11,6 +11,7 @@ import { renderHybridCompaction } from "./pi-hybrid.js";
 import { parseHistoricalBlocks } from "./blocks.js";
 import { estimateTokensFromText, hashText, stableStringify } from "./utils.js";
 import type { CompressionResult } from "./types.js";
+import { appendRollupShadowRecord, runRollupShadowEvaluation } from "./history-rollup-shadow.js";
 
 interface SourceState { deviceId: string; inodeId: string; size: number; mtimeMs: number; }
 interface ReplayLoadMetrics {
@@ -130,6 +131,33 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
   try {
     try { setPriority(0, request.niceLevel); priorityApplied = true; } catch {}
     if (Date.now() > request.deadlineMs) throw Object.assign(new Error(), { code: "worker-timeout" });
+    if (request.jobType === "rollup-shadow") {
+      const boundState = await expectedState(request);
+      const shadow = await runRollupShadowEvaluation({
+        sessionPath: request.sessionPath,
+        branchLeafId: request.branchLeafId,
+        firstKeptEntryId: request.firstKeptEntryId,
+        currentReplayText: request.currentReplayText,
+        hardTokenBound: request.hardTokenBound,
+        targetTokenBound: request.targetTokenBound,
+        retentionHints: request.retentionHints,
+        dynamicContext: request.dynamicContext,
+        signal,
+        persist: false,
+      });
+      if (!same(boundState, sourceState(await stat(request.sessionPath)))) {
+        throw Object.assign(new Error(), { code: "source-changed" });
+      }
+      await appendRollupShadowRecord(request.sessionPath, shadow);
+      return {
+        schemaVersion: 1,
+        jobId: request.jobId,
+        status: "ok",
+        jobType: request.jobType,
+        shadow,
+        metrics: baseMetrics(started, 0, priorityApplied, "disabled"),
+      };
+    }
     if (request.jobType === "candidate-store-update") {
       const boundState = await expectedState(request);
       const store = createCandidateSegmentStore(request.sessionPath);
@@ -161,7 +189,7 @@ process.on("message", (value) => {
     let checked: CompactionWorkerResponse;
     try { checked = validateWorkerResponse(response); if (Buffer.byteLength(JSON.stringify(checked)) > MAX_WORKER_RESPONSE_BYTES) throw new Error("worker-response-too-large"); }
     catch (error) { checked = { schemaVersion: 1, jobId: (value as { jobId?: string })?.jobId ?? "invalid", status: "failed",
-      jobType: (value as { jobType?: "replay-compaction" | "candidate-store-update" })?.jobType ?? "replay-compaction",
+      jobType: (value as { jobType?: "replay-compaction" | "candidate-store-update" | "rollup-shadow" })?.jobType ?? "replay-compaction",
       failureCode: String((error as Error)?.message).includes("response-too-large") ? "worker-response-too-large" : "worker-protocol-error",
       metrics: baseMetrics(performance.now(), 0, false, "disabled") }; }
     if (process.connected && process.send) process.send(checked, () => process.exit(0)); else process.exit(1);

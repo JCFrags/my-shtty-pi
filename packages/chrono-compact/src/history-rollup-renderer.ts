@@ -1,16 +1,513 @@
-import { directInstructionText, estimateTokensFromText } from "./utils.js";
+import { parseHistoricalBlocks } from "./blocks.js";
 import { readSourceLedgerEntries } from "./ledger-branch.js";
-import { historyDynamicValue, type HistoryDynamicContext, type HistoryValueRecord } from "./history-value.js";
-import { loadHistoryNode, loadRecentHistoryLeaves, readCurrentHistorySnapshot, type HistoryLeafNode, type HistoryNode, type HistoryRollupNode, type HistoryRollupRuntime } from "./history-rollup-store.js";
+import { queryHistoryRollups } from "./history-rollup-query.js";
+import {
+  loadRecentHistoryLeavesByTokens,
+  readCurrentHistorySnapshot,
+  type HistoryNode,
+  type HistoryRollupRuntime,
+} from "./history-rollup-store.js";
+import {
+  validateHistoryRollupPlan,
+  validateHistoryRollupPrototype,
+  type HistoryRenderPlanLine,
+  type HistoryRollupValidationIssueCode,
+} from "./history-rollup-validation.js";
+import type { HistoryDynamicContext, HistoryValueRecord } from "./history-value.js";
 import type { SourceLedger } from "./source-ledger.js";
+import { directInstructionText, estimateTokensFromText } from "./utils.js";
 
-export interface HistoryRollupRenderOptions {readonly targetTokens?:number;readonly hardTokens?:number;readonly currentTokens?:number;readonly recentTokens?:number;readonly olderTokens?:number;readonly archiveTokens?:number;readonly recentSourceTokens?:number;readonly dynamicContext?:HistoryDynamicContext;}
-export interface HistoryRollupQuality {outputTokens:number;currentRestrictionCount:number;exactCurrentRestrictions:number;recoveryOnlyRestrictions:number;restrictionCueCoverage:number;openTaskCoverage:number;blockerCoverage:number;nextActionCoverage:number;unresolvedFailureCoverage:number;currentResourceCoverage:number;conflictCoverage:number;recentEventCoverage:number;selectedOlderEvidenceCount:number;archiveRangeCoverage:number;lossyRecords:number;lossyRecordsWithRecovery:number;invalidSourceReferences:number;cutLines:number;falseCompletions:number;unsupportedFacts:number;sourceBytesReadDuringRender:number;nodesReadDuringRender:number;nodeBytesReadDuringRender:number;renderMs:number;peakRssKiB:number;timerDelayMs:number;integrityOk:boolean;}
-export interface HistoryRollupRenderResult {readonly text:string;readonly validation:{ok:boolean;issues:readonly string[]};readonly quality:HistoryRollupQuality;}
-const recovery=(record:HistoryValueRecord):string=>{const start=record.sourceRange?.startEntryId??record.sourceRefs?.[0]?.entryId??"unknown",end=record.sourceRange?.endEntryId??record.sourceRefs?.at(-1)?.entryId??start;return start===end?`history_get("${start}")`:`history_range("${start}", "${end}")`;};
-const lossyLine=(record:HistoryValueRecord):string=>`[${record.confidence==="heuristic-inference"?"heuristic reduced":"deterministic reduced"} ${record.category} ${record.lifecycle}; omitted detail] ${record.lifecycle==="unresolved"?"Unresolved failure or blocker retained; source detail omitted.":record.cue??"Typed history record"} — Exact recovery: ${recovery(record)}`;
-function rootRecords(root:HistoryNode):HistoryValueRecord[]{return root.nodeType==="leaf"?[...root.valueRecords]:[...root.currentStateRecords,...root.conflictRecords,...root.unresolvedFailureRecords,...root.currentResourceRecords,...root.openTaskRecords,...root.selectedImportantEvidence,...root.closedEpisodeCapsules,...root.archiveRangeRecords];}
-function lineBudget(lines:readonly string[],tokens:number):{lines:string[];omitted:boolean}{const output:string[]=[];let used=0;for(const line of lines){const cost=estimateTokensFromText(`${line}\n`);if(used+cost>tokens)continue;output.push(line);used+=cost;}return{lines:output,omitted:output.length<lines.length};}
-async function exactRestriction(runtime:HistoryRollupRuntime,ledger:SourceLedger,record:HistoryValueRecord,budget:number):Promise<{line:string;exact:boolean;bytes:number}>{const ref=record.sourceRefs[0],indexed=ref?ledger.entryById.get(ref.entryId):undefined;if(!ref||!indexed)return{line:`[recovery-only current restriction] Exact source required — Exact recovery: ${recovery(record)}`,exact:false,bytes:0};if(indexed.sourceByteLength>Math.max(4096,budget*4))return{line:`[recovery-only current restriction] Exact instruction is larger than this section — Exact recovery: ${recovery(record)}`,exact:false,bytes:0};try{const loaded=await readSourceLedgerEntries(runtime.sessionPath,ledger,[indexed]),entry=loaded.entries[0]!,blocks=(await import("./blocks.js")).parseHistoricalBlocks([entry],{includeHistoricalCompactions:false,includeMetadata:false}),block=ref.blockIndex===undefined?blocks.find(b=>b.entryId===ref.entryId):blocks.find(b=>b.entryId===ref.entryId&&b.blockIndex===ref.blockIndex),text=block?.exactText,direct=text?directInstructionText(text):undefined,line=direct?`[exact current restriction; source fact] ${JSON.stringify(direct)} — Exact source: history_get("${ref.entryId}"${ref.blockIndex===undefined?"":`, blockIndex=${ref.blockIndex}`})`:undefined;if(!line||estimateTokensFromText(line)>budget)return{line:`[recovery-only current restriction] Exact instruction does not fit this section — Exact recovery: ${recovery(record)}`,exact:false,bytes:loaded.metrics.totalSourceBytesRead};return{line,exact:true,bytes:loaded.metrics.totalSourceBytesRead};}catch{return{line:`[recovery-only current restriction] Exact source unavailable — Exact recovery: ${recovery(record)}`,exact:false,bytes:0};}}
-export async function renderHistoryRollupPrototype(runtime:HistoryRollupRuntime,ledger:SourceLedger,options:HistoryRollupRenderOptions={}):Promise<HistoryRollupRenderResult>{const started=performance.now(),beforeNodes=runtime.nodesLoaded,beforeBytes=runtime.nodeBytesRead,target=Math.min(options.hardTokens??25000,options.targetTokens??20000),hard=Math.min(25000,Math.max(target,options.hardTokens??25000)),budgets={current:options.currentTokens??Math.floor(target*.4),recent:options.recentTokens??Math.floor(target*.25),older:options.olderTokens??Math.floor(target*.25),archive:options.archiveTokens??Math.floor(target*.1)},root=await readCurrentHistorySnapshot(runtime);if(!root){const text="# CURRENT WORK\n\nNo stored history.\n\n# RECENT EVENTS\n\nNone.\n\n# SELECTED OLDER EVIDENCE\n\nNone.\n\n# ARCHIVE MAP\n\nNone.";return{text,validation:{ok:true,issues:[]},quality:{outputTokens:estimateTokensFromText(text),currentRestrictionCount:0,exactCurrentRestrictions:0,recoveryOnlyRestrictions:0,restrictionCueCoverage:1,openTaskCoverage:1,blockerCoverage:1,nextActionCoverage:1,unresolvedFailureCoverage:1,currentResourceCoverage:1,conflictCoverage:1,recentEventCoverage:1,selectedOlderEvidenceCount:0,archiveRangeCoverage:1,lossyRecords:0,lossyRecordsWithRecovery:0,invalidSourceReferences:0,cutLines:0,falseCompletions:0,unsupportedFacts:0,sourceBytesReadDuringRender:0,nodesReadDuringRender:runtime.nodesLoaded-beforeNodes,nodeBytesReadDuringRender:runtime.nodeBytesRead-beforeBytes,renderMs:performance.now()-started,peakRssKiB:process.resourceUsage().maxRSS,timerDelayMs:0,integrityOk:true}};}const all=rootRecords(root),current=all.filter(r=>r.priority==="A"||r.lifecycle==="current"||r.lifecycle==="unresolved"||r.lifecycle==="open"||r.lifecycle==="conflict"||["goal","decision","next-action","blocker","resource-state"].includes(r.category)),restrictions=current.filter(r=>r.category==="restriction"),currentLines:string[]=[],renderedIds=new Set<string>();let exact=0,recoveryOnly=0,sourceBytes=0;for(const record of restrictions){const value=await exactRestriction(runtime,ledger,record,Math.max(128,Math.floor(budgets.current/Math.max(1,restrictions.length))));currentLines.push(value.line);renderedIds.add(record.id);sourceBytes+=value.bytes;if(value.exact)exact++;else recoveryOnly++;}const conflicts=current.filter(r=>r.lifecycle==="conflict");if(conflicts.length){currentLines.push(`[deterministic reduced conflict-group; omitted detail] ${conflicts.length} linked conflict records retained — Exact recovery: history_range("${root.sourceRange.startEntryId}", "${root.sourceRange.endEntryId}")`);for(const record of conflicts)renderedIds.add(record.id);}for(const record of current.sort((a,b)=>historyDynamicValue(b,options.dynamicContext)-historyDynamicValue(a,options.dynamicContext)||(a.sourceRange?.startEntryId??"").localeCompare(b.sourceRange?.startEntryId??"")))if(!renderedIds.has(record.id)){currentLines.push(lossyLine(record));renderedIds.add(record.id);}const currentBound=lineBudget(currentLines,budgets.current);if(currentBound.omitted)currentBound.lines.push("[current-work omission] Lower-value complete records omitted; use archive recovery ranges below.");const recentLeaves=await loadRecentHistoryLeaves(runtime,2),recentRecords=recentLeaves.flatMap(leaf=>leaf.valueRecords).filter(r=>!renderedIds.has(r.id)),recentBound=lineBudget(recentRecords.map(lossyLine),budgets.recent);if(recentBound.omitted)recentBound.lines.push("[recent-event omission] Additional recent typed records omitted; exact source remains in JSONL.");const older=all.filter(r=>!renderedIds.has(r.id)&&r.category!=="archive-range").sort((a,b)=>historyDynamicValue(b,options.dynamicContext)-historyDynamicValue(a,options.dynamicContext)).slice(0,256).sort((a,b)=>(a.sourceRefs?.[0]?.entryId??a.sourceRange?.startEntryId??"").localeCompare(b.sourceRefs?.[0]?.entryId??b.sourceRange?.startEntryId??"")),olderBound=lineBudget(older.map(lossyLine),budgets.older);if(olderBound.omitted)olderBound.lines.push("[older-evidence omission] Lower-value typed evidence omitted; use archive ranges.");const archives=all.filter(r=>r.category==="archive-range"),archiveBound=lineBudget(archives.map(lossyLine),budgets.archive);if(!archiveBound.lines.length)archiveBound.lines.push(`[archive map] Stored branch ${root.sourceRange.startEntryId}–${root.sourceRange.endEntryId}; exact recovery: history_range("${root.sourceRange.startEntryId}", "${root.sourceRange.endEntryId}")`);let text=["# CURRENT WORK","",...currentBound.lines,"","# RECENT EVENTS","",...recentBound.lines,"","# SELECTED OLDER EVIDENCE","",...olderBound.lines,"","# ARCHIVE MAP","",...archiveBound.lines].join("\n");while(estimateTokensFromText(text)>hard){const sections=[olderBound.lines,recentBound.lines,archiveBound.lines,currentBound.lines],section=sections.find(lines=>lines.length>1);if(!section)break;section.splice(-2,1);text=["# CURRENT WORK","",...currentBound.lines,"","# RECENT EVENTS","",...recentBound.lines,"","# SELECTED OLDER EVIDENCE","",...olderBound.lines,"","# ARCHIVE MAP","",...archiveBound.lines].join("\n");}const validation=validateHistoryRollupPrototype(text,ledger,all,hard),count=(category:string,lifecycle?:string)=>current.filter(r=>r.category===category&&(!lifecycle||r.lifecycle===lifecycle)).length,coverage=(wanted:number,regex:RegExp)=>wanted===0?1:Math.min(1,text.split("\n").filter(line=>regex.test(line)).length/wanted),lossy=text.split("\n").filter(line=>/^\[(heuristic|deterministic) reduced/.test(line));const quality:HistoryRollupQuality={outputTokens:estimateTokensFromText(text),currentRestrictionCount:restrictions.length,exactCurrentRestrictions:exact,recoveryOnlyRestrictions:recoveryOnly,restrictionCueCoverage:restrictions.length===0?1:(exact+recoveryOnly)/restrictions.length,openTaskCoverage:coverage(current.filter(r=>r.lifecycle==="open"||r.category==="goal").length,/task-episode|goal/),blockerCoverage:coverage(count("blocker"),/blocker/),nextActionCoverage:coverage(count("next-action"),/next-action/),unresolvedFailureCoverage:coverage(current.filter(r=>r.category==="failure"&&r.lifecycle==="unresolved").length,/failure/),currentResourceCoverage:coverage(count("resource-state"),/resource-state/),conflictCoverage:conflicts.length===0?1:(text.includes("conflict-group")?1:0),recentEventCoverage:recentRecords.length===0?1:Math.min(1,recentBound.lines.length/recentRecords.length),selectedOlderEvidenceCount:olderBound.lines.filter(line=>line.startsWith("[")).length,archiveRangeCoverage:archiveBound.lines.length?1:0,lossyRecords:lossy.length,lossyRecordsWithRecovery:lossy.filter(line=>line.includes("Exact recovery:")).length,invalidSourceReferences:validation.issues.filter(x=>x.startsWith("invalid-source")).length,cutLines:validation.issues.filter(x=>x==="cut-line").length,falseCompletions:validation.issues.filter(x=>x==="false-completion").length,unsupportedFacts:validation.issues.filter(x=>x.startsWith("unsupported-exact-fact")).length,sourceBytesReadDuringRender:sourceBytes,nodesReadDuringRender:runtime.nodesLoaded-beforeNodes,nodeBytesReadDuringRender:runtime.nodeBytesRead-beforeBytes,renderMs:performance.now()-started,peakRssKiB:process.resourceUsage().maxRSS,timerDelayMs:0,integrityOk:validation.ok};return{text,validation,quality};}
-export function validateHistoryRollupPrototype(text:string,ledger:SourceLedger,records:readonly HistoryValueRecord[],hardTokens=25000):{ok:boolean;issues:string[]}{const issues:string[]=[];if(estimateTokensFromText(text)>hardTokens)issues.push("hard-token-limit");const ids=new Set(ledger.sourceOrder.map(e=>e.entryId)),order=new Map(ledger.sourceOrder.map((e,index)=>[e.entryId,index]));for(const record of records){if(!record?.sourceRange||!record.sourceRefs?.length){issues.push(`unsupported-record:${record?.id??`unknown-${typeof record}`}`);continue;}for(const ref of record.sourceRefs)if(!ref||!ids.has(ref.entryId))issues.push(`invalid-source:${record.id}`);const start=order.get(record.sourceRange.startEntryId),end=order.get(record.sourceRange.endEntryId);if(start===undefined||end===undefined||start>end)issues.push(`invalid-source-order:${record.id}`);}for(const line of text.split("\n")){if(line.endsWith("…")||(/history_(get|range)\(/.test(line)&&!line.includes(")")))issues.push("cut-line");if(line.includes("source fact")&&!/Exact source: history_get\("[^"]+"/.test(line))issues.push("unsupported-exact-fact");if(line.includes("omitted detail")&&!line.includes("Exact recovery:"))issues.push("loss-without-recovery");if(/\b(completed|resolved|passed)\b/i.test(line)&&/\bunresolved\b/i.test(line))issues.push("false-completion");}return{ok:issues.length===0,issues};}
+export { validateHistoryRollupPrototype } from "./history-rollup-validation.js";
+export type { HistoryRenderPlanLine } from "./history-rollup-validation.js";
+
+export interface HistoryRollupRenderOptions {
+  readonly targetTokens?: number;
+  readonly hardTokens?: number;
+  readonly currentTokens?: number;
+  readonly recentTokens?: number;
+  readonly olderTokens?: number;
+  readonly archiveTokens?: number;
+  readonly recentSourceTokens?: number;
+  readonly dynamicContext?: HistoryDynamicContext;
+}
+
+export interface HistoryRollupQuality {
+  outputTokens: number;
+  currentRestrictionCount: number;
+  exactCurrentRestrictions: number;
+  recoveryOnlyRestrictions: number;
+  omittedRestrictionsWithoutRoute: number;
+  restrictionCueCoverage: number;
+  restrictionExactCoverage: number;
+  restrictionConflictCoverage: number;
+  openTaskCoverage: number;
+  blockerCoverage: number;
+  nextActionCoverage: number;
+  goalCoverage: number;
+  decisionCoverage: number;
+  unresolvedFailureCoverage: number;
+  currentResourceCoverage: number;
+  conflictCoverage: number;
+  recentEventCoverage: number;
+  recentSourceTokenCoverage: number;
+  selectedOlderEvidenceCount: number;
+  archiveRangeCoverage: number;
+  lossyRecords: number;
+  lossyRecordsWithRecovery: number;
+  invalidSourceReferences: number;
+  invalidSourceRanges: number;
+  cutLines: number;
+  missingRecoveryRoutes: number;
+  falseCompletions: number;
+  unsupportedIdentifiers: number;
+  unsupportedQuotations: number;
+  unsupportedNumbers: number;
+  unsupportedFacts: number;
+  sourceOrderErrors: number;
+  duplicateRenderedRecords: number;
+  sourceBytesReadDuringRender: number;
+  exactSourceBytesLoaded: number;
+  hardLimitReached: boolean;
+  nodesReadDuringRender: number;
+  nodeBytesReadDuringRender: number;
+  queryNodesVisited: number;
+  queryBytesRead: number;
+  renderMs: number;
+  peakRssKiB: number;
+  timerDelayMs: number;
+  integrityOk: boolean;
+}
+
+export interface HistoryRollupRenderResult {
+  readonly text: string;
+  readonly plan: readonly HistoryRenderPlanLine[];
+  readonly validation: { readonly ok: boolean; readonly issues: readonly string[] };
+  readonly quality: HistoryRollupQuality;
+}
+
+function rootRecords(root: HistoryNode): HistoryValueRecord[] {
+  if (root.nodeType === "leaf") return [...root.valueRecords];
+  return [
+    ...root.currentStateRecords,
+    ...root.conflictRecords,
+    ...root.unresolvedFailureRecords,
+    ...root.currentResourceRecords,
+    ...root.openTaskRecords,
+    ...root.selectedImportantEvidence,
+    ...root.closedEpisodeCapsules,
+    ...root.archiveRangeRecords,
+  ];
+}
+
+function recovery(record: HistoryValueRecord): string {
+  const start = record.sourceRange.startEntryId;
+  const end = record.sourceRange.endEntryId;
+  return start === end ? `history_get("${start}")` : `history_range("${start}", "${end}")`;
+}
+
+function planLine(
+  section: HistoryRenderPlanLine["section"],
+  record: HistoryValueRecord,
+  text: string,
+  lineType: HistoryRenderPlanLine["lineType"],
+  lossy: boolean,
+  included = false,
+): HistoryRenderPlanLine {
+  return {
+    id: `${section}:${record.id}`,
+    section,
+    record,
+    sourceRange: record.sourceRange,
+    sourceOrder: record.sourceOrder,
+    lineType,
+    lossy,
+    recoveryRoute: recovery(record),
+    text,
+    tokenEstimate: estimateTokensFromText(`${text}\n`),
+    priority: record.priority,
+    included,
+  };
+}
+
+function lossyText(record: HistoryValueRecord): string {
+  const cue = record.lifecycle === "unresolved"
+    ? "Unresolved failure or blocker retained; source detail omitted."
+    : record.cue ?? "Typed history record";
+  return `[deterministic reduced ${record.category} ${record.lifecycle}; omitted detail] ${cue} — Exact recovery: ${recovery(record)}`;
+}
+
+async function restrictionLine(
+  runtime: HistoryRollupRuntime,
+  ledger: SourceLedger,
+  record: HistoryValueRecord,
+  budget: number,
+): Promise<{ line: HistoryRenderPlanLine; bytes: number }> {
+  const ref = record.sourceRefs[0];
+  const indexed = ref ? ledger.entryById.get(ref.entryId) : undefined;
+  const route = recovery(record);
+  const recoveryText = (reason: string) =>
+    `[derived recovery-only current restriction] ${reason} — Exact recovery: ${route}`;
+  if (!ref || !indexed) return { line: planLine("current", record, recoveryText("Exact source required"), "derived", true), bytes: 0 };
+  if (indexed.sourceByteLength > Math.max(4096, budget * 4)) {
+    return { line: planLine("current", record, recoveryText("Exact instruction is larger than this section"), "derived", true), bytes: 0 };
+  }
+  try {
+    const loaded = await readSourceLedgerEntries(runtime.sessionPath, ledger, [indexed], { maximumGapBytes: 0 });
+    const blocks = parseHistoricalBlocks(loaded.entries, { includeHistoricalCompactions: false, includeMetadata: false });
+    const block = ref.blockIndex === undefined
+      ? blocks.find(candidate => candidate.entryId === ref.entryId)
+      : blocks.find(candidate => candidate.entryId === ref.entryId && candidate.blockIndex === ref.blockIndex);
+    const exact = block ? directInstructionText(block.exactText) : undefined;
+    const text = exact
+      ? `[exact current restriction; source fact] ${JSON.stringify(exact)} — Exact source: ${route}`
+      : undefined;
+    if (!text || estimateTokensFromText(text) > budget) {
+      return { line: planLine("current", record, recoveryText("Exact instruction does not fit this section"), "derived", true), bytes: loaded.metrics.totalSourceBytesRead };
+    }
+    return { line: planLine("current", record, text, "exact", false), bytes: loaded.metrics.totalSourceBytesRead };
+  } catch {
+    return { line: planLine("current", record, recoveryText("Exact source unavailable"), "derived", true), bytes: 0 };
+  }
+}
+
+function currentRank(record: HistoryValueRecord): number {
+  if (record.category === "restriction" && record.sourceAuthority !== "assistant") return 0;
+  if (record.category === "restriction" && record.lifecycle === "conflict") return 1;
+  if (record.category === "blocker") return 2;
+  if (record.category === "failure" && record.lifecycle === "unresolved") return 3;
+  if (record.category === "next-action") return 4;
+  if (record.lifecycle === "open") return 5;
+  if (record.category === "goal") return 6;
+  if (record.category === "decision") return 7;
+  if (record.category === "resource-state") return 8;
+  return 9;
+}
+
+function duplicateKey(record: HistoryValueRecord): string {
+  return `${record.category}:${record.normalizedClaimHash}`;
+}
+
+function deduplicate(records: readonly HistoryValueRecord[]): HistoryValueRecord[] {
+  const seen = new Set<string>();
+  return records.filter(record => {
+    const key = duplicateKey(record);
+    if (seen.has(record.id) || seen.has(key)) return false;
+    seen.add(record.id);
+    seen.add(key);
+    return true;
+  });
+}
+
+function includeWithinBudget(
+  lines: HistoryRenderPlanLine[],
+  budget: number,
+  protectedSections = false,
+): HistoryRenderPlanLine[] {
+  let used = 0;
+  return lines.map(line => {
+    if (used + line.tokenEstimate <= budget || protectedSections) {
+      used += line.tokenEstimate;
+      return { ...line, included: true };
+    }
+    return line;
+  });
+}
+
+function finalReduction(plan: HistoryRenderPlanLine[], hardTokens: number): HistoryRenderPlanLine[] {
+  let current = plan;
+  const headingReserve = estimateTokensFromText("# CURRENT WORK\n# RECENT EVENTS\n# SELECTED OLDER EVIDENCE\n# ARCHIVE MAP\n");
+  const total = () => headingReserve + current.filter(line => line.included).reduce((sum, line) => sum + line.tokenEstimate, 0);
+  const removalOrder = [
+    (line: HistoryRenderPlanLine) => line.section === "older" && line.record?.priority !== "A",
+    (line: HistoryRenderPlanLine) => line.section === "recent" && line.record?.priority !== "A",
+    (line: HistoryRenderPlanLine) => line.section === "archive" && line.lineType !== "omission",
+    (line: HistoryRenderPlanLine) => line.section === "current" && line.record?.category === "status",
+    (line: HistoryRenderPlanLine) => line.section === "current" && ["decision", "task-episode"].includes(line.record?.category ?? "") && line.record?.lifecycle === "closed",
+    (line: HistoryRenderPlanLine) => line.section === "current" && line.record?.category === "goal",
+    (line: HistoryRenderPlanLine) => line.section === "current" && line.record?.category === "task-episode" && line.record?.lifecycle === "open",
+    (line: HistoryRenderPlanLine) => line.section === "current" && line.record?.category === "decision",
+    (line: HistoryRenderPlanLine) => line.section === "current" && line.record?.category === "next-action" && line.record?.priority !== "A",
+    (line: HistoryRenderPlanLine) => line.section === "current" && line.record?.category === "resource-state" && line.record?.priority !== "A",
+    (line: HistoryRenderPlanLine) => line.section === "current" && ["blocker", "failure"].includes(line.record?.category ?? "") && line.record?.priority !== "A",
+  ];
+  for (const removable of removalOrder) {
+    if (total() <= hardTokens) break;
+    const candidates = current
+      .filter(line => line.included && removable(line))
+      .sort((a, b) => b.sourceOrder.start - a.sourceOrder.start || b.id.localeCompare(a.id));
+    for (const candidate of candidates) {
+      if (total() <= hardTokens) break;
+      current = current.map(line => line.id === candidate.id ? { ...line, included: false } : line);
+    }
+  }
+  return current;
+}
+
+function finalText(plan: readonly HistoryRenderPlanLine[]): string {
+  const sections: { key: HistoryRenderPlanLine["section"]; heading: string }[] = [
+    { key: "current", heading: "# CURRENT WORK" },
+    { key: "recent", heading: "# RECENT EVENTS" },
+    { key: "older", heading: "# SELECTED OLDER EVIDENCE" },
+    { key: "archive", heading: "# ARCHIVE MAP" },
+  ];
+  return sections.map(section => {
+    const lines = plan.filter(line => line.included && line.section === section.key).map(line => line.text);
+    return `${section.heading}\n\n${lines.join("\n")}`;
+  }).join("\n\n");
+}
+
+function coverage(records: readonly HistoryValueRecord[], plan: readonly HistoryRenderPlanLine[]): number {
+  if (!records.length) return 1;
+  const rendered = new Set(plan.filter(line => line.included).flatMap(line => line.record ? [line.record.id] : []));
+  return records.filter(record => rendered.has(record.id)).length / records.length;
+}
+
+function issueCount(issues: readonly string[], code: HistoryRollupValidationIssueCode): number {
+  return issues.filter(issue => issue === code).length;
+}
+
+export async function renderHistoryRollupPrototype(
+  runtime: HistoryRollupRuntime,
+  ledger: SourceLedger,
+  options: HistoryRollupRenderOptions = {},
+): Promise<HistoryRollupRenderResult> {
+  const started = performance.now();
+  let timerDelay = 0;
+  let timerExpected = performance.now() + 10;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    timerDelay = Math.max(timerDelay, now - timerExpected);
+    timerExpected = now + 10;
+  }, 10);
+  timer.unref();
+  const beforeNodes = runtime.nodesLoaded;
+  const beforeBytes = runtime.nodeBytesRead;
+  const target = Math.min(options.hardTokens ?? 25000, options.targetTokens ?? 20000);
+  const hard = Math.min(25000, Math.max(target, options.hardTokens ?? 25000));
+  const budgets = {
+    current: options.currentTokens ?? Math.floor(target * 0.4),
+    recent: options.recentTokens ?? Math.floor(target * 0.25),
+    older: options.olderTokens ?? Math.floor(target * 0.25),
+    archive: options.archiveTokens ?? Math.floor(target * 0.1),
+  };
+  const root = await readCurrentHistorySnapshot(runtime);
+  if (!root) {
+    const text = "# CURRENT WORK\n\nNo stored history.\n\n# RECENT EVENTS\n\n\n# SELECTED OLDER EVIDENCE\n\n\n# ARCHIVE MAP\n\n";
+    clearInterval(timer);
+    return {
+      text,
+      plan: [],
+      validation: { ok: true, issues: [] },
+      quality: emptyQuality(text, runtime, beforeNodes, beforeBytes, performance.now() - started),
+    };
+  }
+  const rootSet = deduplicate(rootRecords(root));
+  const current = rootSet.filter(record =>
+    record.priority === "A" ||
+    ["current", "unresolved", "open", "conflict"].includes(record.lifecycle) ||
+    ["goal", "decision", "next-action", "blocker", "resource-state"].includes(record.category));
+  let restrictions = deduplicate(current.filter(record => record.category === "restriction"));
+  let sourceBytes = 0;
+  const restrictionPlans: HistoryRenderPlanLine[] = [];
+  for (const record of restrictions) {
+    const result = await restrictionLine(runtime, ledger, record, Math.max(64, Math.floor(budgets.current / Math.max(1, restrictions.length))));
+    restrictionPlans.push(result.line);
+    sourceBytes += result.bytes;
+  }
+  const currentOther = deduplicate(current.filter(record => record.category !== "restriction"))
+    .sort((a, b) => currentRank(a) - currentRank(b) || a.sourceOrder.start - b.sourceOrder.start || a.id.localeCompare(b.id))
+    .map(record => planLine("current", record, lossyText(record), "derived", true));
+  const protectedCurrent = currentOther.filter(line =>
+    line.record?.category === "blocker" ||
+    line.record?.category === "next-action" ||
+    line.record?.category === "resource-state" ||
+    (line.record?.category === "failure" && line.record.lifecycle === "unresolved") ||
+    line.record?.lifecycle === "conflict");
+  const routineCurrent = currentOther.filter(line => !protectedCurrent.includes(line));
+  const mandatoryTokens = [...restrictionPlans, ...protectedCurrent]
+    .reduce((sum, line) => sum + line.tokenEstimate, 0);
+  let plan: HistoryRenderPlanLine[] = [
+    ...includeWithinBudget(restrictionPlans, budgets.current, true),
+    ...includeWithinBudget(protectedCurrent, budgets.current, true),
+    ...includeWithinBudget(routineCurrent, Math.max(0, budgets.current - mandatoryTokens)),
+  ];
+  const recentLeaves = await loadRecentHistoryLeavesByTokens(runtime, options.recentSourceTokens ?? 10000);
+  const recentRecords = deduplicate(recentLeaves.flatMap(leaf => leaf.valueRecords).filter(record =>
+    !plan.some(line => line.record && (line.record.id === record.id || duplicateKey(line.record) === duplicateKey(record)))));
+  plan.push(...includeWithinBudget(
+    recentRecords.sort((a, b) => a.sourceOrder.start - b.sourceOrder.start || a.id.localeCompare(b.id))
+      .map(record => planLine("recent", record, lossyText(record), "derived", true)),
+    budgets.recent,
+  ));
+  const query = await queryHistoryRollups(runtime, { context: options.dynamicContext });
+  const discoveredRestrictions = deduplicate([
+    ...restrictions,
+    ...recentRecords.filter(record => record.category === "restriction"),
+    ...query.records.filter(record => record.category === "restriction"),
+  ]);
+  if (discoveredRestrictions.length > restrictions.length) {
+    const known = new Set(restrictions.map(record => record.id));
+    plan = plan.map(line => line.record?.category === "restriction" && line.section !== "current"
+      ? { ...line, included: false }
+      : line);
+    for (const record of discoveredRestrictions) {
+      if (known.has(record.id)) continue;
+      const loaded = await restrictionLine(
+        runtime,
+        ledger,
+        record,
+        Math.max(48, Math.floor(budgets.current / Math.max(1, discoveredRestrictions.length))),
+      );
+      sourceBytes += loaded.bytes;
+      plan.push({ ...loaded.line, included: true });
+    }
+    restrictions = discoveredRestrictions;
+  }
+  const olderRecords = deduplicate(query.records.filter(record =>
+    record.category !== "archive-range" &&
+    !plan.some(line => line.record && (line.record.id === record.id || duplicateKey(line.record) === duplicateKey(record)))));
+  plan.push(...includeWithinBudget(
+    olderRecords.map(record => planLine("older", record, lossyText(record), "derived", true)),
+    budgets.older,
+  ));
+  const archiveRecords = deduplicate(rootSet.filter(record => record.category === "archive-range"))
+    .sort((a, b) => a.sourceOrder.start - b.sourceOrder.start || a.id.localeCompare(b.id));
+  const archiveLines = archiveRecords.length
+    ? archiveRecords.map(record => planLine("archive", record, lossyText(record), "derived", true))
+    : [planLine(
+        "archive",
+        {
+          ...restrictions[0] ?? rootSet[0]!,
+          id: `archive:${root.nodeId}`,
+          category: "archive-range",
+          sourceRange: root.sourceRange,
+          sourceOrder: root.branchOrderRange,
+          cue: "Stored branch archive range.",
+        },
+        `[archive map; derived] Stored branch range — Exact recovery: history_range("${root.sourceRange.startEntryId}", "${root.sourceRange.endEntryId}")`,
+        "derived",
+        true,
+      )];
+  plan.push(...includeWithinBudget(archiveLines, budgets.archive));
+  plan = finalReduction(plan, hard);
+  const text = finalText(plan);
+  const validation = await validateHistoryRollupPlan(runtime, ledger, plan, hard);
+  sourceBytes += validation.exactSourceBytesRead;
+  const included = plan.filter(line => line.included);
+  const includedRestrictions = included.filter(line => line.record?.category === "restriction");
+  const exactRestrictions = includedRestrictions.filter(line => line.lineType === "exact").length;
+  const directRecoveryRestrictions = includedRestrictions.filter(line => line.lineType !== "exact" && line.recoveryRoute).length;
+  const aggregateRestrictionCount = root.nodeType === "rollup"
+    ? root.aggregateCounts.restriction ?? restrictions.length
+    : restrictions.length;
+  const currentRestrictionCount = Math.max(aggregateRestrictionCount, restrictions.length);
+  const archiveRestrictionRecovery = included.some(line => line.section === "archive" && line.recoveryRoute)
+    ? Math.max(0, currentRestrictionCount - exactRestrictions - directRecoveryRestrictions)
+    : 0;
+  const recoveryRestrictions = directRecoveryRestrictions + archiveRestrictionRecovery;
+  const restrictionConflicts = restrictions.filter(record => record.lifecycle === "conflict");
+  const issues = validation.issues;
+  const quality: HistoryRollupQuality = {
+    outputTokens: estimateTokensFromText(text),
+    currentRestrictionCount,
+    exactCurrentRestrictions: exactRestrictions,
+    recoveryOnlyRestrictions: recoveryRestrictions,
+    omittedRestrictionsWithoutRoute: Math.max(0, currentRestrictionCount - exactRestrictions - recoveryRestrictions),
+    restrictionCueCoverage: currentRestrictionCount ? Math.min(1, (exactRestrictions + recoveryRestrictions) / currentRestrictionCount) : 1,
+    restrictionExactCoverage: currentRestrictionCount ? exactRestrictions / currentRestrictionCount : 1,
+    restrictionConflictCoverage: coverage(restrictionConflicts, plan),
+    openTaskCoverage: coverage(current.filter(record => record.lifecycle === "open"), plan),
+    blockerCoverage: coverage(current.filter(record => record.category === "blocker"), plan),
+    nextActionCoverage: coverage(current.filter(record => record.category === "next-action"), plan),
+    goalCoverage: coverage(current.filter(record => record.category === "goal"), plan),
+    decisionCoverage: coverage(current.filter(record => record.category === "decision"), plan),
+    unresolvedFailureCoverage: coverage(current.filter(record => record.category === "failure" && record.lifecycle === "unresolved"), plan),
+    currentResourceCoverage: coverage(current.filter(record => record.category === "resource-state"), plan),
+    conflictCoverage: coverage(current.filter(record => record.lifecycle === "conflict"), plan),
+    recentEventCoverage: coverage(recentRecords, plan),
+    recentSourceTokenCoverage: Math.min(1, recentLeaves.reduce((sum, leaf) => sum + leaf.sourceTokenEstimate, 0) / Math.max(1, options.recentSourceTokens ?? 10000)),
+    selectedOlderEvidenceCount: included.filter(line => line.section === "older").length,
+    archiveRangeCoverage: included.some(line => line.section === "archive") ? 1 : 0,
+    lossyRecords: included.filter(line => line.lossy).length,
+    lossyRecordsWithRecovery: included.filter(line => line.lossy && line.recoveryRoute).length,
+    invalidSourceReferences: issueCount(issues, "invalid-source-reference"),
+    invalidSourceRanges: issueCount(issues, "invalid-source-range"),
+    cutLines: issueCount(issues, "cut-line"),
+    missingRecoveryRoutes: issueCount(issues, "loss-without-recovery") + issueCount(issues, "missing-current-restriction-route"),
+    falseCompletions: issueCount(issues, "unresolved-became-complete") + issueCount(issues, "failure-became-success"),
+    unsupportedIdentifiers: issueCount(issues, "unsupported-identifier"),
+    unsupportedQuotations: issueCount(issues, "unsupported-quotation"),
+    unsupportedNumbers: issueCount(issues, "unsupported-number"),
+    unsupportedFacts: issueCount(issues, "unsupported-identifier") + issueCount(issues, "unsupported-quotation") + issueCount(issues, "unsupported-number"),
+    sourceOrderErrors: issueCount(issues, "source-order"),
+    duplicateRenderedRecords: issueCount(issues, "duplicate-rendered-record"),
+    sourceBytesReadDuringRender: sourceBytes,
+    exactSourceBytesLoaded: sourceBytes,
+    hardLimitReached: estimateTokensFromText(text) >= hard,
+    nodesReadDuringRender: runtime.nodesLoaded - beforeNodes,
+    nodeBytesReadDuringRender: runtime.nodeBytesRead - beforeBytes,
+    queryNodesVisited: query.nodesVisited,
+    queryBytesRead: query.nodeBytesRead,
+    renderMs: performance.now() - started,
+    peakRssKiB: process.resourceUsage().maxRSS,
+    timerDelayMs: timerDelay,
+    integrityOk: validation.ok,
+  };
+  clearInterval(timer);
+  return { text, plan, validation, quality };
+}
+
+function emptyQuality(
+  text: string,
+  runtime: HistoryRollupRuntime,
+  beforeNodes: number,
+  beforeBytes: number,
+  renderMs: number,
+): HistoryRollupQuality {
+  return {
+    outputTokens: estimateTokensFromText(text),
+    currentRestrictionCount: 0,
+    exactCurrentRestrictions: 0,
+    recoveryOnlyRestrictions: 0,
+    omittedRestrictionsWithoutRoute: 0,
+    restrictionCueCoverage: 1,
+    restrictionExactCoverage: 1,
+    restrictionConflictCoverage: 1,
+    openTaskCoverage: 1,
+    blockerCoverage: 1,
+    nextActionCoverage: 1,
+    goalCoverage: 1,
+    decisionCoverage: 1,
+    unresolvedFailureCoverage: 1,
+    currentResourceCoverage: 1,
+    conflictCoverage: 1,
+    recentEventCoverage: 1,
+    recentSourceTokenCoverage: 1,
+    selectedOlderEvidenceCount: 0,
+    archiveRangeCoverage: 1,
+    lossyRecords: 0,
+    lossyRecordsWithRecovery: 0,
+    invalidSourceReferences: 0,
+    invalidSourceRanges: 0,
+    cutLines: 0,
+    missingRecoveryRoutes: 0,
+    falseCompletions: 0,
+    unsupportedIdentifiers: 0,
+    unsupportedQuotations: 0,
+    unsupportedNumbers: 0,
+    unsupportedFacts: 0,
+    sourceOrderErrors: 0,
+    duplicateRenderedRecords: 0,
+    sourceBytesReadDuringRender: 0,
+    exactSourceBytesLoaded: 0,
+    hardLimitReached: false,
+    nodesReadDuringRender: runtime.nodesLoaded - beforeNodes,
+    nodeBytesReadDuringRender: runtime.nodeBytesRead - beforeBytes,
+    queryNodesVisited: 0,
+    queryBytesRead: 0,
+    renderMs,
+    peakRssKiB: process.resourceUsage().maxRSS,
+    timerDelayMs: 0,
+    integrityOk: true,
+  };
+}

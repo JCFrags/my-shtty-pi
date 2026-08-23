@@ -17,16 +17,17 @@ The child can perform these deterministic tasks:
 - replay compaction and final validation;
 - complete replay generation hashing;
 - deterministic regular-summary rebase;
-- worker-specific replay cache reads and writes; and
-- candidate-store updates.
+- worker-specific replay cache reads and writes;
+- candidate-store updates; and
+- default-off post-result V2 rollup shadow evaluation.
 
 A provider-backed regular Pi summary stays in the main Pi process. The worker never receives a model client. It does not import a network client. Runtime responses report zero model and network calls.
 
 ## Host-wide scheduler
 
-All replay and candidate-update jobs use one owner-only scheduler directory in the operating system temporary directory. The directory name contains a protocol version and a hash of the local user ID. It does not contain a project path, session path, source ID, or source text.
+All replay, candidate-update, and rollup-shadow jobs use one owner-only scheduler directory in the operating system temporary directory. The directory name contains a protocol version and a hash of the local user ID. It does not contain a project path, session path, source ID, or source text.
 
-The setting `PI_CHRONO_HOST_WORKER_SLOTS` accepts 1 through 4 and defaults to 1. Replay tickets have high priority. Candidate-update tickets have low priority. A waiting replay runs before waiting updates when a slot becomes available. Active update work is not terminated.
+The setting `PI_CHRONO_HOST_WORKER_SLOTS` accepts 1 through 4 and defaults to 1. Replay tickets have high priority. Candidate-update and rollup-shadow tickets have low priority. A waiting replay runs before waiting updates when a slot becomes available. Active update work is not terminated.
 
 Waiting uses an asynchronous timer. It does not busy-loop. Cancellation and timeout remove the caller's ticket. A slot owner record contains only a PID, Linux process-start identity, random nonce, timestamp, priority, and job type. Linux recovery removes an owner only when both the PID and `/proc/<pid>/stat` start identity prove that the recorded process is not the live owner. Age alone never proves death. Release checks the random nonce before it removes a slot.
 
@@ -50,12 +51,13 @@ When both isolated work and segmented candidate preprocessing are enabled, backg
 
 | Setting | Default | Range or meaning |
 | --- | ---: | --- |
-| `PI_CHRONO_ISOLATED_WORKER` | `false` | Enable one-job local child processes. |
+| `PI_CHRONO_ISOLATED_WORKER` | `false` | Enable one-job local child processes for authoritative replay. |
+| `PI_CHRONO_ROLLUP_SHADOW` | `false` | Schedule post-result low-priority rollup metrics. Shadow output does not reach the model. |
 | `PI_CHRONO_HOST_WORKER_SLOTS` | `1` | Host-wide simultaneous ChronoCompact CPU jobs, 1–4. |
 | `PI_CHRONO_WORKER_TIMEOUT_SECONDS` | `900` | Queue and worker timeout, 30–3,600 seconds. |
 | `PI_CHRONO_WORKER_NICE` | `10` | Child nice level, 0–19. |
 
-The persistent command keys are `isolated-worker`, `worker-slots`, `worker-timeout`, and `worker-nice`.
+The persistent command keys are `isolated-worker`, `rollup-shadow`, `worker-slots`, `worker-timeout`, and `worker-nice`. Rollup shadow jobs always use a child even when authoritative replay remains in-process. See [rollup-shadow.md](rollup-shadow.md).
 
 ## Benchmark
 

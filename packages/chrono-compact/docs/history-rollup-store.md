@@ -1,76 +1,75 @@
-# Hierarchical history rollup prototype
+# Hierarchical history rollup V2
 
 ## Status and boundary
 
-The history rollup store is an isolated prototype. It is not connected to the Pi extension, replay, retrieval tools, candidate selection, the compaction worker, or the memory store. Pi JSONL is authoritative. The source ledger and this store are deletable derived data.
+The V2 history rollup store is a hardened research path. Pi JSONL and the current ChronoCompact replay remain authoritative. The default-off shadow evaluator can measure V2 after a compaction result is ready. V2 text never enters model context, a compaction response, the regular Pi summary, or the retained raw tail.
 
-The prototype runs only after Pi has persisted source. It never changes a tool result before the main model receives that result. It does not make network or model calls.
+The path is retrospective. It does not intercept or change a tool result. It makes no model or network call.
 
-## Typed history value
+## V2 schema and storage
 
-`src/history-value.ts` extracts bounded typed records from historical blocks. A record contains:
+For `session.jsonl`, V2 uses the owner-only directory `session.jsonl.chrono-history-rollups-v2/`. Schema 1 directories with the V1 suffix are ignored. They are not migrated or deleted.
 
-- a category, source authority, lifecycle, and priority from A through E;
-- evidence and confidence types;
-- exact source references and a source range;
-- a bounded cue, static value signals, and recovery and reproduction costs;
-- optional resource, task, duplicate, conflict, or supersession relations.
+V2 uses complete SHA-256 hex identities for nodes, node content, manifest integrity, branch manifests, query indexes, and normalized claims. Existing node files are read and verified before reuse. A mismatched schema, identity, or content hash is not accepted.
 
-Leaf extraction fixes static value. The renderer computes dynamic value from current retention hints, recent terms, open tasks, resource identities, retrieval feedback, and unresolved failures. Dynamic value never rewrites a node.
+The manifest records reachable node count and bytes, leaf count, rollup count, tree levels, source entry count, and source byte coverage. Normal updates derive these values from reachable manifests. They do not scan the node directory.
 
-Protected current restrictions keep generic metadata and source references. They do not store exact protected instruction text. Tool call and successful tool result cues omit complete arguments and output.
+Directories use mode `0700`. Files use mode `0600`. Publication writes and flushes a private temporary file, renames it, and flushes the directory when supported.
 
-Supersession needs a deterministic state, resource, task, failure, or correction relation. Recency alone is not enough. An unrelated pass cannot resolve a failure. A task episode closes only with successful linked validation, user acceptance, or an explicit recorded completion event. A final assistant message does not close it.
+## Typed value and lifecycle relations
 
-## Store layout
+`history-value.ts` creates bounded records with source authority, confidence, static value, normalized identities, and explicit relations. Dynamic value exists only at query and render time.
 
-For `session.jsonl`, the owner-only store is `session.jsonl.chrono-history-rollups-v1/`:
+Protected restrictions store a complete normalized-text hash, bounded subject fingerprint, authority, and exact-source requirement. Nodes do not store protected exact text. Exact duplicates can merge. Supersession requires explicit correction language, the same deterministic subject, and authority that is not lower. Recency alone does not supersede. Assistant or derived state cannot supersede user authority.
 
-- `manifest.json` points to the active branch manifest.
-- `branches/<hash>.json` records exact branch order and tree nodes.
-- `nodes/<hash>.json` contains an immutable leaf or rollup node.
-- `tmp/` supports atomic publication.
-- `writer.lock` contains a process ID, process start identity, and random nonce while one writer runs.
+Failures use signature, command, resource, and task identities. Resolution requires a matching signature, matching command and relevant resource, matching task with explicit resolution, or an explicit correction relation. A generic later `passed`, `fixed`, or `resolved` message does not resolve an unrelated failure.
 
-Directories use mode `0700`. Files use mode `0600`. Node IDs are hashes of canonical node content. Each node and manifest also has an integrity hash. Publication writes and syncs a temporary file, then renames it.
+Tasks use stable identities. A final assistant statement alone does not close a task. Linked successful validation, explicit user acceptance, or an explicit completion event can close it. Resource reads, writes, validations, and observations remain separate roles.
 
-Default leaf targets are 4 MiB, 2,048 source entries, or 4,096 blocks. One JSONL entry is never split. Rollup fan-out is eight. A node keeps at most 1,024 structured records, 8,000 cue tokens, and 1 MiB. The lazy runtime cache defaults to 16 MiB.
+## Cross-leaf context
 
-A same-branch append reads only new source. It combines a stored typed open leaf with new typed records, then publishes a replacement open leaf. It never reads the old leaf source again. Full leaves seal and never change. Parent nodes change only on the path to the root.
+The branch manifest carries bounded open tool-call references and typed open state. The next leaf loads exact source only for needed open calls. It parses that verified call context with new entries, keeps records sourced by the new leaf, removes matched calls, and retains unmatched calls. Nodes omit complete tool arguments and complete successful tool output.
 
-A branch switch verifies leaf source digests against the exact source-ledger branch. It reuses only sealed common-prefix nodes. It rebuilds the divergent suffix. Abandoned-branch records are not part of the active manifest.
+Leaf boundaries enforce source-byte, source-entry, and historical-block targets. One source entry is never split and can exceed a target.
 
-## Prototype rendering
+## Bounded update work
 
-`src/history-rollup-renderer.ts` renders four sections:
+An exact hit verifies the source-ledger state and requested branch leaf. It checks zero old leaf digests, scans zero node-directory entries, and writes zero files.
 
-1. `# CURRENT WORK`
-2. `# RECENT EVENTS`
-3. `# SELECTED OLDER EVIDENCE`
-4. `# ARCHIVE MAP`
+A same-branch append walks the new parent-chain suffix. It uses the prior manifest and source-ledger tail, changes the open leaf and tree path, and publishes new manifests. It does not recalculate all old leaf digests or load every old node. A branch switch finds the exact common ancestor, reuses verified sealed common nodes, and excludes abandoned records.
 
-The default target is 20,000 tokens. The hard maximum is 25,000 tokens. The renderer adds only complete lines. Every lossy line states that detail was omitted and includes an exact `history_get` or `history_range` recovery route.
+Update metrics expose visited entries, old leaf digest checks, directory scans, old and new node loads, changed tree-path nodes, and exact-hit writes.
 
-The renderer reads the root, at most two recent leaves, and exact current restrictions from the authoritative source through the source ledger. If an exact restriction does not fit, it emits one complete recovery cue instead. It does not load every old leaf.
+## Writer ownership
 
-The prototype validator checks source references, missing recovery routes, unsupported records, false completion changes, and the hard token limit without reading all old source.
+A lock binds schema, PID, Linux process-start identity, nonce, creation time, and inode. A matching PID and start identity is live. A missing process is dead. An unreadable or unverifiable process remains protected. Other platforms do not use age alone to remove a lock.
+
+Release rechecks nonce, PID, process-start identity, and inode. It cannot remove a replacement owner's lock. Cancellation before manifest publication leaves the old manifest active.
+
+## Dynamic tree query
+
+Each node has a bounded query index. It contains store-local hashed cue terms, categories, priority, lifecycle flags, safe typed identities, source-order ranges, child ranges, current-state flags, and counts. It contains no protected exact text, complete source, tool arguments, or tool output. Hashed terms are private derived data.
+
+The deterministic query starts at the root, scores child summaries, and descends only selected paths. Defaults limit work to 64 nodes, 8 MiB of node bytes, and 512 returned records. It can recover old evidence omitted from the root by a later retention hint, resource identity, task identity, or unresolved-failure identity. Results are deduplicated and ordered by numeric source order.
+
+## Typed renderer and final validator
+
+The renderer builds typed lines for current work, recent events, selected older evidence, and the archive map. `recentSourceTokens` controls recent leaf loading. Older evidence uses the bounded tree query. Numeric source order controls chronology.
+
+Current restrictions have first priority. The renderer reads exact restriction source when it fits. Otherwise, it keeps one complete subject-specific recovery cue or a complete archive recovery range. It never cuts a line or source-link suffix. Under hard pressure, routine older evidence and routine recent evidence drop before current restrictions, conflicts, blockers, unresolved failures, next actions, current resources, and the omission map.
+
+Quality metrics use final included lines only. They report restriction, blocker, failure, task, goal, decision, resource, recent-source, and archive coverage. They also report exact-source reads, node reads, query work, invalid references and ranges, cut lines, missing routes, false completion, unsupported facts, source-order defects, duplicates, token state, render time, and timer delay.
+
+The final validator checks the typed final plan. Exact lines must match bounded exact source reads. Lossy lines need valid references or ranges and recovery routes. Identifiers, quotations, numbers, lifecycle words, derived labels, order, duplicates, complete lines, and the unchanged 25,000-token hard limit are checked with safe issue codes.
+
+## Shadow boundary
+
+The shadow path is documented in [rollup-shadow.md](rollup-shadow.md). It uses this store only after current replay creation. Shadow output is hashed and discarded. Only aggregate metrics and complete local hashes can enter the shadow sidecar.
 
 ## Failure and recovery
 
-A missing or corrupt manifest leaves Pi JSONL unchanged. A corrupt node fails closed. Delete the derived rollup directory to rebuild it.
-
-A live verified writer lock causes a busy error. A stale lock can be replaced only after process identity verification. Cancellation before manifest publication leaves the prior manifest active. Unreferenced immutable nodes are safe derived data and can be removed by a later cleanup pass.
+A missing or corrupt V2 manifest leaves current replay unchanged. A corrupt node fails closed. A busy store can use the last complete matching manifest. Delete the V2 derived directory to rebuild it. V1 data remains untouched.
 
 ## Public benchmark
 
-Build first, then use strict modes:
-
-```sh
-npm run benchmark:history-rollups -- series --final-tasks 1000 --batches 20
-npm run benchmark:history-rollups -- render --tasks 1000 --target-tokens 20000
-npm run benchmark:history-rollups -- scale --source-tokens 50000000 --batches 50 --target-tokens 20000
-npm run benchmark:history-rollups -- branch --common-tasks 5000 --left-tasks 5000 --right-tasks 5000
-npm run benchmark:history-rollups -- compare --tasks 5000
-```
-
-The benchmark uses synthetic source, owner-only temporary files, bounded numeric arguments, and no network. It reports source and block amplification, node work, update and render time, bytes read, memory, timer delay, branch reuse, integrity, recovery, and coverage measures.
+Build first. `scripts/benchmark-history-rollups.mjs` supports `series`, `render`, `scale`, `metadata`, `query`, `restrictions`, `branch`, and `compare`. It accepts synthetic input only. Large runs use low CPU and I/O priority. Reports omit hashed query terms and source text.

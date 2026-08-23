@@ -1,6 +1,8 @@
 import type { CompactorConfig, CompressionDetails, ValidationReport } from "./types.js";
 import type { CandidateStoreMetrics } from "./candidate-segment-store.js";
 import type { RetrievalFeedback } from "./telemetry.js";
+import type { HistoryDynamicContext } from "./history-value.js";
+import type { RollupShadowPayload, RollupShadowQualityMetrics } from "./history-rollup-shadow.js";
 
 export const COMPACTION_WORKER_PROTOCOL_VERSION = 1;
 export const MAX_WORKER_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -10,7 +12,7 @@ const MAX_WORKER_RESPONSE_TEXT_BYTES = 8 * 1024 * 1024;
 export const MAX_WORKER_STDERR_BYTES = 16 * 1024;
 
 export type WorkerFailureCode = "worker-disabled" | "no-session-file" | "branch-not-persisted" | "branch-parent-missing" | "branch-cycle" | "branch-source-order" | "invalid-cut" | "source-changed" | "scheduler-timeout" | "worker-timeout" | "worker-aborted" | "worker-crashed" | "worker-protocol-error" | "worker-response-too-large" | "candidate-store-unavailable" | "replay-validation-rejected" | "unknown-worker-failure";
-export type WorkerJobType = "replay-compaction" | "candidate-store-update";
+export type WorkerJobType = "replay-compaction" | "candidate-store-update" | "rollup-shadow";
 export interface WorkerSourceExpectation { readonly deviceId: string; readonly inodeId: string; readonly size: number; readonly mtimeMs: number; }
 export interface WorkerBaseRequest { readonly schemaVersion: 1; readonly jobId: string; readonly jobType: WorkerJobType; readonly sessionPath: string; readonly expectedSource: WorkerSourceExpectation; readonly deadlineMs: number; readonly niceLevel: number; }
 export interface ReplayWorkerRequest extends WorkerBaseRequest {
@@ -19,14 +21,24 @@ export interface ReplayWorkerRequest extends WorkerBaseRequest {
   readonly retrievalFeedback?: RetrievalFeedback; readonly candidateStoreEnabled: boolean; readonly cacheEnabled: boolean;
   readonly deterministicRebase?: { readonly targetTokens: number; readonly combinedTargetTokens: number; readonly historicalCeilingTokens: number };
 }
+export interface RollupShadowWorkerRequest extends WorkerBaseRequest {
+  readonly jobType: "rollup-shadow";
+  readonly branchLeafId: string;
+  readonly firstKeptEntryId: string;
+  readonly currentReplayText: string;
+  readonly hardTokenBound: number;
+  readonly targetTokenBound: number;
+  readonly retentionHints: string;
+  readonly dynamicContext?: Omit<HistoryDynamicContext, "retentionHints" | "retrievalEntryIds">;
+}
 export interface CandidateUpdateWorkerRequest extends WorkerBaseRequest {
   readonly jobType: "candidate-store-update"; readonly config: CompactorConfig;
   readonly storeSettings?: { readonly targetSourceBytes?: number; readonly targetEntries?: number; readonly targetRecords?: number };
 }
-export type CompactionWorkerRequest = ReplayWorkerRequest | CandidateUpdateWorkerRequest;
+export type CompactionWorkerRequest = ReplayWorkerRequest | CandidateUpdateWorkerRequest | RollupShadowWorkerRequest;
 export interface WorkerRuntimeMetrics { readonly workerPid: number; readonly totalWallMs: number; readonly compactionMs: number; readonly cpuUserMicros: number; readonly cpuSystemMicros: number; readonly peakRssKiB: number; readonly priorityApplied: boolean; readonly cacheState: "disabled" | "hit" | "miss" | "write-failed"; readonly modelCalls: 0; readonly networkCalls: 0; readonly secretSentinelPresent: false; readonly sourceLedgerTransition: string; readonly ledgerColdLoadMs: number; readonly branchResolveMs: number; readonly branchReadMs: number; readonly branchEntryCount: number; readonly branchSourceBytes: number; readonly sourceRangeCount: number; readonly sourceBytesRead: number; readonly sourceByteAvoidanceRate: number; readonly completeSessionReadAvoided: boolean; readonly candidateLedgerReused: boolean; }
 export interface ReplayWorkerPayload { readonly summary: string; readonly deterministicRebaseText?: string; readonly rawTokens: number; readonly renderedTokens: number; readonly targetTokens: number; readonly validation: ValidationReport; readonly details: CompressionDetails; readonly generationHash: string; readonly planSources: readonly { readonly unitId: string; readonly sourceRefs: readonly { readonly entryId: string; readonly blockIndex?: number }[] }[]; readonly sourceEntryCount: number; }
-export interface WorkerSuccessResponse { readonly schemaVersion: 1; readonly jobId: string; readonly status: "ok"; readonly jobType: WorkerJobType; readonly replay?: ReplayWorkerPayload; readonly candidateUpdate?: CandidateStoreMetrics; readonly metrics: WorkerRuntimeMetrics; }
+export interface WorkerSuccessResponse { readonly schemaVersion: 1; readonly jobId: string; readonly status: "ok"; readonly jobType: WorkerJobType; readonly replay?: ReplayWorkerPayload; readonly candidateUpdate?: CandidateStoreMetrics; readonly shadow?: RollupShadowPayload; readonly metrics: WorkerRuntimeMetrics; }
 export interface WorkerFailureResponse { readonly schemaVersion: 1; readonly jobId: string; readonly status: "failed"; readonly jobType: WorkerJobType; readonly failureCode: WorkerFailureCode; readonly metrics: WorkerRuntimeMetrics; }
 export type CompactionWorkerResponse = WorkerSuccessResponse | WorkerFailureResponse;
 
@@ -48,20 +60,91 @@ function optionalIntegers(value:Record<string,unknown>,keys:readonly string[]):b
 function validDetails(value:unknown,generationHash:unknown):value is CompressionDetails{return object(value)&&exactKeys(value,["schemaVersion","generationHash","sourceEntryIds","sourceRange","rawTokens","renderedTokens","targetTokens","reducerVersions","plan","validation","v2","historyEditor"])&&value.schemaVersion===2&&value.generationHash===generationHash&&Array.isArray(value.sourceEntryIds)&&value.sourceEntryIds.every(id=>boundedId(id,1024))&&(value.sourceRange===undefined||(object(value.sourceRange)&&exactKeys(value.sourceRange,["start","end"])&&boundedId(value.sourceRange.start,1024)&&boundedId(value.sourceRange.end,1024)))&&integer(value.rawTokens,0,Number.MAX_SAFE_INTEGER)&&integer(value.renderedTokens,0,30_000)&&integer(value.targetTokens,0,30_000)&&object(value.reducerVersions)&&Object.entries(value.reducerVersions).every(([key,item])=>boundedId(key,256)&&boundedId(item,256))&&Array.isArray(value.plan)&&value.plan.length<=1_000_000&&value.plan.every(item=>object(item)&&exactKeys(item,["unitId","level","sourceRefs","rawTokens","renderedTokens","importance","importanceReasons"])&&boundedId(item.unitId,1024)&&boundedId(item.level,64)&&Array.isArray(item.sourceRefs)&&item.sourceRefs.every(ref=>object(ref)&&exactKeys(ref,["entryId","blockIndex"])&&boundedId(ref.entryId,1024)&&(ref.blockIndex===undefined||integer(ref.blockIndex,0,Number.MAX_SAFE_INTEGER)))&&integer(item.rawTokens,0,Number.MAX_SAFE_INTEGER)&&integer(item.renderedTokens,0,Number.MAX_SAFE_INTEGER)&&typeof item.importance==="number"&&Number.isFinite(item.importance)&&Array.isArray(item.importanceReasons)&&item.importanceReasons.every(reason=>boundedText(reason,4096)))&&validValidation(value.validation)&&(value.v2===undefined||(object(value.v2)&&exactKeys(value.v2,["resourceGenerationHash","causalGenerationHash","pinnedMemoryTokens","retentionBands","tokenTelemetry"])&&boundedId(value.v2.resourceGenerationHash,256)&&boundedId(value.v2.causalGenerationHash,256)&&integer(value.v2.pinnedMemoryTokens,0,30_000)&&object(value.v2.retentionBands)&&exactKeys(value.v2.retentionBands,["hot","warm","cold"])&&Object.values(value.v2.retentionBands).every(item=>integer(item,0,Number.MAX_SAFE_INTEGER))&&object(value.v2.tokenTelemetry)))&&(value.historyEditor===undefined||(object(value.historyEditor)&&exactKeys(value.historyEditor,["status","calls","model","inputItems","outputDecisions","rejectedDecisions","missingDecisions","changedItems","inputTokens","outputTokens","reason"])&&["disabled","skipped","applied","fallback"].includes(String(value.historyEditor.status))&&(value.historyEditor.calls===0||value.historyEditor.calls===1)&&integer(value.historyEditor.inputItems,0,Number.MAX_SAFE_INTEGER)&&optionalIntegers(value.historyEditor,["outputDecisions","rejectedDecisions","missingDecisions","changedItems","inputTokens","outputTokens"])&&(value.historyEditor.model===undefined||boundedText(value.historyEditor.model,1024))&&(value.historyEditor.reason===undefined||boundedText(value.historyEditor.reason,4096))));}
 function validReplay(value:unknown):value is ReplayWorkerPayload{return object(value)&&exactKeys(value,["summary","deterministicRebaseText","rawTokens","renderedTokens","targetTokens","validation","details","generationHash","planSources","sourceEntryCount"])&&boundedText(value.summary,MAX_WORKER_RESPONSE_TEXT_BYTES)&&(value.deterministicRebaseText===undefined||boundedText(value.deterministicRebaseText,MAX_WORKER_RESPONSE_TEXT_BYTES))&&integer(value.rawTokens,0,Number.MAX_SAFE_INTEGER)&&integer(value.renderedTokens,0,30_000)&&integer(value.targetTokens,0,30_000)&&validValidation(value.validation)&&validDetails(value.details,value.generationHash)&&boundedId(value.generationHash,256)&&Array.isArray(value.planSources)&&value.planSources.length<=1_000_000&&value.planSources.every(unit=>object(unit)&&exactKeys(unit,["unitId","sourceRefs"])&&boundedText(unit.unitId,1024)&&Array.isArray(unit.sourceRefs)&&unit.sourceRefs.every(ref=>object(ref)&&exactKeys(ref,["entryId","blockIndex"])&&boundedText(ref.entryId,1024)&&(ref.blockIndex===undefined||integer(ref.blockIndex,0,Number.MAX_SAFE_INTEGER))))&&integer(value.sourceEntryCount,0,Number.MAX_SAFE_INTEGER);}
 export function validateWorkerRequest(value: unknown): CompactionWorkerRequest {
-  if (!object(value) || value.schemaVersion !== 1 || (value.jobType !== "replay-compaction" && value.jobType !== "candidate-store-update")) throw new Error("worker-protocol-error");
+  if (!object(value) || value.schemaVersion !== 1 || !["replay-compaction", "candidate-store-update", "rollup-shadow"].includes(String(value.jobType))) throw new Error("worker-protocol-error");
   const common=["schemaVersion","jobId","jobType","sessionPath","expectedSource","deadlineMs","niceLevel"];
-  const allowed=value.jobType==="replay-compaction"?[...common,"branchLeafId","firstKeptEntryId","config","hardOutputTokens","retentionHints","pinnedMemoryText","retrievalFeedback","candidateStoreEnabled","cacheEnabled","deterministicRebase"]:[...common,"config","storeSettings"];
-  if (!exactKeys(value,allowed) || !boundedId(value.jobId,256) || !boundedId(value.sessionPath,4096) || !validExpectation(value.expectedSource) || !integer(value.deadlineMs,Date.now()-1,Date.now()+3_600_000) || !integer(value.niceLevel,0,19) || !validConfig(value.config)) throw new Error("worker-protocol-error");
+  const allowed = value.jobType === "replay-compaction"
+    ? [...common, "branchLeafId", "firstKeptEntryId", "config", "hardOutputTokens", "retentionHints", "pinnedMemoryText", "retrievalFeedback", "candidateStoreEnabled", "cacheEnabled", "deterministicRebase"]
+    : value.jobType === "candidate-store-update"
+      ? [...common, "config", "storeSettings"]
+      : [...common, "branchLeafId", "firstKeptEntryId", "currentReplayText", "hardTokenBound", "targetTokenBound", "retentionHints", "dynamicContext"];
+  if (!exactKeys(value, allowed) || !boundedId(value.jobId, 256) || !boundedId(value.sessionPath, 4096) || !validExpectation(value.expectedSource) || !integer(value.deadlineMs, Date.now() - 1, Date.now() + 3_600_000) || !integer(value.niceLevel, 0, 19)) throw new Error("worker-protocol-error");
+  if (value.jobType !== "rollup-shadow" && !validConfig(value.config)) throw new Error("worker-protocol-error");
   if (value.jobType==="replay-compaction") {
     if (!boundedId(value.branchLeafId,1024)||!boundedId(value.firstKeptEntryId,1024)||!integer(value.hardOutputTokens,128,30_000)||!boundedText(value.retentionHints)||!boundedText(value.pinnedMemoryText)||typeof value.candidateStoreEnabled!=="boolean"||typeof value.cacheEnabled!=="boolean") throw new Error("worker-protocol-error");
     if (value.retrievalFeedback!==undefined && (!object(value.retrievalFeedback)||Buffer.byteLength(JSON.stringify(value.retrievalFeedback))>MAX_WORKER_TEXT_BYTES)) throw new Error("worker-protocol-error");
     if (value.deterministicRebase!==undefined && (!object(value.deterministicRebase)||!exactKeys(value.deterministicRebase,["targetTokens","combinedTargetTokens","historicalCeilingTokens"])||!integer(value.deterministicRebase.targetTokens,256,16_000)||!integer(value.deterministicRebase.combinedTargetTokens,256,30_000)||!integer(value.deterministicRebase.historicalCeilingTokens,256,30_000))) throw new Error("worker-protocol-error");
+  } else if (value.jobType === "rollup-shadow") {
+    if (!boundedId(value.branchLeafId, 1024) || !boundedId(value.firstKeptEntryId, 1024) ||
+      !boundedText(value.currentReplayText, MAX_WORKER_TEXT_BYTES) || !boundedText(value.retentionHints) ||
+      !integer(value.hardTokenBound, 128, 25_000) || !integer(value.targetTokenBound, 128, value.hardTokenBound as number) ||
+      (value.dynamicContext !== undefined && (!object(value.dynamicContext) || Buffer.byteLength(JSON.stringify(value.dynamicContext)) > MAX_WORKER_TEXT_BYTES))) {
+      throw new Error("worker-protocol-error");
+    }
   } else if (value.storeSettings!==undefined && (!object(value.storeSettings)||!exactKeys(value.storeSettings,["targetSourceBytes","targetEntries","targetRecords"])||Object.values(value.storeSettings).some(item=>item!==undefined&&!integer(item,1,100_000_000)))) throw new Error("worker-protocol-error");
   const bytes=Buffer.byteLength(JSON.stringify(value)); if(bytes>MAX_WORKER_REQUEST_BYTES) throw new Error("worker-protocol-error"); return value as unknown as CompactionWorkerRequest;
 }
+const SHADOW_QUALITY_KEYS = ["restrictionCueCoverage", "blockerCoverage", "unresolvedFailureCoverage", "currentResourceCoverage", "invalidReferences", "invalidRanges", "cutLines", "falseCompletions", "unsupportedIdentifiers", "unsupportedQuotations", "unsupportedNumbers", "missingRecoveryRoutes"] as const;
+function validShadowQuality(value: unknown): value is RollupShadowQualityMetrics {
+  return object(value) && exactKeys(value, SHADOW_QUALITY_KEYS) && SHADOW_QUALITY_KEYS.every(key =>
+    typeof value[key] === "number" && Number.isFinite(value[key] as number) && (value[key] as number) >= 0);
+}
+function validShadow(value: unknown): value is RollupShadowPayload {
+  const keys = ["schemaVersion", "generation", "sourceTokenCount", "currentReplayTokenCount", "rollupTokenCount", "currentQuality", "rollupQuality", "updateTimeMs", "renderTimeMs", "sourceBytesRead", "nodeBytesRead", "queryNodes", "workerTimerDelayMs", "validationIssueCounts", "currentReplayHash", "rollupOutputHash", "safeStatus", "modelCalls", "networkCalls"];
+  return object(value) && exactKeys(value, keys) && value.schemaVersion === 2 &&
+    ["generation", "sourceTokenCount", "currentReplayTokenCount", "rollupTokenCount", "sourceBytesRead", "nodeBytesRead", "queryNodes"].every(key => integer(value[key], 0, Number.MAX_SAFE_INTEGER)) &&
+    ["updateTimeMs", "renderTimeMs", "workerTimerDelayMs"].every(key => typeof value[key] === "number" && Number.isFinite(value[key] as number) && (value[key] as number) >= 0) &&
+    validShadowQuality(value.currentQuality) && validShadowQuality(value.rollupQuality) &&
+    object(value.validationIssueCounts) && Object.entries(value.validationIssueCounts).every(([key, count]) => /^[a-z0-9-]{1,64}$/.test(key) && integer(count, 0, Number.MAX_SAFE_INTEGER)) &&
+    typeof value.currentReplayHash === "string" && /^[a-f0-9]{64}$/.test(value.currentReplayHash) &&
+    typeof value.rollupOutputHash === "string" && /^[a-f0-9]{64}$/.test(value.rollupOutputHash) &&
+    ["ok", "validation-failed", "store-busy-snapshot", "empty-prefix"].includes(String(value.safeStatus)) &&
+    value.modelCalls === 0 && value.networkCalls === 0;
+}
+
 export function validateWorkerResponse(value: unknown, expectedJobId?: string): CompactionWorkerResponse {
-  if (!object(value)||value.schemaVersion!==1||(value.status!=="ok"&&value.status!=="failed")||(value.jobType!=="replay-compaction"&&value.jobType!=="candidate-store-update")||!boundedId(value.jobId,256)||(expectedJobId!==undefined&&value.jobId!==expectedJobId)||!validMetrics(value.metrics)) throw new Error("worker-protocol-error");
-  if (value.status==="failed") { if(!exactKeys(value,["schemaVersion","jobId","status","jobType","failureCode","metrics"])||!FAILURE_CODES.includes(value.failureCode as WorkerFailureCode)) throw new Error("worker-protocol-error"); }
-  else { if(!exactKeys(value,["schemaVersion","jobId","status","jobType","replay","candidateUpdate","metrics"]))throw new Error("worker-protocol-error");if(value.jobType==="replay-compaction"&&(!validReplay(value.replay)||value.candidateUpdate!==undefined))throw new Error("worker-protocol-error");if(value.jobType==="candidate-store-update"&&(!validCandidateMetrics(value.candidateUpdate)||value.replay!==undefined))throw new Error("worker-protocol-error"); }
-  if(Buffer.byteLength(JSON.stringify(value))>MAX_WORKER_RESPONSE_BYTES) throw new Error("worker-response-too-large"); return value as unknown as CompactionWorkerResponse;
+  if (
+    !object(value) ||
+    value.schemaVersion !== 1 ||
+    (value.status !== "ok" && value.status !== "failed") ||
+    !["replay-compaction", "candidate-store-update", "rollup-shadow"].includes(String(value.jobType)) ||
+    !boundedId(value.jobId, 256) ||
+    (expectedJobId !== undefined && value.jobId !== expectedJobId) ||
+    !validMetrics(value.metrics)
+  ) {
+    throw new Error("worker-protocol-error");
+  }
+  if (value.status === "failed") {
+    if (
+      !exactKeys(value, ["schemaVersion", "jobId", "status", "jobType", "failureCode", "metrics"]) ||
+      !FAILURE_CODES.includes(value.failureCode as WorkerFailureCode)
+    ) {
+      throw new Error("worker-protocol-error");
+    }
+  } else {
+    if (!exactKeys(value, ["schemaVersion", "jobId", "status", "jobType", "replay", "candidateUpdate", "shadow", "metrics"])) {
+      throw new Error("worker-protocol-error");
+    }
+    if (
+      value.jobType === "replay-compaction" &&
+      (!validReplay(value.replay) || value.candidateUpdate !== undefined || value.shadow !== undefined)
+    ) {
+      throw new Error("worker-protocol-error");
+    }
+    if (
+      value.jobType === "candidate-store-update" &&
+      (!validCandidateMetrics(value.candidateUpdate) || value.replay !== undefined || value.shadow !== undefined)
+    ) {
+      throw new Error("worker-protocol-error");
+    }
+    if (
+      value.jobType === "rollup-shadow" &&
+      (!validShadow(value.shadow) || value.replay !== undefined || value.candidateUpdate !== undefined)
+    ) {
+      throw new Error("worker-protocol-error");
+    }
+  }
+  if (Buffer.byteLength(JSON.stringify(value)) > MAX_WORKER_RESPONSE_BYTES) {
+    throw new Error("worker-response-too-large");
+  }
+  return value as unknown as CompactionWorkerResponse;
 }

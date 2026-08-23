@@ -23,6 +23,36 @@ The 5,000-task comparator measured current replay at 5.48 s and 24,978 tokens. P
 
 The 5,000-task branch probe reused 60 common leaves and seven common rollup nodes. It created 74 divergent nodes, switched in 1.77 s, rendered zero abandoned-branch records, and passed output integrity.
 
+## V2 hardening gate
+
+A later public synthetic gate measured the hardened V2 store. Normal cases ran three times. Scale and metadata cases ran once with low CPU and idle I/O priority.
+
+| Case | Result |
+| --- | --- |
+| 1,000 / 5,000 / 10,000 task series | Integrity passed in all nine runs. Median final append was 23.3 / 88.1 / 187.5 ms. |
+| 1,000 / 5,000 / 10,000 task render | Integrity passed. Median render was 6.4 / 26.8 / 53.2 ms. |
+| 5-million / 50-million token dynamic query | The omitted target was found and rendered in all six runs. Query work stayed at 64 nodes. |
+| 100,000 / 1,000,000 entry metadata | Integrity passed. Old leaf digest checks and node-directory scans were zero. |
+| 5,000 + 5,000 + 5,000 branch | All three runs excluded abandoned records. Median switch time was 4.01 s. |
+
+The 50-million-token scale case had a 101.4 ms final append, 11.4 ms render, 31.6 KiB render source read, 430.6 KiB render node read, 64 query nodes, 408.6 MiB peak RSS, 3.8 ms timer delay, 1.17 changed-path node amplification, and valid integrity. It met the stated pre-shadow targets. Exact hits wrote no files. Same-branch appends checked no old leaf digests and scanned no node-directory entries.
+
+Restriction pressure was rerun after final aggregate-count correction. Both 100 and 1,000 current-restriction cases had final cue coverage 1.0, zero restrictions without a specific route, zero cut lines, and valid final-plan validation.
+
+## Rollup shadow evaluation
+
+The default-off public shadow benchmark uses a local low-priority child. Compare mode verifies that scheduling does not change current replay bytes. Generation mode records only bounded metrics and complete local hashes. Pressure mode skips current full replay and measures the V2 shadow path only. The sidecar contains no output or source text.
+
+| Case | Median current replay | Median rollup update | Median rollup render | Result |
+| --- | ---: | ---: | ---: | --- |
+| Compare, 1,000 tasks | 699.1 ms | 319.5 ms | 37.5 ms | All three runs kept current output unchanged and passed integrity. |
+| Compare, 5,000 tasks | 5.21 s | 1.37 s | 70.8 ms | All three runs kept current output unchanged and passed integrity. |
+| Compare, 10,000 tasks | 15.43 s | 2.73 s | 35.4 ms | All three runs kept current output unchanged and passed integrity. |
+| 50 generations, 1,000 final tasks | 14.69 s total | 2.54 s total | 1.77 s total | All 150 jobs passed final validation. Median maximum main timer delay was 0.87 ms. |
+| 20 generations, 5,000 final tasks | 41.44 s total | 3.23 s total | 707.1 ms total | All 60 jobs passed final validation. Median maximum main timer delay was 0.67 ms. |
+
+The 5-million-token, 100-restriction pressure case produced 4,014 tokens. The 50-million-token, 1,000-restriction case produced 20,808 tokens. Both had complete restriction, blocker, unresolved-failure, and current-resource coverage. Both had zero invalid references, cut lines, false completions, unsupported facts, missing recovery routes, model calls, and network calls. All compare and generation runs had the same zero-defect quality totals. See [rollup-shadow.md](rollup-shadow.md).
+
 ## Status
 
 This is an advisory baseline for a personal project. It measured commit `62dc53e279a3897d88bda615f6561794590c1017`. The results are not a release decision.

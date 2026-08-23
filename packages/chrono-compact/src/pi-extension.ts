@@ -84,7 +84,8 @@ import {
 import { emptyRetrievalFeedback, recordRetrievalFeedback, type RetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, safeErrorMessage, stableStringify, truncateToTokens } from "./utils.js";
 import { runCompactionWorker, type WorkerClientResult } from "./compaction-worker-client.js";
-import type { CandidateUpdateWorkerRequest, ReplayWorkerRequest, WorkerSourceExpectation } from "./compaction-worker-protocol.js";
+import type { CandidateUpdateWorkerRequest, ReplayWorkerRequest, RollupShadowWorkerRequest, WorkerSourceExpectation } from "./compaction-worker-protocol.js";
+import { getRollupShadowStatus } from "./history-rollup-shadow.js";
 
 const EXTENSION_VERSION = "2.0.0";
 export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
@@ -115,6 +116,7 @@ export interface RuntimeSettings {
   readonly historyEditorMaxOutputTokens: number;
   readonly incrementalPrecomputeEnabled: boolean;
   readonly isolatedWorkerEnabled: boolean;
+  readonly rollupShadowEnabled: boolean;
   readonly hostWorkerSlots: number;
   readonly workerTimeoutSeconds: number;
   readonly workerNiceLevel: number;
@@ -192,6 +194,7 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
     historyEditorMaxOutputTokens: numberSetting("PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT", 16_000, 256, 25_000),
     incrementalPrecomputeEnabled: booleanSetting("PI_CHRONO_INCREMENTAL_PRECOMPUTE", false, overrides.incrementalPrecomputeEnabled),
     isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
+    rollupShadowEnabled: booleanSetting("PI_CHRONO_ROLLUP_SHADOW", false, overrides.rollupShadowEnabled),
     hostWorkerSlots: numberSetting("PI_CHRONO_HOST_WORKER_SLOTS", 1, 1, 4, overrides.hostWorkerSlots),
     workerTimeoutSeconds: numberSetting("PI_CHRONO_WORKER_TIMEOUT_SECONDS", 900, 30, 3_600, overrides.workerTimeoutSeconds),
     workerNiceLevel: numberSetting("PI_CHRONO_WORKER_NICE", 10, 0, 19, overrides.workerNiceLevel),
@@ -272,6 +275,7 @@ async function openChronoCompactSettings(
       `Experimental LLM history classifier · ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
       `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
       `Isolated local compaction worker · ${settings.isolatedWorkerEnabled ? `enabled · ${settings.hostWorkerSlots} host slot(s) · nice ${settings.workerNiceLevel}` : "disabled"}`,
+      `Hierarchical rollup shadow evaluation · ${settings.rollupShadowEnabled ? "enabled · output does not reach the model · current replay authoritative · local isolated low-priority worker · metrics only" : "disabled"}`,
       `Request-local tool-result projection · ${settings.toolResultProjectionMode}`,
       `Ranked local history search · ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
       `Editable working memory · ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,
@@ -378,6 +382,12 @@ async function openChronoCompactSettings(
       const selected = await ctx.ui.select("Incremental deterministic precompute", ["Enabled", "Disabled"]);
       if (selected === "Disabled") draft = applyConfigCommand(draft, "incremental-precompute off").config;
       if (selected === "Enabled") draft = applyConfigCommand(draft, "incremental-precompute on").config;
+      continue;
+    }
+    if (choice.startsWith("Hierarchical rollup shadow evaluation")) {
+      const selected = await ctx.ui.select("Hierarchical rollup shadow evaluation", ["Enabled", "Disabled"]);
+      if (selected === "Disabled") draft = applyConfigCommand(draft, "rollup-shadow off").config;
+      if (selected === "Enabled") draft = applyConfigCommand(draft, "rollup-shadow on").config;
       continue;
     }
     if (choice.startsWith("Isolated local compaction worker")) {
@@ -876,6 +886,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   let incrementalTimer: ReturnType<typeof setTimeout> | undefined;
   let incrementalGeneration = 0;
   let incrementalStatus: Record<string, unknown> = { state: "disabled" };
+  let shadowAbort: AbortController | undefined;
+  let shadowTimer: ReturnType<typeof setTimeout> | undefined;
+  let shadowGeneration = 0;
+  let shadowStatus: Record<string, unknown> = { state: "disabled" };
   let projectionSeenToolCallIds = new Set<string>();
   let lastProjectionMetrics: ToolResultProjectionMetrics | undefined;
 
@@ -966,6 +980,83 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
     }, 35);
   };
 
+  const cancelShadowWork = (): void => {
+    shadowGeneration += 1;
+    if (shadowTimer) clearTimeout(shadowTimer);
+    shadowTimer = undefined;
+    shadowAbort?.abort(new Error("ChronoCompact shadow work was cancelled for session state replacement."));
+    shadowAbort = undefined;
+  };
+
+  const scheduleRollupShadow = (input: {
+    sessionPath: string;
+    branchLeafId: string;
+    firstKeptEntryId: string;
+    currentReplayText: string;
+    hardTokenBound: number;
+    targetTokenBound: number;
+    retentionHints: string;
+    settings: RuntimeSettings;
+  }): void => {
+    if (!input.settings.rollupShadowEnabled) {
+      cancelShadowWork();
+      shadowStatus = { state: "disabled" };
+      return;
+    }
+    cancelShadowWork();
+    const generation = shadowGeneration;
+    const controller = new AbortController();
+    shadowAbort = controller;
+    shadowStatus = { state: "pending" };
+    shadowTimer = setTimeout(() => {
+      shadowTimer = undefined;
+      void (async () => {
+        try {
+          const request: RollupShadowWorkerRequest = {
+            schemaVersion: 1,
+            jobId: randomUUID(),
+            jobType: "rollup-shadow",
+            sessionPath: input.sessionPath,
+            expectedSource: await workerSourceExpectation(input.sessionPath),
+            deadlineMs: Date.now() + input.settings.workerTimeoutSeconds * 1_000,
+            niceLevel: input.settings.workerNiceLevel,
+            branchLeafId: input.branchLeafId,
+            firstKeptEntryId: input.firstKeptEntryId,
+            currentReplayText: input.currentReplayText,
+            hardTokenBound: input.hardTokenBound,
+            targetTokenBound: input.targetTokenBound,
+            retentionHints: input.retentionHints,
+          };
+          const execution = await runCompactionWorker(request, {
+            slots: input.settings.hostWorkerSlots,
+            workerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
+            schedulerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
+            signal: controller.signal,
+            priority: "low",
+          });
+          if (controller.signal.aborted || generation !== shadowGeneration) return;
+          if (execution.response.status !== "ok" || !execution.response.shadow) {
+            shadowStatus = {
+              state: "failed",
+              failureCode: execution.response.status === "failed" ? execution.response.failureCode : "worker-protocol-error",
+            };
+            return;
+          }
+          shadowStatus = {
+            state: "ready",
+            safeStatus: execution.response.shadow.safeStatus,
+            generation: execution.response.shadow.generation,
+            client: execution.clientMetrics,
+          };
+        } catch (error) {
+          if (!controller.signal.aborted) shadowStatus = { state: "failed", reason: safeErrorMessage(error) };
+        } finally {
+          if (shadowAbort === controller) shadowAbort = undefined;
+        }
+      })();
+    }, 0);
+  };
+
   const launchCompaction = (ctx: ExtensionContext, reason: string, currentTokens?: number, resumeAfter = false): void => {
     if (triggerPending) return;
     triggerPending = true;
@@ -1037,6 +1128,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
     lastProjectionMetrics = undefined;
@@ -1045,18 +1137,21 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
 
   pi.on("session_before_switch", () => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 
   pi.on("session_before_fork", () => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 
   pi.on("session_shutdown", () => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
     historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
@@ -1274,6 +1369,19 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             `ChronoCompact reused generation ${cached.generation}: ${cached.rawTokens.toLocaleString()}→${cached.renderedTokens.toLocaleString()} estimated tokens.`,
             "info",
           );
+          const cachedShadowLeafId = sourceEntries.at(-1)?.id;
+          if (settings.rollupShadowEnabled && sessionPath && typeof cachedShadowLeafId === "string") {
+            scheduleRollupShadow({
+              sessionPath,
+              branchLeafId: cachedShadowLeafId,
+              firstKeptEntryId,
+              currentReplayText: cached.summary,
+              hardTokenBound: Math.min(HARD_REPLAY_CAP_TOKENS, historicalCeilingTokens),
+              targetTokenBound: targetTokens,
+              retentionHints,
+              settings,
+            });
+          }
           return {
             compaction: {
               summary: cached.summary,
@@ -1460,6 +1568,19 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         `ChronoCompact 2.0.0 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; editor ${editorStatus?.status ?? "disabled"} (${editorStatus?.calls ?? 0} job).`,
         "info",
       );
+      const shadowBranchLeafId = sourceEntries.at(-1)?.id;
+      if (settings.rollupShadowEnabled && sessionPath && typeof shadowBranchLeafId === "string") {
+        scheduleRollupShadow({
+          sessionPath,
+          branchLeafId: shadowBranchLeafId,
+          firstKeptEntryId,
+          currentReplayText: result.summary,
+          hardTokenBound: Math.min(HARD_REPLAY_CAP_TOKENS, replayCeilingTokens),
+          targetTokenBound: replayTargetTokens,
+          retentionHints,
+          settings,
+        });
+      }
       return {
         compaction: {
           summary: combinedSummary,
@@ -1519,6 +1640,36 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
     }
   });
 
+  pi.registerCommand("chrono-rollup-shadow-status", {
+    description: "Show aggregate hierarchical rollup shadow metrics",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) return;
+      const settings = resolveExtensionSettings(userConfig);
+      const sessionPath = ctx.sessionManager.getSessionFile();
+      if (!sessionPath) {
+        ctx.ui.notify("Hierarchical rollup shadow evaluation has no active persisted session.", "info");
+        return;
+      }
+      const status = await getRollupShadowStatus(sessionPath);
+      ctx.ui.notify([
+        `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled" : "disabled"}`,
+        `Pending state: ${String(shadowStatus.state ?? "none")}`,
+        `Last safe status: ${status.lastSafeStatus}`,
+        `Recorded generations: ${status.records}`,
+        `Current replay tokens: p50 ${status.currentReplayTokens.p50}, maximum ${status.currentReplayTokens.maximum}`,
+        `Rollup tokens: p50 ${status.rollupTokens.p50}, maximum ${status.rollupTokens.maximum}`,
+        `Restriction cue coverage: current ${status.currentRestrictionCueCoverage}, rollup ${status.rollupRestrictionCueCoverage}`,
+        `Blocker coverage: current ${status.currentBlockerCoverage}, rollup ${status.rollupBlockerCoverage}`,
+        `Unresolved-failure coverage: current ${status.currentUnresolvedFailureCoverage}, rollup ${status.rollupUnresolvedFailureCoverage}`,
+        `Resource coverage: current ${status.currentResourceCoverage}, rollup ${status.rollupResourceCoverage}`,
+        `Invalid references: ${status.invalidReferenceCount}; cut lines: ${status.cutLineCount}; false completions: ${status.falseCompletionCount}; unsupported facts: ${status.unsupportedFactCount}`,
+        `Update time ms: p50 ${status.updateTimeMs.p50}, maximum ${status.updateTimeMs.maximum}`,
+        `Render time ms: p50 ${status.renderTimeMs.p50}, maximum ${status.renderTimeMs.maximum}`,
+        `Worker timer delay ms: p50 ${status.workerTimerDelayMs.p50}, maximum ${status.workerTimerDelayMs.maximum}`,
+      ].join("\n"), "info");
+    },
+  });
+
   pi.registerCommand("chrono-compact-settings", {
     description: "Open interactive ChronoCompact settings",
     handler: async (_args, ctx) => {
@@ -1551,6 +1702,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             `Experimental LLM history classifier: ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
             `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
             `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
+            `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,
             `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,
             `Ranked local history search: ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
             `Editable working memory: ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,

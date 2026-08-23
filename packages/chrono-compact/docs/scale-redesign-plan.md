@@ -33,7 +33,13 @@ The goal is better long-session working memory than a normal single summary.
 
 ## Prototype milestone
 
-The isolated hierarchical history rollup prototype is complete. It adds typed static values, render-time dynamic values, immutable branch-aware nodes, incremental open-leaf append, verified common-prefix branch reuse, bounded lazy rendering, validation, and synthetic benchmark modes. It remains outside the extension and normal replay. Integration is a separate decision after review of prototype quality and measurements. See [history-rollup-store.md](history-rollup-store.md) and [scale-baseline.md](scale-baseline.md).
+The hardened V2 hierarchical history rollup is complete. It adds explicit lifecycle relations, linked resolution, cross-leaf exact call context, full SHA-256 identities, bounded changed-path append, safe lock ownership, top-down dynamic query, typed final planning, final-line quality metrics, and final-plan validation. The default-off shadow path is evaluation only. It remains outside authoritative replay and model context. Live integration is a separate later decision. See [history-rollup-store.md](history-rollup-store.md) and [scale-baseline.md](scale-baseline.md).
+
+## Rollup shadow gate
+
+The V2 rollup store is hardened. Shadow evaluation is default-off. Current replay output remains unchanged and authoritative. Shadow metrics guide a later live-integration decision. This work does not approve live rollup use.
+
+The evaluator runs after current compaction result creation in a low-priority local worker. Its output never reaches the model. It stores safe metrics and complete local hashes only. See [rollup-shadow.md](rollup-shadow.md).
 
 ## Scale targets
 

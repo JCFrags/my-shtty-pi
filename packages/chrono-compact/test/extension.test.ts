@@ -8,6 +8,7 @@ import extension, { resolveExtensionSettings } from "../src/pi-extension.js";
 import { getActiveBranch, readSessionJsonl } from "../src/jsonl.js";
 import { candidateSegmentStorePath } from "../src/candidate-segment-store.js";
 import { sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
+import { rollupShadowSidecarPath } from "../src/history-rollup-shadow.js";
 
 type Hook = (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, context: Record<string, unknown>) => unknown | Promise<unknown>;
@@ -31,16 +32,19 @@ test("experimental high-impact features default off and environment overrides ha
     incremental: process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE,
     projection: process.env.PI_CHRONO_TOOL_RESULT_PROJECTION,
     worker: process.env.PI_CHRONO_ISOLATED_WORKER,
+    shadow: process.env.PI_CHRONO_ROLLUP_SHADOW,
   };
   try {
     delete process.env.PI_CHRONO_HISTORY_EDITOR;
     delete process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE;
     delete process.env.PI_CHRONO_TOOL_RESULT_PROJECTION;
     delete process.env.PI_CHRONO_ISOLATED_WORKER;
+    delete process.env.PI_CHRONO_ROLLUP_SHADOW;
     assert.equal(resolveExtensionSettings().historyEditorEnabled, false);
     assert.equal(resolveExtensionSettings().incrementalPrecomputeEnabled, false);
     assert.equal(resolveExtensionSettings().toolResultProjectionMode, "off");
     assert.equal(resolveExtensionSettings().isolatedWorkerEnabled, false);
+    assert.equal(resolveExtensionSettings().rollupShadowEnabled, false);
     assert.equal(resolveExtensionSettings().hostWorkerSlots, 1);
     assert.equal(resolveExtensionSettings().workerNiceLevel, 10);
     assert.equal(resolveExtensionSettings({ historyEditorEnabled: true }).historyEditorEnabled, true);
@@ -57,6 +61,8 @@ test("experimental high-impact features default off and environment overrides ha
     assert.equal(resolveExtensionSettings({ incrementalPrecomputeEnabled: true }).incrementalPrecomputeEnabled, false);
     process.env.PI_CHRONO_ISOLATED_WORKER = "true";
     assert.equal(resolveExtensionSettings({ isolatedWorkerEnabled: false }).isolatedWorkerEnabled, true);
+    process.env.PI_CHRONO_ROLLUP_SHADOW = "true";
+    assert.equal(resolveExtensionSettings({ rollupShadowEnabled: false }).rollupShadowEnabled, true);
     process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = "aggressive";
     assert.equal(resolveExtensionSettings({ toolResultProjectionMode: "off" }).toolResultProjectionMode, "aggressive");
   } finally {
@@ -66,6 +72,8 @@ test("experimental high-impact features default off and environment overrides ha
     else process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE = previous.incremental;
     if (previous.worker === undefined) delete process.env.PI_CHRONO_ISOLATED_WORKER;
     else process.env.PI_CHRONO_ISOLATED_WORKER = previous.worker;
+    if (previous.shadow === undefined) delete process.env.PI_CHRONO_ROLLUP_SHADOW;
+    else process.env.PI_CHRONO_ROLLUP_SHADOW = previous.shadow;
     if (previous.projection === undefined) delete process.env.PI_CHRONO_TOOL_RESULT_PROJECTION;
     else process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = previous.projection;
   }
@@ -310,7 +318,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "history_retention_hint",
     "request_compaction",
   ]);
-  assert.deepEqual(commandNames, ["chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-rollup-shadow-status", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
@@ -403,10 +411,12 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     if (title === "ChronoCompact settings") {
       settingsMenuVisits += 1;
       if (settingsMenuVisits === 1) return choices.find((choice) => choice.startsWith("Experimental LLM history classifier"));
-      if (settingsMenuVisits === 2) return choices.find((choice) => choice.startsWith("Raw history retained"));
+      if (settingsMenuVisits === 2) return choices.find((choice) => choice.startsWith("Hierarchical rollup shadow evaluation"));
+      if (settingsMenuVisits === 3) return choices.find((choice) => choice.startsWith("Raw history retained"));
       return "Save and close";
     }
     if (title === "Experimental LLM history classifier") return "Enabled";
+    if (title === "Hierarchical rollup shadow evaluation") return "Enabled";
     if (title === "How much recent history should remain raw?") return "Short · 8,000 tokens";
     return undefined;
   };
@@ -416,6 +426,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
   const persisted = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
   assert.equal(persisted.rawTail, "short");
   assert.equal(persisted.historyEditorEnabled, true);
+  assert.equal(persisted.rollupShadowEnabled, true);
   assert.ok(notifications.some((notification) => /Experimental LLM history classifier: enabled/.test(notification.message)));
   rmSync(configPath, { force: true });
 });
@@ -746,6 +757,49 @@ test("uniform continuation follows unresolved turns across successful compaction
 });
 
 test("exact history tools reuse an existing ledger but never create one alone",async()=>{const directory=mkdtempSync(join(tmpdir(),"chrono-extension-retrieval-")),sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});const tools=new Map<string,(...args:any[])=>Promise<any>>(),pi={registerTool(tool:{name:string;execute:(...args:any[])=>Promise<any>}){tools.set(tool.name,tool.execute);},registerCommand(){},on(){},appendEntry(){},sendMessage(){}};try{extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath),entries=session.entries,context={hasUI:false,model:undefined,thinkingLevel:"medium",sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>entries,getBranch:()=>entries},getContextUsage:()=>undefined,isIdle:()=>true,abort(){},compact(){},ui:{notify(){}},modelRegistry:{}};const get=tools.get("history_get"),range=tools.get("history_range");assert.ok(get&&range);const first=await get("get-no-ledger",{entryId:"e123"},undefined,undefined,context),firstText=first.content[0].text;assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await range("range-no-ledger",{startEntryId:"e123",endEntryId:"e124"},undefined,undefined,context);assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await updateSourceLedger(sessionPath);const ledgerText=(await get("get-ledger",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(ledgerText,firstText);writeFileSync(`${sourceLedgerPath(sessionPath)}.lock`,"busy",{mode:0o600});const busyText=(await get("get-busy",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(busyText,firstText);}finally{rmSync(directory,{recursive:true,force:true});}});
+
+test("shadow-on extension output equals shadow-off output and completes after return", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-extension-shadow-"));
+  const sessionPath = join(directory, "session.jsonl");
+  writeFileSync(sessionPath, readFileSync(resolve("test/fixtures/session.jsonl")), { mode: 0o600 });
+  const names = ["PI_CHRONO_CONFIG_PATH", "PI_CHRONO_ROLLUP_SHADOW", "PI_CHRONO_CACHE", "PI_CHRONO_PI_SUMMARY"];
+  const previous = new Map(names.map(name => [name, process.env[name]]));
+  const execute = async (enabled: boolean) => {
+    process.env.PI_CHRONO_CONFIG_PATH = join(directory, `config-${enabled}.json`);
+    process.env.PI_CHRONO_ROLLUP_SHADOW = String(enabled);
+    process.env.PI_CHRONO_CACHE = "false";
+    process.env.PI_CHRONO_PI_SUMMARY = "false";
+    const hooks = new Map<string, Hook>();
+    const pi = { registerTool() {}, registerCommand() {}, on(name: string, handler: Hook) { setUniqueHook(hooks, name, handler); }, appendEntry() {}, sendMessage() {} };
+    extension(pi as unknown as ExtensionAPI);
+    const session = await readSessionJsonl(sessionPath);
+    const branch = getActiveBranch(session);
+    const hook = hooks.get("session_before_compact");
+    assert.ok(hook);
+    return hook({ branchEntries: branch, preparation: { firstKeptEntryId: "e133", tokensBefore: 16_000 }, customInstructions: "Preserve the public API restriction.", reason: "manual", willRetry: false, signal: new AbortController().signal }, { hasUI: true, model: { contextWindow: 272_000 }, sessionManager: { getSessionFile: () => sessionPath, getEntries: () => branch, getBranch: () => branch }, ui: { notify() {} }, modelRegistry: {} }) as Promise<{ compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number } }>;
+  };
+  try {
+    const off = await execute(false);
+    assert.equal(existsSync(rollupShadowSidecarPath(sessionPath)), false);
+    assert.equal(existsSync(`${sessionPath}.chrono-history-rollups-v2`), false);
+    const started = performance.now();
+    const on = await execute(true);
+    const returnMs = performance.now() - started;
+    assert.deepEqual(on, off);
+    assert.ok(returnMs < 1_000, "the compaction response must not wait for shadow completion");
+    await waitFor(() => existsSync(rollupShadowSidecarPath(sessionPath)), 10_000);
+    const text = readFileSync(rollupShadowSidecarPath(sessionPath), "utf8");
+    assert.doesNotMatch(text, /public API|session\.jsonl|e133|CURRENT WORK|CHRONOCOMPACT/);
+    assert.equal(statSync(rollupShadowSidecarPath(sessionPath)).mode & 0o777, 0o600);
+  } finally {
+    for (const name of names) {
+      const value = previous.get(name);
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("isolated worker extension path uses persisted source and returns exact bounded replay", async () => {
   const directory=mkdtempSync(join(tmpdir(),"chrono-extension-worker-"));const sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});

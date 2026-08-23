@@ -17,6 +17,7 @@ export interface UserConfig {
   readonly historyEditorEnabled?: boolean;
   readonly incrementalPrecomputeEnabled?: boolean;
   readonly isolatedWorkerEnabled?: boolean;
+  readonly rollupShadowEnabled?: boolean;
   readonly hostWorkerSlots?: number;
   readonly workerTimeoutSeconds?: number;
   readonly workerNiceLevel?: number;
@@ -47,6 +48,7 @@ const CONFIG_KEYS = [
   "historyEditorEnabled",
   "incrementalPrecomputeEnabled",
   "isolatedWorkerEnabled",
+  "rollupShadowEnabled",
   "hostWorkerSlots",
   "workerTimeoutSeconds",
   "workerNiceLevel",
@@ -73,6 +75,7 @@ const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
   "history-classifier": "historyEditorEnabled",
   "incremental-precompute": "incrementalPrecomputeEnabled",
   "isolated-worker": "isolatedWorkerEnabled",
+  "rollup-shadow": "rollupShadowEnabled",
   "worker-slots": "hostWorkerSlots",
   "worker-timeout": "workerTimeoutSeconds",
   "worker-nice": "workerNiceLevel",
@@ -133,6 +136,7 @@ export function validateUserConfig(value: unknown): UserConfig {
   if (input.historyEditorEnabled !== undefined) config.historyEditorEnabled = booleanValue(input.historyEditorEnabled, "historyEditorEnabled");
   if (input.incrementalPrecomputeEnabled !== undefined) config.incrementalPrecomputeEnabled = booleanValue(input.incrementalPrecomputeEnabled, "incrementalPrecomputeEnabled");
   if (input.isolatedWorkerEnabled !== undefined) config.isolatedWorkerEnabled = booleanValue(input.isolatedWorkerEnabled, "isolatedWorkerEnabled");
+  if (input.rollupShadowEnabled !== undefined) config.rollupShadowEnabled = booleanValue(input.rollupShadowEnabled, "rollupShadowEnabled");
   if (input.hostWorkerSlots !== undefined) config.hostWorkerSlots = boundedInteger(input.hostWorkerSlots, "hostWorkerSlots", 1, 4);
   if (input.workerTimeoutSeconds !== undefined) config.workerTimeoutSeconds = boundedInteger(input.workerTimeoutSeconds, "workerTimeoutSeconds", 30, 3_600);
   if (input.workerNiceLevel !== undefined) config.workerNiceLevel = boundedInteger(input.workerNiceLevel, "workerNiceLevel", 0, 19);
@@ -220,6 +224,7 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     case "historyEditorEnabled": value = booleanValue(raw, command); break;
     case "incrementalPrecomputeEnabled": value = booleanValue(raw, command); break;
     case "isolatedWorkerEnabled": value = booleanValue(raw, command); break;
+    case "rollupShadowEnabled": value = booleanValue(raw, command); break;
     case "hostWorkerSlots": value = boundedInteger(raw, command, 1, 4); break;
     case "workerTimeoutSeconds": value = boundedInteger(raw, command, 30, 3_600); break;
     case "workerNiceLevel": value = boundedInteger(raw, command, 0, 19); break;

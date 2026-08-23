@@ -55,6 +55,7 @@
     "benchmark:worker": "npm run build && node scripts/benchmark-compaction-worker.mjs",
     "benchmark:ledger-branch": "npm run build && node scripts/benchmark-ledger-branch.mjs",
     "benchmark:history-rollups": "npm run build && node scripts/benchmark-history-rollups.mjs",
+    "benchmark:rollup-shadow": "npm run build && node scripts/benchmark-rollup-shadow.mjs",
     "benchmark:sessions": "npm run build && node scripts/benchmark-session-set.mjs",
     "prepack": "npm test"
   },

@@ -32,7 +32,7 @@ The V2 replay benchmark has no comparator mode. Historical evaluation, private f
 
 ## Hierarchical history rollup benchmark
 
-`scripts/benchmark-history-rollups.mjs` measures the isolated rollup prototype with synthetic data. It has strict `series`, `render`, `scale`, `branch`, and `compare` modes. It uses owner-only temporary files and no network. It does not discover or read private sessions.
+`scripts/benchmark-history-rollups.mjs` measures the isolated rollup prototype with synthetic data. It has strict `series`, `render`, `scale`, `metadata`, `query`, `restrictions`, `branch`, and `compare` modes. It uses owner-only temporary files and no network. It does not discover or read private sessions.
 
 ```bash
 npm run benchmark:history-rollups -- series --final-tasks 5000 --batches 50
@@ -42,7 +42,19 @@ npm run benchmark:history-rollups -- branch --common-tasks 5000 --left-tasks 500
 npm run benchmark:history-rollups -- compare --tasks 5000
 ```
 
-The comparator reports current replay and prototype render measures for the same synthetic branch. It does not change either path. See [history-rollup-store.md](history-rollup-store.md).
+The comparator reports current replay and prototype render measures for the same synthetic branch. It does not change either path. Metadata mode can model one million entry descriptors without one large source body. Query mode measures bounded top-down recovery of omitted old evidence. Restriction mode measures final-line recovery under pressure. See [history-rollup-store.md](history-rollup-store.md).
+
+## Rollup shadow benchmark
+
+`scripts/benchmark-rollup-shadow.mjs` uses synthetic source only. It schedules the same low-priority one-job worker used by the default-off shadow setting. It has strict `compare`, `generations`, and `pressure` modes.
+
+```bash
+npm run benchmark:rollup-shadow -- compare --tasks 5000
+npm run benchmark:rollup-shadow -- generations --final-tasks 1000 --generations 50
+npm run benchmark:rollup-shadow -- pressure --source-tokens 50000000 --restrictions 1000
+```
+
+Compare mode runs the current replay, then measures rollup update, render, final quality, worker delay, and unchanged current bytes. Generations mode measures repeated replay and post-result shadows with one bounded sidecar. Pressure mode skips the current full replay and measures only bounded rollup work. Reports contain aggregate public values. They contain no output text, source text, path, entry ID, source reference, or hash. See [rollup-shadow.md](rollup-shadow.md).
 
 ## Repeated-generation and concurrent-process benchmark
 

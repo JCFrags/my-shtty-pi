@@ -78,17 +78,17 @@ Official compaction validates the persistent key, dependency class, candidate sh
 
 The unkeyed integrity hash is corruption detection. It is not cryptographic authentication against a same-owner actor who can rewrite content and hash.
 
-## Isolated hierarchical history rollup prototype
+## Hierarchical history rollup V2 and shadow evaluation
 
-`history-value.ts`, `history-rollup-store.ts`, and `history-rollup-renderer.ts` form a separate research path. They derive typed values from one exact source-ledger branch, publish immutable content-addressed leaf and rollup nodes, and render a bounded four-section context through a lazy byte-bounded cache. Same-branch appends process new source and a stored typed open leaf. Branch switches verify and reuse only sealed common-prefix nodes.
+`history-value.ts`, `history-rollup-store.ts`, `history-rollup-query.ts`, `history-rollup-renderer.ts`, `history-rollup-validation.ts`, and `history-rollup-lock.ts` form the V2 research path. They derive typed values with explicit relations from one exact source-ledger branch, publish full-SHA-256 immutable nodes, perform bounded changed-path updates, descend through private query indexes, and validate a typed final render plan. Cross-leaf exact call context supports matching later tool results without storing complete arguments or output.
 
-This prototype is not in the core data flow above. The extension, normal replay, retrieval tools, candidate store, memory store, reducers, planner, isolated compaction worker, and source-ledger behavior do not call it. Pi JSONL remains authoritative. See [history-rollup-store.md](history-rollup-store.md).
+The V2 store is not a model-context source. The default-off `history-rollup-shadow.ts` path can run after authoritative replay creation in a low-priority child. It compares safe metrics and hashes, then discards both texts. It does not change replay, current validation, regular Pi summary, raw tail, retrieval, token limits, or model context. See [history-rollup-store.md](history-rollup-store.md) and [rollup-shadow.md](rollup-shadow.md).
 
 ## Isolated deterministic worker
 
 `compaction-worker-client.ts` and `compaction-worker-entry.ts` provide the default-off child-process boundary. One child reads one persisted JSONL source, reconstructs the exact requested leaf and cut, performs deterministic replay work, returns a strict bounded response, and exits. It has no model or network client. Provider-backed regular summary creation remains in the extension process. On success, the extension does not run `compactEntries` or calculate the complete replay generation hash.
 
-`host-worker-scheduler.ts` limits replay and candidate-update CPU jobs across local Pi processes. It uses owner-only temporary tickets and slots. Replay has priority over waiting candidate updates. Linux stale recovery binds the PID to `/proc` process-start identity. The files contain no session or project identity. See [compaction-worker.md](compaction-worker.md).
+`host-worker-scheduler.ts` limits replay, candidate-update, and rollup-shadow CPU jobs across local Pi processes. It uses owner-only temporary tickets and slots. Replay has priority over waiting candidate and shadow work. Linux stale recovery binds the PID to `/proc` process-start identity. The files contain no session or project identity. See [compaction-worker.md](compaction-worker.md).
 
 ## Retained V1.2 tool-result projection
 
