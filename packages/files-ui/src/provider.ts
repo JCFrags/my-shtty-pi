@@ -15,7 +15,7 @@ export type FilesProviderAction = "snapshot" | "list" | "navigate" | "expand" | 
 export interface FilesProviderRequest { version: 1; requestId: string; action: FilesProviderAction; path?: string; query?: string; expanded?: boolean; selected?: boolean; includedPaths?: string[]; }
 export interface FilesProviderLimits { directoryEntryLimit: number; filterMaxEntries: number; filterMaxResults: number; previewMaxBytes: number; previewMaxLines: number; insertPerFileMaxBytes: number; insertTotalMaxBytes: number; maxRowsPerEvent: number; maxErrorCharacters: number; }
 export interface FilesProviderSummary { version: 1; cwd: string; currentPath: string; selectedPaths: string[]; selectedCount: number; showHidden?: boolean; selectedKnownBytes?: number; selectedApproximateTokens?: number; limits: FilesProviderLimits; }
-export interface FilesProviderRow { path: string; name: string; kind: TreeNode["kind"]; depth: number; selected: boolean; partiallySelected: boolean; expanded: boolean; loaded: boolean; truncated: boolean; hidden: boolean; ignored: boolean; supplemental: boolean; error?: string; }
+export interface FilesProviderRow { path: string; name: string; kind: TreeNode["kind"]; depth: number; selected: boolean; partiallySelected: boolean; expanded: boolean; loaded: boolean; truncated: boolean; hidden: boolean; ignored: boolean; supplemental: boolean; /** Additive row discriminator for non-node informational rows. */ rowType?: VisibleTreeRow["kind"]; /** Bounded display text for a section or warning row. */ message?: string; error?: string; }
 export interface FilesProviderPreview { metadata: PreviewResult["metadata"]; lines: string[]; error?: string; }
 export interface FilesProviderView { version: 1; cwd: string; currentPath: string; rows: FilesProviderRow[]; filter: string; searchTruncated: boolean; showHidden?: boolean; previewPath?: string; preview?: FilesProviderPreview; }
 export interface FilesProviderResponse { version: 1; requestId: string; ok: boolean; summary?: FilesProviderSummary; view?: FilesProviderView; budget?: InsertBudget; error?: string; }
@@ -29,7 +29,8 @@ const safeError = (error: unknown): string => bounded(error instanceof Error ? e
 
 function rowFromVisible(row: VisibleTreeRow): FilesProviderRow {
   const node = row.node;
-  return { path: node?.relativePath ?? "", name: node?.name ?? row.label ?? "", kind: node?.kind ?? "other", depth: row.depth, selected: row.selected, partiallySelected: row.partiallySelected, expanded: node?.expanded ?? false, loaded: node?.loaded ?? false, truncated: node?.truncated ?? false, hidden: node?.hidden ?? false, ignored: node?.ignored ?? false, supplemental: row.supplemental, ...(node?.error || row.label ? { error: bounded(node?.error ?? row.label ?? "", MAX_ERROR) } : {}) };
+  const message = row.label ? bounded(row.label, MAX_ERROR) : undefined;
+  return { path: node?.relativePath ?? "", name: node?.name ?? "", kind: node?.kind ?? "other", depth: row.depth, selected: row.selected, partiallySelected: row.partiallySelected, expanded: node?.expanded ?? false, loaded: node?.loaded ?? false, truncated: node?.truncated ?? false, hidden: node?.hidden ?? false, ignored: node?.ignored ?? false, supplemental: row.supplemental, ...(row.kind !== "node" ? { rowType: row.kind } : {}), ...(message ? { message } : {}), ...(node?.error ? { error: bounded(node.error, MAX_ERROR) } : {}) };
 }
 
 function boundedPreview(result: PreviewResult): FilesProviderPreview {
@@ -72,7 +73,7 @@ export class FilesProvider {
   }
   private async refreshPreview(): Promise<void> {
     if (!this.previewPath) return;
-    const result = await this.preview.load(this.previewPath, true);
+    const result = await this.preview.load(this.previewPath);
     if (result.error) {
       this.previewPath = undefined;
       this.previewResult = undefined;
@@ -81,6 +82,22 @@ export class FilesProvider {
     this.previewResult = result;
   }
   publishState(): void { this.emit(FILES_PROVIDER_SUMMARY_EVENT, this.summary()); this.emit(FILES_PROVIDER_VIEW_EVENT, this.view()); }
+  private async rebuildFilter(): Promise<void> {
+    if (this.filterQuery.trim() === "") {
+      this.searchRows = undefined;
+      this.searchTruncated = false;
+      return;
+    }
+    const search = await this.tree.search(this.filterQuery, this.showHidden, undefined, this.selected);
+    this.searchRows = [...search.rows];
+    this.searchTruncated = search.truncated;
+  }
+  private async refreshState(): Promise<void> {
+    await this.tree.refreshBounded();
+    await this.tree.refreshSelected(this.selected);
+    await this.rebuildFilter();
+    await this.refreshPreview();
+  }
   private async validateSelection(): Promise<string[]> { await this.tree.refreshSelected(this.selected); return [...this.selected].sort(deterministicNameCompare); }
   private async selectPath(pathValue: string, desired?: boolean): Promise<void> { const node = this.tree.getNode(pathValue); const paths = node.kind === "file" || (node.kind === "symlink" && node.symlinkTargetKind === "file" && node.symlinkWithinRoot === true) ? [node.relativePath] : await this.tree.collectFiles(node.relativePath); const include = desired ?? !paths.every((path) => this.selected.has(path)); for (const path of paths) include ? this.selected.add(path) : this.selected.delete(path); await this.tree.refreshSelected(this.selected); }
   private async prepareContents(includedPaths?: string[]): Promise<InsertBudget> { const selected = await this.validateSelection(); const budget = await prepareInsertBudget(this.tree, selected, { perFileMaxBytes: INSERT_PER_FILE_MAX_BYTES, totalMaxBytes: INSERT_TOTAL_MAX_BYTES }); if (includedPaths) { const wanted = new Set(includedPaths.map(normalizeRelativePath)); const model = new InsertBudgetModel(budget); for (const candidate of budget.candidates) model.setIncluded(candidate.path, wanted.has(candidate.path)); } this.lastBudget = budget; return budget; }
@@ -88,7 +105,16 @@ export class FilesProvider {
   async handle(request: FilesProviderRequest): Promise<Omit<FilesProviderResponse, "requestId">> {
     if (this.disposed) throw new Error("Files provider is disposed");
     switch (request.action) {
-      case "snapshot":
+      case "snapshot": {
+        await this.refreshState();
+        const pathValue = normalizeRelativePath(request.path ?? this.currentPath);
+        const node = this.tree.getNode(pathValue);
+        if (node.kind !== "directory" && node.kind !== "root") throw new Error("Listing requires a directory path");
+        await this.tree.expand(pathValue);
+        this.currentPath = pathValue;
+        await this.rebuildFilter();
+        break;
+      }
       case "list": { const pathValue = normalizeRelativePath(request.path ?? this.currentPath); const node = this.tree.getNode(pathValue); if (node.kind !== "directory" && node.kind !== "root") throw new Error("Listing requires a directory path"); await this.tree.expand(pathValue); this.currentPath = pathValue; break; }
       case "navigate": { const pathValue = normalizeRelativePath(request.path ?? ""); const node = this.tree.getNode(pathValue); if (node.kind !== "directory" && node.kind !== "root") throw new Error("Navigation requires a directory path"); await this.tree.expand(pathValue); this.currentPath = pathValue; break; }
       case "expand": { const pathValue = normalizeRelativePath(request.path ?? this.currentPath); const node = this.tree.getNode(pathValue); if (request.expanded === false) this.tree.collapse(pathValue); else await this.tree.expand(pathValue); if (node.kind === "directory" || node.kind === "root") this.currentPath = pathValue; break; }
@@ -99,25 +125,14 @@ export class FilesProvider {
       }
       case "filter": {
         this.filterQuery = bounded(typeof request.query === "string" ? request.query : "", 256);
-        if (this.filterQuery.trim() === "") {
-          this.searchRows = undefined;
-          this.searchTruncated = false;
-        } else {
-          const search = await this.tree.search(this.filterQuery, this.showHidden);
-          this.searchRows = [...search.rows];
-          this.searchTruncated = search.truncated;
-        }
+        await this.rebuildFilter();
         break;
       }
       case "toggle-selection": await this.selectPath(normalizeRelativePath(request.path ?? ""), request.selected); break;
       case "clear-selection": this.selected.clear(); this.lastBudget = undefined; break;
       case "toggle-hidden": {
         this.showHidden = !this.showHidden;
-        if (this.filterQuery.trim() !== "") {
-          const search = await this.tree.search(this.filterQuery, this.showHidden);
-          this.searchRows = [...search.rows];
-          this.searchTruncated = search.truncated;
-        }
+        await this.rebuildFilter();
         break;
       }
       case "insert-paths": { const paths = await this.validateSelection(); if (paths.length === 0) throw new Error("Select at least one file"); this.ctx.ui.pasteToEditor(formatSelectedPaths(paths)); break; }
@@ -125,7 +140,7 @@ export class FilesProvider {
       case "insert-contents": { const budget = await this.prepareContents(request.includedPaths); const candidates = new InsertBudgetModel(budget).includedCandidates(); if (candidates.length === 0) throw new Error("No insertable files are included"); this.ctx.ui.pasteToEditor(formatLengthDelimitedFiles(candidates)); break; }
       default: throw new Error(`Unsupported files provider action: ${String(request.action)}`);
     }
-    if (request.action !== "preview") await this.refreshPreview();
+    if (request.action !== "preview" && request.action !== "snapshot") await this.refreshPreview();
     this.emit(FILES_PROVIDER_SUMMARY_EVENT, this.summary());
     this.emit(FILES_PROVIDER_VIEW_EVENT, this.view());
     return { version: 1, ok: true, summary: this.summary(), view: this.view(), ...(this.lastBudget && request.action === "prepare-contents" ? { budget: this.lastBudget } : {}) };

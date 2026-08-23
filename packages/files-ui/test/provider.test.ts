@@ -76,6 +76,56 @@ test("provider preserves v1 expand compatibility, supports collapse, and clears 
   });
 });
 
+test("snapshot refreshes selected size, preview contents, and an active filter", async () => {
+  await withTempDirectory("pi-files-provider-refresh", async (root) => {
+    await writeFile(root, "note.txt", "one");
+    await writeFile(root, "other.txt", "other");
+    const provider = new FilesProvider(context(root, []), () => {});
+    await provider.initialize();
+    await provider.handle({ version: 1, requestId: "select", action: "toggle-selection", path: "note.txt", selected: true });
+    await provider.handle({ version: 1, requestId: "preview", action: "preview", path: "note.txt" });
+    await provider.handle({ version: 1, requestId: "filter", action: "filter", query: "note" });
+    await writeFile(root, "note.txt", "updated content");
+    const refreshed = await provider.handle({ version: 1, requestId: "snapshot", action: "snapshot" });
+    assert.equal(refreshed.summary?.selectedKnownBytes, Buffer.byteLength("updated content"));
+    assert.equal(refreshed.summary?.selectedApproximateTokens, Math.ceil("updated content".length / 4));
+    assert.deepEqual(refreshed.view?.preview?.lines, ["updated content"]);
+    assert.deepEqual(refreshed.view?.rows.filter((row) => row.rowType === undefined).map((row) => row.path), ["note.txt"]);
+    provider.dispose();
+  });
+});
+
+test("snapshot removes deleted selections and clears a deleted preview", async () => {
+  await withTempDirectory("pi-files-provider-delete", async (root) => {
+    await writeFile(root, "gone.txt", "gone");
+    const provider = new FilesProvider(context(root, []), () => {});
+    await provider.initialize();
+    await provider.handle({ version: 1, requestId: "select", action: "toggle-selection", path: "gone.txt", selected: true });
+    await provider.handle({ version: 1, requestId: "preview", action: "preview", path: "gone.txt" });
+    await rm(`${root}/gone.txt`);
+    const refreshed = await provider.handle({ version: 1, requestId: "snapshot", action: "snapshot" });
+    assert.deepEqual(refreshed.summary?.selectedPaths, []);
+    assert.equal(refreshed.view?.previewPath, undefined);
+    assert.equal(refreshed.view?.preview, undefined);
+    provider.dispose();
+  });
+});
+
+test("informational rows use additive typed fields without an action path", async () => {
+  await withTempDirectory("pi-files-provider-info", async (root) => {
+    await writeFile(root, "a.txt", "a");
+    const provider = new FilesProvider(context(root, []), () => {});
+    await provider.initialize();
+    await provider.handle({ version: 1, requestId: "select", action: "toggle-selection", path: "a.txt", selected: true });
+    const response = await provider.handle({ version: 1, requestId: "filter", action: "filter", query: "missing" });
+    const section = response.view?.rows.find((row) => row.rowType === "section");
+    assert.equal(section?.message, "Selected (collapsed, hidden, or filtered)");
+    assert.equal(section?.path, "");
+    assert.equal((section as unknown as Record<string, unknown> | undefined)?.action, undefined);
+    provider.dispose();
+  });
+});
+
 test("provider uses native editor mutation and rejects unsafe or invalid remote paths", async () => {
   await withTempDirectory("pi-files-provider-safe", async (root) => {
     await writeFile(root, "note.txt", "hello");

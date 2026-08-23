@@ -529,7 +529,7 @@ export class RepositoryTree {
     return rows;
   }
 
-  async search(query: string, showHidden: boolean, signal?: AbortSignal): Promise<SearchResult> {
+  async search(query: string, showHidden: boolean, signal?: AbortSignal, selectedPaths: ReadonlySet<string> = new Set()): Promise<SearchResult> {
     const normalizedQuery = query.trim().toLowerCase();
     if (normalizedQuery === "") return { rows: [], truncated: false, scannedEntries: 0 };
     const queue = [""];
@@ -573,7 +573,7 @@ export class RepositoryTree {
     });
     const rows = this.visibleRows({
       showHidden,
-      selectedPaths: new Set(),
+      selectedPaths,
       filter: normalizedQuery,
       searchNodes: matches,
       searchTruncated: truncated,
