@@ -256,21 +256,29 @@ export class FilesBrowserComponent {
   }
 
   private enqueue(operation: () => Promise<void>, renderOnComplete = true): void {
+    let failed = false;
     this.operationChain = this.operationChain
       .then(operation)
       .catch((error: unknown) => {
+        failed = true;
         if (!this.disposed) {
           this.ui.notify(sanitizeTerminalText(error instanceof Error ? error.message : String(error)), "error");
           this.requestRender();
         }
       })
       .finally(() => {
-        if (renderOnComplete) this.requestRender();
+        if (renderOnComplete && !failed) this.requestRender();
       });
   }
 
   async settle(): Promise<void> {
     await this.operationChain;
+  }
+
+  async runScheduledRefreshCycle(): Promise<void> {
+    if (this.disposed) return;
+    this.enqueue(() => this.refreshNow(), false);
+    await this.settle();
   }
 
   private async restoreSessionState(): Promise<void> {
@@ -360,11 +368,13 @@ export class FilesBrowserComponent {
               loading: row.node.loading,
               truncated: row.node.truncated,
               error: row.node.error,
+              symlinkTarget: row.node.symlinkTarget,
               symlinkTargetKind: row.node.symlinkTargetKind,
               symlinkWithinRoot: row.node.symlinkWithinRoot,
             }
           : undefined,
       })),
+      selectionSummary: this.selectionSummary(),
       searchTruncated: this.searchTruncated,
       searchLoading: this.searchLoading,
       previewPath: this.previewPath,
