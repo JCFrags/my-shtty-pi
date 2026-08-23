@@ -118,7 +118,7 @@ export class LegacyToolControlsOverlay implements ComponentLike {
   handleInput(data: string): void {
     try {
       if (this.disposed) return;
-      if (data === "\x1b" || data === "escape") {
+      if (data === "\x1b" || data === "escape" || data === "\x03") {
         this.options.close();
         return;
       }

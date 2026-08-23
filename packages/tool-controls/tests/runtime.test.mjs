@@ -43,6 +43,20 @@ test("runtime installs one below-editor widget and cleans widget plus subscripti
   assert.deepEqual(removal.options, { placement: "belowEditor" });
 });
 
+test("fullscreen popup owns mouse capture only while open and releases it on close", async () => {
+  const tui = createTui(24, 120, "fullscreen");
+  const ui = new MockUI({ states: [state("a")], currentTurnIds: ["a"], autoCloseOverlay: false, tui });
+  const runtime = new ToolControlsRuntime({ ui, mode: "tui" });
+  await runtime.start();
+  const opening = runtime.openOverlay();
+  await waitFor(() => ui.overlayComponent !== undefined, "overlay creation");
+  assert.deepEqual(tui.mouseCapture, [true]);
+  ui.overlayComponent.handleInput("\x1b");
+  await opening;
+  assert.deepEqual(tui.mouseCapture, [true, false]);
+  runtime.cleanup();
+});
+
 test("missing patched capability names are shown and legacy global controls remain keyboard accessible", async () => {
   const ui = createLegacyUI({ globalExpanded: false });
   const runtime = new ToolControlsRuntime({ ui, mode: "tui" });

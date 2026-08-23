@@ -54,6 +54,8 @@ export interface TuiLike {
   mode?: "regular" | "fullscreen" | string;
   terminal?: TerminalLike;
   requestRender(force?: boolean): void;
+  /** Enable component mouse reporting only while a fullscreen component is active. */
+  setMouseCapture?(enabled: boolean): void;
 }
 
 export interface ThemeLike {

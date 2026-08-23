@@ -28,7 +28,7 @@ import type {
 } from "../types.ts";
 import { computeBrowserLayout, pointInRect } from "./layout.ts";
 import { decodeBrowserKey, isPrintableInput } from "./key.ts";
-import { attachFirstClassMouse, normalizeMouseEvent, type MouseAttachment } from "./mouse.ts";
+import { attachFirstClassMouse, normalizeMouseEvent, parseSgrMouse, type MouseAttachment } from "./mouse.ts";
 import { alignRight, cellWidth, padToCells, sanitizeTerminalText, truncateToCells } from "./text.ts";
 
 const REVERSE = "\u001b[7m";
@@ -255,17 +255,30 @@ export class FilesBrowserComponent {
     if (!this.disposed) this.tui.requestRender();
   }
 
-  private enqueue(operation: () => Promise<void>): void {
+  private enqueue(operation: () => Promise<void>, renderOnComplete = true): void {
+    let failed = false;
     this.operationChain = this.operationChain
       .then(operation)
       .catch((error: unknown) => {
-        if (!this.disposed) this.ui.notify(sanitizeTerminalText(error instanceof Error ? error.message : String(error)), "error");
+        failed = true;
+        if (!this.disposed) {
+          this.ui.notify(sanitizeTerminalText(error instanceof Error ? error.message : String(error)), "error");
+          this.requestRender();
+        }
       })
-      .finally(() => this.requestRender());
+      .finally(() => {
+        if (renderOnComplete && !failed) this.requestRender();
+      });
   }
 
   async settle(): Promise<void> {
     await this.operationChain;
+  }
+
+  async runScheduledRefreshCycle(): Promise<void> {
+    if (this.disposed) return;
+    this.enqueue(() => this.refreshNow(), false);
+    await this.settle();
   }
 
   private async restoreSessionState(): Promise<void> {
@@ -307,13 +320,14 @@ export class FilesBrowserComponent {
         } finally {
           this.scheduleRefresh();
         }
-      });
+      }, false);
     }, this.refreshIntervalMs);
     this.refreshTimer.unref?.();
   }
 
   async refreshNow(): Promise<void> {
     if (this.disposed) return;
+    const before = this.visibleModelSignature();
     const result = await this.tree.refreshSelected(this.sessionState.selectedPaths);
     if (this.disposed) return;
     if (result.removed.length > 0) {
@@ -331,6 +345,42 @@ export class FilesBrowserComponent {
       if (refreshedPreview.error && result.removed.includes(this.previewPath)) this.previewPath = undefined;
     }
     this.rebuildRows(this.previewPath);
+    if (this.visibleModelSignature() !== before) this.requestRender();
+  }
+
+  private visibleModelSignature(): string {
+    return JSON.stringify({
+      rows: this.rows.map((row) => ({
+        key: row.key,
+        kind: row.kind,
+        label: row.label,
+        depth: row.depth,
+        selected: row.selected,
+        partiallySelected: row.partiallySelected,
+        supplemental: row.supplemental,
+        node: row.node
+          ? {
+              path: row.node.relativePath,
+              name: row.node.name,
+              kind: row.node.kind,
+              expanded: row.node.expanded,
+              loaded: row.node.loaded,
+              loading: row.node.loading,
+              truncated: row.node.truncated,
+              error: row.node.error,
+              symlinkTarget: row.node.symlinkTarget,
+              symlinkTargetKind: row.node.symlinkTargetKind,
+              symlinkWithinRoot: row.node.symlinkWithinRoot,
+            }
+          : undefined,
+      })),
+      selectionSummary: this.selectionSummary(),
+      searchTruncated: this.searchTruncated,
+      searchLoading: this.searchLoading,
+      previewPath: this.previewPath,
+      previewLoading: this.previewLoading,
+      preview: this.previewResult,
+    });
   }
 
   private firstNodeIndex(start = 0, direction: 1 | -1 = 1): number {
@@ -747,6 +797,11 @@ export class FilesBrowserComponent {
 
   handleInput(data: string): void {
     if (this.disposed) return;
+    const mouse = parseSgrMouse(data);
+    if (mouse) {
+      this.handleMouse(mouse);
+      return;
+    }
     if (this.budget) {
       this.handleBudgetInput(data);
       this.requestRender();

@@ -120,6 +120,10 @@ test("keyboard focus, Enter, Space, a, n, and Escape have parity", async () => {
   assert.deepEqual(second.overlay.selectedToolIds(), []);
   second.overlay.handleInput("escape");
   assert.equal(second.closed.count, 1);
+
+  const third = await setup();
+  third.overlay.handleInput("\x03");
+  assert.equal(third.closed.count, 1, "Ctrl+C closes the popup");
 });
 
 test("PageUp/PageDown and configured shared scroll keys scroll the list", async () => {
