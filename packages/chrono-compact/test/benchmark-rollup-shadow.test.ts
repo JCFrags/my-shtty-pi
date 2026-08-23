@@ -23,7 +23,8 @@ test("rollup shadow benchmark validates bounded public arguments", () => {
 test("small shadow compare, generations, and pressure modes preserve isolation and integrity", async () => {
   const compare = await runRollupShadowBenchmark(parseRollupShadowBenchmarkArgs(["compare", "--tasks", "10"]));
   assert.equal(compare.integrity, true);
-  assert.equal(compare.currentSummaryUnchanged, true);
+  assert.equal(compare.authoritativeResponseUnchanged, true);
+  assert.equal(compare.maliciousShadowAttempted, true);
   assert.equal(compare.modelCalls, 0);
   assert.equal(compare.networkCalls, 0);
   const generations = await runRollupShadowBenchmark(parseRollupShadowBenchmarkArgs(["generations", "--final-tasks", "10", "--generations", "2"]));

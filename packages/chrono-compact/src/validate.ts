@@ -245,8 +245,9 @@ export function validatePlan(
 
   let previousStart = -1;
   let previousEnd = -1;
+  const coveredSourceOrdinals = new Set<string>();
   for (const unit of plan.units) {
-    if (unit.startEntryIndex < previousStart || unit.endEntryIndex < unit.startEntryIndex) {
+    if (unit.startEntryIndex < previousStart || unit.startEntryIndex < previousEnd || unit.endEntryIndex < unit.startEntryIndex) {
       issues.push({
         severity: "error",
         code: "chronology",
@@ -257,6 +258,13 @@ export function validatePlan(
     previousStart = unit.startEntryIndex;
     previousEnd = Math.max(previousEnd, unit.endEntryIndex);
     for (const ref of unit.sourceRefs) {
+      const exactKeys = ref.blockIndex === undefined
+        ? validationIndex.blocks.filter((block) => block.entryId === ref.entryId).map((block) => refKey(block.entryId, block.blockIndex))
+        : [refKey(ref.entryId, ref.blockIndex)];
+      if (exactKeys.some((key) => coveredSourceOrdinals.has(key))) {
+        issues.push({ severity: "error", code: "source-overlap", message: `Unit ${unit.id} repeats source coverage from an earlier unit.`, unitId: unit.id });
+      }
+      for (const key of exactKeys) coveredSourceOrdinals.add(key);
       const valid = validationIndex.validEntryIds.has(ref.entryId)
         && (ref.blockIndex === undefined || validationIndex.validExactSourceRefs.has(refKey(ref.entryId, ref.blockIndex)));
       if (!valid) {
@@ -272,20 +280,35 @@ export function validatePlan(
   }
 
   const firstRepresentedEntryIndex = plan.units[0]?.startEntryIndex ?? Number.POSITIVE_INFINITY;
-  const representedToolPairs = new Map<string, { represented: boolean; substantive: boolean }>();
+  const representedToolPairs = new Map<string, { call: boolean; result: boolean }>();
   for (const unit of plan.units) {
-    for (const toolCallId of unit.toolCallIds) {
-      const previous = representedToolPairs.get(toolCallId) ?? { represented: false, substantive: false };
-      representedToolPairs.set(toolCallId, {
-        represented: true,
-        substantive: previous.substantive || unit.selected.level !== "absent",
-      });
+    if (unit.selected.level === "absent") continue;
+    for (const ref of unit.selected.sourceRefs) {
+      const referencedBlocks = ref.blockIndex === undefined
+        ? validationIndex.blocks.filter((block) => block.entryId === ref.entryId)
+        : [validationIndex.exactBlockByRef.get(refKey(ref.entryId, ref.blockIndex))].filter((block): block is HistoricalBlock => block !== undefined);
+      for (const block of referencedBlocks) {
+        if (!block.toolCallId) continue;
+        const previous = representedToolPairs.get(block.toolCallId) ?? { call: false, result: false };
+        representedToolPairs.set(block.toolCallId, {
+          call: previous.call || block.kind === "tool_call",
+          result: previous.result || block.kind === "tool_result",
+        });
+      }
     }
   }
   for (const [toolCallId, pair] of validationIndex.toolPairs) {
     if (!pair.call || !pair.result) continue;
-    const represented = representedToolPairs.get(toolCallId);
-    if (!represented?.represented || !represented.substantive) {
+    const represented = representedToolPairs.get(toolCallId) ?? { call: false, result: false };
+    if (represented.call !== represented.result) {
+      issues.push({
+        severity: "error",
+        code: "tool-pair-partial",
+        message: `Tool interaction ${toolCallId} has only one source side in the compacted replay.`,
+      });
+      continue;
+    }
+    if (!represented.call) {
       if (options.allowOmittedPrefix === true && pair.latestEntryIndex < firstRepresentedEntryIndex) continue;
       issues.push({
         severity: "error",

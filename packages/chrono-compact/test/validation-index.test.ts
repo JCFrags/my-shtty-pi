@@ -134,7 +134,7 @@ test("indexed and default validation reports match for plan structure failures",
   const call = block({ id: "call", entryId: "call", entryIndex: 0, kind: "tool_call", exactText: "read file", toolCallId: "tool-1" });
   const result = block({ id: "result", entryId: "result", entryIndex: 1, kind: "tool_result", exactText: "file text", toolCallId: "tool-1" });
   const selected = candidate([{ entryId: "call" }]);
-  assertEquivalent([call, result], plan([unit(selected)]), "tool-pair-missing");
+  assertEquivalent([call, result], plan([unit(selected)]), "tool-pair-partial");
 
   const first = unit(candidate([{ entryId: "result" }]), { id: "late", startEntryIndex: 1, endEntryIndex: 1 });
   const second = unit(candidate([{ entryId: "call" }]), { id: "early", startEntryIndex: 0, endEntryIndex: 0 });

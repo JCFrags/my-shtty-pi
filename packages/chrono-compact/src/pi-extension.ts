@@ -90,6 +90,7 @@ import { estimateTokensFromText, hashText, safeErrorMessage, stableStringify, tr
 import { runCompactionWorker, type WorkerClientResult } from "./compaction-worker-client.js";
 import type { CandidateUpdateWorkerRequest, ReplayWorkerRequest, RollupShadowWorkerRequest, WorkerSourceExpectation } from "./compaction-worker-protocol.js";
 import { getRollupShadowStatus } from "./history-rollup-shadow.js";
+import { returnAuthoritativeAfterShadowSchedule } from "./post-result-shadow.js";
 
 const EXTENSION_VERSION = "2.0.0";
 export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
@@ -114,6 +115,7 @@ export interface RuntimeSettings {
   readonly dynamicRawTailMinTokens: number;
   readonly dynamicRawTailMaxTokens: number;
   readonly hybridSummaryEnabled: boolean;
+  readonly legacyPiSummaryDisabled: boolean;
   readonly hybridSummaryTargetTokens: number;
   readonly legacyHistoryEditorEnabled: boolean;
   /** Always false. The extension history editor is retired. */
@@ -197,7 +199,9 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
     ...(rawTail.tokens === undefined ? {} : { rawTailTokens: rawTail.tokens }),
     dynamicRawTailMinTokens: numberSetting("PI_CHRONO_RAW_TAIL_MIN", 3_000, 1_000, 200_000, overrides.dynamicRawTailMinTokens),
     dynamicRawTailMaxTokens: numberSetting("PI_CHRONO_RAW_TAIL_MAX", 6_000, 1_000, 200_000, overrides.dynamicRawTailMaxTokens),
-    hybridSummaryEnabled: booleanSetting("PI_CHRONO_PI_SUMMARY", true, overrides.hybridSummaryEnabled),
+    // Retained as a compatibility-shaped field. The regular Pi summary is required.
+    hybridSummaryEnabled: true,
+    legacyPiSummaryDisabled: !booleanSetting("PI_CHRONO_PI_SUMMARY", true, overrides.hybridSummaryEnabled),
     hybridSummaryTargetTokens: numberSetting("PI_CHRONO_PI_SUMMARY_TOKENS", 2_500, 512, 16_000, overrides.hybridSummaryTargetTokens),
     legacyHistoryEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
     historyEditorEnabled: false,
@@ -940,7 +944,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   let valueWorkerStatus: ValueWorkerRunResult | { status: string } = { status: "off" };
   let valueWorkerActive = false;
   let valueWorkerRerun = false;
+  let valueWorkerCompactionGate = false;
   let legacyHistoryEditorWarningShown = false;
+  let legacyPiSummaryWarningShown = false;
   let projectionSeenToolCallIds = new Set<string>();
   let lastProjectionMetrics: ToolResultProjectionMetrics | undefined;
 
@@ -987,12 +993,16 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
 
   const scheduleValueWorker = (ctx: ExtensionContext, store: CandidateSegmentStore): void => {
     const settings = resolveExtensionSettings(userConfig);
+    if (valueWorkerCompactionGate) { valueWorkerStatus = { status: "paused-for-compaction" }; return; }
     if (settings.valueWorker.mode === "off") { cancelValueWorker(); valueWorkerStatus = { status: "off" }; return; }
     if (!settings.incrementalPrecomputeEnabled) { valueWorkerStatus = { status: "candidate-store-required" }; return; }
     if (valueWorkerActive) { valueWorkerRerun = true; return; }
     valueWorkerActive = true; valueWorkerStatus = { status: "scheduled" };
     const controller = new AbortController(); valueWorkerAbort = controller;
-    queueMicrotask(() => { void runValueWorker({ ctx, settings: settings.valueWorker, store, signal: controller.signal }).then((result) => { valueWorkerStatus = result; }).catch(() => { if (!controller.signal.aborted) valueWorkerStatus = { status: "unknown-value-worker-failure" }; }).finally(() => { valueWorkerActive = false; if (valueWorkerAbort === controller) valueWorkerAbort = undefined; if (valueWorkerRerun && !controller.signal.aborted) { valueWorkerRerun = false; scheduleValueWorker(ctx, store); } }); });
+    queueMicrotask(() => {
+      if (valueWorkerCompactionGate || controller.signal.aborted) { valueWorkerActive = false; if (valueWorkerAbort === controller) valueWorkerAbort = undefined; return; }
+      void runValueWorker({ ctx, settings: settings.valueWorker, store, signal: controller.signal }).then((result) => { valueWorkerStatus = result; }).catch(() => { if (!controller.signal.aborted) valueWorkerStatus = { status: "unknown-value-worker-failure" }; }).finally(() => { valueWorkerActive = false; if (valueWorkerAbort === controller) valueWorkerAbort = undefined; if (valueWorkerRerun && !controller.signal.aborted && !valueWorkerCompactionGate) { valueWorkerRerun = false; scheduleValueWorker(ctx, store); } });
+    });
   };
 
   const scheduleIncrementalWork = (ctx: ExtensionContext): void => {
@@ -1204,6 +1214,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
     lastProjectionMetrics = undefined;
     const settings = resolveExtensionSettings(userConfig);
     if (settings.legacyHistoryEditorEnabled && !legacyHistoryEditorWarningShown && ctx.hasUI) { legacyHistoryEditorWarningShown = true; ctx.ui.notify("The old ChronoCompact history-classifier setting is retired and cannot start a model call. Use the background value-worker settings for explicit opt-in.", "warning"); }
+    if (settings.legacyPiSummaryDisabled && !legacyPiSummaryWarningShown && ctx.hasUI) { legacyPiSummaryWarningShown = true; ctx.ui.notify("PI_CHRONO_PI_SUMMARY=false is retired. The required regular Pi summary remains active; no configuration was changed.", "warning"); }
     scheduleIncrementalWork(ctx);
   });
 
@@ -1282,6 +1293,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_compact", (event) => {
+    valueWorkerCompactionGate = false;
     cancelIncrementalWork(true);
     projectionSeenToolCallIds = new Set();
     const shouldContinue = continueAfterSuccessfulCompaction && !event.willRetry;
@@ -1303,6 +1315,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
+    valueWorkerCompactionGate = true;
+    cancelValueWorker();
     cancelIncrementalWork(false);
     const settings = resolveExtensionSettings(userConfig);
     try {
@@ -1419,6 +1433,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         dynamicRawTailMaxTokens: settings.dynamicRawTailMaxTokens,
         hybridSummaryEnabled: settings.hybridSummaryEnabled,
         hybridSummaryTargetTokens: settings.hybridSummaryTargetTokens,
+        piSummaryModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unavailable",
+        piSummaryThinkingLevel: ctx.thinkingLevel,
+        previousPiSummaryHash: previousPiSummary ? hashText(previousPiSummary) : undefined,
         rankedSearchEnabled: settings.rankedSearchEnabled,
         editableMemoryEnabled: settings.editableMemoryEnabled,
         memoryGenerationHash: memory?.generationHash,
@@ -1491,32 +1508,18 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       }
 
       let piSummary: Awaited<ReturnType<typeof createPiRegularSummary>>;
-      let workerRebaseTargetTokens: number | undefined;
-      if (settings.hybridSummaryEnabled) {
-        try {
-          const piSummaryTargetTokens = Math.min(
-            settings.hybridSummaryTargetTokens,
-            Math.max(512, targetTokens - 512),
-          );
-          if (summaryRebase.rebase) {
-            if (useIsolatedWorker) workerRebaseTargetTokens = piSummaryTargetTokens;
-            else {
-              const text = buildDeterministicSummaryRebase(
-                parseHistoricalBlocks(sourceEntries, { includeHistoricalCompactions: false, includeMetadata: false }),
-                undefined,
-                piSummaryTargetTokens,
-              );
-              piSummary = { text, tokens: estimateTokensFromText(text), model: "deterministic-local-rebase" };
-            }
-          } else {
-            piSummary = await createPiRegularSummary(ctx, event.preparation, {
-              targetTokens: piSummaryTargetTokens,
-              customInstructions: event.customInstructions,
-              signal: event.signal,
-              previousSummary: previousPiSummary,
-              messages: regularSummaryMessagesForCut(branchEntries, firstKeptEntryId, false),
-            });
-          }
+      try {
+        const piSummaryTargetTokens = Math.min(
+          settings.hybridSummaryTargetTokens,
+          Math.max(512, targetTokens - 512),
+        );
+        piSummary = await createPiRegularSummary(ctx, event.preparation, {
+          targetTokens: piSummaryTargetTokens,
+          customInstructions: event.customInstructions,
+          signal: event.signal,
+          ...(summaryRebase.rebase ? {} : { previousSummary: previousPiSummary }),
+          messages: regularSummaryMessagesForCut(branchEntries, firstKeptEntryId, summaryRebase.rebase),
+        });
           if (piSummary && piSummary.tokens > piSummaryTargetTokens) {
             const text = truncateToTokens(
               piSummary.text,
@@ -1528,18 +1531,15 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           if (!piSummary && ctx.hasUI) {
             ctx.ui.notify("Regular Pi hybrid summary was unavailable; deterministic replay will be used alone.", "warning");
           }
-        } catch (hybridError) {
-          if (!event.signal?.aborted && ctx.hasUI) {
-            ctx.ui.notify(`Regular Pi hybrid summary failed; deterministic replay will continue: ${safeErrorMessage(hybridError)}`, "warning");
-          }
+      } catch (hybridError) {
+        if (!event.signal?.aborted && ctx.hasUI) {
+          ctx.ui.notify(`Regular Pi summary failed; deterministic replay will continue in degraded mode: ${safeErrorMessage(hybridError)}`, "warning");
         }
       }
 
       const hybridWrapperTokens = piSummary
         ? estimateTokensFromText(renderHybridCompaction(piSummary.text, "")) - piSummary.tokens
-        : workerRebaseTargetTokens !== undefined
-          ? estimateTokensFromText(renderHybridCompaction("", ""))
-          : 0;
+        : 0;
       const replayCeilingTokens = Math.max(
         128,
         historicalCeilingTokens - (piSummary?.tokens ?? 0) - Math.max(0, hybridWrapperTokens),
@@ -1578,9 +1578,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           hardOutputTokens: replayCeilingTokens, retentionHints, pinnedMemoryText,
           ...(currentRetrievalFeedback === undefined ? {} : { retrievalFeedback: currentRetrievalFeedback }),
           candidateStoreEnabled: settings.incrementalPrecomputeEnabled, cacheEnabled: settings.cacheEnabled,
-          valueWorkerMode: settings.valueWorker.mode, valueWorkerConfigurationHash: valueWorkerConfigurationHash(settings.valueWorker),
-          ...(workerRebaseTargetTokens === undefined ? {} : { deterministicRebase: { targetTokens: workerRebaseTargetTokens,
-            combinedTargetTokens: targetTokens, historicalCeilingTokens } }) };
+          valueWorkerMode: settings.valueWorker.mode, valueWorkerConfigurationHash: valueWorkerConfigurationHash(settings.valueWorker) };
         workerExecution = await runCompactionWorker(request, { slots: settings.hostWorkerSlots,
           workerTimeoutMs: settings.workerTimeoutSeconds * 1_000, schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
           signal: event.signal, priority: "high" });
@@ -1589,8 +1587,6 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           throw new Error(`Isolated worker failed: ${code}`);
         }
         const replay = workerExecution.response.replay; generationHash = replay.generationHash;
-        if (replay.deterministicRebaseText !== undefined) piSummary = { text: replay.deterministicRebaseText,
-          tokens: estimateTokensFromText(replay.deterministicRebaseText), model: "deterministic-local-rebase" };
         result = { summary: replay.summary, rawTokens: replay.rawTokens, renderedTokens: replay.renderedTokens,
           targetTokens: replay.targetTokens, validation: replay.validation,
           plan: { targetTokens: replay.targetTokens, estimatedTokens: replay.renderedTokens, rawTokens: replay.rawTokens, units: [], warnings: [] },
@@ -1645,19 +1641,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         "info",
       );
       const shadowBranchLeafId = sourceEntries.at(-1)?.id;
-      if (settings.rollupShadowEnabled && sessionPath && typeof shadowBranchLeafId === "string") {
-        scheduleRollupShadow({
-          sessionPath,
-          branchLeafId: shadowBranchLeafId,
-          firstKeptEntryId,
-          currentReplayText: result.summary,
-          hardTokenBound: Math.min(HARD_REPLAY_CAP_TOKENS, replayCeilingTokens),
-          targetTokenBound: replayTargetTokens,
-          retentionHints,
-          settings,
-        });
-      }
-      return {
+      const authoritativeResponse = {
         compaction: {
           summary: combinedSummary,
           firstKeptEntryId,
@@ -1702,6 +1686,20 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           },
         },
       };
+      return returnAuthoritativeAfterShadowSchedule(authoritativeResponse, () => {
+        if (settings.rollupShadowEnabled && sessionPath && typeof shadowBranchLeafId === "string") {
+          scheduleRollupShadow({
+            sessionPath,
+            branchLeafId: shadowBranchLeafId,
+            firstKeptEntryId,
+            currentReplayText: result.summary,
+            hardTokenBound: Math.min(HARD_REPLAY_CAP_TOKENS, replayCeilingTokens),
+            targetTokenBound: replayTargetTokens,
+            retentionHints,
+            settings,
+          });
+        }
+      });
     } catch (error) {
       const noSavings =
         error instanceof CompactionValidationError && error.report.issues.some((issue) => issue.code === "no-net-savings");

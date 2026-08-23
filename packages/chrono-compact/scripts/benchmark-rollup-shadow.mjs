@@ -10,6 +10,7 @@ import { runCompactionWorker } from "../dist/src/compaction-worker-client.js";
 import { readRollupShadowRecords } from "../dist/src/history-rollup-shadow.js";
 import { syntheticEntries } from "./benchmark-v2.mjs";
 import { ROLLUP_SHADOW_FAILURE_CODES, ROLLUP_SHADOW_FAILURE_STAGES } from "../dist/src/rollup-shadow-failure.js";
+import { returnAuthoritativeAfterShadowSchedule } from "../dist/src/post-result-shadow.js";
 
 const bounds = {
   tasks: [1, 10_000],
@@ -103,9 +104,30 @@ async function compare(options, directory) {
   const currentStarted = performance.now();
   const current = await compactEntries(source, { config, hardOutputTokens: 25_000, futureEntries: [kept] });
   const currentReplayTime = performance.now() - currentStarted;
-  const before = hash(current.summary);
-  const shadow = await workerRequest(path, source.at(-1).id, kept.id, current.summary, 20_000, join(directory, "scheduler"), "compare");
+  const authoritativeResponse = {
+    summary: current.summary,
+    firstKeptEntryId: kept.id,
+    tokensBefore: current.rawTokens,
+    details: current.details,
+    generationHash: current.details.generationHash,
+    renderedTokens: current.renderedTokens,
+    validation: current.validation,
+    regularPiSummary: undefined,
+    rawTailBoundary: kept.id,
+  };
+  const frozenBeforeShadow = structuredClone(authoritativeResponse);
+  let shadowPromise;
+  let maliciousShadowAttempted = false;
+  const returnedResponse = returnAuthoritativeAfterShadowSchedule(authoritativeResponse, (snapshot) => {
+    maliciousShadowAttempted = true;
+    snapshot.summary = "malicious replacement";
+    snapshot.details = { malicious: true };
+    shadowPromise = workerRequest(path, source.at(-1).id, kept.id, current.summary, 20_000, join(directory, "scheduler"), "compare");
+    return { summary: "replacement object" };
+  });
+  const shadow = await shadowPromise;
   const payload = shadow.payload;
+  const authoritativeResponseUnchanged = JSON.stringify(returnedResponse) === JSON.stringify(frozenBeforeShadow);
   return {
     schemaVersion: 2,
     mode: "compare",
@@ -123,7 +145,8 @@ async function compare(options, directory) {
     rollupQueryNodes: payload.queryNodes,
     rollupNodeBytes: payload.nodeBytesRead,
     rollupSourceBytes: payload.sourceBytesRead,
-    currentSummaryUnchanged: hash(current.summary) === before,
+    authoritativeResponseUnchanged,
+    maliciousShadowAttempted,
     modelCalls: payload.modelCalls,
     networkCalls: payload.networkCalls,
     integrity: payload.safeStatus === "ok" && payload.rollupQuality.invalidReferences === 0,
@@ -157,13 +180,21 @@ async function generations(options, directory) {
     const started = performance.now();
     const current = await compactEntries(source, { config: resolveCompactorConfig({ targetTokens: 20_000, enableSemanticCompression: false }), hardOutputTokens: 25_000, futureEntries: [kept] });
     currentTotal += performance.now() - started;
-    const currentHash = hash(current.summary);
-    const shadow = await workerRequest(path, leaf.id, kept.id, current.summary, 20_000, join(directory, "scheduler"), `generation-${generation}`);
+    const authoritativeResponse = { summary: current.summary, firstKeptEntryId: kept.id, tokensBefore: current.rawTokens, details: current.details,
+      generationHash: current.details.generationHash, renderedTokens: current.renderedTokens, validation: current.validation, regularPiSummary: undefined, rawTailBoundary: kept.id };
+    const frozenBeforeShadow = structuredClone(authoritativeResponse);
+    let shadowPromise;
+    const returnedResponse = returnAuthoritativeAfterShadowSchedule(authoritativeResponse, (snapshot) => {
+      snapshot.summary = "malicious replacement";
+      shadowPromise = workerRequest(path, leaf.id, kept.id, current.summary, 20_000, join(directory, "scheduler"), `generation-${generation}`);
+      return { summary: "replacement object" };
+    });
+    const shadow = await shadowPromise;
     shadowUpdateTotal += shadow.payload.updateTimeMs;
     shadowRenderTotal += shadow.payload.renderTimeMs;
     maxMainDelay = Math.max(maxMainDelay, shadow.metrics.mainProcessMaximumTimerDelayMs);
     maxWorkerDelay = Math.max(maxWorkerDelay, shadow.payload.workerTimerDelayMs);
-    outputUnchanged &&= hash(current.summary) === currentHash;
+    outputUnchanged &&= JSON.stringify(returnedResponse) === JSON.stringify(frozenBeforeShadow);
   }
   const records = await readRollupShadowRecords(path);
   const safeStatusCounts = Object.fromEntries([...new Set(records.map(record => record.safeStatus))].sort().map(status => [status, records.filter(record => record.safeStatus === status).length]));

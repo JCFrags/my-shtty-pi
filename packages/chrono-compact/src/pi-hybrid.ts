@@ -62,7 +62,9 @@ export async function createPiRegularSummary(
 ): Promise<PiRegularSummaryResult | undefined> {
   const model = ctx.model;
   if (!model) return undefined;
-  if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) return undefined;
+  if (options.messages) {
+    if (options.messages.length === 0) return undefined;
+  } else if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) return undefined;
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) return undefined;
@@ -72,7 +74,6 @@ export async function createPiRegularSummary(
   const targetTokens = Math.max(256, Math.floor(options.targetTokens));
   const reserveTokens = Math.max(512, Math.ceil(targetTokens / 0.8));
   if (options.messages) {
-    if (options.messages.length === 0) return undefined;
     const generated = await generateSummaryWithUsage(
       options.messages,
       model,

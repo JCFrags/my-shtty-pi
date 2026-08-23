@@ -483,7 +483,7 @@ test("default-off and explicitly disabled classifier paths make zero classifier 
         },
         {
           hasUI: true,
-          model: { provider: "test", id: "test", contextWindow: 100_000 },
+          model: undefined,
           modelRegistry: {
             async getApiKeyAndHeaders() {
               providerAuthCalls += 1;
@@ -498,7 +498,7 @@ test("default-off and explicitly disabled classifier paths make zero classifier 
       assert.equal(raw.compaction.details?.historyEditor?.status, "disabled");
       assert.equal(raw.compaction.details?.historyEditor?.calls, 0);
       assert.equal(raw.compaction.details?.hybrid?.enabled, false);
-      assert.equal(providerAuthCalls, 0, `${mode} classifier path requested provider authentication`);
+      assert.equal(providerAuthCalls, 0, `${mode} retired classifier path requested provider authentication`);
       rmSync(configPath, { force: true });
     }
   } finally {

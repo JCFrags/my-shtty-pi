@@ -109,7 +109,7 @@ export function protectedVisibility(blocks, summary, directInstructionText) {
   return { protectedSourceBlocks: protectedBlocks.length, protectedVisibleBlocks: visible,
     protectedVisibilityRate: protectedBlocks.length ? visible / protectedBlocks.length : 1 };
 }
-const STRUCTURAL_CODES = new Set(["chronology", "invalid-source-ref", "tool-pair-missing", "source-order"]);
+const STRUCTURAL_CODES = new Set(["chronology", "source-overlap", "invalid-source-ref", "tool-pair-missing", "tool-pair-partial", "source-order"]);
 const FACTUAL_CODES = new Set(["protected-exact", "loss-without-notice", "unsupported-identifier", "unsupported-quote", "unsupported-number", "unresolved-became-complete", "failure-became-success"]);
 export function classifyCompactionOutcome(error) {
   const issues = Array.isArray(error?.report?.issues) ? error.report.issues : undefined;

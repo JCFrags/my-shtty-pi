@@ -189,7 +189,7 @@ function buildDetails(
   };
 }
 
-function capPlanToRecentSuffix(
+export function capPlanToRecentSuffix(
   plan: CompressionPlan,
   generationHash: string,
   includeHeader: boolean,
@@ -221,30 +221,38 @@ function capPlanToRecentSuffix(
     };
   };
 
-  let low = 1;
-  let high = plan.units.length;
+  const toolIntervals = new Map<string, { first: number; last: number }>();
+  for (let index = 0; index < plan.units.length; index += 1) {
+    for (const toolCallId of plan.units[index]!.toolCallIds) {
+      const interval = toolIntervals.get(toolCallId);
+      if (interval) interval.last = index;
+      else toolIntervals.set(toolCallId, { first: index, last: index });
+    }
+  }
+  const unsafeBoundaryDelta = new Int32Array(plan.units.length + 1);
+  for (const interval of toolIntervals.values()) {
+    if (interval.first === interval.last) continue;
+    unsafeBoundaryDelta[interval.first + 1] = (unsafeBoundaryDelta[interval.first + 1] ?? 0) + 1;
+    unsafeBoundaryDelta[interval.last + 1] = (unsafeBoundaryDelta[interval.last + 1] ?? 0) - 1;
+  }
+  const safeStarts: number[] = [];
+  let crossingInteractions = 0;
+  for (let start = 1; start <= plan.units.length; start += 1) {
+    crossingInteractions += unsafeBoundaryDelta[start]!;
+    if (crossingInteractions === 0) safeStarts.push(start);
+  }
+
+  let low = 0;
+  let high = safeStarts.length - 1;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    const candidate = makePlan(middle);
+    const candidate = makePlan(safeStarts[middle]!);
     if (renderCompressionPlan(candidate, generationHash, includeHeader).tokens > hardMaximum) low = middle + 1;
     else high = middle;
   }
-  let start = low;
-  let cappedPlan = makePlan(start);
-  let rendered = renderCompressionPlan(cappedPlan, generationHash, includeHeader);
-  while (rendered.tokens > hardMaximum && start < plan.units.length) {
-    start += 1;
-    cappedPlan = makePlan(start);
-    rendered = renderCompressionPlan(cappedPlan, generationHash, includeHeader);
-  }
-  while (start > 1) {
-    const expandedPlan = makePlan(start - 1);
-    const expanded = renderCompressionPlan(expandedPlan, generationHash, includeHeader);
-    if (expanded.tokens > hardMaximum) break;
-    start -= 1;
-    cappedPlan = expandedPlan;
-    rendered = expanded;
-  }
+  const start = safeStarts[low] ?? plan.units.length;
+  const cappedPlan = makePlan(start);
+  const rendered = renderCompressionPlan(cappedPlan, generationHash, includeHeader);
   return { plan: cappedPlan, rendered, omittedUnits: start };
 }
 
