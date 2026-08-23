@@ -45,6 +45,19 @@ test("regular Pi summary messages follow the final raw-tail boundary", () => {
   assert.doesNotMatch(encoded, /retained raw/);
 });
 
+test("regular Pi summary rebase uses original raw messages and no generated compaction text", () => {
+  const messages = regularSummaryMessagesForCut([
+    { type: "message", id: "original", parentId: null, message: { role: "user", content: "original raw source" } },
+    { type: "compaction", id: "prior", parentId: "original", summary: "PRIOR_COMBINED_OUTPUT", firstKeptEntryId: "original" },
+    { type: "message", id: "new", parentId: "prior", message: { role: "assistant", content: [{ type: "text", text: "new raw source" }] } },
+    { type: "message", id: "cut", parentId: "new", message: { role: "user", content: "retained" } },
+  ], "cut", true);
+  const encoded = JSON.stringify(messages);
+  assert.match(encoded, /original raw source/);
+  assert.match(encoded, /new raw source/);
+  assert.doesNotMatch(encoded, /PRIOR_COMBINED_OUTPUT|retained/);
+});
+
 test("regular Pi summary stream never receives the prior ChronoCompact replay", () => {
   const selected = previousRegularPiSummary(
     [

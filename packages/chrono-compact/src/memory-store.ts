@@ -520,6 +520,13 @@ type LockOwnerState = "live" | "dead" | "unverifiable";
 const MEMORY_LOCK_RETRIES = 2_000;
 const MEMORY_LOCK_WAIT_MS = 5;
 
+class TransientLockObservationError extends Error {
+  constructor() {
+    super("Memory lock publication or release is still changing its link state.");
+    this.name = "TransientLockObservationError";
+  }
+}
+
 async function linuxProcessStart(pid: number): Promise<{ state: LockOwnerState; start?: string }> {
   try {
     const text = await readFile(`/proc/${pid}/stat`, "utf8");
@@ -575,9 +582,11 @@ async function readLockOwner(path: string): Promise<{ owner: MemoryLockOwner; de
   const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const before = await handle.stat({ bigint: true });
-    if (!before.isFile() || before.nlink !== 1n || (before.mode & 0o077n) !== 0n) {
-      throw new Error("Memory lock must be a one-link owner-only regular file.");
+    if (!before.isFile() || (before.mode & 0o077n) !== 0n) {
+      throw new Error("Memory lock must be an owner-only regular file.");
     }
+    if (before.nlink === 0n || before.nlink === 2n) throw new TransientLockObservationError();
+    if (before.nlink !== 1n) throw new Error("Memory lock must be a one-link owner-only regular file.");
     const owner = parseLockOwner(await handle.readFile("utf8"));
     const after = await handle.stat({ bigint: true });
     if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs) {
@@ -690,23 +699,28 @@ async function acquireMemoryLock(path: string): Promise<() => Promise<void>> {
   const guardPath = `${lockPath}.recovery`;
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < MEMORY_LOCK_RETRIES; attempt += 1) {
-    if (await recoveryGuardActive(guardPath)) {
-      await new Promise((resolveWait) => setTimeout(resolveWait, MEMORY_LOCK_WAIT_MS));
-      continue;
-    }
     try {
-      const lock = await createOwnedLockFile(lockPath);
-      return () => releaseOwnedLock(lock);
+      if (await recoveryGuardActive(guardPath)) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, MEMORY_LOCK_WAIT_MS));
+        continue;
+      }
+      try {
+        const lock = await createOwnedLockFile(lockPath);
+        return () => releaseOwnedLock(lock);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const observed = await readLockOwner(lockPath).catch((lockError: unknown) => {
+          if ((lockError as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+          throw lockError;
+        });
+        if (!observed) continue;
+        const state = await lockOwnerState(observed.owner);
+        if (state === "unverifiable") throw new Error("Memory lock owner is unverifiable; lock acquisition fails closed.");
+        if (state === "dead" && await recoverDeadOwnedFile(lockPath, observed.owner)) continue;
+        await new Promise((resolveWait) => setTimeout(resolveWait, MEMORY_LOCK_WAIT_MS));
+      }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const observed = await readLockOwner(lockPath).catch((lockError: unknown) => {
-        if ((lockError as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-        throw lockError;
-      });
-      if (!observed) continue;
-      const state = await lockOwnerState(observed.owner);
-      if (state === "unverifiable") throw new Error("Memory lock owner is unverifiable; lock acquisition fails closed.");
-      if (state === "dead" && await recoverDeadOwnedFile(lockPath, observed.owner)) continue;
+      if (!(error instanceof TransientLockObservationError)) throw error;
       await new Promise((resolveWait) => setTimeout(resolveWait, MEMORY_LOCK_WAIT_MS));
     }
   }

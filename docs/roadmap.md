@@ -9,6 +9,6 @@ This is a working order, not a publication promise:
 5. Grounded Tools narrowing and hardening.
 6. Progressive Tools public stabilization decision.
 7. Tool Controls host-boundary decision.
-8. ChronoCompact decomposition before feature work.
+8. Staged ChronoCompact candidate review for Pi 0.84.2 compatibility, long-session evidence, and default-off experimental boundaries.
 
 Each step remains subject to package-specific evidence and approval. No step makes a package stable or publication-approved.

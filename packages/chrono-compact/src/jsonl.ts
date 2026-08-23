@@ -103,15 +103,20 @@ function assembleParsedSession(
     childrenMutable.set(parentId, children);
   }
 
+  const cycleChecked = new Set<string>();
   for (const id of entryById.keys()) {
-    const visited = new Set<string>();
+    if (cycleChecked.has(id)) continue;
+    const path: string[] = [];
+    const pathPositions = new Set<string>();
     let cursor: string | null = id;
-    while (cursor !== null) {
-      if (visited.has(cursor)) throw new SessionFormatError(`Cycle detected at entry ${cursor}`);
-      visited.add(cursor);
+    while (cursor !== null && !cycleChecked.has(cursor)) {
+      if (pathPositions.has(cursor)) throw new SessionFormatError(`Cycle detected at entry ${cursor}`);
+      pathPositions.add(cursor);
+      path.push(cursor);
       const entry = entryById.get(cursor);
       cursor = entry ? (entry.parentId ?? null) : null;
     }
+    for (const checkedId of path) cycleChecked.add(checkedId);
   }
 
   const childrenByParent = new Map<string | null, readonly string[]>();

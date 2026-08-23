@@ -6,7 +6,7 @@ import {
   type HistoryEditorObservation,
 } from "./history-editor.js";
 import { buildCandidateUnits, type CandidatePrecomputeRecord } from "./candidates.js";
-import { buildCausalMemory, renderCurrentStateRegister } from "./causal-memory.js";
+import { buildCausalMemory, renderCurrentStateRegisterWithinTokens } from "./causal-memory.js";
 import { mergeOldCompletedEpisodes, mergeRoutineActivitySegments } from "./episodes.js";
 import { planCompression } from "./planner.js";
 import { addRepeatedObservationCandidates } from "./repeated-observations.js";
@@ -28,7 +28,9 @@ import type {
 import { DEFAULT_COMPACTOR_CONFIG } from "./types.js";
 import { measureTokenTelemetry, retentionSignalsFromFeedback, type RetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, stableStringify, truncateToTokens } from "./utils.js";
-import { pruneUnsafeCandidates, validatePlan } from "./validate.js";
+import { buildValidationIndex, pruneUnsafeCandidates, validatePlan } from "./validate.js";
+import { applyValueAdvice } from "./value-advice-application.js";
+import type { StoredValueAdvice } from "./value-advice-store.js";
 
 const RENDER_OVERHEAD_RESERVE = 180;
 const MAX_BUDGET_REPLANS = 8;
@@ -43,6 +45,9 @@ export interface CompactEntriesOptions {
   readonly historyEditor?: HistoryEditor;
   readonly historyEditorMaxInputTokens?: number;
   readonly historyEditorMaxOutputTokens?: number;
+  /** Last complete non-authoritative advice snapshot. Never starts or waits for a model call. */
+  readonly valueAdvice?: ReadonlyMap<string, StoredValueAdvice>;
+  readonly valueWorkerMode?: "off" | "shadow" | "advisory";
   readonly hardOutputTokens?: number;
   /** Validated deterministic candidates from the request-local incremental checkpoint. */
   readonly precomputedCandidates?: ReadonlyMap<string, CandidatePrecomputeRecord>;
@@ -184,7 +189,7 @@ function buildDetails(
   };
 }
 
-function capPlanToRecentSuffix(
+export function capPlanToRecentSuffix(
   plan: CompressionPlan,
   generationHash: string,
   includeHeader: boolean,
@@ -216,30 +221,38 @@ function capPlanToRecentSuffix(
     };
   };
 
-  let low = 1;
-  let high = plan.units.length;
+  const toolIntervals = new Map<string, { first: number; last: number }>();
+  for (let index = 0; index < plan.units.length; index += 1) {
+    for (const toolCallId of plan.units[index]!.toolCallIds) {
+      const interval = toolIntervals.get(toolCallId);
+      if (interval) interval.last = index;
+      else toolIntervals.set(toolCallId, { first: index, last: index });
+    }
+  }
+  const unsafeBoundaryDelta = new Int32Array(plan.units.length + 1);
+  for (const interval of toolIntervals.values()) {
+    if (interval.first === interval.last) continue;
+    unsafeBoundaryDelta[interval.first + 1] = (unsafeBoundaryDelta[interval.first + 1] ?? 0) + 1;
+    unsafeBoundaryDelta[interval.last + 1] = (unsafeBoundaryDelta[interval.last + 1] ?? 0) - 1;
+  }
+  const safeStarts: number[] = [];
+  let crossingInteractions = 0;
+  for (let start = 1; start <= plan.units.length; start += 1) {
+    crossingInteractions += unsafeBoundaryDelta[start]!;
+    if (crossingInteractions === 0) safeStarts.push(start);
+  }
+
+  let low = 0;
+  let high = safeStarts.length - 1;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    const candidate = makePlan(middle);
+    const candidate = makePlan(safeStarts[middle]!);
     if (renderCompressionPlan(candidate, generationHash, includeHeader).tokens > hardMaximum) low = middle + 1;
     else high = middle;
   }
-  let start = low;
-  let cappedPlan = makePlan(start);
-  let rendered = renderCompressionPlan(cappedPlan, generationHash, includeHeader);
-  while (rendered.tokens > hardMaximum && start < plan.units.length) {
-    start += 1;
-    cappedPlan = makePlan(start);
-    rendered = renderCompressionPlan(cappedPlan, generationHash, includeHeader);
-  }
-  while (start > 1) {
-    const expandedPlan = makePlan(start - 1);
-    const expanded = renderCompressionPlan(expandedPlan, generationHash, includeHeader);
-    if (expanded.tokens > hardMaximum) break;
-    start -= 1;
-    cappedPlan = expandedPlan;
-    rendered = expanded;
-  }
+  const start = safeStarts[low] ?? plan.units.length;
+  const cappedPlan = makePlan(start);
+  const rendered = renderCompressionPlan(cappedPlan, generationHash, includeHeader);
   return { plan: cappedPlan, rendered, omittedUnits: start };
 }
 
@@ -286,9 +299,14 @@ export async function compactEntries(
   });
   if (blocks.length === 0) return emptyResult(entries, config, options.retentionHints, options.futureEntries);
 
+  const hardOutputTokens = Math.min(
+    HARD_REPLAY_CAP_TOKENS,
+    Math.max(128, Math.floor(options.hardOutputTokens ?? HARD_REPLAY_CAP_TOKENS)),
+  );
+  const currentStateTokenBudget = Math.max(128, Math.min(5_000, Math.floor(hardOutputTokens * 0.2)));
   const lineage = buildResourceLineage(blocks);
   const causal = buildCausalMemory(blocks, lineage);
-  const derivedState = truncateToTokens(renderCurrentStateRegister(causal, 32), 900, "\n…[additional state cells remain searchable]…");
+  const derivedState = renderCurrentStateRegisterWithinTokens(causal, 250, currentStateTokenBudget);
   const pinnedMemoryText = [options.pinnedMemoryText?.trim(), derivedState.trim()].filter(Boolean).join("\n\n");
   const pinnedMemoryTokens = estimateTokensFromText(pinnedMemoryText);
   const generationHash = computeGenerationHash(entries, config, options.retentionHints, options.futureEntries, pinnedMemoryText, options.retrievalFeedback);
@@ -317,8 +335,9 @@ export async function compactEntries(
     coldCueTokens: config.coldCueTokens,
     ...retentionSignals,
   });
-  const initialPruned = pruneUnsafeCandidates(gradient.units, blocks);
-  const repeatPruned = pruneUnsafeCandidates(addRepeatedObservationCandidates(initialPruned.units, blocks), blocks);
+  const validationIndex = buildValidationIndex(blocks);
+  const initialPruned = pruneUnsafeCandidates(gradient.units, blocks, validationIndex);
+  const repeatPruned = pruneUnsafeCandidates(addRepeatedObservationCandidates(initialPruned.units, blocks), blocks, validationIndex);
   candidateUnits = [...repeatPruned.units];
 
   // Pi has already selected this prefix for compaction. Do not spend a large
@@ -328,18 +347,20 @@ export async function compactEntries(
   const renderedTarget = Math.min(config.targetTokens, usefulSavingsTarget);
   const replayRenderedTarget = Math.max(128, renderedTarget - pinnedMemoryTokens);
   const planningTarget = Math.max(32, replayRenderedTarget - (config.includeHeader ? RENDER_OVERHEAD_RESERVE : 24));
+  const advised = applyValueAdvice(candidateUnits, options.valueAdvice ?? new Map(), options.valueWorkerMode ?? "off");
+  candidateUnits = [...advised.units];
   let plan = planCompression(candidateUnits, planningTarget, config);
   if (shouldMergeEpisodes(candidateUnits, rawTokens, renderedTarget, config) || plan.estimatedTokens > planningTarget) {
     const merged = mergeOldCompletedEpisodes(candidateUnits, blocks, config);
     if (merged.length < candidateUnits.length) {
-      candidateUnits = [...pruneUnsafeCandidates(merged, blocks).units];
+      candidateUnits = [...pruneUnsafeCandidates(merged, blocks, validationIndex).units];
       plan = planCompression(candidateUnits, planningTarget, config);
     }
   }
   if (candidateUnits.length > config.maxIndividualUnits || plan.estimatedTokens > planningTarget) {
     const segmented = mergeRoutineActivitySegments(candidateUnits, blocks, config, planningTarget);
     if (segmented.length < candidateUnits.length) {
-      candidateUnits = [...pruneUnsafeCandidates(segmented, blocks).units];
+      candidateUnits = [...pruneUnsafeCandidates(segmented, blocks, validationIndex).units];
       plan = planCompression(candidateUnits, planningTarget, config);
     }
   }
@@ -355,10 +376,6 @@ export async function compactEntries(
     rendered = renderCompressionPlan(plan, generationHash, config.includeHeader);
   }
 
-  const hardOutputTokens = Math.min(
-    HARD_REPLAY_CAP_TOKENS,
-    Math.max(128, Math.floor(options.hardOutputTokens ?? HARD_REPLAY_CAP_TOKENS)),
-  );
   const hardCap = capPlanToRecentSuffix(plan, generationHash, config.includeHeader, Math.max(128, hardOutputTokens - pinnedMemoryTokens));
   plan = hardCap.plan;
   rendered = hardCap.rendered;
@@ -386,6 +403,7 @@ export async function compactEntries(
 
   let validation = validatePlan(plan, blocks, Math.min(replayRenderedTarget, Math.max(128, hardOutputTokens - pinnedMemoryTokens)), {
     allowOmittedPrefix: hardCap.omittedUnits > 0,
+    validationIndex,
   });
   const additionalIssues: ValidationIssue[] = [
     ...initialPruned.rejectedIssues.map((issue) => ({ ...issue, severity: "warning" as const })),

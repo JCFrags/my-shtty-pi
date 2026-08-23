@@ -260,6 +260,7 @@ Retained raw tail
 This same pipeline must handle manual `/compact`, Pi context pressure, and a configured proactive threshold.
 The regular summary is advisory.
 Later replay events or the retained raw tail can supersede it.
+If Pi's regular summary generation is unavailable, ChronoCompact uses a replay-only degraded fallback and reports the degraded state. This is an operational failure path, not a user-disable mode. It must not create local text and label it as Pi's regular summary.
 The chronological replay and immutable JSONL remain the evidence and recovery path.
 
 ---

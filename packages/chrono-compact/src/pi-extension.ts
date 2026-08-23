@@ -1,6 +1,10 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { env } from "node:process";
+import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import {
   cachePathForSession,
   hashCompactionConfig,
@@ -27,27 +31,28 @@ import {
   type ToolResultProjectionMode,
 } from "./context-projection.js";
 import {
-  buildIncrementalCheckpoint,
-  incrementalCachePathForSession,
-  incrementalConfigHash,
-  incrementalReducerHash,
-  readIncrementalCheckpoint,
-  validateIncrementalCheckpoint,
-  writeIncrementalCheckpoint,
-  type IncrementalCacheIdentity,
-  type IncrementalRuntimeCheckpoint,
-} from "./incremental-context.js";
+  createCandidateSegmentStore,
+  loadCandidateRecordsForBranch,
+  loadCandidateSegmentManifest,
+  updateCandidateSegmentStore,
+  type CandidateSegmentStore,
+} from "./candidate-segment-store.js";
 import { getSourceEntriesBefore, parseBranchEntries, readSessionJsonl } from "./jsonl.js";
+import { loadSourceLedger, sourceLedgerIsBusy, sourceLedgerMatchesSource, sourceLedgerPath, type SourceLedger } from "./source-ledger.js";
 import {
   createPiRegularSummary,
   previousRegularPiSummary,
   regularSummaryMessagesForCut,
   renderHybridCompaction,
 } from "./pi-hybrid.js";
-import { createPiHistoryEditor, DEFAULT_HISTORY_EDITOR_MAX_INPUT_TOKENS } from "./history-editor.js";
+import { DEFAULT_VALUE_WORKER_SETTINGS, type ValueWorkerSettings } from "./value-worker-types.js";
+import { runValueWorker, loadCompatibleAdvice, valueWorkerConfigurationHash, type ValueWorkerRunResult } from "./value-worker.js";
+import { readValueAdviceManifest, resetAdviceCircuit, valueAdviceStorePath } from "./value-advice-store.js";
 import {
   historyGet,
+  historyGetFromLedger,
   historyRange,
+  historyRangeFromLedger,
   historySearch,
 } from "./retrieval.js";
 import { buildLocalSearchIndex, renderRankedSearch, searchLocalHistory, type LocalSearchIndex } from "./search-index.js";
@@ -72,7 +77,7 @@ import {
   type RawTailSelection,
 } from "./tail-selection.js";
 import { decideCompactionTrigger } from "./trigger.js";
-import type { CompactorConfig, ParsedSession, SessionEntryLike } from "./types.js";
+import type { CompactorConfig, CompressionResult, ParsedSession, SessionEntryLike } from "./types.js";
 import {
   applyConfigCommand,
   defaultUserConfigPath,
@@ -82,6 +87,10 @@ import {
 } from "./user-config.js";
 import { emptyRetrievalFeedback, recordRetrievalFeedback, type RetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, safeErrorMessage, stableStringify, truncateToTokens } from "./utils.js";
+import { runCompactionWorker, type WorkerClientResult } from "./compaction-worker-client.js";
+import type { CandidateUpdateWorkerRequest, ReplayWorkerRequest, RollupShadowWorkerRequest, WorkerSourceExpectation } from "./compaction-worker-protocol.js";
+import { getRollupShadowStatus } from "./history-rollup-shadow.js";
+import { returnAuthoritativeAfterShadowSchedule } from "./post-result-shadow.js";
 
 const EXTENSION_VERSION = "2.0.0";
 export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
@@ -106,11 +115,18 @@ export interface RuntimeSettings {
   readonly dynamicRawTailMinTokens: number;
   readonly dynamicRawTailMaxTokens: number;
   readonly hybridSummaryEnabled: boolean;
+  readonly legacyPiSummaryDisabled: boolean;
   readonly hybridSummaryTargetTokens: number;
-  readonly historyEditorEnabled: boolean;
-  readonly historyEditorMaxInputTokens: number;
-  readonly historyEditorMaxOutputTokens: number;
+  readonly legacyHistoryEditorEnabled: boolean;
+  /** Always false. The extension history editor is retired. */
+  readonly historyEditorEnabled: false;
+  readonly valueWorker: ValueWorkerSettings;
   readonly incrementalPrecomputeEnabled: boolean;
+  readonly isolatedWorkerEnabled: boolean;
+  readonly rollupShadowEnabled: boolean;
+  readonly hostWorkerSlots: number;
+  readonly workerTimeoutSeconds: number;
+  readonly workerNiceLevel: number;
   readonly toolResultProjectionMode: ToolResultProjectionMode;
   readonly cacheEnabled: boolean;
   readonly rankedSearchEnabled: boolean;
@@ -143,6 +159,11 @@ function booleanSetting(name: string, fallback: boolean, override?: unknown): bo
   if (["1", "true", "yes", "on"].includes(raw)) return true;
   if (["0", "false", "no", "off"].includes(raw)) return false;
   return fallback;
+}
+
+function stringSetting(name: string, fallback: string, override?: unknown): string {
+  const raw = String(configuredValue(name, override) ?? "").trim();
+  return raw || fallback;
 }
 
 function projectionModeSetting(override?: unknown): ToolResultProjectionMode {
@@ -178,12 +199,35 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
     ...(rawTail.tokens === undefined ? {} : { rawTailTokens: rawTail.tokens }),
     dynamicRawTailMinTokens: numberSetting("PI_CHRONO_RAW_TAIL_MIN", 3_000, 1_000, 200_000, overrides.dynamicRawTailMinTokens),
     dynamicRawTailMaxTokens: numberSetting("PI_CHRONO_RAW_TAIL_MAX", 6_000, 1_000, 200_000, overrides.dynamicRawTailMaxTokens),
-    hybridSummaryEnabled: booleanSetting("PI_CHRONO_PI_SUMMARY", true, overrides.hybridSummaryEnabled),
+    // Retained as a compatibility-shaped field. The regular Pi summary is required.
+    hybridSummaryEnabled: true,
+    legacyPiSummaryDisabled: !booleanSetting("PI_CHRONO_PI_SUMMARY", true, overrides.hybridSummaryEnabled),
     hybridSummaryTargetTokens: numberSetting("PI_CHRONO_PI_SUMMARY_TOKENS", 2_500, 512, 16_000, overrides.hybridSummaryTargetTokens),
-    historyEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
-    historyEditorMaxInputTokens: numberSetting("PI_CHRONO_HISTORY_EDITOR_MAX_INPUT", DEFAULT_HISTORY_EDITOR_MAX_INPUT_TOKENS, 1_000, 50_000),
-    historyEditorMaxOutputTokens: numberSetting("PI_CHRONO_HISTORY_EDITOR_MAX_OUTPUT", 16_000, 256, 25_000),
+    legacyHistoryEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
+    historyEditorEnabled: false,
+    valueWorker: {
+      mode: (["shadow", "advisory"].includes(String(env.PI_CHRONO_VALUE_WORKER_MODE ?? overrides.valueWorkerMode)) ? (env.PI_CHRONO_VALUE_WORKER_MODE ?? overrides.valueWorkerMode) : "off") as ValueWorkerSettings["mode"],
+      model: stringSetting("PI_CHRONO_VALUE_WORKER_MODEL", DEFAULT_VALUE_WORKER_SETTINGS.model, overrides.valueWorkerModel),
+      thinking: (["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(env.PI_CHRONO_VALUE_WORKER_THINKING ?? overrides.valueWorkerThinking)) ? (env.PI_CHRONO_VALUE_WORKER_THINKING ?? overrides.valueWorkerThinking) : "inherit") as ValueWorkerSettings["thinking"],
+      maxInputTokensPerJob: numberSetting("PI_CHRONO_VALUE_WORKER_JOB_INPUT", 6_000, 1_000, 12_000, overrides.valueWorkerMaxInputTokensPerJob),
+      maxOutputTokensPerJob: numberSetting("PI_CHRONO_VALUE_WORKER_JOB_OUTPUT", 1_500, 256, 4_000, overrides.valueWorkerMaxOutputTokensPerJob),
+      maxItemsPerJob: numberSetting("PI_CHRONO_VALUE_WORKER_JOB_ITEMS", 40, 5, 100, overrides.valueWorkerMaxItemsPerJob),
+      timeoutSeconds: numberSetting("PI_CHRONO_VALUE_WORKER_TIMEOUT", 90, 10, 600, overrides.valueWorkerTimeoutSeconds),
+      retries: numberSetting("PI_CHRONO_VALUE_WORKER_RETRIES", 1, 0, 2, overrides.valueWorkerRetries),
+      hostSlots: numberSetting("PI_CHRONO_VALUE_WORKER_SLOTS", 1, 1, 4, overrides.valueWorkerHostSlots),
+      maxCallsPerSession: numberSetting("PI_CHRONO_VALUE_WORKER_SESSION_CALLS", 100, 1, 2_000, overrides.valueWorkerMaxCallsPerSession),
+      maxInputTokensPerSession: numberSetting("PI_CHRONO_VALUE_WORKER_SESSION_INPUT", 250_000, 1_000, 10_000_000, overrides.valueWorkerMaxInputTokensPerSession),
+      maxOutputTokensPerSession: numberSetting("PI_CHRONO_VALUE_WORKER_SESSION_OUTPUT", 50_000, 1_000, 2_000_000, overrides.valueWorkerMaxOutputTokensPerSession),
+      ...(() => { const raw = env.PI_CHRONO_VALUE_WORKER_COST; if (raw && ["off", "disabled", "none"].includes(raw.trim().toLowerCase())) return {}; const usd = raw === undefined || raw.trim() === "" ? overrides.valueWorkerMaxEstimatedCostUsd : Number(raw); if (usd === undefined || usd === null) return {}; if (!Number.isFinite(usd) || usd < 0.01 || usd > 1000) throw new Error("PI_CHRONO_VALUE_WORKER_COST must be off or 0.01 through 1000."); return { maxEstimatedCostMicroUsd: Math.ceil(usd * 1_000_000) }; })(),
+      circuitFailureLimit: numberSetting("PI_CHRONO_VALUE_WORKER_CIRCUIT_FAILURES", 3, 1, 20, overrides.valueWorkerCircuitFailureLimit),
+      circuitCooldownSeconds: numberSetting("PI_CHRONO_VALUE_WORKER_CIRCUIT_COOLDOWN", 1_800, 30, 86_400, overrides.valueWorkerCircuitCooldownSeconds),
+    },
     incrementalPrecomputeEnabled: booleanSetting("PI_CHRONO_INCREMENTAL_PRECOMPUTE", false, overrides.incrementalPrecomputeEnabled),
+    isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
+    rollupShadowEnabled: booleanSetting("PI_CHRONO_ROLLUP_SHADOW", false, overrides.rollupShadowEnabled),
+    hostWorkerSlots: numberSetting("PI_CHRONO_HOST_WORKER_SLOTS", 1, 1, 4, overrides.hostWorkerSlots),
+    workerTimeoutSeconds: numberSetting("PI_CHRONO_WORKER_TIMEOUT_SECONDS", 900, 30, 3_600, overrides.workerTimeoutSeconds),
+    workerNiceLevel: numberSetting("PI_CHRONO_WORKER_NICE", 10, 0, 19, overrides.workerNiceLevel),
     toolResultProjectionMode: projectionModeSetting(overrides.toolResultProjectionMode),
     cacheEnabled: booleanSetting("PI_CHRONO_CACHE", true),
     rankedSearchEnabled: booleanSetting("PI_CHRONO_RANKED_SEARCH", true, overrides.rankedSearchEnabled),
@@ -206,6 +250,11 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
       coldCueTokens: numberSetting("PI_CHRONO_COLD_CUE_TOKENS", 56, 24, 160),
     },
   };
+}
+
+async function workerSourceExpectation(sessionPath: string): Promise<WorkerSourceExpectation> {
+  const value = await stat(sessionPath);
+  return { deviceId: String(value.dev), inodeId: String(value.ino), size: value.size, mtimeMs: value.mtimeMs };
 }
 
 function rawTailDescription(settings: RuntimeSettings): string {
@@ -253,8 +302,11 @@ async function openChronoCompactSettings(
       `Active context target · ${settings.targetContextTokens.toLocaleString()} tokens`,
       `Chronological replay maximum · ${settings.replayTargetTokens === undefined ? "automatic" : `${settings.replayTargetTokens.toLocaleString()} tokens`}`,
       `Regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
-      `Experimental LLM history classifier · ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
-      `Incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+      `Background value worker · ${settings.valueWorker.mode} · ${settings.valueWorker.model} · thinking ${settings.valueWorker.thinking}`,
+      "Retrospective only. Bounded assistant and tool excerpts can be sent only after enablement. Protected exact, user, and project instruction text is never sent. Final replay remains deterministic. Compaction never waits. Shadow does not change replay.",
+      `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+      `Isolated local compaction worker · ${settings.isolatedWorkerEnabled ? `enabled · ${settings.hostWorkerSlots} host slot(s) · nice ${settings.workerNiceLevel}` : "disabled"}`,
+      `Hierarchical rollup shadow evaluation · ${settings.rollupShadowEnabled ? "enabled · output does not reach the model · current replay authoritative · local isolated low-priority worker · metrics only" : "disabled"}`,
       `Request-local tool-result projection · ${settings.toolResultProjectionMode}`,
       `Ranked local history search · ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
       `Editable working memory · ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,
@@ -351,16 +403,52 @@ async function openChronoCompactSettings(
       }
       continue;
     }
-    if (choice.startsWith("Experimental LLM history classifier")) {
-      const selected = await ctx.ui.select("Experimental LLM history classifier", ["Enabled", "Disabled"]);
-      if (selected === "Disabled") draft = applyConfigCommand(draft, "history-classifier off").config;
-      if (selected === "Enabled") draft = applyConfigCommand(draft, "history-classifier on").config;
+    if (choice.startsWith("Background value worker")) {
+      const mode = await ctx.ui.select("Background value-worker mode", ["off", "shadow", "advisory"]);
+      if (!mode) continue;
+      draft = applyConfigCommand(draft, `value-worker-mode ${mode}`).config;
+      const model = await ctx.ui.input("Value model: main or provider/model", settings.valueWorker.model);
+      if (model !== undefined) draft = applyConfigCommand(draft, `value-worker-model ${model.trim()}`).config;
+      const selectedModel = settings.valueWorker.model === "main" ? ctx.model : (() => { const slash = settings.valueWorker.model.indexOf("/"); return slash > 0 ? ctx.modelRegistry.find(settings.valueWorker.model.slice(0, slash), settings.valueWorker.model.slice(slash + 1)) : undefined; })();
+      const thinkingOptions = selectedModel ? ["inherit", ...getSupportedThinkingLevels(selectedModel)] : ["inherit"];
+      const thinking = await ctx.ui.select("Value-model thinking level", thinkingOptions);
+      if (thinking) draft = applyConfigCommand(draft, `value-worker-thinking ${thinking}`).config;
+      draft = await tokenInput(ctx, "Maximum input tokens per value job", settings.valueWorker.maxInputTokensPerJob, "value-worker-job-input", draft);
+      draft = await tokenInput(ctx, "Maximum output tokens per value job", settings.valueWorker.maxOutputTokensPerJob, "value-worker-job-output", draft);
+      draft = await tokenInput(ctx, "Maximum items per value job", settings.valueWorker.maxItemsPerJob, "value-worker-job-items", draft);
+      draft = await tokenInput(ctx, "Value-job timeout seconds", settings.valueWorker.timeoutSeconds, "value-worker-timeout", draft);
+      draft = await tokenInput(ctx, "Value-job retries", settings.valueWorker.retries, "value-worker-retries", draft);
+      draft = await tokenInput(ctx, "Host-wide value-model slots", settings.valueWorker.hostSlots, "value-worker-slots", draft);
+      draft = await tokenInput(ctx, "Maximum value calls per session", settings.valueWorker.maxCallsPerSession, "value-worker-session-calls", draft);
+      draft = await tokenInput(ctx, "Maximum value input tokens per session", settings.valueWorker.maxInputTokensPerSession, "value-worker-session-input", draft);
+      draft = await tokenInput(ctx, "Maximum value output tokens per session", settings.valueWorker.maxOutputTokensPerSession, "value-worker-session-output", draft);
+      const cost = await ctx.ui.input("Maximum estimated value cost in USD, or off", draft.valueWorkerMaxEstimatedCostUsd == null ? "off" : String(draft.valueWorkerMaxEstimatedCostUsd));
+      if (cost !== undefined) draft = applyConfigCommand(draft, `value-worker-cost ${cost.trim()}`).config;
+      draft = await tokenInput(ctx, "Circuit failure limit", settings.valueWorker.circuitFailureLimit, "value-worker-circuit-failures", draft);
+      draft = await tokenInput(ctx, "Circuit cooldown seconds", settings.valueWorker.circuitCooldownSeconds, "value-worker-circuit-cooldown", draft);
       continue;
     }
-    if (choice.startsWith("Incremental deterministic precompute")) {
+    if (choice.startsWith("Segmented incremental deterministic precompute")) {
       const selected = await ctx.ui.select("Incremental deterministic precompute", ["Enabled", "Disabled"]);
       if (selected === "Disabled") draft = applyConfigCommand(draft, "incremental-precompute off").config;
       if (selected === "Enabled") draft = applyConfigCommand(draft, "incremental-precompute on").config;
+      continue;
+    }
+    if (choice.startsWith("Hierarchical rollup shadow evaluation")) {
+      const selected = await ctx.ui.select("Hierarchical rollup shadow evaluation", ["Enabled", "Disabled"]);
+      if (selected === "Disabled") draft = applyConfigCommand(draft, "rollup-shadow off").config;
+      if (selected === "Enabled") draft = applyConfigCommand(draft, "rollup-shadow on").config;
+      continue;
+    }
+    if (choice.startsWith("Isolated local compaction worker")) {
+      const selected = await ctx.ui.select("Isolated local compaction worker", ["Enabled", "Disabled"]);
+      if (selected === "Disabled") draft = applyConfigCommand(draft, "isolated-worker off").config;
+      if (selected === "Enabled") {
+        draft = applyConfigCommand(draft, "isolated-worker on").config;
+        draft = await tokenInput(ctx, "Host-wide ChronoCompact worker slots (one prevents simultaneous CPU jobs by default)", settings.hostWorkerSlots, "worker-slots", draft);
+        draft = await tokenInput(ctx, "Local worker timeout in seconds", settings.workerTimeoutSeconds, "worker-timeout", draft);
+        draft = await tokenInput(ctx, "Local worker nice level (the worker does not call a model)", settings.workerNiceLevel, "worker-nice", draft);
+      }
       continue;
     }
     if (choice.startsWith("Request-local tool-result projection")) {
@@ -498,6 +586,7 @@ function registerHistoryTools(
   pi: ExtensionAPI,
   settings: () => RuntimeSettings,
   retrievalFeedback: Map<string, RetrievalFeedback>,
+  availableLedger: (ctx: ExtensionContext) => Promise<{ sessionPath: string; ledger: SourceLedger } | undefined>,
 ): void {
   pi.registerTool({
     name: "history_get",
@@ -512,14 +601,16 @@ function registerHistoryTools(
       maxChars: Type.Optional(Type.Number({ minimum: 1, maximum: 12_000 })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const session = await loadSession(ctx);
-      const text = historyGet(session, params.entryId, {
+      const options = {
         blockIndex: params.blockIndex,
         contextBefore: params.contextBefore,
         contextAfter: params.contextAfter,
         startChar: params.startChar,
         maxChars: params.maxChars,
-      });
+      };
+      const ledger = await availableLedger(ctx);
+      const text = ledger ? await historyGetFromLedger(ledger.sessionPath, ledger.ledger, params.entryId, options).catch(async () => historyGet(await loadSession(ctx), params.entryId, options))
+        : historyGet(await loadSession(ctx), params.entryId, options);
       return toolText(text, { entryId: params.entryId, blockIndex: params.blockIndex });
     },
   });
@@ -672,8 +763,10 @@ function registerHistoryTools(
       maxEntries: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const session = await loadSession(ctx);
-      const text = historyRange(session, params.startEntryId, params.endEntryId, { maxEntries: params.maxEntries });
+      const options = { maxEntries: params.maxEntries };
+      const ledger = await availableLedger(ctx);
+      const text = ledger ? await historyRangeFromLedger(ledger.sessionPath, ledger.ledger, params.startEntryId, params.endEntryId, options).catch(async () => historyRange(await loadSession(ctx), params.startEntryId, params.endEntryId, options))
+        : historyRange(await loadSession(ctx), params.startEntryId, params.endEntryId, options);
       return toolText(text, { startEntryId: params.startEntryId, endEntryId: params.endEntryId });
     },
   });
@@ -831,22 +924,49 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   let userConfig = loadedUserConfig.config;
   let userConfigWarning = loadedUserConfig.warning;
   const retrievalFeedback = new Map<string, RetrievalFeedback>();
-  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback);
-  registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
-  registerRetentionHintTool(pi);
   let triggerPending = false;
   let lastTriggerAttemptTokens: number | undefined;
   let forcedCompactionReason: string | undefined;
   let forcedContinuationPending = false;
   let continueAfterSuccessfulCompaction = false;
   let warningLevel = 0;
-  let incrementalCheckpoint: IncrementalRuntimeCheckpoint | undefined;
+  let incrementalStore: CandidateSegmentStore | undefined;
+  let historyLedger: { sessionPath: string; ledger: SourceLedger } | undefined;
   let incrementalAbort: AbortController | undefined;
   let incrementalTimer: ReturnType<typeof setTimeout> | undefined;
   let incrementalGeneration = 0;
   let incrementalStatus: Record<string, unknown> = { state: "disabled" };
+  let shadowAbort: AbortController | undefined;
+  let shadowTimer: ReturnType<typeof setTimeout> | undefined;
+  let shadowGeneration = 0;
+  let shadowStatus: Record<string, unknown> = { state: "disabled" };
+  let valueWorkerAbort: AbortController | undefined;
+  let valueWorkerStatus: ValueWorkerRunResult | { status: string } = { status: "off" };
+  let valueWorkerActive = false;
+  let valueWorkerRerun = false;
+  let valueWorkerCompactionGate = false;
+  let legacyHistoryEditorWarningShown = false;
+  let legacyPiSummaryWarningShown = false;
   let projectionSeenToolCallIds = new Set<string>();
   let lastProjectionMetrics: ToolResultProjectionMetrics | undefined;
+
+  const availableHistoryLedger = async (ctx: ExtensionContext): Promise<{ sessionPath: string; ledger: SourceLedger } | undefined> => {
+    const sessionPath = ctx.sessionManager.getSessionFile();
+    if (!sessionPath) { historyLedger = undefined; return undefined; }
+    const sidecar = sourceLedgerPath(sessionPath);
+    if (await sourceLedgerIsBusy(sidecar)) return undefined;
+    const candidateLedger = incrementalStore?.sessionPath === sessionPath ? incrementalStore.ledger : undefined;
+    if (candidateLedger && await sourceLedgerMatchesSource(sessionPath, candidateLedger)) return historyLedger = { sessionPath, ledger: candidateLedger };
+    if (historyLedger?.sessionPath === sessionPath && await sourceLedgerMatchesSource(sessionPath, historyLedger.ledger)) return historyLedger;
+    try {
+      const ledger = await loadSourceLedger(sessionPath, sidecar);
+      if (!await sourceLedgerMatchesSource(sessionPath, ledger)) return undefined;
+      return historyLedger = { sessionPath, ledger };
+    } catch { return undefined; }
+  };
+  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger);
+  registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
+  registerRetentionHintTool(pi);
 
   const incrementalConfig = (settings: RuntimeSettings): CompactorConfig => resolveCompactorConfig({
     ...settings.config,
@@ -856,19 +976,33 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
     enableSemanticCompression: false,
   });
 
-  const incrementalIdentity = (sessionPath: string, config: CompactorConfig): IncrementalCacheIdentity => ({
-    sessionPath,
-    configHash: incrementalConfigHash(config),
-    reducerHash: incrementalReducerHash(),
-  });
-
   const cancelIncrementalWork = (clearCheckpoint: boolean): void => {
     incrementalGeneration += 1;
     if (incrementalTimer) clearTimeout(incrementalTimer);
     incrementalTimer = undefined;
     incrementalAbort?.abort(new Error("ChronoCompact incremental work was cancelled for session state replacement."));
     incrementalAbort = undefined;
-    if (clearCheckpoint) incrementalCheckpoint = undefined;
+    if (clearCheckpoint) incrementalStore = undefined;
+  };
+
+  const cancelValueWorker = (): void => {
+    valueWorkerRerun = false;
+    valueWorkerAbort?.abort(new Error("Value worker cancelled for session state replacement."));
+    valueWorkerAbort = undefined;
+  };
+
+  const scheduleValueWorker = (ctx: ExtensionContext, store: CandidateSegmentStore): void => {
+    const settings = resolveExtensionSettings(userConfig);
+    if (valueWorkerCompactionGate) { valueWorkerStatus = { status: "paused-for-compaction" }; return; }
+    if (settings.valueWorker.mode === "off") { cancelValueWorker(); valueWorkerStatus = { status: "off" }; return; }
+    if (!settings.incrementalPrecomputeEnabled) { valueWorkerStatus = { status: "candidate-store-required" }; return; }
+    if (valueWorkerActive) { valueWorkerRerun = true; return; }
+    valueWorkerActive = true; valueWorkerStatus = { status: "scheduled" };
+    const controller = new AbortController(); valueWorkerAbort = controller;
+    queueMicrotask(() => {
+      if (valueWorkerCompactionGate || controller.signal.aborted) { valueWorkerActive = false; if (valueWorkerAbort === controller) valueWorkerAbort = undefined; return; }
+      void runValueWorker({ ctx, settings: settings.valueWorker, store, signal: controller.signal }).then((result) => { valueWorkerStatus = result; }).catch(() => { if (!controller.signal.aborted) valueWorkerStatus = { status: "unknown-value-worker-failure" }; }).finally(() => { valueWorkerActive = false; if (valueWorkerAbort === controller) valueWorkerAbort = undefined; if (valueWorkerRerun && !controller.signal.aborted && !valueWorkerCompactionGate) { valueWorkerRerun = false; scheduleValueWorker(ctx, store); } });
+    });
   };
 
   const scheduleIncrementalWork = (ctx: ExtensionContext): void => {
@@ -883,34 +1017,39 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       incrementalStatus = { state: "refused", reason: "session path unavailable" };
       return;
     }
-    let entries: SessionEntryLike[];
-    try {
-      entries = [...asEntries(ctx.sessionManager.getBranch())];
-    } catch (error) {
-      incrementalStatus = { state: "refused", reason: safeErrorMessage(error) };
-      return;
-    }
     cancelIncrementalWork(false);
     const generation = incrementalGeneration;
     const controller = new AbortController();
     incrementalAbort = controller;
     const config = incrementalConfig(settings);
-    const identity = incrementalIdentity(sessionPath, config);
-    incrementalStatus = { state: "scheduled", sourceEntries: entries.length };
+    const store = incrementalStore?.sessionPath === sessionPath ? incrementalStore : createCandidateSegmentStore(sessionPath);
+    incrementalStore = store;
+    incrementalStatus = { state: "scheduled" };
     incrementalTimer = setTimeout(() => {
       incrementalTimer = undefined;
       void (async () => {
         try {
-          const disk = incrementalCheckpoint ?? await readIncrementalCheckpoint(incrementalCachePathForSession(sessionPath));
-          const checkpoint = await buildIncrementalCheckpoint(entries, identity, config, {
-            previous: disk,
-            signal: controller.signal,
-          });
-          if (controller.signal.aborted || generation !== incrementalGeneration) return;
-          await writeIncrementalCheckpoint(incrementalCachePathForSession(sessionPath), checkpoint);
-          if (controller.signal.aborted || generation !== incrementalGeneration) return;
-          incrementalCheckpoint = checkpoint;
-          incrementalStatus = { state: "ready", ...checkpoint.metrics };
+          if (!store.manifest) await loadCandidateSegmentManifest(store);
+          if (settings.isolatedWorkerEnabled) {
+            const request: CandidateUpdateWorkerRequest = { schemaVersion: 1, jobId: randomUUID(), jobType: "candidate-store-update", sessionPath,
+              expectedSource: await workerSourceExpectation(sessionPath), deadlineMs: Date.now() + settings.workerTimeoutSeconds * 1_000,
+              niceLevel: settings.workerNiceLevel, config };
+            const worker = await runCompactionWorker(request, { slots: settings.hostWorkerSlots, workerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
+              schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000, signal: controller.signal, priority: "low" });
+            if (controller.signal.aborted || generation !== incrementalGeneration) return;
+            if (worker.response.status !== "ok" || !worker.response.candidateUpdate) {
+              incrementalStatus = { state: "fallback", failureCode: worker.response.status === "failed" ? worker.response.failureCode : "worker-protocol-error", worker: worker.clientMetrics };
+              return;
+            }
+            await loadCandidateSegmentManifest(store); incrementalStore = store;
+            incrementalStatus = { state: "ready", ...worker.response.candidateUpdate, worker: worker.clientMetrics, workerRuntime: worker.response.metrics };
+            scheduleValueWorker(ctx, store);
+          } else {
+            const metrics = await updateCandidateSegmentStore(store, config, { signal: controller.signal });
+            if (controller.signal.aborted || generation !== incrementalGeneration) return;
+            incrementalStore = store; incrementalStatus = { state: "ready", ...metrics };
+            scheduleValueWorker(ctx, store);
+          }
         } catch (error) {
           if (!controller.signal.aborted) incrementalStatus = { state: "fallback", reason: safeErrorMessage(error) };
         } finally {
@@ -918,6 +1057,83 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         }
       })();
     }, 35);
+  };
+
+  const cancelShadowWork = (): void => {
+    shadowGeneration += 1;
+    if (shadowTimer) clearTimeout(shadowTimer);
+    shadowTimer = undefined;
+    shadowAbort?.abort(new Error("ChronoCompact shadow work was cancelled for session state replacement."));
+    shadowAbort = undefined;
+  };
+
+  const scheduleRollupShadow = (input: {
+    sessionPath: string;
+    branchLeafId: string;
+    firstKeptEntryId: string;
+    currentReplayText: string;
+    hardTokenBound: number;
+    targetTokenBound: number;
+    retentionHints: string;
+    settings: RuntimeSettings;
+  }): void => {
+    if (!input.settings.rollupShadowEnabled) {
+      cancelShadowWork();
+      shadowStatus = { state: "disabled" };
+      return;
+    }
+    cancelShadowWork();
+    const generation = shadowGeneration;
+    const controller = new AbortController();
+    shadowAbort = controller;
+    shadowStatus = { state: "pending" };
+    shadowTimer = setTimeout(() => {
+      shadowTimer = undefined;
+      void (async () => {
+        try {
+          const request: RollupShadowWorkerRequest = {
+            schemaVersion: 1,
+            jobId: randomUUID(),
+            jobType: "rollup-shadow",
+            sessionPath: input.sessionPath,
+            expectedSource: await workerSourceExpectation(input.sessionPath),
+            deadlineMs: Date.now() + input.settings.workerTimeoutSeconds * 1_000,
+            niceLevel: input.settings.workerNiceLevel,
+            branchLeafId: input.branchLeafId,
+            firstKeptEntryId: input.firstKeptEntryId,
+            currentReplayText: input.currentReplayText,
+            hardTokenBound: input.hardTokenBound,
+            targetTokenBound: input.targetTokenBound,
+            retentionHints: input.retentionHints,
+          };
+          const execution = await runCompactionWorker(request, {
+            slots: input.settings.hostWorkerSlots,
+            workerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
+            schedulerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
+            signal: controller.signal,
+            priority: "low",
+          });
+          if (controller.signal.aborted || generation !== shadowGeneration) return;
+          if (execution.response.status !== "ok" || !execution.response.shadow) {
+            shadowStatus = {
+              state: "failed",
+              failureCode: execution.response.status === "failed" ? execution.response.failureCode : "worker-protocol-error",
+            };
+            return;
+          }
+          shadowStatus = {
+            state: "ready",
+            safeStatus: execution.response.shadow.safeStatus,
+            generation: execution.response.shadow.generation,
+            client: execution.clientMetrics,
+          };
+        } catch (error) {
+          if (!controller.signal.aborted) shadowStatus = { state: "failed", reason: safeErrorMessage(error) };
+        } finally {
+          if (shadowAbort === controller) shadowAbort = undefined;
+        }
+      })();
+    }, 0);
   };
 
   const launchCompaction = (ctx: ExtensionContext, reason: string, currentTokens?: number, resumeAfter = false): void => {
@@ -991,23 +1207,38 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
+    cancelValueWorker();
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
     lastProjectionMetrics = undefined;
+    const settings = resolveExtensionSettings(userConfig);
+    if (settings.legacyHistoryEditorEnabled && !legacyHistoryEditorWarningShown && ctx.hasUI) { legacyHistoryEditorWarningShown = true; ctx.ui.notify("The old ChronoCompact history-classifier setting is retired and cannot start a model call. Use the background value-worker settings for explicit opt-in.", "warning"); }
+    if (settings.legacyPiSummaryDisabled && !legacyPiSummaryWarningShown && ctx.hasUI) { legacyPiSummaryWarningShown = true; ctx.ui.notify("PI_CHRONO_PI_SUMMARY=false is retired. The required regular Pi summary remains active; no configuration was changed.", "warning"); }
     scheduleIncrementalWork(ctx);
   });
 
   pi.on("session_before_switch", () => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
+    cancelValueWorker();
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 
   pi.on("session_before_fork", () => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
+    cancelValueWorker();
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 
   pi.on("session_shutdown", () => {
     cancelIncrementalWork(true);
+    cancelShadowWork();
+    cancelValueWorker();
+    historyLedger = undefined;
     projectionSeenToolCallIds = new Set();
   });
 
@@ -1062,6 +1293,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_compact", (event) => {
+    valueWorkerCompactionGate = false;
     cancelIncrementalWork(true);
     projectionSeenToolCallIds = new Set();
     const shouldContinue = continueAfterSuccessfulCompaction && !event.willRetry;
@@ -1083,6 +1315,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
+    valueWorkerCompactionGate = true;
+    cancelValueWorker();
     cancelIncrementalWork(false);
     const settings = resolveExtensionSettings(userConfig);
     try {
@@ -1170,6 +1404,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       });
       const retentionHints = retentionHintsFromBranch(branchEntries, event.customInstructions);
       const sessionPath = ctx.sessionManager.getSessionFile();
+      const useIsolatedWorker = settings.isolatedWorkerEnabled && !!sessionPath;
       const currentRetrievalFeedback = sessionPath ? retrievalFeedback.get(sessionPath) : undefined;
       const memory = settings.editableMemoryEnabled && sessionPath
         ? await readMemoryEvents(memorySidecarPath(sessionPath))
@@ -1180,15 +1415,17 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       const pinnedMemoryText = memory?.status === "ready" ? renderPinnedMemory(memory.memories, branchEntries.length) : "";
       const previousPiSummary = previousRegularPiSummary(branchEntries, event.preparation.previousSummary);
       const summaryRebase = decideRegularSummaryRebase(branchEntries, previousPiSummary, { intervalGenerations: settings.summaryRebaseInterval });
-      const generationHash = computeGenerationHash(sourceEntries, config, retentionHints, retainedEntries, pinnedMemoryText, currentRetrievalFeedback);
+      let generationHash: string | undefined = useIsolatedWorker
+        ? undefined
+        : computeGenerationHash(sourceEntries, config, retentionHints, retainedEntries, pinnedMemoryText, currentRetrievalFeedback);
       const configHash = hashCompactionConfig({
         extensionVersion: EXTENSION_VERSION,
         config,
         retentionHints,
-        historyEditorEnabled: settings.historyEditorEnabled,
-        historyEditorMaxInputTokens: settings.historyEditorMaxInputTokens,
-        historyEditorMaxOutputTokens: settings.historyEditorMaxOutputTokens,
-        historyEditorModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+        historyEditorEnabled: false,
+        historyEditorMaxInputTokens: 0,
+        historyEditorMaxOutputTokens: 0,
+        historyEditorModel: undefined,
         hardCombinedContextCapTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS,
         rawTailMode: settings.rawTailMode,
         rawTailTokens: settings.rawTailTokens,
@@ -1196,6 +1433,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         dynamicRawTailMaxTokens: settings.dynamicRawTailMaxTokens,
         hybridSummaryEnabled: settings.hybridSummaryEnabled,
         hybridSummaryTargetTokens: settings.hybridSummaryTargetTokens,
+        piSummaryModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unavailable",
+        piSummaryThinkingLevel: ctx.thinkingLevel,
+        previousPiSummaryHash: previousPiSummary ? hashText(previousPiSummary) : undefined,
         rankedSearchEnabled: settings.rankedSearchEnabled,
         editableMemoryEnabled: settings.editableMemoryEnabled,
         memoryGenerationHash: memory?.generationHash,
@@ -1210,10 +1450,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       });
       const cachePath = sessionPath ? cachePathForSession(sessionPath) : undefined;
 
-      if (settings.cacheEnabled && cachePath) {
+      if (!useIsolatedWorker && settings.cacheEnabled && settings.valueWorker.mode !== "advisory" && cachePath) {
         const cached = await readCompactionCache(cachePath);
         if (
-          cached?.sourceHash === generationHash &&
+          cached && cached.sourceHash === generationHash &&
           cached.configHash === configHash &&
           cached.renderedTokens + retainedTailTokens <= HARD_COMBINED_CONTEXT_CAP_TOKENS
         ) {
@@ -1221,6 +1461,19 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             `ChronoCompact reused generation ${cached.generation}: ${cached.rawTokens.toLocaleString()}→${cached.renderedTokens.toLocaleString()} estimated tokens.`,
             "info",
           );
+          const cachedShadowLeafId = sourceEntries.at(-1)?.id;
+          if (settings.rollupShadowEnabled && sessionPath && typeof cachedShadowLeafId === "string") {
+            scheduleRollupShadow({
+              sessionPath,
+              branchLeafId: cachedShadowLeafId,
+              firstKeptEntryId,
+              currentReplayText: cached.summary,
+              hardTokenBound: Math.min(HARD_REPLAY_CAP_TOKENS, historicalCeilingTokens),
+              targetTokenBound: targetTokens,
+              retentionHints,
+              settings,
+            });
+          }
           return {
             compaction: {
               summary: cached.summary,
@@ -1229,7 +1482,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
               details: {
                 kind: "chrono-compact-event-stream-context-compaction",
                 version: EXTENSION_VERSION,
-                cache: { hit: true, generation: cached.generation, sourceHash: generationHash },
+                cache: { hit: true, generation: cached.generation, sourceHash: generationHash! },
                 ...(cached.piSummary === undefined ? {} : { piSummary: cached.piSummary }),
                 retainedTail: tailSelection,
                 replayTargetMode: settings.replayTargetTokens === undefined ? "derived-active-context" : "fixed",
@@ -1255,32 +1508,18 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       }
 
       let piSummary: Awaited<ReturnType<typeof createPiRegularSummary>>;
-      if (settings.hybridSummaryEnabled) {
-        try {
-          const piSummaryTargetTokens = Math.min(
-            settings.hybridSummaryTargetTokens,
-            Math.max(512, targetTokens - 512),
-          );
-          if (summaryRebase.rebase) {
-            const text = buildDeterministicSummaryRebase(
-              parseHistoricalBlocks(sourceEntries, { includeHistoricalCompactions: false, includeMetadata: false }),
-              undefined,
-              piSummaryTargetTokens,
-            );
-            piSummary = {
-              text,
-              tokens: estimateTokensFromText(text),
-              model: "deterministic-local-rebase",
-            };
-          } else {
-            piSummary = await createPiRegularSummary(ctx, event.preparation, {
-              targetTokens: piSummaryTargetTokens,
-              customInstructions: event.customInstructions,
-              signal: event.signal,
-              previousSummary: previousPiSummary,
-              messages: regularSummaryMessagesForCut(branchEntries, firstKeptEntryId, false),
-            });
-          }
+      try {
+        const piSummaryTargetTokens = Math.min(
+          settings.hybridSummaryTargetTokens,
+          Math.max(512, targetTokens - 512),
+        );
+        piSummary = await createPiRegularSummary(ctx, event.preparation, {
+          targetTokens: piSummaryTargetTokens,
+          customInstructions: event.customInstructions,
+          signal: event.signal,
+          ...(summaryRebase.rebase ? {} : { previousSummary: previousPiSummary }),
+          messages: regularSummaryMessagesForCut(branchEntries, firstKeptEntryId, summaryRebase.rebase),
+        });
           if (piSummary && piSummary.tokens > piSummaryTargetTokens) {
             const text = truncateToTokens(
               piSummary.text,
@@ -1292,10 +1531,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           if (!piSummary && ctx.hasUI) {
             ctx.ui.notify("Regular Pi hybrid summary was unavailable; deterministic replay will be used alone.", "warning");
           }
-        } catch (hybridError) {
-          if (!event.signal?.aborted && ctx.hasUI) {
-            ctx.ui.notify(`Regular Pi hybrid summary failed; deterministic replay will continue: ${safeErrorMessage(hybridError)}`, "warning");
-          }
+      } catch (hybridError) {
+        if (!event.signal?.aborted && ctx.hasUI) {
+          ctx.ui.notify(`Regular Pi summary failed; deterministic replay will continue in degraded mode: ${safeErrorMessage(hybridError)}`, "warning");
         }
       }
 
@@ -1313,38 +1551,58 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           : targetTokens,
       );
       const replayConfig = resolveCompactorConfig({ ...config, targetTokens: replayTargetTokens });
-      let precomputedCandidates: ReturnType<typeof validateIncrementalCheckpoint>["candidates"] | undefined;
+      let precomputedCandidates: ReadonlyMap<string, import("./candidates.js").CandidatePrecomputeRecord> | undefined;
       let officialIncremental: Record<string, unknown> = { state: "disabled" };
-      if (settings.incrementalPrecomputeEnabled && sessionPath) {
-        const checkpoint = incrementalCheckpoint
-          ?? await readIncrementalCheckpoint(incrementalCachePathForSession(sessionPath));
-        const validated = validateIncrementalCheckpoint(
-          checkpoint,
-          branchEntries,
-          incrementalIdentity(sessionPath, replayConfig),
-        );
-        officialIncremental = {
-          state: validated.ok ? "validated-hit" : "stale-fallback",
-          reason: validated.reason,
-          cachedCandidates: validated.candidates.size,
-          background: incrementalStatus,
-        };
-        if (validated.ok) precomputedCandidates = validated.candidates;
+      if (!useIsolatedWorker && settings.incrementalPrecomputeEnabled && sessionPath) {
+        try {
+          const store = incrementalStore?.sessionPath === sessionPath ? incrementalStore : createCandidateSegmentStore(sessionPath);
+          incrementalStore = store; if (!store.manifest) await loadCandidateSegmentManifest(store);
+          if (!store.ledger && store.manifest) store.ledger = await loadSourceLedger(sessionPath, store.ledgerPath);
+          const branchIds = sourceEntries.flatMap((entry) => typeof entry.id === "string" ? [entry.id] : []);
+          const candidates = await loadCandidateRecordsForBranch(store, branchIds);
+          if (candidates.size > 0) precomputedCandidates = candidates;
+          officialIncremental = { state: candidates.size > 0 ? "validated-hit" : "stale-fallback", cachedCandidates: candidates.size,
+            background: incrementalStatus, metrics: store.metrics };
+        } catch (error) {
+          officialIncremental = { state: "stale-fallback", reason: safeErrorMessage(error), background: incrementalStatus };
+        }
       }
-      const historyEditor = settings.historyEditorEnabled && ctx.model ? createPiHistoryEditor(ctx) : undefined;
-      const result = await compactEntries(sourceEntries, {
-        config: replayConfig,
-        ...(precomputedCandidates === undefined ? {} : { precomputedCandidates }),
-        historyEditor,
-        historyEditorMaxInputTokens: settings.historyEditorMaxInputTokens,
-        historyEditorMaxOutputTokens: settings.historyEditorMaxOutputTokens,
-        hardOutputTokens: replayCeilingTokens,
-        signal: event.signal,
-        retentionHints,
-        futureEntries: retainedEntries,
-        pinnedMemoryText,
-        retrievalFeedback: currentRetrievalFeedback,
-      });
+      const validAdviceRecordHashes = precomputedCandidates ? new Map([...precomputedCandidates].map(([blockId, record]) => [blockId, record.integrityHash])) : undefined;
+      const valueAdvice = sessionPath ? await loadCompatibleAdvice(sessionPath, settings.valueWorker, validAdviceRecordHashes) : new Map();
+      let result: CompressionResult; let workerExecution: WorkerClientResult | undefined;
+      if (useIsolatedWorker && sessionPath) {
+        const leafId = branchEntries.at(-1)?.id; if (typeof leafId !== "string") throw new Error("Isolated worker failed: branch-not-persisted");
+        const request: ReplayWorkerRequest = { schemaVersion: 1, jobId: randomUUID(), jobType: "replay-compaction", sessionPath,
+          expectedSource: await workerSourceExpectation(sessionPath), deadlineMs: Date.now() + settings.workerTimeoutSeconds * 1_000,
+          niceLevel: settings.workerNiceLevel, branchLeafId: leafId, firstKeptEntryId, config: replayConfig,
+          hardOutputTokens: replayCeilingTokens, retentionHints, pinnedMemoryText,
+          ...(currentRetrievalFeedback === undefined ? {} : { retrievalFeedback: currentRetrievalFeedback }),
+          candidateStoreEnabled: settings.incrementalPrecomputeEnabled, cacheEnabled: settings.cacheEnabled,
+          valueWorkerMode: settings.valueWorker.mode, valueWorkerConfigurationHash: valueWorkerConfigurationHash(settings.valueWorker) };
+        workerExecution = await runCompactionWorker(request, { slots: settings.hostWorkerSlots,
+          workerTimeoutMs: settings.workerTimeoutSeconds * 1_000, schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
+          signal: event.signal, priority: "high" });
+        if (workerExecution.response.status !== "ok" || !workerExecution.response.replay) {
+          const code = workerExecution.response.status === "failed" ? workerExecution.response.failureCode : "worker-protocol-error";
+          throw new Error(`Isolated worker failed: ${code}`);
+        }
+        const replay = workerExecution.response.replay; generationHash = replay.generationHash;
+        result = { summary: replay.summary, rawTokens: replay.rawTokens, renderedTokens: replay.renderedTokens,
+          targetTokens: replay.targetTokens, validation: replay.validation,
+          plan: { targetTokens: replay.targetTokens, estimatedTokens: replay.renderedTokens, rawTokens: replay.rawTokens, units: [], warnings: [] },
+          details: replay.details };
+        officialIncremental = settings.incrementalPrecomputeEnabled
+          ? { state: "worker-snapshot", background: incrementalStatus, cacheState: workerExecution.response.metrics.cacheState }
+          : { state: "disabled" };
+      } else {
+        result = await compactEntries(sourceEntries, {
+          config: replayConfig, ...(precomputedCandidates === undefined ? {} : { precomputedCandidates }),
+          valueAdvice, valueWorkerMode: settings.valueWorker.mode,
+          hardOutputTokens: replayCeilingTokens, signal: event.signal, retentionHints, futureEntries: retainedEntries,
+          pinnedMemoryText, retrievalFeedback: currentRetrievalFeedback,
+        });
+        generationHash ??= result.details.generationHash;
+      }
       const combinedSummary = piSummary
         ? renderHybridCompaction(piSummary.text, result.summary)
         : result.summary;
@@ -1357,13 +1615,13 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       }
 
       let generation: number | undefined;
-      if (settings.cacheEnabled && cachePath) {
+      if (!useIsolatedWorker && settings.cacheEnabled && settings.valueWorker.mode !== "advisory" && cachePath) {
         try {
           generation = await nextCacheGeneration(cachePath);
           await writeCompactionCache(cachePath, {
             schemaVersion: 4,
             generation,
-            sourceHash: generationHash,
+            sourceHash: generationHash!,
             configHash,
             summary: combinedSummary,
             ...(piSummary === undefined ? {} : { piSummary: piSummary.text }),
@@ -1378,12 +1636,12 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         }
       }
 
-      const editorStatus = result.details.historyEditor;
       ctx.ui.notify(
-        `ChronoCompact 2.0.0 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; editor ${editorStatus?.status ?? "disabled"} (${editorStatus?.calls ?? 0} job).`,
+        `ChronoCompact 2.0.0 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`,
         "info",
       );
-      return {
+      const shadowBranchLeafId = sourceEntries.at(-1)?.id;
+      const authoritativeResponse = {
         compaction: {
           summary: combinedSummary,
           firstKeptEntryId,
@@ -1392,7 +1650,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           details: {
             kind: "chrono-compact-event-stream-context-compaction",
             version: EXTENSION_VERSION,
-            cache: { hit: false, generation, sourceHash: generationHash },
+            cache: { hit: useIsolatedWorker ? workerExecution?.response.metrics.cacheState === "hit" : false, generation, sourceHash: generationHash! },
             retainedTail: tailSelection,
             retainedTailTokens,
             replayTargetMode: settings.replayTargetTokens === undefined ? "derived-active-context" : "fixed",
@@ -1408,6 +1666,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             summaryRebase,
             editableMemory: { enabled: settings.editableMemoryEnabled, status: memory?.status ?? "unavailable", generationHash: memory?.generationHash, pinnedTokens: estimateTokensFromText(pinnedMemoryText) },
             incrementalPrecompute: officialIncremental,
+            isolatedWorker: workerExecution === undefined ? { enabled: settings.isolatedWorkerEnabled, used: false }
+              : { enabled: true, used: true, client: workerExecution.clientMetrics, runtime: workerExecution.response.metrics },
             toolResultProjection: lastProjectionMetrics ?? { mode: settings.toolResultProjectionMode, state: "no request metrics" },
             ...(piSummary === undefined ? {} : { piSummary: piSummary.text }),
             hybrid: piSummary
@@ -1426,6 +1686,20 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
           },
         },
       };
+      return returnAuthoritativeAfterShadowSchedule(authoritativeResponse, () => {
+        if (settings.rollupShadowEnabled && sessionPath && typeof shadowBranchLeafId === "string") {
+          scheduleRollupShadow({
+            sessionPath,
+            branchLeafId: shadowBranchLeafId,
+            firstKeptEntryId,
+            currentReplayText: result.summary,
+            hardTokenBound: Math.min(HARD_REPLAY_CAP_TOKENS, replayCeilingTokens),
+            targetTokenBound: replayTargetTokens,
+            retentionHints,
+            settings,
+          });
+        }
+      });
     } catch (error) {
       const noSavings =
         error instanceof CompactionValidationError && error.report.issues.some((issue) => issue.code === "no-net-savings");
@@ -1438,6 +1712,63 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
       }
       return undefined;
     }
+  });
+
+  pi.registerCommand("chrono-rollup-shadow-status", {
+    description: "Show aggregate hierarchical rollup shadow metrics",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) return;
+      const settings = resolveExtensionSettings(userConfig);
+      const sessionPath = ctx.sessionManager.getSessionFile();
+      if (!sessionPath) {
+        ctx.ui.notify("Hierarchical rollup shadow evaluation has no active persisted session.", "info");
+        return;
+      }
+      const status = await getRollupShadowStatus(sessionPath);
+      ctx.ui.notify([
+        `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled" : "disabled"}`,
+        `Pending state: ${String(shadowStatus.state ?? "none")}`,
+        `Last safe status: ${status.lastSafeStatus}`,
+        `Recorded generations: ${status.records}`,
+        `Failure stages: ${JSON.stringify(status.failureStageCounts)}`,
+        `Failure codes: ${JSON.stringify(status.failureCodeCounts)}`,
+        `Current replay tokens: p50 ${status.currentReplayTokens.p50}, maximum ${status.currentReplayTokens.maximum}`,
+        `Rollup tokens: p50 ${status.rollupTokens.p50}, maximum ${status.rollupTokens.maximum}`,
+        `Restriction cue coverage: current ${status.currentRestrictionCueCoverage}, rollup ${status.rollupRestrictionCueCoverage}`,
+        `Blocker coverage: current ${status.currentBlockerCoverage}, rollup ${status.rollupBlockerCoverage}`,
+        `Unresolved-failure coverage: current ${status.currentUnresolvedFailureCoverage}, rollup ${status.rollupUnresolvedFailureCoverage}`,
+        `Resource coverage: current ${status.currentResourceCoverage}, rollup ${status.rollupResourceCoverage}`,
+        `Invalid references: ${status.invalidReferenceCount}; cut lines: ${status.cutLineCount}; false completions: ${status.falseCompletionCount}; unsupported facts: ${status.unsupportedFactCount}`,
+        `Update time ms: p50 ${status.updateTimeMs.p50}, maximum ${status.updateTimeMs.maximum}`,
+        `Render time ms: p50 ${status.renderTimeMs.p50}, maximum ${status.renderTimeMs.maximum}`,
+        `Worker timer delay ms: p50 ${status.workerTimerDelayMs.p50}, maximum ${status.workerTimerDelayMs.maximum}`,
+      ].join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("chrono-value-worker-status", {
+    description: "Show aggregate background value-worker status",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) return;
+      const settings = resolveExtensionSettings(userConfig); const sessionPath = ctx.sessionManager.getSessionFile();
+      const manifest = sessionPath ? await readValueAdviceManifest(valueAdviceStorePath(sessionPath)) : undefined;
+      const adviceStoreState = manifest ? "ready" : sessionPath ? await stat(join(valueAdviceStorePath(sessionPath), "manifest.json")).then(() => "corrupt" as const).catch(() => "none" as const) : "none";
+      const candidateManifest = incrementalStore && incrementalStore.sessionPath === sessionPath ? incrementalStore.manifest : undefined;
+      const pendingSegments = candidateManifest ? candidateManifest.segments.filter((segment) => !manifest?.processedSegmentIdentities.includes(segment.segmentContentHash)).length : 0;
+      const budgetState = manifest && (manifest.usage.calls >= settings.valueWorker.maxCallsPerSession || manifest.usage.inputTokens >= settings.valueWorker.maxInputTokensPerSession || manifest.usage.outputTokens >= settings.valueWorker.maxOutputTokensPerSession || (settings.valueWorker.maxEstimatedCostMicroUsd !== undefined && manifest.usage.costMicroUsd >= settings.valueWorker.maxEstimatedCostMicroUsd)) ? "exhausted" : "available";
+      ctx.ui.notify([
+        `Mode: ${settings.valueWorker.mode}`, `Configured model: ${settings.valueWorker.model}`, `Resolved model: ${manifest?.resolvedModelIdentity ?? "none"}`, `Thinking: ${settings.valueWorker.thinking}`,
+        `Candidate store: ${String(incrementalStatus.state ?? "unknown")}`, `Advice store: ${adviceStoreState}`, `Pending segments: ${pendingSegments}`, `Pending batches: ${pendingSegments === 0 ? 0 : "bounded at run time"}`, `Active job: ${valueWorkerActive ? "running" : "idle"}`, `Model slot limit: ${settings.valueWorker.hostSlots}`, `Budget state: ${budgetState}`, `Last safe status: ${String((valueWorkerStatus as {status:string}).status)}`,
+        `Completed segments: ${manifest?.processedSegmentIdentities.length ?? 0}`, `Valid advice records: ${manifest?.adviceFiles.filter((item) => item.configurationHash === valueWorkerConfigurationHash(settings.valueWorker)).reduce((n,x)=>n+x.records,0) ?? 0}`, `Ignored advice records: ${manifest?.adviceFiles.filter((item) => item.configurationHash !== valueWorkerConfigurationHash(settings.valueWorker)).reduce((n,x)=>n+x.records,0) ?? 0}`, `Calls: ${manifest?.usage.calls ?? 0}`, `Repair calls: ${manifest?.usage.repairCalls ?? 0}`,
+        `Input tokens: ${manifest?.usage.inputTokens ?? 0}`, `Output tokens: ${manifest?.usage.outputTokens ?? 0}`, `Cache-read tokens: ${manifest?.usage.cacheReadTokens ?? 0}`, `Cache-write tokens: ${manifest?.usage.cacheWriteTokens ?? 0}`, `Estimated cost: ${manifest?.usage.costAvailable ? `$${((manifest.usage.costMicroUsd ?? 0) / 1_000_000).toFixed(6)}` : "unavailable"}`, `Provider attempts: ${valueWorkerStatus && "providerAttempts" in valueWorkerStatus ? valueWorkerStatus.providerAttempts ?? 0 : 0}`,
+        `Consecutive failures: ${manifest?.consecutiveFailures ?? 0}`, `Circuit: ${manifest?.circuitState ?? "closed"}`, `Circuit reopen time: ${manifest?.circuitReopenTime ?? "none"}`, `Last successful update: ${manifest?.lastSuccessTime ?? "none"}`,
+      ].join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("chrono-value-worker-reset", {
+    description: "Cancel pending value work and reset its persisted circuit",
+    handler: async (_args, ctx) => { cancelValueWorker(); const sessionPath = ctx.sessionManager.getSessionFile(); const reset = sessionPath ? await resetAdviceCircuit(valueAdviceStorePath(sessionPath)).catch(() => false) : false; valueWorkerStatus = { status: "off" }; ctx.ui.notify(`${reset ? "Reset the persisted circuit. " : "No compatible persisted circuit was found. "}Pending value work was cancelled. Stored advice and source files were preserved.`, "info"); },
   });
 
   pi.registerCommand("chrono-compact-settings", {
@@ -1456,6 +1787,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
         userConfigWarning = undefined;
         lastTriggerAttemptTokens = undefined;
         cancelIncrementalWork(true);
+        cancelShadowWork();
+        cancelValueWorker();
         projectionSeenToolCallIds = new Set();
         const settings = resolveExtensionSettings(userConfig);
         scheduleIncrementalWork(ctx);
@@ -1469,8 +1802,11 @@ export default function chronoCompactExtension(pi: ExtensionAPI): void {
             `Active target: ${settings.targetContextTokens.toLocaleString()} tokens`,
             `Replay maximum: ${settings.replayTargetTokens === undefined ? "automatic" : settings.replayTargetTokens.toLocaleString()}`,
             `Regular Pi summary: ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
-            `Experimental LLM history classifier: ${settings.historyEditorEnabled ? "enabled" : "disabled"}`,
-            `Incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+            `Background value worker: ${settings.valueWorker.mode}; model ${settings.valueWorker.model}; thinking ${settings.valueWorker.thinking}`,
+            ...(settings.legacyHistoryEditorEnabled ? ["Warning: the old history classifier setting is retired and cannot start a model call. Use the value-worker controls."] : []),
+            `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+            `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
+            `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,
             `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,
             `Ranked local history search: ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
             `Editable working memory: ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,

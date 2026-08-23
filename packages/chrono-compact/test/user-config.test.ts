@@ -19,6 +19,10 @@ test("persistent compactor controls set independent trigger, tail, and target va
   config = applyConfigCommand(config, "hybrid-tokens 2200").config;
   config = applyConfigCommand(config, "history-classifier on").config;
   config = applyConfigCommand(config, "incremental-precompute on").config;
+  config = applyConfigCommand(config, "isolated-worker on").config;
+  config = applyConfigCommand(config, "worker-slots 2").config;
+  config = applyConfigCommand(config, "worker-timeout 600").config;
+  config = applyConfigCommand(config, "worker-nice 12").config;
   config = applyConfigCommand(config, "tool-result-projection safe").config;
   assert.deepEqual(config, {
     triggerThresholdTokens: 48_000,
@@ -30,6 +34,10 @@ test("persistent compactor controls set independent trigger, tail, and target va
     hybridSummaryTargetTokens: 2_200,
     historyEditorEnabled: true,
     incrementalPrecomputeEnabled: true,
+    isolatedWorkerEnabled: true,
+    hostWorkerSlots: 2,
+    workerTimeoutSeconds: 600,
+    workerNiceLevel: 12,
     toolResultProjectionMode: "safe",
   });
 
@@ -44,6 +52,9 @@ test("persistent compactor controls reject unsafe or contradictory values", () =
   assert.throws(() => applyConfigCommand({}, "raw-tail-bounds 30000 20000"), /minimum must not exceed/);
   assert.throws(() => validateUserConfig({ targetContextTokens: "many" }), /targetContextTokens/);
   assert.throws(() => applyConfigCommand({}, "tool-result-projection unsafe"), /off, safe, or aggressive/);
+  assert.throws(() => applyConfigCommand({}, "worker-slots 5"), /from 1 to 4/);
+  assert.throws(() => applyConfigCommand({}, "worker-timeout 10"), /from 30 to 3,600/);
+  assert.throws(() => applyConfigCommand({}, "worker-nice 20"), /from 0 to 19/);
 });
 
 test("user configuration is saved atomically and loaded after restart", () => {

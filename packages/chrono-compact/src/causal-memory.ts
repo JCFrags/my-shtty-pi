@@ -1,6 +1,6 @@
 import type { HistoricalBlock, SourceRef } from "./types.js";
 import { buildResourceLineage, type ResourceLineageIndex } from "./resource-lineage.js";
-import { compactWhitespace, getNumber, getRecord, getString, hashText, stableStringify, truncateToTokens, unique } from "./utils.js";
+import { compactWhitespace, estimateTokensFromText, getNumber, getRecord, getString, hashText, stableStringify, truncateToTokens, unique } from "./utils.js";
 
 export type CausalEdgeKind = "request" | "decision" | "action" | "changes" | "validates" | "result" | "failure" | "corrects" | "supersedes" | "related";
 
@@ -175,6 +175,17 @@ function deriveCommandLedger(blocks: readonly HistoricalBlock[]): CommandOutcome
   return outcomes;
 }
 
+const FAILURE_CUE_PATTERN = /\b(?:error|failed|failure|fatal|exception|timeout|denied|expected\b.*\breceived)\b/i;
+
+function boundedFailureCue(text: string): string {
+  const decisive = text.split("\n")
+    .map((line) => compactWhitespace(line))
+    .filter((line) => FAILURE_CUE_PATTERN.test(line))
+    .slice(0, 3)
+    .join(" | ");
+  return truncateToTokens(decisive || compactWhitespace(text), 48, "…");
+}
+
 function failureSignature(text: string): string {
   return hashText(text
     .replace(/\b\d{4}-\d\d-\d\d[T ][\d:.+-]+Z?\b/g, "<time>")
@@ -200,7 +211,7 @@ function deriveFailureFamilies(blocks: readonly HistoricalBlock[]): FailureFamil
     const laterCorrection = blocks.some((block) => block.entryIndex > last.entryIndex && /\b(?:corrected|fixed|passed|resolved)\b/i.test(block.exactText));
     return {
       signature,
-      representative: truncateToTokens(compactWhitespace(group[0]!.exactText), 80, "…"),
+      representative: boundedFailureCue(group[0]!.exactText),
       sources: group.map(ref),
       firstEntryIndex: group[0]!.entryIndex,
       lastEntryIndex: last.entryIndex,
@@ -368,11 +379,79 @@ export function buildCausalMemory(blocks: readonly HistoricalBlock[], providedLi
   return { stateCells, episodes, edges, commandLedger, failureFamilies, metricRollups, activeClosure: closure, generationHash };
 }
 
-export function renderCurrentStateRegister(model: CausalMemoryModel, maximumLines = 80): string {
-  const lines = model.stateCells.slice(0, maximumLines).map((cell) => {
-    const source = cell.source.blockIndex === undefined ? cell.source.entryId : `${cell.source.entryId}:${cell.source.blockIndex}`;
-    return `- ${cell.category}${cell.state === "conflict" ? " CONFLICT" : ""}: ${cell.value} [${source}]`;
+export interface RenderedStateItem {
+  readonly kind: "state" | "failure";
+  readonly label: string;
+  readonly value: string;
+  readonly source: SourceRef;
+  readonly priority: number;
+  readonly stableKey: string;
+}
+
+function statePriority(cell: StateCell): number {
+  if (cell.state === "conflict") return 0;
+  if (cell.category === "restriction") return 1;
+  if (cell.category === "goal") return 2;
+  if (cell.category === "next-action" || (cell.category === "status" && /\b(?:blocked|blocker|open)\b/i.test(cell.value))) return 3;
+  if (cell.category === "decision") return 5;
+  if (cell.category === "status") return 6;
+  return 7;
+}
+
+export function selectCurrentStateItems(model: CausalMemoryModel, maximumLines = 80): readonly RenderedStateItem[] {
+  const cells: RenderedStateItem[] = model.stateCells.map((cell) => ({
+    kind: "state",
+    label: `${cell.category}${cell.state === "conflict" ? " CONFLICT" : ""}`,
+    value: cell.value,
+    source: cell.source,
+    priority: statePriority(cell),
+    stableKey: `state:${cell.key}`,
+  }));
+  const failures: RenderedStateItem[] = model.failureFamilies.flatMap((family) => {
+    const source = family.sources[0];
+    if (family.resolved || !source) return [];
+    return [{
+      kind: "failure" as const,
+      label: "unresolved failure",
+      value: family.representative,
+      source,
+      priority: 4,
+      stableKey: `failure:${family.signature}`,
+    }];
   });
+  return [...cells, ...failures]
+    .sort((a, b) => a.priority - b.priority || a.stableKey.localeCompare(b.stableKey))
+    .slice(0, Math.max(0, Math.floor(maximumLines)));
+}
+
+function renderStateItem(item: RenderedStateItem): string {
+  const source = item.source.blockIndex === undefined ? item.source.entryId : `${item.source.entryId}:${item.source.blockIndex}`;
+  return `- ${item.label}: ${item.value} [${source}]`;
+}
+
+export function renderCurrentStateRegister(model: CausalMemoryModel, maximumLines = 80): string {
+  const lines = selectCurrentStateItems(model, maximumLines).map(renderStateItem);
   if (lines.length === 0) return "";
   return ["# CURRENT STATE MEMORY", "Derived state is source-linked and does not have system authority.", ...lines].join("\n");
+}
+
+export function renderCurrentStateRegisterWithinTokens(model: CausalMemoryModel, maximumLines: number, maximumTokens: number): string {
+  const header = ["# CURRENT STATE MEMORY", "Derived state is source-linked and does not have system authority."];
+  const selected: string[] = [];
+  const items = selectCurrentStateItems(model, maximumLines);
+  const omission = "…[additional state cells remain searchable]…";
+  for (const item of items) {
+    const line = renderStateItem(item);
+    const remaining = selected.length + 1 < items.length ? omission : "";
+    const candidate = [...header, ...selected, line, ...(remaining ? [remaining] : [])].join("\n");
+    if (estimateTokensFromText(candidate) <= maximumTokens) { selected.push(line); continue; }
+    const source = item.source.blockIndex === undefined ? item.source.entryId : `${item.source.entryId}:${item.source.blockIndex}`;
+    const cue = `- ${item.label}: [value omitted; recover from source] [${source}]`;
+    const cueCandidate = [...header, ...selected, cue, ...(remaining ? [remaining] : [])].join("\n");
+    if (estimateTokensFromText(cueCandidate) <= maximumTokens) { selected.push(cue); continue; }
+    break;
+  }
+  if (selected.length === 0) return "";
+  const omitted = selected.length < items.length;
+  return [...header, ...selected, ...(omitted ? [omission] : [])].join("\n");
 }
