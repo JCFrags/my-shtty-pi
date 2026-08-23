@@ -76,7 +76,7 @@ The listeners respond after session startup and are removed on session shutdown 
 
 ## Side-panel provider contract
 
-The provider is a same-process Files service for a separate Pi Herd side panel. It does not import or start Herdr. It does not open the native `/files` overlay. The provider owns `ctx.cwd`, path normalization, repository-root checks, symlink checks, ignore handling, all filesystem reads, selection, limits, and `ctx.ui.pasteToEditor`.
+The provider is a same-process Files service for a separate Agent Board side panel. It does not import or start Herdr. It does not open the native `/files` overlay. The provider owns `ctx.cwd`, path normalization, repository-root checks, symlink checks, ignore handling, all filesystem reads, selection, limits, and `ctx.ui.pasteToEditor`.
 
 ### Events
 
@@ -89,11 +89,11 @@ All names and payloads are versioned:
 
 A request is `{ "version": 1, "requestId": "panel-1", "action": "..." }`. `requestId` is required, trimmed, and limited to 128 characters. Every response contains the same `requestId`, `version: 1`, and `ok`. Errors are limited to 240 characters.
 
-Supported actions are `snapshot`, `list`, `navigate`, `expand`, `preview`, `toggle-selection`, `clear-selection`, `insert-paths`, `prepare-contents`, and `insert-contents`.
+Supported actions are `snapshot`, `list`, `navigate`, `expand`, `preview`, `filter`, `toggle-selection`, `clear-selection`, `toggle-hidden`, `insert-paths`, `prepare-contents`, and `insert-contents`.
 
 `list`, `navigate`, and `expand` accept a provider-relative `path`. `expand` also accepts `expanded`. `preview` accepts a file path. `toggle-selection` accepts a file or directory path and optional `selected`; directory selection is bounded by the provider's directory entry limit. `insert-paths` inserts the current selected paths. `prepare-contents` returns the bounded insertion budget. `insert-contents` inserts the provider-selected eligible contents and may accept `includedPaths` to apply a side-panel budget choice. The provider revalidates every path and limit before editor mutation.
 
-The summary contains `cwd`, `currentPath`, sorted `selectedPaths`, `selectedCount`, and the exact active limits. The view contains `cwd`, `currentPath`, at most 256 rows, and an optional bounded UTF-8 preview. Rows contain relative path, kind, depth, selection state, expansion state, hidden/ignored state, and truncation state. No event contains a file's unbounded contents.
+The summary retains all version 1 fields and adds provider-authoritative `showHidden`, `selectedKnownBytes`, and `selectedApproximateTokens`. The view retains all version 1 fields and adds `showHidden`, `previewPath`, and a persistent bounded UTF-8 preview. The preview survives other provider actions and is refreshed or cleared when its file changes or disappears. Rows contain relative path, kind, depth, selection state, expansion state, hidden/ignored state, and truncation state. No event contains a file's unbounded contents.
 
 Summary and view-change events are emitted after every successful action. Initialization emits both events. The response also includes the current summary and view. The side panel must treat the provider as authoritative and must not send an absolute path or a second cwd.
 

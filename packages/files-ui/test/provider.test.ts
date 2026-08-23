@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { rm } from "node:fs/promises";
 import { FilesProvider, FILES_PROVIDER_SUMMARY_EVENT, FILES_PROVIDER_VIEW_EVENT } from "../src/provider.ts";
 import { withTempDirectory, writeFile } from "./helpers.ts";
 
@@ -24,6 +25,8 @@ test("provider lists, navigates, previews, selects, and emits bounded correlated
     assert.equal(response.view?.rows.some((row) => row.path === ".visible-after-toggle"), false);
     const withHidden = await provider.handle({ version: 1, requestId: "hidden-1", action: "toggle-hidden" });
     assert.equal(withHidden.view?.rows.some((row) => row.path === ".visible-after-toggle"), true);
+    assert.equal(withHidden.summary?.showHidden, true);
+    assert.equal(withHidden.view?.showHidden, true);
     assert.equal(events.at(-2)?.channel, FILES_PROVIDER_SUMMARY_EVENT);
     assert.equal(events.at(-1)?.channel, FILES_PROVIDER_VIEW_EVENT);
 
@@ -36,12 +39,39 @@ test("provider lists, navigates, previews, selects, and emits bounded correlated
 
     await provider.handle({ version: 1, requestId: "nav-1", action: "navigate", path: "src" });
     const preview = await provider.handle({ version: 1, requestId: "preview-1", action: "preview", path: "src/main.ts" });
+    assert.equal(preview.view?.previewPath, "src/main.ts");
     assert.deepEqual(preview.view?.preview?.lines, ["export const value = 1;", ""]);
-    await provider.handle({ version: 1, requestId: "select-1", action: "toggle-selection", path: "src/main.ts", selected: true });
+    const selectedResponse = await provider.handle({ version: 1, requestId: "select-1", action: "toggle-selection", path: "src/main.ts", selected: true });
+    assert.equal(selectedResponse.view?.previewPath, "src/main.ts");
+    assert.deepEqual(selectedResponse.view?.preview?.lines, ["export const value = 1;", ""]);
     assert.deepEqual(response.summary?.selectedPaths, []);
     const selected = await provider.handle({ version: 1, requestId: "snapshot-1", action: "snapshot" });
     assert.deepEqual(selected.summary?.selectedPaths, ["src/main.ts"]);
+    assert.equal(selected.summary?.selectedKnownBytes, 24);
+    assert.equal(selected.summary?.selectedApproximateTokens, 6);
     assert.equal(selected.view?.rows.every((row) => JSON.stringify(row).length < 2000), true);
+    provider.dispose();
+  });
+});
+
+test("provider preserves v1 expand compatibility, supports collapse, and clears a deleted preview", async () => {
+  await withTempDirectory("pi-files-provider-state", async (root) => {
+    await writeFile(root, "dir/file.txt", "preview");
+    const provider = new FilesProvider(context(root, []), () => {});
+    await provider.initialize();
+
+    const expanded = await provider.handle({ version: 1, requestId: "expand", action: "expand", path: "dir", expanded: true });
+    assert.equal(expanded.view?.rows.find((row) => row.path === "dir")?.expanded, true);
+    const collapsed = await provider.handle({ version: 1, requestId: "collapse", action: "expand", path: "dir", expanded: false });
+    assert.equal(collapsed.view?.rows.find((row) => row.path === "dir")?.expanded, false);
+    const compatible = await provider.handle({ version: 1, requestId: "compat", action: "expand", path: "dir" });
+    assert.equal(compatible.view?.rows.find((row) => row.path === "dir")?.expanded, true);
+
+    await provider.handle({ version: 1, requestId: "preview", action: "preview", path: "dir/file.txt" });
+    await rm(`${root}/dir/file.txt`);
+    const refreshed = await provider.handle({ version: 1, requestId: "refresh", action: "snapshot" });
+    assert.equal(refreshed.view?.previewPath, undefined);
+    assert.equal(refreshed.view?.preview, undefined);
     provider.dispose();
   });
 });
