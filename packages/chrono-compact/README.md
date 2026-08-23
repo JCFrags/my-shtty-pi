@@ -4,7 +4,7 @@ An installable Pi extension and standalone TypeScript library for **bounded long
 
 The implementation follows the hand-off in [`docs/hand-off.md`](docs/hand-off.md): new information reaches the primary model normally; only historical active-context representations are compacted. Pi's JSONL is never rewritten and remains the authoritative record.
 
-This tree is an isolated **2.0.0 correction 020 candidate**. It is not accepted, installed, activated, reaudited, or production-ready. External semantic processing, the background value worker, incremental preprocessing, isolated local worker processes, hierarchical rollup shadow evaluation, and request-local projection remain default-off.
+This tree is a **2.0.0 candidate** for staged compatibility and stabilization review. It is not stable, publication-approved, or recommended for public installation. Deterministic replay is the current model-facing path. Isolated replay and segmented precompute have local acceptance evidence. Hierarchical rollup shadow and background value advice remain default-off and non-authoritative. Real-provider value advice was not evaluated, and live rollup context is not approved. Request-local projection also remains default-off.
 
 ## Implemented behavior
 
@@ -50,7 +50,7 @@ This is not a `memory.md` authority file and not only one conversation summary. 
 
 ## Installation
 
-Requirements: Node.js 20 or later and a current Pi installation.
+Requirements: Node.js 20 or later and Pi 0.84.2. The package supports Pi `>=0.84.2 <0.85.0` through its optional peer dependencies.
 
 ```bash
 npm install
@@ -65,7 +65,7 @@ For direct development loading:
 pi -e ./dist/src/pi-extension.js
 ```
 
-The package manifest declares `dist/src/pi-extension.js` as its Pi extension entry point. Pi-provided core modules are declared as `"*"` peer dependencies rather than bundled runtime dependencies. Prebuilt JavaScript and declarations are included in the distribution archive.
+The package manifest declares `dist/src/pi-extension.js` as its Pi extension entry point. Pi-provided core modules use the optional peer range `>=0.84.2 <0.85.0` rather than bundled runtime dependencies. Development uses exact Pi 0.84.2 packages. Prebuilt JavaScript and declarations are included in the distribution archive.
 
 ## Pi integration
 

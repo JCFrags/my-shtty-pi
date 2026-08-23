@@ -14,7 +14,7 @@ This catalog describes the Foundation incubator. No lifecycle status is release 
 
 | Product | Status | Source | Next gate |
 |---|---|---|---|
-| ChronoCompact | quarantined | [`packages/chrono-compact`](../packages/chrono-compact) | Decompose its current product scope and failure domain. |
+| ChronoCompact | candidate | [`packages/chrono-compact`](../packages/chrono-compact) | Review the Pi 0.84.2 compatibility, long-session scale, private-session, deployment, and default-off experimental-feature evidence before a release decision. |
 | Grounded Tools | experimental | [`packages/grounded-tools`](../packages/grounded-tools) | Review its broad privileged tool surface. |
 | Progressive Tools | experimental | [`packages/progressive-tools`](../packages/progressive-tools) | Complete the same public stabilization and deployment-boundary review. |
 | Agent Context | experimental | [`packages/pi-agent-context`](../packages/pi-agent-context) | Complete public stabilization and deployment-boundary review. |

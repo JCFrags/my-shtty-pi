@@ -66,6 +66,9 @@ export async function createPiRegularSummary(
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) return undefined;
+  const headers = auth.headers
+    ? Object.fromEntries(Object.entries(auth.headers).filter((entry): entry is [string, string] => entry[1] !== null))
+    : undefined;
   const targetTokens = Math.max(256, Math.floor(options.targetTokens));
   const reserveTokens = Math.max(512, Math.ceil(targetTokens / 0.8));
   if (options.messages) {
@@ -75,7 +78,7 @@ export async function createPiRegularSummary(
       model,
       reserveTokens,
       auth.apiKey,
-      auth.headers,
+      headers,
       options.signal,
       options.customInstructions,
       options.previousSummary,
@@ -101,7 +104,7 @@ export async function createPiRegularSummary(
     },
     model,
     auth.apiKey,
-    auth.headers,
+    headers,
     options.customInstructions,
     options.signal,
     ctx.thinkingLevel,

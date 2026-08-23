@@ -20,24 +20,24 @@
       "id": "chrono-compact",
       "installationRecommended": false,
       "lifecycle": {
-        "reason": "its current product scope and failure domain need decomposition.",
-        "status": "quarantined"
+        "reason": "Product scope and failure-domain decomposition is complete; staged Pi 0.84.2 compatibility and stabilization review is next.",
+        "status": "candidate"
       },
       "lockfile": {
         "path": "packages/chrono-compact/package-lock.json",
         "scope": "package"
       },
       "nextGate": {
-        "action": "its current product scope and failure domain need decomposition.",
-        "status": "quarantined"
+        "action": "Review the Pi 0.84.2 compatibility, long-session scale, private-session, deployment, and default-off experimental-feature evidence before a release decision.",
+        "status": "candidate"
       },
       "nodeRequirement": ">=20",
       "operatingSystemBoundary": "Node.js 20 or later; editable-memory lock recovery uses Linux /proc process identity and fails closed on platforms without that identity; no broader cross-platform production claim",
       "piPeerRangeOrPackageModel": {
         "packageModel": "published package with compiled dist entry and CLI; Pi extension package",
         "peerDependencies": [
-          "@earendil-works/pi-ai:* (optional)",
-          "@earendil-works/pi-coding-agent:* (optional)",
+          "@earendil-works/pi-ai:>=0.84.2 <0.85.0 (optional)",
+          "@earendil-works/pi-coding-agent:>=0.84.2 <0.85.0 (optional)",
           "typebox:* (optional)"
         ]
       },
@@ -64,11 +64,12 @@
         "benchmark:history-rollups": "npm run build && node scripts/benchmark-history-rollups.mjs",
         "benchmark:rollup-shadow": "npm run build && node scripts/benchmark-rollup-shadow.mjs",
         "benchmark:sessions": "npm run build && node scripts/benchmark-session-set.mjs",
+        "pack:check": "npm pack --dry-run --json --ignore-scripts > /dev/null",
         "prepack": "npm test"
       },
       "peerDependencies": {
-        "@earendil-works/pi-ai": "*",
-        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-ai": ">=0.84.2 <0.85.0",
+        "@earendil-works/pi-coding-agent": ">=0.84.2 <0.85.0",
         "typebox": "*"
       },
       "peerDependenciesMeta": {
@@ -86,12 +87,11 @@
       "filesBoundary": [
         "dist/src",
         "README.md",
-        "BUILD_REPORT.md",
         "LICENSE",
         "docs",
         "examples"
       ],
-      "developmentPiVersion": "^0.83.0",
+      "developmentPiVersion": "0.84.2",
       "private": false
     },
     {
@@ -706,11 +706,10 @@
   "releaseUnits": [
     {
       "buildModel": "TypeScript build to dist/src; tests execute compiled dist",
-      "developmentPiVersion": "^0.83.0",
+      "developmentPiVersion": "0.84.2",
       "filesBoundary": [
         "dist/src",
         "README.md",
-        "BUILD_REPORT.md",
         "LICENSE",
         "docs",
         "examples"
@@ -718,8 +717,8 @@
       "id": "pi-chrono-compact",
       "installationRecommended": false,
       "license": "MIT",
-      "lifecycleReason": "its current product scope and failure domain need decomposition.",
-      "lifecycleStatus": "quarantined",
+      "lifecycleReason": "Product scope and failure-domain decomposition is complete; staged Pi 0.84.2 compatibility and stabilization review is next.",
+      "lifecycleStatus": "candidate",
       "lockfile": {
         "path": "packages/chrono-compact/package-lock.json",
         "scope": "package"
@@ -730,8 +729,8 @@
       "packageModel": "published package with compiled dist entry and CLI; Pi extension package",
       "parentProductId": "chrono-compact",
       "peerDependencies": {
-        "@earendil-works/pi-ai": "*",
-        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-ai": ">=0.84.2 <0.85.0",
+        "@earendil-works/pi-coding-agent": ">=0.84.2 <0.85.0",
         "typebox": "*"
       },
       "piExtensionEntries": [
@@ -758,6 +757,7 @@
         "benchmark:history-rollups": "npm run build && node scripts/benchmark-history-rollups.mjs",
         "benchmark:rollup-shadow": "npm run build && node scripts/benchmark-rollup-shadow.mjs",
         "benchmark:sessions": "npm run build && node scripts/benchmark-session-set.mjs",
+        "pack:check": "npm pack --dry-run --json --ignore-scripts > /dev/null",
         "prepack": "npm test"
       },
       "sourceDirectory": "packages/chrono-compact",
@@ -767,6 +767,7 @@
         "test",
         "demo",
         "benchmark",
+        "pack:check",
         "prepack"
       ],
       "version": "2.0.0",

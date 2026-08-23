@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### ChronoCompact 2.0.0 candidate
+
+- Promoted ChronoCompact to candidate for staged Pi 0.84.2 compatibility and stabilization review.
+- Kept deterministic replay as the model-facing path. Isolated replay and segmented precompute have local acceptance evidence.
+- Kept rollup shadow and value advice default-off and non-authoritative. Real-provider value advice was not evaluated, and live rollup context is not approved.
+
 ### Agent Context 0.2.0
 
 - Replaced exact local and UTC capture times with one stable local calendar date.
