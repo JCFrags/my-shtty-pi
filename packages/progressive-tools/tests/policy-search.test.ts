@@ -171,20 +171,22 @@ test("active-set policy hides unactivated managed tools and keeps unknown tools 
 	);
 });
 
-test("inactive built-ins remain inactive", () => {
+test("explicit blocked rules retire built-in names without activating other built-ins", () => {
 	const read = tool({ name: "read", source: "builtin", path: "builtin:read", scope: "temporary", origin: "top-level" });
 	const grep = tool({ name: "grep", source: "builtin", path: "builtin:grep", scope: "temporary", origin: "top-level" });
 	const loader = tool({ name: SEARCH_TOOL_NAME, source: "local:/broker" });
 	const tools = [read, grep, loader];
+	const policy = config({ blocked: [{ name: ["grep", "find", "fuzzy_find"] }] });
 	const inventory = buildInventory({
 		tools,
-		activeTools: new Set([read.name]),
+		activeTools: new Set([read.name, grep.name]),
 		activatedManaged: new Set(),
 		initialToolIdentities: new Set(tools.map(toolIdentity)),
-		config: config(),
+		config: policy,
 	});
+	assert.equal(classifyTool(grep, policy).state, "blocked");
 	assert.deepEqual(
-		buildDesiredActiveTools({ current: [read.name], inventory, activatedManaged: new Set() }),
+		buildDesiredActiveTools({ current: [read.name, grep.name], inventory, activatedManaged: new Set() }),
 		[read.name, SEARCH_TOOL_NAME],
 	);
 });
