@@ -204,6 +204,23 @@ test("free-form blocking answers are normalized", async () => {
   assert.equal(blockingTerminalCount(runtime.bus), 1);
 });
 
+test("over-limit UI text follows one legal provider_failure terminal without truncation", async () => {
+  const runtime = harness({
+    enabled: true,
+    select: async (_title, values) => values.at(-1),
+    input: async () => "x".repeat(4001),
+  });
+  const result = await executeBlocking(runtime);
+  assert.equal(result.details.status, "cancelled");
+  assert.equal(result.details.reason, "provider_failure");
+  assert.equal(runtime.bus.emitted.some((event) =>
+    event.name === ASK_USER_BLOCKING_RESPONSE_EVENT_V1
+    && (event.value as { state?: string }).state === "answered"
+  ), false);
+  assert.equal(blockingTerminalCount(runtime.bus), 1);
+  assert.deepEqual(herdrStates(runtime.bus), [true, false]);
+});
+
 test("deferred ask routes exactly, maps escalationPolicy, and normalizes queued", async () => {
   const runtime = harness({ enabled: true });
   let request: any;
@@ -248,6 +265,47 @@ test("facade correlation is stable for an exact tool retry and rejects conflicti
     /ASK_USER_CORRELATION_CONFLICT/u,
   );
   assert.equal(correlations.length, 2);
+});
+
+test("facade retry identity uses normalized deferred arrays and preserves real conflicts", async () => {
+  const runtime = harness({ enabled: true });
+  const requests: any[] = [];
+  runtime.bus.on(ASK_USER_DEFERRED_REQUEST_EVENT_V1, (value: any) => {
+    requests.push(value);
+    runtime.bus.emit(ASK_USER_DEFERRED_RESPONSE_EVENT_V1, { schemaVersion: 1, correlationId: value.correlationId, mode: "deferred", state: "accepted" });
+    runtime.bus.emit(ASK_USER_DEFERRED_RESPONSE_EVENT_V1, { schemaVersion: 1, correlationId: value.correlationId, mode: "deferred", state: "queued", operation: "ask", questionId: "qst_00000000-0000-4000-8000-000000000001", displayId: "Q-1", revision: 1 });
+  });
+  const omittedArrays = {
+    operation: "ask",
+    mode: "deferred",
+    question: "Choose",
+    reason: "Continue work.",
+    class: "reversible",
+    response: { kind: "text" },
+  } as const;
+  const explicitEmptyArrays = {
+    ...omittedArrays,
+    response: { kind: "text", options: [] },
+    recommendedOptionIds: [],
+    affectedWork: [],
+    continuingWork: [],
+    attachments: [],
+  } as const;
+  await runtime.tools.get("ask_user").execute("normalized-retry", omittedArrays, undefined, undefined, runtime.ctx);
+  await runtime.tools.get("ask_user").execute("normalized-retry", explicitEmptyArrays, undefined, undefined, runtime.ctx);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].correlationId, requests[1].correlationId);
+  for (const key of ["recommendedOptionIds", "affectedWork", "continuingWork", "attachments"] as const) {
+    assert.deepEqual(requests[0][key], []);
+    assert.deepEqual(requests[1][key], []);
+  }
+  assert.deepEqual(requests[0].response, { kind: "text", options: [] });
+  assert.deepEqual(requests[1].response, { kind: "text", options: [] });
+  await assert.rejects(
+    runtime.tools.get("ask_user").execute("normalized-retry", { ...explicitEmptyArrays, question: "Different" }, undefined, undefined, runtime.ctx),
+    /ASK_USER_CORRELATION_CONFLICT/u,
+  );
+  assert.equal(requests.length, 2);
 });
 
 test("selected provider absence and malformed responses fail closed", async () => {

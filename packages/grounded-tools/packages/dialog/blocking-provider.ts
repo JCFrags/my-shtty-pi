@@ -7,6 +7,7 @@ import {
   type AskUserBlockingProviderResponseV1,
   type AskUserProviderErrorV1,
   isBlockingProviderRequestV1,
+  isBlockingProviderResponseV1,
 } from "@grounded/pi-core/ask-user-v1";
 
 interface ActiveRecord {
@@ -101,9 +102,13 @@ export function registerBlockingProviderV1(
       if (answer === null) {
         complete(record, response(record.request, { state: "cancelled", reason: "user" }));
       } else if (answer.kind === "option") {
-        complete(record, response(record.request, { state: "answered", answer: { kind: "option", optionId: answer.value } }));
+        const terminal = response(record.request, { state: "answered", answer: { kind: "option", optionId: answer.value } });
+        if (!isBlockingProviderResponseV1(terminal)) throw new Error("Dialog returned an invalid option answer.");
+        complete(record, terminal);
       } else {
-        complete(record, response(record.request, { state: "answered", answer: { kind: "text", text: answer.value } }));
+        const terminal = response(record.request, { state: "answered", answer: { kind: "text", text: answer.value } });
+        if (!isBlockingProviderResponseV1(terminal)) throw new Error("Dialog returned an invalid text answer.");
+        complete(record, terminal);
       }
     } catch {
       complete(record, response(record.request, { state: "cancelled", reason: "provider_failure" }));
