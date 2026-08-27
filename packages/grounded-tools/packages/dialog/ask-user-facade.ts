@@ -144,8 +144,10 @@ export function registerAskUserFacadeV1(pi: ExtensionAPI): void {
     parameters: ASK_USER_PARAMETERS_V1,
     executionMode: "sequential",
     async execute(toolCallId, input, signal) {
-      const fingerprint = stableFingerprint(input);
       const prior = correlations.get(toolCallId);
+      const correlationId = prior?.correlationId ?? `ask_${randomUUID()}`;
+      const request = buildProviderRequest(input, correlationId, signal);
+      const fingerprint = providerRequestFingerprint(request);
       if (prior !== undefined && prior.fingerprint !== fingerprint) {
         throw providerError({
           code: "ASK_USER_CORRELATION_CONFLICT",
@@ -153,9 +155,7 @@ export function registerAskUserFacadeV1(pi: ExtensionAPI): void {
           retryable: false,
         });
       }
-      const correlationId = prior?.correlationId ?? `ask_${randomUUID()}`;
       if (prior === undefined) correlations.set(toolCallId, { fingerprint, correlationId });
-      const request = buildProviderRequest(input, correlationId, signal);
       const result = request.mode === "blocking"
         ? normalizeBlocking(await dispatchBlocking(pi.events, request), request)
         : normalizeDeferred(await dispatchDeferred(pi.events, request), request);
@@ -205,7 +205,9 @@ function buildProviderRequest(input: AskUserToolInputV1, correlationId: string, 
     question: input.question,
     reason: input.reason,
     class: input.class,
-    response: input.response as AskUserDeferredAskProviderRequestV1["response"],
+    response: input.response.kind === "text"
+      ? { kind: "text", options: [] }
+      : input.response as AskUserDeferredAskProviderRequestV1["response"],
     ...(input.recommendation === undefined ? {} : { recommendation: input.recommendation }),
     recommendedOptionIds: input.recommendedOptionIds ?? [],
     ...(input.recommendedText === undefined ? {} : { recommendedText: input.recommendedText }),
@@ -341,6 +343,13 @@ function unhealthyLifecycle(): Error {
 
 function providerError(error: AskUserProviderErrorV1): Error {
   return new Error(`ask_user failed (${error.code}): ${error.message}`);
+}
+
+function providerRequestFingerprint(
+  request: AskUserBlockingProviderRequestV1 | AskUserDeferredProviderRequestV1,
+): string {
+  const { correlationId: _correlationId, signal: _signal, ...normalizedContent } = request;
+  return stableFingerprint(normalizedContent);
 }
 
 function stableFingerprint(value: unknown): string {
