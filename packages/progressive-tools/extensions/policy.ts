@@ -10,7 +10,7 @@ import type {
 
 export const SEARCH_TOOL_NAME = "search_tools";
 
-const CORE_TOOL_NAMES = new Set(["read", "write", "edit", "bash", "grep", "find", "ls"]);
+const CORE_TOOL_NAMES = new Set(["read", "write", "edit", "bash", "ls"]);
 
 export function toolIdentity(tool: ToolInfo): string {
 	return `${tool.name}\u0000${tool.sourceInfo.source}\u0000${tool.sourceInfo.path}`;
@@ -83,17 +83,8 @@ function areasForRules(rules: ToolMatchRule[]): string[] {
 }
 
 export function classifyTool(tool: ToolInfo, config: ProgressiveToolsConfig): PolicyDecision {
-	// The broker never hides Pi built-ins, but it also must not activate a
-	// built-in that Pi or the user left inactive. The loader itself is the only
-	// unconditional core tool here.
-	if (tool.sourceInfo.source === "builtin") {
-		return {
-			state: "core",
-			forceActive: false,
-			aliases: [],
-			areas: [],
-		};
-	}
+	// The loader is unconditional. Explicit blocked rules can retire a built-in
+	// name, but no other policy rule can manage or force-activate a built-in.
 	if (tool.name === SEARCH_TOOL_NAME) {
 		return {
 			state: "core",
@@ -114,6 +105,15 @@ export function classifyTool(tool: ToolInfo, config: ProgressiveToolsConfig): Po
 			matchedRule: blocked[0].rule,
 			matchedRuleIndex: blocked[0].index,
 			matchedRuleSet: "blocked",
+		};
+	}
+
+	if (tool.sourceInfo.source === "builtin") {
+		return {
+			state: "core",
+			forceActive: false,
+			aliases: [],
+			areas: [],
 		};
 	}
 
