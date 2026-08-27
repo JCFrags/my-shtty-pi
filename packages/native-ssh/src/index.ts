@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createReadToolDefinition, createLsToolDefinition, createFindToolDefinition, createGrepToolDefinition, createWriteToolDefinition, createEditToolDefinition, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, createLsToolDefinition, createWriteToolDefinition, createEditToolDefinition, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readFileSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, selectTransferTarget } from "./config.mjs";
 import { Controller } from "./controller.mjs";
 import { SshTransport } from "./transport.mjs";
+import { NativeSshSessionProvider, registerNativeSshSessionProvider } from "./session-provider.mjs";
 import { PrivateAudit } from "./audit.mjs";
 import { RemoteRuntime } from "./runtime.mjs";
 import { classifyCommand } from "./policy.mjs";
@@ -24,6 +25,22 @@ function confinedLocal(cwd: string, value: string) {
 export default function nativeSsh(pi: ExtensionAPI) {
   const config = loadConfig(process.env.PI_NATIVE_SSH_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-native-ssh", "config.json"));
   const helper = readFileSync(fileURLToPath(new URL("./helper.py", import.meta.url)), "utf8");
+  const sessionHelper = readFileSync(fileURLToPath(new URL("./session_helper.py", import.meta.url)), "utf8");
+  let sessionContext: ExtensionContext | undefined;
+  const sessionProvider = new NativeSshSessionProvider(sessionHelper, config, {
+    authorize: async (target: { name: string; displayName: string }, request: { cwd: string }) => {
+      const ctx = sessionContext;
+      if (!ctx?.hasUI) {
+        throw fail("SESSION_CONFIRMATION_REQUIRED", "The first persistent SSH session for this target requires a visible confirmation", { recommendedAction: "use_terminal" });
+      }
+      const confirmed = await ctx.ui.confirm(
+        "Open persistent SSH session",
+        `Target alias: ${target.name}\nDisplay name: ${target.displayName}\nOperation: persistent shell session\nStarting directory: ${request.cwd}\n\nOpen one non-interactive persistent SSH shell for this Pi runtime?`,
+      );
+      if (!confirmed) throw fail("SESSION_CONFIRMATION_REQUIRED", "Persistent SSH session was not confirmed");
+    },
+  });
+  registerNativeSshSessionProvider(pi, sessionProvider);
   const controller = new Controller(pi, config);
   const audit = new PrivateAudit(config.audit);
   const imageProcessor = async (image: any, args: any, signal: AbortSignal | undefined, ctx: any) => {
@@ -34,7 +51,7 @@ export default function nativeSsh(pi: ExtensionAPI) {
   const runtime = new RemoteRuntime(controller, new SshTransport(helper), audit, imageProcessor, config.limits);
 
   function registerLocal(cwd: string) {
-    pi.registerTool(createReadToolDefinition(cwd)); pi.registerTool(createLsToolDefinition(cwd)); pi.registerTool(createFindToolDefinition(cwd)); pi.registerTool(createGrepToolDefinition(cwd));
+    pi.registerTool(createReadToolDefinition(cwd)); pi.registerTool(createLsToolDefinition(cwd));
     pi.registerTool(createWriteToolDefinition(cwd)); pi.registerTool(createEditToolDefinition(cwd)); pi.registerTool(createBashToolDefinition(cwd));
     pi.setActiveTools([...new Set([...pi.getActiveTools(), "ls"])]);
   }
@@ -45,10 +62,6 @@ export default function nativeSsh(pi: ExtensionAPI) {
     pi.registerTool({ ...read, description: `${read.description} REMOTE mode reads the selected configured SSH host and never falls back locally.`, promptGuidelines: ["REMOTE mode uses only the visible configured SSH route."], execute: (_id, p, signal, _u, c) => runtime.execute("read", { path: p.path, offset: p.offset ?? 1, limit: p.limit ?? null }, signal, c) });
     const ls = createLsToolDefinition(remoteCwd);
     pi.registerTool({ ...ls, description: `${ls.description} REMOTE mode lists the selected SSH host.`, execute: (_id, p, signal, _u, c) => runtime.execute("ls", { path: p.path ?? ".", limit: p.limit ?? 500 }, signal, c) });
-    const find = createFindToolDefinition(remoteCwd);
-    pi.registerTool({ ...find, description: `${find.description} REMOTE mode searches the selected SSH host.`, execute: (_id, p, signal, _u, c) => runtime.execute("find", { path: p.path ?? ".", pattern: p.pattern, limit: p.limit ?? 1000 }, signal, c) });
-    const grep = createGrepToolDefinition(remoteCwd);
-    pi.registerTool({ ...grep, description: `${grep.description} REMOTE mode searches the selected SSH host.`, execute: (_id, p, signal, _u, c) => runtime.execute("grep", { path: p.path ?? ".", pattern: p.pattern, glob: p.glob ?? null, ignoreCase: p.ignoreCase ?? false, literal: p.literal ?? false, context: p.context ?? 0, limit: p.limit ?? 100 }, signal, c) });
 
     const write = createWriteToolDefinition(remoteCwd);
     pi.registerTool({ ...write, description: `${write.description} REMOTE mode performs an atomic bounded write and keeps one same-directory rollback copy.`, async execute(id, p, signal, update, c) {
@@ -76,9 +89,9 @@ export default function nativeSsh(pi: ExtensionAPI) {
   }
 
   const registerForState = (ctx: ExtensionContext) => controller.status().mode === "remote" ? registerRemote(ctx) : registerLocal(ctx.cwd);
-  pi.on("session_start", async (_event, ctx) => { controller.sessionStart(ctx); controller.restore(ctx); registerForState(ctx); });
-  pi.on("session_tree", async (_event, ctx) => { controller.restore(ctx); registerForState(ctx); });
-  pi.on("session_shutdown", async () => { controller.sessionShutdown(); await audit.flush(); });
+  pi.on("session_start", async (_event, ctx) => { sessionContext = ctx; controller.sessionStart(ctx); controller.restore(ctx); registerForState(ctx); });
+  pi.on("session_tree", async (_event, ctx) => { sessionContext = ctx; controller.restore(ctx); registerForState(ctx); });
+  pi.on("session_shutdown", async () => { sessionContext = undefined; controller.sessionShutdown(); await sessionProvider.close(); await audit.flush(); });
 
   pi.registerTool({ name: "ssh_transfer", label: "SSH Transfer", description: "Upload or download one bounded file through the active configured SSH host, or roll back the latest remote write for a path. In local mode, target selects and activates a configured route; the only configured target is selected automatically when unambiguous. Local paths stay inside Pi's current working directory. Upload keeps one remote rollback copy.", parameters: Type.Object({ action: Type.Union([Type.Literal("upload"), Type.Literal("download"), Type.Literal("rollback")]), target: Type.Optional(Type.String({ description: "Configured target name. Optional when a route is active or exactly one target is configured." })), localPath: Type.Optional(Type.String()), remotePath: Type.String(), overwrite: Type.Optional(Type.Boolean()) }), async execute(_id, p, signal, _update, ctx) {
     const state = controller.status();

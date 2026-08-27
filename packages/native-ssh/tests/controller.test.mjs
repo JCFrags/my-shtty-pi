@@ -47,6 +47,10 @@ test("parallel operation accounting and persistent route errors are correct", ()
   h.controller.sessionStart(h.ctx);
   h.controller.use("fixture", "/tmp", h.ctx);
   assert.ok(h.pi.active.includes("write") && h.pi.active.includes("edit") && h.pi.active.includes("bash"));
+  const widgetText = h.widgets.at(-1)?.[1]?.join("\n") ?? "";
+  assert.match(widgetText, /ls and ssh_transfer/);
+  assert.match(widgetText, /Grounded local_search/);
+  assert.doesNotMatch(widgetText, /read\/write\/edit\/bash\/search tools/);
   const one = h.controller.begin("read", undefined, h.ctx);
   const two = h.controller.begin("grep", undefined, h.ctx);
   assert.equal(h.controller.status().activeOperations, 2);
