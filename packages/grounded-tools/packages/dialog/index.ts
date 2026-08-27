@@ -11,6 +11,8 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { registerAskUserFacadeV1, loadAskUserV1Enabled } from "./ask-user-facade.ts";
+import { registerBlockingProviderV1 } from "./blocking-provider.ts";
 
 interface QuestionOption {
   value: string;
@@ -198,7 +200,17 @@ async function askRpc(question: Question, ctx: Parameters<Parameters<ExtensionAP
   return { option: question.options[index] };
 }
 
-export default function groundedDialog(pi: ExtensionAPI) {
+export interface GroundedDialogRegistrationOptions {
+  readonly askUserV1Enabled?: boolean;
+}
+
+export function registerGroundedDialog(
+  pi: ExtensionAPI,
+  options: GroundedDialogRegistrationOptions = {},
+): void {
+  registerBlockingProviderV1(pi);
+  if (options.askUserV1Enabled === true) registerAskUserFacadeV1(pi);
+
   pi.on("session_start", (_event, ctx) => {
     if (!ctx.hasUI) pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "ask_user_question"));
   });
@@ -264,4 +276,8 @@ export default function groundedDialog(pi: ExtensionAPI) {
       );
     },
   });
+}
+
+export default function groundedDialog(pi: ExtensionAPI): void {
+  registerGroundedDialog(pi, { askUserV1Enabled: loadAskUserV1Enabled() });
 }

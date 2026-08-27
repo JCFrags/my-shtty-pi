@@ -6,6 +6,7 @@
   "license": "MIT",
   "files": ["src"],
   "exports": {
+    "./ask-user-v1": "./src/ask-user-v1.ts",
     "./anchors": "./src/anchors.ts",
     "./atomic": "./src/atomic.ts",
     "./exec": "./src/exec.ts",
