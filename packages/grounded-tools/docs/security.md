@@ -12,6 +12,8 @@ Language-server executable definitions are accepted only from the user's global 
 
 Project configuration is read only when Pi marks the project trusted. Its schema permits only `disabledServers` and a bounded `diagnosticTimeoutMs`; unknown fields cannot alter commands, arguments, initialization options, or executable paths. Thus project policy can narrow built-in/global behavior but cannot widen executable authority.
 
+The optional `ask_user` facade reads `~/.pi/agent/grounded-dialog.json` and registers only when `askUserV1` is exactly `true`. It does not write this file. Blocking questions remain in process memory. Provider messages stay on Pi's same-process event bus. Grounded Tools adds no deferred store.
+
 ## File mutations
 
 - Exact and anchored batches are validated before writing.

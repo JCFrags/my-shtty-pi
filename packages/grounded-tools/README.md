@@ -11,7 +11,7 @@ Grounded Tools never summarizes or semantically filters tool evidence. When a vi
 | `@grounded/pi-files` | `read`, `edit`, `write`, `local_search` | Full-fidelity files, strict mutations, and unified exact or fuzzy search |
 | `@grounded/pi-process` | `bash`, `process`, `session` | Stateless commands, process control, and explicit persistent sessions |
 | `@grounded/pi-lsp` | `lsp` | Diagnostics, hover, definition, references, rename preview |
-| `@grounded/pi-dialog` | `ask_user_question` | Structured decisions with descriptions and previews |
+| `@grounded/pi-dialog` | `ask_user_question`, opt-in `ask_user` | Structured blocking decisions and the unified provider facade |
 | `@grounded/pi-tasks` | `todo` | Session-backed dependency-aware tactical actions |
 | `@grounded/pi-notes` | `notes` | Explicit session-tree scratchpad state |
 | `@grounded/pi-workplan` | `workplan` | Detailed milestones and execution specifications |
@@ -146,6 +146,8 @@ Project config cannot supply commands, arguments, or executable paths.
 ## Dialog and tasks
 
 `ask_user_question` accepts 1–4 questions with 2–4 options each. Stable values, descriptions, previews, and free-form responses are returned structurally. The tool deactivates when Pi has no UI; RPC uses Pi's extension UI protocol.
+
+The strict version-1 `ask_user` facade is off by default. Enable it with `{ "askUserV1": true }` in `~/.pi/agent/grounded-dialog.json`. The extension reads but never writes this setting. The facade requires explicit `blocking` or `deferred` mode. Dialog supplies only the in-memory blocking provider. A separate Signals extension can supply the durable deferred provider. See [the frozen contract](docs/ask-user-v1.md).
 
 `todo` keeps one in-progress task, validates dependencies and cycles, and stores snapshots in Pi's session tree. A blocked task can name unfinished task IDs in `blockedBy`, an external condition in `waitReason`, or both. Set `waitReason` to an empty string to clear the external wait. Restoring or forking a branch restores that branch's task list. No project file or database is created. Use `/todos` for the full scrollable overlay. Use `/todos compact`, `/todos plan`, or `Ctrl+Shift+U` to select and save the persistent widget size.
 
