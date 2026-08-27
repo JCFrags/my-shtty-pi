@@ -5,6 +5,7 @@ import {
   emptyWorkplanState,
   performWorkplanAction,
   renderWorkplan,
+  renderWorkplanRecovery,
   type WorkplanState,
 } from "@grounded/pi-core/workplan";
 
@@ -144,6 +145,60 @@ test("every permitted and forbidden milestone transition follows the exact matri
       }
     }
   }
+});
+
+test("workplan recovery returns durable orientation without mutating state", () => {
+  let state = run(emptyWorkplanState(), { action: "create", content: {
+    title: "Long project", objective: "Deliver the user-approved system", approach: "Preserve the durable design",
+    scope: ["Core behavior"], nonGoals: ["Unrelated cleanup"], constraints: ["Keep rollback"], acceptanceCriteria: ["Works after compaction"], verification: ["Run recovery test"],
+  } }).state;
+  state = mutate(state, { action: "add_milestone", planId: "WP1", expectedRevision: 1, content: { title: "Implement recovery", description: "Return the current position" } });
+  state = mutate(state, { action: "update_milestone", planId: "WP1", milestoneId: "WP1-M1", expectedRevision: 2, content: { status: "in_progress", evidence: ["design approved"] } });
+  state = mutate(state, { action: "record_decision", planId: "WP1", expectedRevision: 3, rationale: "Avoid stale summaries", content: { decision: "Recover from event-sourced state" } });
+  state = mutate(state, { action: "record_risk", planId: "WP1", expectedRevision: 4, content: { description: "Context loss", impact: "Drift", mitigation: "Call recover" } });
+  state = mutate(state, { action: "record_question", planId: "WP1", expectedRevision: 5, content: { question: "Is recovery current?" } });
+  state = mutate(state, { action: "checkpoint", planId: "WP1", expectedRevision: 6, content: { summary: "Design complete", currentFocus: "Implement the bounded recovery view", nextActions: ["Add extension tests", "Run typecheck"] } });
+  const before = structuredClone(state);
+  const operation = run(state, { action: "recover", planId: "WP1" });
+  assert.deepEqual(operation.state, before);
+  assert.equal(operation.event, undefined);
+  const recovery = operation.result as string;
+  for (const expected of ["Deliver the user-approved system", "Keep rollback", "Design complete", "Implement the bounded recovery view", "Add extension tests", "Recover from event-sourced state", "Context loss", "Is recovery current?"]) assert.match(recovery, new RegExp(expected));
+  assert.doesNotMatch(recovery, /## Revisions/);
+  assert.equal(renderWorkplanRecovery(state.plans[0]!), recovery);
+  assert.match(renderWorkplan(state.plans[0]!), /Current focus: Implement the bounded recovery view/);
+  assert.match(renderWorkplan(state.plans[0]!), /Next actions:\n- Add extension tests/);
+  const changed = mutate(state, { action: "record_decision", planId: "WP1", expectedRevision: 7, rationale: "advance", content: { decision: "Checkpoint is now historical" } });
+  const changedRecovery = run(changed, { action: "recover", planId: "WP1" }).result as string;
+  assert.match(changedRecovery, /WP1-K1 at revision 7 \(plan changed afterward\)/);
+  assert.match(changedRecovery, /## Next actions\n- WP1-M1: Implement recovery/);
+  assert.doesNotMatch(changedRecovery, /Current focus: Implement the bounded recovery view/);
+});
+
+test("completed and archived plans do not consume the open-plan limit", () => {
+  let state = emptyWorkplanState();
+  for (let index = 1; index <= 20; index++) {
+    state = mutate(state, { action: "create", content: { title: `Plan ${index}`, objective: "Objective", approach: "Approach" } });
+    state = mutate(state, { action: "archive", planId: `WP${index}`, expectedRevision: 1, rationale: "Retain completed history" });
+  }
+  assert.equal(state.plans.length, 20);
+  assert.ok(state.plans.every((plan) => plan.status === "archived"));
+  for (let index = 21; index <= 36; index++) state = mutate(state, { action: "create", content: { title: `Plan ${index}`, objective: "Objective", approach: "Approach" } });
+  assert.throws(() => run(state, { action: "create", content: { title: "Plan 37", objective: "Objective", approach: "Approach" } }), /at most 16 open workplans/);
+});
+
+test("canonical revise sections are recorded while legacy event sections still replay", () => {
+  let state = create([]);
+  const operation = run(state, { action: "revise", planId: "WP1", section: "nonGoals", expectedRevision: 1, rationale: "canonical", content: ["Do not drift"] });
+  assert.equal(operation.state.plans[0]!.revisions.at(-1)!.section, "nonGoals");
+  assert.deepEqual(operation.state.plans[0]!.nonGoals, ["Do not drift"]);
+  const legacyEvent = structuredClone(operation.event!);
+  (legacyEvent.data as any).section = "non_goals";
+  (legacyEvent.data as any).revisionRecord.section = "non_goals";
+  assert.deepEqual(applyWorkplanEvent(state, legacyEvent), {
+    ...operation.state,
+    plans: operation.state.plans.map((plan) => ({ ...plan, revisions: plan.revisions.map((record, index) => index === plan.revisions.length - 1 ? { ...record, section: "non_goals" } : record) })),
+  });
 });
 
 test("workplan create rejects a non-string background without coercion", () => {

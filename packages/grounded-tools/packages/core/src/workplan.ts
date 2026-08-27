@@ -42,7 +42,14 @@ export interface Decision { id: string; decision: string; rationale: string; at:
 export interface Risk { id: string; description: string; impact: string; mitigation: string; status: RiskStatus }
 export interface Question { id: string; question: string; status: QuestionStatus; answer?: string }
 export interface CriterionEvidence { criterionId: string; evidence: string }
-export interface Checkpoint { id: string; summary: string; criterionEvidence: CriterionEvidence[]; at: string }
+export interface Checkpoint {
+  id: string;
+  summary: string;
+  currentFocus?: string;
+  nextActions?: string[];
+  criterionEvidence: CriterionEvidence[];
+  at: string;
+}
 export interface PlanRevision {
   planRevision: number;
   action: WorkplanMutationAction;
@@ -89,13 +96,14 @@ export interface Workplan {
 export interface WorkplanState { plans: Workplan[]; nextPlanNumber: number; stateRevision: number }
 
 export type WorkplanAction =
-  | "create" | "list" | "status" | "read" | "revise" | "add_milestone"
+  | "create" | "list" | "status" | "read" | "recover" | "revise" | "add_milestone"
   | "update_milestone" | "record_decision" | "record_risk" | "record_question"
   | "checkpoint" | "pause" | "resume" | "complete" | "archive";
-export type WorkplanMutationAction = Exclude<WorkplanAction, "list" | "status" | "read">;
+export type WorkplanMutationAction = Exclude<WorkplanAction, "list" | "status" | "read" | "recover">;
 export type WorkplanSection =
-  | "title" | "objective" | "background" | "scope" | "non_goals" | "constraints"
-  | "approach" | "acceptance_criteria" | "verification" | "risks" | "open_questions";
+  | "title" | "objective" | "background" | "scope" | "nonGoals" | "constraints"
+  | "approach" | "acceptanceCriteria" | "verification" | "risks" | "openQuestions"
+  | "non_goals" | "acceptance_criteria" | "open_questions";
 
 export interface WorkplanInput {
   action: WorkplanAction;
@@ -111,13 +119,20 @@ export type WorkplanEvent = StateEvent<WorkplanMutationAction, Record<string, un
 export interface WorkplanOperation { state: WorkplanState; event?: WorkplanEvent; result: unknown }
 
 const ACTIONS = new Set<WorkplanAction>([
-  "create", "list", "status", "read", "revise", "add_milestone", "update_milestone", "record_decision",
+  "create", "list", "status", "read", "recover", "revise", "add_milestone", "update_milestone", "record_decision",
   "record_risk", "record_question", "checkpoint", "pause", "resume", "complete", "archive",
 ]);
 const SECTIONS = new Set<WorkplanSection>([
-  "title", "objective", "background", "scope", "non_goals", "constraints", "approach", "acceptance_criteria",
-  "verification", "risks", "open_questions",
+  "title", "objective", "background", "scope", "nonGoals", "constraints", "approach", "acceptanceCriteria",
+  "verification", "risks", "openQuestions", "non_goals", "acceptance_criteria", "open_questions",
 ]);
+const SECTION_ALIASES: Partial<Record<WorkplanSection, WorkplanSection>> = {
+  non_goals: "nonGoals",
+  acceptance_criteria: "acceptanceCriteria",
+  open_questions: "openQuestions",
+};
+const MAX_RETAINED_PLANS = 64;
+const MAX_OPEN_PLANS = 16;
 const PLAN_ID = /^WP([1-9][0-9]*)$/;
 const TODO_ID = /^T[1-9][0-9]*$/;
 const HEX = /^[0-9a-f]{64}$/;
@@ -263,8 +278,10 @@ export function validateWorkplan(plan: Workplan, code: StateErrorCode = "STATE_C
   }
   const criterionIds = new Set(plan.acceptanceCriteria.map((item) => item.id));
   for (const checkpoint of plan.checkpoints) {
-    exact(checkpoint, ["id", "summary", "criterionEvidence", "at"], [], "checkpoint", code);
+    exact(checkpoint, ["id", "summary", "criterionEvidence", "at"], ["currentFocus", "nextActions"], "checkpoint", code);
     if (typeof checkpoint.summary !== "string" || !/\S/u.test(checkpoint.summary) || [...checkpoint.summary].length > 2000 || typeof checkpoint.at !== "string" || !Array.isArray(checkpoint.criterionEvidence)) stateError(code, "A checkpoint is invalid");
+    if (checkpoint.currentFocus !== undefined && (typeof checkpoint.currentFocus !== "string" || !/\S/u.test(checkpoint.currentFocus) || [...checkpoint.currentFocus].length > 2000)) stateError(code, "A checkpoint current focus is invalid");
+    if (checkpoint.nextActions !== undefined && (!Array.isArray(checkpoint.nextActions) || checkpoint.nextActions.length > 16 || !checkpoint.nextActions.every((item) => typeof item === "string" && /\S/u.test(item) && [...item].length <= 2000) || new Set(checkpoint.nextActions).size !== checkpoint.nextActions.length)) stateError(code, "Checkpoint next actions are invalid");
     const links = new Set<string>();
     for (const evidence of checkpoint.criterionEvidence) {
       exact(evidence, ["criterionId", "evidence"], [], "criterion evidence", code);
@@ -283,7 +300,9 @@ export function validateWorkplan(plan: Workplan, code: StateErrorCode = "STATE_C
 export function validateWorkplanState(state: WorkplanState): void {
   requirePlainJson(state, "workplan state");
   exact(state, ["plans", "nextPlanNumber", "stateRevision"], [], "workplan state", "STATE_CORRUPT");
-  if (!Array.isArray(state.plans) || state.plans.length > 16) stateError("STATE_CORRUPT", "The live workplan count is invalid");
+  if (!Array.isArray(state.plans) || state.plans.length > MAX_RETAINED_PLANS) stateError("STATE_CORRUPT", "The retained workplan count is invalid");
+  const openPlans = state.plans.filter((plan) => plan.status === "draft" || plan.status === "active" || plan.status === "paused");
+  if (openPlans.length > MAX_OPEN_PLANS) stateError("STATE_CORRUPT", "The open workplan count is invalid");
   requireSafeInteger(state.nextPlanNumber, "nextPlanNumber", 1, "STATE_CORRUPT");
   requireSafeInteger(state.stateRevision, "stateRevision", 0, "STATE_CORRUPT");
   validateIds(state.plans, PLAN_ID, state.nextPlanNumber, "workplan", "STATE_CORRUPT");
@@ -335,14 +354,17 @@ function eventShape(action: WorkplanMutationAction, data: unknown): asserts data
   else exact(data, ["planId", "baseRevision", "revision", "from", "to", "revisionRecord"], [], "event data", "STATE_CORRUPT");
 }
 
-function setSection(plan: Workplan, section: WorkplanSection, value: unknown): void {
+function canonicalSection(section: WorkplanSection): WorkplanSection { return SECTION_ALIASES[section] ?? section }
+
+function setSection(plan: Workplan, sectionValue: WorkplanSection, value: unknown): void {
+  const section = canonicalSection(sectionValue);
   if (section === "title" || section === "objective" || section === "approach") plan[section] = value as string;
   else if (section === "background") plan.background = value as string;
   else if (section === "scope") plan.scope = cloneJson(value as string[]);
-  else if (section === "non_goals") plan.nonGoals = cloneJson(value as string[]);
+  else if (section === "nonGoals") plan.nonGoals = cloneJson(value as string[]);
   else if (section === "constraints") plan.constraints = cloneJson(value as string[]);
   else if (section === "verification") plan.verification = cloneJson(value as string[]);
-  else if (section === "acceptance_criteria") plan.acceptanceCriteria = cloneJson(value as PlanCriterion[]);
+  else if (section === "acceptanceCriteria") plan.acceptanceCriteria = cloneJson(value as PlanCriterion[]);
   else if (section === "risks") plan.risks = cloneJson(value as Risk[]);
   else plan.openQuestions = cloneJson(value as Question[]);
 }
@@ -350,7 +372,7 @@ function setSection(plan: Workplan, section: WorkplanSection, value: unknown): v
 export function applyWorkplanEvent(current: WorkplanState, value: unknown): WorkplanState {
   validateWorkplanState(current);
   validateStateEventEnvelope(value, "workplan", current.stateRevision);
-  if (!ACTIONS.has(value.action as WorkplanAction) || ["list", "status", "read"].includes(value.action)) stateError("STATE_CORRUPT", "The workplan event action is invalid");
+  if (!ACTIONS.has(value.action as WorkplanAction) || ["list", "status", "read", "recover"].includes(value.action)) stateError("STATE_CORRUPT", "The workplan event action is invalid");
   const action = value.action as WorkplanMutationAction;
   eventShape(action, value.data);
   const data = value.data;
@@ -374,12 +396,13 @@ export function applyWorkplanEvent(current: WorkplanState, value: unknown): Work
       requireString(data.section, "section", "STATE_CORRUPT");
       if (!SECTIONS.has(data.section as WorkplanSection)) stateError("STATE_CORRUPT", "The revised section is invalid");
       const revisedSection = data.section as WorkplanSection;
-      setSection(next, revisedSection, data.value);
-      if (revisedSection === "acceptance_criteria") {
+      const canonical = canonicalSection(revisedSection);
+      setSection(next, canonical, data.value);
+      if (canonical === "acceptanceCriteria") {
         next.nextCriterionNumber = Math.max(next.nextCriterionNumber, ...next.acceptanceCriteria.map((item) => idNumber(item.id) + 1));
-      } else if (revisedSection === "risks") {
+      } else if (canonical === "risks") {
         next.nextRiskNumber = Math.max(next.nextRiskNumber, ...next.risks.map((item) => idNumber(item.id) + 1));
-      } else if (revisedSection === "open_questions") {
+      } else if (canonical === "openQuestions") {
         next.nextQuestionNumber = Math.max(next.nextQuestionNumber, ...next.openQuestions.map((item) => idNumber(item.id) + 1));
       }
     } else if (action === "add_milestone") {
@@ -552,11 +575,12 @@ export function performWorkplanAction(current: WorkplanState, inputValue: unknow
     allowed(input, []);
     return { state: current, result: sorted(current.plans).map((plan) => ({ id: plan.id, title: plan.title, status: plan.status, revision: plan.revision, updatedAt: plan.updatedAt })) };
   }
-  if (input.action === "status" || input.action === "read") {
+  if (input.action === "status" || input.action === "read" || input.action === "recover") {
     allowed(input, ["planId"]);
     if (typeof input.planId !== "string" || !PLAN_ID.test(input.planId)) stateError("STATE_INVALID_INPUT", "planId must be a workplan ID");
     const plan = planById(current, input.planId);
     if (input.action === "read") return { state: current, result: renderWorkplan(plan) };
+    if (input.action === "recover") return { state: current, result: renderWorkplanRecovery(plan) };
     const completed = plan.milestones.filter((item) => item.status === "completed").length;
     const evidenceIds = new Set(plan.checkpoints.flatMap((item) => item.criterionEvidence.map((link) => link.criterionId)));
     return { state: current, result: {
@@ -570,7 +594,9 @@ export function performWorkplanAction(current: WorkplanState, inputValue: unknow
   if (input.action === "create") {
     allowed(input, ["content"]);
     const content = contentObject(input.content, ["title", "objective", "approach"], ["background", "scope", "nonGoals", "constraints", "acceptanceCriteria", "verification"]);
-    if (current.plans.length >= 16) stateError("STATE_LIMIT_EXCEEDED", "The branch can contain at most 16 live workplans");
+    const openPlans = current.plans.filter((plan) => plan.status === "draft" || plan.status === "active" || plan.status === "paused");
+    if (openPlans.length >= MAX_OPEN_PLANS) stateError("STATE_LIMIT_EXCEEDED", `The branch can contain at most ${MAX_OPEN_PLANS} open workplans; complete or archive one before creating another`);
+    if (current.plans.length >= MAX_RETAINED_PLANS) stateError("STATE_LIMIT_EXCEEDED", `The branch can retain at most ${MAX_RETAINED_PLANS} workplans`);
     const plan = makeCreatePlan(content, `WP${current.nextPlanNumber}`, at); data = { plan };
   } else {
     const fields: (keyof WorkplanInput)[] = ["planId", "expectedRevision"];
@@ -586,17 +612,17 @@ export function performWorkplanAction(current: WorkplanState, inputValue: unknow
 
     if (input.action === "revise") {
       if (typeof input.section !== "string" || !SECTIONS.has(input.section)) stateError("STATE_INVALID_INPUT", "section is invalid");
-      section = input.section;
+      section = canonicalSection(input.section);
       if (section === "title") setSection(next, section, stringValue(input.content, "title", 200));
       else if (section === "objective") setSection(next, section, stringValue(input.content, "objective"));
       else if (section === "background") { const text = stringValue(input.content, "background", 8192, true); requireUtf8(text, 8192, "background"); setSection(next, section, text); }
       else if (section === "approach") { const text = stringValue(input.content, "approach", 16384); requireUtf8(text, 16384, "approach"); setSection(next, section, text); }
-      else if (["scope", "non_goals", "constraints", "verification"].includes(section)) setSection(next, section, stringList(input.content, section));
-      else if (section === "acceptance_criteria") { const change = criteriaInput(input.content, next); setSection(next, section, change.values); ids = change; }
+      else if (["scope", "nonGoals", "constraints", "verification"].includes(section)) setSection(next, section, stringList(input.content, section));
+      else if (section === "acceptanceCriteria") { const change = criteriaInput(input.content, next); setSection(next, section, change.values); ids = change; }
       else if (section === "risks") { const change = risksInput(input.content, next); setSection(next, section, change.values); ids = change; }
       else { const change = questionsInput(input.content, next); setSection(next, section, change.values); ids = change; }
       const record = recordFor(original, next, input.action, at, reason, ids, section); addRecord(next, record);
-      data = { planId: next.id, baseRevision: original.revision, revision: next.revision, section, value: cloneJson(section === "non_goals" ? next.nonGoals : section === "acceptance_criteria" ? next.acceptanceCriteria : section === "open_questions" ? next.openQuestions : next[section as keyof Workplan]), revisionRecord: record };
+      data = { planId: next.id, baseRevision: original.revision, revision: next.revision, section, value: cloneJson(section === "nonGoals" ? next.nonGoals : section === "acceptanceCriteria" ? next.acceptanceCriteria : section === "openQuestions" ? next.openQuestions : next[section as keyof Workplan]), revisionRecord: record };
     } else if (input.action === "add_milestone") {
       const content = contentObject(input.content, ["title"], ["description", "dependsOn", "acceptanceCriteria"]);
       if (next.milestones.length >= 64) stateError("STATE_LIMIT_EXCEEDED", "A workplan can contain at most 64 milestones");
@@ -651,10 +677,20 @@ export function performWorkplanAction(current: WorkplanState, inputValue: unknow
       next.openQuestions.push(question); next.nextQuestionNumber++; ids = { added: [question.id], updated: [next.id] }; const record = recordFor(original, next, input.action, at, reason, ids); addRecord(next, record);
       data = { planId: next.id, baseRevision: original.revision, revision: next.revision, question, revisionRecord: record };
     } else if (input.action === "checkpoint") {
-      const content = contentObject(input.content, ["summary"], ["criterionEvidence"]); const raw = content.criterionEvidence ?? [];
+      const content = contentObject(input.content, ["summary"], ["currentFocus", "nextActions", "criterionEvidence"]); const raw = content.criterionEvidence ?? [];
       if (!Array.isArray(raw) || raw.length > 64) stateError("STATE_INVALID_INPUT", "criterionEvidence must be an array with at most 64 items");
       const links: CriterionEvidence[] = raw.map((item) => { exact(item, ["criterionId", "evidence"], [], "criterion evidence"); requireString(item.criterionId, "criterionId"); if (!next.acceptanceCriteria.some((criterion) => criterion.id === item.criterionId)) stateError("STATE_INVALID_LINK", "Criterion evidence names an unknown criterion"); return { criterionId: item.criterionId, evidence: stringValue(item.evidence, "evidence") }; });
-      requireUnique(links.map((item) => item.criterionId), "criterionEvidence"); const checkpoint: Checkpoint = { id: `${next.id}-K${next.nextCheckpointNumber}`, summary: stringValue(content.summary, "summary"), criterionEvidence: links, at };
+      const nextActions = content.nextActions === undefined ? undefined : stringList(content.nextActions, "nextActions", 16, 2000);
+      if (nextActions) requireUnique(nextActions, "nextActions", "STATE_INVALID_INPUT");
+      requireUnique(links.map((item) => item.criterionId), "criterionEvidence");
+      const checkpoint: Checkpoint = {
+        id: `${next.id}-K${next.nextCheckpointNumber}`,
+        summary: stringValue(content.summary, "summary"),
+        ...(content.currentFocus !== undefined ? { currentFocus: stringValue(content.currentFocus, "currentFocus") } : {}),
+        ...(nextActions ? { nextActions } : {}),
+        criterionEvidence: links,
+        at,
+      };
       next.checkpoints.push(checkpoint); next.nextCheckpointNumber++; ids = { added: [checkpoint.id], updated: [next.id, ...links.map((item) => item.criterionId)] }; const record = recordFor(original, next, input.action, at, reason, ids); addRecord(next, record);
       data = { planId: next.id, baseRevision: original.revision, revision: next.revision, checkpoint, criterionLinks: links, revisionRecord: record };
     } else {
@@ -694,6 +730,128 @@ function listLines(values: string[]): string[] {
 }
 function heading(lines: string[], name: string, values: string[]): void { lines.push(`## ${name}`, ...listLines(values), ""); }
 
+function planSummaryLines(plan: Workplan): string[] {
+  const completed = plan.milestones.filter((item) => item.status === "completed").length;
+  const blocked = plan.milestones.filter((item) => item.status === "blocked").length;
+  const evidenced = new Set(plan.checkpoints.flatMap((item) => item.criterionEvidence.map((link) => link.criterionId))).size;
+  return [
+    ...continued("Plan: ", `${plan.id}: ${plan.title}`),
+    ...labeled("Objective", plan.objective),
+    `Status: ${plan.status}`,
+    `Revision: ${plan.revision}`,
+    `Milestones: ${completed}/${plan.milestones.length} completed; ${blocked} blocked`,
+    `Plan criteria with evidence: ${evidenced}/${plan.acceptanceCriteria.length}`,
+  ];
+}
+
+function milestoneLines(item: Milestone): string[] {
+  return [
+    ...continued(`### ${item.id}: `, item.title),
+    `Status: ${item.status}`,
+    ...labeled("Description", item.description ?? "None"),
+    `Depends on: ${item.dependsOn.length ? item.dependsOn.join(", ") : "None"}`,
+    "Acceptance criteria:", ...listLines(item.acceptanceCriteria),
+    "Evidence:", ...listLines(item.evidence),
+    `Linked todo IDs (unverified external references): ${item.linkedTodoIds.length ? item.linkedTodoIds.join(", ") : "None"}`,
+    `Created: ${item.createdAt}`,
+    `Updated: ${item.updatedAt}`,
+  ];
+}
+
+function checkpointLines(item: Checkpoint): string[] {
+  return [
+    `### ${item.id}`,
+    ...labeled("Summary", item.summary),
+    ...labeled("Current focus", item.currentFocus ?? "None"),
+    "Next actions:", ...listLines(item.nextActions ?? []),
+    "Criterion evidence:", ...listLines(item.criterionEvidence.map((link) => `${link.criterionId}: ${link.evidence}`)),
+    `At: ${item.at}`,
+  ];
+}
+
+function mutationPlan(state: WorkplanState, event: WorkplanEvent): Workplan {
+  const value = event.action === "create" ? (event.data.plan as { id?: unknown } | undefined)?.id : event.data.planId;
+  if (typeof value !== "string") stateError("STATE_CORRUPT", "A workplan mutation result has no plan ID");
+  return planById(state, value);
+}
+
+function revisedSectionLines(plan: Workplan, section: WorkplanSection): string[] {
+  const canonical = canonicalSection(section);
+  if (canonical === "title") return block(plan.title);
+  if (canonical === "objective") return block(plan.objective);
+  if (canonical === "background") return plan.background ? block(plan.background) : ["None"];
+  if (canonical === "approach") return block(plan.approach);
+  if (canonical === "scope") return listLines(plan.scope);
+  if (canonical === "nonGoals") return listLines(plan.nonGoals);
+  if (canonical === "constraints") return listLines(plan.constraints);
+  if (canonical === "verification") return listLines(plan.verification);
+  if (canonical === "acceptanceCriteria") return plan.acceptanceCriteria.length ? sorted(plan.acceptanceCriteria).flatMap((item) => [`### ${item.id}`, ...block(item.text), ""]) : ["None"];
+  if (canonical === "risks") return plan.risks.length ? sorted(plan.risks).flatMap((item) => [`### ${item.id}`, `Status: ${item.status}`, ...labeled("Description", item.description), ...labeled("Impact", item.impact), ...labeled("Mitigation", item.mitigation), ""]) : ["None"];
+  return plan.openQuestions.length ? sorted(plan.openQuestions).flatMap((item) => [`### ${item.id}`, `Status: ${item.status}`, ...labeled("Question", item.question), ...labeled("Answer", item.answer ?? "None"), ""]) : ["None"];
+}
+
+export function renderWorkplanList(state: WorkplanState): string {
+  const lines = ["# Workplans"];
+  if (!state.plans.length) lines.push("None");
+  for (const plan of sorted(state.plans)) lines.push("", ...continued(`## ${plan.id}: `, plan.title), `Status: ${plan.status}`, `Revision: ${plan.revision}`, ...labeled("Objective", plan.objective), `Updated: ${plan.updatedAt}`);
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+}
+
+export function renderWorkplanStatus(plan: Workplan): string {
+  const latestCheckpoint = sorted(plan.checkpoints).at(-1);
+  const lines = [`# Workplan status`, ...planSummaryLines(plan), "", "## Milestones"];
+  if (!plan.milestones.length) lines.push("None");
+  for (const item of sorted(plan.milestones)) lines.push(`- ${item.id} [${item.status}]: ${item.title}`);
+  lines.push("", "## Latest checkpoint", ...(latestCheckpoint ? checkpointLines(latestCheckpoint) : ["None"]));
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+}
+
+export function renderWorkplanMutation(state: WorkplanState, event: WorkplanEvent): string {
+  const plan = mutationPlan(state, event);
+  if (event.action === "create") return `# Workplan created\n\n${renderWorkplan(plan)}`;
+  const revision = plan.revisions.find((item) => item.planRevision === plan.revision);
+  if (!revision) stateError("STATE_CORRUPT", "A workplan mutation result has no matching revision record");
+  const lines = ["# Workplan updated", `Action: ${event.action}`, ...planSummaryLines(plan), ...labeled("Rationale", revision.rationale), "", "## What changed"];
+  if (event.action === "add_milestone") {
+    const id = revision.addedIds.find((value) => /^WP[1-9][0-9]*-M[1-9][0-9]*$/.test(value));
+    const item = plan.milestones.find((value) => value.id === id);
+    if (!item) stateError("STATE_CORRUPT", "The added milestone is unavailable");
+    lines.push(...milestoneLines(item));
+  } else if (event.action === "update_milestone") {
+    const id = event.data.milestoneId;
+    const item = typeof id === "string" ? plan.milestones.find((value) => value.id === id) : undefined;
+    if (!item) stateError("STATE_CORRUPT", "The updated milestone is unavailable");
+    const changes = event.data.changes && typeof event.data.changes === "object" && !Array.isArray(event.data.changes) ? Object.keys(event.data.changes) : [];
+    lines.push(`Changed fields: ${changes.length ? changes.join(", ") : "None"}`, ...milestoneLines(item));
+  } else if (event.action === "record_decision") {
+    const id = revision.addedIds.find((value) => /^WP[1-9][0-9]*-D[1-9][0-9]*$/.test(value));
+    const item = plan.decisions.find((value) => value.id === id);
+    if (!item) stateError("STATE_CORRUPT", "The recorded decision is unavailable");
+    lines.push(`### ${item.id}`, ...labeled("Decision", item.decision), ...labeled("Rationale", item.rationale), `At: ${item.at}`);
+  } else if (event.action === "record_risk") {
+    const id = revision.addedIds.find((value) => /^WP[1-9][0-9]*-R[1-9][0-9]*$/.test(value));
+    const item = plan.risks.find((value) => value.id === id);
+    if (!item) stateError("STATE_CORRUPT", "The recorded risk is unavailable");
+    lines.push(`### ${item.id}`, `Status: ${item.status}`, ...labeled("Description", item.description), ...labeled("Impact", item.impact), ...labeled("Mitigation", item.mitigation));
+  } else if (event.action === "record_question") {
+    const id = revision.addedIds.find((value) => /^WP[1-9][0-9]*-Q[1-9][0-9]*$/.test(value));
+    const item = plan.openQuestions.find((value) => value.id === id);
+    if (!item) stateError("STATE_CORRUPT", "The recorded question is unavailable");
+    lines.push(`### ${item.id}`, `Status: ${item.status}`, ...labeled("Question", item.question), ...labeled("Answer", item.answer ?? "None"));
+  } else if (event.action === "checkpoint") {
+    const id = revision.addedIds.find((value) => /^WP[1-9][0-9]*-K[1-9][0-9]*$/.test(value));
+    const item = plan.checkpoints.find((value) => value.id === id);
+    if (!item) stateError("STATE_CORRUPT", "The recorded checkpoint is unavailable");
+    lines.push(...checkpointLines(item));
+  } else if (event.action === "revise") {
+    if (!revision.section) stateError("STATE_CORRUPT", "The revised section is unavailable");
+    lines.push(`Section: ${canonicalSection(revision.section)}`, ...revisedSectionLines(plan, revision.section));
+  } else {
+    lines.push(`Status transition: ${String(event.data.from)} -> ${String(event.data.to)}`);
+  }
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+}
+
 export function renderWorkplan(plan: Workplan): string {
   const lines: string[] = [
     ...continued(`# ${plan.id}: `, plan.title),
@@ -729,17 +887,107 @@ export function renderWorkplan(plan: Workplan): string {
   for (const item of sorted(plan.decisions)) lines.push(`### ${item.id}`, ...labeled("Decision", item.decision), ...labeled("Rationale", item.rationale), `At: ${item.at}`, "");
   lines.push("## Checkpoints");
   if (!plan.checkpoints.length) lines.push("None");
-  for (const item of sorted(plan.checkpoints)) lines.push(`### ${item.id}`, ...labeled("Summary", item.summary), "Criterion evidence:", ...listLines(item.criterionEvidence.map((link) => `${link.criterionId}: ${link.evidence}`)), `At: ${item.at}`, "");
+  for (const item of sorted(plan.checkpoints)) lines.push(`### ${item.id}`, ...labeled("Summary", item.summary), ...(item.currentFocus ? labeled("Current focus", item.currentFocus) : []), ...(item.nextActions ? ["Next actions:", ...listLines(item.nextActions)] : []), "Criterion evidence:", ...listLines(item.criterionEvidence.map((link) => `${link.criterionId}: ${link.evidence}`)), `At: ${item.at}`, "");
   lines.push("## Revisions");
   for (const item of plan.revisions.slice().sort((a, b) => a.planRevision - b.planRevision)) lines.push(`### Revision ${item.planRevision}`, `Action: ${item.action}`, `Section: ${item.section ?? "None"}`, `Added IDs: ${item.addedIds.length ? item.addedIds.join(", ") : "None"}`, `Updated IDs: ${item.updatedIds.length ? item.updatedIds.join(", ") : "None"}`, `Removed IDs: ${item.removedIds.length ? item.removedIds.join(", ") : "None"}`, `Before SHA-256: ${item.beforeDigest}`, `After SHA-256: ${item.afterDigest}`, ...labeled("Rationale", item.rationale), `Actor: ${item.actor}`, `At: ${item.at}`, "");
   return `${lines.join("\n").replace(/\n+$/, "")}\n`;
 }
 
-export function workplanContextLine(state: WorkplanState): string | undefined {
+function recoveryText(value: string, maximum = 2000): string {
+  if ([...value].length <= maximum) return value;
+  return `${[...value].slice(0, maximum).join("")}\n[truncated in recovery view; use workplan read for complete text]`;
+}
+
+function recoveryList(values: string[], maximumItems: number, maximumPoints = 1000): string[] {
+  const visible = values.slice(0, maximumItems).map((value) => recoveryText(value, maximumPoints));
+  if (values.length > maximumItems) visible.push(`[${values.length - maximumItems} more item(s); use workplan read for the complete list]`);
+  return visible;
+}
+
+export function renderWorkplanRecovery(plan: Workplan): string {
+  const orderedMilestones = sorted(plan.milestones);
+  const activeMilestones = orderedMilestones.filter((item) => item.status === "in_progress" || item.status === "blocked");
+  const readyMilestones = orderedMilestones.filter((item) => item.status === "pending" && item.dependsOn.every((id) => milestoneById(plan, id).status === "completed"));
+  const currentMilestones = (activeMilestones.length ? activeMilestones : readyMilestones.slice(0, 1)).slice(0, 12);
+  const latestCheckpoint = sorted(plan.checkpoints).at(-1);
+  const checkpointRevision = latestCheckpoint
+    ? plan.revisions.find((record) => record.addedIds.includes(latestCheckpoint.id))?.planRevision
+    : undefined;
+  const checkpointCurrent = checkpointRevision === plan.revision;
+  const checkpointActions = checkpointCurrent ? latestCheckpoint?.nextActions ?? [] : [];
+  const inferredActions = currentMilestones.map((item) => `${item.id}: ${item.title}`);
+  const nextActions = checkpointActions.length ? checkpointActions : inferredActions;
+  const evidenced = new Set(plan.checkpoints.flatMap((item) => item.criterionEvidence.map((link) => link.criterionId)));
+  const outstandingCriteria = plan.acceptanceCriteria.filter((item) => !evidenced.has(item.id));
+  const relevantRisks = plan.risks.filter((item) => item.status !== "mitigated").slice(0, 12);
+  const openQuestions = plan.openQuestions.filter((item) => item.status === "open").slice(0, 12);
+  const decisions = sorted(plan.decisions).slice(-12);
+  const completed = orderedMilestones.filter((item) => item.status === "completed").length;
+  const lines: string[] = [
+    `# Recovery for ${plan.id}: ${recoveryText(plan.title, 500)}`,
+    `Status: ${plan.status}`,
+    `Revision: ${plan.revision}`,
+    `Updated: ${plan.updatedAt}`,
+    "",
+    "## Goal",
+    ...block(recoveryText(plan.objective)),
+    "",
+    "## Scope",
+    ...listLines(recoveryList(plan.scope, 12)),
+    "",
+    "## Non-goals",
+    ...listLines(recoveryList(plan.nonGoals, 12)),
+    "",
+    "## Constraints",
+    ...listLines(recoveryList(plan.constraints, 16)),
+    "",
+    "## Approach",
+    ...block(recoveryText(plan.approach, 6000)),
+    "",
+    "## Current position",
+    `Milestones completed: ${completed}/${orderedMilestones.length}`,
+    ...labeled("Latest checkpoint", latestCheckpoint ? `${latestCheckpoint.id} at revision ${checkpointRevision ?? "unknown"}${checkpointCurrent ? " (current)" : " (plan changed afterward)"}: ${recoveryText(latestCheckpoint.summary)}` : "None"),
+    ...labeled("Current focus", checkpointCurrent && latestCheckpoint?.currentFocus ? recoveryText(latestCheckpoint.currentFocus) : "Use the current milestone state below"),
+    "",
+    "## Current milestones",
+  ];
+  if (!currentMilestones.length) lines.push("None");
+  for (const item of currentMilestones) {
+    lines.push(`### ${item.id}: ${recoveryText(item.title, 500)}`, `Status: ${item.status}`, ...labeled("Description", item.description ? recoveryText(item.description) : "None"), `Depends on: ${item.dependsOn.length ? item.dependsOn.join(", ") : "None"}`, "Evidence:", ...listLines(recoveryList(item.evidence.slice(-4), 4)), "");
+  }
+  lines.push("## Next actions", ...listLines(recoveryList(nextActions, 8)), "", "## Outstanding acceptance criteria", ...listLines(recoveryList(outstandingCriteria.map((item) => `${item.id}: ${item.text}`), 12)), "", "## Open or accepted risks");
+  if (!relevantRisks.length) lines.push("None");
+  for (const item of relevantRisks) lines.push(`- ${item.id} [${item.status}]: ${recoveryText(item.description, 700)} Mitigation: ${recoveryText(item.mitigation, 700)}`);
+  lines.push("", "## Open questions");
+  if (!openQuestions.length) lines.push("None");
+  for (const item of openQuestions) lines.push(`- ${item.id}: ${recoveryText(item.question, 1000)}`);
+  lines.push("", "## Key decisions");
+  if (!decisions.length) lines.push("None");
+  for (const item of decisions) lines.push(`- ${item.id}: ${recoveryText(item.decision, 1000)} Rationale: ${recoveryText(item.rationale, 1000)}`);
+  lines.push("", "## Verification", ...listLines(recoveryList(plan.verification, 12)), "", "Use workplan read for the complete immutable plan and revision history.");
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+}
+
+export function workplanContextLine(state: WorkplanState, recovered?: { planId: string; revision: number }): string | undefined {
   if (!state.plans.length) return undefined;
   const active = state.plans.find((plan) => plan.status === "active");
-  if (!active) return "[workplan state] active=none status=none rev=0 milestones=0/0 blocked=0";
+  if (!active) {
+    const open = sorted(state.plans.filter((plan) => plan.status === "draft" || plan.status === "paused"));
+    const completedPlans = state.plans.filter((plan) => plan.status === "completed").length;
+    const archivedPlans = state.plans.filter((plan) => plan.status === "archived").length;
+    if (!open.length) return `[workplan state] active=none open=none openCount=0 retained=${state.plans.length} completed=${completedPlans} archived=${archivedPlans}`;
+    const candidate = open.slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || compareNumericIds(right.id, left.id))[0]!;
+    const visible = open.slice(0, 4).map((plan) => `${plan.id}:${plan.status}@rev${plan.revision}`);
+    if (open.length > visible.length) visible.push(`+${open.length - visible.length}`);
+    const recovery = recovered?.planId === candidate.id && recovered.revision === candidate.revision
+      ? "current"
+      : `required:workplan(action=recover,planId=${candidate.id})`;
+    return `[workplan state] active=none open=${visible.join(",")} openCount=${open.length} retained=${state.plans.length} completed=${completedPlans} archived=${archivedPlans} recovery=${recovery}`;
+  }
   const completed = active.milestones.filter((item) => item.status === "completed").length;
   const blocked = active.milestones.filter((item) => item.status === "blocked").length;
-  return `[workplan state] active=${active.id} status=${active.status} rev=${active.revision} milestones=${completed}/${active.milestones.length} blocked=${blocked}`;
+  const recovery = recovered?.planId === active.id && recovered.revision === active.revision
+    ? "current"
+    : `required:workplan(action=recover,planId=${active.id})`;
+  return `[workplan state] active=${active.id} status=${active.status} rev=${active.revision} milestones=${completed}/${active.milestones.length} blocked=${blocked} recovery=${recovery}`;
 }
