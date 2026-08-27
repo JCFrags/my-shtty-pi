@@ -21,6 +21,14 @@ test("umbrella manifest loads every modular extension", async () => {
   assert.equal(pkg.scripts.postinstall, undefined);
 });
 
+test("Core exports the session service modules and remains tool-free", async () => {
+  const core = await manifest("../packages/core/package.json");
+  assert.equal(core.pi, undefined);
+  for (const name of ["./session-contract", "./session-framing", "./session-logs", "./session-registry", "./local-session"]) {
+    assert.equal(typeof core.exports[name], "string");
+  }
+});
+
 test("each feature is independently publishable and has no lifecycle scripts", async () => {
   const expected = new Map([
     ["core", undefined],
