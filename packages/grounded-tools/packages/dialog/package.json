@@ -4,9 +4,13 @@
   "description": "Structured user questions with previews and free-form answers for Pi",
   "type": "module",
   "license": "MIT",
-  "files": ["index.ts"],
+  "files": ["index.ts", "ask-user-facade.ts", "blocking-provider.ts"],
   "pi": { "extensions": ["./index.ts"] },
+  "dependencies": {
+    "@grounded/pi-core": "0.1.0"
+  },
   "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.83.0 <1",
     "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
     "@earendil-works/pi-tui": ">=0.83.0 <1",
     "typebox": ">=1.3.0 <2"

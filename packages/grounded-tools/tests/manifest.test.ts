@@ -19,6 +19,19 @@ test("umbrella manifest loads every modular extension", async () => {
   ]);
   assert.deepEqual(pkg.workspaces, ["packages/*"]);
   assert.equal(pkg.scripts.postinstall, undefined);
+  const core = await manifest("../packages/core/package.json");
+  assert.equal(core.exports["./ask-user-v1"], "./src/ask-user-v1.ts");
+  const dialog = await manifest("../packages/dialog/package.json");
+  assert.equal(dialog.dependencies["@grounded/pi-core"], "0.1.0");
+  assert.deepEqual(dialog.files, ["index.ts", "ask-user-facade.ts", "blocking-provider.ts"]);
+});
+
+test("Core exports the session service modules and remains tool-free", async () => {
+  const core = await manifest("../packages/core/package.json");
+  assert.equal(core.pi, undefined);
+  for (const name of ["./session-contract", "./session-framing", "./session-logs", "./session-registry", "./local-session"]) {
+    assert.equal(typeof core.exports[name], "string");
+  }
 });
 
 test("each feature is independently publishable and has no lifecycle scripts", async () => {

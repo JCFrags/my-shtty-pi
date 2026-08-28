@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { loadConfig, AUTHORIZATION_STATEMENT, selectTransferTarget } from "../src/config.mjs";
 import { PrivateAudit } from "../src/audit.mjs";
 
-test("package pins the Pi peer and compatibility to exactly 0.84.1", async () => {
+test("package limits the Pi peer and compatibility to tested 0.84.1-0.84.2 releases", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(manifest.peerDependencies["@earendil-works/pi-coding-agent"], "0.84.1");
-  assert.deepEqual(manifest.piCompatibility, { minimum: "0.84.1", maximum: "0.84.1" });
+  assert.equal(manifest.peerDependencies["@earendil-works/pi-coding-agent"], ">=0.84.1 <0.84.3");
+  assert.deepEqual(manifest.piCompatibility, { minimum: "0.84.1", maximum: "0.84.2" });
 });
 
 function document(root, overrides = {}) {

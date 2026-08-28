@@ -2,10 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import groundedDialog from "../packages/dialog/index.ts";
 
+function eventBus() {
+  const listeners = new Map<string, Set<(value: unknown) => void>>();
+  return {
+    emit(name: string, value: unknown) { for (const listener of [...(listeners.get(name) ?? [])]) listener(value); },
+    on(name: string, listener: (value: unknown) => void) {
+      const values = listeners.get(name) ?? new Set();
+      values.add(listener);
+      listeners.set(name, values);
+      return () => values.delete(listener);
+    },
+  };
+}
+
 function loadTool() {
-  let tool: any;
-  groundedDialog({ registerTool(value: any) { tool = value; }, on() {} } as any);
-  return tool;
+  const tools: any[] = [];
+  groundedDialog({ registerTool(value: any) { tools.push(value); }, on() {}, events: eventBus() } as any);
+  return tools.find((tool) => tool.name === "ask_user_question");
 }
 
 test("headless sessions deactivate the question tool", () => {
@@ -16,6 +29,7 @@ test("headless sessions deactivate the question tool", () => {
     on(name: string, handler: Function) { if (name === "session_start") start = handler; },
     getActiveTools() { return active; },
     setActiveTools(next: string[]) { active = next; },
+    events: eventBus(),
   } as any);
   start?.({}, { hasUI: false });
   assert.deepEqual(active, ["read"]);

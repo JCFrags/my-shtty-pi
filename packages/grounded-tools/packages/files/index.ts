@@ -1,6 +1,8 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createReadTool,
@@ -9,13 +11,29 @@ import {
   type ExtensionAPI,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { anchorDocument, resolveAnchorRange } from "@grounded/pi-core/anchors";
 import { atomicWriteText } from "@grounded/pi-core/atomic";
 import { capture } from "@grounded/pi-core/exec";
 import { boundedOutput, persistOutput } from "@grounded/pi-core/output";
 import { resolveToolPath } from "@grounded/pi-core/paths";
-import { exactFind, exactGrep, fuzzyFiles } from "@grounded/pi-core/search";
+import {
+  filterStructuredFileInventory,
+  structuredFileSearch,
+  structuredFuzzySearch,
+  structuredTextSearch,
+} from "@grounded/pi-core/search";
+import {
+  SESSION_FILE_RESOURCE_PROTOCOL_VERSION,
+  SESSION_OPERATION_SERVICE_PROTOCOL_VERSION,
+  SESSION_OPERATION_SERVICE_V2_READY_EVENT,
+  SESSION_OPERATION_SERVICE_V2_REQUEST_EVENT,
+  SessionServiceError,
+  type SessionFileResource,
+  type SessionOperationServiceV2,
+  type SessionOperationServiceV2RequestEvent,
+} from "@grounded/pi-core/session-contract";
 import { checkSyntax } from "@grounded/pi-core/syntax";
 import {
   countOccurrences,
@@ -41,8 +59,20 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Operation aborted");
 }
 
+function remoteMutationQueuePath(resource: SessionFileResource, canonicalPath: string): string {
+  return join(tmpdir(), "pi-grounded-remote-mutation", sha256(`${resource.queueIdentity}\0${canonicalPath}`));
+}
+
 function textResult(text: string, details?: unknown) {
   return { content: [{ type: "text" as const, text }], details };
+}
+
+function compactSearchValue(value: string, maxCharacters = 72): string {
+  const characters = [...value];
+  const clipped = characters.length > maxCharacters
+    ? `${characters.slice(0, maxCharacters - 1).join("")}…`
+    : value;
+  return JSON.stringify(clipped);
 }
 
 const ReadParams = Type.Object({
@@ -55,6 +85,7 @@ const ReadParams = Type.Object({
     }),
   ),
   symbol: Type.Optional(Type.String({ description: "Symbol text to locate when mode=symbol" })),
+  sessionId: Type.Optional(Type.String({ description: "Explicit local session id; relative paths use the session working directory" })),
 });
 
 const EditItem = Type.Object({
@@ -75,6 +106,7 @@ const EditParams = Type.Object({
   expectedDigest: Type.Optional(
     Type.String({ description: "Optional SHA-256 snapshot digest; required for anchored edits" }),
   ),
+  sessionId: Type.Optional(Type.String({ description: "Explicit local session id; relative paths use the session working directory" })),
 });
 
 const WriteParams = Type.Object({
@@ -83,34 +115,82 @@ const WriteParams = Type.Object({
   expectedDigest: Type.Optional(
     Type.String({ description: "Optional SHA-256 digest required to match an existing file" }),
   ),
+  sessionId: Type.Optional(Type.String({ description: "Explicit local session id; relative paths use the session working directory" })),
 });
 
-const GrepParams = Type.Object({
-  pattern: Type.String({ description: "Search text or regular expression" }),
-  path: Type.Optional(Type.String({ description: "Directory or file to search" })),
-  glob: Type.Optional(Type.String({ description: "File glob filter" })),
-  ignoreCase: Type.Optional(Type.Boolean()),
-  literal: Type.Optional(Type.Boolean({ description: "Treat pattern as literal text" })),
-  context: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
-  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 2000 })),
-  cursor: Type.Optional(Type.Number({ minimum: 0, description: "Exact result-line offset from a prior call" })),
-});
+export const LocalSearchParams = Type.Union([
+  Type.Object({
+    action: Type.Literal("capabilities"),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal("query"),
+    strategy: Type.Literal("text"),
+    query: Type.String({ minLength: 1, description: "Literal text or regular expression" }),
+    syntax: Type.Optional(StringEnum(["literal", "regex"] as const)),
+    path: Type.Optional(Type.String({ description: "Directory or file scope" })),
+    fileGlob: Type.Optional(Type.String({ description: "File glob filter" })),
+    ignoreCase: Type.Optional(Type.Boolean()),
+    contextLines: Type.Optional(Type.Integer({ minimum: 0, maximum: 20 })),
+    pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+    cursor: Type.Optional(Type.String({ minLength: 1, description: "Opaque continuation cursor from the same query" })),
+    sessionId: Type.Optional(Type.String({ description: "Explicit local session id; relative scope uses the session working directory" })),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal("query"),
+    strategy: Type.Literal("files"),
+    pathGlob: Type.String({ minLength: 1, description: "Full relative-path glob" }),
+    path: Type.Optional(Type.String({ description: "Directory scope" })),
+    pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+    cursor: Type.Optional(Type.String({ minLength: 1, description: "Opaque continuation cursor from the same query" })),
+    sessionId: Type.Optional(Type.String({ description: "Explicit local session id; relative scope uses the session working directory" })),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal("query"),
+    strategy: Type.Literal("fuzzy"),
+    query: Type.String({ minLength: 1, description: "Fuzzy file-name or path query" }),
+    path: Type.Optional(Type.String({ description: "Directory scope" })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+    sessionId: Type.Optional(Type.String({ description: "Reserved for exact strategies; fuzzy session routing is not supported" })),
+  }, { additionalProperties: false }),
+]);
 
-const FindParams = Type.Object({
-  pattern: Type.String({ description: "Glob pattern" }),
-  path: Type.Optional(Type.String({ description: "Directory to search" })),
-  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 2000 })),
-  cursor: Type.Optional(Type.Number({ minimum: 0, description: "Exact result offset from a prior call" })),
-});
+type SearchCursor = {
+  version: 1;
+  fingerprint: string;
+  strategy: "text" | "files";
+  offset: number;
+};
 
-const FuzzyFindParams = Type.Object({
-  query: Type.String({ description: "Fuzzy file-name/path query" }),
-  path: Type.Optional(Type.String({ description: "Directory constraint" })),
-  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
-});
+function encodeSearchCursor(cursor: SearchCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeSearchCursor(value: string): SearchCursor {
+  let parsed: unknown;
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("invalid base64url");
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Invalid local_search cursor");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid local_search cursor");
+  }
+  const cursor = parsed as Partial<SearchCursor>;
+  const keys = Object.keys(cursor).sort();
+  if (keys.length !== 4 || keys.join(",") !== "fingerprint,offset,strategy,version"
+    || cursor.version !== 1 || (cursor.strategy !== "text" && cursor.strategy !== "files")
+    || typeof cursor.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(cursor.fingerprint)
+    || !Number.isSafeInteger(cursor.offset) || cursor.offset! < 0) {
+    throw new Error("Invalid local_search cursor");
+  }
+  return cursor as SearchCursor;
+}
+
 
 export interface GroundedEditInput {
   path: string;
+  sessionId?: string;
   edits: Array<{
     oldText?: string;
     newText?: string;
@@ -124,6 +204,7 @@ export interface GroundedEditInput {
 export interface GroundedWriteInput {
   path: string;
   content: string;
+  sessionId?: string;
   expectedDigest?: string;
 }
 
@@ -255,6 +336,56 @@ export function constructGroundedWriteContent(
   return input.content;
 }
 
+function imageMime(raw: Buffer): string | undefined {
+  if (raw.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (raw[0] === 0xff && raw[1] === 0xd8 && raw[2] === 0xff) return "image/jpeg";
+  const header = raw.subarray(0, 6).toString("ascii");
+  if (header === "GIF87a" || header === "GIF89a") return "image/gif";
+  if (raw.subarray(0, 2).toString("ascii") === "BM") return "image/bmp";
+  if (raw.subarray(0, 4).toString("ascii") === "RIFF" && raw.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return undefined;
+}
+
+async function remoteFullRead(
+  raw: Buffer,
+  path: string,
+  offset: number | undefined,
+  limit: number | undefined,
+): Promise<{ content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: Record<string, unknown> }> {
+  const mimeType = imageMime(raw);
+  if (mimeType) {
+    return {
+      content: [
+        { type: "text", text: `Read remote image file [${mimeType}]` },
+        { type: "image", data: raw.toString("base64"), mimeType },
+      ],
+      details: { remote: true, bytes: raw.length, mimeType },
+    };
+  }
+  const allLines = raw.toString("utf8").split("\n");
+  const start = Math.max(0, (offset ?? 1) - 1);
+  if (start >= allLines.length) throw new Error(`Offset ${offset} is beyond end of file (${allLines.length} lines total)`);
+  const end = limit === undefined ? allLines.length : Math.min(allLines.length, start + Math.max(0, limit));
+  const selected = allLines.slice(start, end).join("\n");
+  const bounded = await boundedOutput(selected, { prefix: "grounded-remote-read", direction: "head" });
+  const continuation = end < allLines.length ? `\n\n[${allLines.length - end} more lines in file. Use offset=${end + 1} to continue.]` : "";
+  const exactPath = bounded.truncated ? await persistOutput("grounded-remote-read-exact", raw) : undefined;
+  const exactNotice = exactPath ? `\n\n[Complete original remote file bytes: ${exactPath}]` : "";
+  return {
+    content: [{ type: "text", text: bounded.text + continuation + exactNotice }],
+    details: {
+      remote: true,
+      bytes: raw.length,
+      totalFileLines: allLines.length,
+      startLine: start + 1,
+      endLine: end,
+      truncated: bounded.truncated,
+      fullOutputPath: exactPath ?? null,
+      sourcePath: path,
+    },
+  };
+}
+
 export function outline(text: string): string {
   const patterns = [
     /^\s*(?:export\s+)?(?:async\s+)?function\s+\w+/,
@@ -274,6 +405,76 @@ export function outline(text: string): string {
 }
 
 export default function groundedFiles(pi: ExtensionAPI) {
+  let sessionOperationService: SessionOperationServiceV2 | undefined;
+  const acceptSessionOperationService = (service: SessionOperationServiceV2) => {
+    if (service?.protocolVersion !== SESSION_OPERATION_SERVICE_PROTOCOL_VERSION || typeof service.withSession !== "function") {
+      throw new SessionServiceError("SESSION_SERVICE_VERSION_UNSUPPORTED", "Invalid session operation service v2");
+    }
+    if (sessionOperationService && sessionOperationService !== service) {
+      throw new SessionServiceError("SESSION_SERVICE_DUPLICATE", "A different session operation service is already registered");
+    }
+    sessionOperationService = service;
+  };
+  pi.events.on(SESSION_OPERATION_SERVICE_V2_READY_EVENT, (value) => {
+    acceptSessionOperationService(value as SessionOperationServiceV2);
+  });
+  pi.events.emit(SESSION_OPERATION_SERVICE_V2_REQUEST_EVENT, {
+    protocolVersion: SESSION_OPERATION_SERVICE_PROTOCOL_VERSION,
+    accept: acceptSessionOperationService,
+  } satisfies SessionOperationServiceV2RequestEvent);
+
+  async function withEffectiveSession<T>(
+    sessionId: string | undefined,
+    signal: AbortSignal | undefined,
+    defaultCwd: string,
+    operation: (cwd: string, resource: SessionFileResource | undefined, backend: "local" | "ssh") => Promise<T>,
+  ): Promise<T> {
+    if (sessionId === undefined) return operation(defaultCwd, undefined, "local");
+    if (!sessionOperationService) {
+      throw new SessionServiceError(
+        "SESSION_SERVICE_UNAVAILABLE",
+        "Session-aware file operations require the Grounded Process session service",
+      );
+    }
+    return sessionOperationService.withSession(
+      sessionId,
+      (session) => {
+        if (session.backend === "ssh" && (session.fileResource?.protocolVersion !== SESSION_FILE_RESOURCE_PROTOCOL_VERSION)) {
+          throw new SessionServiceError(
+            "SESSION_FILE_RESOURCE_UNAVAILABLE",
+            `SSH session provider does not support exact file operations: ${session.providerId}`,
+          );
+        }
+        return operation(session.cwd, session.fileResource, session.backend);
+      },
+      signal ? { signal } : undefined,
+    );
+  }
+
+  async function runFileOperation<T extends { details?: unknown }>(
+    sessionId: string | undefined,
+    signal: AbortSignal | undefined,
+    defaultCwd: string,
+    operation: (cwd: string, resource: SessionFileResource | undefined, backend: "local" | "ssh") => Promise<T>,
+  ): Promise<T> {
+    return withEffectiveSession(sessionId, signal, defaultCwd, async (cwd, resource, backend) => {
+      const result = await operation(cwd, resource, backend);
+      if (sessionId === undefined) return result;
+      const details = result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? result.details as Record<string, unknown>
+        : {};
+      return {
+        ...result,
+        details: {
+          ...details,
+          sessionId,
+          sessionCwd: cwd,
+          sessionBackend: backend,
+        },
+      };
+    });
+  }
+
   const previewAdapter = {
     protocolVersion: 1 as const,
     id: "pi-grounded-tools/files-v1",
@@ -287,6 +488,12 @@ export default function groundedFiles(pi: ExtensionAPI) {
         signal?: AbortSignal;
       }): Promise<string> {
         throwIfAborted(request.signal);
+        if (request.input.sessionId !== undefined) {
+          throw new SessionServiceError(
+            "SESSION_REVIEW_UNSUPPORTED",
+            "The inactive Review UI adapter cannot preview session-relative edit operations",
+          );
+        }
         if (!request.currentExists) throw Object.assign(new Error("file does not exist"), { code: "ENOENT" });
         return constructGroundedEditContent(request.current.toString("utf8"), request.input).content;
       },
@@ -297,6 +504,12 @@ export default function groundedFiles(pi: ExtensionAPI) {
         signal?: AbortSignal;
       }): Promise<string> {
         throwIfAborted(request.signal);
+        if (request.input.sessionId !== undefined) {
+          throw new SessionServiceError(
+            "SESSION_REVIEW_UNSUPPORTED",
+            "The inactive Review UI adapter cannot preview session-relative write operations",
+          );
+        }
         const current = request.currentExists ? request.current.toString("utf8") : undefined;
         return constructGroundedWriteContent(current, request.input);
       },
@@ -313,39 +526,51 @@ export default function groundedFiles(pi: ExtensionAPI) {
   pi.registerTool({
     name: fileToolName("read"),
     label: "read (grounded)",
-    description: "Read files verbatim by default. Explicit outline, symbol, and stale-safe anchored modes are available; no automatic compression or summary is performed.",
+    description: "Read files verbatim by default. Explicit outline, symbol, and stale-safe anchored modes are available. Optional sessionId uses an existing local or SSH session working directory; omission keeps normal local behavior.",
     promptSnippet: "Read exact file contents, with optional explicit outline, symbol, or anchor modes",
     promptGuidelines: [
       "Use read mode=full unless an outline, symbol window, or hash anchors are explicitly useful.",
       "Use read mode=anchors before an anchored edit; copy its snapshot digest and anchors exactly.",
+      "Set sessionId only for an existing session when paths must follow that session and provider.",
     ],
     parameters: ReadParams,
     async execute(id, params, signal, onUpdate, ctx) {
-      const mode = params.mode ?? "full";
-      if (mode === "full") {
-        const base = createReadTool(ctx.cwd);
-        const result = await base.execute(id, {
-          path: params.path,
-          ...(params.offset !== undefined ? { offset: params.offset } : {}),
-          ...(params.limit !== undefined ? { limit: params.limit } : {}),
-        }, signal, onUpdate);
-        const details = result.details as { truncation?: { truncated?: boolean } } | undefined;
-        if (!details?.truncation?.truncated) return result;
+      return runFileOperation(params.sessionId, signal, ctx.cwd, async (operationCwd, resource, backend) => {
+        const mode = params.mode ?? "full";
+        const remoteSnapshot = backend === "ssh"
+          ? await resource!.read(params.path, { ...(signal ? { signal } : {}) })
+          : undefined;
+        const remoteRaw = remoteSnapshot?.exists
+          ? Buffer.from(remoteSnapshot.dataBase64!, "base64")
+          : undefined;
+        if (mode === "full") {
+          if (backend === "ssh") return remoteFullRead(remoteRaw!, params.path, params.offset, params.limit);
+          const base = createReadTool(operationCwd);
+          const result = await base.execute(id, {
+            path: params.path,
+            ...(params.offset !== undefined ? { offset: params.offset } : {}),
+            ...(params.limit !== undefined ? { limit: params.limit } : {}),
+          }, signal, onUpdate);
+          const details = result.details as { truncation?: { truncated?: boolean } } | undefined;
+          if (!details?.truncation?.truncated) return result;
 
-        throwIfAborted(signal);
-        const raw = await readFile(resolveToolPath(ctx.cwd, params.path));
-        const fullOutputPath = await persistOutput("grounded-read", raw);
-        const content = result.content.map((block) => block.type === "text"
-          ? { ...block, text: `${block.text}\n\n[Complete original file bytes: ${fullOutputPath}]` }
-          : block);
-        return { content, details: { ...details, fullOutputPath } };
-      }
+          throwIfAborted(signal);
+          const raw = await readFile(resolveToolPath(operationCwd, params.path));
+          const fullOutputPath = await persistOutput("grounded-read", raw);
+          const content = result.content.map((block) => block.type === "text"
+            ? { ...block, text: `${block.text}\n\n[Complete original file bytes: ${fullOutputPath}]` }
+            : block);
+          return { content, details: { ...details, fullOutputPath } };
+        }
 
-      const absolute = resolveToolPath(ctx.cwd, params.path);
-      await access(absolute, constants.R_OK);
+        const absolute = backend === "ssh" ? remoteSnapshot!.canonicalPath : resolveToolPath(operationCwd, params.path);
+        if (backend === "local") await access(absolute, constants.R_OK);
       if (mode === "pdf_structure") {
+        if (backend === "ssh") {
+          throw new SessionServiceError("SESSION_READ_MODE_UNSUPPORTED", "mode=pdf_structure remains local-only");
+        }
         if (!absolute.toLowerCase().endsWith(".pdf")) throw new Error("mode=pdf_structure requires a .pdf file");
-        const runOptions = { cwd: ctx.cwd, ...(signal ? { signal } : {}), maxBytes: 100 * 1024 * 1024 };
+        const runOptions = { cwd: operationCwd, ...(signal ? { signal } : {}), maxBytes: 100 * 1024 * 1024 };
         const [metadata, extracted] = await Promise.all([
           capture("pdfinfo", [absolute], runOptions),
           capture("pdftotext", ["-layout", absolute, "-"], runOptions),
@@ -367,7 +592,7 @@ export default function groundedFiles(pi: ExtensionAPI) {
         return textResult(bounded.text, { mode, pages: pages.length, fullOutputPath: bounded.fullOutputPath });
       }
 
-      const raw = await readFile(absolute);
+      const raw = backend === "ssh" ? remoteRaw! : await readFile(absolute);
       if (raw.includes(0)) throw new Error("Non-text files can only be read with mode=full or mode=pdf_structure");
       const { text } = stripBom(raw.toString("utf8"));
       const normalized = normalizeLf(text);
@@ -404,10 +629,11 @@ export default function groundedFiles(pi: ExtensionAPI) {
       if (match < 0) throw new Error(`Symbol text not found: ${params.symbol}`);
       const start = Math.max(0, match - 5);
       const end = Math.min(lines.length, match + 16);
-      return textResult(lines.slice(start, end).map((line, index) => `${start + index + 1}: ${line}`).join("\n"), {
-        digest: sha256(normalized),
-        mode,
-        matchLine: match + 1,
+        return textResult(lines.slice(start, end).map((line, index) => `${start + index + 1}: ${line}`).join("\n"), {
+          digest: sha256(normalized),
+          mode,
+          matchLine: match + 1,
+        });
       });
     },
   });
@@ -415,7 +641,7 @@ export default function groundedFiles(pi: ExtensionAPI) {
   pi.registerTool({
     name: fileToolName("edit"),
     label: "edit (grounded)",
-    description: "Apply strict, literal, non-overlapping edits against one file snapshot. No fuzzy relocation or silent correction. Supports optional anchored line edits from read mode=anchors.",
+    description: "Apply strict, literal, non-overlapping edits against one file snapshot. No fuzzy relocation or silent correction. Optional sessionId uses an existing local or SSH session working directory.",
     promptSnippet: "Apply strict atomic edits with optional stale-safe anchors",
     promptGuidelines: [
       "Use edit oldText/newText for normal strict replacements; oldText must be unique in the original file.",
@@ -429,36 +655,64 @@ export default function groundedFiles(pi: ExtensionAPI) {
         return {
           path: String(input.path ?? ""),
           ...(typeof input.expectedDigest === "string" ? { expectedDigest: input.expectedDigest } : {}),
+          ...(typeof input.sessionId === "string" ? { sessionId: input.sessionId } : {}),
           edits: [{ oldText: input.oldText, newText: input.newText }],
         };
       }
       return args as never;
     },
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const absolute = resolveToolPath(ctx.cwd, params.path);
-      return withFileMutationQueue(absolute, async () => {
-        throwIfAborted(signal);
-        await access(absolute, constants.R_OK | constants.W_OK);
-        const raw = await readFile(absolute, "utf8");
-        const proposed = constructGroundedEditContent(raw, params);
-        const syntax = await checkSyntax(absolute, proposed.content, signal);
-        if (!syntax.ok && syntaxGuard() === "block") {
-          throw new Error(`Syntax guard blocked the edit (${syntax.engine}): ${syntax.message ?? "invalid syntax"}`);
-        }
-        throwIfAborted(signal);
-        const write = await atomicWriteText(absolute, proposed.content);
-        const diff = generateDiffString(proposed.normalizedBefore, proposed.normalizedAfter);
-        const patch = generateUnifiedPatch(params.path, proposed.normalizedBefore, proposed.normalizedAfter);
-        const warning = !syntax.ok ? `\nSyntax warning (${syntax.engine}): ${syntax.message ?? "invalid syntax"}` : "";
-        return textResult(`Successfully replaced ${params.edits.length} block(s) in ${params.path}.${warning}`, {
-          diff: diff.diff,
-          patch,
-          firstChangedLine: diff.firstChangedLine,
-          digestBefore: proposed.digestBefore,
-          digestAfter: sha256(proposed.normalizedAfter),
-          syntax,
-          atomic: write.atomic,
-          preservedHardLinks: write.preservedHardLinks,
+      return runFileOperation(params.sessionId, signal, ctx.cwd, async (operationCwd, resource, backend) => {
+        const absolute = backend === "ssh"
+          ? await resource!.resolve(params.path, signal ? { signal } : undefined)
+          : resolveToolPath(operationCwd, params.path);
+        const queueKey = backend === "ssh" ? remoteMutationQueuePath(resource!, absolute) : absolute;
+        return withFileMutationQueue(queueKey, async () => {
+          throwIfAborted(signal);
+          let raw: string;
+          let expectedRawDigest: string | undefined;
+          if (backend === "ssh") {
+            const snapshot = await resource!.read(params.path, { ...(signal ? { signal } : {}) });
+            if (snapshot.canonicalPath !== absolute) throw new SessionServiceError("SESSION_FILE_CONFLICT", "Remote path identity changed before edit");
+            raw = Buffer.from(snapshot.dataBase64!, "base64").toString("utf8");
+            expectedRawDigest = snapshot.rawDigest;
+          } else {
+            await access(absolute, constants.R_OK | constants.W_OK);
+            raw = await readFile(absolute, "utf8");
+          }
+          const proposed = constructGroundedEditContent(raw, params);
+          const syntax = await checkSyntax(absolute, proposed.content, signal);
+          if (!syntax.ok && syntaxGuard() === "block") {
+            throw new Error(`Syntax guard blocked the edit (${syntax.engine}): ${syntax.message ?? "invalid syntax"}`);
+          }
+          throwIfAborted(signal);
+          const write = backend === "ssh"
+            ? await resource!.commit({
+                path: params.path,
+                canonicalPath: absolute,
+                dataBase64: Buffer.from(proposed.content, "utf8").toString("base64"),
+                expectedExists: true,
+                ...(expectedRawDigest ? { expectedRawDigest } : {}),
+              }, signal ? { signal } : undefined)
+            : await atomicWriteText(absolute, proposed.content);
+          const diff = generateDiffString(proposed.normalizedBefore, proposed.normalizedAfter);
+          const patch = generateUnifiedPatch(params.path, proposed.normalizedBefore, proposed.normalizedAfter);
+          const warning = !syntax.ok ? `\nSyntax warning (${syntax.engine}): ${syntax.message ?? "invalid syntax"}` : "";
+          return textResult(`Successfully replaced ${params.edits.length} block(s) in ${params.path}.${warning}`, {
+            diff: diff.diff,
+            patch,
+            firstChangedLine: diff.firstChangedLine,
+            digestBefore: proposed.digestBefore,
+            digestAfter: sha256(proposed.normalizedAfter),
+            syntax,
+            atomic: write.atomic,
+            preservedHardLinks: write.preservedHardLinks,
+            ...("rollbackAvailable" in write ? {
+              rollbackAvailable: write.rollbackAvailable,
+              hardLinksBefore: write.hardLinksBefore,
+              hardLinkTopologyRollback: false,
+            } : {}),
+          });
         });
       });
     },
@@ -467,120 +721,367 @@ export default function groundedFiles(pi: ExtensionAPI) {
   pi.registerTool({
     name: fileToolName("write"),
     label: "write (grounded)",
-    description: "Create or replace a complete text file literally using an atomic write where filesystem semantics permit. Returns exact syntax diagnostics and overwrite diff metadata.",
+    description: "Create or replace a complete text file literally using an atomic write where filesystem semantics permit. Optional sessionId uses an existing local or SSH session working directory.",
     promptSnippet: "Create or replace complete files atomically without summarizing content",
     promptGuidelines: ["Use write for complete files; prefer edit for targeted changes to existing files."],
     parameters: WriteParams,
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const absolute = resolveToolPath(ctx.cwd, params.path);
-      return withFileMutationQueue(absolute, async () => {
-        throwIfAborted(signal);
-        let previous: string | undefined;
-        try {
-          previous = await readFile(absolute, "utf8");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-        const proposed = constructGroundedWriteContent(previous, params);
-        const syntax = await checkSyntax(absolute, proposed, signal);
-        if (!syntax.ok && syntaxGuard() === "block") {
-          throw new Error(`Syntax guard blocked the write (${syntax.engine}): ${syntax.message ?? "invalid syntax"}`);
-        }
-        throwIfAborted(signal);
-        const result = await atomicWriteText(absolute, proposed);
-        const oldText = previous ?? "";
-        const diff = generateDiffString(oldText, proposed);
-        const patch = generateUnifiedPatch(params.path, oldText, proposed);
-        const warning = !syntax.ok ? `\nSyntax warning (${syntax.engine}): ${syntax.message ?? "invalid syntax"}` : "";
-        return textResult(`Wrote ${params.content.length} characters to ${params.path}.${warning}`, {
-          diff: diff.diff,
-          patch,
-          firstChangedLine: diff.firstChangedLine,
-          digestAfter: sha256(normalizeLf(stripBom(proposed).text)),
-          syntax,
-          atomic: result.atomic,
-          preservedHardLinks: result.preservedHardLinks,
+      return runFileOperation(params.sessionId, signal, ctx.cwd, async (operationCwd, resource, backend) => {
+        const absolute = backend === "ssh"
+          ? await resource!.resolve(params.path, signal ? { signal } : undefined)
+          : resolveToolPath(operationCwd, params.path);
+        const queueKey = backend === "ssh" ? remoteMutationQueuePath(resource!, absolute) : absolute;
+        return withFileMutationQueue(queueKey, async () => {
+          throwIfAborted(signal);
+          let previous: string | undefined;
+          let expectedRawDigest: string | undefined;
+          let expectedExists = false;
+          if (backend === "ssh") {
+            const snapshot = await resource!.read(params.path, { allowMissing: true, ...(signal ? { signal } : {}) });
+            if (snapshot.canonicalPath !== absolute) throw new SessionServiceError("SESSION_FILE_CONFLICT", "Remote path identity changed before write");
+            expectedExists = snapshot.exists;
+            if (snapshot.exists) {
+              previous = Buffer.from(snapshot.dataBase64!, "base64").toString("utf8");
+              expectedRawDigest = snapshot.rawDigest;
+            }
+          } else {
+            try {
+              previous = await readFile(absolute, "utf8");
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
+          }
+          const proposed = constructGroundedWriteContent(previous, params);
+          const syntax = await checkSyntax(absolute, proposed, signal);
+          if (!syntax.ok && syntaxGuard() === "block") {
+            throw new Error(`Syntax guard blocked the write (${syntax.engine}): ${syntax.message ?? "invalid syntax"}`);
+          }
+          throwIfAborted(signal);
+          const result = backend === "ssh"
+            ? await resource!.commit({
+                path: params.path,
+                canonicalPath: absolute,
+                dataBase64: Buffer.from(proposed, "utf8").toString("base64"),
+                expectedExists,
+                ...(expectedRawDigest ? { expectedRawDigest } : {}),
+              }, signal ? { signal } : undefined)
+            : await atomicWriteText(absolute, proposed);
+          const oldText = previous ?? "";
+          const diff = generateDiffString(oldText, proposed);
+          const patch = generateUnifiedPatch(params.path, oldText, proposed);
+          const warning = !syntax.ok ? `\nSyntax warning (${syntax.engine}): ${syntax.message ?? "invalid syntax"}` : "";
+          return textResult(`Wrote ${params.content.length} characters to ${params.path}.${warning}`, {
+            diff: diff.diff,
+            patch,
+            firstChangedLine: diff.firstChangedLine,
+            digestAfter: sha256(normalizeLf(stripBom(proposed).text)),
+            syntax,
+            atomic: result.atomic,
+            preservedHardLinks: result.preservedHardLinks,
+            ...("rollbackAvailable" in result ? {
+              rollbackAvailable: result.rollbackAvailable,
+              hardLinksBefore: result.hardLinksBefore,
+              hardLinkTopologyRollback: false,
+            } : {}),
+          });
         });
       });
     },
   });
 
   pi.registerTool({
-    name: fileToolName("grep"),
-    label: "grep (grounded)",
-    description: "Exhaustive exact or regex search using ripgrep. Results are deterministic and paged without relevance filtering; full output is retained when the visible result is bounded.",
-    promptSnippet: "Search exact text or regex exhaustively with deterministic pagination",
-    parameters: GrepParams,
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const page = await exactGrep({
-        cwd: ctx.cwd,
-        pattern: params.pattern,
-        path: params.path ?? ".",
-        ...(params.glob ? { glob: params.glob } : {}),
-        ...(params.ignoreCase !== undefined ? { ignoreCase: params.ignoreCase } : {}),
-        ...(params.literal !== undefined ? { literal: params.literal } : {}),
-        ...(params.context !== undefined ? { context: params.context } : {}),
-        ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
-        ...(params.limit !== undefined ? { limit: params.limit } : {}),
-        ...(signal ? { signal } : {}),
-      });
-      if (!page.output) return textResult("No matches found", { totalLines: 0 });
-      const bounded = await boundedOutput(page.output, { prefix: "grounded-grep", direction: "head" });
-      let fullOutputPath = bounded.fullOutputPath;
-      if (page.nextCursor !== undefined && !fullOutputPath) fullOutputPath = await persistOutput("grounded-grep", page.allOutput);
-      const suffix = page.nextCursor === undefined ? "" : `\n\n[More exact result lines available: cursor=${page.nextCursor}. Full output: ${fullOutputPath}]`;
-      return textResult(bounded.text + suffix, {
-        totalLines: page.totalLines,
-        nextCursor: page.nextCursor,
-        fullOutputPath,
-      });
-    },
-  });
+    name: "local_search",
+    label: "Local search",
+    description: "Unified local discovery with explicit text, files, and fuzzy strategies. Optional sessionId supports exact text and files queries in an existing local or SSH session; fuzzy rejects session routing.",
+    promptSnippet: "Search local content or paths through explicit record-safe strategies",
+    promptGuidelines: [
+      "Use local_search for normal local discovery when an explicit text, files, or fuzzy strategy fits.",
+      "Use local_search strategy=text for exhaustive literal or regex evidence, strategy=files for full relative-path globs, and strategy=fuzzy only for exploratory path ranking.",
+      "Do not treat local_search strategy=fuzzy results as proof that a path does not exist.",
+    ],
+    parameters: LocalSearchParams,
+    renderCall(args, theme) {
+      const input = args as Record<string, unknown>;
+      const title = theme.fg("toolTitle", theme.bold("local_search "));
+      if (input.action === "capabilities") {
+        return new Text(title + theme.fg("muted", "capabilities"), 0, 0);
+      }
 
-  pi.registerTool({
-    name: fileToolName("find"),
-    label: "find (grounded)",
-    description: "Deterministic gitignore-aware file and directory glob search using fd, with exact cursor pagination.",
-    promptSnippet: "Find paths deterministically by glob with exact pagination",
-    parameters: FindParams,
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const page = await exactFind({
-        cwd: ctx.cwd,
-        pattern: params.pattern,
-        path: params.path ?? ".",
-        ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
-        ...(params.limit !== undefined ? { limit: params.limit } : {}),
-        ...(signal ? { signal } : {}),
-      });
-      if (!page.output) return textResult("No files found", { total: 0 });
-      let fullOutputPath: string | undefined;
-      if (page.nextCursor !== undefined) fullOutputPath = await persistOutput("grounded-find", page.allOutput);
-      const suffix = page.nextCursor === undefined ? "" : `\n\n[More exact paths available: cursor=${page.nextCursor}. Full output: ${fullOutputPath}]`;
-      return textResult(page.output + suffix, { total: page.totalLines, nextCursor: page.nextCursor, fullOutputPath });
-    },
-  });
+      const strategy = input.strategy === "files" || input.strategy === "fuzzy" ? input.strategy : "text";
+      const searched = strategy === "files" ? String(input.pathGlob ?? "") : String(input.query ?? "");
+      const scope = typeof input.path === "string" && input.path.length > 0 ? input.path : ".";
+      const modifiers: string[] = [];
+      if (strategy === "text" && input.syntax === "regex") modifiers.push("regex");
+      if (strategy === "text" && typeof input.fileGlob === "string") {
+        modifiers.push(`files ${compactSearchValue(input.fileGlob)}`);
+      }
+      if (strategy === "text" && input.ignoreCase === true) modifiers.push("ignore case");
+      if (strategy === "text" && typeof input.contextLines === "number") {
+        modifiers.push(`context ${input.contextLines}`);
+      }
+      if (typeof input.cursor === "string") modifiers.push("next page");
+      if (typeof input.sessionId === "string") modifiers.push("session");
 
-  pi.registerTool({
-    name: "fuzzy_find",
-    label: "Fuzzy find",
-    description: "Exploratory fuzzy file search. Results are explicitly ranked and Git-changed files receive a visible boost; use find/grep when exhaustive evidence is required.",
-    promptSnippet: "Fuzzily locate likely files without replacing exhaustive find or grep",
-    parameters: FuzzyFindParams,
+      const summary = [
+        theme.fg("muted", strategy),
+        theme.fg("accent", ` ${compactSearchValue(searched)}`),
+        theme.fg("muted", ` in ${compactSearchValue(scope)}`),
+        ...modifiers.map((modifier) => theme.fg("muted", ` · ${modifier}`)),
+      ].join("");
+      return new Text(title + summary, 0, 0);
+    },
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const matches = await fuzzyFiles({
-        cwd: ctx.cwd,
+      if (params.action === "capabilities") {
+        return textResult([
+          "local_search strategies:",
+          "- text: structured ripgrep search; literal by default; paged by match hit",
+          "- files: structured full relative-path glob search; paged by path hit",
+          "- fuzzy: ranked path discovery with an optional visible Git-change boost",
+          "Unavailable by design: auto, hybrid, ranked passages, and indexes.",
+        ].join("\n"), {
+          schemaVersion: 1,
+          strategies: ["text", "files", "fuzzy"],
+          defaults: { textSyntax: "literal", exactPageSize: 20, fuzzyLimit: 100 },
+          unavailable: ["auto", "hybrid", "ranked"],
+        });
+      }
+
+      if (params.strategy === "fuzzy" && params.sessionId !== undefined) {
+        throw new SessionServiceError(
+          "SESSION_SEARCH_STRATEGY_UNSUPPORTED",
+          "local_search strategy=fuzzy does not support sessionId; use strategy=text or strategy=files",
+        );
+      }
+      return runFileOperation(params.sessionId, signal, ctx.cwd, async (operationCwd, resource, backend) => {
+        const scope = params.path ?? ".";
+        if (params.strategy === "text") {
+        const pageSize = params.pageSize ?? 20;
+        const normalizedRequest = {
+          action: "query" as const,
+          strategy: "text" as const,
+          query: params.query,
+          syntax: params.syntax ?? "literal",
+          path: scope,
+          fileGlob: params.fileGlob ?? null,
+          ignoreCase: params.ignoreCase ?? false,
+          contextLines: params.contextLines ?? 2,
+          pageSize,
+          ...(params.sessionId !== undefined ? { sessionId: params.sessionId, sessionCwd: operationCwd } : {}),
+        };
+        const fingerprint = sha256(JSON.stringify({ ...normalizedRequest, pageSize: undefined }));
+        let offset = 0;
+        if (params.cursor) {
+          const cursor = decodeSearchCursor(params.cursor);
+          if (cursor.strategy !== "text" || cursor.fingerprint !== fingerprint) {
+            throw new Error("local_search cursor does not match this query");
+          }
+          offset = cursor.offset;
+        }
+        const hits = backend === "ssh"
+          ? (await resource!.searchText({
+              query: params.query,
+              path: scope,
+              ...(params.fileGlob ? { fileGlob: params.fileGlob } : {}),
+              ...(params.ignoreCase !== undefined ? { ignoreCase: params.ignoreCase } : {}),
+              literal: params.syntax !== "regex",
+              ...(params.contextLines !== undefined ? { contextLines: params.contextLines } : {}),
+            }, signal ? { signal } : undefined)).hits
+          : await structuredTextSearch({
+              cwd: operationCwd,
+              query: params.query,
+              path: scope,
+              ...(params.fileGlob ? { fileGlob: params.fileGlob } : {}),
+              ...(params.ignoreCase !== undefined ? { ignoreCase: params.ignoreCase } : {}),
+              literal: params.syntax !== "regex",
+              ...(params.contextLines !== undefined ? { contextLines: params.contextLines } : {}),
+              ...(signal ? { signal } : {}),
+            });
+        const page = hits.slice(offset, offset + pageSize);
+        const nextOffset = offset + page.length;
+        const nextCursor = nextOffset < hits.length
+          ? encodeSearchCursor({ version: 1, fingerprint, strategy: "text", offset: nextOffset })
+          : undefined;
+        const rendered = page.map((hit, index) => [
+          `${offset + index + 1}. ${hit.path}:${hit.line}:${hit.byteColumn}`,
+          `   exact submatches: ${hit.submatchCount}`,
+          hit.snippet.split("\n").map((line) => `   ${line}`).join("\n"),
+        ].join("\n")).join("\n\n");
+        const qualifications = [
+          "hidden-included", "dot-git-excluded", "ignore-without-git",
+          "binary-ripgrep-policy", "symlinks-not-followed", "current-snapshot-continuation",
+        ];
+        const header = [
+          "Strategy: text",
+          "Coverage: exhaustive under the listed qualifications",
+          `Returned: ${page.length} of ${hits.length}${nextCursor ? "; next cursor available" : ""}`,
+          "Qualifications: hidden paths included; .git excluded; ignore rules honored without requiring a Git repository; binary and unreadable-file behavior follows ripgrep; symlinks are not followed; continuation reads the current filesystem snapshot.",
+        ].join("\n");
+        const bounded = await boundedOutput(`${header}${rendered ? `\n\n${rendered}` : "\n\nNo matches found"}`, {
+          prefix: "grounded-local-search",
+          direction: "head",
+          maxBytes: 30 * 1024,
+        });
+        return textResult(bounded.text, {
+          schemaVersion: 1,
+          normalizedRequest,
+          requestFingerprint: fingerprint,
+          fingerprint,
+          engine: "ripgrep-json",
+          fallbackAttempted: false,
+          strategy: "text",
+          scope,
+          outcome: hits.length === 0 ? "no_matches" : "matches",
+          coverage: "exhaustive",
+          coverageClass: "exhaustive",
+          complete: true,
+          absenceEvidence: hits.length === 0,
+          qualifications,
+          warnings: [],
+          hits: page,
+          totalHits: hits.length,
+          nextCursor,
+          page: { offset, pageSize, returned: page.length, total: hits.length, nextCursor: nextCursor ?? null },
+          snapshot: "current-filesystem-per-call",
+          fullOutputPath: bounded.fullOutputPath,
+        });
+      }
+
+      if (params.strategy === "files") {
+        const pageSize = params.pageSize ?? 20;
+        const normalizedRequest = {
+          action: "query" as const,
+          strategy: "files" as const,
+          pathGlob: params.pathGlob,
+          path: scope,
+          pageSize,
+          ...(params.sessionId !== undefined ? { sessionId: params.sessionId, sessionCwd: operationCwd } : {}),
+        };
+        const fingerprint = sha256(JSON.stringify({ ...normalizedRequest, pageSize: undefined }));
+        let offset = 0;
+        if (params.cursor) {
+          const cursor = decodeSearchCursor(params.cursor);
+          if (cursor.strategy !== "files" || cursor.fingerprint !== fingerprint) {
+            throw new Error("local_search cursor does not match this query");
+          }
+          offset = cursor.offset;
+        }
+        const hits = backend === "ssh"
+          ? filterStructuredFileInventory({
+              cwd: operationCwd,
+              pathGlob: params.pathGlob,
+              path: scope,
+              inventory: (await resource!.searchFiles({ path: scope }, signal ? { signal } : undefined)).hits,
+              ...(signal ? { signal } : {}),
+            })
+          : await structuredFileSearch({
+              cwd: operationCwd,
+              pathGlob: params.pathGlob,
+              path: scope,
+              ...(signal ? { signal } : {}),
+            });
+        const page = hits.slice(offset, offset + pageSize);
+        const nextOffset = offset + page.length;
+        const nextCursor = nextOffset < hits.length
+          ? encodeSearchCursor({ version: 1, fingerprint, strategy: "files", offset: nextOffset })
+          : undefined;
+        const rendered = page.map((hit, index) => `${offset + index + 1}. ${hit.path}`).join("\n");
+        const qualifications = [
+          "basename-glob-without-slash", "full-relative-path-glob-with-slash",
+          "hidden-included", "dot-git-excluded", "ignore-without-git",
+          "symlinks-not-followed", "current-snapshot-continuation",
+        ];
+        const header = [
+          "Strategy: files",
+          "Coverage: exhaustive under the listed qualifications",
+          `Returned: ${page.length} of ${hits.length}${nextCursor ? "; next cursor available" : ""}`,
+          "Qualifications: pathGlob matches a full relative path when it contains '/', otherwise it matches any basename; hidden paths included; .git excluded; ignore rules honored without requiring a Git repository; symlinks are not followed; continuation reads the current filesystem snapshot.",
+        ].join("\n");
+        const bounded = await boundedOutput(`${header}${rendered ? `\n\n${rendered}` : "\n\nNo paths found"}`, {
+          prefix: "grounded-local-search",
+          direction: "head",
+          maxBytes: 30 * 1024,
+        });
+        return textResult(bounded.text, {
+          schemaVersion: 1,
+          normalizedRequest,
+          requestFingerprint: fingerprint,
+          fingerprint,
+          engine: "fd-nul",
+          fallbackAttempted: false,
+          strategy: "files",
+          scope,
+          outcome: hits.length === 0 ? "no_matches" : "matches",
+          coverage: "exhaustive",
+          coverageClass: "exhaustive",
+          complete: true,
+          absenceEvidence: hits.length === 0,
+          qualifications,
+          warnings: [],
+          hits: page,
+          totalHits: hits.length,
+          nextCursor,
+          page: { offset, pageSize, returned: page.length, total: hits.length, nextCursor: nextCursor ?? null },
+          snapshot: "current-filesystem-per-call",
+          fullOutputPath: bounded.fullOutputPath,
+        });
+      }
+
+      const limit = params.limit ?? 100;
+      const normalizedRequest = {
+        action: "query" as const,
+        strategy: "fuzzy" as const,
         query: params.query,
-        path: params.path ?? ".",
-        ...(params.limit !== undefined ? { limit: params.limit } : {}),
+        path: scope,
+        limit,
+      };
+      const fingerprint = sha256(JSON.stringify(normalizedRequest));
+      const fuzzy = await structuredFuzzySearch({
+        cwd: operationCwd,
+        query: params.query,
+        path: scope,
+        limit,
         ...(signal ? { signal } : {}),
       });
-      return textResult(
-        matches.length
-          ? matches.map((match) => `${match.gitChanged ? "*" : " "} ${match.path}\t(score ${match.score.toFixed(1)})`).join("\n")
-          : "No fuzzy matches found",
-        { matches },
-      );
-    },
+      const rendered = fuzzy.hits.map((hit, index) => `${index + 1}. ${hit.gitChanged ? "* " : ""}${hit.path} (score ${hit.score.toFixed(1)})`).join("\n");
+      const qualifications = fuzzy.gitMetadataAvailable
+        ? ["non-exhaustive", "git-change-boost-visible"]
+        : ["non-exhaustive", "git-metadata-unavailable", "git-change-boost-disabled"];
+      const warnings = fuzzy.gitMetadataAvailable
+        ? []
+        : ["Git metadata is unavailable; the fuzzy Git-change boost is disabled."];
+      const bounded = await boundedOutput([
+        "Strategy: fuzzy",
+        "Coverage: ranked and non-exhaustive",
+        `Returned: ${fuzzy.hits.length}`,
+        fuzzy.gitMetadataAvailable
+          ? "Qualification: zero results do not prove path absence; * marks a Git-changed path."
+          : "Qualifications: zero results do not prove path absence; Git metadata is unavailable and the change boost is disabled.",
+        "",
+        rendered || "No fuzzy matches found",
+      ].join("\n"), { prefix: "grounded-local-search", direction: "head", maxBytes: 30 * 1024 });
+      return textResult(bounded.text, {
+        schemaVersion: 1,
+        normalizedRequest,
+        requestFingerprint: fingerprint,
+        fingerprint,
+        engine: "fd-nul+grounded-fuzzy",
+        fallbackAttempted: false,
+        strategy: "fuzzy",
+        scope,
+        outcome: fuzzy.hits.length === 0 ? "no_matches" : "matches",
+        coverage: "ranked",
+        coverageClass: "ranked-non-exhaustive",
+        complete: false,
+        absenceEvidence: false,
+        qualifications,
+        warnings,
+        hits: fuzzy.hits,
+        page: { offset: 0, pageSize: limit, returned: fuzzy.hits.length, total: null, nextCursor: null },
+        snapshot: "current-filesystem-per-call",
+          fullOutputPath: bounded.fullOutputPath,
+        });
+      });
+    }
   });
 
   pi.registerCommand("grounded-files", {
