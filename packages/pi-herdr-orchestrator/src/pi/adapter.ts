@@ -11,6 +11,10 @@ import type {
 import { modelChoiceFromPi } from "./types.js";
 import { LifecycleCorrelator, type CorrelationState } from "./correlation.js";
 import { createId } from "../shared/ids.js";
+import {
+  projectRecentWorkWithChrono,
+  type RecentWorkSnapshot,
+} from "./recent-work.js";
 
 function sessionId(context: PiContextLike): string {
   const id = context.sessionManager.getSessionId?.();
@@ -325,7 +329,11 @@ export class PiAdapter implements PiControl {
   async handleControl(
     method: string,
     params: Record<string, unknown>,
-  ): Promise<{ ok: true; answer?: string }> {
+  ): Promise<{
+    ok: true;
+    answer?: string;
+    recentWork?: RecentWorkSnapshot;
+  }> {
     const state = this.safeState();
     const identity = [
       "agentId",
@@ -367,7 +375,16 @@ export class PiAdapter implements PiControl {
               ? ["tools"]
               : method === "control.set_tool_expansion"
                 ? ["name", "expanded"]
-                : []),
+                : method === "control.monitor_snapshot"
+                  ? [
+                      "taskId",
+                      "runId",
+                      "assignmentId",
+                      "assignmentGeneration",
+                      "maxItems",
+                      "maxBytes",
+                    ]
+                  : []),
     ]);
     if (
       ![
@@ -380,6 +397,7 @@ export class PiAdapter implements PiControl {
         "control.set_thinking",
         "control.set_tools",
         "control.set_tool_expansion",
+        "control.monitor_snapshot",
       ].includes(method) ||
       Object.keys(params).some((key) => !allowed.has(key))
     )
@@ -456,6 +474,48 @@ export class PiAdapter implements PiControl {
       )
         throw new Error("INVALID_REQUEST");
       await this.setTools(params.tools);
+    } else if (method === "control.monitor_snapshot") {
+      const correlation = this.correlator.state;
+      if (
+        correlation.kind !== "accepted" &&
+        correlation.kind !== "bound" &&
+        correlation.kind !== "settled"
+      )
+        throw new Error("RECENT_WORK_SCOPE_UNAVAILABLE");
+      const assignment = correlation.assignment;
+      if (
+        params.taskId !== assignment.taskId ||
+        params.runId !== assignment.runId ||
+        params.assignmentId !== assignment.id ||
+        params.assignmentGeneration !== assignment.assignmentGeneration
+      )
+        throw new Error("PI_IDENTITY_MISMATCH");
+      if (
+        (params.maxItems !== undefined &&
+          !Number.isSafeInteger(params.maxItems)) ||
+        (params.maxBytes !== undefined &&
+          !Number.isSafeInteger(params.maxBytes))
+      )
+        throw new Error("INVALID_REQUEST");
+      const entries =
+        this.#context.sessionManager.getBranch?.() ??
+        this.#context.sessionManager.getEntries?.() ??
+        [];
+      return {
+        ok: true,
+        recentWork: await projectRecentWorkWithChrono({
+          entries,
+          taskId: assignment.taskId,
+          runId: assignment.runId,
+          assignmentId: assignment.id,
+          ...(params.maxItems !== undefined
+            ? { maxItems: Number(params.maxItems) }
+            : {}),
+          ...(params.maxBytes !== undefined
+            ? { maxBytes: Number(params.maxBytes) }
+            : {}),
+        }),
+      };
     } else {
       if (
         typeof params.name !== "string" ||

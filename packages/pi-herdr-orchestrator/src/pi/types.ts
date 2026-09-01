@@ -17,6 +17,7 @@ export interface PiSessionManagerLike {
   getSessionId?(): string;
   getSessionFile?(): string | undefined;
   getCwd?(): string;
+  getBranch?(fromId?: string): unknown[];
   getEntries?(): unknown[];
   [key: string]: unknown;
 }

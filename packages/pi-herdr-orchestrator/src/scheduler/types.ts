@@ -5,6 +5,7 @@ export type SchedulableState =
   | "running"
   | "blocked"
   | "collecting"
+  | "cancelling"
   | "succeeded"
   | "failed"
   | "cancelled"

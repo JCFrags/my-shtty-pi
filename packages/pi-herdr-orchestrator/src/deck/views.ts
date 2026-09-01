@@ -191,9 +191,15 @@ export function renderHome(
   const blockedAgents = agents.filter((agent) => agent.state === "blocked");
   const workingAgents = agents.filter((agent) => agent.state === "working");
   const activeTasks = tasks.filter((task) =>
-    ["queued", "assigned", "running", "blocked", "collecting"].includes(
-      task.state,
-    ),
+    [
+      "queued",
+      "provisioning",
+      "assigned",
+      "running",
+      "blocked",
+      "collecting",
+      "cancelling",
+    ].includes(task.state),
   );
   const relevantQuestions = [...state.questions.values()].filter(
     (question) =>

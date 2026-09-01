@@ -400,6 +400,7 @@ export function reduce(
         "running",
         "blocked",
         "collecting",
+        "cancelling",
         "succeeded",
         "failed",
         "cancelled",
@@ -503,64 +504,6 @@ export function reduce(
         agent = next.agents[id];
       if (!agent)
         throw new OrchestratorError("STATE_CORRUPT", "Agent is missing.");
-      if (
-        event.type === "agent.state_changed" &&
-        Object.hasOwn(p, "adoptedRootParentAgentId")
-      ) {
-        const parentAgentId = String(p.adoptedRootParentAgentId ?? "");
-        const parent = next.agents[parentAgentId];
-        if (
-          !parent ||
-          agent.managed ||
-          parent.managed ||
-          id === parentAgentId ||
-          agent.parentAgentId ||
-          !agent.paneId ||
-          agent.paneId !== parent.paneId ||
-          agent.paneId !== p.adoptedRootPaneId ||
-          !agent.piSessionId ||
-          agent.piSessionId !== parent.piSessionId ||
-          agent.piSessionId !== p.adoptedRootPiSessionId
-        )
-          throw new OrchestratorError(
-            "STATE_CORRUPT",
-            "Adopted lineage recovery is invalid.",
-          );
-        const existingLinks = next.adoptedRootLinks ?? {};
-        if (existingLinks[id] || existingLinks[parentAgentId])
-          throw new OrchestratorError(
-            "STATE_CORRUPT",
-            "Adopted lineage recovery is already linked.",
-          );
-        const adoptedRootLinks = {
-          ...existingLinks,
-          [id]: parentAgentId,
-        };
-        for (const candidate of Object.values(next.agents)) {
-          let current: string | undefined = candidate.id;
-          const seen = new Set<string>();
-          let depth = 0;
-          while (current) {
-            if (seen.has(current) || depth > 4)
-              throw new OrchestratorError(
-                "STATE_CORRUPT",
-                "Recovered agent lineage exceeds its safe depth.",
-              );
-            seen.add(current);
-            const currentAgent: typeof agent | undefined = next.agents[current];
-            if (!currentAgent)
-              throw new OrchestratorError(
-                "STATE_CORRUPT",
-                "Recovered agent lineage is incomplete.",
-              );
-            current =
-              currentAgent.parentAgentId ?? adoptedRootLinks[currentAgent.id];
-            if (current) depth++;
-          }
-        }
-        next.adoptedRootLinks = adoptedRootLinks;
-        break;
-      }
       const baseAgent = { ...agent };
       if (p.clearCurrentRun === true) {
         delete baseAgent.currentRunId;
@@ -894,6 +837,28 @@ export function reduce(
                 : {}),
         },
       };
+      const task = next.tasks[run.taskId];
+      if (task && !taskTerminal.has(task.state)) {
+        const lifecycleTaskState =
+          event.type === "assignment.accepted" && task.state !== "cancelling"
+            ? ("assigned" as const)
+            : event.type === "run.pi_started" && task.state !== "cancelling"
+              ? ("running" as const)
+              : event.type === "run.pi_settled"
+                ? task.state === "cancelling"
+                  ? ("cancelling" as const)
+                  : ("collecting" as const)
+                : undefined;
+        if (lifecycleTaskState)
+          next.tasks = {
+            ...next.tasks,
+            [task.id]: {
+              ...task,
+              state: lifecycleTaskState,
+              admissionReason: undefined,
+            },
+          };
+      }
       if (
         run.agentId &&
         Number.isSafeInteger(p.adapterSeq) &&
@@ -937,15 +902,25 @@ export function reduce(
       const id = String(event.entityRefs?.taskId ?? p.taskId),
         task = next.tasks[id];
       if (!task || taskTerminal.has(task.state)) break;
-      next.tasks = { ...next.tasks, [id]: { ...task, state: "cancelled" } };
-      if (task.currentRunId && next.runs[task.currentRunId])
+      const run = task.currentRunId ? next.runs[task.currentRunId] : undefined;
+      const waitsForQuiescence =
+        p.completionMode === "quiescent" &&
+        run !== undefined &&
+        !runSharedTerminal.has(run.state) &&
+        !run.settled;
+      next.tasks = {
+        ...next.tasks,
+        [id]: {
+          ...task,
+          state: waitsForQuiescence ? "cancelling" : "cancelled",
+        },
+      };
+      if (run)
         next.runs = {
           ...next.runs,
-          [task.currentRunId]: {
-            ...next.runs[task.currentRunId]!,
-            state: "cancelled",
-            cancelled: true,
-          },
+          [run.id]: waitsForQuiescence
+            ? { ...run, cancelled: true }
+            : { ...run, state: "cancelled", cancelled: true },
         };
       break;
     }

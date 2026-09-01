@@ -1034,6 +1034,7 @@ export class EventStore {
           "running",
           "blocked",
           "collecting",
+          "cancelling",
           "succeeded",
           "failed",
           "cancelled",
@@ -1194,23 +1195,6 @@ export class EventStore {
           ].every(
             (key) => Number.isSafeInteger(p[key]) && Number(p[key]) >= 0,
           ));
-    } else if (
-      event.type === "agent.state_changed" &&
-      Object.hasOwn(p, "adoptedRootParentAgentId")
-    ) {
-      valid =
-        exactKeys(refs, ["agentId"]) &&
-        typeof refs.agentId === "string" &&
-        exactKeys(p, [
-          "agentId",
-          "adoptedRootParentAgentId",
-          "adoptedRootPaneId",
-          "adoptedRootPiSessionId",
-        ]) &&
-        p.agentId === refs.agentId &&
-        typeof p.adoptedRootParentAgentId === "string" &&
-        typeof p.adoptedRootPaneId === "string" &&
-        typeof p.adoptedRootPiSessionId === "string";
     } else if (
       [
         "agent.registered",

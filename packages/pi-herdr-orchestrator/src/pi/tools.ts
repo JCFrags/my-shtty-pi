@@ -533,6 +533,7 @@ function validateExactNested(
               "resultValidation",
               "worktree",
               "budgets",
+              "recentWork",
             ]
           : key === "select"
             ? ["taskId", "state", "summary", "status", "result"]
@@ -2606,6 +2607,8 @@ const orchestrateInputSchema = {
     },
     include: {
       type: "array",
+      description:
+        'Optional detail sections. Task inspection accepts "runs", "definition", "lineage", and "project"; bounded recent work is always requested.',
       maxItems: 16,
       items: boundedString(64),
     },
@@ -2616,7 +2619,12 @@ const orchestrateInputSchema = {
     },
     state: boundedString(64),
     limit: { type: "integer", minimum: 1, maximum: 500 },
-    maxBytes: { type: "integer", minimum: 1, maximum: 262_144 },
+    maxBytes: {
+      type: "integer",
+      description: "Maximum UTF-8 bytes for the JSON result.",
+      minimum: 1,
+      maximum: 262_144,
+    },
     until: {
       type: "array",
       maxItems: 16,
@@ -2749,7 +2757,7 @@ export function registerParentTools(
     name: "orchestrate",
     label: "Orchestrate Agents",
     description:
-      'Create an agent with action "run" and only a task; omitted profile defaults to scout and omitted model uses the broker\'s top installed, allowed recommendation. Optional fields override those safe defaults. Use the returned taskId for inspect, wait, collect, cancel, and close; the broker derives agent, run, and generation identity for cleanup.',
+      'Create an agent with action "run" and only a task; omitted profile defaults to scout and omitted model uses the broker\'s top installed, allowed recommendation. Optional fields override those safe defaults. Use the returned taskId for inspect, wait, collect, cancel, and close. Task inspection returns only critical state plus bounded recent child work by default; definition, lineage, project policy, and run history are explicit detail sections. The broker derives exact task, run, agent, generation, and session identity.',
     parameters: orchestrateInputSchema,
     async execute(_id, params, signal, _onUpdate, context) {
       assertExactObject(params, [
@@ -2853,13 +2861,18 @@ export function registerParentTools(
                 ? "group_get"
                 : undefined;
         if (!tool) throw new Error("INVALID_REQUEST");
+        const requestedInclude = params.include as unknown[] | undefined;
+        const include =
+          kind === "task"
+            ? [...new Set([...(requestedInclude ?? []), "recentWork"])]
+            : requestedInclude;
         const input: Record<string, unknown> = {
           [kind === "task"
             ? "taskId"
             : kind === "agent"
               ? "agentId"
               : "groupId"]: params.id,
-          ...(params.include !== undefined ? { include: params.include } : {}),
+          ...(include !== undefined ? { include } : {}),
           ...(params.maxBytes !== undefined
             ? { maxBytes: params.maxBytes }
             : {}),
