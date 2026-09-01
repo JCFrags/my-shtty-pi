@@ -9,14 +9,7 @@ import type {
 import { hitTest } from "./components/controls.js";
 
 export type FilesRowKind =
-  | "root"
-  | "directory"
-  | "file"
-  | "symlink"
-  | "other"
-  | "info"
-  | "section"
-  | "warning";
+  "root" | "directory" | "file" | "symlink" | "other" | "info";
 
 /** A row keeps the provider path untouched for commands and separate values for UI use. */
 export interface FilesRowPresentation {
@@ -99,7 +92,6 @@ export interface FilesActionRequest {
 export interface FilesScreenOptions {
   presentation: FilesPresentation;
   state: FilesScreenState;
-  pageSize?: number;
   onAction(request: FilesActionRequest): void;
   onStateChange?(state: FilesScreenState): void;
 }
@@ -142,41 +134,8 @@ export function isValidFilesActionPath(actionPath: string): boolean {
 
 function integer(value: unknown): number | undefined {
   return Number.isSafeInteger(value) && Number(value) >= 0
-    ? Math.min(Number(value), 1_000_000_000)
+    ? Number(value)
     : undefined;
-}
-
-function boundedMetadata(value: unknown): Record<string, unknown> {
-  const source = record(value);
-  const aliases: readonly [string, readonly string[]][] = [
-    ["path", ["path", "relativePath"]],
-    ["encoding", ["encoding"]],
-    ["size", ["size", "bytes"]],
-    ["bytes read", ["bytesRead"]],
-    ["displayed lines", ["displayedLines", "lineCount"]],
-    ["total lines", ["totalLines"]],
-    ["binary", ["binary"]],
-    ["binary kind", ["binaryKind"]],
-    ["invalid UTF-8", ["invalidUtf8"]],
-    ["truncated", ["truncated"]],
-    ["truncation reason", ["truncationReason"]],
-    ["changed", ["changed"]],
-    ["error", ["error"]],
-  ];
-  const keys = aliases.flatMap(([label, candidates]) => {
-    const sourceKey = candidates.find((candidate) => candidate in source);
-    return sourceKey ? [{ label, sourceKey }] : [];
-  });
-  const entries: Array<[string, unknown]> = [];
-  for (const { label, sourceKey } of keys) {
-    const raw = source[sourceKey];
-    if (typeof raw === "string")
-      entries.push([label, safeFilesDisplay(raw, 240)]);
-    else if (typeof raw === "boolean") entries.push([label, raw]);
-    else if (Number.isFinite(raw) && Number.isSafeInteger(raw))
-      entries.push([label, Math.max(0, Math.min(Number(raw), 1_000_000_000))]);
-  }
-  return Object.fromEntries(entries);
 }
 
 function rowKey(actionPath: string): string {
@@ -218,28 +177,20 @@ export function normalizeFilesPresentation(
     const source = record(value);
     const rowType = text(source.rowType, 32).toLowerCase();
     const message = rawText(source.message);
-    if (
-      rowType === "info" ||
-      rowType === "information" ||
-      rowType === "section" ||
-      rowType === "warning"
-    ) {
-      const inertMessage = message || rawText(source.label ?? source.title);
-      if (!inertMessage) return [];
-      const kind =
-        rowType === "section" || rowType === "warning" ? rowType : "info";
+    if (rowType === "info" || rowType === "information") {
+      if (!message) return [];
       return [
         {
           path: "",
           displayPath: "",
-          name: safeFilesDisplay(inertMessage, 4096),
-          rowKey: `files-${kind}-${index}`,
-          kind,
+          name: safeFilesDisplay(message, 4096),
+          rowKey: `files-info-${index}`,
+          kind: "info",
           depth: 0,
           selected: false,
           partiallySelected: false,
           expanded: false,
-          message: safeFilesDisplay(inertMessage, 4096),
+          message: safeFilesDisplay(message, 4096),
         },
       ];
     }
@@ -289,16 +240,12 @@ export function normalizeFilesPresentation(
   return {
     available: files?.available === true,
     canOpenStandalone,
-    ...(text(files?.error ?? view.error ?? summary.error, 512)
-      ? {
-          error: safeFilesDisplay(
-            text(files?.error ?? view.error ?? summary.error, 512),
-          ),
-        }
+    ...(text(files?.error, 512)
+      ? { error: safeFilesDisplay(text(files?.error, 512)) }
       : {}),
-    cwd: safeFilesDisplay(text(summary.cwd ?? view.cwd, 240)),
+    cwd: safeFilesDisplay(text(summary.cwd ?? view.cwd, 4096)),
     currentPath: safeFilesDisplay(
-      text(view.currentPath ?? summary.currentPath, 240),
+      text(view.currentPath ?? summary.currentPath, 4096),
     ),
     // These are provider-owned values. Do not filter rows or toggle hidden locally.
     filter: safeFilesDisplay(text(view.filter, 256)),
@@ -314,7 +261,7 @@ export function normalizeFilesPresentation(
             path: safeFilesDisplay(previewActionPath),
             displayPath: safeFilesDisplay(previewActionPath),
             lines: previewLines,
-            metadata: boundedMetadata(preview.metadata),
+            metadata: record(preview.metadata),
             ...(text(preview.error, 512)
               ? { error: safeFilesDisplay(text(preview.error, 512)) }
               : {}),
@@ -329,9 +276,12 @@ export function normalizeFilesPresentation(
 }
 
 function displayMetadata(metadata: Record<string, unknown>): string[] {
-  return Object.entries(boundedMetadata(metadata)).flatMap(([key, value]) => {
+  return Object.entries(metadata).flatMap(([key, value]) => {
     const safeKey = safeFilesDisplay(key, 80);
-    const safeValue = safeFilesDisplay(String(value), 240);
+    const safeValue = safeFilesDisplay(
+      typeof value === "string" ? value : JSON.stringify(value),
+      240,
+    );
     return safeKey && safeValue ? [`${safeKey}: ${safeValue}`] : [];
   });
 }
@@ -369,24 +319,10 @@ export function renderFilesScreen(
   const { presentation } = options;
   const layout = filesLayout(width);
   const root = new SurfaceBuilder(width);
+  root.addLine(`FILES  ${presentation.available ? "● READY" : "○ CONNECTING"}`);
   root.addLine(
-    `FILES  ${presentation.available ? "● READY" : "○ CONNECTING"}${presentation.error ? "  ! PROVIDER ERROR" : ""}`,
+    `${presentation.cwd || "Provider working directory unavailable"}  ${presentation.selectedCount} selected  filter: ${presentation.filter || "none"}  hidden: ${presentation.showHidden ? "on" : "off"}`,
   );
-  const estimates = [
-    presentation.selectedKnownBytes === undefined
-      ? ""
-      : `known bytes: ${presentation.selectedKnownBytes}`,
-    presentation.selectedApproximateTokens === undefined
-      ? ""
-      : `~tokens: ${presentation.selectedApproximateTokens}`,
-  ].filter(Boolean);
-  root.addLine(
-    `Root: ${presentation.cwd || "unavailable"}  Current: ${presentation.currentPath || "."}`,
-  );
-  root.addLine(
-    `${presentation.selectedCount} selected${estimates.length ? `  ${estimates.join("  ")}` : ""}  filter: ${presentation.filter || "none"}  hidden: ${presentation.showHidden ? "on" : "off"}`,
-  );
-  if (presentation.error) root.addLine(`! ${presentation.error}`);
   const contentY = root.lines.length;
   const tree = new SurfaceBuilder(layout.treeWidth);
   const preview = new SurfaceBuilder(layout.previewWidth);
@@ -396,20 +332,18 @@ export function renderFilesScreen(
     (row) => row.actionPath === options.state.focusedPath,
   );
   let treeScroll = Math.max(0, options.state.treeScroll);
-  if (!options.state.wheelDetached && selectedIndex >= 0) {
-    if (selectedIndex < treeScroll) treeScroll = selectedIndex;
-    else if (selectedIndex >= treeScroll + rowBudget)
-      treeScroll = selectedIndex - rowBudget + 1;
-  }
+  if (!options.state.wheelDetached && selectedIndex >= 0)
+    treeScroll = Math.max(
+      0,
+      Math.min(selectedIndex, treeScroll + rowBudget - 1),
+    );
   treeScroll = Math.min(
     treeScroll,
     Math.max(0, visibleRows.length - rowBudget),
   );
   for (const row of visibleRows.slice(treeScroll, treeScroll + rowBudget)) {
-    if (row.actionPath === undefined) {
-      const prefix =
-        row.kind === "warning" ? "! " : row.kind === "section" ? "─ " : "  ";
-      tree.addLine(`${prefix}${row.message ?? row.name}`);
+    if (row.kind === "info") {
+      tree.addLine(`  ${row.message ?? row.name}`);
       continue;
     }
     const actionPath = row.actionPath;
@@ -462,12 +396,7 @@ export function renderFilesScreen(
         }),
     });
   }
-  if (visibleRows.length === 0)
-    tree.addLine(
-      presentation.error
-        ? "Provider did not return repository rows."
-        : "No provider rows.",
-    );
+  if (visibleRows.length === 0) tree.addLine("No provider rows.");
 
   const selectedPreview = presentation.preview;
   preview.addLine(
@@ -510,28 +439,29 @@ export function renderFilesScreen(
   tree.addRegion(treeRegion);
   preview.addRegion(previewRegion);
   if (layout.narrow) {
-    root.addButtons([
-      {
-        id: "files:tab-tree",
-        label: "Tree",
-        focused: options.state.activePane === "tree",
-        activate: () =>
-          withState(options, {
-            activePane: "tree",
-            focusTarget: "tree",
-          }),
-      },
-      {
-        id: "files:tab-preview",
-        label: "Preview",
-        focused: options.state.activePane === "preview",
-        activate: () =>
-          withState(options, {
-            activePane: "preview",
-            focusTarget: "preview",
-          }),
-      },
-    ]);
+    const tabY = root.addLine(
+      `>${options.state.activePane === "tree" ? "Tree" : "Preview"}<  [Tree] [Preview]`,
+    );
+    root.addHitBox({
+      id: "files:tab-tree",
+      x: 0,
+      y: tabY,
+      width: 8,
+      height: 1,
+      disabled: false,
+      activate: () =>
+        withState(options, { activePane: "tree", focusTarget: "tree" }),
+    });
+    root.addHitBox({
+      id: "files:tab-preview",
+      x: 9,
+      y: tabY,
+      width: 11,
+      height: 1,
+      disabled: false,
+      activate: () =>
+        withState(options, { activePane: "preview", focusTarget: "preview" }),
+    });
     appendSurface(
       root,
       options.state.activePane === "tree" ? tree : preview,
@@ -548,47 +478,36 @@ export function renderFilesScreen(
   }
   root.addLine("");
   // This is the only command bar. Header, pane titles, metadata, and empty states are inert.
-  const actionButton = (
-    id: string,
-    label: string,
-    action: FilesAction,
-    disabled = false,
-  ) => ({
-    id,
-    label,
-    disabled,
-    focused: options.state.focusedAction === id,
-    activate: () => {
-      withState(options, { focusTarget: "actions", focusedAction: id });
-      options.onAction({ action });
-    },
-  });
   root.addButtons([
-    actionButton(
-      "files:action-insert-paths",
-      `Insert paths (${presentation.selectedCount})`,
-      "insert-paths",
-      presentation.selectedCount === 0,
-    ),
-    actionButton(
-      "files:action-insert-contents",
-      `Insert contents (${presentation.selectedCount})`,
-      "insert-contents",
-      presentation.selectedCount === 0,
-    ),
-    actionButton(
-      "files:action-clear",
-      "Clear selection",
-      "clear-selection",
-      presentation.selectedCount === 0,
-    ),
-    actionButton("files:action-refresh", "Refresh", "refresh"),
-    actionButton(
-      "files:action-open-standalone",
-      "Open standalone view",
-      "open-standalone",
-      !presentation.canOpenStandalone,
-    ),
+    {
+      id: "files:action-insert-paths",
+      label: `Insert paths (${presentation.selectedCount})`,
+      disabled: presentation.selectedCount === 0,
+      activate: () => options.onAction({ action: "insert-paths" }),
+    },
+    {
+      id: "files:action-insert-contents",
+      label: `Insert contents (${presentation.selectedCount})`,
+      disabled: presentation.selectedCount === 0,
+      activate: () => options.onAction({ action: "insert-contents" }),
+    },
+    {
+      id: "files:action-clear",
+      label: "Clear selection",
+      disabled: presentation.selectedCount === 0,
+      activate: () => options.onAction({ action: "clear-selection" }),
+    },
+    {
+      id: "files:action-refresh",
+      label: "Refresh",
+      activate: () => options.onAction({ action: "refresh" }),
+    },
+    {
+      id: "files:action-open-standalone",
+      label: "Open standalone view",
+      disabled: !presentation.canOpenStandalone,
+      activate: () => options.onAction({ action: "open-standalone" }),
+    },
   ]);
   const correctedState =
     treeScroll === options.state.treeScroll
@@ -601,245 +520,34 @@ export function renderFilesScreen(
   return { ...finished, layout, presentation };
 }
 
-const FILES_ACTION_IDS = [
-  "files:action-insert-paths",
-  "files:action-insert-contents",
-  "files:action-clear",
-  "files:action-refresh",
-  "files:action-open-standalone",
-] as const;
-
-function activateFilesAction(
-  options: FilesScreenOptions,
-  id: (typeof FILES_ACTION_IDS)[number],
-): boolean {
-  const actions: Record<string, FilesActionRequest> = {
-    "files:action-insert-paths": { action: "insert-paths" },
-    "files:action-insert-contents": { action: "insert-contents" },
-    "files:action-clear": { action: "clear-selection" },
-    "files:action-refresh": { action: "refresh" },
-    "files:action-open-standalone": { action: "open-standalone" },
-  };
-  const action = actions[id];
-  if (!action) return false;
-  const disabled =
-    (id === "files:action-insert-paths" ||
-      id === "files:action-insert-contents" ||
-      id === "files:action-clear") &&
-    options.presentation.selectedCount === 0;
-  if (
-    disabled ||
-    (id === "files:action-open-standalone" &&
-      !options.presentation.canOpenStandalone)
-  )
-    return true;
-  withState(options, { focusTarget: "actions", focusedAction: id });
-  options.onAction(action);
-  return true;
-}
-
 export function handleFilesKey(
   options: FilesScreenOptions,
   key: string,
 ): boolean {
   const rows = options.presentation.rows;
-  const actionable = rows.flatMap((row, index) =>
-    row.actionPath === undefined ? [] : [{ row, index }],
+  const current = Math.max(
+    0,
+    rows.findIndex((row) => row.actionPath === options.state.focusedPath),
   );
-  const current = actionable.findIndex(
-    (entry) => entry.row.actionPath === options.state.focusedPath,
-  );
-  const pageSize = Math.max(1, options.pageSize ?? 10);
-  const focusTargets: FilesScreenState["focusTarget"][] = [
-    "tree",
-    "preview",
-    "actions",
-  ];
-  const focus = (target: FilesScreenState["focusTarget"]): void => {
-    withState(options, {
-      focusTarget: target,
-      ...(target === "tree" ? { activePane: "tree" } : {}),
-      ...(target === "preview" ? { activePane: "preview" } : {}),
-    });
-  };
   const move = (delta: number): void => {
-    if (actionable.length === 0) return;
-    const next =
-      current < 0
-        ? delta > 0
-          ? 0
-          : actionable.length - 1
-        : Math.max(0, Math.min(actionable.length - 1, current + delta));
-    const row = actionable[next]?.row;
+    const row = rows[Math.max(0, Math.min(rows.length - 1, current + delta))];
     if (row?.actionPath !== undefined)
       withState(options, {
         focusedPath: row.actionPath,
         focusTarget: "tree",
-        activePane: "tree",
         wheelDetached: false,
       });
   };
-  const row = actionable[current]?.row;
-
-  if (key === "Tab" || key === "\t" || key === "Shift+Tab") {
-    const delta = key === "Shift+Tab" ? -1 : 1;
-    const index = focusTargets.indexOf(options.state.focusTarget);
-    focus(
-      focusTargets[
-        (index + delta + focusTargets.length) % focusTargets.length
-      ]!,
-    );
-    return true;
-  }
-  if (options.state.focusTarget === "actions") {
-    const currentAction = Math.max(
-      0,
-      FILES_ACTION_IDS.indexOf(
-        (options.state.focusedAction ??
-          "") as (typeof FILES_ACTION_IDS)[number],
-      ),
-    );
-    if (["ArrowDown", "j", "ArrowRight", "l"].includes(key)) {
-      withState(options, {
-        focusedAction:
-          FILES_ACTION_IDS[
-            Math.min(FILES_ACTION_IDS.length - 1, currentAction + 1)
-          ]!,
-      });
-      return true;
-    }
-    if (["ArrowUp", "k", "ArrowLeft"].includes(key)) {
-      withState(options, {
-        focusedAction: FILES_ACTION_IDS[Math.max(0, currentAction - 1)]!,
-      });
-      return true;
-    }
-    if (key === "Enter")
-      return activateFilesAction(
-        options,
-        (options.state.focusedAction ??
-          FILES_ACTION_IDS[0]) as (typeof FILES_ACTION_IDS)[number],
-      );
-  }
-  if (options.state.focusTarget === "preview") {
-    const previewMaxScroll = Math.max(
-      0,
-      (options.presentation.preview?.lines.length ?? 0) - pageSize,
-    );
-    if (key === "ArrowDown" || key === "j") {
-      withState(options, {
-        previewScroll: Math.min(
-          previewMaxScroll,
-          options.state.previewScroll + 1,
-        ),
-      });
-      return true;
-    }
-    if (key === "ArrowUp" || key === "k") {
-      withState(options, {
-        previewScroll: Math.max(0, options.state.previewScroll - 1),
-      });
-      return true;
-    }
-    if (key === "PageDown") {
-      withState(options, {
-        previewScroll: Math.min(
-          previewMaxScroll,
-          options.state.previewScroll + pageSize,
-        ),
-      });
-      return true;
-    }
-    if (key === "PageUp") {
-      withState(options, {
-        previewScroll: Math.max(0, options.state.previewScroll - pageSize),
-      });
-      return true;
-    }
-    if (key === "Enter" && options.presentation.preview?.actionPath) {
-      options.onAction({
-        action: "preview",
-        actionPath: options.presentation.preview.actionPath,
-      });
-      return true;
-    }
-  }
   if (key === "ArrowDown" || key === "j") {
-    focus("tree");
     move(1);
     return true;
   }
   if (key === "ArrowUp" || key === "k") {
-    focus("tree");
     move(-1);
     return true;
   }
-  if (key === "PageDown") {
-    focus("tree");
-    withState(options, {
-      treeScroll: Math.min(
-        Math.max(0, rows.length - pageSize),
-        options.state.treeScroll + pageSize,
-      ),
-      wheelDetached: true,
-    });
-    return true;
-  }
-  if (key === "PageUp") {
-    focus("tree");
-    withState(options, {
-      treeScroll: Math.max(0, options.state.treeScroll - pageSize),
-      wheelDetached: true,
-    });
-    return true;
-  }
-  if ((key === "ArrowRight" || key === "l") && row?.actionPath) {
-    if (isFolder(row) && !row.expanded) {
-      options.onAction({
-        action: "expand",
-        actionPath: row.actionPath,
-        expanded: true,
-      });
-      return true;
-    }
-    const childPrefix = `${row.actionPath}/`;
-    const child = actionable.find(
-      (entry) =>
-        entry.index > (actionable[current]?.index ?? -1) &&
-        entry.row.depth === row.depth + 1 &&
-        entry.row.actionPath?.startsWith(childPrefix),
-    )?.row;
-    if (child?.actionPath) {
-      withState(options, {
-        focusedPath: child.actionPath,
-        wheelDetached: false,
-      });
-      return true;
-    }
-  }
-  if (key === "ArrowLeft" && row?.actionPath) {
-    if (isFolder(row) && row.expanded) {
-      options.onAction({
-        action: "expand",
-        actionPath: row.actionPath,
-        expanded: false,
-      });
-      return true;
-    }
-    const separator = row.actionPath.lastIndexOf("/");
-    const parentPath = separator < 0 ? "" : row.actionPath.slice(0, separator);
-    const parent = actionable.find(
-      (entry) => entry.row.actionPath === parentPath,
-    )?.row;
-    if (parent?.actionPath) {
-      withState(options, {
-        focusedPath: parent.actionPath,
-        wheelDetached: false,
-      });
-      return true;
-    }
-  }
-  if ((key === "Enter" || key === "p") && row?.actionPath) {
+  const row = rows[current];
+  if (key === "Enter" && row?.actionPath !== undefined) {
     options.onAction({
       action: isFolder(row) ? "expand" : "preview",
       actionPath: row.actionPath,
@@ -847,21 +555,33 @@ export function handleFilesKey(
     });
     return true;
   }
-  if ((key === " " || key === "Space") && row?.actionPath) {
+  if ((key === " " || key === "Space") && row?.actionPath !== undefined) {
     options.onAction({
       action: "toggle-selection",
       actionPath: row.actionPath,
     });
     return true;
   }
-  if (key === "H" || key === "h") {
+  if (key === "h") {
     options.onAction({ action: "toggle-hidden" });
     return true;
   }
-  if (key === "i") return activateFilesAction(options, FILES_ACTION_IDS[0]);
-  if (key === "c") return activateFilesAction(options, FILES_ACTION_IDS[2]);
-  if (key === "r") return activateFilesAction(options, FILES_ACTION_IDS[3]);
-  if (key === "o") return activateFilesAction(options, FILES_ACTION_IDS[4]);
+  if (key === "i") {
+    options.onAction({ action: "insert-paths" });
+    return true;
+  }
+  if (key === "c") {
+    options.onAction({ action: "clear-selection" });
+    return true;
+  }
+  if (key === "r") {
+    options.onAction({ action: "refresh" });
+    return true;
+  }
+  if (key === "o") {
+    options.onAction({ action: "open-standalone" });
+    return true;
+  }
   return false;
 }
 
