@@ -95,10 +95,6 @@ import { renderTextInputScreen } from "./screens/text-input-screen.js";
 import { renderQuestionResponseScreen } from "./screens/question-response-screen.js";
 import { renderHeader } from "./shell/header.js";
 import type { RenderedSurface } from "./screen-types.js";
-import {
-  buildQuestionResponsePayload,
-  type QuestionResponseSelection,
-} from "./question-response.js";
 
 export interface BrokerDeckAppOptions {
   client: BrokerClient;
@@ -187,10 +183,7 @@ export class BrokerDeckApp implements Component {
       options.client.store.onChange((state) => {
         if (
           this.#overlay.kind === "agent-more" &&
-          !isAgentMoreGuardCurrent(
-            this.scopedWorkState(state),
-            this.#overlay.guard,
-          )
+          !isAgentMoreGuardCurrent(state, this.#overlay.guard)
         )
           this.closeOverlay();
         const projection = currentProviderProjection(state, this.#targetPaneId);
@@ -294,21 +287,6 @@ export class BrokerDeckApp implements Component {
       this.#requestRender();
       return;
     }
-    if (
-      data === "\u001b" &&
-      this.#tab === "files" &&
-      this.#filesSurface?.layout.narrow &&
-      this.#filesScreen.activePane === "preview"
-    ) {
-      this.#filesScreen = {
-        ...this.#filesScreen,
-        activePane: "tree",
-        focusTarget: "tree",
-      };
-      this.syncVisibleSignature();
-      this.#requestRender();
-      return;
-    }
     if (data === "q" || data === "\u0003" || data === "\u001b") {
       this.#onClose();
       return;
@@ -316,8 +294,6 @@ export class BrokerDeckApp implements Component {
       this.selectTab(NAV_TABS[Number(data) - 1]!);
     else if (data === ",") this.toggleSettings();
     else if (data === "?") this.toggleHelp();
-    else if (data === "r" && this.#tab === "files")
-      handleFilesKey(this.filesScreenOptions(), "r");
     else if (data === "r") void this.run("refresh");
     else if (data === "v" && this.#tab === "board") this.cycleBoardFilter();
     else if (data === "v" && this.#tab === "activity")
@@ -331,21 +307,9 @@ export class BrokerDeckApp implements Component {
           ? "ArrowUp"
           : data === "\u001b[B"
             ? "ArrowDown"
-            : data === "\u001b[C"
-              ? "ArrowRight"
-              : data === "\u001b[D"
-                ? "ArrowLeft"
-                : data === "\r" || data === "\n"
-                  ? "Enter"
-                  : data === "\t"
-                    ? "Tab"
-                    : data === "\u001b[Z"
-                      ? "Shift+Tab"
-                      : data === "\u001b[5~"
-                        ? "PageUp"
-                        : data === "\u001b[6~"
-                          ? "PageDown"
-                          : data;
+            : data === "\r" || data === "\n"
+              ? "Enter"
+              : data;
       if (!handleFilesKey(this.filesScreenOptions(), key) && data === "/")
         this.beginInput("files-filter");
     } else if (data === "f" && this.#tab === "agents") void this.run("focus");
@@ -487,12 +451,11 @@ export class BrokerDeckApp implements Component {
       online: this.#status === "connected",
       boardFilter: this.#boardFilter,
       activityFilter: this.#activityFilter,
-      ...(this.#unifiedBoardSelection
-        ? { boardSelectedId: this.#unifiedBoardSelection }
-        : {}),
-      ...(this.#activitySelection
-        ? { activitySelectedId: this.#activitySelection }
-        : {}),
+      ...(this.#tab === "activity" && this.#activitySelection
+        ? { boardSelectionId: this.#activitySelection }
+        : this.#unifiedBoardSelection
+          ? { boardSelectionId: this.#unifiedBoardSelection }
+          : {}),
       notifications: this.#client.store.notifications,
       ...(overlay.kind !== "none"
         ? { overlay: overlay.kind, overlayGuard: overlay }
@@ -556,7 +519,7 @@ export class BrokerDeckApp implements Component {
   private ensureAgentMoreCurrent(): boolean {
     if (
       this.#overlay.kind === "agent-more" &&
-      !this.guardedAgent(this.#overlay.guard)
+      !isAgentMoreGuardCurrent(this.#client.store.state, this.#overlay.guard)
     ) {
       this.closeOverlay();
       this.syncVisibleSignature();
@@ -569,7 +532,7 @@ export class BrokerDeckApp implements Component {
     const overlay = this.#overlay;
     if (overlay.kind !== "agent-more" || !this.ensureAgentMoreCurrent()) return;
     const presentation = openAgentMore(
-      this.scopedWorkState(this.#client.store.state),
+      this.#client.store.state,
       overlay.guard,
       overlay.focusedIndex ?? 0,
       this.agentActionContract(),
@@ -590,7 +553,7 @@ export class BrokerDeckApp implements Component {
   ): void {
     if (!this.ensureAgentMoreCurrent()) return;
     const presentation = openAgentMore(
-      this.scopedWorkState(this.#client.store.state),
+      this.#client.store.state,
       guard,
       index,
       this.agentActionContract(),
@@ -600,7 +563,7 @@ export class BrokerDeckApp implements Component {
       return;
     }
     activateAgentMore(
-      this.scopedWorkState(this.#client.store.state),
+      this.#client.store.state,
       presentation,
       this.agentActionContract(),
     );
@@ -640,7 +603,7 @@ export class BrokerDeckApp implements Component {
         return renderHelpScreen(width, () => this.closeOverlay());
       case "agent-more": {
         const presentation = openAgentMore(
-          this.scopedWorkState(this.#client.store.state),
+          this.#client.store.state,
           overlay.guard,
           overlay.focusedIndex ?? 0,
           this.agentActionContract(),
@@ -682,12 +645,11 @@ export class BrokerDeckApp implements Component {
           onToggle: (id) => {
             this.#overlay = toggleQuestionOption(overlay, id);
           },
-          onRecommendation: () =>
-            void this.handleQuestionRecommendation(overlay),
+          onRecommendation: () => {
+            this.#overlay = applyQuestionRecommendation(overlay);
+          },
           onSubmit: () => void this.submitQuestionResponse(),
           onCancel: () => this.closeOverlay(),
-          onDismiss: () => void this.dismissQuestion(overlay),
-          onRetry: () => void this.retryQuestionDelivery(overlay),
         });
     }
   }
@@ -734,10 +696,8 @@ export class BrokerDeckApp implements Component {
     }
     if (overlay.kind === "agent-more") {
       if (data === "m" || data === "\u001b") this.closeOverlay();
-      else if (data === "\u001b[A" || data === "k" || data === "\u001b[Z")
-        this.setAgentMoreFocus(-1);
-      else if (data === "\u001b[B" || data === "j" || data === "\t")
-        this.setAgentMoreFocus(1);
+      else if (data === "\u001b[A" || data === "k") this.setAgentMoreFocus(-1);
+      else if (data === "\u001b[B" || data === "j") this.setAgentMoreFocus(1);
       else if (data === "\r" || data === "\n")
         this.activateAgentMore(overlay.guard, overlay.focusedIndex ?? 0);
       return;
@@ -747,7 +707,7 @@ export class BrokerDeckApp implements Component {
       return;
     }
     if (overlay.kind === "question-response") {
-      if (data === "y") this.handleQuestionRecommendation(overlay);
+      if (data === "y") this.#overlay = applyQuestionRecommendation(overlay);
       else if (data >= "1" && data <= "9") {
         const option = overlay.question.options[Number(data) - 1];
         if (option) this.#overlay = toggleQuestionOption(overlay, option.id);
@@ -961,7 +921,14 @@ export class BrokerDeckApp implements Component {
         accepted = await this.loadSettings();
       } else if (overlay.purpose === "default")
         accepted = await this.setDefault(value);
-      else accepted = await this.run(overlay.purpose, value, target);
+      else {
+        // The broker request is launched synchronously. Close the editor now
+        // so navigation is not blocked while the request settles.
+        const request = this.run(overlay.purpose, value, target);
+        this.closeOverlay();
+        await request;
+        return;
+      }
       if (!accepted) {
         this.#overlay = {
           ...overlay,
@@ -1011,46 +978,13 @@ export class BrokerDeckApp implements Component {
       };
       return;
     }
-    const model = selectUnifiedBoardPresentation(
-      this.#client.store.state,
-      this.#targetPaneId,
-      undefined,
-      "all-current",
-    );
-    const currentItem = model.visible.find(
-      (item) =>
-        item.entityId === overlay.guard?.questionId &&
-        (overlay.question.source === "signals"
-          ? item.kind === "signal-question"
-          : item.kind === "broker-question"),
-    );
-    if (!currentItem) {
-      this.#overlay = {
-        ...overlay,
-        error: "The question changed. Close and select it again.",
-      };
-      return;
-    }
-    const context = this.productTargetContext();
-    const currentTarget = actionTargetForBoardItem(currentItem, context);
-    const currentQuestion =
-      currentItem.kind === "signal-question"
-        ? normalizedSignalsQuestionForBoardItem(currentItem, context.agentBoard)
-        : currentItem.kind === "broker-question"
-          ? normalizeBrokerQuestion(currentItem.source)
-          : undefined;
-    if (!currentQuestion) {
-      this.#overlay = {
-        ...overlay,
-        error: "The current Signals question is unavailable.",
-      };
-      return;
-    }
+    let target = overlay.target;
+    const currentTarget = this.target();
+    const guard = overlay.guard;
     if (
-      currentQuestion.terminal ||
-      currentQuestion.responseKind !== overlay.question.responseKind ||
-      (overlay.guard?.revision !== undefined &&
-        currentQuestion.revision !== overlay.guard.revision)
+      guard?.questionId &&
+      currentTarget.questionId !== guard.questionId &&
+      currentTarget.boardQuestion?.questionId !== guard.questionId
     ) {
       this.#overlay = {
         ...overlay,
@@ -1058,20 +992,98 @@ export class BrokerDeckApp implements Component {
       };
       return;
     }
-    const selection: QuestionResponseSelection = {
-      selectedOptionIds: [...overlay.selectedOptionIds],
-      text: overlay.text,
-    };
-    this.#overlay = { ...overlay, pending: true };
+    if (
+      overlay.question.source === "signals" &&
+      guard?.revision !== undefined &&
+      currentTarget.boardQuestion?.revision !== guard.revision
+    ) {
+      this.#overlay = {
+        ...overlay,
+        error: "The question revision changed. Close and select it again.",
+      };
+      return;
+    }
+    if (guard?.questionId) {
+      if (overlay.question.source === "signals") {
+        const currentItem = selectUnifiedBoardPresentation(
+          this.#client.store.state,
+          this.#targetPaneId,
+          undefined,
+          this.#boardFilter,
+        ).visible.find(
+          (item) =>
+            item.kind === "signal-question" &&
+            item.pendingQuestion?.questionId === guard.questionId,
+        );
+        if (!currentItem || currentItem.kind !== "signal-question") {
+          this.#overlay = {
+            ...overlay,
+            error: "The question changed. Close and select it again.",
+          };
+          return;
+        }
+        const pending = signalsQuestionForBoardItem(
+          currentItem,
+          this.productTargetContext().agentBoard,
+        );
+        const normalized = normalizedSignalsQuestionForBoardItem(
+          currentItem,
+          this.productTargetContext().agentBoard,
+        );
+        if (!pending || !normalized || pending.revision !== guard.revision) {
+          this.#overlay = {
+            ...overlay,
+            error: "The question revision changed. Close and select it again.",
+          };
+          return;
+        }
+        target = {
+          ...actionTargetForBoardItem(currentItem, this.productTargetContext()),
+          boardQuestion: pending,
+          questionId: pending.questionId,
+        };
+      } else {
+        const question = this.scopedWorkState(
+          this.#client.store.state,
+        ).questions.get(guard.questionId);
+        if (!question || normalizeBrokerQuestion(question).terminal) {
+          this.#overlay = {
+            ...overlay,
+            error: "The question changed. Close and select it again.",
+          };
+          return;
+        }
+        target = {
+          ...actionTargetForAgent(this.adoptedRootAgent()),
+          question,
+          questionId: question.id,
+        };
+      }
+    }
+    const denied = this.#actions.authorize(
+      overlay.question.source === "signals" ? "agentBoardAnswer" : "answer",
+      target,
+    );
+    if (denied) {
+      this.#overlay = { ...overlay, error: denied };
+      return;
+    }
+    this.#overlay = { ...overlay, target, pending: true };
     try {
-      // Validate against the freshly resolved question. DeckActions rebuilds the
-      // same typed payload and never accepts a caller-supplied wire value.
-      buildQuestionResponsePayload(currentQuestion, selection);
-      await this.#actions.run(
-        currentQuestion.source === "signals" ? "agentBoardAnswer" : "answer",
-        currentTarget,
-        selection,
-      );
+      if (overlay.question.source === "signals") {
+        const value = {
+          kind: overlay.selectedOptionIds.length > 0 ? "options" : "text",
+          ...(overlay.selectedOptionIds.length > 0
+            ? { optionIds: [...overlay.selectedOptionIds] }
+            : {}),
+          ...(overlay.text.trim() ? { text: overlay.text.trim() } : {}),
+        };
+        await this.#actions.run("agentBoardAnswer", target, value);
+      } else
+        await this.#actions.run("answer", target, {
+          optionId: overlay.selectedOptionIds[0] ?? null,
+          text: overlay.text.trim() || null,
+        });
       this.#message = "Answer accepted.";
       this.closeOverlay();
     } catch (error) {
@@ -1082,102 +1094,6 @@ export class BrokerDeckApp implements Component {
       };
     }
     this.#requestRender();
-  }
-
-  private async handleQuestionRecommendation(
-    overlay: Extract<OverlayState, { kind: "question-response" }>,
-  ): Promise<void> {
-    if (overlay.question.source !== "signals") {
-      this.#overlay = applyQuestionRecommendation(overlay);
-      return;
-    }
-    await this.runQuestionMutation(overlay, "accept-recommendation");
-  }
-
-  private async dismissQuestion(
-    overlay: Extract<OverlayState, { kind: "question-response" }>,
-  ): Promise<void> {
-    if (overlay.question.source !== "signals") return;
-    await this.runQuestionMutation(overlay, "dismiss-question");
-  }
-
-  private async retryQuestionDelivery(
-    overlay: Extract<OverlayState, { kind: "question-response" }>,
-  ): Promise<void> {
-    if (
-      overlay.question.source !== "signals" ||
-      !overlay.question.retryableDelivery ||
-      !overlay.question.answerId
-    )
-      return;
-    await this.runQuestionMutation(overlay, "retry-delivery");
-  }
-
-  private async runQuestionMutation(
-    overlay: Extract<OverlayState, { kind: "question-response" }>,
-    action: "accept-recommendation" | "dismiss-question" | "retry-delivery",
-  ): Promise<void> {
-    if (this.#overlay.kind !== "question-response" || this.#overlay.pending)
-      return;
-    const item = this.currentBoardQuestionItem(overlay.guard?.questionId);
-    const current = item
-      ? normalizedSignalsQuestionForBoardItem(
-          item,
-          this.productTargetContext().agentBoard,
-        )
-      : undefined;
-    if (
-      !item ||
-      !current ||
-      current.terminal ||
-      current.revision !== overlay.guard?.revision ||
-      (action === "dismiss-question" && !current.dismissible) ||
-      (action === "retry-delivery" &&
-        (!current.retryableDelivery || !current.answerId))
-    ) {
-      this.#overlay = {
-        ...overlay,
-        error: "The question changed. Close and select it again.",
-      };
-      return;
-    }
-    const request = signalsActionRequest(
-      item,
-      action,
-      this.productTargetContext().agentBoard,
-    );
-    if (!request) {
-      this.#overlay = { ...overlay, error: "The action is unavailable." };
-      return;
-    }
-    const { error: _previousError, ...pendingOverlay } = overlay;
-    this.#overlay = { ...pendingOverlay, pending: true };
-    this.#requestRender();
-    const target = actionTargetForBoardItem(item, this.productTargetContext());
-    const ok = await this.run("boardAction", undefined, {
-      ...target,
-      boardAction: request,
-    });
-    if (ok) this.closeOverlay();
-    else
-      this.#overlay = {
-        ...overlay,
-        pending: false,
-        error: this.#message.slice(0, 4_000),
-      };
-    this.#requestRender();
-  }
-
-  private currentBoardQuestionItem(questionId?: string): BoardItem | undefined {
-    if (!questionId) return undefined;
-    return selectUnifiedBoardPresentation(
-      this.#client.store.state,
-      this.#targetPaneId,
-      undefined,
-      "all-current",
-    ).visible.find(
-      (item) => item.kind === "signal-question" && item.entityId === questionId,
-    );
   }
 
   private async submitConfirmation(): Promise<void> {
@@ -1211,7 +1127,9 @@ export class BrokerDeckApp implements Component {
         this.closeOverlay();
         return;
       }
-      target = actionTargetForBoardItem(item, this.productTargetContext());
+      // The guard validates the current board item. Keep the original target
+      // identity so a confirmation cannot silently switch sources.
+      target = overlay.target;
     } else if (
       overlay.action === "groupStop" ||
       overlay.action === "groupClose"
@@ -1242,7 +1160,9 @@ export class BrokerDeckApp implements Component {
         this.closeOverlay();
         return;
       }
-      target = actionTargetForBoardItem(item, this.productTargetContext());
+      // The guard validates the current board item. Keep the original target
+      // identity so a confirmation cannot silently switch sources.
+      target = overlay.target;
     } else {
       const agentId =
         overlay.target.agent?.id ?? guard.agentId ?? guard.targetId;
@@ -1277,7 +1197,6 @@ export class BrokerDeckApp implements Component {
 
   private selectBoardItem(item: BoardItem): void {
     this.#unifiedBoardSelection = item.id;
-    this.#boardWheelDetached = false;
   }
 
   private selectedBoardItem(): BoardItem | undefined {
@@ -1352,7 +1271,6 @@ export class BrokerDeckApp implements Component {
         filter: (filter) => {
           this.#boardFilter = filter;
           this.#boardScroll = 0;
-          this.#boardWheelDetached = false;
         },
         answer: (item) => {
           if (item.kind === "signal-question")
@@ -1722,11 +1640,9 @@ export class BrokerDeckApp implements Component {
       case "insert-paths":
       case "insert-contents":
       case "clear-selection":
+      case "refresh":
       case "toggle-hidden":
         void this.runFiles(request.action);
-        return;
-      case "refresh":
-        void this.runFiles("snapshot");
         return;
     }
   }
@@ -1786,7 +1702,6 @@ export class BrokerDeckApp implements Component {
     return {
       rootAgent: this.adoptedRootAgent(),
       scopedAgents: this.scopedWorkState(state).agents,
-      runs: this.scopedWorkState(state).runs,
       agentBoard: currentProviderProjection(state, this.#targetPaneId)
         ?.agentBoard,
     };
@@ -2002,27 +1917,32 @@ export class BrokerDeckApp implements Component {
     value: string,
     parentOverride?: Agent,
   ): Promise<boolean> {
-    const parts = value.split("|").map((part) => part.trim());
-    const automatic = parts.length === 5 && parts[3] === "auto";
-    const [title, objective, profileId] = parts;
-    const provider = automatic ? undefined : parts[3];
-    const modelId = automatic ? undefined : parts[4];
-    const thinkingLevel = automatic ? undefined : parts[5];
-    const lifecycleClass = automatic ? parts[4] : parts[6];
+    const [
+      title,
+      objective,
+      profileId,
+      provider,
+      modelId,
+      thinkingLevel,
+      lifecycleClass,
+      ...extra
+    ] = value.split("|").map((part) => part.trim());
     const parent = parentOverride ?? this.selectedAgent();
     if (
-      (!automatic && parts.length !== 7) ||
+      extra.length ||
       !parent?.cwd ||
       !title ||
       !objective ||
       !profileId ||
-      (!automatic && (!provider || !modelId || !thinkingLevel)) ||
+      !provider ||
+      !modelId ||
+      !thinkingLevel ||
       !["temporary", "reusable", "retained", "pinned"].includes(
         lifecycleClass ?? "",
       )
     ) {
       this.#message =
-        "Use title|objective|profile|auto|lifecycle or title|objective|profile|provider|model|thinking|lifecycle.";
+        "Use title|objective|profile|provider|model|thinking|lifecycle with a parent that has a project.";
       this.#requestRender();
       return false;
     }
@@ -2031,7 +1951,7 @@ export class BrokerDeckApp implements Component {
         parentAgentId: parent.id,
         task: { title, objective },
         profileId,
-        ...(automatic ? {} : { model: { provider, modelId, thinkingLevel } }),
+        model: { provider, modelId, thinkingLevel },
         lifecycleClass,
         keepForReuse: lifecycleClass === "reusable",
         project: { cwd: parent.cwd },
@@ -2043,9 +1963,7 @@ export class BrokerDeckApp implements Component {
         budget: { wallTimeMs: 1_800_000 },
         wait: false,
       });
-      this.#message = automatic
-        ? "Creation accepted with broker-owned model selection."
-        : `Creation accepted with explicit ${provider}/${modelId} and ${thinkingLevel} thinking.`;
+      this.#message = `Creation accepted with explicit ${provider}/${modelId} and ${thinkingLevel} thinking.`;
       await this.#client.refresh();
     } catch (error) {
       this.#message = error instanceof Error ? error.message : String(error);

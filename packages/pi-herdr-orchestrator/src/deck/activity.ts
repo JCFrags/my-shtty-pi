@@ -86,22 +86,6 @@ export type ActivityDetail =
     }
   | SignalActivityDetail
   | SystemActivityDetail;
-const activityRecord = (value: unknown): BoardRecord =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as BoardRecord)
-    : {};
-
-const activityText = (value: unknown): string | undefined => {
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object") {
-    const record = activityRecord(value);
-    const candidate =
-      record.text ?? record.summary ?? record.outcome ?? record.statusLabel;
-    return typeof candidate === "string" ? candidate : undefined;
-  }
-  return undefined;
-};
-
 export function activityDetail(item: ActivityItem): ActivityDetail {
   const base = {
     id: item.entityId,
@@ -146,20 +130,12 @@ export function activityDetail(item: ActivityItem): ActivityDetail {
         ...(typeof source.terminalAt === "string"
           ? { terminalAt: source.terminalAt }
           : {}),
-        ...(activityText(source.detail)
-          ? { detail: activityText(source.detail) }
-          : {}),
+        ...(typeof source.detail === "string" ? { detail: source.detail } : {}),
         ...(typeof source.stage === "string" ? { stage: source.stage } : {}),
         ...(typeof source.outcome === "string"
           ? { outcome: source.outcome }
           : {}),
-        ...(activityText(source.answerSummary ?? source.acknowledgementOutcome)
-          ? {
-              answer: activityText(
-                source.answerSummary ?? source.acknowledgementOutcome,
-              ),
-            }
-          : {}),
+        ...(typeof source.answer === "string" ? { answer: source.answer } : {}),
         ...(typeof source.revision === "number"
           ? { revision: source.revision }
           : {}),
@@ -167,7 +143,7 @@ export function activityDetail(item: ActivityItem): ActivityDetail {
           ? { deliveryState: source.deliveryState }
           : {}),
         retryableDelivery: source.retryableDelivery === true,
-        archivable: source.terminal === true && source.archived !== true,
+        archivable: source.archivable === true,
       } as ActivityDetail;
     }
   }
