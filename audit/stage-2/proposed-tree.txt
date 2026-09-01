@@ -1,0 +1,69 @@
+# Proposed future tree — design only; not created in Stage 2
+
+.gitignore
+LICENSE
+README.md
+package.json
+package-lock.json
+.github/
+  workflows/
+    verify.yml
+scripts/
+  verify-deployed-baseline.mjs
+packages/
+  codex-usage-footer/
+    DEPLOYED.sha256  LICENSE  README.md  package.json
+    extensions/codex-usage-footer.ts
+  files-ui/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    extensions/  src/  test/smoke.test.ts
+  grounded-tools/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    core/  dialog/  files/  lsp/  notes/  process/  tasks/  workplan/
+    test/smoke.test.ts
+  herdr-agent-state/
+    DEPLOYED.sha256  LICENSE  README.md  package.json
+    extensions/herdr-agent-state.ts
+  herdr-blocked-bridge/
+    DEPLOYED.sha256  LICENSE  README.md  package.json
+    extensions/herdr-blocked-bridge.ts
+  herdr-status/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    extensions/  src/  test/smoke.test.ts
+  pi-agent-context/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    extensions/  src/  test/smoke.test.ts
+  pi-chrono-compaction/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    src/  dist/src/  test/smoke.test.ts
+  pi-herdr-orchestrator/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    extensions/  src/  schemas/  profiles/  workflows/
+    vendor/pi-chrono-compact-2.0.0-herdr.1.tgz
+    dist/extensions/  dist/src/  test/smoke.test.ts
+  pi-native-ssh/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    src/  test/smoke.test.ts
+  pi-pixel-cua/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  tsconfig.json
+    src/  helper/  test/smoke.test.ts
+  pi-progressive-tools/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    extensions/  test/smoke.test.ts
+  pi-review-ui/
+    LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    extensions/review-ui.ts  src/  test/smoke.test.ts
+  pi-signal-board/
+    DEPLOYED.sha256  LICENSE  README.md  package.json  package-lock.json  tsconfig.json  tsconfig.build.json
+    src/  dist/  test/smoke.test.ts
+  pi-tool-controls/
+    LICENSE  README.md  package.json  package-lock.json  tsconfig.json
+    extensions/tool-controls.ts  src/  test/smoke.test.ts
+  temporary-orchestrator-cancel-isolation/
+    DEPLOYED.sha256  LICENSE  README.md  package.json
+    extensions/temporary-orchestrator-cancel-isolation.ts
+  titlebar-spinner/
+    DEPLOYED.sha256  LICENSE  README.md  package.json
+    extensions/titlebar-spinner.ts
+
+# Excluded: pi-web. Its Stage 1 audit snapshot remains evidence only.

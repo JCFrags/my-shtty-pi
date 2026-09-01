@@ -1,0 +1,3607 @@
+{
+  "schema_version": 1,
+  "stage_1_commit": "19110f9cf34ab29b2059e3bff460e856c7157bce",
+  "baseline_accounting": {
+    "stage_1_entries": 22,
+    "active_in_scope_entrypoints": 21,
+    "active_in_scope_product_families": 15,
+    "inactive_real_extensions": 2,
+    "external_excluded_entries": 1,
+    "proposed_retained_products": 17
+  },
+  "classification_counts": {
+    "ACTIVE_CANONICAL": 14,
+    "ACTIVE_TEMPORARY": 1,
+    "INACTIVE_REAL_EXTENSION": 2,
+    "EXTERNAL_EXCLUDED": 1
+  },
+  "products": [
+    {
+      "canonical_slug": "codex-usage-footer",
+      "display_name": "Codex Usage Footer",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "codex-usage-footer",
+          "activation_source": "global auto-discovery",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/extensions/codex-usage-footer.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/codex-usage-footer/codex-usage-footer.ts",
+          "sha256": "f9e3f4031c5b5d666424a134cd9c5a4d09ce5427ee3e669c1c2e3779ae9c873f"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "codex-usage-footer",
+          "snapshot_path": "audit/stage-1/live-deployed/codex-usage-footer",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/codex-usage-footer/codex-usage-footer.ts",
+              "sha256": "f9e3f4031c5b5d666424a134cd9c5a4d09ce5427ee3e669c1c2e3779ae9c873f"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [],
+      "local_source_roots": [
+        "$HOME/.pi/agent/extensions"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [],
+      "license": {
+        "spdx": null,
+        "evidence": "No standalone package or license metadata in the Stage 1 runtime closure; retain under repository-level license only after ownership review."
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "The Stage 1 TypeScript entrypoint is the authoritative deployed byte sequence.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/codex-usage-footer",
+      "exact_files_or_directories_to_retain": [
+        "packages/codex-usage-footer/extensions/codex-usage-footer.ts",
+        "packages/codex-usage-footer/package.json",
+        "packages/codex-usage-footer/README.md",
+        "packages/codex-usage-footer/LICENSE",
+        "packages/codex-usage-footer/DEPLOYED.sha256"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "files-ui",
+      "display_name": "Files UI",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "files-ui",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/Projects/my-shtty-pi/packages/files-ui/extensions/files/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/files-ui/extensions/files/index.ts",
+          "sha256": "ac75866fa1bb52708c0a77fffa139d1e9bcb56b3975efc4584395b72e99694ab"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "files-ui",
+          "snapshot_path": "audit/stage-1/live-deployed/files-ui",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/extensions/files/index.ts",
+              "sha256": "ac75866fa1bb52708c0a77fffa139d1e9bcb56b3975efc4584395b72e99694ab"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/package-lock.json",
+              "sha256": "64bc91df105170c5ca6d742d8af7bbaa9d1c834cf65b08cd401bbb7c09709567"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/package.json",
+              "sha256": "d2131aa6d0990c91f923333a65133376d5bb41011059c9e594fe53acbd875eab"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/binary.ts",
+              "sha256": "e96b18b895fe3a962ad9d5570cd5ccaac58b485be03502c514a18da61c96261f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/constants.ts",
+              "sha256": "af0c2162dbd011c2bef499d7f01c74bebca0ac3e0901217f867593dc86f9f389"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/file-read.ts",
+              "sha256": "0b633a422a2fd3d759377bf629da2146bc4bc1f1f2e8566da5a6bf7a347f06eb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/filesystem.ts",
+              "sha256": "5e94c51dce886c071df19134e9dc7497c38461a114f4b741dadd0250b1d7c065"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/gitignore.ts",
+              "sha256": "2c9fb6b3f3410e343f5d623196ec99443d7012d113c774ce14ecf578b496a27f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/insertion.ts",
+              "sha256": "a355e4df2233797752d887d170d8932b7b8768cea59cd474becee532625bb4b0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/path-utils.ts",
+              "sha256": "a32453884b2df55922eb79ed5b66bc949917d9333eed6d0069dedbe98ec6c4c0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/preview.ts",
+              "sha256": "1f8a3d56cf63271ca29b3aee493151571cba44ab64b81c1d1fe1601e9b90d241"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/provider.ts",
+              "sha256": "dda4723160308b0ef0e49f98aab8bf29ea1005f58472c8b8a108caff6305772f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/types.ts",
+              "sha256": "db2abb1ad0f34d799c74eb5b55bf0c9aacd48aa70dd2a06a0a76ee74902ce330"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/ui/files-browser.ts",
+              "sha256": "8adae4fdf89f5439ebb44602370668067e4199273430ea5d0921a8bfdaa2996d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/ui/key.ts",
+              "sha256": "18311fe09640ac12b25d5b0e9e7c1d88bf88a70e0eeda7915e62f6785f94c609"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/ui/layout.ts",
+              "sha256": "329284c0804caa6cb57e7d07fbbe0486b8c8b13047bbbc0abd9505b041d22a17"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/ui/mouse.ts",
+              "sha256": "686f2d5f7fa461b702665d61934905871914ed1e6881d02a5895e30977b3c5e6"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/files-ui/src/ui/text.ts",
+              "sha256": "af413dc004570434c779f3957577ff624a2ca9580e73210e80ba23a50d1733e0"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/files-ui"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/files-ui/package.json",
+          "name": "pi-files-ui",
+          "version": "0.1.1"
+        },
+        {
+          "path": "packages/files-ui/package-lock.json",
+          "version": "lock metadata"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "Stage 1 captures the exact loaded TypeScript closure. Retain that closure, then reconcile it with the tracked source and privately preserved dirty state.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [
+          {
+            "group_id": "my-shtty-pi-U002",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-final-files-provider",
+                "tip_sha": "a5358975bd61821c0b27b29bfa82d11dcf4efe17"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          }
+        ],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/files-ui",
+      "exact_files_or_directories_to_retain": [
+        "packages/files-ui/extensions",
+        "packages/files-ui/src",
+        "packages/files-ui/package.json",
+        "packages/files-ui/package-lock.json",
+        "packages/files-ui/tsconfig.json",
+        "packages/files-ui/README.md",
+        "packages/files-ui/LICENSE",
+        "packages/files-ui/DEPLOYED.sha256",
+        "packages/files-ui/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "grounded-tools",
+      "display_name": "Grounded Tools",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "grounded-files",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/afa7977ae759947d3fbc905e0b2beef3d4f0b51c663365614b7ab368aef62c66/packages/files/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/grounded-files/files/index.ts",
+          "sha256": "ae99314b197b281ab1df854428d4b16966fdd00ec3f3eb84f24ba68db022fd35"
+        },
+        {
+          "stage_1_slug": "grounded-process",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/afa7977ae759947d3fbc905e0b2beef3d4f0b51c663365614b7ab368aef62c66/packages/process/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/grounded-process/process/index.ts",
+          "sha256": "288a54fca963ea56d921904723157e25b9e22572835dc7180c85ee3c74f52175"
+        },
+        {
+          "stage_1_slug": "grounded-lsp",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/afa7977ae759947d3fbc905e0b2beef3d4f0b51c663365614b7ab368aef62c66/packages/lsp/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/grounded-lsp/lsp/index.ts",
+          "sha256": "491ecb4809f49714d06197c844e2a286353ee8248075c3ff3ea52e6fe16f4ee7"
+        },
+        {
+          "stage_1_slug": "grounded-dialog",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/afa7977ae759947d3fbc905e0b2beef3d4f0b51c663365614b7ab368aef62c66/packages/dialog/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/grounded-dialog/dialog/index.ts",
+          "sha256": "78ff9788c73918e5398f17a78f13b1b55109ebb17d6241a2ed1a8087fb05e4dd"
+        },
+        {
+          "stage_1_slug": "grounded-tasks",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/afa7977ae759947d3fbc905e0b2beef3d4f0b51c663365614b7ab368aef62c66/packages/tasks/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/grounded-tasks/tasks/index.ts",
+          "sha256": "3060113e41c7f8a385dee07394677fb3c5e0556be476e23c3a50f3fb2c6a2ab0"
+        },
+        {
+          "stage_1_slug": "grounded-notes",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/afa7977ae759947d3fbc905e0b2beef3d4f0b51c663365614b7ab368aef62c66/packages/notes/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/grounded-notes/notes/index.ts",
+          "sha256": "11fa4bc840f7a04200e1b0179793b0bb97ff3b73d26d9780af4fa2474394202f"
+        },
+        {
+          "stage_1_slug": "grounded-workplan",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/afa7977ae759947d3fbc905e0b2beef3d4f0b51c663365614b7ab368aef62c66/packages/workplan/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/grounded-workplan/workplan/index.ts",
+          "sha256": "c5b2b572e9a24153b233fd46c7c73489194111bbfd082123e781e6e1f707faf9"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "grounded-files",
+          "snapshot_path": "audit/stage-1/live-deployed/grounded-files",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/package.json",
+              "sha256": "7b05055b0fa4816b530f8b110b8cc8b7981a9f1014431a366398906ae97e3e4b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/anchors.ts",
+              "sha256": "a426f7ba756d79b218a71b937de39cb7e9ae85295d306a49812a1d169cbf89de"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/atomic.ts",
+              "sha256": "d8ef8d6603c051ca52d9b9057870ab6a68e2f0ad128655bb226fe643b5fe1139"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/exec.ts",
+              "sha256": "0065e7a9b3632bf3075f0d23ca8cacae9a7c5aeeff7f3ee812203691c04c94e2"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/output.ts",
+              "sha256": "6ab84111ba6a5d0eaab90ef264c718f1cb144f5f40f0fd101f7bb2fa10205081"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/paths.ts",
+              "sha256": "51af1e1cfd8381bfff7387871b15970cde1e2bb321ffc415fee685d235c28f57"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/search.ts",
+              "sha256": "9ff67ef04eb05e97b65e4a2d0b970ef7e8cd7ca0fb9ef0868a53a3a0e9a9629c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/session-contract.ts",
+              "sha256": "876959c2833902e0919d4e80b2d1b853bfaa03fb0873ce88d40ef15f757dde7a"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/syntax.ts",
+              "sha256": "ca03cc085210e67ae012ac3aba9892ab3f3c5b9ddda58da9179ae94b948e7ab0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/core/src/text.ts",
+              "sha256": "86edf1c016ffda367fe8c09f6d49cea00a2bfa66d16ce4b3ec2a3d69c9c5cbe1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/files/index.ts",
+              "sha256": "ae99314b197b281ab1df854428d4b16966fdd00ec3f3eb84f24ba68db022fd35"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-files/files/package.json",
+              "sha256": "82d45707aa7eaa3c4fb853c3e11ca917a026917d7834389367cbc2d56d153b6e"
+            }
+          ]
+        },
+        {
+          "stage_1_slug": "grounded-process",
+          "snapshot_path": "audit/stage-1/live-deployed/grounded-process",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/package.json",
+              "sha256": "7b05055b0fa4816b530f8b110b8cc8b7981a9f1014431a366398906ae97e3e4b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/local-session.ts",
+              "sha256": "2b20f6bdbefb63e6e5fa76302e068bd66650738a86424d890c610fa61e184ed6"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/output.ts",
+              "sha256": "6ab84111ba6a5d0eaab90ef264c718f1cb144f5f40f0fd101f7bb2fa10205081"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/process-manager.ts",
+              "sha256": "05fd0a332b64f4e717b948074139f318a294cb7da05d5b7ef33306586f5078bb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/pty_bridge.py",
+              "sha256": "d523ef0751757ee22e2c925f2a0e819f164140b1e2fa463283b5d502d965ab99"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/session-contract.ts",
+              "sha256": "876959c2833902e0919d4e80b2d1b853bfaa03fb0873ce88d40ef15f757dde7a"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/session-framing.ts",
+              "sha256": "79ef1f0ef63abdbc9ef3028302ab3020aab192f978ed688aa1ea8747ea83b88b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/session-logs.ts",
+              "sha256": "2f1e1110ba3025e9ae53c8ae9872f2f16158f175cf1dbf558a508db20ef6ad64"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/session-registry.ts",
+              "sha256": "0d85fd9c010c884124ef5a9241776a252d9bbb6b8a8f86e0b0de98ed3db887ef"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/core/src/session_pty_bridge.py",
+              "sha256": "8af732ab39300c57fc1532f697cafa3737afebcc0b745caaadc19ba30edb6033"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/process/index.ts",
+              "sha256": "288a54fca963ea56d921904723157e25b9e22572835dc7180c85ee3c74f52175"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-process/process/package.json",
+              "sha256": "40158e18c6de33cd83685c3c57f44b4262adf96ccbf192c277a14ddc472c2e51"
+            }
+          ]
+        },
+        {
+          "stage_1_slug": "grounded-lsp",
+          "snapshot_path": "audit/stage-1/live-deployed/grounded-lsp",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/grounded-lsp/core/package.json",
+              "sha256": "7b05055b0fa4816b530f8b110b8cc8b7981a9f1014431a366398906ae97e3e4b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-lsp/core/src/lsp-client.ts",
+              "sha256": "48234eb7c7724766214a82d6fac8466e57ccc369b0bd1707a20708c79815b2e0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-lsp/core/src/output.ts",
+              "sha256": "6ab84111ba6a5d0eaab90ef264c718f1cb144f5f40f0fd101f7bb2fa10205081"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-lsp/core/src/paths.ts",
+              "sha256": "51af1e1cfd8381bfff7387871b15970cde1e2bb321ffc415fee685d235c28f57"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-lsp/lsp/index.ts",
+              "sha256": "491ecb4809f49714d06197c844e2a286353ee8248075c3ff3ea52e6fe16f4ee7"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-lsp/lsp/package.json",
+              "sha256": "8f9af1c48a64ae975b0c6941381eb3cbd33aa82d2f40d2796e436012b6a5052f"
+            }
+          ]
+        },
+        {
+          "stage_1_slug": "grounded-dialog",
+          "snapshot_path": "audit/stage-1/live-deployed/grounded-dialog",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/grounded-dialog/core/package.json",
+              "sha256": "7b05055b0fa4816b530f8b110b8cc8b7981a9f1014431a366398906ae97e3e4b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-dialog/core/src/ask-user-v1.ts",
+              "sha256": "0dd1cf486db069b38ddcf5a85a591134360360c8a0f43b2f4d62af61669dfb49"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-dialog/dialog/ask-user-facade.ts",
+              "sha256": "b3ce2c0d1f26266c7d3f3abb8d067d14fb9993e8defa90b4d78978f8b381e7a5"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-dialog/dialog/blocking-provider.ts",
+              "sha256": "20d91a8b667cb70bab31b473211ab66b46f8b127119ecf2c52f521bcff272016"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-dialog/dialog/index.ts",
+              "sha256": "78ff9788c73918e5398f17a78f13b1b55109ebb17d6241a2ed1a8087fb05e4dd"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-dialog/dialog/package.json",
+              "sha256": "0431472387b9ef6a091bc6424518945453ce05a69981e3179c6e73d56e4dccab"
+            }
+          ]
+        },
+        {
+          "stage_1_slug": "grounded-tasks",
+          "snapshot_path": "audit/stage-1/live-deployed/grounded-tasks",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/grounded-tasks/core/package.json",
+              "sha256": "7b05055b0fa4816b530f8b110b8cc8b7981a9f1014431a366398906ae97e3e4b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-tasks/core/src/tasks.ts",
+              "sha256": "f13e07833f0b5a64cf2298c33a4727f7739d29204a887452b7259d246b0a9392"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-tasks/tasks/index.ts",
+              "sha256": "3060113e41c7f8a385dee07394677fb3c5e0556be476e23c3a50f3fb2c6a2ab0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-tasks/tasks/package.json",
+              "sha256": "3ebaef6925127d0bbd9e46e46ddf9dcfff8b266f3568833e4df6d4c94313b039"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-tasks/tasks/settings.ts",
+              "sha256": "d99804e2d7e6138b2f6aadbd377ca0034727654948df9266fe284cd915aeb581"
+            }
+          ]
+        },
+        {
+          "stage_1_slug": "grounded-notes",
+          "snapshot_path": "audit/stage-1/live-deployed/grounded-notes",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/grounded-notes/core/package.json",
+              "sha256": "7b05055b0fa4816b530f8b110b8cc8b7981a9f1014431a366398906ae97e3e4b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-notes/core/src/notes.ts",
+              "sha256": "ade7d9b56ee9ef48f9fc6f46e483aff92bf17454dbf807940053de8c58e21d41"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-notes/core/src/state.ts",
+              "sha256": "db37188a5909907877c25b7530d30cf6800276d6df2e4f442cc313bb36af5d3b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-notes/notes/index.ts",
+              "sha256": "11fa4bc840f7a04200e1b0179793b0bb97ff3b73d26d9780af4fa2474394202f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-notes/notes/package.json",
+              "sha256": "c7368933e2f48eca3c02b9e0a26e785bc147de08578fd07309d91fc78064fb2b"
+            }
+          ]
+        },
+        {
+          "stage_1_slug": "grounded-workplan",
+          "snapshot_path": "audit/stage-1/live-deployed/grounded-workplan",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/grounded-workplan/core/package.json",
+              "sha256": "7b05055b0fa4816b530f8b110b8cc8b7981a9f1014431a366398906ae97e3e4b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-workplan/core/src/state.ts",
+              "sha256": "db37188a5909907877c25b7530d30cf6800276d6df2e4f442cc313bb36af5d3b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-workplan/core/src/workplan.ts",
+              "sha256": "b6668f1c4df56bbac345418db0fc22cd1bf944952a5db1bdaba74e7fe1280510"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-workplan/workplan/index.ts",
+              "sha256": "c5b2b572e9a24153b233fd46c7c73489194111bbfd082123e781e6e1f707faf9"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/grounded-workplan/workplan/package.json",
+              "sha256": "4ccea08955ab12cdaa3b8d0a4c447d8f4b7a77d3d931b48a24e23783d97aedae"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/grounded-tools",
+        "$HOME/.pi/agent/deployments/pi-grounded-tools/0.1.0/<content-address>"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/grounded-tools/files/package.json",
+          "name": "@grounded/pi-files",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/process/package.json",
+          "name": "@grounded/pi-process",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/lsp/package.json",
+          "name": "@grounded/pi-lsp",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/dialog/package.json",
+          "name": "@grounded/pi-dialog",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/tasks/package.json",
+          "name": "@grounded/pi-tasks",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/notes/package.json",
+          "name": "@grounded/pi-notes",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/workplan/package.json",
+          "name": "@grounded/pi-workplan",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/core/package.json",
+          "name": "@grounded/pi-core",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/grounded-tools/package.json",
+          "version": "0.1.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "TypeScript-loaded (seven entrypoints)",
+      "source_to_runtime_relationship": "Seven manifest-backed feature packages form one family and share one core. All Stage 1 closure bytes are exact deployed copies; shared core files must be retained once.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [
+          {
+            "group_id": "my-shtty-pi-U005",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/ask-user-core",
+                "tip_sha": "f98a5f789dcd663599cd63c20b77b7fe5062a79a"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-U006",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/fix/workplan-long-horizon-capacity",
+                "tip_sha": "03e43c0e83954d26b95bd7ca50fcbac91038c1d2"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-U007",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/source-preservation/grounded-artifacts",
+                "tip_sha": "cc1de08e1ddf4ecc1d46795111f7bfa9b8e9b59e"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          }
+        ],
+        "private_dirty_or_stash_summary": {
+          "dirty_path_count": 31,
+          "stash_path_count": 0,
+          "classification": "UNKNOWN_REQUIRES_REVIEW",
+          "safe_to_delete_later": "no",
+          "note": "Exact private bytes remain only in the owner-only Stage 1 backup."
+        }
+      },
+      "proposed_canonical_repository_path": "packages/grounded-tools",
+      "exact_files_or_directories_to_retain": [
+        "packages/grounded-tools/core",
+        "packages/grounded-tools/files",
+        "packages/grounded-tools/process",
+        "packages/grounded-tools/lsp",
+        "packages/grounded-tools/dialog",
+        "packages/grounded-tools/tasks",
+        "packages/grounded-tools/notes",
+        "packages/grounded-tools/workplan",
+        "packages/grounded-tools/package.json",
+        "packages/grounded-tools/package-lock.json",
+        "packages/grounded-tools/tsconfig.json",
+        "packages/grounded-tools/README.md",
+        "packages/grounded-tools/LICENSE",
+        "packages/grounded-tools/DEPLOYED.sha256",
+        "packages/grounded-tools/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes",
+        "duplicated copies of shared core in per-entrypoint snapshots"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "herdr-agent-state",
+      "display_name": "Herdr Agent State",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "herdr-agent-state",
+          "activation_source": "global auto-discovery",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/extensions/herdr-agent-state.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/herdr-agent-state/herdr-agent-state.ts",
+          "sha256": "0c5da648d9499afe592b469fc83f1493c9351f05a5345d3a79806cba1a93d93a"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "herdr-agent-state",
+          "snapshot_path": "audit/stage-1/live-deployed/herdr-agent-state",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/herdr-agent-state/herdr-agent-state.ts",
+              "sha256": "0c5da648d9499afe592b469fc83f1493c9351f05a5345d3a79806cba1a93d93a"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [],
+      "local_source_roots": [
+        "$HOME/.pi/agent/extensions"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [],
+      "license": {
+        "spdx": null,
+        "evidence": "No standalone package or license metadata in the Stage 1 runtime closure; retain under repository-level license only after ownership review."
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "The Stage 1 singleton TypeScript entrypoint is the authoritative deployed byte sequence. It is a lifecycle bridge utility, not Herdr Status.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/herdr-agent-state",
+      "exact_files_or_directories_to_retain": [
+        "packages/herdr-agent-state/extensions/herdr-agent-state.ts",
+        "packages/herdr-agent-state/package.json",
+        "packages/herdr-agent-state/README.md",
+        "packages/herdr-agent-state/LICENSE",
+        "packages/herdr-agent-state/DEPLOYED.sha256"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "herdr-blocked-bridge",
+      "display_name": "Herdr Blocked Bridge",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "herdr-blocked-bridge",
+          "activation_source": "global auto-discovery",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/extensions/herdr-blocked-bridge.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/herdr-blocked-bridge/herdr-blocked-bridge.ts",
+          "sha256": "bab7899b1fa2ffbb7996f87c2a42ad45c3d4f7b65286b5f3450db1be53da17a0"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "herdr-blocked-bridge",
+          "snapshot_path": "audit/stage-1/live-deployed/herdr-blocked-bridge",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/herdr-blocked-bridge/herdr-blocked-bridge.ts",
+              "sha256": "bab7899b1fa2ffbb7996f87c2a42ad45c3d4f7b65286b5f3450db1be53da17a0"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [],
+      "local_source_roots": [
+        "$HOME/.pi/agent/extensions"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [],
+      "license": {
+        "spdx": null,
+        "evidence": "No standalone package or license metadata in the Stage 1 runtime closure; retain under repository-level license only after ownership review."
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "The Stage 1 singleton TypeScript entrypoint is the authoritative deployed byte sequence. It is a lifecycle bridge utility, not Herdr Status.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/herdr-blocked-bridge",
+      "exact_files_or_directories_to_retain": [
+        "packages/herdr-blocked-bridge/extensions/herdr-blocked-bridge.ts",
+        "packages/herdr-blocked-bridge/package.json",
+        "packages/herdr-blocked-bridge/README.md",
+        "packages/herdr-blocked-bridge/LICENSE",
+        "packages/herdr-blocked-bridge/DEPLOYED.sha256"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "herdr-status",
+      "display_name": "Herdr Status",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "herdr-status",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/Projects/my-shtty-pi/packages/herdr-status/extensions/herdr-status.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/herdr-status/extensions/herdr-status.ts",
+          "sha256": "5495e4dc469596884ed0f62973e9b622dc43fc58ab6977108eb306decf6da8e7"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "herdr-status",
+          "snapshot_path": "audit/stage-1/live-deployed/herdr-status",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/extensions/herdr-status.ts",
+              "sha256": "5495e4dc469596884ed0f62973e9b622dc43fc58ab6977108eb306decf6da8e7"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/package-lock.json",
+              "sha256": "fb14edb71a39a4f0a001a1dc65059d5b19690f8a5570f0b6b9d7054a6d2d4b80"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/package.json",
+              "sha256": "b0b595ddbbae28a037d1828e643d51bbacc1ad077f852cd38efcab1e6a373543"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/activity.ts",
+              "sha256": "4a6d756d3beb9a06c9480468080c766a1dcf25f20fb5e490d4b6967a4d5fe4a9"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/clock.ts",
+              "sha256": "56b5d2f1ad14a266eaf140d75197f14e96d6cd550c3a61b4f475ab0eee02e6cf"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/constants.ts",
+              "sha256": "e5d15cd5bf9645d7abeb01c0388ccf2f9ef03f7a6a892a7e53f2cc91f4e00fa5"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/extension.ts",
+              "sha256": "4d4d7a9e9179a7853b1e3816c37af8eb8f9ed025981d6e952b258a3001465aa1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/herdr-client.ts",
+              "sha256": "d99b00bd43913572ba24911568e2518f5dcc4648ccb83cde1b891227864bf2e9"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/pi-types.ts",
+              "sha256": "29e4fc8273a61094966a0f9860597acf9d1c9eb5828cbba14d1d10aa8f843f91"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/reporter.ts",
+              "sha256": "784b51ceaf91229ee3848e2f53c1dcfe8cfd8329c20e099b187587c645a4a50d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/sanitize.ts",
+              "sha256": "b48c0e8003f80252493987c9dfe0b5f04eff593a948f5c6b56c049ce67be7d0b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/herdr-status/src/status.ts",
+              "sha256": "11f27dc88012845df47f36993a66c9dffcdfc3a7d8997858fc15c8dad860dcea"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/herdr-status"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/herdr-status/package.json",
+          "name": "pi-herdr-status",
+          "version": "0.1.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "Stage 1 captures the exact display-only companion extension closure. It does not replace the official Herdr integration.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/herdr-status",
+      "exact_files_or_directories_to_retain": [
+        "packages/herdr-status/extensions",
+        "packages/herdr-status/src",
+        "packages/herdr-status/package.json",
+        "packages/herdr-status/package-lock.json",
+        "packages/herdr-status/tsconfig.json",
+        "packages/herdr-status/README.md",
+        "packages/herdr-status/LICENSE",
+        "packages/herdr-status/DEPLOYED.sha256",
+        "packages/herdr-status/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "pi-agent-context",
+      "display_name": "Pi Agent Context",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-agent-context",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/Projects/my-shtty-pi/packages/pi-agent-context/extensions/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-agent-context/extensions/index.ts",
+          "sha256": "dff9a7fbc10eacad01b959d06bef5c938d9dc839b2534c6a499a7046c3f7acd2"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-agent-context",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-agent-context",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-agent-context/extensions/index.ts",
+              "sha256": "dff9a7fbc10eacad01b959d06bef5c938d9dc839b2534c6a499a7046c3f7acd2"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-agent-context/extensions/snapshot.ts",
+              "sha256": "bdca690519e11e83b0e64e39deafc17e43b11c1a6c9ae30be0c760405026135e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-agent-context/package-lock.json",
+              "sha256": "f8469c18c61e86bbea1771c5c88918685a379a799ead66299d21f52c6a1ceff3"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-agent-context/package.json",
+              "sha256": "147ccf59e7d67e4853dc9590f3e69eb0671714a33c5b2e673a06d7ef34871dce"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/pi-agent-context"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-agent-context/package.json",
+          "name": "pi-agent-context",
+          "version": "0.2.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "Stage 1 captures the exact loaded TypeScript closure.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/pi-agent-context",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-agent-context/extensions",
+        "packages/pi-agent-context/src",
+        "packages/pi-agent-context/package.json",
+        "packages/pi-agent-context/package-lock.json",
+        "packages/pi-agent-context/tsconfig.json",
+        "packages/pi-agent-context/README.md",
+        "packages/pi-agent-context/LICENSE",
+        "packages/pi-agent-context/DEPLOYED.sha256",
+        "packages/pi-agent-context/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "pi-chrono-compaction",
+      "display_name": "ChronoCompact",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-chrono-compaction",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.agents/projects/pi-chrono-compaction/implementation/chrono-v2-infinite-memory-005-correction-020/active-project/dist/src/pi-extension.js",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/pi-extension.js",
+          "sha256": "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-chrono-compaction",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-chrono-compaction",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/blocks.js",
+              "sha256": "062e45089221484ccebb3ffa450bdec1470f217bd2581e771b822430a43ed8f1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/cache.js",
+              "sha256": "a2983eeb6ef14cf1cff1d2e5c629badadc1600a14220cecec14c401918bef711"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/candidate-segment-store.js",
+              "sha256": "5a44c466dd33bc042710beb3d0ce25625fbc0b83e43863e0b68ba0b5ffe7223e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/candidates.js",
+              "sha256": "7e6f91e0e038526c6151469a1f18f5ad3e020e1a97194e7f1e0a6a16c0794c4f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/causal-memory.js",
+              "sha256": "5c2262b6b5400d783b75391ce246d672819e6c37cadad726968b7cf0719d0325"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/compaction-worker-client.js",
+              "sha256": "ba4b5c65864e318b4c0166c8db64b3eda31a528f7506b628f2f3e17bd0f43cd0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/compaction-worker-entry.js",
+              "sha256": "b7629dcc41f68afe191c667e4948276207f88b137a544d257241f6157ffbc400"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/compaction-worker-protocol.js",
+              "sha256": "252b2adbfe530ea4c434c7a25879979a157d5bdf0ee097b5f59079393f8ef24a"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/compactor.js",
+              "sha256": "ab4d760064fe7588a02458e3fda4e72541499dac9741361515d0fdf5114aa5d0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/context-projection.js",
+              "sha256": "b68adcb66f18ed1013f90cea1bef7e1fb23cc3bda08e7ad7a6eec1bc80e83e02"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/derived-store-lock.js",
+              "sha256": "e589eb21b84d2cc7e14978bdae19656c8ffd61639febe8b54a7d604f02cc54fb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/episodes.js",
+              "sha256": "24b5356d3cb8ec7f385d29422132f0c1250c057425acfe4e239fde33fdadbba7"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-analysis.js",
+              "sha256": "5f4d332dbad092d6e25a2821b0a32d213862eda1d1956de733372439fc25cdcb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-editor.js",
+              "sha256": "96537b851529c78a2856f812b134bc2cf6f773a4aac4d5cbcece26cacb9e36e1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-rollup-lock.js",
+              "sha256": "817868e0b0b8019ce67cfae05fb0bd91bee266eee7be1bf052568f27d2f5e0af"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-rollup-query.js",
+              "sha256": "1288f418e696349486f03c3f3c1e63fd1bde2acdca36f23e7703c2b5c2e81c52"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-rollup-renderer.js",
+              "sha256": "4f9abec6277a21ec415fe7eb8224fc3aa06a33d426cd1fc6214b2bf3814c2ac1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-rollup-shadow.js",
+              "sha256": "341e8015d425cca98bd3795cd4f83fe6dc63d262a9eb11241c87a7d5c8e43a98"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-rollup-store.js",
+              "sha256": "69ad59753f4bcdb203e956d8d93bc72da7102edf558bfe538a75edf381a616a4"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-rollup-validation.js",
+              "sha256": "608b100949d0bc0d6366de19f3bdbaa3e179057dac93f13a597730ad5c70dafb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/history-value.js",
+              "sha256": "7d22f9a11c20b50932245405aa41f755a7e348924dbb4f0c9a4cf5f14174e6a7"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
+              "sha256": "9b1d3719ad7b252b37f656c399d31f0994585836320a9643cdbb8968a34187a8"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/jsonl.js",
+              "sha256": "9128c746f032636fbdb838b3c2c8d3672f95b2c136f4a6508f01b18445f569ed"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/ledger-branch.js",
+              "sha256": "a0d793dfb3d64e548b240632da37ac9eb2f1092ed1f39b1165d22bcf9423ac1b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/memory-store.js",
+              "sha256": "2526c118104c36c4aa39c0c11231d910491d38382742e82a61ca5a312e6987b1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/pi-extension.js",
+              "sha256": "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/pi-hybrid.js",
+              "sha256": "c7519227a72801f70f019966ebaa1bbb37c2b2d26ec94a3e7bfadaccf2b64bd4"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/plain-renderer.js",
+              "sha256": "03bca765b4bb0b238b08313f582d7c4d70b0ce2204bfc7eb5785db7311939932"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/planner.js",
+              "sha256": "2453b45ff254b727f4becfe1c31248e7c80459a4567bcdd50fea9625b54a03c3"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/post-result-shadow.js",
+              "sha256": "9f11fc9d1775d1e43a9352f52a91bf9c45a0339dc8c0ebfa8c64d3037d558542"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/recall.js",
+              "sha256": "2c6f5fc2d17e493e102260f81d237f759015b475133c5e98fb413625530ca13f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/assistant.js",
+              "sha256": "2edf3c14398e686a8056261e9703d5e659b0ceccba00b32262bf7606dcb675ce"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/diff.js",
+              "sha256": "326803873359ceb23ee77fddd032c87b5a2d4da60d3b8326594ed2ea78f6ed62"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/file-read.js",
+              "sha256": "036e5bba2c71794df827819d7ac526e9b0a991432413e4995c8e3ac9e6b34171"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/generic.js",
+              "sha256": "365e1a4d4d514a57b29aa9bcef1426a3c874fad3d0f6458f3871a8c651a36cd4"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/index.js",
+              "sha256": "628da7045f6466ac9b82b9007dc23385f602bf13675ad27e59526af5064ce984"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/json.js",
+              "sha256": "431bc75da7fa8a3a611179d3db384d862c392d240539672dc71a0ab929df4672"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/normalize.js",
+              "sha256": "a1ccd9b76efe2c1dfea3e9354de307d6372ba91544aa38fe9244cbff2ba674ba"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/search.js",
+              "sha256": "0bd0b9af6fd84426913c883e864f94b3645c4d6d11717fde974efd1bbec9df55"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/terminal.js",
+              "sha256": "c56da4e8408acf0cfdba0b9cdca9760f6b331792b17c2d013d0ee8d49bf20c47"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/reducers/test-output.js",
+              "sha256": "78ada8bd7b6f8d0ff01125d5aca8bc23e4eaab50a798d772e6747309e3a48cb1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/render.js",
+              "sha256": "804c2e2acd6894f733d4719eaa53f4683ef53e29c843e25e221c43b94c064914"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/repeated-observations.js",
+              "sha256": "e8b4d5c27c83ff70dbf744ba1514e6dc27d6e21364e016a3202b1072e05686ff"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/resource-lineage.js",
+              "sha256": "512282d9ffa226067a9f662e79669b87b93f677e66b750ffc82fcc6085989061"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/retention-gradient.js",
+              "sha256": "3926ed487844f435e850c2ac7d1eff7ae62b63f8978ff0007e1bdd9a423cff3f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/retrieval.js",
+              "sha256": "695532b986d72c3861c91f0ffe073920667cbc26aa433a8cd057af7a73bf9d82"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/rollup-shadow-failure.js",
+              "sha256": "786a7375bab6ccb5f87ca4b7bbb0845f3777c7cb4f3b8b885eaf17cfe0339c99"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/search-index.js",
+              "sha256": "bf469fb79b364ea5729608fd47f8d34d8cf11acdeeb1de087c7ca69e85052eee"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/source-ledger.js",
+              "sha256": "2c158b31d95d7f7a8e7e5c923bc0888fad91928280f04031838db1d28331bcfd"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/summary-rebase.js",
+              "sha256": "a94041e49c36b48ae1c84e1c5a96ee6346105eaf016fe56dee8598f1f2b6d91f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/tail-selection.js",
+              "sha256": "241f61889b35d1736a6bd59a3b818e4a5d553844725c624f5641055e8b77a16c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/telemetry.js",
+              "sha256": "3edb45ecbc9dc71c3e04b391d7be14b24131f8bc0beb847d110cd32f9ddde24f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/trigger.js",
+              "sha256": "630e068a38fae6f8be14f2e210b5755b0b5bd7a991b48de86cca80eb97f80c5c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/types.js",
+              "sha256": "d3c6e2497dafb46c147ae71e206432be11d0764da04959e4454ce8413b12a002"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/user-config.js",
+              "sha256": "db20f894d99c30a90157501f02b775ed9d2882b69bf2909d4b5555bb522a8f22"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/utils.js",
+              "sha256": "a3f1230c775e7c5cc5d03e4d095b057598e4e9e161c5882e7d8dcc04ee08af07"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/validate.js",
+              "sha256": "a5c19f201dc6c534444fa770c6844b3e4c272be7c0f39eb635ce986f55e23b7d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-advice-application.js",
+              "sha256": "5fc76e6b73d851ff8304f831cc28b18dfd42ae5ae2fba8eccfeee0f5ecacd9ad"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-advice-store.js",
+              "sha256": "509e051866d80891b5267184f975959de7a0d5b5aa74820f68fe2937a70ba7d1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-worker-model.js",
+              "sha256": "83e57ad2261a05d7cf7e7e9946dc83b740b6248a7e902bc7c2f4cd5926994995"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-worker-prompt.js",
+              "sha256": "8a313645cfdd191d960e19b1f3b6b8a222baf7317bd2cd708a8722e64832ec62"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-worker-response.js",
+              "sha256": "a049ddaeacc915d02643dde5a48f9ab49e3fa1cdc2ccd3202125ccf1f18e56d3"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-worker-scheduler.js",
+              "sha256": "056e60e0fca5407541fbe646485670930055658fbc84e6b616461aa4acd12ba8"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-worker-types.js",
+              "sha256": "287d94f5ce2141407f7743398aac5e45855ba836deddd1f947b65be47fd90b0d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/dist/src/value-worker.js",
+              "sha256": "5adbed5e11eb5fb579d3e6202906c26bcc9e8399591baf84cda3ac239fedbc51"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-chrono-compaction/package.json",
+              "sha256": "56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/chrono-compact",
+        "$HOME/.agents/projects/pi-chrono-compaction/implementation/<deployment>/active-project"
+      ],
+      "source_refs": [
+        {
+          "repository": "https://github.com/JCFrags/my-shtty-pi",
+          "commit": "9a4d25a46f329bd91828a22a925e5de81c71eee4",
+          "relationship": "isolated build source"
+        }
+      ],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-chrono-compaction/package.json",
+          "name": "pi-chrono-compact",
+          "version": "2.0.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "compiled-JavaScript-loaded",
+      "source_to_runtime_relationship": "EXACT_REPRODUCIBLE: a direct isolated TypeScript build of source commit 9a4d25a46f329bd91828a22a925e5de81c71eee4 produced all 65 deployed JavaScript files byte-for-byte. The build also emitted non-runtime files that are not part of the Stage 1 closure.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [
+          {
+            "group_id": "my-shtty-pi-U003",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/source-preservation/chrono-benchmark",
+                "tip_sha": "f9e811a08d497ad7a2f1911887546d40ccee249c"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          }
+        ],
+        "private_dirty_or_stash_summary": {
+          "dirty_path_count": 76,
+          "stash_path_count": 0,
+          "classification": "UNKNOWN_REQUIRES_REVIEW",
+          "safe_to_delete_later": "no",
+          "note": "Exact private bytes remain only in the owner-only Stage 1 backup."
+        }
+      },
+      "proposed_canonical_repository_path": "packages/pi-chrono-compaction",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-chrono-compaction/src",
+        "packages/pi-chrono-compaction/dist/src",
+        "packages/pi-chrono-compaction/package.json",
+        "packages/pi-chrono-compaction/package-lock.json",
+        "packages/pi-chrono-compaction/tsconfig.json",
+        "packages/pi-chrono-compaction/README.md",
+        "packages/pi-chrono-compaction/LICENSE",
+        "packages/pi-chrono-compaction/DEPLOYED.sha256",
+        "packages/pi-chrono-compaction/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes",
+        "compiled CLI, tests, and other build products absent from the deployed runtime closure"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "pi-herdr-orchestrator",
+      "display_name": "Pi Herdr Orchestrator and Agent Board",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-herdr-orchestrator",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-herdr-orchestrator/0.1.0/cc04bfe9a978e12f5b3f0e54e3cebd30d4555f99f5e9fda25cbb1f18ffbaf764/dist/extensions/pi-herdr-orchestrator.js",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/extensions/pi-herdr-orchestrator.js",
+          "sha256": "cebe2214553e6be7f72db3c1c8b1ec7a5cb6846ce49c0a108a37836fea6a0564"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-herdr-orchestrator",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-herdr-orchestrator",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/extensions/pi-herdr-orchestrator.js",
+              "sha256": "cebe2214553e6be7f72db3c1c8b1ec7a5cb6846ce49c0a108a37836fea6a0564"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/broker/endpoint-policy.js",
+              "sha256": "143b98b9d5c0981317e89636aef174c75e8d5d5909708d1e2b9739772fd4d967"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/broker/model-policy.js",
+              "sha256": "ff6af69eca27372ce6bf2292824f731f832fa7bfc0960648c3d8714d97c66194"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/herdr/pi-herd-command.js",
+              "sha256": "227924b3fb32310258400ba7f53c38193fe1756f271a67ac23c1388bd8323511"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/model-intelligence/model-evidence.js",
+              "sha256": "60a735cd2d53fafb60c441eb026c8f8f6eee31b29ecf55dec1feb39b67af31a5"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/model-intelligence/model-ranking.js",
+              "sha256": "93e46c1ca520627b00161af10900391c005daa033938beb3c96a9f9db3b1c316"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/adapter.js",
+              "sha256": "786494f1df87de30ca520297532229c61c553eb44478956644918d6efec539cb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/agent-settings.js",
+              "sha256": "6972437a9f2b7ccf7a1b10b4c3c225c9108d7f2ba16ae382d616424a5c5214c4"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/broker-client.js",
+              "sha256": "4720deabc1f0a95d929ec65b20e6f54d4a84eb334f291a1ccf73f84243cc00ce"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/correlation.js",
+              "sha256": "fa9871b22a7fb417ec8068e564ef19a6ab1f9241302ffd6440f3932aac10febb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/parent-tool-schema.js",
+              "sha256": "523f5962e3536018688a023c3f9b3ad55ad29e11c9c66f1ba3bbbb5ddabcf25c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/parent-tools.js",
+              "sha256": "816458b8b8e862548e0b04e3dd5303a6b91a89f57ba42a00094be65ade0a068b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/provider-event-adapters.js",
+              "sha256": "a5da9f5193f640ad8ced3a7eb934403b66a05d6a0ccb0f35c10d769b27e5a522"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/provider-projection-collector.js",
+              "sha256": "f5e543cbfe51e78f4a3e84b2f71d053ee5685a795d38a8d0722f5618f7e1a396"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/registration.js",
+              "sha256": "a9539ece4991db1c06d21c385b79a754f0ef5dafc0f76e0f5b2d9e2f6b867244"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/state-reporter.js",
+              "sha256": "dddc01bfe89bef63af0be48f2ece525ddcc30c00a7d81b4a20193c3591cb905f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/terminal-result-delivery.js",
+              "sha256": "a773936c618467b1d5208b2508572e20106412fe68b819aee6ce8dfc6ec22ab5"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/token-file.js",
+              "sha256": "683a0f6f108d58ae54af3202c9c12a5632bb3d3ae6663d7db500e75b5af4b42f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/tool-audit-reporter.js",
+              "sha256": "d4f261568e45defca8318f04f178d93ea8814f4e4fac0d37372d0693b5ffe50e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/tools.js",
+              "sha256": "0ab99a43d7d787486abea9081976927810d6d8ed747f42dd29af5dddf58c399f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/pi/types.js",
+              "sha256": "61387100acf2a8f874133180440a9fc0ee042cdb0cc20c069d0bb74f3d52659d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/canonical-json.js",
+              "sha256": "2c726cfaa1f44fcd59d2606910ca593865ab81cfecedf9132d0b1c74f41fe1b6"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/errors.js",
+              "sha256": "7db0f83d27f807995a83cbcf843105b35eb5cdaccc8527f727db1ba183493dc6"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/ids.js",
+              "sha256": "3ba286af7c436da289aa73f3c41122d851e80b6263d5438634b3b380f3b660ae"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/limits.js",
+              "sha256": "d4549d414241d19f4b755783391af403daa9e298c2e2b6e87b51cba095ae2212"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/paths.js",
+              "sha256": "31b46692a93d9dd74402e3f0918d7999ebea86b521cfe6bddf97a0146835991b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/private-fs.js",
+              "sha256": "a128689e8c10853a6c1f1ba1355eed4251f1881ed6b89567b103de881be9fdb2"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/protocol/codec.js",
+              "sha256": "705e7843016d780613d215e4e711e80526b2a4a870e976d6d865a438c43be641"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/shared/provider-projections.js",
+              "sha256": "c21299585945716dd38ed75e0ff32a9ae18a035f8d6fa444d52fb0a1bda59e67"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/dist/src/state/types.js",
+              "sha256": "0b7c94670d1ad35a25ee275f0a32fddae5003cf80aa99309741cca3841c45897"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/package-lock.json",
+              "sha256": "89e6cdf4a7c4aba1ece8fa3452a5e244f73fa630d31726e57f395d5aef2f387c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-herdr-orchestrator/package.json",
+              "sha256": "f8fabf01fdfc9a28a8eec0bad08f0e277b223c47c821c840a28f1646e51bdb52"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi-herdr-deck"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi-herdr-deck"
+      ],
+      "source_refs": [
+        {
+          "repository": "https://github.com/JCFrags/my-shtty-pi-herdr-deck",
+          "ref": "refs/heads/deploy/adopted-root-rebind-recovery",
+          "commit": "79046614e870088b832f9dd1d98495e16cfd9345",
+          "relationship": "isolated exact-build source"
+        }
+      ],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-herdr-orchestrator/package.json",
+          "name": "pi-herdr-orchestrator",
+          "version": "0.1.0"
+        },
+        {
+          "path": "packages/pi-herdr-orchestrator/package-lock.json",
+          "version": "lock metadata"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "compiled-JavaScript-loaded",
+      "source_to_runtime_relationship": "EXACT_REPRODUCIBLE: a direct isolated TypeScript build of clean source commit 79046614e870088b832f9dd1d98495e16cfd9345 produced all 30 deployed JavaScript files byte-for-byte. The Agent Board/deck is a managed pane in this product, not a second Pi extension product. The deployed orchestrator does not contain the temporary cancellation-isolation behavior.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U001",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-final-files-screen",
+                "tip_sha": "630bb92465b68fd936861ee3bf9a04d51a093bbf"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U002",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/pi-herd-modern-tui",
+                "tip_sha": "63ab9923f4c73f8be87c2dc2a31792b0a4d08035"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U003",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/final-gate-agents-activity",
+                "tip_sha": "5f43d9ce3698949315db07cbafb7ce315aafa816"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U004",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/m4-integration-tests",
+                "tip_sha": "64b4eef86cfd2f5705f7a1e9c13a84937b971f09"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U005",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/final-gate-files",
+                "tip_sha": "782f7f036468b4be851dba02fb2d88f39e5dd470"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U006",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/fix/adopted-root-rebind",
+                "tip_sha": "47cee2d0a6dbca46466837acdb028e213c260dee"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U007",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/integrate/concurrent-orchestrator-20260901",
+                "tip_sha": "747d97c426de1ff3b901438bcdc28184e83100ca"
+              },
+              {
+                "scope": "local",
+                "ref": "refs/heads/main",
+                "tip_sha": "14786f1192faae7f163b355cb6955db70b1a1b24"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U008",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/m3-registration",
+                "tip_sha": "7d6110ff16f53e247d0043f54ebe615a0451f0af"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U009",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/fix/completion-driven-runtime",
+                "tip_sha": "e206d2db6b92ed547eb4aed102bac246e883630b"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U010",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/lifecycle-cancel-fix",
+                "tip_sha": "b7547803d4f69e49ba3a7f1932461a2c926dc3e2"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U011",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/fix/orchestrate-wait-until-finish",
+                "tip_sha": "f825b2d1e879010714ae7b0dda1ffb913792747b"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U012",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/deploy/adopted-root-rebind-recovery",
+                "tip_sha": "79046614e870088b832f9dd1d98495e16cfd9345"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U013",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/integrate/recent-work-snapshot",
+                "tip_sha": "4f0dce52402af009425c5f174b5b214f2c9135d4"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U014",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/integrate/recent-work-final-snapshot",
+                "tip_sha": "aaa010008231ad31926337fa35ff096e40be1867"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U015",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/m3-integration",
+                "tip_sha": "dea42f563470d595cedf63b119e60e9641ca441d"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U016",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-final-activity-agents",
+                "tip_sha": "f30a92181ffd6ed07cab0970a9df51075e5edb50"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U017",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-final-board",
+                "tip_sha": "4969179a7b972b4baeee17ad63418efb2bf7cabc"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U018",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-final-shell-overlay",
+                "tip_sha": "b324ba7e1b20d84fe35b358ef1771e716cacef0e"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U019",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/m4-question-tests",
+                "tip_sha": "3ce31109845568564ace72d4405ea169bac09cb8"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U020",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-contract-agent-activity-overlay",
+                "tip_sha": "9b3a10ceb4ca8c09e19c2f750a9025de557bbf49"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U021",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-final-render-qa",
+                "tip_sha": "0bf9e83fc0947d042b8ffef8d9437c91fa738d49"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U022",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/final-gate-signals",
+                "tip_sha": "c0dc6cc909b5d9a6eeec866d4a2c91accb63d506"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U023",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/unified-deck-tests",
+                "tip_sha": "29b1e545668846849efbd55bd392aba951f47898"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U024",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/final-gate-board",
+                "tip_sha": "d14a0da0fc12a83210048966ecc03b7a47be6656"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U025",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/unified-model-spawn",
+                "tip_sha": "133f42947c0c3c1501e69b07a65c7445aa739474"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U026",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/unified-controls-groups",
+                "tip_sha": "0ed0dc5a39f916dc28684d8c8847859eec8f4580"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U027",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agt-01m0cf6stqz6h9438gmym05aw5",
+                "tip_sha": "dcc67f6159129cadd43566c65200a4f09c88700e"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U028",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-contract-files-consumer",
+                "tip_sha": "59731ccb3cdcccd568bce9f716edae1b4c4a2062"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U029",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/m3-schemas",
+                "tip_sha": "bd8abf7db82bd3b30ad2a5798266db35f680c949"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U030",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/m4-artifact-tests",
+                "tip_sha": "6751112c6cd25421e83dfb9635ce03cc25473f29"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U031",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-contract-question-board",
+                "tip_sha": "b37ab2edaa829a6717a764629f8c7afe417a4ae9"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U032",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-contract-render-qa",
+                "tip_sha": "124c5222be536c12e129a8450ff1cafcbda3a992"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U033",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/unified-legacy-coordination",
+                "tip_sha": "f0061bcc4ed07a3ac4b3b7c6036b5f97fc2f8a0d"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U034",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/final-gate-render",
+                "tip_sha": "765b0afa1f1731bc0caae21d25b37a8261ce50fd"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "my-shtty-pi-herdr-deck-U035",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/project/m3-controls",
+                "tip_sha": "1c31ab0ea8c44cdfb909895c5b8ac25628633b65"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          }
+        ],
+        "private_dirty_or_stash_summary": {
+          "dirty_path_count": 7,
+          "stash_path_count": 8,
+          "classification": "UNKNOWN_REQUIRES_REVIEW",
+          "safe_to_delete_later": "no",
+          "note": "Exact private bytes remain only in the owner-only Stage 1 backup."
+        }
+      },
+      "proposed_canonical_repository_path": "packages/pi-herdr-orchestrator",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-herdr-orchestrator/extensions",
+        "packages/pi-herdr-orchestrator/src",
+        "packages/pi-herdr-orchestrator/schemas",
+        "packages/pi-herdr-orchestrator/profiles",
+        "packages/pi-herdr-orchestrator/workflows",
+        "packages/pi-herdr-orchestrator/vendor/pi-chrono-compact-2.0.0-herdr.1.tgz",
+        "packages/pi-herdr-orchestrator/dist/extensions",
+        "packages/pi-herdr-orchestrator/dist/src",
+        "packages/pi-herdr-orchestrator/package.json",
+        "packages/pi-herdr-orchestrator/package-lock.json",
+        "packages/pi-herdr-orchestrator/tsconfig.json",
+        "packages/pi-herdr-orchestrator/README.md",
+        "packages/pi-herdr-orchestrator/LICENSE",
+        "packages/pi-herdr-orchestrator/DEPLOYED.sha256",
+        "packages/pi-herdr-orchestrator/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes",
+        "examples and operational release plans not read by the runtime"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "pi-native-ssh",
+      "display_name": "Pi Native SSH",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-native-ssh",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-native-ssh/1.0.0/edadf023051a5b349e6884fc911fa8b02105c1cd8dde58d15f7c17c20229bf2a/src/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-native-ssh/src/index.ts",
+          "sha256": "68f7431073f81e81b291451b00734501042c2f73fb06eb8796574eda91015fc2"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-native-ssh",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-native-ssh",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/package.json",
+              "sha256": "d04c95a5c9e46894de64f843e5dc28f08c9668416d7915065380a14dfc51e676"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/audit.mjs",
+              "sha256": "f17fd1858bb3f163b05a069d73f58895eab3beda8eca34e5e1c689610627a82b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/config.mjs",
+              "sha256": "32f1883a0c348a106e7f105da565dbccad74fc9a5548e3c177c23821353dac93"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/controller.mjs",
+              "sha256": "9d97cd8257222219a225a5caebeaaf86187ba80e6def403e340d1e6121078238"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/helper.py",
+              "sha256": "38d04765ea5781b0f7f8debaed04df06e87aaf53b600e25e46ebff4f986b02dc"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/index.ts",
+              "sha256": "68f7431073f81e81b291451b00734501042c2f73fb06eb8796574eda91015fc2"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/policy.mjs",
+              "sha256": "187801337ad67a322e58df4745fd52ecc38b9abb0533316bd34c7e7f4476e2f6"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/protocol.mjs",
+              "sha256": "b31f8bac53b8d748346faca59757a9fba4450c49633bbf1708a99a6db4a43422"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/runtime.mjs",
+              "sha256": "8fc34a35c1209575f5b6599595b1dd9bf09af850927bf14645b564fd0e4ed202"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/session-provider.mjs",
+              "sha256": "c11b0743fcb612d220196cae2679873008f34952fc01f3f37aa98e43da283d5b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/session_helper.py",
+              "sha256": "e62a2ccc4bd51c48341cbafaf234d949dbef9171a2df8bfe632728d62673d7b3"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-native-ssh/src/transport.mjs",
+              "sha256": "c8bb29c6b9183b852c700cfea99ac15a0d12f03394cd5239b47311bb42cbcc90"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/native-ssh",
+        "$HOME/.pi/agent/deployments/pi-native-ssh/1.0.0/<content-address>"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-native-ssh/package.json",
+          "name": "pi-native-ssh",
+          "version": "1.0.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "Stage 1 captures the exact active TypeScript closure. The persistent session provider present in source is not active and needs separate acceptance.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": {
+          "dirty_path_count": 12,
+          "stash_path_count": 0,
+          "classification": "UNKNOWN_REQUIRES_REVIEW",
+          "safe_to_delete_later": "no",
+          "note": "Exact private bytes remain only in the owner-only Stage 1 backup."
+        }
+      },
+      "proposed_canonical_repository_path": "packages/pi-native-ssh",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-native-ssh/src",
+        "packages/pi-native-ssh/package.json",
+        "packages/pi-native-ssh/package-lock.json",
+        "packages/pi-native-ssh/tsconfig.json",
+        "packages/pi-native-ssh/README.md",
+        "packages/pi-native-ssh/LICENSE",
+        "packages/pi-native-ssh/DEPLOYED.sha256",
+        "packages/pi-native-ssh/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": [
+        "Should the source-only persistent session provider be accepted and activated in a later stage?"
+      ]
+    },
+    {
+      "canonical_slug": "pi-pixel-cua",
+      "display_name": "Pi Pixel CUA Portal",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-pixel-cua",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/PI_PROJECT_STAGING/projects/pi-pixel-cua/wayland-redesign/product/src/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-pixel-cua/src/index.ts",
+          "sha256": "e9b17ec51e897938aadb3d6a3352fc6e76f3ec923fe3d33c80b9029ed59f0eef"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-pixel-cua",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-pixel-cua",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-pixel-cua/helper/ei_sender.py",
+              "sha256": "f0313e294ee7fa8b1094140b54328897d5d00fe77bc1e023911ff988e8ce042e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-pixel-cua/helper/portal_backend.py",
+              "sha256": "dc6fd85024721c78790cc9303dfbe110a5e33894d88d4954a870e6208e8b27f1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-pixel-cua/helper/server.py",
+              "sha256": "0e711fb17ed8ed2290ad953f4195e755d39a5979c38feba8440a38555e5b663e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-pixel-cua/package.json",
+              "sha256": "a4ccd4b2bd2d385ea4c076e3bf6b432376231d21ea6b798bb1641c5518531a99"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-pixel-cua/src/helper-client.ts",
+              "sha256": "48762068fc5b0a44ed7180ac6a0ac8775b2f63e6058ee042f9cbd6f8d016552c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-pixel-cua/src/index.ts",
+              "sha256": "e9b17ec51e897938aadb3d6a3352fc6e76f3ec923fe3d33c80b9029ed59f0eef"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [],
+      "local_source_roots": [
+        "$HOME/PI_PROJECT_STAGING/projects/pi-pixel-cua/wayland-redesign/product"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-pixel-cua/package.json",
+          "name": "pi-pixel-cua-portal",
+          "version": "0.2.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "Stage 1 captures the exact consent-bound GNOME Wayland runtime closure. This non-web local product remains separate.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/pi-pixel-cua",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-pixel-cua/src",
+        "packages/pi-pixel-cua/helper",
+        "packages/pi-pixel-cua/package.json",
+        "packages/pi-pixel-cua/tsconfig.json",
+        "packages/pi-pixel-cua/README.md",
+        "packages/pi-pixel-cua/LICENSE",
+        "packages/pi-pixel-cua/DEPLOYED.sha256",
+        "packages/pi-pixel-cua/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "pi-progressive-tools",
+      "display_name": "Pi Progressive Tools",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-progressive-tools",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/packages/pi-progressive-tools/extensions/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-progressive-tools/extensions/index.ts",
+          "sha256": "89fd9d3e363ec5c251414a36a7d8d93cdf8f177aabf93f3f114d5548b8d228d7"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-progressive-tools",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-progressive-tools",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/extensions/audit.ts",
+              "sha256": "d1f9249608e6be8d4688aaeaef9c0d24c134b0b9591b590895d96a17db5059fa"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/extensions/config.ts",
+              "sha256": "1619f38208cf0f5917b5971760be77142238eaa1ccf1a1c341a81f8196bcaf77"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/extensions/index.ts",
+              "sha256": "89fd9d3e363ec5c251414a36a7d8d93cdf8f177aabf93f3f114d5548b8d228d7"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/extensions/policy.ts",
+              "sha256": "9254096ad07ccffcc1aa402276481cc6084135abe6a654d01f26ba663643f0fe"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/extensions/search.ts",
+              "sha256": "ad285122d5e8f3cf45cf190de4151257bcc7933807b2ca156c3e537e5e349944"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/extensions/types.ts",
+              "sha256": "3fca1e6861cd656c80a3d28cf19f9a6d3175368411dc5324db4c4ed0d9bed20c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/package.json",
+              "sha256": "8cab64c1407ce491e47f25b4cbbbfd762711228519c943845f200f53197ebe71"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-progressive-tools/progressive-tools.config.json",
+              "sha256": "4dd1c1cf879ab6c0ec24cc983b4eee38188404dcd08918ed8b2b0c26a4a867a1"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/.pi/agent/packages/pi-progressive-tools",
+        "$HOME/Projects/my-shtty-pi/packages/progressive-tools"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-progressive-tools/package.json",
+          "name": "pi-progressive-tools",
+          "version": "0.1.2"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "Stage 1 captures the exact active TypeScript policy-layer closure; tracked source and privately preserved dirty paths still require byte selection during implementation.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": {
+          "dirty_path_count": 2,
+          "stash_path_count": 0,
+          "classification": "UNKNOWN_REQUIRES_REVIEW",
+          "safe_to_delete_later": "no",
+          "note": "Exact private bytes remain only in the owner-only Stage 1 backup."
+        }
+      },
+      "proposed_canonical_repository_path": "packages/pi-progressive-tools",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-progressive-tools/extensions",
+        "packages/pi-progressive-tools/package.json",
+        "packages/pi-progressive-tools/package-lock.json",
+        "packages/pi-progressive-tools/tsconfig.json",
+        "packages/pi-progressive-tools/README.md",
+        "packages/pi-progressive-tools/LICENSE",
+        "packages/pi-progressive-tools/DEPLOYED.sha256",
+        "packages/pi-progressive-tools/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "pi-signal-board",
+      "display_name": "Pi Signal Board (Signals)",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-signal-board",
+          "activation_source": "global settings local-path package",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/deployments/pi-signal-board/0.1.0/e599df249d8c5514fc24e2ec3b614b6315ac46cb6f5585594f34d17dd5b2d32f/dist/index.js",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-signal-board/dist/index.js",
+          "sha256": "9548123550c8cdb94ca1baef950de578dcba92117e931758f948a779c65b2885"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-signal-board",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-signal-board",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/commands/answer-actions.js",
+              "sha256": "7748bfda81dab94771793588a46d1ca2f4362f4d7e648b3b24bd94bf2c270ffe"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/commands/board-action-coordinator.js",
+              "sha256": "96ec84c2d8b17f7feef55e702fc9df7f8a199f51233b800ec83ddb3e7bd624d0"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/commands/command-parser.js",
+              "sha256": "4d50aeec2e90eec2470cce8792abea62d3b212d5591f13348c2e90e9b80dbd87"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/commands/dismiss-archive-actions.js",
+              "sha256": "8c5753b6273b111ab0adc0e89734ddf16ba1632ab3df0201043b32e1cf6b0742"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/commands/shortcut-registration.js",
+              "sha256": "725e76be0ffcaf911e6da16a8f91d3799ada5ddcacc05580d80a80fce236b48c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/commands/signalboard-command.js",
+              "sha256": "07eb1575d28ead3e0e8368d204dabbf31d400ecf1f284163bb888a82ad062605"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/config/defaults.js",
+              "sha256": "61dd1daf846d10a0f3d1dec195247ee0bfe8cb2ef5ba0681dd4d673462baa63c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/config/loader.js",
+              "sha256": "4c14ff85a09ece6110d0c6fe1bdf2d8ba5e56f5c469d41ee1ffaec3d6f3a1557"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/config/schema.js",
+              "sha256": "84f0f75f8a34c5c358b6aaec65660062de50e0f72e23d6d2ba1fa8358ea3981e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/constants.js",
+              "sha256": "1d30e25227885a3f838a3e03accc79134de09625cfef93033a43ae2f8a5c72cb"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/attachments.js",
+              "sha256": "04fc5fc01870ea441fa9b0dd529bc6f856643ffec554fc3f627e86148ed1b5a4"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/clock.js",
+              "sha256": "a671a86ff5af47f6abdfcca8adbf987c6a154854299033eb466209a32148202c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/errors.js",
+              "sha256": "c109bd8c34bcd1b0aed88b65b442a96d5ec27b46dd1a62da2973515544dbf39c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/events.js",
+              "sha256": "1574d4e33bf21a0c4288c298625edc5d989c1173a6b9e3afc93b004e06042213"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/ids.js",
+              "sha256": "e3e4d9a7fbcfb1f3bac47b45ff004843f768ace3cdf77ea16b8512a1a90a4704"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/invariants.js",
+              "sha256": "ad335a4f5d6f487e264a4cac3cad4baf86bd8c5c2564cf1d15400674e4e41b4d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/reducer.js",
+              "sha256": "26c868656177817248f264237f81811d98fe4cf96f96ed6bd20e7ca0c6156f26"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/sanitization.js",
+              "sha256": "f2b8a407471492c708555312a3ee78865b5457d23c829f838ff92f82416276d4"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/domain/selectors.js",
+              "sha256": "1003366cf20e0925a5115934e927a5600d050a47fd5da7cf14b0c77840fef1d7"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/index.js",
+              "sha256": "9548123550c8cdb94ca1baef950de578dcba92117e931758f948a779c65b2885"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/integration/ask-user-deferred-provider.js",
+              "sha256": "87fcfd52518b6d52220ae9ca22f128b07b7e3d4f644ba2a0a645c6062d17752f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/integration/compatibility.js",
+              "sha256": "c89e2c025848cb8ed0609d04d6791353202444343fad2efea60d479df874e8c2"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/integration/doctor.js",
+              "sha256": "ecee8f3514cb2190cc346ef31ce3e02c3ddfdd70f551fe5b59d9c9000ebd6607"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/integration/event-bus.js",
+              "sha256": "13370e75878d14f39c4fe4482a3555b5cdbea0cb3e2b397d04309a3be2db5e86"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/integration/lifecycle.js",
+              "sha256": "6a55300d325f3385c9f5d55bd417b9a70a0a3129acda376a688a2c7e905b0e0c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/integration/summary-api.js",
+              "sha256": "58b5e24bb641b4eb11de221cd4373692137f8a5784515d2a50371d828b06c7bc"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/persistence/event-codec.js",
+              "sha256": "6c028c21b9db66f472e8fd48e965ed459f4a475d4915a8817e980ee41b321177"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/persistence/pi-session-store.js",
+              "sha256": "475c37af5b76a9a770f53d3ec0ceaa8bb982b1c7aa527af6704832e0b36b5b65"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/persistence/replay.js",
+              "sha256": "27668df4878637f1617427fce70af79caa6cb1e9cf4e28fa59cae44bf24c38e1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/questions/unsafe-question.js",
+              "sha256": "965f475aacf0f6cb751dde91f8ee933f6a8cc85a411f6d0195c303b612efb17c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/questions/validation/index.js",
+              "sha256": "99d9e34647e444223288e3095c4c8dd3a89bcd864fe49d5a31bd73313651ad99"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/runtime/slot.js",
+              "sha256": "7d72891b43ef029e14deb72fe6b671c123eda21c57b74c3ddc2cedae75fdf129"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/acknowledgement-rate-counter.js",
+              "sha256": "c77b24b77a1ae38775398d85a602dab669f607eaadb839270e0e9bba30b2cd2f"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/acknowledgement-service.js",
+              "sha256": "705f98a2b53c7e07b7f50cece089386e833ba92db6a2e64b1d65cc3a8ec74375"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/answer-delivery-service.js",
+              "sha256": "177fc4d16f88335f1203611ecf77da6b7cbf456501e6842f07cd7a31b9fa8bb6"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/answer-persistence-service.js",
+              "sha256": "8f2051be183be11f43f3963fa2f6a37eb0c46c8f42cce93e8a579c25fcddf233"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/board-view-checkpoint-service.js",
+              "sha256": "8e079e6370fdbaf6ff6c513ae8d575b3f1e5e1324d9110b2d9fbc55caf90463b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/diagnostics.js",
+              "sha256": "c19e2d4913100a3f6fef44d6119b30b80be3403896409bfc424cf9363105c450"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/expiry-service.js",
+              "sha256": "380490a9f8dd1f29fab2d60f3ad484f0325f34ff36b4a8fe89605c6f09973ab4"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/mutation-queue.js",
+              "sha256": "54552d67ce9bf40d3f1ac95c8dc27608f91d6d4f607f4c6bd0301db16d0541f9"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/question-escalation-service.js",
+              "sha256": "b230a01615bbbbba5d1d354b91d18c2b0e833074cd38e836e82e2cdf0d1ebf3e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/question-rate-counter.js",
+              "sha256": "7fc3dfeeb55f58e204dff3406cb78b14839928883ce2ea0c5198acaaa7e6c409"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/question-service.js",
+              "sha256": "00a09d9ef98e7f731a69c1a89969cddb5617998df43e347d605fc6f0165cdb84"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/update-rate-counter.js",
+              "sha256": "25817539bea114720eae6018b5b2e46943937117d3cabda919cac66368e8cd28"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/services/update-service.js",
+              "sha256": "fe3cd4472b03bf0c8a524988f5005e1e05308f2debf7249d711d68ba23c5ac40"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/tools/ack-tool.js",
+              "sha256": "088c257b73e9eedb233ee94ada4df85d4eaade09c262d11cad48da06b05862ea"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/tools/question-tool.js",
+              "sha256": "e309ae3bee795aae996cb63547ba3647b03f836875b2abd55cc27826b831da66"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/tools/update-tool.js",
+              "sha256": "a5a4db3653f68d66888ffcbe57056e24eb80b3e2e9f2d8ebd50495cdc1067c7e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/adapter.js",
+              "sha256": "7aff5fca0df862735ce8bcc0934516493248f8c11a7b54d0850e661bc53a0dfd"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/board/component.js",
+              "sha256": "25c342a7ab4924cf9e0970a65c7c2aeb5e394a7a8c52a76f8ff9558d1ac00d61"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/board/model.js",
+              "sha256": "495368655b199217a4ceaa6286f84755714fedce2360026f6c525b32adc0cacc"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/board/multiple-answer-component.js",
+              "sha256": "e95d7ad66f6061751df50b790bb0b3bfc005a979827977497b6753632ce72e36"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/board/renderer.js",
+              "sha256": "15843b523e6ee90088ab5ddd596657bd224d150d4246694eb604696f987af567"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/status/index.js",
+              "sha256": "b3cebb9c53a446d1e0b23debd884596f9391317cd8f5c61da0fd6a0ce0a1ed26"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/status/renderer.js",
+              "sha256": "ae411be9df3678d25632745428467b2e48de6745b92c50c31caa0fb96703b9a3"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/widget/index.js",
+              "sha256": "f851842c026ad89621b796cd24597d7a6977a1d02fe31e6ba8d8b343dd0ce1d3"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/dist/ui/widget/renderer.js",
+              "sha256": "b7e574dd948640a6ac87aa77960f993a33e3c52d8c17a57e5f6a15300066bc28"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-signal-board/package.json",
+              "sha256": "89d15e62f5729bf24d5b57fe7aa5ca5d03247062c98776074f8ddb47d57090d9"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [
+        "https://github.com/JCFrags/pi-signal-board"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/pi-signal-board"
+      ],
+      "source_refs": [
+        {
+          "repository": "https://github.com/JCFrags/pi-signal-board",
+          "ref": "refs/heads/agent/ask-user-signals-deploy-fix-20260827",
+          "commit": "047ab0e767a7655eb854647e09487a188952516a",
+          "relationship": "isolated exact-build source"
+        }
+      ],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-signal-board/package.json",
+          "name": "pi-signal-board",
+          "version": "0.1.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "compiled-JavaScript-loaded",
+      "source_to_runtime_relationship": "EXACT_REPRODUCIBLE: a direct isolated TypeScript build of clean source commit 047ab0e767a7655eb854647e09487a188952516a produced all 57 deployed JavaScript files byte-for-byte. Four additional type/support outputs were outside the Stage 1 runtime closure. Signals remains a separate durable inbox product even though the Agent Board presents its events.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [
+          {
+            "group_id": "pi-signal-board-U001",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/phase2-final-signals",
+                "tip_sha": "0aa784d4321a585e009763385f89651e79ec3d7c"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U002",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-014-runtime",
+                "tip_sha": "3e0062f14175383041265b00d4ae3aff32a834bc"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U003",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-008-events",
+                "tip_sha": "aebbf779e914f6215d86f303f1caaffdfac5e9c5"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U004",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/ask-user-signals-deploy-fix-20260827",
+                "tip_sha": "047ab0e767a7655eb854647e09487a188952516a"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U005",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/agent/ask-user-signals-provider",
+                "tip_sha": "3c303e5364cebf2f84ebc16ace01c0099a821569"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U006",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/fix/m2-command-id-compat",
+                "tip_sha": "cf6c166d4d0d1dbf3d163497475276c220922901"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U007",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-024-question-escalation",
+                "tip_sha": "17f24491ae5a38d6d6199fe1d8c01e7edfbcc457"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U008",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/m0-exit-shell",
+                "tip_sha": "89950421ecbf307a265433a2a47869aec0d8a58b"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U009",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-023-expiry-service",
+                "tip_sha": "52cc52529f3079b209bbdffef539aafb87e6ee03"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U010",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/test/sb-004-harness",
+                "tip_sha": "ede8d04efaea69d5a2a52021fb45c64cee5f77b4"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U011",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-018-ui-adapter",
+                "tip_sha": "e400e75ae03e3bd410d1ff148e21f5d803912b7c"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U012",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-007-ids",
+                "tip_sha": "3617a1e600e22000b310f83eed19c11915c3e13e"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U013",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-019-question-validation",
+                "tip_sha": "3673a009c1f84135876b7184b3d6ec93a8f044c8"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U014",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-031-answer-ui",
+                "tip_sha": "518d434452c7dd4229732254257e7cc3290b9629"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U015",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-005-errors",
+                "tip_sha": "afa147c55e4b6e1b759f8e87666026f2f3419e3c"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U016",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-032-multiple-answer-ui",
+                "tip_sha": "a5fa1e7fd5e6a40e2cf288379a0aaa37ccfd5a6a"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U017",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-015-update-service",
+                "tip_sha": "e1af8c4ccf4cdd7d737220b3c25b883b6c7221e0"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U018",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-016-update-tool",
+                "tip_sha": "98d6cb5c9eae26ef9a05f83b11e5d5f1881073d9"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U019",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-010-reducer",
+                "tip_sha": "cb6ec654509e8b3f2905a4ef0331aaaa7214da32"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U020",
+            "refs": [
+              {
+                "scope": "remote",
+                "ref": "refs/heads/dependabot/npm_and_yarn/types/node-26.2.0",
+                "tip_sha": "cbec935976f329c1ace540f54b235bf9dd7a86ff"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U021",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-006-sanitizer",
+                "tip_sha": "d2d169d409643df7f9882bc0ea1b1a58d23ddb02"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U022",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-035-race-guard",
+                "tip_sha": "542132b75587f960cd0c5bba05d5e1c1fbdeb499"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U023",
+            "refs": [
+              {
+                "scope": "remote",
+                "ref": "refs/heads/dependabot/npm_and_yarn/typescript-7.0.2",
+                "tip_sha": "7ce0d53abb0b04ba7403ef7c7c042a93918673e1"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U024",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-020-unsafe-question",
+                "tip_sha": "366ae8203c85ea86e7718748b42ed1b39e2c3744"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U025",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-011-selectors",
+                "tip_sha": "dcfd94eab964ba6789b30aa2bbca8e7ddd178aea"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U026",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-013-queue-store",
+                "tip_sha": "14f52e05a329ad6d35188682c3e182082ea58efd"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U027",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-033-accept-recommendation",
+                "tip_sha": "48de59e17912b53288ed521f12db6e4ca56854c5"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U028",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-026-board-models",
+                "tip_sha": "748d647fb26458f2f366668ed223ca3022e24cea"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U029",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-028-signalboard-command",
+                "tip_sha": "cce2795e2cd5534ae348da7145b2a11e961f417c"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U030",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-030-view-checkpoint",
+                "tip_sha": "bf5aa76f2c164c91bd8693f0f3d215adbd097d36"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U031",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-017-widget",
+                "tip_sha": "eb15854af45e5380f569362d712f588191ec1c39"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U032",
+            "refs": [
+              {
+                "scope": "remote",
+                "ref": "refs/heads/dependabot/npm_and_yarn/test-toolchain-b6d487308a",
+                "tip_sha": "88250c5f5d5f65c84209690a54d9369544f06a3d"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U033",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-009-attachments",
+                "tip_sha": "701535786bf6bfe3eaf27da4733555239ec33672"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U034",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-034-dismiss-archive-ui",
+                "tip_sha": "b73d1ad72b2f839f3d0aa6a46cd2d78a52f3f92c"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U035",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-003-config",
+                "tip_sha": "19e7ce540e38b3231525183e655cb6a7695c4cc6"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U036",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-022-question-tool",
+                "tip_sha": "1579ab1bcecb9f1fef9747966cd23ee93e087fbd"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U037",
+            "refs": [
+              {
+                "scope": "remote",
+                "ref": "refs/heads/dependabot/npm_and_yarn/pi-host-a81fd2e162",
+                "tip_sha": "18eb518a17af086b244217ba3f98fafc8916736b"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U038",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-036-answer-persistence",
+                "tip_sha": "8c3b5ae18cf6a7e83e61d7df6fe6cb49c44152f3"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U039",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-027-board-component",
+                "tip_sha": "b1cb42e018e6dc904c6138bbad9dec64143b7dec"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U040",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-021-question-service",
+                "tip_sha": "bb67758bc85aa71219f7343b825fb3952d9d9828"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U041",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-025-inbox-projections",
+                "tip_sha": "4d79d49da590ee2dae84814382e9e32dc4d96353"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U042",
+            "refs": [
+              {
+                "scope": "remote",
+                "ref": "refs/heads/dependabot/npm_and_yarn/biomejs/biome-2.5.9",
+                "tip_sha": "c31d665a4c923170a3ce28786ce82b463eca3b78"
+              }
+            ],
+            "classification": "UNKNOWN_REQUIRES_REVIEW",
+            "safe_to_delete_later": "no"
+          },
+          {
+            "group_id": "pi-signal-board-U043",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-029-shortcut",
+                "tip_sha": "6be34f628c89d87f0a7e0203258fc6c389f4d2c9"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          },
+          {
+            "group_id": "pi-signal-board-U044",
+            "refs": [
+              {
+                "scope": "local",
+                "ref": "refs/heads/feat/sb-012-codec-replay",
+                "tip_sha": "b91e892ff0df1e216dc876fbb3f5698aacc3ca9c"
+              }
+            ],
+            "classification": "DUPLICATE_OR_SUPERSEDED",
+            "safe_to_delete_later": "yes"
+          }
+        ],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/pi-signal-board",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-signal-board/src",
+        "packages/pi-signal-board/dist",
+        "packages/pi-signal-board/package.json",
+        "packages/pi-signal-board/package-lock.json",
+        "packages/pi-signal-board/tsconfig.json",
+        "packages/pi-signal-board/tsconfig.build.json",
+        "packages/pi-signal-board/README.md",
+        "packages/pi-signal-board/LICENSE",
+        "packages/pi-signal-board/DEPLOYED.sha256",
+        "packages/pi-signal-board/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes",
+        "build outputs absent from the deployed runtime closure"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "temporary-orchestrator-cancel-isolation",
+      "display_name": "Temporary Orchestrator Cancel Isolation",
+      "active_status": "active",
+      "classification": "ACTIVE_TEMPORARY",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "temporary-orchestrator-cancel-isolation",
+          "activation_source": "global auto-discovery",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/extensions/temporary-orchestrator-cancel-isolation.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/temporary-orchestrator-cancel-isolation/temporary-orchestrator-cancel-isolation.ts",
+          "sha256": "44cac29893b50c5a3114cd00a723d29638e1639f6dc936fd3eacb95dfc7542e5"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "temporary-orchestrator-cancel-isolation",
+          "snapshot_path": "audit/stage-1/live-deployed/temporary-orchestrator-cancel-isolation",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/temporary-orchestrator-cancel-isolation/temporary-orchestrator-cancel-isolation.ts",
+              "sha256": "44cac29893b50c5a3114cd00a723d29638e1639f6dc936fd3eacb95dfc7542e5"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [],
+      "local_source_roots": [
+        "$HOME/.pi/agent/extensions"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [],
+      "license": {
+        "spdx": null,
+        "evidence": "No standalone package or license metadata in the Stage 1 runtime closure; retain under repository-level license only after ownership review."
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "The Stage 1 singleton TypeScript entrypoint is authoritative. Its behavior is not present in the deployed orchestrator, so it must remain in the baseline until a later acceptance decision.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/temporary-orchestrator-cancel-isolation",
+      "exact_files_or_directories_to_retain": [
+        "packages/temporary-orchestrator-cancel-isolation/extensions/temporary-orchestrator-cancel-isolation.ts",
+        "packages/temporary-orchestrator-cancel-isolation/package.json",
+        "packages/temporary-orchestrator-cancel-isolation/README.md",
+        "packages/temporary-orchestrator-cancel-isolation/LICENSE",
+        "packages/temporary-orchestrator-cancel-isolation/DEPLOYED.sha256"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": [
+        "When should this temporary policy shim be superseded by accepted orchestrator behavior?"
+      ]
+    },
+    {
+      "canonical_slug": "titlebar-spinner",
+      "display_name": "Titlebar Spinner",
+      "active_status": "active",
+      "classification": "ACTIVE_CANONICAL",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "titlebar-spinner",
+          "activation_source": "global auto-discovery",
+          "exact_loaded_entrypoint": "$HOME/.pi/agent/extensions/titlebar-spinner.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/titlebar-spinner/titlebar-spinner.ts",
+          "sha256": "e7b573dda2b03cc72c7392054fec181d2eb8c7938a7911400b3698cd129a6e6b"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "titlebar-spinner",
+          "snapshot_path": "audit/stage-1/live-deployed/titlebar-spinner",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/titlebar-spinner/titlebar-spinner.ts",
+              "sha256": "e7b573dda2b03cc72c7392054fec181d2eb8c7938a7911400b3698cd129a6e6b"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [],
+      "local_source_roots": [
+        "$HOME/.pi/agent/extensions"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [],
+      "license": {
+        "spdx": null,
+        "evidence": "No standalone package or license metadata in the Stage 1 runtime closure; retain under repository-level license only after ownership review."
+      },
+      "load_form": "TypeScript-loaded",
+      "source_to_runtime_relationship": "The Stage 1 singleton TypeScript entrypoint is the authoritative deployed byte sequence.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/titlebar-spinner",
+      "exact_files_or_directories_to_retain": [
+        "packages/titlebar-spinner/extensions/titlebar-spinner.ts",
+        "packages/titlebar-spinner/package.json",
+        "packages/titlebar-spinner/README.md",
+        "packages/titlebar-spinner/LICENSE",
+        "packages/titlebar-spinner/DEPLOYED.sha256"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    },
+    {
+      "canonical_slug": "pi-review-ui",
+      "display_name": "Pi Review UI",
+      "active_status": "inactive",
+      "classification": "INACTIVE_REAL_EXTENSION",
+      "deployed_entrypoints": [],
+      "stage_1_snapshots": [],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/review-ui"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-review-ui/package.json",
+          "name": "pi-review-ui",
+          "version": "0.1.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "inactive TypeScript extension source",
+      "source_to_runtime_relationship": "Real extension source, absent from the Stage 1 effective manifest. Retain for compatibility review; do not activate automatically.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/pi-review-ui",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-review-ui/extensions/review-ui.ts",
+        "packages/pi-review-ui/src",
+        "packages/pi-review-ui/package.json",
+        "packages/pi-review-ui/package-lock.json",
+        "packages/pi-review-ui/tsconfig.json",
+        "packages/pi-review-ui/README.md",
+        "packages/pi-review-ui/LICENSE",
+        "packages/pi-review-ui/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": [
+        "Does its pre-execution approval model fit the current Pi host APIs?"
+      ]
+    },
+    {
+      "canonical_slug": "pi-tool-controls",
+      "display_name": "Pi Tool Controls",
+      "active_status": "inactive",
+      "classification": "INACTIVE_REAL_EXTENSION",
+      "deployed_entrypoints": [],
+      "stage_1_snapshots": [],
+      "source_repositories": [
+        "https://github.com/JCFrags/my-shtty-pi"
+      ],
+      "local_source_roots": [
+        "$HOME/Projects/my-shtty-pi/packages/tool-controls"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "packages/pi-tool-controls/package.json",
+          "name": "pi-tool-controls",
+          "version": "0.1.0"
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "evidence": "package/repository license metadata"
+      },
+      "load_form": "inactive TypeScript extension source",
+      "source_to_runtime_relationship": "Real extension source, absent from the Stage 1 effective manifest. Retain for host/API acceptance; do not activate automatically.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": "packages/pi-tool-controls",
+      "exact_files_or_directories_to_retain": [
+        "packages/pi-tool-controls/extensions/tool-controls.ts",
+        "packages/pi-tool-controls/src",
+        "packages/pi-tool-controls/package.json",
+        "packages/pi-tool-controls/package-lock.json",
+        "packages/pi-tool-controls/tsconfig.json",
+        "packages/pi-tool-controls/README.md",
+        "packages/pi-tool-controls/LICENSE",
+        "packages/pi-tool-controls/test/smoke.test.ts"
+      ],
+      "categories_to_discard": [
+        "archives and legacy copies not required for a reproducible build",
+        "planning, milestone, implementation, and traceability reports",
+        "screenshots, generated demonstrations, benchmarks, and benchmark artifacts",
+        "examples not read at runtime",
+        "duplicated or historical documentation",
+        "release ceremony and repository-administration history",
+        "stale workflows and issue templates",
+        "tests beyond narrowly necessary smoke verification",
+        "generated output not loaded by Pi or required to verify deployed bytes"
+      ],
+      "confidence": "high",
+      "unresolved_questions": [
+        "Do its mouse and bulk-output controls fit the current Pi host APIs?"
+      ]
+    },
+    {
+      "canonical_slug": "pi-web",
+      "display_name": "Pi WebX",
+      "active_status": "external_excluded",
+      "classification": "EXTERNAL_EXCLUDED",
+      "deployed_entrypoints": [
+        {
+          "stage_1_slug": "pi-web",
+          "activation_source": "global auto-discovery",
+          "exact_loaded_entrypoint": "$HOME/.local/lib/pi-web-tools-releases/7f986081b4e8a03729620777248ba1484c9bc4d7/apps/pi-webx/src/index.ts",
+          "stage_1_snapshot_entrypoint": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/src/index.ts",
+          "sha256": "eaf3b7cb1e2c73abd79139c707f70358200c3c9e76df12aca5ad4017d4615c5c"
+        }
+      ],
+      "stage_1_snapshots": [
+        {
+          "stage_1_slug": "pi-web",
+          "snapshot_path": "audit/stage-1/live-deployed/pi-web",
+          "exact_copy": true,
+          "files": [
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/package.json",
+              "sha256": "2e0ea58f3b241c3e1583710791a223843e4d396dac5d783419b69793c1bb4d3a"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/src/audit.ts",
+              "sha256": "64396349f06244b0f1b41bc1885448410d0b916f3c49dd4ad522894f010cd995"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/src/index.ts",
+              "sha256": "eaf3b7cb1e2c73abd79139c707f70358200c3c9e76df12aca5ad4017d4615c5c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/src/modes.ts",
+              "sha256": "1c7d2f842ca77532e6b63f178207a0fd061585dcf9121e457cdcd6e0e2ac0d21"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/src/output.ts",
+              "sha256": "095a696c5fe68d1f6da8b4f6f0cffe7762e2da4fab5f155403bd54aa85a61e28"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/src/schemas.ts",
+              "sha256": "d2da29ecf313646205e7ad14777d51f67969d6039525b7f3e01c71fe01a2bb6c"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/apps/pi-webx/src/sdk.ts",
+              "sha256": "3239a36caa18fcb8742a7f508ad46b0c51cca76aa0ca1f062122bd02596a180a"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/package.json",
+              "sha256": "94ac5a3a8400d9768e3c126c8f0d07275ec9f0641616a160b07cf89f511e8c17"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/policy/package.json",
+              "sha256": "bb19c3d8f1096791376e92db2153140412e1edbcc92ce90486229c2763446040"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/policy/storage.mjs",
+              "sha256": "9012e58805ce37c2157e3d87f62eb2e4bac6e6a7e72abb54309672cfdf84999d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/package.json",
+              "sha256": "f933cb39334cb6f29e64083dcdf14045903fb49a16dba3207546434c9dd78ad1"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/src/client.ts",
+              "sha256": "e85abe40de237ae6b4e7d17f80c9a05233c05c094b64281138fc2ca5862f065b"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/src/errors.ts",
+              "sha256": "923c95f3f0a06c92e3a6f37ee4357e807cf8954869fcd33c56b57f5c40602b42"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/src/facade.ts",
+              "sha256": "7e560ab60215cf889652d2b851d4b743e4ed8a150a3edfb4b2f7a18eaa7fb89d"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/src/node-unix.ts",
+              "sha256": "e53b6298bb46dba12144fccf3b3a0ed42133b68bcb8a90667450a818be1ecd39"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/src/save-markdown.ts",
+              "sha256": "baaae4f264c3739b54681474e74f5b2b7f9a75a87885f57bb9ed6f2fc8771ccf"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/src/transport.ts",
+              "sha256": "ee4238e02f8911b3a001d2345d75b01e295eeb0f88a86acdf2c41a367f3fdd1a"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/packages/sdk/src/types.ts",
+              "sha256": "151695ef36e7fd4ef1d7ea96fefe0a1eb21b9bbd7279dc648871bc6da62a764e"
+            },
+            {
+              "path": "audit/stage-1/live-deployed/pi-web/pnpm-lock.yaml",
+              "sha256": "c222fcd79a765fb052e4612d7faf19f1f8c099f1c5f84473426cb83528afbf82"
+            }
+          ]
+        }
+      ],
+      "source_repositories": [],
+      "local_source_roots": [
+        "not inspected in Stage 2"
+      ],
+      "source_refs": [],
+      "package_manifests_and_versions": [
+        {
+          "path": "Stage 1 manifest evidence only",
+          "name": "@webx/pi-webx",
+          "version": "0.1.0"
+        }
+      ],
+      "license": {
+        "spdx": null,
+        "evidence": "Not evaluated; external exclusion."
+      },
+      "load_form": "TypeScript-loaded (Stage 1 evidence only)",
+      "source_to_runtime_relationship": "Stage 1 snapshot remains historical evidence. Stage 2 did not inspect source or history and proposes no copy into the consolidated tree.",
+      "associated_branch_worktree_stash_evidence": {
+        "unmerged_change_groups": [],
+        "private_dirty_or_stash_summary": null
+      },
+      "proposed_canonical_repository_path": null,
+      "exact_files_or_directories_to_retain": [],
+      "categories_to_discard": [
+        "all pi-web source, runtime, settings, activation, and history are outside consolidation scope"
+      ],
+      "confidence": "high",
+      "unresolved_questions": []
+    }
+  ]
+}
