@@ -116,6 +116,12 @@ for (const product of active) {
     }
   }
 }
+if (packageJson.piConsolidation.stage1RuntimeRecords !== 272 || packageJson.piConsolidation.canonicalDeployedFiles !== 261) {
+  throw new Error("Stage 1 record or canonical deployed-file count changed");
+}
+if (hashCount !== packageJson.piConsolidation.canonicalDeployedFiles) {
+  throw new Error(`canonical deployed hash count ${hashCount}; expected ${packageJson.piConsolidation.canonicalDeployedFiles}`);
+}
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) {
     throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
@@ -215,6 +221,7 @@ console.log(JSON.stringify({
   activeFamilies: active.length,
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
+  stage1RuntimeRecords: packageJson.piConsolidation.stage1RuntimeRecords,
   deployedHashesVerified: hashCount,
   compiledCounts: Object.fromEntries(products.filter((p) => p.compiledCount !== undefined).map((p) => [p.slug, p.compiledCount])),
   buildResults,

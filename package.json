@@ -3,15 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
     "verify": "node scripts/verify-deployed-baseline.mjs",
     "test": "npm run verify"
   },
   "piConsolidation": {
     "stage1Commit": "19110f9cf34ab29b2059e3bff460e856c7157bce",
+    "stage1RuntimeRecords": 272,
+    "canonicalDeployedFiles": 261,
     "products": [
       {"slug":"codex-usage-footer","status":"active","entrypoints":["extensions/codex-usage-footer.ts"]},
       {"slug":"files-ui","status":"active","entrypoints":["extensions/files/index.ts"]},
