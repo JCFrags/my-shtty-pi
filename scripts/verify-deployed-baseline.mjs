@@ -153,7 +153,7 @@ if (scriptFiles.length !== 1 || scriptFiles[0] !== "verify-deployed-baseline.mjs
 const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: root }).toString("utf8").split("\0").filter(Boolean);
 const privatePatterns = [
   /\/home\/mainpc(?:\/|\b)/,
-  /pi-extension-rescue-backups/,
+  new RegExp("pi-extension-" + "rescue-backups"),
   /\.agents\/temporary\//,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
   /\bAKIA[0-9A-Z]{16}\b/,
