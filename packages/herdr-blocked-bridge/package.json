@@ -1,0 +1,11 @@
+{
+  "name": "local-herdr-blocked-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions/herdr-blocked-bridge.ts"
+    ]
+  }
+}

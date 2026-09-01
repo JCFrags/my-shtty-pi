@@ -1,0 +1,11 @@
+{
+  "name": "local-temporary-orchestrator-cancel-isolation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions/temporary-orchestrator-cancel-isolation.ts"
+    ]
+  }
+}

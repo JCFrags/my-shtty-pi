@@ -1,0 +1,20 @@
+export const DEFAULT_COMPACTOR_CONFIG = {
+    targetTokens: 12_000,
+    minSummaryTokens: 4_000,
+    maxSummaryTokens: 20_000,
+    recentExactBiasFraction: 0.2,
+    minMarginalUtilityPerToken: 0.06,
+    mergeEpisodes: true,
+    mergeBeforeFraction: 0.55,
+    maxIndividualUnits: 600,
+    minEpisodeRawTokens: 1_200,
+    maxEpisodeTokens: 420,
+    semanticMaxTokens: 180,
+    enableSemanticCompression: true,
+    includeHeader: true,
+    emergencyAllowAbsent: true,
+    hotSourceTokens: 10_000,
+    warmSourceTokens: 75_000,
+    coldCueTokens: 56,
+};
+//# sourceMappingURL=types.js.map

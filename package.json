@@ -1,16 +1,34 @@
 {
   "name": "my-shtty-pi",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "private": true,
-  "description": "Source-only repository for small Pi extensions and local tools.",
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
-  "packageManager": "npm@10.9.3",
   "scripts": {
-    "check": "node scripts/check.mjs",
-    "check:public-tree": "node scripts/check-public-tree.mjs",
-    "check:catalog": "node scripts/check-catalog.mjs",
-    "test:repo": "node --test scripts/test/*.test.mjs",
-    "inventory": "node scripts/inventory.mjs"
+    "verify": "node scripts/verify-deployed-baseline.mjs",
+    "test": "npm run verify"
+  },
+  "piConsolidation": {
+    "stage1Commit": "19110f9cf34ab29b2059e3bff460e856c7157bce",
+    "stage1RuntimeRecords": 272,
+    "canonicalDeployedFiles": 261,
+    "products": [
+      {"slug":"codex-usage-footer","status":"active","entrypoints":["extensions/codex-usage-footer.ts"]},
+      {"slug":"files-ui","status":"active","entrypoints":["extensions/files/index.ts"]},
+      {"slug":"grounded-tools","status":"active","entrypoints":["files/index.ts","process/index.ts","lsp/index.ts","dialog/index.ts","tasks/index.ts","notes/index.ts","workplan/index.ts"]},
+      {"slug":"herdr-agent-state","status":"active","entrypoints":["extensions/herdr-agent-state.ts"]},
+      {"slug":"herdr-blocked-bridge","status":"active","entrypoints":["extensions/herdr-blocked-bridge.ts"]},
+      {"slug":"herdr-status","status":"active","entrypoints":["extensions/herdr-status.ts"]},
+      {"slug":"pi-agent-context","status":"active","entrypoints":["extensions/index.ts"]},
+      {"slug":"pi-chrono-compaction","status":"active","entrypoints":["dist/src/pi-extension.js"],"compiledCount":65,"buildConfig":"tsconfig.json"},
+      {"slug":"pi-herdr-orchestrator","status":"active","entrypoints":["dist/extensions/pi-herdr-orchestrator.js"],"compiledCount":30,"buildConfig":"tsconfig.json"},
+      {"slug":"pi-native-ssh","status":"active","entrypoints":["src/index.ts"]},
+      {"slug":"pi-pixel-cua","status":"active","entrypoints":["src/index.ts"]},
+      {"slug":"pi-progressive-tools","status":"active","entrypoints":["extensions/index.ts"]},
+      {"slug":"pi-review-ui","status":"inactive","entrypoints":["extensions/review-ui.ts"]},
+      {"slug":"pi-signal-board","status":"active","entrypoints":["dist/index.js"],"compiledCount":57,"buildConfig":"tsconfig.build.json"},
+      {"slug":"pi-tool-controls","status":"inactive","entrypoints":["extensions/tool-controls.ts"]},
+      {"slug":"temporary-orchestrator-cancel-isolation","status":"active-temporary","entrypoints":["extensions/temporary-orchestrator-cancel-isolation.ts"]},
+      {"slug":"titlebar-spinner","status":"active","entrypoints":["extensions/titlebar-spinner.ts"]}
+    ]
   }
 }

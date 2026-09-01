@@ -1,0 +1,331 @@
+import type { EntityKind } from "../shared/ids.js";
+import type { ModelEvidenceState } from "../model-intelligence/model-evidence.js";
+export const AGENT_STATES = [
+  "provisioning",
+  "starting",
+  "idle",
+  "working",
+  "blocked",
+  "stopping",
+  "stopped",
+  "failed",
+  "orphaned",
+  "replaced",
+] as const;
+export type AgentState = (typeof AGENT_STATES)[number];
+export type TaskState =
+  | "draft"
+  | "queued"
+  | "provisioning"
+  | "assigned"
+  | "running"
+  | "blocked"
+  | "collecting"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "timed_out";
+export type RunState =
+  | "created"
+  | "prompting"
+  | "working"
+  | "blocked"
+  | "settled"
+  | "result_pending"
+  | "result_pending_missing"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "lost";
+export interface ErrorSummary {
+  code: "TIMEOUT" | "BUDGET_EXCEEDED" | "RESULT_MISSING";
+  message: string;
+}
+export type AgentLifecycleClass =
+  "temporary" | "reusable" | "retained" | "pinned";
+export type CloseRecommendation = "close" | "keep" | "blocked";
+export interface Task {
+  id: string;
+  title: string;
+  objective: string;
+  state: TaskState;
+  createdAt: string;
+  parentAgentId?: string;
+  workflowId?: string;
+  profileId?: string;
+  isolationMode?:
+    | "profile-default"
+    | "shared-readonly"
+    | "worktree"
+    | "shared-explicit"
+    | "reuse-worktree";
+  constraints?: string[];
+  dependencies?: string[];
+  currentRunId?: string;
+  assignedAgentId?: string;
+  runIds?: string[];
+  resultId?: string;
+  resultCollectedAt?: string;
+  timeoutAt?: string;
+  terminalReason?: ErrorSummary;
+  endpointId?: string;
+  admissionReason?:
+    | "global_limit"
+    | "parent_limit"
+    | "endpoint_capacity"
+    | "provisioning_limit"
+    | "dependency_blocked"
+    | "depth_exceeded"
+    | "queue_full"
+    | "not_queued"
+    | undefined;
+  project?: Record<string, unknown>;
+}
+export interface Run {
+  id: string;
+  taskId: string;
+  state: RunState;
+  agentId?: string;
+  agentGeneration?: number;
+  assignmentId?: string;
+  assignmentDeliveryState?: "pending" | "accepted" | "failed";
+  assignmentConnectionGeneration?: number;
+  assignmentGeneration: number;
+  endpointId?: string;
+  agentCycleId?: string;
+  firstTurnIndex?: number;
+  piSessionId?: string;
+  terminalId?: string;
+  startedAt?: string;
+  terminalAt?: string;
+  settled: boolean;
+  resultRecoveryCount?: 0 | 1;
+  resultId?: string;
+  timeoutAt?: string;
+  terminalReason?: ErrorSummary;
+  cancelled?: boolean;
+}
+export interface AgentModelMetadata {
+  profileId?: "manager" | "subagent";
+  placement?: "current-workspace" | "new-workspace";
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: string;
+}
+export interface Agent {
+  id: string;
+  state: AgentState;
+  generation: number;
+  managed?: boolean;
+  parentAgentId?: string;
+  depth?: number;
+  displayName?: string;
+  herdrName?: string;
+  profileId?: string;
+  requestedModel?: AgentModelMetadata;
+  effectiveModel?: AgentModelMetadata;
+  actualModel?: AgentModelMetadata;
+  modelPolicyHash?: string;
+  lifecycleClass?: AgentLifecycleClass;
+  keepForReuse?: boolean;
+  closeRecommendation?: CloseRecommendation;
+  closeReason?: string;
+  terminalId?: string;
+  paneId?: string;
+  workspaceId?: string;
+  tabId?: string;
+  cwd?: string;
+  worktreeId?: string;
+  piSessionId?: string;
+  connectionGeneration?: number;
+  detectedKind?: string;
+  coarseStatus?: "idle" | "working" | "blocked" | "done" | "unknown";
+  currentRunId?: string;
+  currentAssignmentGeneration?: number;
+  lastAdapterSeq?: number;
+  tokenDigest?: string;
+}
+export interface ReviewContract {
+  id: string;
+  reviewTaskId: string;
+  reviewedTaskId: string;
+  reviewedRunId: string;
+  reviewedResultId: string;
+  resultDigest: string;
+  rubricVersion: string;
+  taskProfile: string;
+  issuedAt: string;
+  expiresAt: string;
+}
+export interface ResultRecord {
+  id: string;
+  taskId: string;
+  runId: string;
+  agentId: string;
+  status: "succeeded" | "failed" | "cancelled";
+  payloadHash: string;
+  piSettled: boolean;
+  assignmentGeneration?: number;
+  payload?: unknown;
+  validation?: Record<string, unknown>;
+  publishedAt?: string;
+}
+export interface QuestionRecord {
+  id: string;
+  taskId: string;
+  runId: string;
+  agentId: string;
+  state: "open" | "answered" | "cancelled" | "timed_out";
+  assignmentGeneration?: number;
+  toolCallId?: string;
+  payload?: unknown;
+  askedAt?: string;
+  answeredAt?: string;
+  answeredBy?: string;
+  answer?: { optionId: string | null; text: string | null };
+}
+export interface Workflow {
+  id: string;
+  state:
+    "created" | "running" | "blocked" | "succeeded" | "failed" | "cancelled";
+  taskIds: string[];
+}
+export interface AgentGroup {
+  id: string;
+  name: string;
+  agentIds: string[];
+  state: "open" | "stopped" | "closed";
+  createdAt: string;
+  createdBy: string;
+  stoppedAt?: string;
+  closedAt?: string;
+}
+export type HerdrMetadataState =
+  | "requested"
+  | "compiling"
+  | "validated"
+  | "scheduled"
+  | "creating"
+  | "starting"
+  | "working"
+  | "blocked"
+  | "settling"
+  | "settled"
+  | "exited"
+  | "cleanup_pending"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "orphaned"
+  | "conflict"
+  | "closed";
+export interface HerdrTaskMetadata {
+  schemaVersion: 1;
+  metadataId: string;
+  orchestrationId: string;
+  workflowId: string;
+  taskId: string;
+  runId: string;
+  agentId: string;
+  parentAgentId?: string;
+  profileId: string;
+  state: HerdrMetadataState;
+  placement: "background";
+  transcriptPolicy: "retain-tab";
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  terminalId: string;
+  piSessionRef: string;
+  startedAt: string;
+  updatedAt: string;
+  settledAt: string | null;
+  exitedAt: string | null;
+  transcriptRef: string | null;
+  resultRef: string | null;
+  questionRef: string | null;
+  errorCode: string | null;
+  metadataDigest: string;
+}
+export interface OrchestrationState {
+  schemaVersion: number;
+  lastEventSeq: number;
+  lastEventHash: string;
+  tasks: Record<string, Task>;
+  runs: Record<string, Run>;
+  agents: Record<string, Agent>;
+  adoptedRootLinks?: Record<string, string>;
+  workflows: Record<string, Workflow>;
+  results?: Record<string, ResultRecord>;
+  questions?: Record<string, QuestionRecord>;
+  groups?: Record<string, AgentGroup>;
+  herdrMetadata?: Record<string, HerdrTaskMetadata>;
+  modelEvidence?: ModelEvidenceState;
+  reviewContracts?: Record<string, ReviewContract>;
+  herdrResources?: Record<
+    string,
+    {
+      agentId: string;
+      state: string;
+      paneId?: string;
+      tabId?: string;
+      worktreeId?: string;
+      worktreePath?: string;
+      workspaceId?: string;
+      reason?: string;
+      parentAgentId?: string;
+      ownerId?: string;
+      terminalId?: string;
+      sessionId?: string;
+      generation?: number;
+      tokenDigest?: string;
+      promptFileDev?: number;
+      promptFileIno?: number;
+      tokenFileDev?: number;
+      tokenFileIno?: number;
+      registrationDeadline?: string;
+      cleanupOutcome?: string;
+      dirty?: boolean;
+      replaced?: boolean;
+      orphaned?: boolean;
+      unknown?: boolean;
+      parentGitRoot?: string;
+      parentGitHead?: string;
+      parentGitBranch?: string;
+      parentGitChangedFiles?: string[];
+      worktreeGitRoot?: string;
+      worktreeGitHead?: string;
+      worktreeGitBranch?: string;
+    }
+  >;
+  idempotency: Record<
+    string,
+    {
+      principalId: string;
+      method: string;
+      paramsHash?: string;
+      response: unknown;
+    }
+  >;
+}
+export interface StoredEvent {
+  schemaVersion: 1;
+  seq: number;
+  id: string;
+  timestamp: string;
+  type: string;
+  actor: { principalId: string; kind: string };
+  entityRefs: Record<string, string>;
+  payload: unknown;
+  prevHash: string;
+  hash: string;
+}
+export type EventInput = {
+  type: string;
+  actor: { principalId: string; kind: string };
+  entityRefs?: Record<string, string>;
+  payload: unknown;
+};
+export type Entity = Agent | Task | Run | Workflow;
+export type { EntityKind };

@@ -1,6 +1,0 @@
-b425ed8e8535cf76deaeeea7de91edfda3d07606ee5ef9b2f02028583600a05a  node_modules/@earendil-works/pi-tui/dist/tui.js
-0b34c1688da2789a4d73d66a748287c8731f906bee480c5ef79633b66c9ab2f9  node_modules/@earendil-works/pi-tui/dist/tui.d.ts
-2886260eca46a0a66cdc9f407777bd17f05200326d495ebf903578c49f298e3a  node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js
-19fd4e71f4706245192bad73dffb1e7c9d762b12cf099b23b6ec2040a6cd9001  dist/core/extensions/types.d.ts
-b39d59b8f86693b9aca15f13e14f367fce9a0ad8ed7ce9ad17950906f226951d  dist/core/extensions/runner.js
-da01f077caca6e7c440ea05e7226a64dffdfd96e8e53a1ffaca4bd7d6e186261  dist/modes/interactive/interactive-mode.js

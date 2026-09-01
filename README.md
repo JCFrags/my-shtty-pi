@@ -1,53 +1,25 @@
-# Pi Package Incubator
+# Pi extension monorepo
 
-`my-shtty-pi` is an independent community Pi package incubator. This public repository contains nine products and seventeen release units. It is not endorsed by Pi.
+This repository consolidates extension source and the September 1, 2026 deployed baseline without changing extension behavior. The 15 active families reproduce 21 active entrypoints. Review UI and Tool Controls remain inactive.
 
-The root is a private npm control plane, not a workspace or install boundary. npm `private: true` prevents accidental publication of the root package. It does not make this GitHub repository private.
+| Product | Status |
+|---|---|
+| `codex-usage-footer` | active |
+| `files-ui` | active |
+| `grounded-tools` | active; seven entrypoints with one shared core |
+| `herdr-agent-state` | active |
+| `herdr-blocked-bridge` | active |
+| `herdr-status` | active |
+| `pi-agent-context` | active |
+| `pi-chrono-compaction` | active; compiled runtime retained |
+| `pi-herdr-orchestrator` | active; compiled runtime retained |
+| `pi-native-ssh` | active |
+| `pi-pixel-cua` | active |
+| `pi-progressive-tools` | active |
+| `pi-review-ui` | inactive |
+| `pi-signal-board` | active; compiled runtime retained |
+| `pi-tool-controls` | inactive |
+| `temporary-orchestrator-cancel-isolation` | active temporary; separate from the orchestrator |
+| `titlebar-spinner` | active |
 
-## Package status
-
-The lifecycle status describes review state. It is not a release, installation, or publication approval. See [status definitions](docs/package-status.md).
-
-| Product | Status | Package source |
-|---|---|---|
-| ChronoCompact | quarantined | [source](packages/chrono-compact) |
-| Grounded Tools | experimental | [source](packages/grounded-tools) |
-| Progressive Tools | experimental | [source](packages/progressive-tools) |
-| Agent Context | experimental | [source](packages/pi-agent-context) |
-| Tool Controls | host-dependent | [source](packages/tool-controls) |
-| Review UI | blocked | [source](packages/review-ui) |
-| Files UI | candidate | [source](packages/files-ui) |
-| Herdr Status | candidate | [source](packages/herdr-status) |
-| Native SSH | candidate | [source](packages/native-ssh) |
-
-No package is stable, generally recommended, or publication-approved. This repository does not make a general installation recommendation. Files UI is the intended first stabilization pilot.
-
-## Root commands
-
-Run the repository checks without installing dependencies:
-
-```sh
-npm run test:repo
-npm run check:catalog
-npm run check:public-tree
-npm run inventory
-npm run check
-```
-
-These commands check repository structure and policy. They do not prove package behavior or Pi compatibility.
-
-## Working order
-
-See the [roadmap](docs/roadmap.md) for the broad stabilization order and [release gates](docs/release.md) for package-specific release decisions.
-
-## Contributing and security
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Read [SECURITY.md](SECURITY.md) before reporting a security concern. Do not post secrets or exploit details in public issues.
-
-## Safety and provenance
-
-Extensions run with Pi process permissions. Review source and pin exact inputs before use. Never commit credentials, tokens, cookies, private keys, sessions, logs, machine paths, or private state. See [NOTICE](NOTICE) and [provenance guidance](docs/provenance.md).
-
-## License
-
-Original package source uses the package license shown in its manifest. Repository documentation is MIT-licensed where marked.
+Run `npm run verify` to validate deployed hashes, entrypoints, manifests, product boundaries, privacy, and isolated compiled reproducibility. `pi-web` is external and excluded from this repository.
