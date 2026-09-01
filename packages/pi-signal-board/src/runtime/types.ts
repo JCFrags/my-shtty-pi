@@ -1,0 +1,109 @@
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { EffectiveCommandInfo } from '../commands/signalboard-command.js';
+import type { ConfigLoadResult } from '../config/types.js';
+import type { SignalBoardError } from '../domain/errors.js';
+import type { RuntimeIdGenerator } from '../domain/ids.js';
+import type { BoardState } from '../domain/types.js';
+import type { CompatibilityResult } from '../integration/compatibility.js';
+import type { SessionHealthSnapshot, SessionPersistence } from '../integration/doctor.js';
+import type { PiSessionStore } from '../persistence/pi-session-store.js';
+import type { TurnAcknowledgementRateCounter } from '../services/acknowledgement-rate-counter.js';
+import type { AcknowledgementService } from '../services/acknowledgement-service.js';
+import type { AnswerDeliveryService } from '../services/answer-delivery-service.js';
+import type { AnswerPersistenceService } from '../services/answer-persistence-service.js';
+import type { BoardViewCheckpointService } from '../services/board-view-checkpoint-service.js';
+import type { Diagnostics } from '../services/diagnostics.js';
+import type { ExpiryService } from '../services/expiry-service.js';
+import type { MutationQueue } from '../services/mutation-queue.js';
+import type { QuestionEscalationService } from '../services/question-escalation-service.js';
+import type { TurnQuestionRateCounter } from '../services/question-rate-counter.js';
+import type { QuestionService } from '../services/question-service.js';
+import type { TurnUpdateRateCounter } from '../services/update-rate-counter.js';
+import type { UpdateService } from '../services/update-service.js';
+import type { SignalBoardUiAdapter } from '../ui/adapter.js';
+
+export type RuntimeStatus = 'healthy' | 'degraded' | 'disabled' | 'unsupported';
+
+export interface RuntimeIdentity {
+  readonly persistence: SessionPersistence;
+  readonly token: string;
+}
+
+/** Session state owned by one lifecycle generation. */
+export interface SignalBoardRuntime {
+  readonly generation: number;
+  readonly identity: RuntimeIdentity;
+  /** Branch identity revision. Only session_tree replacement increments it. */
+  treeRevision: number;
+  readonly context: ExtensionContext;
+  readonly queue: MutationQueue;
+  readonly compatibility: CompatibilityResult;
+  readonly config: ConfigLoadResult;
+  readonly diagnostics: Diagnostics;
+  /** Runtime-owned durable mutation dependencies. */
+  ids?: RuntimeIdGenerator;
+  updateRateCounter?: TurnUpdateRateCounter;
+  questionRateCounter?: TurnQuestionRateCounter;
+  sessionStore?: PiSessionStore;
+  updateService?: UpdateService;
+  questionService?: QuestionService;
+  answerPersistenceService?: AnswerPersistenceService;
+  answerDeliveryService?: AnswerDeliveryService;
+  acknowledgementService?: AcknowledgementService;
+  acknowledgementRateCounter?: TurnAcknowledgementRateCounter;
+  expiryService?: ExpiryService;
+  questionEscalationService?: QuestionEscalationService;
+  boardViewCheckpointService?: BoardViewCheckpointService;
+  /** One adapter owns the namespaced widget and status for this runtime. */
+  ui?: SignalBoardUiAdapter;
+  /** Actual Pi invocation resolved from registered command metadata. */
+  effectiveCommand?: EffectiveCommandInfo;
+  state: BoardState;
+  status: RuntimeStatus;
+  timer: unknown | undefined;
+  disposed: boolean;
+  disposeCount: number;
+  notifications: Set<string>;
+}
+
+export type RuntimeAccessErrorCode =
+  | 'SB_NOT_INITIALIZED'
+  | 'SB_DISABLED'
+  | 'SB_UNSUPPORTED_HOST'
+  | 'SB_INTERNAL';
+
+export interface RuntimeAccessError {
+  readonly code: RuntimeAccessErrorCode;
+  readonly message: string;
+  readonly retryable: boolean;
+}
+
+export type RuntimeAccessResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: RuntimeAccessError };
+
+export interface RuntimeDoctorSource {
+  doctorSnapshot(context: ExtensionContext): SessionHealthSnapshot;
+}
+
+export interface RuntimeLifecycleHooks {
+  /** Locked hooks are intentionally injectable until their services exist. */
+  readonly resetTurnRateCountersLocked?: (runtime: SignalBoardRuntime) => void | Promise<void>;
+  readonly evaluateExpiryLocked?: (runtime: SignalBoardRuntime) => void | Promise<void>;
+  readonly escalateConditionalQuestionsLocked?: (
+    runtime: SignalBoardRuntime,
+  ) => void | Promise<void>;
+  readonly recoverDeliveryLocked?: (runtime: SignalBoardRuntime) => void | Promise<void>;
+  readonly refreshLocked?: (runtime: SignalBoardRuntime) => void | Promise<void>;
+  readonly onTimerLocked?: (runtime: SignalBoardRuntime) => void | Promise<void>;
+  readonly armTimerLocked?: (
+    runtime: SignalBoardRuntime,
+    callback: () => Promise<void>,
+  ) => unknown | Promise<unknown | undefined>;
+  readonly clearTimer?: (handle: unknown) => void;
+}
+
+/** Future services can convert runtime access failures to the shared public error type. */
+export type RuntimeMutationBoundary<T> =
+  | RuntimeAccessResult<T>
+  | { ok: false; error: SignalBoardError };
