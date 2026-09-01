@@ -34,16 +34,7 @@ export function renderHeader(
   );
   const status = presentation.online ? "● ONLINE" : "○ OFFLINE";
   const first = `${presentation.productName}  ${status}  ${scope}  ⚠ ${presentation.attentionCount}`;
-  const lines =
-    visibleWidth(first) <= safeWidth
-      ? [first]
-      : [
-          bounded(presentation.productName, safeWidth),
-          bounded(
-            `${status}  ${scope}  ⚠ ${presentation.attentionCount}`,
-            safeWidth,
-          ),
-        ];
+  const lines = [bounded(first, safeWidth)];
   const hitBoxes: HitBox[] = [];
   const tabs: Array<{ id: string; label: string; tab: AgentBoardTab }> = [
     { id: "tab:board", label: "Board 1", tab: "board" },
@@ -51,65 +42,66 @@ export function renderHeader(
     { id: "tab:agents", label: "Agents 3", tab: "agents" },
     { id: "tab:activity", label: "Activity 4", tab: "activity" },
   ];
-  const controls = [
-    ...tabs.map((item) => ({
-      id: item.id,
-      label:
-        presentation.selectedTab === item.tab
-          ? item.label.toUpperCase()
-          : item.label,
-      activate: actions ? () => actions.selectTab(item.tab) : undefined,
-    })),
+  let row = "";
+  const entries: Array<{
+    id: string;
+    x: number;
+    width: number;
+    activate: () => void;
+  }> = [];
+  for (const item of tabs) {
+    const label = renderButton(
+      presentation.selectedTab === item.tab
+        ? item.label.toUpperCase()
+        : item.label,
+    );
+    const separator = row ? " " : "";
+    if (
+      visibleWidth(row) + visibleWidth(separator) + visibleWidth(label) >
+      safeWidth
+    )
+      break;
+    const x = visibleWidth(row) + visibleWidth(separator);
+    row += `${separator}${label}`;
+    if (actions)
+      entries.push({
+        id: item.id,
+        x,
+        width: visibleWidth(label),
+        activate: () => actions.selectTab(item.tab),
+      });
+  }
+  for (const item of [
     {
       id: "header:settings",
       label: "Settings ,",
       activate: actions?.toggleSettings,
     },
     { id: "header:help", label: "Help ?", activate: actions?.toggleHelp },
-  ];
-  let row = "";
-  let rowY = lines.length;
-  const entries: Array<{
-    id: string;
-    x: number;
-    y: number;
-    width: number;
-    activate: () => void;
-  }> = [];
-  for (const item of controls) {
-    const fullLabel = renderButton(item.label);
-    const label =
-      visibleWidth(fullLabel) <= safeWidth
-        ? fullLabel
-        : truncateToWidth(fullLabel, safeWidth);
+  ]) {
+    if (!item.activate) continue;
+    const label = renderButton(item.label);
     const separator = row ? " " : "";
     if (
-      row &&
       visibleWidth(row) + visibleWidth(separator) + visibleWidth(label) >
-        safeWidth
-    ) {
-      lines.push(truncateToWidth(row, safeWidth));
-      row = "";
-      rowY = lines.length;
-    }
-    const actualSeparator = row ? " " : "";
-    const x = visibleWidth(row) + visibleWidth(actualSeparator);
-    row += `${actualSeparator}${label}`;
-    if (item.activate)
-      entries.push({
-        id: item.id,
-        x,
-        y: rowY,
-        width: visibleWidth(label),
-        activate: item.activate,
-      });
+      safeWidth
+    )
+      break;
+    const x = visibleWidth(row) + visibleWidth(separator);
+    row += `${separator}${label}`;
+    entries.push({
+      id: item.id,
+      x,
+      width: visibleWidth(label),
+      activate: item.activate,
+    });
   }
   lines.push(truncateToWidth(row, safeWidth));
   for (const entry of entries)
     hitBoxes.push({
       id: entry.id,
       x: entry.x,
-      y: entry.y,
+      y: 1,
       width: entry.width,
       height: 1,
       disabled: false,

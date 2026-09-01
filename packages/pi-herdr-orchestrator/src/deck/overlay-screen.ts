@@ -1,4 +1,3 @@
-import type { ActionTarget } from "./actions.js";
 import type { NormalizedQuestion } from "./product-presentation.js";
 
 export const MAX_OVERLAY_TEXT = 16_384;
@@ -13,11 +12,6 @@ export type TextInputPurpose =
   | "default"
   | "files-filter"
   | "model-filter";
-
-/** Filter editors accept an empty value so that they can clear their filter. */
-export function allowsEmptyText(purpose: TextInputPurpose): boolean {
-  return purpose === "files-filter" || purpose === "model-filter";
-}
 
 export type ConfirmationAction =
   "cancelTask" | "groupStop" | "groupClose" | "close" | "stop";
@@ -47,13 +41,11 @@ export type OverlayState =
   | ({
       kind: "agent-more";
       guard: Required<Pick<OverlayTargetGuard, "agentId" | "generation">>;
-      focusedIndex?: number;
     } & OverlayCommon)
   | ({
       kind: "confirm";
       action: ConfirmationAction;
       guard?: OverlayTargetGuard;
-      target: ActionTarget;
       summary: string;
     } & OverlayCommon)
   | ({
@@ -66,7 +58,6 @@ export type OverlayState =
   | ({
       kind: "question-response";
       question: NormalizedQuestion;
-      target: ActionTarget;
       guard?: Required<Pick<OverlayTargetGuard, "questionId">> &
         Pick<OverlayTargetGuard, "revision">;
       selectedOptionIds: readonly string[];

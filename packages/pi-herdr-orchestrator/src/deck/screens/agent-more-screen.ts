@@ -1,5 +1,4 @@
 import type { Agent } from "../../state/types.js";
-import type { AgentMorePresentation } from "../agents.js";
 import type { RenderedSurface } from "../screen-types.js";
 import { SurfaceBuilder } from "../geometry.js";
 
@@ -15,8 +14,6 @@ export interface AgentMoreScreenOptions {
   onThinking(): void;
   onCreate(): void;
   onClose(): void;
-  presentation?: AgentMorePresentation;
-  onActivate?(index: number): void;
 }
 
 export function renderAgentMoreScreen(
@@ -31,68 +28,60 @@ export function renderAgentMoreScreen(
       : "Agent is unavailable",
   );
   surface.addLine("");
-  const fallback = [
+  surface.addButtons([
     {
-      id: "compact",
+      id: "agent-more:compact",
       label: "Compact",
       disabled: agent?.state !== "idle",
       activate: options.onCompact,
     },
     {
-      id: "restart",
+      id: "agent-more:restart",
       label: "Restart",
       disabled: !agent || ["stopped", "replaced"].includes(agent.state),
       activate: options.onRestart,
     },
     {
-      id: "close",
+      id: "agent-more:close",
       label: "Close",
       disabled: !agent,
       activate: options.onCloseAgent,
     },
     {
-      id: "openWorktree",
+      id: "agent-more:worktree",
       label: "Open worktree",
       disabled: !agent?.cwd,
       activate: options.onWorktree,
     },
     {
-      id: "copyId",
+      id: "agent-more:copy",
       label: "Copy ID",
       disabled: !agent,
       activate: options.onCopy,
     },
     {
-      id: "setModel",
+      id: "agent-more:model",
       label: "Running model",
       disabled: !agent,
       activate: options.onModel,
     },
     {
-      id: "setThinking",
+      id: "agent-more:thinking",
       label: "Thinking level",
       disabled: !agent,
       activate: options.onThinking,
     },
     {
-      id: "create-child-agent",
+      id: "agent-more:create",
       label: "Create child agent",
       disabled: !agent?.cwd,
       activate: options.onCreate,
     },
-  ];
-  const buttons = options.presentation
-    ? options.presentation.actions.map((action) => ({
-        id: `agent-more:${action.id}`,
-        label: action.label,
-        disabled: action.disabled,
-        focused:
-          options.presentation?.actions[options.presentation.focusedIndex] ===
-          action,
-        activate: () =>
-          options.onActivate?.(options.presentation!.actions.indexOf(action)),
-      }))
-    : fallback;
-  surface.addButtons(buttons);
+    {
+      id: "agent-more:close-drawer",
+      label: "Close drawer",
+      activate: options.onClose,
+    },
+  ]);
   return surface.finish();
 }
