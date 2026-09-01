@@ -1,6 +1,6 @@
-# Clean Pi extension monorepo candidate
+# Pi extension monorepo
 
-This branch consolidates extension source and the September 1, 2026 deployed baseline without changing extension behavior. The 15 active families reproduce 21 active entrypoints. Review UI and Tool Controls remain inactive.
+This repository consolidates extension source and the September 1, 2026 deployed baseline without changing extension behavior. The 15 active families reproduce 21 active entrypoints. Review UI and Tool Controls remain inactive.
 
 | Product | Status |
 |---|---|
