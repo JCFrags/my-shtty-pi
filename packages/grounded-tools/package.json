@@ -1,0 +1,15 @@
+{
+  "name": "pi-grounded-tools",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "core",
+    "dialog",
+    "files",
+    "lsp",
+    "notes",
+    "process",
+    "tasks",
+    "workplan"
+  ]
+}

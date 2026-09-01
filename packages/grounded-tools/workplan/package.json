@@ -1,0 +1,17 @@
+{
+  "name": "@grounded/pi-workplan",
+  "version": "0.1.0",
+  "description": "Detailed branch-aware execution specifications for Pi",
+  "type": "module",
+  "license": "MIT",
+  "files": ["index.ts", "README.md", "LICENSE"],
+  "pi": { "extensions": ["./index.ts"] },
+  "dependencies": { "@grounded/pi-core": "0.1.0" },
+  "bundledDependencies": ["@grounded/pi-core"],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "engines": { "node": ">=22" }
+}
