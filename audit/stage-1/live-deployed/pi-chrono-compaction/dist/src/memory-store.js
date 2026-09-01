@@ -1,0 +1,730 @@
+import { createHash, randomBytes } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { link, lstat, mkdir, open, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { hashText, stableStringify, unique } from "./utils.js";
+const VERIFIED_SOURCE = Symbol("verified-authoritative-memory-source");
+const AUTHORITATIVE_MANIFEST_PATH = process.env.PI_CHRONO_AUTHORITATIVE_MEMORY_MANIFEST?.trim();
+const PROTECTED = new Set(["system", "user", "project", "skill"]);
+function sha256Hex(bytes) {
+    return createHash("sha256").update(bytes).digest("hex");
+}
+function isWithinRoot(root, target) {
+    const path = relative(root, target);
+    return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
+}
+async function readStableRegularFile(path, allowedRoot) {
+    const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+        const before = await handle.stat();
+        if (!before.isFile() || before.nlink !== 1 || (before.mode & 0o022) !== 0) {
+            throw new Error(`Authoritative source is not a one-link regular file without group or other write access: ${path}`);
+        }
+        const bytes = await handle.readFile();
+        const after = await handle.stat();
+        if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+            throw new Error(`Authoritative source changed while it was read: ${path}`);
+        }
+        const current = await lstat(path);
+        if (!current.isFile() || current.isSymbolicLink() || current.dev !== after.dev || current.ino !== after.ino) {
+            throw new Error(`Authoritative source path was replaced while it was read: ${path}`);
+        }
+        if (allowedRoot) {
+            const openedPath = await realpath(`/proc/self/fd/${handle.fd}`).catch(() => realpath(path));
+            if (!isWithinRoot(allowedRoot, openedPath))
+                throw new Error("Authoritative source escaped its configured root.");
+        }
+        return bytes;
+    }
+    finally {
+        await handle.close();
+    }
+}
+function parseAuthoritativeManifest(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        throw new Error("Authoritative memory manifest must be an object.");
+    const record = value;
+    if (record.schemaVersion !== 1 || !Array.isArray(record.sources))
+        throw new Error("Unsupported authoritative memory manifest schema.");
+    const sources = record.sources.map((item, index) => {
+        if (item === null || typeof item !== "object" || Array.isArray(item))
+            throw new Error(`Invalid authoritative source at index ${index}.`);
+        const source = item;
+        if (source.authority !== "project" && source.authority !== "skill")
+            throw new Error(`Unsupported authoritative source type at index ${index}.`);
+        const authority = source.authority;
+        if (typeof source.sourceRef !== "string" || !new RegExp(`^${authority}:[A-Za-z0-9._-]{1,120}$`).test(source.sourceRef)) {
+            throw new Error(`Authoritative source identity does not match its authority at index ${index}.`);
+        }
+        if (typeof source.relativePath !== "string" || !source.relativePath || isAbsolute(source.relativePath))
+            throw new Error(`Invalid authoritative source path at index ${index}.`);
+        const normalized = relative(".", source.relativePath);
+        if (normalized === ".." || normalized.startsWith(`..${sep}`))
+            throw new Error(`Authoritative source path traversal at index ${index}.`);
+        if (typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256))
+            throw new Error(`Invalid authoritative source SHA-256 at index ${index}.`);
+        return { sourceRef: source.sourceRef, authority, relativePath: source.relativePath, sha256: source.sha256 };
+    });
+    if (new Set(sources.map((source) => source.sourceRef)).size !== sources.length)
+        throw new Error("Authoritative source identities must be unique.");
+    return { schemaVersion: 1, sources };
+}
+async function resolveConfiguredAuthoritativeSource(sourceRef) {
+    if (!AUTHORITATIVE_MANIFEST_PATH)
+        throw new Error("Authoritative file ingestion is not configured; protected memory fails closed.");
+    if (!isAbsolute(AUTHORITATIVE_MANIFEST_PATH))
+        throw new Error("Authoritative memory manifest path must be absolute.");
+    const manifestPath = resolve(AUTHORITATIVE_MANIFEST_PATH);
+    const root = await realpath(dirname(manifestPath));
+    const manifestBytes = await readStableRegularFile(manifestPath, root);
+    let manifestValue;
+    try {
+        manifestValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
+    }
+    catch (error) {
+        throw new Error(`Authoritative memory manifest is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const manifest = parseAuthoritativeManifest(manifestValue);
+    const configured = manifest.sources.find((source) => source.sourceRef === sourceRef);
+    if (!configured)
+        throw new Error(`Authoritative source identity is not configured: ${sourceRef}`);
+    const target = resolve(root, configured.relativePath);
+    if (!isWithinRoot(root, target))
+        throw new Error("Authoritative source path traversal was rejected.");
+    const bytes = await readStableRegularFile(target, root);
+    const sourceSha256 = sha256Hex(bytes);
+    if (sourceSha256 !== configured.sha256)
+        throw new Error(`Authoritative source bytes changed for ${sourceRef}.`);
+    let sourceText;
+    try {
+        sourceText = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    }
+    catch (error) {
+        throw new Error(`Authoritative source is not valid UTF-8: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!sourceText.trim() || sourceText !== sourceText.trim())
+        throw new Error("Authoritative memory source must be non-empty normalized text.");
+    return Object.freeze({
+        [VERIFIED_SOURCE]: true,
+        authority: configured.authority,
+        sourceRef: configured.sourceRef,
+        sourceText,
+        sourceSha256,
+    });
+}
+function eventPayload(event) {
+    return stableStringify(event);
+}
+function validateEvent(event, previousHash) {
+    if (event.schemaVersion !== 2)
+        throw new Error("Unsupported memory event schema.");
+    if (event.previousEventHash !== previousHash)
+        throw new Error(`Memory hash chain broke at ${event.eventId}.`);
+    const { eventHash: _eventHash, ...payload } = event;
+    if (hashText(eventPayload(payload)) !== event.eventHash)
+        throw new Error(`Memory event integrity failed at ${event.eventId}.`);
+    if (!Number.isSafeInteger(event.turn) || event.turn < 0)
+        throw new Error(`Memory event ${event.eventId} has an invalid turn.`);
+    if (!Number.isFinite(event.confidence) || event.confidence < 0 || event.confidence > 1)
+        throw new Error(`Memory event ${event.eventId} has invalid confidence.`);
+    if (event.action === "remember" && PROTECTED.has(event.authority)) {
+        const sourceHash = event.text === undefined ? "" : sha256Hex(event.text);
+        const sourceIdentity = hashText(`${event.authority}\n${event.sourceRef}\n${sourceHash}\nconfigured-file-v1`);
+        if (event.authoritativeVerifier !== "configured-file-v1"
+            || event.authoritativeSourceHash !== sourceHash
+            || event.authoritativeSourceIdentity !== sourceIdentity) {
+            throw new Error(`Protected memory ${event.memoryId} lacks independently verified authoritative source bytes and identity.`);
+        }
+        if ((event.authority !== "project" && event.authority !== "skill") || !event.sourceRef.startsWith(`${event.authority}:`)) {
+            throw new Error(`Protected memory ${event.memoryId} has an unsupported or mismatched authoritative source identity.`);
+        }
+    }
+}
+function checkedText(input) {
+    const text = input.text?.trim();
+    if ((input.action === "remember" || input.action === "update") && !text)
+        throw new Error(`${input.action} requires non-empty text.`);
+    return text;
+}
+function currentById(events) {
+    const memories = new Map();
+    for (const event of events) {
+        const existing = memories.get(event.memoryId);
+        if (event.action === "remember") {
+            if (existing)
+                throw new Error(`Memory ${event.memoryId} was remembered more than once.`);
+            memories.set(event.memoryId, {
+                memoryId: event.memoryId,
+                text: event.text,
+                sourceRef: event.sourceRef,
+                scope: event.scope,
+                authority: event.authority,
+                protected: PROTECTED.has(event.authority),
+                confidence: event.confidence,
+                state: "current",
+                createdAt: event.timestamp,
+                updatedAt: event.timestamp,
+                createdTurn: event.turn,
+                lastUsedTurn: event.turn,
+                useCount: 0,
+                ...(event.supersedesMemoryId === undefined ? {} : { supersedesMemoryId: event.supersedesMemoryId }),
+                lastEventHash: event.eventHash,
+            });
+            if (event.supersedesMemoryId) {
+                const superseded = memories.get(event.supersedesMemoryId);
+                if (superseded?.protected && !PROTECTED.has(event.authority)) {
+                    throw new Error(`Protected ${superseded.authority} memory ${superseded.memoryId} cannot be superseded by ordinary memory.`);
+                }
+                if (superseded)
+                    memories.set(event.supersedesMemoryId, { ...superseded, state: "superseded", updatedAt: event.timestamp });
+            }
+            continue;
+        }
+        if (!existing)
+            throw new Error(`Memory event ${event.eventId} refers to unknown memory ${event.memoryId}.`);
+        if (existing.protected) {
+            throw new Error(`Protected ${existing.authority} memory ${event.memoryId} cannot be changed by an ordinary memory event.`);
+        }
+        if (event.action === "update") {
+            memories.set(event.memoryId, {
+                ...existing,
+                text: event.text,
+                sourceRef: event.sourceRef,
+                scope: event.scope,
+                confidence: event.confidence,
+                state: "current",
+                updatedAt: event.timestamp,
+                lastEventHash: event.eventHash,
+            });
+        }
+        else if (event.action === "touch") {
+            memories.set(event.memoryId, {
+                ...existing,
+                updatedAt: event.timestamp,
+                lastUsedTurn: event.turn,
+                useCount: existing.useCount + 1,
+                lastEventHash: event.eventHash,
+            });
+        }
+        else if (event.action === "promote") {
+            memories.set(event.memoryId, {
+                ...existing,
+                state: "current",
+                updatedAt: event.timestamp,
+                lastUsedTurn: event.turn,
+                useCount: existing.useCount + 1,
+                promotedUntilTurn: event.turn + 8,
+                lastEventHash: event.eventHash,
+            });
+        }
+        else {
+            memories.set(event.memoryId, {
+                ...existing,
+                state: "demoted",
+                updatedAt: event.timestamp,
+                lastEventHash: event.eventHash,
+            });
+        }
+    }
+    return memories;
+}
+export function materializeMemoryEvents(events) {
+    try {
+        let previousHash = "0".repeat(64);
+        for (const event of events) {
+            validateEvent(event, previousHash);
+            previousHash = event.eventHash;
+        }
+        const memories = [...currentById(events).values()].sort((a, b) => a.createdTurn - b.createdTurn || a.memoryId.localeCompare(b.memoryId));
+        return {
+            schemaVersion: 2,
+            status: "ready",
+            generationHash: hashText(stableStringify(events.map((event) => event.eventHash))),
+            memories,
+            events: [...events],
+        };
+    }
+    catch (error) {
+        return {
+            schemaVersion: 2,
+            status: "corrupt-rebuild-required",
+            generationHash: hashText("corrupt-memory-store"),
+            memories: [],
+            events: [],
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+function createMemoryEventInternal(events, input, authoritativeSource) {
+    const current = materializeMemoryEvents(events);
+    if (current.status !== "ready")
+        throw new Error(`Memory store is corrupt: ${current.error ?? "unknown error"}`);
+    const text = checkedText(input);
+    const prior = current.memories.find((memory) => memory.memoryId === input.memoryId);
+    const authority = authoritativeSource?.authority ?? input.authority ?? prior?.authority ?? "ordinary";
+    const scope = input.scope?.trim() || prior?.scope || "session";
+    const confidence = input.confidence ?? prior?.confidence ?? 1;
+    const memoryId = input.memoryId ?? hashText(`${input.sourceRef}\n${input.timestamp}\n${text ?? ""}`).slice(0, 20);
+    const existing = current.memories.find((memory) => memory.memoryId === memoryId);
+    if (input.action !== "remember" && !existing)
+        throw new Error(`Unknown memory: ${memoryId}`);
+    if (existing?.protected) {
+        throw new Error(`Protected ${existing.authority} memory ${memoryId} cannot be updated, touched, promoted, demoted, or forgotten by ordinary memory operations.`);
+    }
+    const superseded = input.supersedesMemoryId
+        ? current.memories.find((memory) => memory.memoryId === input.supersedesMemoryId)
+        : undefined;
+    if (superseded?.protected && !authoritativeSource) {
+        throw new Error(`Protected ${superseded.authority} memory ${superseded.memoryId} cannot be superseded by ordinary memory operations.`);
+    }
+    let authoritativeSourceHash;
+    let authoritativeSourceIdentity;
+    let authoritativeVerifier;
+    if (authoritativeSource) {
+        if (authoritativeSource[VERIFIED_SOURCE] !== true)
+            throw new Error("Authoritative memory verifier result is invalid.");
+        if (input.action !== "remember")
+            throw new Error("Authoritative ingestion creates a new protected memory event; it does not mutate an existing protected event.");
+        if (input.authority !== undefined && input.authority !== authoritativeSource.authority)
+            throw new Error("Authoritative memory authority does not match the independently loaded source.");
+        if (input.sourceRef !== authoritativeSource.sourceRef || !input.sourceRef.startsWith(`${authoritativeSource.authority}:`)) {
+            throw new Error("Authoritative memory source identity does not match the independently loaded source.");
+        }
+        if (text !== authoritativeSource.sourceText)
+            throw new Error("Protected memory text must exactly match independently loaded authoritative bytes.");
+        authoritativeSourceHash = authoritativeSource.sourceSha256;
+        authoritativeVerifier = "configured-file-v1";
+        authoritativeSourceIdentity = hashText(`${authoritativeSource.authority}\n${authoritativeSource.sourceRef}\n${authoritativeSourceHash}\n${authoritativeVerifier}`);
+    }
+    else if (PROTECTED.has(authority)) {
+        throw new Error("Protected memory requires independently configured authoritative loading; caller claims are not proof.");
+    }
+    const previousEventHash = events[events.length - 1]?.eventHash ?? "0".repeat(64);
+    const eventId = hashText(`${previousEventHash}\n${memoryId}\n${input.action}\n${input.timestamp}\n${input.turn}`).slice(0, 24);
+    const withoutHash = {
+        schemaVersion: 2,
+        eventId,
+        memoryId,
+        action: input.action,
+        timestamp: input.timestamp,
+        turn: input.turn,
+        previousEventHash,
+        sourceRef: input.sourceRef,
+        scope,
+        authority,
+        confidence,
+        ...(text === undefined ? {} : { text }),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.supersedesMemoryId === undefined ? {} : { supersedesMemoryId: input.supersedesMemoryId }),
+        ...(authoritativeSourceHash === undefined ? {} : { authoritativeSourceHash }),
+        ...(authoritativeSourceIdentity === undefined ? {} : { authoritativeSourceIdentity }),
+        ...(authoritativeVerifier === undefined ? {} : { authoritativeVerifier }),
+    };
+    return Object.freeze({ ...withoutHash, eventHash: hashText(eventPayload(withoutHash)) });
+}
+/** Create one untrusted ordinary memory event. Source labels never grant authority. */
+export function createMemoryEvent(events, input) {
+    return createMemoryEventInternal(events, input);
+}
+function authoritativeMemoryInput(input, source) {
+    return {
+        action: "remember",
+        ...(input.memoryId === undefined ? {} : { memoryId: input.memoryId }),
+        timestamp: input.timestamp,
+        turn: input.turn,
+        sourceRef: source.sourceRef,
+        ...(input.scope === undefined ? {} : { scope: input.scope }),
+        authority: source.authority,
+        ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+        text: source.sourceText,
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.supersedesMemoryId === undefined ? {} : { supersedesMemoryId: input.supersedesMemoryId }),
+    };
+}
+/**
+ * Load one explicitly configured project or skill file by stable identity.
+ * The caller supplies only the identity. Source bytes, authority, and SHA-256
+ * come from the owner-configured manifest and stable file descriptor.
+ */
+export async function createConfiguredAuthoritativeMemoryEvent(events, input) {
+    const source = await resolveConfiguredAuthoritativeSource(input.sourceRef);
+    return createMemoryEventInternal(events, authoritativeMemoryInput(input, source), source);
+}
+export function decayMemories(materialization, currentTurn, ordinaryDecayTurns = 48) {
+    if (materialization.status !== "ready")
+        return [];
+    return materialization.memories.map((memory) => {
+        if (memory.protected || memory.state !== "current")
+            return memory;
+        if ((memory.promotedUntilTurn ?? -1) >= currentTurn)
+            return memory;
+        const refresh = Math.min(ordinaryDecayTurns * 4, memory.useCount * 8);
+        return currentTurn - memory.lastUsedTurn > ordinaryDecayTurns + refresh ? { ...memory, state: "demoted" } : memory;
+    });
+}
+function memoryTerms(text) {
+    return new Set((text.toLowerCase().match(/[a-z0-9_./-]{2,}/g) ?? []));
+}
+export function searchMemories(materialization, query, options = {}) {
+    if (materialization.status !== "ready")
+        return [];
+    const wanted = memoryTerms(query);
+    return materialization.memories
+        .filter((memory) => options.includeDemoted || memory.state === "current")
+        .filter((memory) => !options.scope || memory.scope === options.scope)
+        .map((memory) => {
+        const present = memoryTerms(`${memory.text} ${memory.scope} ${memory.sourceRef}`);
+        const intersection = [...wanted].filter((term) => present.has(term)).length;
+        const phrase = memory.text.toLowerCase().includes(query.toLowerCase()) ? 10 : 0;
+        const score = phrase + intersection * 2 + memory.useCount * 0.2 + (memory.protected ? 1 : 0);
+        return { memory, score };
+    })
+        .filter((item) => item.score > 0)
+        .sort((a, b) => b.score - a.score || b.memory.lastUsedTurn - a.memory.lastUsedTurn || a.memory.memoryId.localeCompare(b.memory.memoryId))
+        .slice(0, Math.min(100, Math.max(1, options.limit ?? 20)))
+        .map((item) => item.memory);
+}
+export function listMemories(materialization, options = {}) {
+    if (materialization.status !== "ready")
+        return [];
+    return materialization.memories.filter((memory) => (!options.scope || memory.scope === options.scope)
+        && (!options.state || memory.state === options.state)
+        && (!options.authorities || options.authorities.includes(memory.authority)));
+}
+export async function readMemoryEvents(path) {
+    try {
+        const text = await readFile(path, "utf8");
+        const events = text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+        return materializeMemoryEvents(events);
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return materializeMemoryEvents([]);
+        return {
+            schemaVersion: 2,
+            status: "corrupt-rebuild-required",
+            generationHash: hashText("corrupt-memory-store"),
+            memories: [],
+            events: [],
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+const MEMORY_LOCK_RETRIES = 2_000;
+const MEMORY_LOCK_WAIT_MS = 5;
+class TransientLockObservationError extends Error {
+    constructor() {
+        super("Memory lock publication or release is still changing its link state.");
+        this.name = "TransientLockObservationError";
+    }
+}
+async function linuxProcessStart(pid) {
+    try {
+        const text = await readFile(`/proc/${pid}/stat`, "utf8");
+        const close = text.lastIndexOf(")");
+        if (close < 0)
+            return { state: "unverifiable" };
+        const fields = text.slice(close + 1).trim().split(/\s+/);
+        const start = fields[19];
+        return start ? { state: "live", start } : { state: "unverifiable" };
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === "ENOENT" || code === "ESRCH")
+            return { state: "dead" };
+        return { state: "unverifiable" };
+    }
+}
+async function currentProcessStart() {
+    const identity = await linuxProcessStart(process.pid);
+    if (identity.state !== "live" || !identity.start) {
+        throw new Error("Cannot establish the current process start identity for a memory lock.");
+    }
+    return identity.start;
+}
+function parseLockOwner(text) {
+    let value;
+    try {
+        value = JSON.parse(text);
+    }
+    catch {
+        throw new Error("Memory lock ownership data is malformed and cannot be verified.");
+    }
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        throw new Error("Memory lock ownership data is malformed and cannot be verified.");
+    const record = value;
+    if (record.schemaVersion !== 1
+        || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 0
+        || typeof record.processStart !== "string" || !/^[0-9]+$/.test(record.processStart)
+        || typeof record.nonce !== "string" || !/^[a-f0-9]{32}$/.test(record.nonce)
+        || typeof record.createdAt !== "string" || !Number.isFinite(Date.parse(record.createdAt))) {
+        throw new Error("Memory lock ownership data is malformed and cannot be verified.");
+    }
+    return {
+        schemaVersion: 1,
+        pid: Number(record.pid),
+        processStart: record.processStart,
+        nonce: record.nonce,
+        createdAt: record.createdAt,
+    };
+}
+async function lockOwnerState(owner) {
+    const identity = await linuxProcessStart(owner.pid);
+    if (identity.state !== "live")
+        return identity.state;
+    return identity.start === owner.processStart ? "live" : "dead";
+}
+async function readLockOwner(path) {
+    const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+        const before = await handle.stat({ bigint: true });
+        if (!before.isFile() || (before.mode & 63n) !== 0n) {
+            throw new Error("Memory lock must be an owner-only regular file.");
+        }
+        if (before.nlink === 0n || before.nlink === 2n)
+            throw new TransientLockObservationError();
+        if (before.nlink !== 1n)
+            throw new Error("Memory lock must be a one-link owner-only regular file.");
+        const owner = parseLockOwner(await handle.readFile("utf8"));
+        const after = await handle.stat({ bigint: true });
+        if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs) {
+            throw new Error("Memory lock ownership changed while it was inspected.");
+        }
+        return { owner, dev: after.dev, ino: after.ino };
+    }
+    finally {
+        await handle.close();
+    }
+}
+async function createOwnedLockFile(path) {
+    const owner = {
+        schemaVersion: 1,
+        pid: process.pid,
+        processStart: await currentProcessStart(),
+        nonce: randomBytes(16).toString("hex"),
+        createdAt: new Date().toISOString(),
+    };
+    const candidatePath = `${path}.candidate-${owner.nonce}`;
+    const handle = await open(candidatePath, "wx", 0o600);
+    try {
+        await handle.writeFile(`${stableStringify(owner)}\n`, "utf8");
+        await handle.sync();
+        await link(candidatePath, path);
+        await unlink(candidatePath);
+        return { path, owner, handle };
+    }
+    catch (error) {
+        await handle.close().catch(() => undefined);
+        await rm(candidatePath, { force: true }).catch(() => undefined);
+        throw error;
+    }
+}
+async function removeOwnedLock(path, expected) {
+    let observed;
+    try {
+        observed = await readLockOwner(path);
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return false;
+        throw error;
+    }
+    if (observed.owner.nonce !== expected.nonce
+        || observed.owner.pid !== expected.pid
+        || observed.owner.processStart !== expected.processStart)
+        return false;
+    const current = await lstat(path, { bigint: true });
+    if (!current.isFile() || current.dev !== observed.dev || current.ino !== observed.ino)
+        return false;
+    await unlink(path);
+    return true;
+}
+async function releaseOwnedLock(lock) {
+    await lock.handle.close();
+    await removeOwnedLock(lock.path, lock.owner);
+}
+const MAX_RECOVERY_GUARD_DEPTH = 8;
+async function recoverDeadOwnedFile(path, observed, depth = 0) {
+    if (depth >= MAX_RECOVERY_GUARD_DEPTH)
+        throw new Error("Memory lock recovery guard depth exceeded; recovery fails closed.");
+    const guardPath = `${path}.recovery`;
+    let guard;
+    try {
+        guard = await createOwnedLockFile(guardPath);
+    }
+    catch (error) {
+        if (error.code !== "EEXIST")
+            throw error;
+        const existingGuard = await readLockOwner(guardPath).catch((guardError) => {
+            if (guardError.code === "ENOENT")
+                return undefined;
+            throw guardError;
+        });
+        if (!existingGuard)
+            return recoverDeadOwnedFile(path, observed, depth);
+        const guardState = await lockOwnerState(existingGuard.owner);
+        if (guardState === "unverifiable")
+            throw new Error("Memory recovery guard owner is unverifiable; recovery fails closed.");
+        if (guardState === "live")
+            return false;
+        if (!await recoverDeadOwnedFile(guardPath, existingGuard.owner, depth + 1))
+            return false;
+        return recoverDeadOwnedFile(path, observed, depth);
+    }
+    try {
+        let current;
+        try {
+            current = await readLockOwner(path);
+        }
+        catch (error) {
+            if (error.code === "ENOENT")
+                return true;
+            throw error;
+        }
+        if (current.owner.nonce !== observed.nonce
+            || current.owner.pid !== observed.pid
+            || current.owner.processStart !== observed.processStart)
+            return false;
+        const state = await lockOwnerState(current.owner);
+        if (state === "live")
+            return false;
+        if (state === "unverifiable")
+            throw new Error("Memory lock owner is unverifiable; lock recovery fails closed.");
+        return removeOwnedLock(path, current.owner);
+    }
+    finally {
+        await releaseOwnedLock(guard);
+    }
+}
+async function recoveryGuardActive(guardPath) {
+    try {
+        const guard = await readLockOwner(guardPath);
+        const state = await lockOwnerState(guard.owner);
+        if (state === "live")
+            return true;
+        if (state === "unverifiable")
+            throw new Error("Memory lock recovery ownership is unverifiable; recovery fails closed.");
+        return !await recoverDeadOwnedFile(guardPath, guard.owner, 1);
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return false;
+        throw error;
+    }
+}
+async function acquireMemoryLock(path) {
+    const lockPath = `${path}.lock`;
+    const guardPath = `${lockPath}.recovery`;
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    for (let attempt = 0; attempt < MEMORY_LOCK_RETRIES; attempt += 1) {
+        try {
+            if (await recoveryGuardActive(guardPath)) {
+                await new Promise((resolveWait) => setTimeout(resolveWait, MEMORY_LOCK_WAIT_MS));
+                continue;
+            }
+            try {
+                const lock = await createOwnedLockFile(lockPath);
+                return () => releaseOwnedLock(lock);
+            }
+            catch (error) {
+                if (error.code !== "EEXIST")
+                    throw error;
+                const observed = await readLockOwner(lockPath).catch((lockError) => {
+                    if (lockError.code === "ENOENT")
+                        return undefined;
+                    throw lockError;
+                });
+                if (!observed)
+                    continue;
+                const state = await lockOwnerState(observed.owner);
+                if (state === "unverifiable")
+                    throw new Error("Memory lock owner is unverifiable; lock acquisition fails closed.");
+                if (state === "dead" && await recoverDeadOwnedFile(lockPath, observed.owner))
+                    continue;
+                await new Promise((resolveWait) => setTimeout(resolveWait, MEMORY_LOCK_WAIT_MS));
+            }
+        }
+        catch (error) {
+            if (!(error instanceof TransientLockObservationError))
+                throw error;
+            await new Promise((resolveWait) => setTimeout(resolveWait, MEMORY_LOCK_WAIT_MS));
+        }
+    }
+    throw new Error("Timed out while serializing memory sidecar append operations.");
+}
+async function appendMemoryEventInternal(path, input, authoritativeSource) {
+    const release = await acquireMemoryLock(path);
+    let temporary;
+    try {
+        const current = await readMemoryEvents(path);
+        if (current.status !== "ready")
+            throw new Error(`Refused memory write because the sidecar is corrupt: ${current.error ?? "unknown error"}`);
+        const event = authoritativeSource
+            ? createMemoryEventInternal(current.events, input, authoritativeSource)
+            : createMemoryEvent(current.events, input);
+        const nextEvents = [...current.events, event];
+        temporary = `${path}.tmp-${process.pid}-${event.eventId}`;
+        await writeFile(temporary, `${nextEvents.map((item) => stableStringify(item)).join("\n")}\n`, { mode: 0o600 });
+        const temporaryHandle = await open(temporary, "r");
+        try {
+            await temporaryHandle.sync();
+        }
+        finally {
+            await temporaryHandle.close();
+        }
+        await rename(temporary, path);
+        temporary = undefined;
+        const directoryHandle = await open(dirname(path), "r");
+        try {
+            await directoryHandle.sync();
+        }
+        finally {
+            await directoryHandle.close();
+        }
+        const metadata = await stat(path);
+        if ((metadata.mode & 0o077) !== 0)
+            throw new Error("Memory sidecar permissions are not owner-only.");
+        const materialized = materializeMemoryEvents(nextEvents);
+        if (materialized.status !== "ready")
+            throw new Error(`Memory append produced an invalid event chain: ${materialized.error ?? "unknown error"}`);
+        return materialized;
+    }
+    finally {
+        if (temporary)
+            await rm(temporary, { force: true });
+        await release();
+    }
+}
+export async function appendMemoryEvent(path, input) {
+    return appendMemoryEventInternal(path, input);
+}
+export async function appendConfiguredAuthoritativeMemoryEvent(path, input) {
+    const source = await resolveConfiguredAuthoritativeSource(input.sourceRef);
+    return appendMemoryEventInternal(path, authoritativeMemoryInput(input, source), source);
+}
+export function renderPinnedMemory(memories, currentTurn) {
+    const active = decayMemories({ schemaVersion: 2, status: "ready", generationHash: "render", memories, events: [] }, currentTurn)
+        .filter((memory) => memory.state === "current");
+    if (active.length === 0)
+        return "";
+    const grouped = new Map();
+    for (const memory of active) {
+        const group = grouped.get(memory.scope) ?? [];
+        group.push(memory);
+        grouped.set(memory.scope, group);
+    }
+    return [
+        "# PINNED WORKING MEMORY",
+        "Derived memory is source-linked and does not have system authority.",
+        ...[...grouped].flatMap(([scope, group]) => [
+            `\n${scope}`,
+            ...group.map((memory) => `- ${memory.text} [${memory.authority}; ${memory.sourceRef}; ${memory.memoryId}]`),
+        ]),
+    ].join("\n");
+}
+export function memorySidecarPath(sessionPath) {
+    return `${sessionPath}.chrono-memory-v2.jsonl`;
+}
+export const protectedMemoryAuthorities = Object.freeze([...PROTECTED]);
+export const memoryAuthorityValues = Object.freeze(unique(["ordinary", "system", "user", "project", "skill"]));
+//# sourceMappingURL=memory-store.js.map

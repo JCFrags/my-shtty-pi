@@ -1,0 +1,21 @@
+{
+  "name": "pi-pixel-cua-portal",
+  "version": "0.2.0",
+  "description": "Consent-bound pixel-only GNOME Wayland computer use for Pi",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "wayland", "xdg-desktop-portal", "computer-use", "pixel-only"],
+  "engines": {"node": ">=22.19.0", "python": ">=3.10"},
+  "pi": {
+    "extensions": ["./src/index.ts"],
+    "skills": ["./skills"]
+  },
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -v && python3 -m py_compile helper/ei_sender.py helper/portal_backend.py helper/server.py fixtures/test_window.py && node --experimental-strip-types --check src/helper-client.ts && node --experimental-strip-types --check src/index.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

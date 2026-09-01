@@ -1,0 +1,4948 @@
+{
+  "schema_version": 1,
+  "captured_at_local": "2026-09-01",
+  "private_backup_retained": true,
+  "private_backup_uploaded": false,
+  "backup_summary": {
+    "clone_groups": 4,
+    "worktrees": 150,
+    "fetch_failures": 0,
+    "bundle_failures": 0,
+    "archive_failures": 0
+  },
+  "repositories": [
+    {
+      "slug": "my-shtty-pi",
+      "url": "https://github.com/JCFrags/my-shtty-pi",
+      "default_branch": "main",
+      "main_sha": "21ea17db6e5cfd98c5c044f505cdc0acc519e750",
+      "branch_counts": {
+        "local_unique_ref_sha_pairs": 20,
+        "local_unique_branch_names": 20,
+        "local_not_merged_into_main": 7,
+        "remote_branches": 10,
+        "remote_not_merged_into_main": 0,
+        "remote_tags": 0
+      },
+      "remote_branches": [
+        {
+          "ref": "refs/heads/admin/github-governance",
+          "sha": "515d32f3d2ee1228addc4e31ab86ca476d1eff89",
+          "ahead_main": 0,
+          "behind_main": 87,
+          "merged_into_main": true,
+          "date": "2026-08-09T22:35:05-07:00",
+          "subject": "Record applied GitHub administration"
+        },
+        {
+          "ref": "refs/heads/feat/files-side-panel-state",
+          "sha": "13ea6260bcc038f86b34bd9f1fd7f2a9edd7bead",
+          "ahead_main": 0,
+          "behind_main": 15,
+          "merged_into_main": true,
+          "date": "2026-08-23T13:28:08-07:00",
+          "subject": "Merge current main into Files provider feature"
+        },
+        {
+          "ref": "refs/heads/feat/pi-agent-context-date-cache",
+          "sha": "9253030eef6111239ed391bbe6616e095c46961d",
+          "ahead_main": 0,
+          "behind_main": 62,
+          "merged_into_main": true,
+          "date": "2026-08-21T11:28:17-07:00",
+          "subject": "feat(agent-context): stabilize date cache input"
+        },
+        {
+          "ref": "refs/heads/feat/ui-herdr-status-finish",
+          "sha": "f65a277fb35fb53f26937dae7b11cc6baae89493",
+          "ahead_main": 0,
+          "behind_main": 69,
+          "merged_into_main": true,
+          "date": "2026-08-20T22:09:04-07:00",
+          "subject": "docs(herdr-status): record real 0.8.2 acceptance"
+        },
+        {
+          "ref": "refs/heads/feat/ui-todo-panel",
+          "sha": "0e4b7891fea574d071da483e67914bab852cf10f",
+          "ahead_main": 0,
+          "behind_main": 67,
+          "merged_into_main": true,
+          "date": "2026-08-20T22:12:09-07:00",
+          "subject": "feat(grounded): add responsive todo plan UI"
+        },
+        {
+          "ref": "refs/heads/fix/files-ui-noop-refresh-render",
+          "sha": "f15e147693fc2c52e10cb63e2f4ca98b2ddd0138",
+          "ahead_main": 0,
+          "behind_main": 49,
+          "merged_into_main": true,
+          "date": "2026-08-22T21:04:50-07:00",
+          "subject": "Complete Files refresh render model"
+        },
+        {
+          "ref": "refs/heads/foundation/repository-control-plane",
+          "sha": "50274950ed18dc0455f4a306799c7e8fe3c0b9aa",
+          "ahead_main": 0,
+          "behind_main": 89,
+          "merged_into_main": true,
+          "date": "2026-08-09T19:58:10-07:00",
+          "subject": "Correct Foundation runtime and CLI boundaries"
+        },
+        {
+          "ref": "refs/heads/main",
+          "sha": "21ea17db6e5cfd98c5c044f505cdc0acc519e750",
+          "ahead_main": 0,
+          "behind_main": 0,
+          "merged_into_main": true,
+          "date": "2026-08-28T10:01:52-07:00",
+          "subject": "Merge pull request #25 from JCFrags/agent/pi-extension-completion-20260827"
+        },
+        {
+          "ref": "refs/heads/source-preservation/public-benchmark-artifacts",
+          "sha": "a4f4985dd93e3fafbc0a8d6e7679dcbd140a0a3b",
+          "ahead_main": 0,
+          "behind_main": 94,
+          "merged_into_main": true,
+          "date": "2026-08-08T22:43:40-07:00",
+          "subject": "Harden Grounded artifact verification"
+        },
+        {
+          "ref": "refs/heads/work/chrono-compact-scale-redesign",
+          "sha": "9a4d25a46f329bd91828a22a925e5de81c71eee4",
+          "ahead_main": 0,
+          "behind_main": 20,
+          "merged_into_main": true,
+          "date": "2026-08-23T10:35:56-07:00",
+          "subject": "fix(chrono-compact): close final review gaps"
+        }
+      ],
+      "remote_tags": [],
+      "clone_groups": [
+        {
+          "id": "my-shtty-pi-1ef6a36ded",
+          "normalized_path": "$HOME/Projects/pi-extension-architecture-audit-20260830/docs-worktree",
+          "common_git_dir": "$HOME/Projects/pi-extension-architecture-audit-20260830/docs-worktree/.git",
+          "remotes": [
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/my-shtty-pi.git\t(fetch)"
+            },
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/my-shtty-pi.git\t(push)"
+            }
+          ],
+          "head": "a617af76144043d2692b3cc50850beefffd5fb69",
+          "branch": "architecture/first-principles-audit-20260830",
+          "upstream": null,
+          "fetch_succeeded": true,
+          "private_bundle_created": true,
+          "stash_count": 0,
+          "tag_count": 0,
+          "local_branches": [
+            {
+              "ref": "refs/heads/architecture/first-principles-audit-20260830",
+              "sha": "a617af76144043d2692b3cc50850beefffd5fb69",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T01:29:33-07:00",
+              "subject": "docs: satisfy architecture markdown lint"
+            },
+            {
+              "ref": "refs/heads/main",
+              "sha": "21ea17db6e5cfd98c5c044f505cdc0acc519e750",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 0,
+              "merged_into_main": true,
+              "date": "2026-08-28T10:01:52-07:00",
+              "subject": "Merge pull request #25 from JCFrags/agent/pi-extension-completion-20260827"
+            }
+          ],
+          "remote_tracking_branch_count": 2,
+          "worktrees": [
+            {
+              "path": "$HOME/Projects/pi-extension-architecture-audit-20260830/docs-worktree",
+              "head": "a617af76144043d2692b3cc50850beefffd5fb69",
+              "branch": "architecture/first-principles-audit-20260830",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            }
+          ]
+        },
+        {
+          "id": "my-shtty-pi-894739fcb9",
+          "normalized_path": "$HOME/Projects/my-shtty-pi",
+          "common_git_dir": "$HOME/Projects/my-shtty-pi/.git",
+          "remotes": [
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/my-shtty-pi.git\t(fetch)"
+            },
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/my-shtty-pi.git\t(push)"
+            }
+          ],
+          "head": "cc2561b389752227e7849e47fcb318e0ec102dc4",
+          "branch": "feat/files-side-panel-state",
+          "upstream": "origin/feat/files-side-panel-state",
+          "fetch_succeeded": true,
+          "private_bundle_created": true,
+          "stash_count": 1,
+          "tag_count": 0,
+          "local_branches": [
+            {
+              "ref": "refs/heads/admin/github-governance",
+              "sha": "515d32f3d2ee1228addc4e31ab86ca476d1eff89",
+              "upstream": "refs/remotes/origin/admin/github-governance",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 87,
+              "merged_into_main": true,
+              "date": "2026-08-09T22:35:05-07:00",
+              "subject": "Record applied GitHub administration"
+            },
+            {
+              "ref": "refs/heads/agent/ask-user-core",
+              "sha": "f98a5f789dcd663599cd63c20b77b7fe5062a79a",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 45,
+              "merged_into_main": false,
+              "date": "2026-08-26T23:44:20-07:00",
+              "subject": "fix(grounded): normalize ask_user terminal and retry handling"
+            },
+            {
+              "ref": "refs/heads/agent/files-provider-main-sync",
+              "sha": "13ea6260bcc038f86b34bd9f1fd7f2a9edd7bead",
+              "upstream": "refs/remotes/origin/feat/files-side-panel-state",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 15,
+              "merged_into_main": true,
+              "date": "2026-08-23T13:28:08-07:00",
+              "subject": "Merge current main into Files provider feature"
+            },
+            {
+              "ref": "refs/heads/agent/foundation-runtime-fix-054",
+              "sha": "dccd2de8dce1beb622c4ec3b154855b2846bd76d",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 90,
+              "merged_into_main": false,
+              "date": "2026-08-09T19:55:05-07:00",
+              "subject": "Correct Foundation runtime and CLI boundaries"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-files-provider",
+              "sha": "a5358975bd61821c0b27b29bfa82d11dcf4efe17",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 47,
+              "merged_into_main": false,
+              "date": "2026-08-23T10:24:24-07:00",
+              "subject": "fix(files): refresh provider snapshot state"
+            },
+            {
+              "ref": "refs/heads/feat/files-side-panel-state",
+              "sha": "cc2561b389752227e7849e47fcb318e0ec102dc4",
+              "upstream": "refs/remotes/origin/feat/files-side-panel-state",
+              "upstream_track": "[behind 30]",
+              "ahead_main": 0,
+              "behind_main": 45,
+              "merged_into_main": true,
+              "date": "2026-08-23T11:45:06-07:00",
+              "subject": "docs(files): document informational provider rows"
+            },
+            {
+              "ref": "refs/heads/feat/ui-files-finish",
+              "sha": "1b063f9dbea31f6621a438e04154cb3ae5b3028e",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": "[behind 70]",
+              "ahead_main": 0,
+              "behind_main": 70,
+              "merged_into_main": true,
+              "date": "2026-08-20T22:04:58-07:00",
+              "subject": "Merge pull request #10 from JCFrags/feat/ui-files-finish"
+            },
+            {
+              "ref": "refs/heads/feat/ui-herdr-status-finish",
+              "sha": "f89284373dd46ead78c620fe2b3f7be189768970",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": "[behind 68]",
+              "ahead_main": 0,
+              "behind_main": 68,
+              "merged_into_main": true,
+              "date": "2026-08-20T22:10:20-07:00",
+              "subject": "Merge pull request #11 from JCFrags/feat/ui-herdr-status-finish"
+            },
+            {
+              "ref": "refs/heads/feat/ui-review-finish",
+              "sha": "fe958cf1a90e512c90e472603b09f167101d5507",
+              "upstream": "refs/remotes/origin/feat/ui-review-finish",
+              "upstream_track": "[gone]",
+              "ahead_main": 0,
+              "behind_main": 58,
+              "merged_into_main": true,
+              "date": "2026-08-21T11:31:09-07:00",
+              "subject": "Merge origin/main into feat/ui-review-finish"
+            },
+            {
+              "ref": "refs/heads/feat/ui-todo-panel",
+              "sha": "05ef8fb0314f93895d9f94092e4e87bff9a6e0d2",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": "[behind 66]",
+              "ahead_main": 0,
+              "behind_main": 66,
+              "merged_into_main": true,
+              "date": "2026-08-20T22:13:27-07:00",
+              "subject": "Merge pull request #12 from JCFrags/feat/ui-todo-panel"
+            },
+            {
+              "ref": "refs/heads/feat/ui-tool-controls-finish",
+              "sha": "d4e610fb2ddff1a12eead82c1470f1613d5f9617",
+              "upstream": "refs/remotes/origin/feat/ui-tool-controls-finish",
+              "upstream_track": "[gone]",
+              "ahead_main": 0,
+              "behind_main": 63,
+              "merged_into_main": true,
+              "date": "2026-08-20T22:17:07-07:00",
+              "subject": "Merge pull request #13 from JCFrags/feat/ui-tool-controls-finish"
+            },
+            {
+              "ref": "refs/heads/fix/files-ui-noop-refresh-render",
+              "sha": "f15e147693fc2c52e10cb63e2f4ca98b2ddd0138",
+              "upstream": "refs/remotes/origin/fix/files-ui-noop-refresh-render",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 49,
+              "merged_into_main": true,
+              "date": "2026-08-22T21:04:50-07:00",
+              "subject": "Complete Files refresh render model"
+            },
+            {
+              "ref": "refs/heads/fix/workplan-long-horizon-capacity",
+              "sha": "03e43c0e83954d26b95bd7ca50fcbac91038c1d2",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": "[ahead 1]",
+              "ahead_main": 1,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-30T22:46:34-07:00",
+              "subject": "feat(workplan): support long-horizon project state"
+            },
+            {
+              "ref": "refs/heads/foundation/repository-control-plane",
+              "sha": "50274950ed18dc0455f4a306799c7e8fe3c0b9aa",
+              "upstream": "refs/remotes/origin/foundation/repository-control-plane",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 89,
+              "merged_into_main": true,
+              "date": "2026-08-09T19:58:10-07:00",
+              "subject": "Correct Foundation runtime and CLI boundaries"
+            },
+            {
+              "ref": "refs/heads/main",
+              "sha": "21ea17db6e5cfd98c5c044f505cdc0acc519e750",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 0,
+              "merged_into_main": true,
+              "date": "2026-08-28T10:01:52-07:00",
+              "subject": "Merge pull request #25 from JCFrags/agent/pi-extension-completion-20260827"
+            },
+            {
+              "ref": "refs/heads/source-preservation/chrono-benchmark",
+              "sha": "f9e811a08d497ad7a2f1911887546d40ccee249c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 97,
+              "merged_into_main": false,
+              "date": "2026-08-08T18:48:13-07:00",
+              "subject": "Preserve ChronoCompact public benchmark"
+            },
+            {
+              "ref": "refs/heads/source-preservation/grounded-artifacts",
+              "sha": "cc1de08e1ddf4ecc1d46795111f7bfa9b8e9b59e",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 97,
+              "merged_into_main": false,
+              "date": "2026-08-08T18:51:18-07:00",
+              "subject": "Preserve Grounded Tools artifact checks"
+            },
+            {
+              "ref": "refs/heads/source-preservation/public-benchmark-artifacts",
+              "sha": "a4f4985dd93e3fafbc0a8d6e7679dcbd140a0a3b",
+              "upstream": "refs/remotes/origin/source-preservation/public-benchmark-artifacts",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 94,
+              "merged_into_main": true,
+              "date": "2026-08-08T22:43:40-07:00",
+              "subject": "Harden Grounded artifact verification"
+            },
+            {
+              "ref": "refs/heads/work/chrono-compact-scale-redesign",
+              "sha": "9a4d25a46f329bd91828a22a925e5de81c71eee4",
+              "upstream": "refs/remotes/origin/work/chrono-compact-scale-redesign",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 20,
+              "merged_into_main": true,
+              "date": "2026-08-23T10:35:56-07:00",
+              "subject": "fix(chrono-compact): close final review gaps"
+            }
+          ],
+          "remote_tracking_branch_count": 11,
+          "worktrees": [
+            {
+              "path": "$HOME/.agents/temporary/ask-user-core-worktree",
+              "head": "f98a5f789dcd663599cd63c20b77b7fe5062a79a",
+              "branch": "agent/ask-user-core",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/foundation-repository-control-plane-045/worktrees/catalog",
+              "head": "3b3d6437a2c2eb0d034a9d38d7af3534f09c42c6",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/foundation-repository-control-plane-045/worktrees/documentation",
+              "head": "dd6a86f096e86ad003f99e7048a685902e028802",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/foundation-repository-control-plane-045/worktrees/tooling",
+              "head": "c530f9a4b05815ec1b2c2e274532a8bad5bcdda2",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/foundation-runtime-cli-correction-053/worktree",
+              "head": "dccd2de8dce1beb622c4ec3b154855b2846bd76d",
+              "branch": "agent/foundation-runtime-fix-054",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/github-administration-058/docs-worktree",
+              "head": "aeb70236bd1f3ad2b41cd65c3c71cb2805c73a6b",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/files-provider",
+              "head": "a5358975bd61821c0b27b29bfa82d11dcf4efe17",
+              "branch": "agent/phase2-final-files-provider",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/provider-merges-20260823/files-main",
+              "head": "21ea17db6e5cfd98c5c044f505cdc0acc519e750",
+              "branch": "main",
+              "upstream": "origin/main",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/provider-merges-20260823/files-sync",
+              "head": "13ea6260bcc038f86b34bd9f1fd7f2a9edd7bead",
+              "branch": "agent/files-provider-main-sync",
+              "upstream": "origin/feat/files-side-panel-state",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-artifact-hardening-043/worktrees/implementation",
+              "head": "e54763ada534f2c4fdd5922ffb77164ffd613d31",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-artifact-hardening-043/worktrees/security-review",
+              "head": "58a18d201eda5396685f3bf5b947ff279f79d21c",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-artifact-hardening-043/worktrees/security-review-r2",
+              "head": "1d5943552a865fa9782b7280fbb0f9f5161f2a18",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-artifact-hardening-043/worktrees/security-review-r3",
+              "head": "645b747aa3b0b856c6d05701b1ccf69c1bdfcead",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-artifact-hardening-043/worktrees/security-review-r4",
+              "head": "6f8def07e0bcac972bb8a80f2e4d60e1093922bc",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-artifact-hardening-043/worktrees/security-review-r5",
+              "head": "a4f4985dd93e3fafbc0a8d6e7679dcbd140a0a3b",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-pr-042/worktrees/chrono",
+              "head": "f9e811a08d497ad7a2f1911887546d40ccee249c",
+              "branch": "source-preservation/chrono-benchmark",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-pr-042/worktrees/grounded",
+              "head": "cc1de08e1ddf4ecc1d46795111f7bfa9b8e9b59e",
+              "branch": "source-preservation/grounded-artifacts",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/source-preservation-pr-042/worktrees/validation-initial",
+              "head": "f12ad64248d4fdbec5a24fcc14c98e0bd15cd17a",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/ui-files",
+              "head": "1b063f9dbea31f6621a438e04154cb3ae5b3028e",
+              "branch": "feat/ui-files-finish",
+              "upstream": "origin/main",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/ui-herdr-status",
+              "head": "f89284373dd46ead78c620fe2b3f7be189768970",
+              "branch": "feat/ui-herdr-status-finish",
+              "upstream": "origin/main",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/ui-review",
+              "head": "fe958cf1a90e512c90e472603b09f167101d5507",
+              "branch": "feat/ui-review-finish",
+              "upstream": "@{upstream}",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/ui-todo-panel",
+              "head": "05ef8fb0314f93895d9f94092e4e87bff9a6e0d2",
+              "branch": "feat/ui-todo-panel",
+              "upstream": "origin/main",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/ui-tool-controls",
+              "head": "d4e610fb2ddff1a12eead82c1470f1613d5f9617",
+              "branch": "feat/ui-tool-controls-finish",
+              "upstream": "@{upstream}",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/workplan-long-horizon-capacity",
+              "head": "03e43c0e83954d26b95bd7ca50fcbac91038c1d2",
+              "branch": "fix/workplan-long-horizon-capacity",
+              "upstream": "origin/main",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/Projects/my-shtty-pi",
+              "head": "cc2561b389752227e7849e47fcb318e0ec102dc4",
+              "branch": "feat/files-side-panel-state",
+              "upstream": "origin/feat/files-side-panel-state",
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 29,
+                "untracked": 93,
+                "unmerged": 0,
+                "records": 122
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 252628,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/Projects/my-shtty-pi-chrono-scale",
+              "head": "9a4d25a46f329bd91828a22a925e5de81c71eee4",
+              "branch": "work/chrono-compact-scale-redesign",
+              "upstream": "origin/work/chrono-compact-scale-redesign",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "my-shtty-pi-herdr-deck",
+      "url": "https://github.com/JCFrags/my-shtty-pi-herdr-deck",
+      "default_branch": "main",
+      "main_sha": "cdf69002b1c1cf62f2ec5252f4c5a5e82f9bfadc",
+      "branch_counts": {
+        "local_unique_ref_sha_pairs": 102,
+        "local_unique_branch_names": 102,
+        "local_not_merged_into_main": 36,
+        "remote_branches": 26,
+        "remote_not_merged_into_main": 0,
+        "remote_tags": 0
+      },
+      "remote_branches": [
+        {
+          "ref": "refs/heads/compat/herdr-082-adapter-identity",
+          "sha": "2994fdd0924fc142ca5c823f01e398e19810e4fb",
+          "ahead_main": 0,
+          "behind_main": 126,
+          "merged_into_main": true,
+          "date": "2026-08-20T11:18:46-07:00",
+          "subject": "fix(broker): bind managed control connection identity"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-adapter-timeout",
+          "sha": "d8a62f352739730c3fe688410c7f22848d7d6a91",
+          "ahead_main": 0,
+          "behind_main": 128,
+          "merged_into_main": true,
+          "date": "2026-08-20T11:07:12-07:00",
+          "subject": "fix(broker): keep adapter timeout local"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-close-replay",
+          "sha": "1f8a2a947b47b0e7b4c62f50e508d6cf400b1e4b",
+          "ahead_main": 0,
+          "behind_main": 116,
+          "merged_into_main": true,
+          "date": "2026-08-20T13:38:21-07:00",
+          "subject": "fix(close): preserve idempotency through restart replay"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-close-shared-workspace",
+          "sha": "17b0197aa67d28ff5d4e19a30f6e2495fb61cd79",
+          "ahead_main": 0,
+          "behind_main": 114,
+          "merged_into_main": true,
+          "date": "2026-08-20T13:51:39-07:00",
+          "subject": "fix(close): allow absent panes in shared workspaces"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-prompt-locality",
+          "sha": "71bd95d827978b03613f6c659afc77e7052c5582",
+          "ahead_main": 0,
+          "behind_main": 124,
+          "merged_into_main": true,
+          "date": "2026-08-20T11:41:55-07:00",
+          "subject": "fix(broker): keep prompt task controls local"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-prompt-rebind",
+          "sha": "783e5df91863dab8c19dd4ae21db8a1f0ef5ed2b",
+          "ahead_main": 0,
+          "behind_main": 122,
+          "merged_into_main": true,
+          "date": "2026-08-20T11:58:18-07:00",
+          "subject": "fix(pi): rebind settled assignment for parent prompt"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-question-wait",
+          "sha": "9e78038166a23ba0fd14d8dbb693d2d4498925ef",
+          "ahead_main": 0,
+          "behind_main": 118,
+          "merged_into_main": true,
+          "date": "2026-08-20T12:50:19-07:00",
+          "subject": "fix(parent): expose blocked question in agent wait"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-settled-cycle",
+          "sha": "23192065bb4b9d50565f5aff23651bc64ed2ab17",
+          "ahead_main": 0,
+          "behind_main": 120,
+          "merged_into_main": true,
+          "date": "2026-08-20T12:23:14-07:00",
+          "subject": "fix(pi): retain settled assignment through parent prompt"
+        },
+        {
+          "ref": "refs/heads/compat/herdr-082-snapshot-key",
+          "sha": "26ffa6e31b46a5207591fd9fffcaa772902b07e5",
+          "ahead_main": 0,
+          "behind_main": 130,
+          "merged_into_main": true,
+          "date": "2026-08-20T10:50:29-07:00",
+          "subject": "fix(broker): separate persistent snapshot authentication"
+        },
+        {
+          "ref": "refs/heads/feat/agent-board-product-consolidation",
+          "sha": "591f1bb7f82896818964663173f994b74bfc0f50",
+          "ahead_main": 0,
+          "behind_main": 61,
+          "merged_into_main": true,
+          "date": "2026-08-23T14:27:12-07:00",
+          "subject": "refactor: centralize Signals presentation parsing"
+        },
+        {
+          "ref": "refs/heads/fix/broker-owned-tab-cleanup-20260828",
+          "sha": "0036e055c6cd0bc5fdad132f476bd978b30cf9b0",
+          "ahead_main": 0,
+          "behind_main": 8,
+          "merged_into_main": true,
+          "date": "2026-08-28T12:53:06-07:00",
+          "subject": "fix: close dedicated broker agent tabs"
+        },
+        {
+          "ref": "refs/heads/fix/deck-visible-render-gate",
+          "sha": "88903b5fd6bc2591a7ba171cbcd8ab5a4f7c5839",
+          "ahead_main": 0,
+          "behind_main": 95,
+          "merged_into_main": true,
+          "date": "2026-08-22T23:03:52-07:00",
+          "subject": "Fail closed on ambiguous provider panes"
+        },
+        {
+          "ref": "refs/heads/integration/pi-herdr-orchestrator-001",
+          "sha": "5c53efe87bbeb9536b86676f08295d349f5b1f11",
+          "ahead_main": 0,
+          "behind_main": 189,
+          "merged_into_main": true,
+          "date": "2026-08-11T00:13:25-07:00",
+          "subject": "Merge GitHub CI portability correction"
+        },
+        {
+          "ref": "refs/heads/main",
+          "sha": "cdf69002b1c1cf62f2ec5252f4c5a5e82f9bfadc",
+          "ahead_main": 0,
+          "behind_main": 0,
+          "merged_into_main": true,
+          "date": "2026-08-30T11:34:26-07:00",
+          "subject": "Merge pull request #60 from JCFrags/fix/live-model-options-public-view-20260829"
+        },
+        {
+          "ref": "refs/heads/project/broker-client-capacity-64",
+          "sha": "7a72cd6d3163059ec7f2ae424de282714d1af152",
+          "ahead_main": 0,
+          "behind_main": 112,
+          "merged_into_main": true,
+          "date": "2026-08-20T15:10:25-07:00",
+          "subject": "Raise broker client capacity to 64"
+        },
+        {
+          "ref": "refs/heads/project/compact-accept-fix",
+          "sha": "1bd158d751cbd0a6ed4ab64f3fede0988bf8fe4c",
+          "ahead_main": 0,
+          "behind_main": 136,
+          "merged_into_main": true,
+          "date": "2026-08-19T22:02:05-07:00",
+          "subject": "fix compact acceptance tool schema"
+        },
+        {
+          "ref": "refs/heads/project/compact-delegation",
+          "sha": "d4139cd00782e09eb2edb7c1afc4542e712f74d8",
+          "ahead_main": 0,
+          "behind_main": 144,
+          "merged_into_main": true,
+          "date": "2026-08-19T00:18:55-07:00",
+          "subject": "fix: update deck for Pi TUI alternate screen API"
+        },
+        {
+          "ref": "refs/heads/project/compact-release-fix",
+          "sha": "4b5ad1444da4f08da2f0fcac20c292e4ec7e590a",
+          "ahead_main": 0,
+          "behind_main": 138,
+          "merged_into_main": true,
+          "date": "2026-08-19T21:44:26-07:00",
+          "subject": "fix compact release blockers"
+        },
+        {
+          "ref": "refs/heads/project/compact-rollback-env-fix",
+          "sha": "97576d0a3d7b8dac8ec42cc691affb4316f9a238",
+          "ahead_main": 0,
+          "behind_main": 134,
+          "merged_into_main": true,
+          "date": "2026-08-19T22:22:04-07:00",
+          "subject": "forward compact rollback switch to broker"
+        },
+        {
+          "ref": "refs/heads/project/core-m0-m1",
+          "sha": "c7ff47df5b4b8a67432fbd4f257e9a1695b442c1",
+          "ahead_main": 0,
+          "behind_main": 304,
+          "merged_into_main": true,
+          "date": "2026-08-10T03:51:17-07:00",
+          "subject": "fix: authenticate snapshot state binding"
+        },
+        {
+          "ref": "refs/heads/project/live-env-fix",
+          "sha": "44bd999f26356a2f2d8a01efd3b662813c96e9a9",
+          "ahead_main": 0,
+          "behind_main": 176,
+          "merged_into_main": true,
+          "date": "2026-08-11T10:24:34-07:00",
+          "subject": "fix: validate the running broker binary on reuse"
+        },
+        {
+          "ref": "refs/heads/project/live-managed-result-fix",
+          "sha": "fc56b05bdc2360b7fb86a8af7e0e650a9f33a3e2",
+          "ahead_main": 0,
+          "behind_main": 168,
+          "merged_into_main": true,
+          "date": "2026-08-11T15:14:21-07:00",
+          "subject": "fix(pi): retain managed active tools after connect"
+        },
+        {
+          "ref": "refs/heads/project/live-result-convergence-fix",
+          "sha": "445f2006c8981cc7fdb6f258a0b195983aec4b1a",
+          "ahead_main": 0,
+          "behind_main": 165,
+          "merged_into_main": true,
+          "date": "2026-08-11T15:49:20-07:00",
+          "subject": "fix(pi): bound agent wait deadline"
+        },
+        {
+          "ref": "refs/heads/project/live-startup-fix",
+          "sha": "6aa2b35e4836a802229ca1c7b2630242a7c4b5bb",
+          "ahead_main": 0,
+          "behind_main": 179,
+          "merged_into_main": true,
+          "date": "2026-08-11T05:01:13-07:00",
+          "subject": "fix: tolerate completed startup unlink readers"
+        },
+        {
+          "ref": "refs/heads/project/official-close-cleanup-fix",
+          "sha": "48b82a106622ef95791787915bd04086336ff15a",
+          "ahead_main": 0,
+          "behind_main": 162,
+          "merged_into_main": true,
+          "date": "2026-08-11T16:31:38-07:00",
+          "subject": "fix: require live worktree cleanup identity"
+        },
+        {
+          "ref": "refs/heads/project/schema-envelope-fix",
+          "sha": "6bff275aef3d3881f75c2fbb85c72189948a8342",
+          "ahead_main": 0,
+          "behind_main": 174,
+          "merged_into_main": true,
+          "date": "2026-08-11T10:45:00-07:00",
+          "subject": "fix: read the official Herdr schema envelope"
+        }
+      ],
+      "remote_tags": [],
+      "clone_groups": [
+        {
+          "id": "my-shtty-pi-herdr-deck-10134c7fd4",
+          "normalized_path": "$HOME/Projects/my-shtty-pi-herdr-deck",
+          "common_git_dir": "$HOME/Projects/my-shtty-pi-herdr-deck/.git",
+          "remotes": [
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/my-shtty-pi-herdr-deck.git\t(fetch)"
+            },
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/my-shtty-pi-herdr-deck.git\t(push)"
+            }
+          ],
+          "head": "14786f1192faae7f163b355cb6955db70b1a1b24",
+          "branch": "main",
+          "upstream": "origin/main",
+          "fetch_succeeded": true,
+          "private_bundle_created": true,
+          "stash_count": 1,
+          "tag_count": 0,
+          "local_branches": [
+            {
+              "ref": "refs/heads/agent/final-gate-agents-activity",
+              "sha": "5f43d9ce3698949315db07cbafb7ce315aafa816",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 71,
+              "merged_into_main": false,
+              "date": "2026-08-23T13:45:33-07:00",
+              "subject": "fix: guard Agent More and current mutations"
+            },
+            {
+              "ref": "refs/heads/agent/final-gate-board",
+              "sha": "d14a0da0fc12a83210048966ecc03b7a47be6656",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 71,
+              "merged_into_main": false,
+              "date": "2026-08-23T13:39:23-07:00",
+              "subject": "fix: correct Board waits and narrow layout"
+            },
+            {
+              "ref": "refs/heads/agent/final-gate-files",
+              "sha": "782f7f036468b4be851dba02fb2d88f39e5dd470",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 71,
+              "merged_into_main": false,
+              "date": "2026-08-23T13:41:51-07:00",
+              "subject": "fix: complete Files consumer keyboard and metadata contract"
+            },
+            {
+              "ref": "refs/heads/agent/final-gate-render",
+              "sha": "765b0afa1f1731bc0caae21d25b37a8261ce50fd",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 71,
+              "merged_into_main": false,
+              "date": "2026-08-23T13:46:38-07:00",
+              "subject": "fix: separate Board and Activity render selections"
+            },
+            {
+              "ref": "refs/heads/agent/final-gate-signals",
+              "sha": "c0dc6cc909b5d9a6eeec866d4a2c91accb63d506",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 71,
+              "merged_into_main": false,
+              "date": "2026-08-23T13:37:18-07:00",
+              "subject": "fix: complete Signals question contract"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-contract-agent-activity-overlay",
+              "sha": "9b3a10ceb4ca8c09e19c2f750a9025de557bbf49",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 76,
+              "merged_into_main": false,
+              "date": "2026-08-23T12:39:57-07:00",
+              "subject": "close Agent Board activity and overlay contracts"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-contract-files-consumer",
+              "sha": "59731ccb3cdcccd568bce9f716edae1b4c4a2062",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 76,
+              "merged_into_main": false,
+              "date": "2026-08-23T12:37:13-07:00",
+              "subject": "feat: close Files provider consumer contract"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-contract-question-board",
+              "sha": "b37ab2edaa829a6717a764629f8c7afe417a4ae9",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 76,
+              "merged_into_main": false,
+              "date": "2026-08-23T12:42:01-07:00",
+              "subject": "fix: close question board contracts"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-contract-render-qa",
+              "sha": "124c5222be536c12e129a8450ff1cafcbda3a992",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 76,
+              "merged_into_main": false,
+              "date": "2026-08-23T12:34:41-07:00",
+              "subject": "test: close render integration QA contracts"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-activity-agents",
+              "sha": "f30a92181ffd6ed07cab0970a9df51075e5edb50",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 88,
+              "merged_into_main": false,
+              "date": "2026-08-23T10:34:38-07:00",
+              "subject": "fix: align activity and agent action contracts"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-board",
+              "sha": "4969179a7b972b4baeee17ad63418efb2bf7cabc",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 88,
+              "merged_into_main": false,
+              "date": "2026-08-23T10:35:29-07:00",
+              "subject": "fix: align Board action contracts and routing"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-epipe",
+              "sha": "5815abaaf9a429812f41c73dae394aeae3bc30b3",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 88,
+              "merged_into_main": true,
+              "date": "2026-08-23T10:17:00-07:00",
+              "subject": "refactor: define shared screen geometry contracts"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-files-screen",
+              "sha": "630bb92465b68fd936861ee3bf9a04d51a093bbf",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 88,
+              "merged_into_main": false,
+              "date": "2026-08-23T10:33:47-07:00",
+              "subject": "fix: align Files screen provider contracts"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-render-qa",
+              "sha": "0bf9e83fc0947d042b8ffef8d9437c91fa738d49",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 82,
+              "merged_into_main": false,
+              "date": "2026-08-23T11:00:20-07:00",
+              "subject": "feat: integrate final deck render surfaces"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-shell-overlay",
+              "sha": "b324ba7e1b20d84fe35b358ef1771e716cacef0e",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 88,
+              "merged_into_main": false,
+              "date": "2026-08-23T10:54:34-07:00",
+              "subject": "feat: unify deck overlays and shell header"
+            },
+            {
+              "ref": "refs/heads/agent/unified-controls-groups",
+              "sha": "0ed0dc5a39f916dc28684d8c8847859eec8f4580",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 161,
+              "merged_into_main": false,
+              "date": "2026-08-11T19:19:19-07:00",
+              "subject": "Fix peer ask answers and tool ownership"
+            },
+            {
+              "ref": "refs/heads/agent/unified-deck-tests",
+              "sha": "29b1e545668846849efbd55bd392aba951f47898",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 161,
+              "merged_into_main": false,
+              "date": "2026-08-11T18:58:13-07:00",
+              "subject": "feat(deck): add managed portfolio controls and smoke tests"
+            },
+            {
+              "ref": "refs/heads/agent/unified-legacy-coordination",
+              "sha": "f0061bcc4ed07a3ac4b3b7c6036b5f97fc2f8a0d",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 161,
+              "merged_into_main": false,
+              "date": "2026-08-11T18:50:27-07:00",
+              "subject": "consolidate legacy orchestration support"
+            },
+            {
+              "ref": "refs/heads/agent/unified-model-spawn",
+              "sha": "133f42947c0c3c1501e69b07a65c7445aa739474",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 161,
+              "merged_into_main": false,
+              "date": "2026-08-11T19:09:39-07:00",
+              "subject": "Add unified model and placement spawn policy"
+            },
+            {
+              "ref": "refs/heads/agt-01kzs56z4kyc8ec357zj3rrbv0",
+              "sha": "8345439198f230684f31f4bcf7ea541e75459c82",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 170,
+              "merged_into_main": true,
+              "date": "2026-08-11T11:37:20-07:00",
+              "subject": "Merge pull request #6 from JCFrags/project/official-cli-fix"
+            },
+            {
+              "ref": "refs/heads/agt-01kzsep62rdy7t1pkyhdb8qkbf",
+              "sha": "b5f53d927a94a414e4d1a358a070ab40e59282c2",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 167,
+              "merged_into_main": true,
+              "date": "2026-08-11T15:19:51-07:00",
+              "subject": "Merge pull request #7 from JCFrags/project/live-managed-result-fix"
+            },
+            {
+              "ref": "refs/heads/agt-01kzsgq8zhc501xv50r90h9qzt",
+              "sha": "23c369baf6aca4965ce45835e32a522758ce5a1b",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 164,
+              "merged_into_main": true,
+              "date": "2026-08-11T15:55:09-07:00",
+              "subject": "Merge pull request #8 from JCFrags/project/live-result-convergence-fix"
+            },
+            {
+              "ref": "refs/heads/agt-01kzsgxsw52gekchd8yfn3ch4e",
+              "sha": "23c369baf6aca4965ce45835e32a522758ce5a1b",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 164,
+              "merged_into_main": true,
+              "date": "2026-08-11T15:55:09-07:00",
+              "subject": "Merge pull request #8 from JCFrags/project/live-result-convergence-fix"
+            },
+            {
+              "ref": "refs/heads/agt-01m0cf6stqz6h9438gmym05aw5",
+              "sha": "dcc67f6159129cadd43566c65200a4f09c88700e",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 143,
+              "merged_into_main": false,
+              "date": "2026-08-19T00:42:55-07:00",
+              "subject": "Add compact delegation and durable metadata projection"
+            },
+            {
+              "ref": "refs/heads/agt-01m0cfqdkn2aggh5r0ye3mh74h",
+              "sha": "26dee93b020c6cfdfe107fbda43b37f05696ae92",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 143,
+              "merged_into_main": true,
+              "date": "2026-08-19T00:25:57-07:00",
+              "subject": "Merge pull request #12 from JCFrags/project/compact-delegation"
+            },
+            {
+              "ref": "refs/heads/backup/integration-pre-convergence-20260810-0856",
+              "sha": "63e223e16b17def60cf7137593839e45b046aa32",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 303,
+              "merged_into_main": true,
+              "date": "2026-08-10T03:58:27-07:00",
+              "subject": "Merge pull request #1 from JCFrags/project/core-m0-m1"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-adapter-identity",
+              "sha": "2994fdd0924fc142ca5c823f01e398e19810e4fb",
+              "upstream": "refs/remotes/origin/compat/herdr-082-adapter-identity",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 126,
+              "merged_into_main": true,
+              "date": "2026-08-20T11:18:46-07:00",
+              "subject": "fix(broker): bind managed control connection identity"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-adapter-timeout",
+              "sha": "d8a62f352739730c3fe688410c7f22848d7d6a91",
+              "upstream": "refs/remotes/origin/compat/herdr-082-adapter-timeout",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 128,
+              "merged_into_main": true,
+              "date": "2026-08-20T11:07:12-07:00",
+              "subject": "fix(broker): keep adapter timeout local"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-close-replay",
+              "sha": "1f8a2a947b47b0e7b4c62f50e508d6cf400b1e4b",
+              "upstream": "refs/remotes/origin/compat/herdr-082-close-replay",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 116,
+              "merged_into_main": true,
+              "date": "2026-08-20T13:38:21-07:00",
+              "subject": "fix(close): preserve idempotency through restart replay"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-close-shared-workspace",
+              "sha": "17b0197aa67d28ff5d4e19a30f6e2495fb61cd79",
+              "upstream": "refs/remotes/origin/compat/herdr-082-close-shared-workspace",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 114,
+              "merged_into_main": true,
+              "date": "2026-08-20T13:51:39-07:00",
+              "subject": "fix(close): allow absent panes in shared workspaces"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-prompt-locality",
+              "sha": "71bd95d827978b03613f6c659afc77e7052c5582",
+              "upstream": "refs/remotes/origin/compat/herdr-082-prompt-locality",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 124,
+              "merged_into_main": true,
+              "date": "2026-08-20T11:41:55-07:00",
+              "subject": "fix(broker): keep prompt task controls local"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-prompt-rebind",
+              "sha": "783e5df91863dab8c19dd4ae21db8a1f0ef5ed2b",
+              "upstream": "refs/remotes/origin/compat/herdr-082-prompt-rebind",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 122,
+              "merged_into_main": true,
+              "date": "2026-08-20T11:58:18-07:00",
+              "subject": "fix(pi): rebind settled assignment for parent prompt"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-question-wait",
+              "sha": "9e78038166a23ba0fd14d8dbb693d2d4498925ef",
+              "upstream": "refs/remotes/origin/compat/herdr-082-question-wait",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 118,
+              "merged_into_main": true,
+              "date": "2026-08-20T12:50:19-07:00",
+              "subject": "fix(parent): expose blocked question in agent wait"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-settled-cycle",
+              "sha": "23192065bb4b9d50565f5aff23651bc64ed2ab17",
+              "upstream": "refs/remotes/origin/compat/herdr-082-settled-cycle",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 120,
+              "merged_into_main": true,
+              "date": "2026-08-20T12:23:14-07:00",
+              "subject": "fix(pi): retain settled assignment through parent prompt"
+            },
+            {
+              "ref": "refs/heads/compat/herdr-082-snapshot-key",
+              "sha": "26ffa6e31b46a5207591fd9fffcaa772902b07e5",
+              "upstream": "refs/remotes/origin/compat/herdr-082-snapshot-key",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 130,
+              "merged_into_main": true,
+              "date": "2026-08-20T10:50:29-07:00",
+              "subject": "fix(broker): separate persistent snapshot authentication"
+            },
+            {
+              "ref": "refs/heads/deploy/adopted-root-rebind-recovery",
+              "sha": "79046614e870088b832f9dd1d98495e16cfd9345",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 13,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-09-01T08:32:54-07:00",
+              "subject": "Recover adopted lineage after terminal replacement"
+            },
+            {
+              "ref": "refs/heads/feat/agent-board-product-consolidation",
+              "sha": "591f1bb7f82896818964663173f994b74bfc0f50",
+              "upstream": "refs/remotes/origin/feat/agent-board-product-consolidation",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 61,
+              "merged_into_main": true,
+              "date": "2026-08-23T14:27:12-07:00",
+              "subject": "refactor: centralize Signals presentation parsing"
+            },
+            {
+              "ref": "refs/heads/fix/adopted-root-rebind",
+              "sha": "47cee2d0a6dbca46466837acdb028e213c260dee",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 25,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-09-01T07:38:22-07:00",
+              "subject": "Fix adopted root rebind after terminal replacement"
+            },
+            {
+              "ref": "refs/heads/fix/broker-owned-tab-cleanup-20260828",
+              "sha": "0036e055c6cd0bc5fdad132f476bd978b30cf9b0",
+              "upstream": "refs/remotes/origin/fix/broker-owned-tab-cleanup-20260828",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 8,
+              "merged_into_main": true,
+              "date": "2026-08-28T12:53:06-07:00",
+              "subject": "fix: close dedicated broker agent tabs"
+            },
+            {
+              "ref": "refs/heads/fix/broker-suffix-replay-stall-20260829",
+              "sha": "98ff76716c0281dd0ee8b2f538c824e836122ff0",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 6,
+              "merged_into_main": true,
+              "date": "2026-08-29T19:24:44-07:00",
+              "subject": "fix: bound broker suffix replay work"
+            },
+            {
+              "ref": "refs/heads/fix/completion-driven-runtime",
+              "sha": "e206d2db6b92ed547eb4aed102bac246e883630b",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 15,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T22:48:20-07:00",
+              "subject": "Use completion-driven managed agent runtime"
+            },
+            {
+              "ref": "refs/heads/fix/deck-visible-render-gate",
+              "sha": "88903b5fd6bc2591a7ba171cbcd8ab5a4f7c5839",
+              "upstream": "refs/remotes/origin/fix/deck-visible-render-gate",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 95,
+              "merged_into_main": true,
+              "date": "2026-08-22T23:03:52-07:00",
+              "subject": "Fail closed on ambiguous provider panes"
+            },
+            {
+              "ref": "refs/heads/fix/model-options-available-list-20260829",
+              "sha": "dff143c10bd7012dcab1ab4f96d967980dcc1809",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 5,
+              "merged_into_main": true,
+              "date": "2026-08-29T20:03:27-07:00",
+              "subject": "fix: show only available agent models"
+            },
+            {
+              "ref": "refs/heads/fix/model-options-five-star-ratings-20260829",
+              "sha": "e694bf4dc6828b5638fde714151582454ab9278d",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 4,
+              "merged_into_main": true,
+              "date": "2026-08-29T20:57:45-07:00",
+              "subject": "feat: add five-star model ratings"
+            },
+            {
+              "ref": "refs/heads/fix/model-options-no-default-disclosure-20260828",
+              "sha": "78696e56e449e066cb660ecf6ae5ad9033d277ab",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 7,
+              "merged_into_main": true,
+              "date": "2026-08-28T14:32:46-07:00",
+              "subject": "fix: hide default agent model selection"
+            },
+            {
+              "ref": "refs/heads/fix/orchestrate-wait-until-finish",
+              "sha": "f825b2d1e879010714ae7b0dda1ffb913792747b",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 15,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T22:48:56-07:00",
+              "subject": "feat: add durable task steering"
+            },
+            {
+              "ref": "refs/heads/integrate/concurrent-orchestrator-20260901",
+              "sha": "747d97c426de1ff3b901438bcdc28184e83100ca",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 23,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T23:40:24-07:00",
+              "subject": "Merge final package staging guidance"
+            },
+            {
+              "ref": "refs/heads/integrate/recent-work-final-snapshot",
+              "sha": "aaa010008231ad31926337fa35ff096e40be1867",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 14,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T23:19:49-07:00",
+              "subject": "feat: expose bounded recent agent work"
+            },
+            {
+              "ref": "refs/heads/integrate/recent-work-snapshot",
+              "sha": "4f0dce52402af009425c5f174b5b214f2c9135d4",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 14,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T23:14:59-07:00",
+              "subject": "feat: expose bounded recent agent work"
+            },
+            {
+              "ref": "refs/heads/integration/pi-herdr-orchestrator-001",
+              "sha": "5c53efe87bbeb9536b86676f08295d349f5b1f11",
+              "upstream": "refs/remotes/origin/integration/pi-herdr-orchestrator-001",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 189,
+              "merged_into_main": true,
+              "date": "2026-08-11T00:13:25-07:00",
+              "subject": "Merge GitHub CI portability correction"
+            },
+            {
+              "ref": "refs/heads/main",
+              "sha": "14786f1192faae7f163b355cb6955db70b1a1b24",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": "[ahead 24]",
+              "ahead_main": 24,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T23:42:52-07:00",
+              "subject": "Merge concurrent orchestrator runtime work"
+            },
+            {
+              "ref": "refs/heads/project/broker-client-capacity-64",
+              "sha": "7a72cd6d3163059ec7f2ae424de282714d1af152",
+              "upstream": "refs/remotes/origin/project/broker-client-capacity-64",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 112,
+              "merged_into_main": true,
+              "date": "2026-08-20T15:10:25-07:00",
+              "subject": "Raise broker client capacity to 64"
+            },
+            {
+              "ref": "refs/heads/project/ci-portability-fix",
+              "sha": "ea751dd5ace5028eec3a457239c0ba060e8f6aaf",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 190,
+              "merged_into_main": true,
+              "date": "2026-08-11T00:05:41-07:00",
+              "subject": "test: make extension reload CI-portable"
+            },
+            {
+              "ref": "refs/heads/project/compact-accept-fix",
+              "sha": "1bd158d751cbd0a6ed4ab64f3fede0988bf8fe4c",
+              "upstream": "refs/remotes/origin/project/compact-accept-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 136,
+              "merged_into_main": true,
+              "date": "2026-08-19T22:02:05-07:00",
+              "subject": "fix compact acceptance tool schema"
+            },
+            {
+              "ref": "refs/heads/project/compact-delegation",
+              "sha": "d4139cd00782e09eb2edb7c1afc4542e712f74d8",
+              "upstream": "refs/remotes/origin/project/compact-delegation",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 144,
+              "merged_into_main": true,
+              "date": "2026-08-19T00:18:55-07:00",
+              "subject": "fix: update deck for Pi TUI alternate screen API"
+            },
+            {
+              "ref": "refs/heads/project/compact-metadata",
+              "sha": "11bd3c00ee75e5b8c42cea905fd5c8d38f4ff713",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 141,
+              "merged_into_main": true,
+              "date": "2026-08-19T20:49:53-07:00",
+              "subject": "Complete compact delegation lifecycle metadata"
+            },
+            {
+              "ref": "refs/heads/project/compact-release-fix",
+              "sha": "4b5ad1444da4f08da2f0fcac20c292e4ec7e590a",
+              "upstream": "refs/remotes/origin/project/compact-release-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 138,
+              "merged_into_main": true,
+              "date": "2026-08-19T21:44:26-07:00",
+              "subject": "fix compact release blockers"
+            },
+            {
+              "ref": "refs/heads/project/compact-review-fix",
+              "sha": "e915de28a8300ffe8792ac38a0487c038a50e05d",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 139,
+              "merged_into_main": true,
+              "date": "2026-08-19T21:21:57-07:00",
+              "subject": "bind compact parent policy context"
+            },
+            {
+              "ref": "refs/heads/project/compact-rollback-env-fix",
+              "sha": "97576d0a3d7b8dac8ec42cc691affb4316f9a238",
+              "upstream": "refs/remotes/origin/project/compact-rollback-env-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 134,
+              "merged_into_main": true,
+              "date": "2026-08-19T22:22:04-07:00",
+              "subject": "forward compact rollback switch to broker"
+            },
+            {
+              "ref": "refs/heads/project/converge-deck",
+              "sha": "1fbb58198c3d9dcf8ec4b648e0c00e47a59edf8c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 225,
+              "merged_into_main": true,
+              "date": "2026-08-10T09:20:29-07:00",
+              "subject": "fix: wire deck entry to authenticated broker"
+            },
+            {
+              "ref": "refs/heads/project/converge-domain",
+              "sha": "fa1ac1d38ee077f297c6ad689a4c6fcd5bff1e8e",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 213,
+              "merged_into_main": true,
+              "date": "2026-08-10T18:57:53-07:00",
+              "subject": "fix: preserve domain release failures"
+            },
+            {
+              "ref": "refs/heads/project/converge-ops",
+              "sha": "874d30a88d19a4f6bbdfad3bef6d5fbb3750196f",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 224,
+              "merged_into_main": true,
+              "date": "2026-08-10T09:35:29-07:00",
+              "subject": "Validate separate M7 operation evidence"
+            },
+            {
+              "ref": "refs/heads/project/converge-pi-tools",
+              "sha": "770f5d617311f1aa9bd030fa5fec0c160318fac5",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 219,
+              "merged_into_main": true,
+              "date": "2026-08-10T12:12:59-07:00",
+              "subject": "Fix Pi socket errors and early question terminalization"
+            },
+            {
+              "ref": "refs/heads/project/core-m0-m1",
+              "sha": "c7ff47df5b4b8a67432fbd4f257e9a1695b442c1",
+              "upstream": "refs/remotes/origin/project/core-m0-m1",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 304,
+              "merged_into_main": true,
+              "date": "2026-08-10T03:51:17-07:00",
+              "subject": "fix: authenticate snapshot state binding"
+            },
+            {
+              "ref": "refs/heads/project/herdr-m2",
+              "sha": "e1d47b154f3d61bf08ec8e9d901c433ff63106eb",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 283,
+              "merged_into_main": true,
+              "date": "2026-08-10T07:56:45-07:00",
+              "subject": "canonicalize herdr retention admission root"
+            },
+            {
+              "ref": "refs/heads/project/integration-isolation-fix",
+              "sha": "fb2f61a2df2cc33a0b97be81c1e484295a34545f",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 194,
+              "merged_into_main": true,
+              "date": "2026-08-10T22:19:23-07:00",
+              "subject": "fix: reject ambiguous retained worktrees"
+            },
+            {
+              "ref": "refs/heads/project/lifecycle-cancel-fix",
+              "sha": "b7547803d4f69e49ba3a7f1932461a2c926dc3e2",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 13,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-31T19:52:47-07:00",
+              "subject": "Wait for quiescence after question cancellation"
+            },
+            {
+              "ref": "refs/heads/project/live-env-fix",
+              "sha": "44bd999f26356a2f2d8a01efd3b662813c96e9a9",
+              "upstream": "refs/remotes/origin/project/live-env-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 176,
+              "merged_into_main": true,
+              "date": "2026-08-11T10:24:34-07:00",
+              "subject": "fix: validate the running broker binary on reuse"
+            },
+            {
+              "ref": "refs/heads/project/live-managed-result-fix",
+              "sha": "fc56b05bdc2360b7fb86a8af7e0e650a9f33a3e2",
+              "upstream": "refs/remotes/origin/project/live-managed-result-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 168,
+              "merged_into_main": true,
+              "date": "2026-08-11T15:14:21-07:00",
+              "subject": "fix(pi): retain managed active tools after connect"
+            },
+            {
+              "ref": "refs/heads/project/live-result-convergence-fix",
+              "sha": "445f2006c8981cc7fdb6f258a0b195983aec4b1a",
+              "upstream": "refs/remotes/origin/project/live-result-convergence-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 165,
+              "merged_into_main": true,
+              "date": "2026-08-11T15:49:20-07:00",
+              "subject": "fix(pi): bound agent wait deadline"
+            },
+            {
+              "ref": "refs/heads/project/live-startup-fix",
+              "sha": "6aa2b35e4836a802229ca1c7b2630242a7c4b5bb",
+              "upstream": "refs/remotes/origin/project/live-startup-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 179,
+              "merged_into_main": true,
+              "date": "2026-08-11T05:01:13-07:00",
+              "subject": "fix: tolerate completed startup unlink readers"
+            },
+            {
+              "ref": "refs/heads/project/m3-controls",
+              "sha": "1c31ab0ea8c44cdfb909895c5b8ac25628633b65",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 283,
+              "merged_into_main": false,
+              "date": "2026-08-10T08:11:45-07:00",
+              "subject": "feat(pi): add authorized parent tool helpers"
+            },
+            {
+              "ref": "refs/heads/project/m3-integration",
+              "sha": "dea42f563470d595cedf63b119e60e9641ca441d",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 283,
+              "merged_into_main": false,
+              "date": "2026-08-10T08:32:27-07:00",
+              "subject": "test(m3): cover fake Pi broker lifecycle"
+            },
+            {
+              "ref": "refs/heads/project/m3-pi",
+              "sha": "4e5764fbd932d80b92a82c75ad391074e10931fa",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 275,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:39:15-07:00",
+              "subject": "test(m3): update parent authentication safety contract"
+            },
+            {
+              "ref": "refs/heads/project/m3-registration",
+              "sha": "7d6110ff16f53e247d0043f54ebe615a0451f0af",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 283,
+              "merged_into_main": false,
+              "date": "2026-08-10T08:10:16-07:00",
+              "subject": "feat(m3): add Pi registration and state reporter"
+            },
+            {
+              "ref": "refs/heads/project/m3-schemas",
+              "sha": "bd8abf7db82bd3b30ad2a5798266db35f680c949",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 283,
+              "merged_into_main": false,
+              "date": "2026-08-10T08:13:03-07:00",
+              "subject": "feat(m3): add agent and assignment schemas"
+            },
+            {
+              "ref": "refs/heads/project/m4-artifact-tests",
+              "sha": "6751112c6cd25421e83dfb9635ce03cc25473f29",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 282,
+              "merged_into_main": false,
+              "date": "2026-08-10T08:14:50-07:00",
+              "subject": "test: add M4 artifact security coverage"
+            },
+            {
+              "ref": "refs/heads/project/m4-integration-tests",
+              "sha": "64b4eef86cfd2f5705f7a1e9c13a84937b971f09",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 282,
+              "merged_into_main": false,
+              "date": "2026-08-10T08:22:44-07:00",
+              "subject": "test: add M4 results integration coverage"
+            },
+            {
+              "ref": "refs/heads/project/m4-question-tests",
+              "sha": "3ce31109845568564ace72d4405ea169bac09cb8",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 282,
+              "merged_into_main": false,
+              "date": "2026-08-10T08:19:08-07:00",
+              "subject": "test: cover M4 question races"
+            },
+            {
+              "ref": "refs/heads/project/m4-results",
+              "sha": "61343381ce2d63ccc1529623ae6d9a25b96c2366",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 278,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:31:29-07:00",
+              "subject": "Record M4 result and question traceability"
+            },
+            {
+              "ref": "refs/heads/project/m5-admission",
+              "sha": "2535316e78241cca4e0864a76b966070ba81a40d",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:14:10-07:00",
+              "subject": "feat(m5): add scheduler admission and reuse helpers"
+            },
+            {
+              "ref": "refs/heads/project/m5-budget",
+              "sha": "7295e62e76fc083bd7e76cf7c08398cea7994b60",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 281,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:16:25-07:00",
+              "subject": "fix: preserve outcomes during budget grace"
+            },
+            {
+              "ref": "refs/heads/project/m5-integration",
+              "sha": "c2d20ea062d78b56b4b0d2f3f5ef3b0ac26be242",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:14:44-07:00",
+              "subject": "Add M5 broker integration preparation adapter"
+            },
+            {
+              "ref": "refs/heads/project/m5-parent-tools",
+              "sha": "1add809ea2d924b6b6d374de51e09bf9d5e1c237",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 281,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:16:55-07:00",
+              "subject": "fix(pi): align parent tool broker metadata"
+            },
+            {
+              "ref": "refs/heads/project/m5-scheduler",
+              "sha": "a6f844f3398171dc33dadec15b94480c29cdbca3",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 283,
+              "merged_into_main": true,
+              "date": "2026-08-10T07:58:46-07:00",
+              "subject": "feat: add scheduler workflows and parent tools"
+            },
+            {
+              "ref": "refs/heads/project/m5-workflow",
+              "sha": "ee02115afaf49262888c8ca18193d5553ebfbeb8",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:15:04-07:00",
+              "subject": "feat: add workflow execution engine helpers"
+            },
+            {
+              "ref": "refs/heads/project/m6-client",
+              "sha": "55c3eb0604eae921debc2beb695928620dcde15e",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:17:04-07:00",
+              "subject": "fix(deck): harden broker client reconnect"
+            },
+            {
+              "ref": "refs/heads/project/m6-deck",
+              "sha": "20dfe67f7888929b1b6f44358d36ce8d9a45f8dd",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 283,
+              "merged_into_main": true,
+              "date": "2026-08-10T07:59:19-07:00",
+              "subject": "feat(deck): add broker-backed orchestration deck foundation"
+            },
+            {
+              "ref": "refs/heads/project/m6-integration",
+              "sha": "bbbfbd6c3b323ad70ddbe89d9b0eb177ba8efc3c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:22:49-07:00",
+              "subject": "test: prepare M6 deck integration fixtures"
+            },
+            {
+              "ref": "refs/heads/project/m6-store",
+              "sha": "6e4929181d487a4dc2d6f90f7015d64c0f4b0caa",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:19:28-07:00",
+              "subject": "feat(deck): harden store snapshot and replay model"
+            },
+            {
+              "ref": "refs/heads/project/m6-views",
+              "sha": "9e7044531733e25ddc59f19f6ee2b96e78dda63f",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:21:18-07:00",
+              "subject": "feat(deck): harden views and action accessibility"
+            },
+            {
+              "ref": "refs/heads/project/m7-cli",
+              "sha": "98f0d21eeeed82c568b37cb47a126a5ba0ea07fd",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:24:54-07:00",
+              "subject": "feat(m7): add safe operator planning"
+            },
+            {
+              "ref": "refs/heads/project/m7-config",
+              "sha": "b03d04bce97a3929ffaef7d2cac3f8de2a0ed8d7",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:22:20-07:00",
+              "subject": "feat: add safe configuration policy"
+            },
+            {
+              "ref": "refs/heads/project/m7-ops",
+              "sha": "e76bc7309eff8290ba4218096a54a3b8ea5621ae",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 283,
+              "merged_into_main": true,
+              "date": "2026-08-10T07:58:49-07:00",
+              "subject": "feat: add M7 operations and recovery scaffolding"
+            },
+            {
+              "ref": "refs/heads/project/m7-recovery",
+              "sha": "6fa9fa25ae727a5dd02dcee71617cd7662f82256",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:18:04-07:00",
+              "subject": "feat: add dry-run recovery planning"
+            },
+            {
+              "ref": "refs/heads/project/m7-release",
+              "sha": "a137b94aec2daf4ff46ba0532fb222d5b2749a21",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 282,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:26:37-07:00",
+              "subject": "Add M7 release rehearsal harness"
+            },
+            {
+              "ref": "refs/heads/project/m7-retention",
+              "sha": "ec6c7738dc469225cd51c121bb9c58b54ec8dd38",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 281,
+              "merged_into_main": true,
+              "date": "2026-08-10T08:34:32-07:00",
+              "subject": "Fix deterministic refusal ordering"
+            },
+            {
+              "ref": "refs/heads/project/official-close-cleanup-fix",
+              "sha": "48b82a106622ef95791787915bd04086336ff15a",
+              "upstream": "refs/remotes/origin/project/official-close-cleanup-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 162,
+              "merged_into_main": true,
+              "date": "2026-08-11T16:31:38-07:00",
+              "subject": "fix: require live worktree cleanup identity"
+            },
+            {
+              "ref": "refs/heads/project/pi-herd-modern-tui",
+              "sha": "63ab9923f4c73f8be87c2dc2a31792b0a4d08035",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 161,
+              "merged_into_main": false,
+              "date": "2026-08-19T00:18:27-07:00",
+              "subject": "fix: update deck for Pi TUI alternate screen API"
+            },
+            {
+              "ref": "refs/heads/project/release-correction",
+              "sha": "b75255ca064b9cb6e5fd4b1b72e296040a2e50bf",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 192,
+              "merged_into_main": true,
+              "date": "2026-08-10T23:24:07-07:00",
+              "subject": "fix: complete release gates and operator migration"
+            },
+            {
+              "ref": "refs/heads/project/schema-envelope-fix",
+              "sha": "6bff275aef3d3881f75c2fbb85c72189948a8342",
+              "upstream": "refs/remotes/origin/project/schema-envelope-fix",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 174,
+              "merged_into_main": true,
+              "date": "2026-08-11T10:45:00-07:00",
+              "subject": "fix: read the official Herdr schema envelope"
+            },
+            {
+              "ref": "refs/heads/project/unified-pi-herdr-orchestration",
+              "sha": "1f56869070e04488adcb751c2cd84ecec5a697cf",
+              "upstream": "refs/remotes/origin/project/unified-pi-herdr-orchestration",
+              "upstream_track": "[gone]",
+              "ahead_main": 0,
+              "behind_main": 148,
+              "merged_into_main": true,
+              "date": "2026-08-11T19:39:08-07:00",
+              "subject": "Expose the production Pi capability fixture to broker children"
+            }
+          ],
+          "remote_tracking_branch_count": 27,
+          "worktrees": [
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/adopted-root-deploy",
+              "head": "79046614e870088b832f9dd1d98495e16cfd9345",
+              "branch": "deploy/adopted-root-rebind-recovery",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/adopted-root-rebind",
+              "head": "47cee2d0a6dbca46466837acdb028e213c260dee",
+              "branch": "fix/adopted-root-rebind",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/broker-client-capacity-64",
+              "head": "7a72cd6d3163059ec7f2ae424de282714d1af152",
+              "branch": "project/broker-client-capacity-64",
+              "upstream": "origin/project/broker-client-capacity-64",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/ci-portability-fix",
+              "head": "ea751dd5ace5028eec3a457239c0ba060e8f6aaf",
+              "branch": "project/ci-portability-fix",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/compact-delegation",
+              "head": "d4139cd00782e09eb2edb7c1afc4542e712f74d8",
+              "branch": "project/compact-delegation",
+              "upstream": "origin/project/compact-delegation",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/compact-metadata",
+              "head": "11bd3c00ee75e5b8c42cea905fd5c8d38f4ff713",
+              "branch": "project/compact-metadata",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/completion-driven-runtime",
+              "head": "e206d2db6b92ed547eb4aed102bac246e883630b",
+              "branch": "fix/completion-driven-runtime",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/converge-domain",
+              "head": "fa1ac1d38ee077f297c6ad689a4c6fcd5bff1e8e",
+              "branch": "project/converge-domain",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/converge-pi-tools",
+              "head": "770f5d617311f1aa9bd030fa5fec0c160318fac5",
+              "branch": "project/converge-pi-tools",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/core",
+              "head": "c7ff47df5b4b8a67432fbd4f257e9a1695b442c1",
+              "branch": "project/core-m0-m1",
+              "upstream": "origin/project/core-m0-m1",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-adapter-identity",
+              "head": "2994fdd0924fc142ca5c823f01e398e19810e4fb",
+              "branch": "compat/herdr-082-adapter-identity",
+              "upstream": "origin/compat/herdr-082-adapter-identity",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-adapter-timeout",
+              "head": "d8a62f352739730c3fe688410c7f22848d7d6a91",
+              "branch": "compat/herdr-082-adapter-timeout",
+              "upstream": "origin/compat/herdr-082-adapter-timeout",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-close-replay",
+              "head": "1f8a2a947b47b0e7b4c62f50e508d6cf400b1e4b",
+              "branch": "compat/herdr-082-close-replay",
+              "upstream": "origin/compat/herdr-082-close-replay",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-close-shared-workspace",
+              "head": "17b0197aa67d28ff5d4e19a30f6e2495fb61cd79",
+              "branch": "compat/herdr-082-close-shared-workspace",
+              "upstream": "origin/compat/herdr-082-close-shared-workspace",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-compat",
+              "head": "26ffa6e31b46a5207591fd9fffcaa772902b07e5",
+              "branch": "compat/herdr-082-snapshot-key",
+              "upstream": "origin/compat/herdr-082-snapshot-key",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-prompt-locality",
+              "head": "71bd95d827978b03613f6c659afc77e7052c5582",
+              "branch": "compat/herdr-082-prompt-locality",
+              "upstream": "origin/compat/herdr-082-prompt-locality",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-prompt-rebind",
+              "head": "783e5df91863dab8c19dd4ae21db8a1f0ef5ed2b",
+              "branch": "compat/herdr-082-prompt-rebind",
+              "upstream": "origin/compat/herdr-082-prompt-rebind",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-question-wait",
+              "head": "9e78038166a23ba0fd14d8dbb693d2d4498925ef",
+              "branch": "compat/herdr-082-question-wait",
+              "upstream": "origin/compat/herdr-082-question-wait",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-082-settled-cycle",
+              "head": "23192065bb4b9d50565f5aff23651bc64ed2ab17",
+              "branch": "compat/herdr-082-settled-cycle",
+              "upstream": "origin/compat/herdr-082-settled-cycle",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/herdr-m2",
+              "head": "e1d47b154f3d61bf08ec8e9d901c433ff63106eb",
+              "branch": "project/herdr-m2",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/integration",
+              "head": "5c53efe87bbeb9536b86676f08295d349f5b1f11",
+              "branch": "integration/pi-herdr-orchestrator-001",
+              "upstream": "origin/integration/pi-herdr-orchestrator-001",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/integration-isolation-fix",
+              "head": "fb2f61a2df2cc33a0b97be81c1e484295a34545f",
+              "branch": "project/integration-isolation-fix",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/lifecycle-cancel-fix",
+              "head": "b7547803d4f69e49ba3a7f1932461a2c926dc3e2",
+              "branch": "project/lifecycle-cancel-fix",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/lifecycle-review-fix",
+              "head": "6aa2b35e4836a802229ca1c7b2630242a7c4b5bb",
+              "branch": "project/live-startup-fix",
+              "upstream": "origin/project/live-startup-fix",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/m3-pi",
+              "head": "4e5764fbd932d80b92a82c75ad391074e10931fa",
+              "branch": "project/m3-pi",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/m4-results",
+              "head": "61343381ce2d63ccc1529623ae6d9a25b96c2366",
+              "branch": "project/m4-results",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/m5-scheduler",
+              "head": "a6f844f3398171dc33dadec15b94480c29cdbca3",
+              "branch": "project/m5-scheduler",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/m6-deck",
+              "head": "20dfe67f7888929b1b6f44358d36ce8d9a45f8dd",
+              "branch": "project/m6-deck",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/m7-ops",
+              "head": "e76bc7309eff8290ba4218096a54a3b8ea5621ae",
+              "branch": "project/m7-ops",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/orchestrate-wait-until-finish",
+              "head": "747d97c426de1ff3b901438bcdc28184e83100ca",
+              "branch": "integrate/concurrent-orchestrator-20260901",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/recent-work-final-snapshot",
+              "head": "aaa010008231ad31926337fa35ff096e40be1867",
+              "branch": "integrate/recent-work-final-snapshot",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/recent-work-snapshot",
+              "head": "4f0dce52402af009425c5f174b5b214f2c9135d4",
+              "branch": "integrate/recent-work-snapshot",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/release-correction",
+              "head": "b75255ca064b9cb6e5fd4b1b72e296040a2e50bf",
+              "branch": "project/release-correction",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-core",
+              "head": "d2c3d75d13551f4c52539829c1b7b26d0c7dfd8e",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-core-2",
+              "head": "4c2583bb94d20e9de1c575f26fcfd8cc961b3678",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-core-3",
+              "head": "b87dab0ba42144ea5869e998f44b4925af5bf391",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-core-4",
+              "head": "d69f491af854746f825655e1c83e24211a812d87",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-core-5",
+              "head": "9ca6bd59fe37a632bb62ba6b57c11fe9694f0efa",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-core-6",
+              "head": "c7ff47df5b4b8a67432fbd4f257e9a1695b442c1",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082",
+              "head": "26ffa6e31b46a5207591fd9fffcaa772902b07e5",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-close-replay",
+              "head": "c1196709d4fc4f98f6ea282efdfcfd693346ea76",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-close-replay-v2",
+              "head": "fb376ea6fdb4b6f5a1ad12d2530c3582ab6c00fa",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-close-replay-v3",
+              "head": "1f8a2a947b47b0e7b4c62f50e508d6cf400b1e4b",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-close-shared",
+              "head": "17b0197aa67d28ff5d4e19a30f6e2495fb61cd79",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-identity",
+              "head": "2994fdd0924fc142ca5c823f01e398e19810e4fb",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-locality",
+              "head": "71bd95d827978b03613f6c659afc77e7052c5582",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-prompt",
+              "head": "d8a62f352739730c3fe688410c7f22848d7d6a91",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-prompt-rebind",
+              "head": "783e5df91863dab8c19dd4ae21db8a1f0ef5ed2b",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-question-wait",
+              "head": "9e78038166a23ba0fd14d8dbb693d2d4498925ef",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-082-settled-cycle",
+              "head": "23192065bb4b9d50565f5aff23651bc64ed2ab17",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-m2-1",
+              "head": "e568cdcf14e07601493458a2b4eb371bf722a2a3",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-m2-2",
+              "head": "12a12d4b37f045f1feaa77f70aa2d69f5661de8a",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-m2-3",
+              "head": "ef4147dcb3897e082d50d7ceea5311416ff76cf4",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-m2-4",
+              "head": "4c4d3c1f0a2facc68cd4b3a2422a9d3f65a7ab5a",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/projects/pi-herdr-agent-orchestration/worktrees/review-herdr-m2-5",
+              "head": "beea80cd8a8b7e999e804d4c3ad805417fdb7dc4",
+              "branch": null,
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-contract-closure-20260823/agent-activity-overlay",
+              "head": "9b3a10ceb4ca8c09e19c2f750a9025de557bbf49",
+              "branch": "agent/phase2-contract-agent-activity-overlay",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-contract-closure-20260823/files-consumer",
+              "head": "59731ccb3cdcccd568bce9f716edae1b4c4a2062",
+              "branch": "agent/phase2-contract-files-consumer",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-contract-closure-20260823/question-board",
+              "head": "b37ab2edaa829a6717a764629f8c7afe417a4ae9",
+              "branch": "agent/phase2-contract-question-board",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-contract-closure-20260823/render-qa",
+              "head": "124c5222be536c12e129a8450ff1cafcbda3a992",
+              "branch": "agent/phase2-contract-render-qa",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/activity-agents",
+              "head": "f30a92181ffd6ed07cab0970a9df51075e5edb50",
+              "branch": "agent/phase2-final-activity-agents",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/board",
+              "head": "4969179a7b972b4baeee17ad63418efb2bf7cabc",
+              "branch": "agent/phase2-final-board",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/epipe",
+              "head": "5815abaaf9a429812f41c73dae394aeae3bc30b3",
+              "branch": "agent/phase2-final-epipe",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/files-screen",
+              "head": "630bb92465b68fd936861ee3bf9a04d51a093bbf",
+              "branch": "agent/phase2-final-files-screen",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/render-qa",
+              "head": "0bf9e83fc0947d042b8ffef8d9437c91fa738d49",
+              "branch": "agent/phase2-final-render-qa",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/shell-overlay",
+              "head": "b324ba7e1b20d84fe35b358ef1771e716cacef0e",
+              "branch": "agent/phase2-final-shell-overlay",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-gate-20260823/agents-activity",
+              "head": "5f43d9ce3698949315db07cbafb7ce315aafa816",
+              "branch": "agent/final-gate-agents-activity",
+              "upstream": null,
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 1,
+                "unmerged": 0,
+                "records": 1
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-gate-20260823/board-domain-screen",
+              "head": "d14a0da0fc12a83210048966ecc03b7a47be6656",
+              "branch": "agent/final-gate-board",
+              "upstream": null,
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 1,
+                "unmerged": 0,
+                "records": 1
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-gate-20260823/files-consumer",
+              "head": "782f7f036468b4be851dba02fb2d88f39e5dd470",
+              "branch": "agent/final-gate-files",
+              "upstream": null,
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 1,
+                "unmerged": 0,
+                "records": 1
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-gate-20260823/render-qa",
+              "head": "765b0afa1f1731bc0caae21d25b37a8261ce50fd",
+              "branch": "agent/final-gate-render",
+              "upstream": null,
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 1,
+                "unmerged": 0,
+                "records": 1
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-gate-20260823/signals-modal",
+              "head": "c0dc6cc909b5d9a6eeec866d4a2c91accb63d506",
+              "branch": "agent/final-gate-signals",
+              "upstream": null,
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 1,
+                "unmerged": 0,
+                "records": 1
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/unified-pi-herdr-implementation-20260811/controls-groups",
+              "head": "0ed0dc5a39f916dc28684d8c8847859eec8f4580",
+              "branch": "agent/unified-controls-groups",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/unified-pi-herdr-implementation-20260811/deck-tests",
+              "head": "29b1e545668846849efbd55bd392aba951f47898",
+              "branch": "agent/unified-deck-tests",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/unified-pi-herdr-implementation-20260811/legacy-coordination",
+              "head": "f0061bcc4ed07a3ac4b3b7c6036b5f97fc2f8a0d",
+              "branch": "agent/unified-legacy-coordination",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/unified-pi-herdr-implementation-20260811/model-spawn",
+              "head": "133f42947c0c3c1501e69b07a65c7445aa739474",
+              "branch": "agent/unified-model-spawn",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-herd-modern-tui",
+              "head": "63ab9923f4c73f8be87c2dc2a31792b0a4d08035",
+              "branch": "project/pi-herd-modern-tui",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-herdr-result-convergence-fix",
+              "head": "48b82a106622ef95791787915bd04086336ff15a",
+              "branch": "project/official-close-cleanup-fix",
+              "upstream": "origin/project/official-close-cleanup-fix",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.herdr/worktrees/my-shtty-pi-herdr-deck/agt-01kzs56z4kyc8ec357zj3rrbv0",
+              "head": "8345439198f230684f31f4bcf7ea541e75459c82",
+              "branch": "agt-01kzs56z4kyc8ec357zj3rrbv0",
+              "upstream": null,
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 1,
+                "unmerged": 0,
+                "records": 1
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.herdr/worktrees/my-shtty-pi-herdr-deck/agt-01kzsep62rdy7t1pkyhdb8qkbf",
+              "head": "b5f53d927a94a414e4d1a358a070ab40e59282c2",
+              "branch": "agt-01kzsep62rdy7t1pkyhdb8qkbf",
+              "upstream": null,
+              "dirty": true,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 1,
+                "unmerged": 0,
+                "records": 1
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.herdr/worktrees/my-shtty-pi-herdr-deck/agt-01kzsgq8zhc501xv50r90h9qzt",
+              "head": "23c369baf6aca4965ce45835e32a522758ce5a1b",
+              "branch": "agt-01kzsgq8zhc501xv50r90h9qzt",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.herdr/worktrees/my-shtty-pi-herdr-deck/agt-01m0cf6stqz6h9438gmym05aw5",
+              "head": "dcc67f6159129cadd43566c65200a4f09c88700e",
+              "branch": "agt-01m0cf6stqz6h9438gmym05aw5",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/Projects/my-shtty-pi-herdr-deck",
+              "head": "14786f1192faae7f163b355cb6955db70b1a1b24",
+              "branch": "main",
+              "upstream": "origin/main",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "pi-signal-board",
+      "url": "https://github.com/JCFrags/pi-signal-board",
+      "default_branch": "main",
+      "main_sha": "7040981874d410efc72d1c1c69b5edddfb5d69da",
+      "branch_counts": {
+        "local_unique_ref_sha_pairs": 43,
+        "local_unique_branch_names": 43,
+        "local_not_merged_into_main": 39,
+        "remote_branches": 7,
+        "remote_not_merged_into_main": 5,
+        "remote_tags": 0
+      },
+      "remote_branches": [
+        {
+          "ref": "refs/heads/dependabot/npm_and_yarn/biomejs/biome-2.5.9",
+          "sha": "c31d665a4c923170a3ce28786ce82b463eca3b78",
+          "ahead_main": 1,
+          "behind_main": 11,
+          "merged_into_main": false,
+          "date": "2026-08-21T05:20:19Z",
+          "subject": "chore(deps-dev): bump @biomejs/biome from 2.3.5 to 2.5.9"
+        },
+        {
+          "ref": "refs/heads/dependabot/npm_and_yarn/pi-host-a81fd2e162",
+          "sha": "18eb518a17af086b244217ba3f98fafc8916736b",
+          "ahead_main": 1,
+          "behind_main": 0,
+          "merged_into_main": false,
+          "date": "2026-08-28T14:44:46Z",
+          "subject": "chore(deps-dev): bump the pi-host group across 1 directory with 3 updates"
+        },
+        {
+          "ref": "refs/heads/dependabot/npm_and_yarn/test-toolchain-b6d487308a",
+          "sha": "88250c5f5d5f65c84209690a54d9369544f06a3d",
+          "ahead_main": 1,
+          "behind_main": 0,
+          "merged_into_main": false,
+          "date": "2026-08-28T14:45:00Z",
+          "subject": "chore(deps-dev): bump the test-toolchain group across 1 directory with 2 updates"
+        },
+        {
+          "ref": "refs/heads/dependabot/npm_and_yarn/types/node-26.2.0",
+          "sha": "cbec935976f329c1ace540f54b235bf9dd7a86ff",
+          "ahead_main": 1,
+          "behind_main": 11,
+          "merged_into_main": false,
+          "date": "2026-08-21T05:20:13Z",
+          "subject": "chore(deps-dev): bump @types/node from 22.19.19 to 26.2.0"
+        },
+        {
+          "ref": "refs/heads/dependabot/npm_and_yarn/typescript-7.0.2",
+          "sha": "7ce0d53abb0b04ba7403ef7c7c042a93918673e1",
+          "ahead_main": 1,
+          "behind_main": 11,
+          "merged_into_main": false,
+          "date": "2026-08-21T05:20:08Z",
+          "subject": "chore(deps-dev): bump typescript from 5.9.3 to 7.0.2"
+        },
+        {
+          "ref": "refs/heads/feat/signals-provider-identity",
+          "sha": "e640ca123d7e9dce2197998705effe539d1014ae",
+          "ahead_main": 0,
+          "behind_main": 1,
+          "merged_into_main": true,
+          "date": "2026-08-23T10:24:37-07:00",
+          "subject": "fix: complete Signals identity corrections"
+        },
+        {
+          "ref": "refs/heads/main",
+          "sha": "7040981874d410efc72d1c1c69b5edddfb5d69da",
+          "ahead_main": 0,
+          "behind_main": 0,
+          "merged_into_main": true,
+          "date": "2026-08-23T13:27:06-07:00",
+          "subject": "Merge pull request #6 from JCFrags/feat/signals-provider-identity"
+        }
+      ],
+      "remote_tags": [],
+      "clone_groups": [
+        {
+          "id": "pi-signal-board-5ca0eca9c5",
+          "normalized_path": "$HOME/Projects/pi-signal-board",
+          "common_git_dir": "$HOME/Projects/pi-signal-board/.git",
+          "remotes": [
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/pi-signal-board.git\t(fetch)"
+            },
+            {
+              "name": "origin",
+              "url": "https://github.com/JCFrags/pi-signal-board.git\t(push)"
+            }
+          ],
+          "head": "7040981874d410efc72d1c1c69b5edddfb5d69da",
+          "branch": "main",
+          "upstream": "origin/main",
+          "fetch_succeeded": true,
+          "private_bundle_created": true,
+          "stash_count": 0,
+          "tag_count": 0,
+          "local_branches": [
+            {
+              "ref": "refs/heads/agent/ask-user-signals-deploy-fix-20260827",
+              "sha": "047ab0e767a7655eb854647e09487a188952516a",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-27T11:16:34-07:00",
+              "subject": "fix(signals): bundle runtime typebox dependency"
+            },
+            {
+              "ref": "refs/heads/agent/ask-user-signals-provider",
+              "sha": "3c303e5364cebf2f84ebc16ace01c0099a821569",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 0,
+              "merged_into_main": false,
+              "date": "2026-08-27T00:05:09-07:00",
+              "subject": "feat(signals): add deferred ask_user provider"
+            },
+            {
+              "ref": "refs/heads/agent/phase2-final-signals",
+              "sha": "0aa784d4321a585e009763385f89651e79ec3d7c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 2,
+              "merged_into_main": false,
+              "date": "2026-08-23T10:23:17-07:00",
+              "subject": "fix: complete Signals identity corrections"
+            },
+            {
+              "ref": "refs/heads/feat/m0-exit-shell",
+              "sha": "89950421ecbf307a265433a2a47869aec0d8a58b",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 53,
+              "merged_into_main": false,
+              "date": "2026-08-12T00:55:02-07:00",
+              "subject": "feat: add M0 doctor shell"
+            },
+            {
+              "ref": "refs/heads/feat/sb-002-compatibility",
+              "sha": "7114df17f72c11da8089fd0fbd9b48d17cc8d909",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 56,
+              "merged_into_main": true,
+              "date": "2026-08-12T00:26:40-07:00",
+              "subject": "feat(sb-002): add host compatibility facts"
+            },
+            {
+              "ref": "refs/heads/feat/sb-003-config",
+              "sha": "19e7ce540e38b3231525183e655cb6a7695c4cc6",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 56,
+              "merged_into_main": false,
+              "date": "2026-08-12T00:36:43-07:00",
+              "subject": "feat(config): add fixed-path configuration loader"
+            },
+            {
+              "ref": "refs/heads/feat/sb-005-errors",
+              "sha": "afa147c55e4b6e1b759f8e87666026f2f3419e3c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 56,
+              "merged_into_main": false,
+              "date": "2026-08-12T00:34:51-07:00",
+              "subject": "feat(sb-005): add safe errors and diagnostics core"
+            },
+            {
+              "ref": "refs/heads/feat/sb-006-sanitizer",
+              "sha": "d2d169d409643df7f9882bc0ea1b1a58d23ddb02",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 52,
+              "merged_into_main": false,
+              "date": "2026-08-12T01:05:33-07:00",
+              "subject": "feat: add deterministic text sanitization"
+            },
+            {
+              "ref": "refs/heads/feat/sb-007-ids",
+              "sha": "3617a1e600e22000b310f83eed19c11915c3e13e",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 52,
+              "merged_into_main": false,
+              "date": "2026-08-12T01:03:34-07:00",
+              "subject": "feat(sb-007): add clock and ID abstractions"
+            },
+            {
+              "ref": "refs/heads/feat/sb-008-events",
+              "sha": "aebbf779e914f6215d86f303f1caaffdfac5e9c5",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 50,
+              "merged_into_main": false,
+              "date": "2026-08-12T01:16:37-07:00",
+              "subject": "feat(sb-008): define immutable domain event model"
+            },
+            {
+              "ref": "refs/heads/feat/sb-009-attachments",
+              "sha": "701535786bf6bfe3eaf27da4733555239ec33672",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 49,
+              "merged_into_main": false,
+              "date": "2026-08-12T01:25:20-07:00",
+              "subject": "feat(sb-009): normalize inert attachments"
+            },
+            {
+              "ref": "refs/heads/feat/sb-010-reducer",
+              "sha": "cb6ec654509e8b3f2905a4ef0331aaaa7214da32",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 48,
+              "merged_into_main": false,
+              "date": "2026-08-12T01:56:28-07:00",
+              "subject": "test(domain): cover reducer invariant boundaries"
+            },
+            {
+              "ref": "refs/heads/feat/sb-011-selectors",
+              "sha": "dcfd94eab964ba6789b30aa2bbca8e7ddd178aea",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 46,
+              "merged_into_main": false,
+              "date": "2026-08-12T02:14:09-07:00",
+              "subject": "feat(domain): add replay-safe board selectors"
+            },
+            {
+              "ref": "refs/heads/feat/sb-012-codec-replay",
+              "sha": "b91e892ff0df1e216dc876fbb3f5698aacc3ca9c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 46,
+              "merged_into_main": false,
+              "date": "2026-08-12T02:12:26-07:00",
+              "subject": "feat: add strict event codec and branch replay"
+            },
+            {
+              "ref": "refs/heads/feat/sb-013-queue-store",
+              "sha": "14f52e05a329ad6d35188682c3e182082ea58efd",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 45,
+              "merged_into_main": false,
+              "date": "2026-08-12T02:23:38-07:00",
+              "subject": "feat: add serialized event store transaction"
+            },
+            {
+              "ref": "refs/heads/feat/sb-014-runtime",
+              "sha": "3e0062f14175383041265b00d4ae3aff32a834bc",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 2,
+              "behind_main": 43,
+              "merged_into_main": false,
+              "date": "2026-08-12T02:44:37-07:00",
+              "subject": "fix: keep recoverable lifecycle warnings usable"
+            },
+            {
+              "ref": "refs/heads/feat/sb-015-update-service",
+              "sha": "e1af8c4ccf4cdd7d737220b3c25b883b6c7221e0",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 41,
+              "merged_into_main": false,
+              "date": "2026-08-12T02:57:48-07:00",
+              "subject": "feat: add durable update service"
+            },
+            {
+              "ref": "refs/heads/feat/sb-016-update-tool",
+              "sha": "98d6cb5c9eae26ef9a05f83b11e5d5f1881073d9",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 3,
+              "behind_main": 40,
+              "merged_into_main": false,
+              "date": "2026-08-12T03:21:06-07:00",
+              "subject": "fix(sb-016): restore narrow Pi AI peer lock"
+            },
+            {
+              "ref": "refs/heads/feat/sb-017-widget",
+              "sha": "eb15854af45e5380f569362d712f588191ec1c39",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 41,
+              "merged_into_main": false,
+              "date": "2026-08-12T02:58:28-07:00",
+              "subject": "feat(widget): add deterministic compact renderer"
+            },
+            {
+              "ref": "refs/heads/feat/sb-018-ui-adapter",
+              "sha": "e400e75ae03e3bd410d1ff148e21f5d803912b7c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 3,
+              "behind_main": 36,
+              "merged_into_main": false,
+              "date": "2026-08-12T03:45:15-07:00",
+              "subject": "fix(ui): separate clear from disposal"
+            },
+            {
+              "ref": "refs/heads/feat/sb-019-question-validation",
+              "sha": "3673a009c1f84135876b7184b3d6ec93a8f044c8",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 32,
+              "merged_into_main": false,
+              "date": "2026-08-12T04:10:06-07:00",
+              "subject": "feat: validate question specifications"
+            },
+            {
+              "ref": "refs/heads/feat/sb-020-unsafe-question",
+              "sha": "366ae8203c85ea86e7718748b42ed1b39e2c3744",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 31,
+              "merged_into_main": false,
+              "date": "2026-08-12T04:18:08-07:00",
+              "subject": "feat: guard unsafe asynchronous questions"
+            },
+            {
+              "ref": "refs/heads/feat/sb-021-question-service",
+              "sha": "bb67758bc85aa71219f7343b825fb3952d9d9828",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 30,
+              "merged_into_main": false,
+              "date": "2026-08-12T04:30:47-07:00",
+              "subject": "feat: add durable question service"
+            },
+            {
+              "ref": "refs/heads/feat/sb-022-question-tool",
+              "sha": "1579ab1bcecb9f1fef9747966cd23ee93e087fbd",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 29,
+              "merged_into_main": false,
+              "date": "2026-08-12T04:42:48-07:00",
+              "subject": "feat: add Signal Board question tool"
+            },
+            {
+              "ref": "refs/heads/feat/sb-023-expiry-service",
+              "sha": "52cc52529f3079b209bbdffef539aafb87e6ee03",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 29,
+              "merged_into_main": false,
+              "date": "2026-08-12T04:48:58-07:00",
+              "subject": "feat: add durable question expiry service"
+            },
+            {
+              "ref": "refs/heads/feat/sb-024-question-escalation",
+              "sha": "17f24491ae5a38d6d6199fe1d8c01e7edfbcc457",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 29,
+              "merged_into_main": false,
+              "date": "2026-08-12T04:46:22-07:00",
+              "subject": "feat: escalate pending questions when agents settle"
+            },
+            {
+              "ref": "refs/heads/feat/sb-025-inbox-projections",
+              "sha": "4d79d49da590ee2dae84814382e9e32dc4d96353",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 25,
+              "merged_into_main": false,
+              "date": "2026-08-12T04:58:27-07:00",
+              "subject": "feat(domain): add inbox question projections"
+            },
+            {
+              "ref": "refs/heads/feat/sb-026-board-models",
+              "sha": "748d647fb26458f2f366668ed223ca3022e24cea",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 24,
+              "merged_into_main": false,
+              "date": "2026-08-12T05:34:04-07:00",
+              "subject": "feat(ui): add board view models"
+            },
+            {
+              "ref": "refs/heads/feat/sb-027-board-component",
+              "sha": "b1cb42e018e6dc904c6138bbad9dec64143b7dec",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 23,
+              "merged_into_main": false,
+              "date": "2026-08-12T05:52:59-07:00",
+              "subject": "feat(ui): add signal board component"
+            },
+            {
+              "ref": "refs/heads/feat/sb-028-signalboard-command",
+              "sha": "cce2795e2cd5534ae348da7145b2a11e961f417c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 22,
+              "merged_into_main": false,
+              "date": "2026-08-12T06:05:28-07:00",
+              "subject": "feat: add signalboard command boundary"
+            },
+            {
+              "ref": "refs/heads/feat/sb-029-shortcut",
+              "sha": "6be34f628c89d87f0a7e0203258fc6c389f4d2c9",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 21,
+              "merged_into_main": false,
+              "date": "2026-08-12T06:17:17-07:00",
+              "subject": "feat: register signal board shortcut"
+            },
+            {
+              "ref": "refs/heads/feat/sb-030-view-checkpoint",
+              "sha": "bf5aa76f2c164c91bd8693f0f3d215adbd097d36",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 20,
+              "merged_into_main": false,
+              "date": "2026-08-12T06:33:14-07:00",
+              "subject": "feat: persist board view checkpoints"
+            },
+            {
+              "ref": "refs/heads/feat/sb-031-answer-ui",
+              "sha": "518d434452c7dd4229732254257e7cc3290b9629",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 19,
+              "merged_into_main": false,
+              "date": "2026-08-12T06:49:34-07:00",
+              "subject": "feat: add single and text answer intents"
+            },
+            {
+              "ref": "refs/heads/feat/sb-032-multiple-answer-ui",
+              "sha": "a5fa1e7fd5e6a40e2cf288379a0aaa37ccfd5a6a",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 18,
+              "merged_into_main": false,
+              "date": "2026-08-12T06:59:59-07:00",
+              "subject": "feat: add multiple answer intents"
+            },
+            {
+              "ref": "refs/heads/feat/sb-033-accept-recommendation",
+              "sha": "48de59e17912b53288ed521f12db6e4ca56854c5",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 17,
+              "merged_into_main": false,
+              "date": "2026-08-12T07:18:59-07:00",
+              "subject": "feat: accept validated recommendations"
+            },
+            {
+              "ref": "refs/heads/feat/sb-034-dismiss-archive-ui",
+              "sha": "b73d1ad72b2f839f3d0aa6a46cd2d78a52f3f92c",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 16,
+              "merged_into_main": false,
+              "date": "2026-08-12T07:33:32-07:00",
+              "subject": "feat: add dismiss and archive actions"
+            },
+            {
+              "ref": "refs/heads/feat/sb-035-race-guard",
+              "sha": "542132b75587f960cd0c5bba05d5e1c1fbdeb499",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 15,
+              "merged_into_main": false,
+              "date": "2026-08-12T07:44:53-07:00",
+              "subject": "feat: guard board action races"
+            },
+            {
+              "ref": "refs/heads/feat/sb-036-answer-persistence",
+              "sha": "8c3b5ae18cf6a7e83e61d7df6fe6cb49c44152f3",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 14,
+              "merged_into_main": false,
+              "date": "2026-08-12T07:59:49-07:00",
+              "subject": "feat: persist validated answers"
+            },
+            {
+              "ref": "refs/heads/feat/sb-037-answer-formatter",
+              "sha": "35287f889b32f9d62d8a26efb80cd53166b4ab22",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 13,
+              "merged_into_main": true,
+              "date": "2026-08-12T08:02:15-07:00",
+              "subject": "feat: persist validated answers"
+            },
+            {
+              "ref": "refs/heads/feat/signals-provider-identity",
+              "sha": "e640ca123d7e9dce2197998705effe539d1014ae",
+              "upstream": "refs/remotes/origin/feat/signals-provider-identity",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 1,
+              "merged_into_main": true,
+              "date": "2026-08-23T10:24:37-07:00",
+              "subject": "fix: complete Signals identity corrections"
+            },
+            {
+              "ref": "refs/heads/fix/m2-command-id-compat",
+              "sha": "cf6c166d4d0d1dbf3d163497475276c220922901",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 33,
+              "merged_into_main": false,
+              "date": "2026-08-12T03:56:07-07:00",
+              "subject": "fix: accept provider-qualified tool command ids"
+            },
+            {
+              "ref": "refs/heads/main",
+              "sha": "7040981874d410efc72d1c1c69b5edddfb5d69da",
+              "upstream": "refs/remotes/origin/main",
+              "upstream_track": null,
+              "ahead_main": 0,
+              "behind_main": 0,
+              "merged_into_main": true,
+              "date": "2026-08-23T13:27:06-07:00",
+              "subject": "Merge pull request #6 from JCFrags/feat/signals-provider-identity"
+            },
+            {
+              "ref": "refs/heads/test/sb-004-harness",
+              "sha": "ede8d04efaea69d5a2a52021fb45c64cee5f77b4",
+              "upstream": null,
+              "upstream_track": null,
+              "ahead_main": 1,
+              "behind_main": 56,
+              "merged_into_main": false,
+              "date": "2026-08-12T00:35:48-07:00",
+              "subject": "test(sb-004): add deterministic fake Pi harness"
+            }
+          ],
+          "remote_tracking_branch_count": 8,
+          "worktrees": [
+            {
+              "path": "$HOME/.agents/temporary/ask-user-signals-provider",
+              "head": "3c303e5364cebf2f84ebc16ace01c0099a821569",
+              "branch": "agent/ask-user-signals-provider",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/phase2-final-20260823/signals",
+              "head": "0aa784d4321a585e009763385f89651e79ec3d7c",
+              "branch": "agent/phase2-final-signals",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/temporary/pi-signal-board-ask-build-20260827",
+              "head": "047ab0e767a7655eb854647e09487a188952516a",
+              "branch": "agent/ask-user-signals-deploy-fix-20260827",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/m0-exit-shell",
+              "head": "89950421ecbf307a265433a2a47869aec0d8a58b",
+              "branch": "feat/m0-exit-shell",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/m2-command-id-compat",
+              "head": "cf6c166d4d0d1dbf3d163497475276c220922901",
+              "branch": "fix/m2-command-id-compat",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb002-foundation",
+              "head": "7114df17f72c11da8089fd0fbd9b48d17cc8d909",
+              "branch": "feat/sb-002-compatibility",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb003-config",
+              "head": "19e7ce540e38b3231525183e655cb6a7695c4cc6",
+              "branch": "feat/sb-003-config",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb004-harness",
+              "head": "ede8d04efaea69d5a2a52021fb45c64cee5f77b4",
+              "branch": "test/sb-004-harness",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb005-errors",
+              "head": "afa147c55e4b6e1b759f8e87666026f2f3419e3c",
+              "branch": "feat/sb-005-errors",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb006-sanitizer",
+              "head": "d2d169d409643df7f9882bc0ea1b1a58d23ddb02",
+              "branch": "feat/sb-006-sanitizer",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb007-ids",
+              "head": "3617a1e600e22000b310f83eed19c11915c3e13e",
+              "branch": "feat/sb-007-ids",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb008-events",
+              "head": "aebbf779e914f6215d86f303f1caaffdfac5e9c5",
+              "branch": "feat/sb-008-events",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb009-attachments",
+              "head": "701535786bf6bfe3eaf27da4733555239ec33672",
+              "branch": "feat/sb-009-attachments",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb010-reducer",
+              "head": "cb6ec654509e8b3f2905a4ef0331aaaa7214da32",
+              "branch": "feat/sb-010-reducer",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb011-selectors",
+              "head": "dcfd94eab964ba6789b30aa2bbca8e7ddd178aea",
+              "branch": "feat/sb-011-selectors",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb012-replay",
+              "head": "b91e892ff0df1e216dc876fbb3f5698aacc3ca9c",
+              "branch": "feat/sb-012-codec-replay",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb013-store",
+              "head": "14f52e05a329ad6d35188682c3e182082ea58efd",
+              "branch": "feat/sb-013-queue-store",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb014-runtime",
+              "head": "3e0062f14175383041265b00d4ae3aff32a834bc",
+              "branch": "feat/sb-014-runtime",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb015-updates",
+              "head": "e1af8c4ccf4cdd7d737220b3c25b883b6c7221e0",
+              "branch": "feat/sb-015-update-service",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb016-update-tool",
+              "head": "98d6cb5c9eae26ef9a05f83b11e5d5f1881073d9",
+              "branch": "feat/sb-016-update-tool",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb017-widget",
+              "head": "eb15854af45e5380f569362d712f588191ec1c39",
+              "branch": "feat/sb-017-widget",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb018-ui-adapter",
+              "head": "e400e75ae03e3bd410d1ff148e21f5d803912b7c",
+              "branch": "feat/sb-018-ui-adapter",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb019-question-validation",
+              "head": "3673a009c1f84135876b7184b3d6ec93a8f044c8",
+              "branch": "feat/sb-019-question-validation",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb020-unsafe-question",
+              "head": "366ae8203c85ea86e7718748b42ed1b39e2c3744",
+              "branch": "feat/sb-020-unsafe-question",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb021-question-service",
+              "head": "bb67758bc85aa71219f7343b825fb3952d9d9828",
+              "branch": "feat/sb-021-question-service",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb022-question-tool",
+              "head": "1579ab1bcecb9f1fef9747966cd23ee93e087fbd",
+              "branch": "feat/sb-022-question-tool",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb023-expiry-service",
+              "head": "52cc52529f3079b209bbdffef539aafb87e6ee03",
+              "branch": "feat/sb-023-expiry-service",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb024-question-escalation",
+              "head": "17f24491ae5a38d6d6199fe1d8c01e7edfbcc457",
+              "branch": "feat/sb-024-question-escalation",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb025-inbox-projections",
+              "head": "4d79d49da590ee2dae84814382e9e32dc4d96353",
+              "branch": "feat/sb-025-inbox-projections",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb026-board-models",
+              "head": "748d647fb26458f2f366668ed223ca3022e24cea",
+              "branch": "feat/sb-026-board-models",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb027-board-component",
+              "head": "b1cb42e018e6dc904c6138bbad9dec64143b7dec",
+              "branch": "feat/sb-027-board-component",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb028-signalboard-command",
+              "head": "cce2795e2cd5534ae348da7145b2a11e961f417c",
+              "branch": "feat/sb-028-signalboard-command",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb029-shortcut",
+              "head": "6be34f628c89d87f0a7e0203258fc6c389f4d2c9",
+              "branch": "feat/sb-029-shortcut",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb030-view-checkpoint",
+              "head": "bf5aa76f2c164c91bd8693f0f3d215adbd097d36",
+              "branch": "feat/sb-030-view-checkpoint",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb031-answer-ui",
+              "head": "518d434452c7dd4229732254257e7cc3290b9629",
+              "branch": "feat/sb-031-answer-ui",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb032-multiple-answer-ui",
+              "head": "a5fa1e7fd5e6a40e2cf288379a0aaa37ccfd5a6a",
+              "branch": "feat/sb-032-multiple-answer-ui",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb033-accept-recommendation",
+              "head": "48de59e17912b53288ed521f12db6e4ca56854c5",
+              "branch": "feat/sb-033-accept-recommendation",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb034-dismiss-archive-ui",
+              "head": "b73d1ad72b2f839f3d0aa6a46cd2d78a52f3f92c",
+              "branch": "feat/sb-034-dismiss-archive-ui",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb035-race-guard",
+              "head": "542132b75587f960cd0c5bba05d5e1c1fbdeb499",
+              "branch": "feat/sb-035-race-guard",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb036-answer-persistence",
+              "head": "8c3b5ae18cf6a7e83e61d7df6fe6cb49c44152f3",
+              "branch": "feat/sb-036-answer-persistence",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/.agents/worktrees/pi-signal-board/sb037-answer-formatter",
+              "head": "35287f889b32f9d62d8a26efb80cd53166b4ab22",
+              "branch": "feat/sb-037-answer-formatter",
+              "upstream": null,
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            },
+            {
+              "path": "$HOME/Projects/pi-signal-board",
+              "head": "7040981874d410efc72d1c1c69b5edddfb5d69da",
+              "branch": "main",
+              "upstream": "origin/main",
+              "dirty": false,
+              "status_counts": {
+                "staged": 0,
+                "unstaged": 0,
+                "untracked": 0,
+                "unmerged": 0,
+                "records": 0
+              },
+              "staged_patch_bytes": 0,
+              "unstaged_patch_bytes": 0,
+              "private_archive_created": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "loss_risk_summary": {
+    "dirty_worktrees": 8,
+    "stashes": 2,
+    "private_archives_created": 150
+  }
+}
