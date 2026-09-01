@@ -13,17 +13,8 @@ import {
   readPrivateRegular,
 } from "../shared/private-fs.js";
 import { EventStore } from "../state/event-store.js";
-import {
-  ToolInvocationAuditStore,
-  type ToolAuditInput,
-  type ToolAuditQuery,
-} from "../audit/tool-invocation-store.js";
 import { createId, isEntityId } from "../shared/ids.js";
 import { canonicalJson, sha256 } from "../shared/canonical-json.js";
-import {
-  validateProviderProjection,
-  type ProviderProjection,
-} from "../shared/provider-projections.js";
 import { NdjsonDecoder, encodeFrame } from "../shared/protocol/codec.js";
 import {
   validateHello,
@@ -56,55 +47,20 @@ import {
   ProvisionOutcomeRecordingError,
   type HerdrService,
 } from "../herdr/service.js";
-import { piSessionMatches } from "../herdr/controls.js";
 import {
   validateQuestion,
   validateResult,
   payloadHash,
 } from "../results/validation.js";
 import type { ResultBody, QuestionBody } from "../results/types.js";
-import {
-  automaticEvidenceForRun,
-  correctedHumanEvidence,
-  humanEvidenceForRun,
-  independentReviewEvidence,
-  modelFamily,
-  runtimeSubjectForRun,
-} from "../model-intelligence/evidence-producers.js";
-import {
-  AGENT_STATES,
-  type HerdrTaskMetadata,
-  type HerdrMetadataState,
-  type QuestionRecord,
-  type StoredEvent,
-  type Agent,
-  type Task,
-  type Run,
-} from "../state/types.js";
+import type { QuestionRecord } from "../state/types.js";
 import { DeterministicScheduler } from "../scheduler/scheduler.js";
-import {
-  resolveEndpoint,
-  validateEndpointPolicyConfig,
-  type EndpointLimit,
-  type EndpointPolicyConfig,
-  type ModelIntelligenceConfig,
-} from "./endpoint-policy.js";
-import {
-  ARTIFICIAL_ANALYSIS_SOURCE_NAME,
-  ArtificialAnalysisFoundationAdapter,
-  FoundationRefreshError,
-  resolveScopedFoundationModels,
-} from "../model-intelligence/artificial-analysis.js";
-import {
-  normalizeFoundationEvidenceSnapshot,
-  type FoundationEvidenceSnapshot,
-} from "../model-intelligence/foundation-snapshot.js";
 import { planAdmission } from "../scheduler/admission.js";
 import {
   workflowReadiness,
   fanInWorkflow,
 } from "../scheduler/workflow-engine.js";
-import type { SchedulerLimits, SchedulerTask } from "../scheduler/types.js";
+import type { SchedulerTask } from "../scheduler/types.js";
 import {
   planWorkflow,
   validateWorkflow,
@@ -114,40 +70,6 @@ import {
   resolveIsolation,
   resolveWorkflowIsolation,
 } from "./isolation-policy.js";
-import {
-  acceptedCompactWorkflow,
-  compileCompactDelegation,
-  type CompactPolicyContext,
-} from "./compact-delegation.js";
-import {
-  agentWithLifecycle,
-  projectAgentLifecycle,
-  projectTaskProgress,
-  taskWithProgress,
-} from "./agent-lifecycle.js";
-import { InstalledPiCapabilities } from "../pi/model-capabilities.js";
-import {
-  modelSelectionMatches,
-  requiredModelSelections,
-  resolveSpawnPolicy,
-  sameModelSelection,
-  validateModelSelection,
-  type AgentPlacement,
-  type ModelPolicyConfig,
-  type ModelProfileId,
-  type ResolvedSpawnPolicy,
-} from "./model-policy.js";
-import {
-  availableModelOptionsView,
-  buildModelOptions,
-  createAdvisoryModelReceipt,
-  modelCapacityView,
-  ratedAutomaticCandidate,
-  MODEL_RANKING_POLICY,
-  type AdvisoryModelReceipt,
-  type BuildModelOptionsInput,
-  type ModelOptionsView,
-} from "../model-intelligence/model-ranking.js";
 interface SubscriptionFilter {
   events?: string[];
   agentIds?: string[];
@@ -235,12 +157,6 @@ function exactKeys(
 ): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
 }
-function allowsIdentityEnrichment<T>(
-  baseline: T | undefined,
-  candidate: T | undefined,
-): boolean {
-  return baseline === undefined || baseline === candidate;
-}
 function safeText(value: unknown, max = 4096): value is string {
   return (
     typeof value === "string" &&
@@ -319,30 +235,13 @@ function safeBoundedRecord(value: unknown): value is Record<string, unknown> {
     )
   );
 }
-function safePiState(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const state = value as Record<string, unknown>;
-  const model = state.model;
-  const scalarState = { ...state };
-  delete scalarState.model;
-  return (
-    safeBoundedRecord(scalarState) &&
-    (model === undefined ||
-      (!!model &&
-        typeof model === "object" &&
-        !Array.isArray(model) &&
-        exactKeys(model as Record<string, unknown>, ["provider", "modelId"]) &&
-        safeText((model as Record<string, unknown>).provider, 128) &&
-        safeText((model as Record<string, unknown>).modelId, 256)))
-  );
-}
 function isTerminal(value: unknown): boolean {
   return ["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(
     String(value),
   );
 }
 function isRunClosedForAdapterProgress(value: unknown): boolean {
-  return isTerminal(value);
+  return isTerminal(value) || value === "settled";
 }
 function isAbortFallbackError(error: unknown): boolean {
   if (!(error instanceof OrchestratorError)) return false;
@@ -356,26 +255,7 @@ function isAbortFallbackError(error: unknown): boolean {
 }
 const DEFAULT_TASK_WALL_MS = 15 * 60_000;
 const MAX_TASK_WALL_MS = 24 * 60 * 60_000;
-const MAX_BROKER_CLIENTS = 64;
-export const HEARTBEAT_SNAPSHOT_INTERVAL = 64;
-export function shouldCheckpointRequestState(
-  method: string,
-  eventSeq: number | null,
-): boolean {
-  return (
-    eventSeq !== null &&
-    (method !== "agent.heartbeat" ||
-      eventSeq % HEARTBEAT_SNAPSHOT_INTERVAL === 0)
-  );
-}
 const ADAPTER_ABORT_TIMEOUT_MS = 10_000;
-const RESULT_RECOVERY_TIMEOUT_MS = 10_000;
-const RESULT_RECOVERY_PROMPT =
-  "This run settled without an accepted structured result. Publish the final result now with orchestrator_result. Do not do more task work.";
-const RESULT_MISSING_REASON = {
-  code: "RESULT_MISSING" as const,
-  message: "The managed agent settled without a structured result.",
-};
 const WALL_TIMEOUT_REASON = {
   code: "TIMEOUT" as const,
   message: "The task wall deadline expired.",
@@ -586,12 +466,6 @@ export function sessionKeyMatches(
 ): boolean {
   return expectedSessionKey === received;
 }
-export interface BrokerOperatorSettings {
-  readonly modelPolicy: ModelPolicyConfig;
-  readonly endpoints?: Readonly<Record<string, EndpointLimit>>;
-  readonly modelIntelligence?: ModelIntelligenceConfig;
-}
-
 export interface BrokerOptions {
   herdr?: HerdrService;
   now?: () => number;
@@ -601,23 +475,9 @@ export interface BrokerOptions {
     store: EventStore,
     paths: CanonicalResolvedPaths,
   ) => Promise<HerdrService>;
-  modelPolicy?: ModelPolicyConfig;
-  schedulerLimits?: Partial<SchedulerLimits>;
-  endpointPolicy?: EndpointPolicyConfig;
-  modelIntelligence?: ModelIntelligenceConfig;
-  foundationAdapter?: ArtificialAnalysisFoundationAdapter;
-  foundationCredentialProvider?: () => Promise<string | undefined>;
-  lifecyclePolicy?: { autoCloseCompletedTemporary?: boolean };
-  persistModelPolicy?: (policy: ModelPolicyConfig) => Promise<void>;
-  persistOperatorSettings?: (settings: BrokerOperatorSettings) => Promise<void>;
-  persistLifecyclePolicy?: (policy: {
-    autoCloseCompletedTemporary?: boolean;
-  }) => Promise<void>;
-  compactDelegationEnabled?: boolean;
 }
 export class Broker {
   readonly store: EventStore;
-  readonly auditStore: ToolInvocationAuditStore;
   readonly snapshotStore: SnapshotStore;
   readonly paths: CanonicalResolvedPaths;
   #server: Server | undefined;
@@ -634,59 +494,14 @@ export class Broker {
     | { record: BrokerProcessRecord; identity: BrokerProcessRecordIdentity }
     | undefined;
   #secret: string;
-  #snapshotAuthentication: string;
   #clients = new Set<Client>();
-  #providerProjections = new Map<
-    string,
-    { projection: ProviderProjection; client: Client }
-  >();
   #questionTimers = new Map<string, NodeJS.Timeout>();
   #deadlineTimers = new Map<string, NodeJS.Timeout>();
-  #resultRecoveryTimers = new Map<string, NodeJS.Timeout>();
-  #foundationRefreshTimer: NodeJS.Timeout | undefined;
-  #foundationRefreshAbort: AbortController | undefined;
-  #foundationRefreshInFlight: Promise<void> | undefined;
-  #foundationStatus: {
-    state:
-      | "disabled"
-      | "scheduled"
-      | "refreshing"
-      | "fresh"
-      | "stale"
-      | "no_scope"
-      | "failed";
-    lastAttemptAt?: string;
-    lastSuccessAt?: string;
-    nextRefreshAt?: string;
-    errorCode?: string;
-    scopedModelCount?: number;
-    requestCount?: number;
-    recordCount?: number;
-    consecutiveFailures: number;
-  } = { state: "disabled", consecutiveFailures: 0 };
-  #pendingAutomaticEvidenceRunIds = new Set<string>();
   #coordinationSignals = new Map<string, number>();
   #now: () => number;
   #setTimeout: (callback: () => void, delayMs: number) => NodeJS.Timeout;
   #clearTimeout: (timer: NodeJS.Timeout) => void;
   #herdr?: HerdrService;
-  #modelPolicy: ModelPolicyConfig;
-  #endpointPolicy: EndpointPolicyConfig;
-  #modelIntelligence: ModelIntelligenceConfig | undefined;
-  readonly #foundationAdapter: ArtificialAnalysisFoundationAdapter;
-  readonly #foundationCredentialProvider:
-    (() => Promise<string | undefined>) | undefined;
-  readonly #scheduler: DeterministicScheduler;
-  readonly #piCapabilities = new InstalledPiCapabilities();
-  readonly #persistModelPolicy:
-    ((policy: ModelPolicyConfig) => Promise<void>) | undefined;
-  readonly #persistOperatorSettings:
-    ((settings: BrokerOperatorSettings) => Promise<void>) | undefined;
-  readonly #persistLifecyclePolicy:
-    | ((policy: { autoCloseCompletedTemporary?: boolean }) => Promise<void>)
-    | undefined;
-  #autoCloseCompletedTemporary: boolean;
-  readonly #compactDelegationEnabled: boolean;
   readonly #herdrFactory:
     | ((
         store: EventStore,
@@ -701,43 +516,15 @@ export class Broker {
       log: paths.log ?? `${paths.socket}.log`,
       herdrSocket: paths.herdrSocket ?? paths.socket,
       sessionKey: paths.sessionKey ?? sessionKey(paths.socket),
-      toolAudit: paths.toolAudit ?? join(paths.root, "tool-audit-v1.jsonl"),
-      snapshotAuthentication:
-        paths.snapshotAuthentication ??
-        join(paths.root, "snapshot-authentication.key"),
     };
     this.#lock = new BrokerLock(this.paths.lock, this.paths.socket);
     this.#secret = "";
-    this.#snapshotAuthentication = "";
     this.#now = options.now ?? Date.now;
     this.#setTimeout =
       options.setTimeout ??
       ((callback, delayMs) => setTimeout(callback, delayMs));
     this.#clearTimeout = options.clearTimeout ?? clearTimeout;
-    this.#modelPolicy = options.modelPolicy ?? {};
-    this.#endpointPolicy = options.endpointPolicy ?? {};
-    this.#modelIntelligence = options.modelIntelligence;
-    this.#foundationAdapter =
-      options.foundationAdapter ?? new ArtificialAnalysisFoundationAdapter();
-    this.#foundationCredentialProvider = options.foundationCredentialProvider;
-    this.#scheduler = new DeterministicScheduler(
-      options.schedulerLimits,
-      Object.fromEntries(
-        Object.entries(this.#endpointPolicy.endpoints ?? {}).map(
-          ([endpointId, limit]) => [endpointId, limit.maxConcurrentAgents],
-        ),
-      ),
-    );
-    this.#persistModelPolicy = options.persistModelPolicy;
-    this.#persistOperatorSettings = options.persistOperatorSettings;
-    this.#persistLifecyclePolicy = options.persistLifecyclePolicy;
-    this.#autoCloseCompletedTemporary =
-      options.lifecyclePolicy?.autoCloseCompletedTemporary === true;
-    this.#compactDelegationEnabled =
-      options.compactDelegationEnabled ??
-      process.env.PI_HERDR_COMPACT_DELEGATION !== "0";
     this.store = new EventStore(this.paths.events);
-    this.auditStore = new ToolInvocationAuditStore(this.paths.toolAudit);
     this.store.onAppend((event) => {
       if (
         event.entityRefs?.taskId &&
@@ -757,7 +544,6 @@ export class Broker {
       ) {
         const run = this.store.state.runs[event.entityRefs.runId];
         if (run) this.#clearTaskDeadline(run.taskId);
-        this.#pendingAutomaticEvidenceRunIds.add(event.entityRefs.runId);
       }
       for (const subscriber of this.#clients) {
         if (
@@ -786,14 +572,6 @@ export class Broker {
           } else if (subscriber.subscribed) this.#sendEvent(subscriber, event);
         }
       }
-      if (event.type !== "herdr.metadata_projected")
-        this.#trackDeferred(() =>
-          this.#enqueueMutation(() => this.#projectCompactMetadata(event)),
-        );
-      if (event.type === "herdr.provision.outcome")
-        this.#trackDeferred(() =>
-          this.#enqueueMutation(() => this.#watchHerdrProvisionOutcome(event)),
-        );
     });
     this.snapshotStore = new SnapshotStore(this.paths.snapshot);
     if (options.herdr) {
@@ -806,9 +584,7 @@ export class Broker {
   async readSnapshot(): Promise<
     import("../state/snapshot-store.js").Snapshot | undefined
   > {
-    const key =
-      this.#snapshotAuthentication ||
-      (await this.#loadSnapshotAuthentication());
+    const key = this.#secret || (await this.#loadSecret());
     return this.snapshotStore.read(key);
   }
   async start(): Promise<void> {
@@ -829,11 +605,8 @@ export class Broker {
       );
       await safeStaleSocket(this.paths.socket);
       this.#secret = await this.#loadSecret();
-      const snapshot = await this.#loadSnapshotAuthentication()
-        .then((key) => {
-          this.#snapshotAuthentication = key;
-          return this.snapshotStore.read(key);
-        })
+      const snapshot = await this.snapshotStore
+        .read(this.#secret)
         .catch((error: unknown) => {
           this.store.readOnly = true;
           this.store.corruption =
@@ -843,7 +616,6 @@ export class Broker {
           return undefined;
         });
       await this.store.open(snapshot);
-      await this.auditStore.open();
       if (this.#herdrFactory)
         this.#herdr = await this.#herdrFactory(this.store, this.paths);
       if (this.#herdr) await this.#herdr.startupReconcile();
@@ -903,68 +675,6 @@ export class Broker {
             principalId: "prn_00000000000000000000000000",
             kind: "system",
           });
-      for (const metadata of Object.values(
-        this.store.state.herdrMetadata ?? {},
-      ))
-        if (metadata.state === "settled" && !metadata.exitedAt)
-          await this.#projectCompactMetadata(
-            {
-              entityRefs: {
-                taskId: metadata.taskId,
-                runId: metadata.runId,
-              },
-            } as unknown as StoredEvent,
-            true,
-          ).catch(() => undefined);
-      for (const metadata of Object.values(
-        this.store.state.herdrMetadata ?? {},
-      ))
-        if (metadata.state === "cleanup_pending" && this.#herdr) {
-          const task = this.store.state.tasks[metadata.taskId];
-          const workflowDigest = String(
-            (task?.project?.compact as { workflowDigest?: unknown } | undefined)
-              ?.workflowDigest ?? "",
-          );
-          if (!/^[a-f0-9]{64}$/u.test(workflowDigest)) continue;
-          try {
-            await this.#herdr.closeRetainedTab({
-              workspaceId: metadata.workspaceId,
-              tabId: metadata.tabId,
-              paneId: metadata.paneId,
-              terminalId: metadata.terminalId,
-            });
-            const closed = {
-              ...metadata,
-              state: "closed" as const,
-              updatedAt: new Date(this.#now()).toISOString(),
-            };
-            delete (closed as Partial<HerdrTaskMetadata>).metadataDigest;
-            await this.store.append({
-              type: "herdr.metadata_projected",
-              actor: {
-                principalId: "prn_00000000000000000000000000",
-                kind: "system",
-              },
-              entityRefs: {
-                workflowId: metadata.workflowId,
-                taskId: metadata.taskId,
-                runId: metadata.runId,
-                agentId: metadata.agentId,
-                workflowDigest,
-              },
-              payload: {
-                ...closed,
-                metadataDigest: sha256(canonicalJson(closed)),
-              },
-            });
-          } catch {
-            // Keep the durable intent. A later recovery can retry exact proof.
-          }
-        }
-      if (!this.store.readOnly) {
-        const evidenceEvent = await this.#reconcileAutomaticModelEvidence();
-        if (evidenceEvent) await this.#writeSnapshotBestEffort();
-      }
       this.#server = createServer((socket) => this.#connect(socket));
       await new Promise<void>((resolve, reject) =>
         this.#server
@@ -988,7 +698,6 @@ export class Broker {
         (secured.mode & 0o077) !== 0
       )
         throw new Error("Broker socket changed while securing its mode.");
-      this.#scheduleFoundationRefresh(0);
     } catch (error) {
       const cleanupFailures: unknown[] = [];
       if (this.#server)
@@ -1035,38 +744,6 @@ export class Broker {
       return value;
     }
   }
-  async #loadSnapshotAuthentication(): Promise<string> {
-    const path = this.paths.snapshotAuthentication!;
-    try {
-      const value = await readPrivateRegular(path);
-      if (!/^[A-Za-z0-9_-]{43}\n$/u.test(value))
-        throw new Error("Invalid snapshot authentication key.");
-      return value.slice(0, -1);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      try {
-        await lstat(this.paths.snapshot);
-        throw new Error(
-          "Snapshot authentication key is missing; preserve the snapshot and run controlled recovery.",
-        );
-      } catch (snapshotError) {
-        if ((snapshotError as NodeJS.ErrnoException).code !== "ENOENT")
-          throw snapshotError;
-      }
-      const key = randomBytes(32).toString("base64url");
-      try {
-        await createPrivateExclusive(path, `${key}\n`);
-        return key;
-      } catch (createError) {
-        if ((createError as NodeJS.ErrnoException).code !== "EEXIST")
-          throw createError;
-        const value = await readPrivateRegular(path);
-        if (!/^[A-Za-z0-9_-]{43}\n$/u.test(value))
-          throw new Error("Invalid snapshot authentication key.");
-        return value.slice(0, -1);
-      }
-    }
-  }
   stop(): Promise<void> {
     if (this.#stopPromise) return this.#stopPromise;
     this.#stopping = true;
@@ -1108,13 +785,6 @@ export class Broker {
       for (const timer of this.#deadlineTimers.values())
         this.#clearTimeout(timer);
       this.#deadlineTimers.clear();
-      for (const timer of this.#resultRecoveryTimers.values())
-        this.#clearTimeout(timer);
-      this.#resultRecoveryTimers.clear();
-      if (this.#foundationRefreshTimer)
-        this.#clearTimeout(this.#foundationRefreshTimer);
-      this.#foundationRefreshTimer = undefined;
-      this.#foundationRefreshAbort?.abort();
       if (typeof this.#herdr?.shutdown === "function") this.#herdr.shutdown();
       await this.#drainAdmittedWork();
       recordBackgroundFailure();
@@ -1165,13 +835,6 @@ export class Broker {
       for (const timer of this.#deadlineTimers.values())
         this.#clearTimeout(timer);
       this.#deadlineTimers.clear();
-      for (const timer of this.#resultRecoveryTimers.values())
-        this.#clearTimeout(timer);
-      this.#resultRecoveryTimers.clear();
-      if (this.#foundationRefreshTimer)
-        this.#clearTimeout(this.#foundationRefreshTimer);
-      this.#foundationRefreshTimer = undefined;
-      this.#foundationRefreshAbort?.abort();
       if (this.#processRecord)
         try {
           await removeBrokerProcessRecord(this.paths.pid, this.#processRecord);
@@ -1198,7 +861,7 @@ export class Broker {
     return this.#secret;
   }
   #connect(socket: Socket): void {
-    if (this.#clients.size >= MAX_BROKER_CLIENTS) {
+    if (this.#clients.size >= 16) {
       socket.destroy();
       return;
     }
@@ -1421,11 +1084,6 @@ export class Broker {
       }
       client.serverRequests.clear();
       this.#clients.delete(client);
-      for (const [agentId, entry] of this.#providerProjections)
-        if (entry.client === client) {
-          this.#providerProjections.delete(agentId);
-          this.#sendProviderProjectionEvent(agentId, undefined);
-        }
     });
   }
   async #enqueueMutation<T>(action: () => Promise<T>): Promise<T> {
@@ -1508,509 +1166,14 @@ export class Broker {
   }
   async #requestUnlocked(client: Client, request: RequestFrame): Promise<void> {
     const principal = client.principal!;
-    const responseMethod = request.method;
     try {
       let result: unknown;
-      let compactPreview: unknown;
-      let compactReplayResponse: unknown;
-      let compactIdempotency: { key: string; paramsHash: string } | undefined;
-      let compactPolicyContext: CompactPolicyContext | undefined;
-      if (request.method === "compact.delegate") {
-        requirePermission(principal, "delegate");
-        if (!this.#compactDelegationEnabled)
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Compact delegation is disabled.",
-          );
-        const p = request.params;
-        const allowed = [
-          "text",
-          "accept",
-          "workflowDigest",
-          "parentAgentId",
-          "wait",
-          "waitUntil",
-          "timeoutMs",
-          "failureMode",
-        ];
-        if (
-          !exactKeys(p, allowed) ||
-          typeof p.text !== "string" ||
-          (p.accept !== undefined && typeof p.accept !== "boolean") ||
-          (p.workflowDigest !== undefined && !safeText(p.workflowDigest, 128))
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Compact delegation parameters are invalid.",
-          );
-        if (
-          principal.kind === "pi_parent" &&
-          safeText(p.parentAgentId) &&
-          p.parentAgentId !== principal.agentId
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "A parent cannot target another parent subtree.",
-          );
-        const compactParentAgentId =
-          principal.kind === "pi_parent"
-            ? principal.agentId
-            : safeText(p.parentAgentId)
-              ? p.parentAgentId
-              : undefined;
-        if (
-          !compactParentAgentId ||
-          !(await this.#canAccessAgent(principal, compactParentAgentId))
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "A broker-bound parent identity is required.",
-          );
-        const compactRequestFingerprint = sha256(
-          canonicalJson({ method: "compact.delegate", params: p }),
-        );
-        if (p.accept === true) {
-          if (!request.idempotencyKey)
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Accepted compact delegation requires an idempotency key.",
-            );
-          const prior = this.store.state.idempotency[request.idempotencyKey];
-          if (prior) {
-            if (
-              prior.principalId !== principal.id ||
-              prior.method !== "compact.delegate" ||
-              prior.paramsHash !== compactRequestFingerprint
-            )
-              throw new OrchestratorError(
-                "IDEMPOTENCY_CONFLICT",
-                "Idempotency key is already bound.",
-              );
-            compactReplayResponse = prior.response;
-          }
-        }
-        if (compactReplayResponse === undefined) {
-          const resolveCompactPolicyContext = (
-            requestedTasks: number,
-          ): CompactPolicyContext => {
-            const parent = this.store.state.agents[compactParentAgentId];
-            if (
-              !parent ||
-              !Number.isSafeInteger(parent.generation) ||
-              parent.generation < 1 ||
-              !safeText(parent.workspaceId)
-            )
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Authenticated parent policy context is unavailable.",
-              );
-            let parentDepth = 0;
-            let ancestorId = parent.parentAgentId;
-            const seen = new Set([parent.id]);
-            while (ancestorId) {
-              if (seen.has(ancestorId))
-                throw new OrchestratorError(
-                  "STATE_CORRUPT",
-                  "Parent delegation ancestry is invalid.",
-                );
-              seen.add(ancestorId);
-              const ancestor = this.store.state.agents[ancestorId];
-              if (!ancestor)
-                throw new OrchestratorError(
-                  "STATE_CORRUPT",
-                  "Parent delegation ancestry is incomplete.",
-                );
-              parentDepth++;
-              ancestorId = ancestor.parentAgentId;
-            }
-            const limits = this.#scheduler.limits;
-            const delegatedDepth = parentDepth + 1;
-            if (delegatedDepth > limits.maxDelegationDepth)
-              throw new OrchestratorError(
-                "PERMISSION_DENIED",
-                "Compact delegation exceeds the delegation-depth policy.",
-              );
-            const admissionLimits = {
-              maxActiveAgents: limits.maxActiveAgents,
-              maxActivePerParent: limits.maxActivePerParent,
-              maxQueuedTasks: limits.maxQueuedTasks,
-              maxTasksPerDelegate: limits.maxTasksPerDelegate,
-              maxProvisioning: limits.maxProvisioning,
-            };
-            const tasks = Object.values(this.store.state.tasks);
-            const activeStates = new Set([
-              "assigned",
-              "provisioning",
-              "running",
-              "blocked",
-            ]);
-            const admissionSnapshot = {
-              queuedTasks: tasks.filter((task) => task.state === "queued")
-                .length,
-              activeTasks: tasks.filter((task) => activeStates.has(task.state))
-                .length,
-              parentActiveTasks: tasks.filter(
-                (task) =>
-                  task.parentAgentId === compactParentAgentId &&
-                  activeStates.has(task.state),
-              ).length,
-              provisioningTasks: tasks.filter(
-                (task) => task.state === "provisioning",
-              ).length,
-            };
-            const queueAfterAcceptance =
-              admissionSnapshot.queuedTasks + requestedTasks;
-            if (
-              requestedTasks > admissionLimits.maxTasksPerDelegate ||
-              queueAfterAcceptance > admissionLimits.maxQueuedTasks
-            )
-              throw new OrchestratorError(
-                "LIMIT_EXCEEDED",
-                "Compact delegation exceeds live task admission capacity.",
-              );
-            const initialDispatch =
-              admissionSnapshot.activeTasks < admissionLimits.maxActiveAgents &&
-              admissionSnapshot.parentActiveTasks <
-                admissionLimits.maxActivePerParent &&
-              admissionSnapshot.provisioningTasks <
-                admissionLimits.maxProvisioning
-                ? "eligible"
-                : "deferred";
-            return {
-              parentContextHash: sha256(
-                canonicalJson({
-                  agentId: parent.id,
-                  generation: parent.generation,
-                  depth: parentDepth,
-                  workspaceId: parent.workspaceId,
-                }),
-              ),
-              workspacePolicyHash: sha256(
-                canonicalJson({
-                  workspaceId: parent.workspaceId,
-                  policy: "authenticated-parent-workspace",
-                }),
-              ),
-              parentGeneration: parent.generation,
-              parentDepth,
-              delegatedDepth,
-              maxDelegationDepth: limits.maxDelegationDepth,
-              depthDecision: "allow",
-              budgetPolicyHash: sha256(canonicalJson(admissionLimits)),
-              admissionLimits,
-              admissionSnapshot,
-              admissionDecision: {
-                decision: "allow",
-                requestedTasks,
-                queueAfterAcceptance,
-                initialDispatch,
-              },
-            };
-          };
-          const preliminaryPolicyContext = resolveCompactPolicyContext(0);
-          const preliminary = compileCompactDelegation(
-            p.text,
-            (profileId, requestedIsolation) => {
-              try {
-                const isolation = resolveIsolation(
-                  profileId,
-                  requestedIsolation,
-                );
-                const spawnPolicy = resolveSpawnPolicy(
-                  { taskProfileId: profileId },
-                  this.#modelPolicy,
-                );
-                const effective = spawnPolicy.effective;
-                return {
-                  profileId,
-                  policy: {
-                    decision: "allow",
-                    placement: effective.placement,
-                    isolation,
-                    modelProfileId: effective.modelProfileId,
-                    providerQualifiedModel: `${effective.model.provider}/${effective.model.modelId}`,
-                    thinkingLevel: effective.model.thinkingLevel,
-                    modelPolicyHash: spawnPolicy.policyHash,
-                    context: preliminaryPolicyContext,
-                  },
-                };
-              } catch {
-                return undefined;
-              }
-            },
-          );
-          const previewPolicyContext = resolveCompactPolicyContext(
-            preliminary.stepCount,
-          );
-          compactPolicyContext = previewPolicyContext;
-          const compiled = compileCompactDelegation(
-            p.text,
-            (profileId, requestedIsolation) => {
-              try {
-                const isolation = resolveIsolation(
-                  profileId,
-                  requestedIsolation,
-                );
-                const spawnPolicy = resolveSpawnPolicy(
-                  { taskProfileId: profileId },
-                  this.#modelPolicy,
-                );
-                const effective = spawnPolicy.effective;
-                return {
-                  profileId,
-                  policy: {
-                    decision: "allow",
-                    placement: effective.placement,
-                    isolation,
-                    modelProfileId: effective.modelProfileId,
-                    providerQualifiedModel: `${effective.model.provider}/${effective.model.modelId}`,
-                    thinkingLevel: effective.model.thinkingLevel,
-                    modelPolicyHash: spawnPolicy.policyHash,
-                    context: previewPolicyContext,
-                  },
-                };
-              } catch {
-                return undefined;
-              }
-            },
-          );
-          if (p.accept !== true) {
-            compactPreview = {
-              schemaVersion: compiled.schemaVersion,
-              workflowDigest: compiled.workflowDigest,
-              stepCount: compiled.stepCount,
-              steps: compiled.steps,
-            };
-          } else {
-            const workflow = acceptedCompactWorkflow(
-              compiled,
-              typeof p.workflowDigest === "string"
-                ? p.workflowDigest
-                : undefined,
-            );
-            if (
-              canonicalJson(resolveCompactPolicyContext(compiled.stepCount)) !==
-              canonicalJson(previewPolicyContext)
-            )
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Authenticated compact policy context changed before acceptance.",
-              );
-            compactIdempotency = {
-              key: request.idempotencyKey!,
-              paramsHash: compactRequestFingerprint,
-            };
-            request = {
-              ...request,
-              method:
-                compactReplayResponse === undefined
-                  ? "delegate.execute"
-                  : "compact.idempotency_replay",
-              params: {
-                ...workflow,
-                ...(p.parentAgentId !== undefined
-                  ? { parentAgentId: p.parentAgentId }
-                  : {}),
-                ...(p.wait !== undefined ? { wait: p.wait } : {}),
-                ...(p.waitUntil !== undefined
-                  ? { waitUntil: p.waitUntil }
-                  : {}),
-                ...(p.timeoutMs !== undefined
-                  ? { timeoutMs: p.timeoutMs }
-                  : {}),
-                compact: {
-                  workflowDigest: compiled.workflowDigest,
-                  transcriptPolicy: workflow.transcriptPolicy,
-                },
-              },
-            };
-          }
-        } else {
-          request = {
-            ...request,
-            method: "compact.idempotency_replay",
-            params: {},
-          };
-        }
-      }
       let replayEvents: import("../state/types.js").StoredEvent[] = [];
       let committedEvent: import("../state/types.js").StoredEvent | undefined;
       let responseBoundary: (() => Promise<void>) | undefined;
       const deferred: Array<() => Promise<void>> = [];
       let shutdownAfterResponse = false;
-      if (compactPreview !== undefined) {
-        result = compactPreview;
-      } else if (compactReplayResponse !== undefined) {
-        const replayWorkflowId =
-          compactReplayResponse &&
-          typeof compactReplayResponse === "object" &&
-          safeText(
-            (compactReplayResponse as Record<string, unknown>).workflowId,
-          )
-            ? ((compactReplayResponse as Record<string, unknown>)
-                .workflowId as string)
-            : undefined;
-        if (replayWorkflowId && this.store.state.workflows[replayWorkflowId]) {
-          for (const taskId of this.store.state.workflows[replayWorkflowId]!
-            .taskIds)
-            this.#scheduleTaskDeadline(this.store.state.tasks[taskId]!);
-          await this.#advanceWorkflow(replayWorkflowId, {
-            principalId: principal.id,
-            kind: principal.kind,
-          });
-        }
-        result = compactReplayResponse;
-      } else if (request.method === "system.recover_adopted_lineage") {
-        if (principal.kind !== "cli" && principal.kind !== "human")
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Only an authenticated local operator can recover adopted lineage.",
-          );
-        const p = request.params;
-        if (
-          !exactKeys(p, ["canonicalAgentId", "historicalAgentIds"]) ||
-          !safeText(p.canonicalAgentId) ||
-          !Array.isArray(p.historicalAgentIds) ||
-          p.historicalAgentIds.length < 1 ||
-          p.historicalAgentIds.length > 64 ||
-          !p.historicalAgentIds.every((id) => safeText(id)) ||
-          new Set(p.historicalAgentIds).size !== p.historicalAgentIds.length
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Adopted lineage recovery plan is invalid.",
-          );
-        const canonicalAgentId = p.canonicalAgentId as string;
-        const historicalAgentIds = p.historicalAgentIds as string[];
-        const canonical = this.store.state.agents[canonicalAgentId];
-        if (
-          !canonical ||
-          canonical.managed ||
-          canonical.parentAgentId ||
-          this.store.state.adoptedRootLinks?.[canonicalAgentId] ||
-          !canonical.paneId ||
-          !canonical.piSessionId
-        )
-          throw new OrchestratorError(
-            "AGENT_REPLACED",
-            "Canonical adopted root identity is unavailable.",
-          );
-        const canonicalClients = [...this.#clients].filter(
-          (candidate) =>
-            !candidate.socket.destroyed &&
-            candidate.adoptedRegistration &&
-            candidate.principal?.kind === "pi_parent" &&
-            candidate.principal.agentId === canonicalAgentId &&
-            candidate.principal.piSessionId === canonical.piSessionId,
-        );
-        if (canonicalClients.length !== 1)
-          throw new OrchestratorError(
-            "AGENT_REPLACED",
-            "Canonical adopted root is not uniquely active.",
-          );
-        const connectedManagedAgentIds = [...this.#clients]
-          .filter(
-            (candidate) =>
-              !candidate.socket.destroyed &&
-              candidate.principal?.kind === "pi_child" &&
-              !!candidate.principal.agentId,
-          )
-          .map((candidate) => candidate.principal!.agentId!);
-        const requestedRoots = historicalAgentIds.map((id) => {
-          const root = this.store.state.agents[id];
-          if (
-            !root ||
-            root.managed ||
-            id === canonicalAgentId ||
-            root.paneId !== canonical.paneId ||
-            root.piSessionId !== canonical.piSessionId ||
-            root.parentAgentId !== undefined ||
-            (this.store.state.adoptedRootLinks?.[id] !== undefined &&
-              this.store.state.adoptedRootLinks[id] !== canonicalAgentId) ||
-            !connectedManagedAgentIds.some((childId) =>
-              this.#isDescendantSync(id, childId),
-            )
-          )
-            throw new OrchestratorError(
-              "AGENT_REPLACED",
-              "Historical adopted root no longer matches the live recovery plan.",
-            );
-          return root;
-        });
-        const liveTopLevelRoots = Object.values(this.store.state.agents).filter(
-          (root) =>
-            !root.managed &&
-            !root.parentAgentId &&
-            !this.store.state.adoptedRootLinks?.[root.id] &&
-            root.id !== canonicalAgentId &&
-            root.paneId === canonical.paneId &&
-            root.piSessionId === canonical.piSessionId &&
-            connectedManagedAgentIds.some((childId) =>
-              this.#isDescendantSync(root.id, childId),
-            ),
-        );
-        if (
-          liveTopLevelRoots.some((root) =>
-            [...this.#clients].some(
-              (candidate) =>
-                !candidate.socket.destroyed &&
-                candidate.adoptedRegistration &&
-                candidate.principal?.agentId === root.id,
-            ),
-          )
-        )
-          throw new OrchestratorError(
-            "AGENT_REPLACED",
-            "A historical adopted root is still active.",
-          );
-        const pendingIds = requestedRoots
-          .filter((root) => !this.store.state.adoptedRootLinks?.[root.id])
-          .map((root) => root.id)
-          .sort();
-        const liveIds = liveTopLevelRoots.map((root) => root.id).sort();
-        if (
-          pendingIds.length !== liveIds.length ||
-          pendingIds.some((id, index) => id !== liveIds[index])
-        )
-          throw new OrchestratorError(
-            "AGENT_REPLACED",
-            "Adopted lineage recovery plan is stale or incomplete.",
-          );
-        for (const rootId of pendingIds)
-          if (!this.#lineageSafeWithParent(rootId, canonicalAgentId))
-            throw new OrchestratorError(
-              "AGENT_REPLACED",
-              "Recovered adopted lineage would exceed its safe depth.",
-            );
-        let lastEventSeq = this.store.state.lastEventSeq;
-        for (const rootId of pendingIds) {
-          const event = await this.store.append({
-            type: "agent.state_changed",
-            actor: { principalId: principal.id, kind: principal.kind },
-            entityRefs: { agentId: rootId },
-            payload: {
-              agentId: rootId,
-              adoptedRootParentAgentId: canonicalAgentId,
-              adoptedRootPaneId: canonical.paneId,
-              adoptedRootPiSessionId: canonical.piSessionId,
-            },
-          });
-          lastEventSeq = event.seq;
-          committedEvent = event;
-        }
-        result = {
-          canonicalAgentId,
-          requestedRootCount: historicalAgentIds.length,
-          recoveredRootCount: pendingIds.length,
-          alreadyApplied: pendingIds.length === 0,
-          connectedDescendantCount: new Set(
-            connectedManagedAgentIds.filter((childId) =>
-              this.#isDescendantSync(canonicalAgentId, childId),
-            ),
-          ).size,
-          lastEventSeq,
-        };
-      } else if (
+      if (
         request.method === "system.ping" ||
         request.method === "system.status"
       ) {
@@ -2238,329 +1401,6 @@ export class Broker {
         else if (request.method === "herdr.stop") await this.#herdr.stop(guard);
         else await this.#herdr.close(guard);
         result = { ok: true };
-      } else if (request.method === "presentation.projection.update") {
-        if (
-          !exactKeys(request.params, ["projection"]) ||
-          !principal.agentId ||
-          !principal.piSessionId ||
-          (!client.adoptedRegistration &&
-            client.managedConnectionGeneration === undefined)
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Only a registered Pi adapter can update its presentation projection.",
-          );
-        let projection: ProviderProjection;
-        try {
-          projection = validateProviderProjection(request.params.projection);
-        } catch {
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Provider presentation projection is invalid or exceeds its limit.",
-          );
-        }
-        if (
-          projection.ownerAgentId !== principal.agentId ||
-          projection.piSessionId !== principal.piSessionId
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Provider presentation projection owner does not match this Pi adapter.",
-          );
-        this.#providerProjections.set(principal.agentId, {
-          projection,
-          client,
-        });
-        this.#sendProviderProjectionEvent(principal.agentId, projection);
-        result = { accepted: true, ephemeral: true };
-      } else if (
-        request.method === "provider.todo_action" ||
-        request.method === "provider.agent_board_action" ||
-        request.method === "provider.agent_board_view" ||
-        request.method === "provider.files_open" ||
-        request.method === "provider.files_action"
-      ) {
-        requirePermission(principal, "read:state");
-        const p = request.params;
-        if (!safeText(p.ownerAgentId, 256))
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Provider owner is required.",
-          );
-        const projection = this.#providerProjections.get(p.ownerAgentId);
-        if (
-          !projection ||
-          (projection.client !== client && principal.kind === "deck")
-        ) {
-          // A deck may only address the adapter that published the selected projection.
-          if (!projection)
-            throw new OrchestratorError(
-              "NOT_FOUND",
-              "Provider projection is unavailable.",
-            );
-        }
-        const agent = this.store.state.agents[p.ownerAgentId];
-        if (!agent || agent.piSessionId !== projection.projection.piSessionId)
-          throw new OrchestratorError(
-            "AGENT_DISCONNECTED",
-            "Provider owner identity is stale.",
-          );
-        let method = request.method;
-        let params: Record<string, unknown> = {};
-        if (request.method === "provider.todo_action") {
-          if (
-            !exactKeys(p, ["ownerAgentId", "action", "taskId"]) ||
-            !["start", "done", "clear_wait"].includes(p.action as string) ||
-            !safeText(p.taskId, 256)
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Todo action is invalid.",
-            );
-          params = { action: p.action, taskId: p.taskId };
-        } else if (request.method === "provider.files_open") {
-          if (!exactKeys(p, ["ownerAgentId"]))
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Files request is invalid.",
-            );
-          method = "provider.files_open";
-        } else if (request.method === "provider.files_action") {
-          if (
-            !safeText(p.action, 64) ||
-            !exactKeys(
-              p,
-              [
-                "ownerAgentId",
-                "action",
-                "path",
-                "query",
-                "expanded",
-                "selected",
-                "includedPaths",
-              ].filter((key) => p[key] !== undefined),
-            ) ||
-            (p.query !== undefined &&
-              (typeof p.query !== "string" || p.query.length > 256))
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Files provider action is invalid.",
-            );
-          method = "provider.files_action";
-          params = Object.fromEntries(
-            Object.entries(p).filter(([key]) => key !== "ownerAgentId"),
-          );
-        } else if (request.method === "provider.agent_board_view") {
-          if (
-            !exactKeys(
-              p,
-              ["ownerAgentId", "selections"].filter(
-                (key) => p[key] !== undefined,
-              ),
-            )
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Agent Board view request is invalid.",
-            );
-          if (p.selections !== undefined) {
-            if (
-              !p.selections ||
-              typeof p.selections !== "object" ||
-              Array.isArray(p.selections)
-            )
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Agent Board selections are invalid.",
-              );
-            const selections = p.selections as Record<string, unknown>;
-            if (
-              Object.keys(selections).some(
-                (key) =>
-                  !["inbox", "updates", "decisions", "history"].includes(key),
-              ) ||
-              Object.values(selections).some((value) => !safeText(value, 256))
-            )
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Agent Board selections are invalid.",
-              );
-            params = { selections };
-          }
-          method = "provider.agent_board_view";
-        } else {
-          if (p.action === "open-ui") {
-            if (!exactKeys(p, ["ownerAgentId", "action"]))
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Agent Board open is invalid.",
-              );
-            method = "provider.agent_board_action";
-            params = { action: "open-ui" };
-          } else {
-            const allowed = [
-              "ownerAgentId",
-              "action",
-              "questionId",
-              "expectedRevision",
-              "value",
-              "answerId",
-              "updateId",
-              "outcome",
-              "summary",
-              "resultingUpdateIds",
-              "attachments",
-            ];
-            if (
-              Object.keys(p).some((key) => !allowed.includes(key)) ||
-              !safeText(p.action, 64)
-            )
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Agent Board action is invalid.",
-              );
-            if (
-              [
-                "answer-question",
-                "accept-recommendation",
-                "dismiss-question",
-                "retry-delivery",
-                "archive-update",
-              ].includes(p.action as string) &&
-              (!safeText(p.questionId ?? p.updateId, 256) ||
-                !Number.isSafeInteger(p.expectedRevision))
-            )
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Agent Board revision is invalid.",
-              );
-            params = Object.fromEntries(
-              Object.entries(p).filter(([key]) => key !== "ownerAgentId"),
-            );
-            params = { ...params, schemaVersion: 2 };
-          }
-        }
-        result = await this.#sendAdapterRequest(
-          p.ownerAgentId as string,
-          method,
-          params,
-          {
-            generation: agent.generation,
-            ...(agent.connectionGeneration === undefined
-              ? {}
-              : { connectionGeneration: agent.connectionGeneration }),
-            piSessionId: agent.piSessionId,
-          },
-          10_000,
-          projection.client,
-        );
-      } else if (request.method === "tool_audit.ingest") {
-        if (
-          !["pi_parent", "pi_child"].includes(principal.kind) ||
-          !principal.agentId ||
-          !principal.piSessionId
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Only a registered Pi adapter can ingest tool audit records.",
-          );
-        const p = request.params;
-        const allowed =
-          p.phase === "started"
-            ? [
-                "phase",
-                "observedAt",
-                "toolCallId",
-                "toolName",
-                "input",
-                "inputBytes",
-                "inputSha256",
-                "inputOmitted",
-                "inputUnavailable",
-              ]
-            : [
-                "phase",
-                "observedAt",
-                "toolCallId",
-                "toolName",
-                "status",
-                "durationMs",
-                "errorCode",
-                "errorMessage",
-              ];
-        if (!exactKeys(p, allowed))
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Tool audit ingestion parameters contain unknown fields.",
-          );
-        result = await this.auditStore.append(
-          {
-            principalId: principal.id,
-            kind: principal.kind,
-            agentId: principal.agentId,
-            piSessionId: principal.piSessionId,
-          },
-          p as unknown as ToolAuditInput,
-        );
-      } else if (request.method === "tool_audit.list") {
-        requirePermission(principal, "read:audit");
-        if (
-          !exactKeys(request.params, [
-            "toolName",
-            "action",
-            "agentId",
-            "status",
-            "errorCode",
-            "since",
-            "until",
-            "limit",
-          ])
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Tool audit query contains unknown fields.",
-          );
-        result = await this.auditStore.list(
-          request.params as unknown as ToolAuditQuery,
-        );
-      } else if (request.method === "tool_audit.get") {
-        requirePermission(principal, "read:audit");
-        if (!exactKeys(request.params, ["invocationId"]))
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Tool audit lookup parameters are invalid.",
-          );
-        result = await this.auditStore.get(
-          request.params.invocationId as string,
-        );
-      } else if (request.method === "tool_audit.stats") {
-        requirePermission(principal, "read:audit");
-        if (
-          !exactKeys(request.params, [
-            "toolName",
-            "action",
-            "agentId",
-            "status",
-            "errorCode",
-            "since",
-            "until",
-            "groupBy",
-          ])
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Tool audit statistics parameters contain unknown fields.",
-          );
-        result = await this.auditStore.stats(request.params as never);
-      } else if (request.method === "tool_audit.verify") {
-        requirePermission(principal, "read:audit");
-        if (!exactKeys(request.params, []))
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Tool audit verification parameters must be empty.",
-          );
-        result = await this.auditStore.verify();
       } else if (request.method === "events.verify") {
         requirePermission(principal, "read:audit");
         if (Object.keys(request.params).length)
@@ -2654,43 +1494,22 @@ export class Broker {
         client.subscribed = false;
         client.subscriptionId = subscriptionId();
         client.eventFilter = filter;
-        const progressNow = this.#now();
         result = {
           subscriptionId: client.subscriptionId,
           ...(includeSnapshot
             ? {
                 snapshot: {
                   seq: currentSeq,
-                  agents: Object.values(this.store.state.agents)
-                    .filter((item) =>
-                      this.#canAccessAgentSync(principal, item.id),
-                    )
-                    .map((item) =>
-                      agentWithLifecycle(item, this.store.state, progressNow),
-                    ),
-                  tasks: Object.values(this.store.state.tasks)
-                    .filter((item) =>
-                      this.#canAccessTaskSync(principal, item.id),
-                    )
-                    .map((item) =>
-                      taskWithProgress(item, this.store.state, progressNow),
-                    ),
-                  runs: Object.values(this.store.state.runs).filter(
-                    (item) =>
-                      this.#canAccessTaskSync(principal, item.taskId) &&
-                      (!item.agentId ||
-                        this.#canAccessAgentSync(principal, item.agentId)),
+                  agents: Object.values(this.store.state.agents).filter(
+                    (item) => this.#canAccessAgentSync(principal, item.id),
+                  ),
+                  tasks: Object.values(this.store.state.tasks).filter((item) =>
+                    this.#canAccessTaskSync(principal, item.id),
                   ),
                   workflows: Object.values(this.store.state.workflows).filter(
                     (item) =>
                       item.taskIds.some((taskId) =>
                         this.#canAccessTaskSync(principal, taskId),
-                      ),
-                  ),
-                  groups: Object.values(this.store.state.groups ?? {}).filter(
-                    (item) =>
-                      item.agentIds.some((agentId) =>
-                        this.#canAccessAgentSync(principal, agentId),
                       ),
                   ),
                   questions: Object.values(
@@ -2701,14 +1520,6 @@ export class Broker {
                   results: Object.values(this.store.state.results ?? {}).filter(
                     (item) => this.#canAccessTaskSync(principal, item.taskId),
                   ),
-                  providerProjections: [...this.#providerProjections.values()]
-                    .map((entry) => entry.projection)
-                    .filter((projection) =>
-                      this.#canAccessAgentSync(
-                        principal,
-                        projection.ownerAgentId,
-                      ),
-                    ),
                 },
               }
             : {}),
@@ -2786,7 +1597,7 @@ export class Broker {
           herdr.detectedKind !== "pi" ||
           (herdr.name !== undefined && !safeText(herdr.name, 256)) ||
           !safeBoundedRecord(pi.capabilities) ||
-          !safePiState(pi.state) ||
+          !safeBoundedRecord(pi.state) ||
           (pi.sessionName !== undefined && !safeText(pi.sessionName, 256))
         )
           throw new OrchestratorError(
@@ -2856,40 +1667,23 @@ export class Broker {
         }
         let existing = this.store.state.agents[agentId];
         if (request.method === "agent.register_adopted") {
-          const paneRoots = Object.values(this.store.state.agents).filter(
+          const roots = Object.values(this.store.state.agents).filter(
             (candidate) =>
               !candidate.managed &&
-              !candidate.parentAgentId &&
-              !this.store.state.adoptedRootLinks?.[candidate.id] &&
-              candidate.paneId === herdr.paneId,
+              candidate.paneId === herdr.paneId &&
+              candidate.terminalId === herdr.terminalId,
           );
-          const exactRoots = paneRoots.filter(
-            (candidate) => candidate.terminalId === herdr.terminalId,
-          );
-          if (exactRoots.length > 1)
+          if (roots.length > 1)
             throw new OrchestratorError(
               "AGENT_REPLACED",
               "Adopted root claim is ambiguous.",
             );
-          existing = exactRoots[0];
-          if (
-            !existing &&
-            piSessionMatches(
-              pi.sessionId as string,
-              undefined,
-              sessionReference,
-            )
-          ) {
-            const sessionRoots = paneRoots.filter(
-              (candidate) => candidate.piSessionId === pi.sessionId,
+          existing = roots[0];
+          if (existing && existing.piSessionId !== pi.sessionId)
+            throw new OrchestratorError(
+              "AGENT_REPLACED",
+              "Pi session does not match the adopted root.",
             );
-            if (sessionRoots.length > 1)
-              throw new OrchestratorError(
-                "AGENT_REPLACED",
-                "Adopted root claim is ambiguous.",
-              );
-            existing = sessionRoots[0];
-          }
           if (
             existing &&
             [...this.#clients].some(
@@ -2905,83 +1699,7 @@ export class Broker {
             );
           if (existing) agentId = existing.id;
         }
-        let actualModel:
-          | { provider: string; modelId: string; thinkingLevel: string }
-          | undefined;
-        if (request.method === "agent.register_managed") {
-          const piState = pi.state as Record<string, unknown>;
-          const reportedModel = piState.model;
-          const expected = existing?.effectiveModel;
-          const hasAttestation =
-            !!reportedModel &&
-            typeof reportedModel === "object" &&
-            !Array.isArray(reportedModel) &&
-            safeText(
-              (reportedModel as Record<string, unknown>).provider,
-              128,
-            ) &&
-            safeText((reportedModel as Record<string, unknown>).modelId, 256) &&
-            safeText(piState.thinkingLevel, 32);
-          if (!hasAttestation && expected) {
-            if (this.#herdr)
-              await this.#herdr.recordRegistrationMismatch(agentId);
-            await this.store.append({
-              type: "agent.state_changed",
-              actor: { principalId: principal.id, kind: principal.kind },
-              entityRefs: { agentId },
-              payload: {
-                agentId,
-                state: "replaced",
-                reason: "PI_MODEL_ATTESTATION_MISSING",
-              },
-            });
-            throw new OrchestratorError(
-              "AGENT_REPLACED",
-              "Managed Pi registration lacks model attestation.",
-            );
-          }
-          if (hasAttestation) {
-            actualModel = {
-              provider: (reportedModel as Record<string, unknown>)
-                .provider as string,
-              modelId: (reportedModel as Record<string, unknown>)
-                .modelId as string,
-              thinkingLevel: piState.thinkingLevel as string,
-            };
-          }
-          if (
-            expected &&
-            actualModel &&
-            !modelSelectionMatches(
-              {
-                provider: String(expected.provider ?? ""),
-                modelId: String(expected.modelId ?? ""),
-                thinkingLevel: expected.thinkingLevel as never,
-              },
-              actualModel,
-            )
-          ) {
-            if (this.#herdr)
-              await this.#herdr.recordRegistrationMismatch(agentId);
-            await this.store.append({
-              type: "agent.state_changed",
-              actor: { principalId: principal.id, kind: principal.kind },
-              entityRefs: { agentId },
-              payload: {
-                agentId,
-                state: "replaced",
-                actualModel,
-                reason: "PI_MODEL_ATTESTATION_MISMATCH",
-              },
-            });
-            throw new OrchestratorError(
-              "AGENT_REPLACED",
-              "Managed Pi model attestation does not match policy.",
-            );
-          }
-        }
         if (
-          request.method === "agent.register_managed" &&
           existing &&
           existing.piSessionId !== undefined &&
           existing.piSessionId !== pi.sessionId
@@ -3161,7 +1879,7 @@ export class Broker {
               },
               undefined,
             );
-          let managedContext = await this.#herdr.verifyManagedPane(
+          const managedContext = await this.#herdr.verifyManagedPane(
             agentId,
             presentedIdentity,
           );
@@ -3171,32 +1889,19 @@ export class Broker {
           registrationConnectionGeneration = nextConnectionGeneration;
           responseBoundary = async () => {
             const exactManagedContext = async () => {
-              const boundary = await this.#herdr!.verifyManagedPane(agentId, {
-                paneId: managedContext.paneId,
-                terminalId: managedContext.terminalId,
-                ...(presentedIdentity.sessionReference
-                  ? { sessionReference: presentedIdentity.sessionReference }
-                  : {}),
-              });
+              const boundary = await this.#herdr!.verifyManagedPane(
+                agentId,
+                managedContext,
+              );
               if (
                 boundary.paneId !== managedContext.paneId ||
                 boundary.terminalId !== managedContext.terminalId ||
-                !allowsIdentityEnrichment(
-                  managedContext.workspaceId,
-                  boundary.workspaceId,
-                ) ||
-                !allowsIdentityEnrichment(
-                  managedContext.tabId,
-                  boundary.tabId,
-                ) ||
-                !allowsIdentityEnrichment(managedContext.cwd, boundary.cwd) ||
-                !allowsIdentityEnrichment(
-                  managedContext.worktreeId,
-                  boundary.worktreeId,
-                )
+                boundary.workspaceId !== managedContext.workspaceId ||
+                boundary.tabId !== managedContext.tabId ||
+                boundary.cwd !== managedContext.cwd ||
+                boundary.worktreeId !== managedContext.worktreeId
               )
                 throw new Error("HERDR_REGISTRATION_IDENTITY_MISMATCH");
-              managedContext = boundary;
             };
             try {
               await exactManagedContext();
@@ -3211,7 +1916,6 @@ export class Broker {
                     paneId: managedContext.paneId,
                     terminalId: managedContext.terminalId,
                     piSessionId: pi.sessionId,
-                    ...(actualModel ? { actualModel } : {}),
                     connectionGeneration: nextConnectionGeneration,
                   },
                 });
@@ -3534,19 +2238,16 @@ export class Broker {
               ].includes(key),
           )
         ) {
-          const nextAgentState = p.event === "blocked" ? "blocked" : "idle";
-          if (agent.state !== nextAgentState)
-            committedEvent = await this.store.append({
-              type: "agent.state_changed",
-              actor: { principalId: principal.id, kind: principal.kind },
-              entityRefs: { agentId: agent.id },
-              payload: { agentId: agent.id, state: nextAgentState },
-            });
-          result = {
-            accepted: false,
-            manual: true,
-            state: nextAgentState,
-          };
+          committedEvent = await this.store.append({
+            type: "agent.state_changed",
+            actor: { principalId: principal.id, kind: principal.kind },
+            entityRefs: { agentId: agent.id },
+            payload: {
+              agentId: agent.id,
+              state: p.event === "blocked" ? "blocked" : "idle",
+            },
+          });
+          result = { accepted: false, manual: true, state: "idle" };
         } else {
           if (
             !exactKeys(assignment, ["assignmentId", "generation"]) ||
@@ -3601,13 +2302,12 @@ export class Broker {
               "Run start lifecycle is duplicated.",
             );
           if (progressEvent && !exactTurn) {
-            if (agent.state !== "idle")
-              committedEvent = await this.store.append({
-                type: "agent.state_changed",
-                actor: { principalId: principal.id, kind: principal.kind },
-                entityRefs: { agentId: agent.id },
-                payload: { agentId: agent.id, state: "idle" },
-              });
+            committedEvent = await this.store.append({
+              type: "agent.state_changed",
+              actor: { principalId: principal.id, kind: principal.kind },
+              entityRefs: { agentId: agent.id },
+              payload: { agentId: agent.id, state: "idle" },
+            });
             result = {
               accepted: false,
               manual: true,
@@ -3674,14 +2374,15 @@ export class Broker {
               state: this.store.state.runs[run.id]?.state,
             };
           } else {
-            const nextAgentState = p.event === "blocked" ? "blocked" : "idle";
-            if (agent.state !== nextAgentState)
-              committedEvent = await this.store.append({
-                type: "agent.state_changed",
-                actor: { principalId: principal.id, kind: principal.kind },
-                entityRefs: { agentId: agent.id },
-                payload: { agentId: agent.id, state: nextAgentState },
-              });
+            committedEvent = await this.store.append({
+              type: "agent.state_changed",
+              actor: { principalId: principal.id, kind: principal.kind },
+              entityRefs: { agentId: agent.id },
+              payload: {
+                agentId: agent.id,
+                state: p.event === "blocked" ? "blocked" : "idle",
+              },
+            });
             result = {
               accepted: false,
               manual: true,
@@ -3690,716 +2391,22 @@ export class Broker {
             };
           }
         }
-      } else if (request.method === "model.feedback.record") {
-        if (!["human", "cli", "deck"].includes(principal.kind))
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Human feedback requires an operator client.",
-          );
-        requirePermission(principal, "manage:all");
-        const p = request.params;
-        if (
-          Object.keys(p).some(
-            (key) =>
-              ![
-                "runId",
-                "dimension",
-                "valuePpm",
-                "confidencePpm",
-                "expiresAt",
-              ].includes(key),
-          ) ||
-          !isEntityId(p.runId, "run") ||
-          (p.dimension !== "preference" &&
-            p.dimension !== "reviewed_output_quality") ||
-          !Number.isSafeInteger(p.valuePpm) ||
-          Number(p.valuePpm) < 0 ||
-          Number(p.valuePpm) > 1_000_000 ||
-          !Number.isSafeInteger(p.confidencePpm) ||
-          Number(p.confidencePpm) < 0 ||
-          Number(p.confidencePpm) > 1_000_000 ||
-          (p.expiresAt !== undefined &&
-            (!safeText(p.expiresAt, 64) ||
-              !Number.isFinite(Date.parse(String(p.expiresAt))))) ||
-          !request.idempotencyKey
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Human feedback parameters or idempotency key are invalid.",
-          );
-        const run = this.store.state.runs[p.runId];
-        if (!run)
-          throw new OrchestratorError("NOT_FOUND", "Rated run was not found.");
-        if (
-          p.dimension === "reviewed_output_quality" &&
-          !Object.values(this.store.state.results ?? {}).some(
-            (item) => item.runId === run.id && item.piSettled,
-          )
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Reviewed quality requires a settled immutable result.",
-          );
-        const idempotencyPrefix = `human-v1:${sha256(
-          `${principal.id}:${request.idempotencyKey}`,
-        )}:`;
-        const sourceKey = `${idempotencyPrefix}${sha256(
-          canonicalJson({ runId: p.runId, ...p }),
-        )}`;
-        const prior = Object.values(
-          this.store.state.modelEvidence?.records ?? {},
-        ).find(
-          (stored) =>
-            stored.record.sourceKind === "human" &&
-            stored.record.sourceName === `operator:${principal.id}` &&
-            stored.record.sourceKey.startsWith(idempotencyPrefix),
-        );
-        if (prior && prior.record.sourceKey !== sourceKey)
-          throw new OrchestratorError(
-            "IDEMPOTENCY_CONFLICT",
-            "Idempotency key is already bound.",
-          );
-        if (prior) {
-          result = {
-            evidenceId: prior.record.evidenceId,
-            state: "already_recorded",
-          };
-        } else {
-          const observedAt = new Date(this.#now()).toISOString();
-          let record;
-          try {
-            record = humanEvidenceForRun({
-              state: this.store.state,
-              run,
-              sourceName: `operator:${principal.id}`,
-              sourceKey,
-              dimension: p.dimension,
-              valuePpm: Number(p.valuePpm),
-              confidencePpm: Number(p.confidencePpm),
-              observedAt,
-              ...(p.expiresAt !== undefined
-                ? { expiresAt: String(p.expiresAt) }
-                : {}),
-            });
-          } catch (error) {
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              error instanceof Error
-                ? error.message
-                : "Human feedback is invalid.",
-            );
-          }
-          committedEvent = await this.store.append({
-            type: "model.evidence_recorded",
-            actor: { principalId: principal.id, kind: principal.kind },
-            entityRefs: {},
-            payload: { record },
-          });
-          result = { evidenceId: record.evidenceId, state: "recorded" };
-        }
-      } else if (request.method === "model.feedback.supersede") {
-        if (!["human", "cli", "deck"].includes(principal.kind))
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Human feedback correction requires an operator client.",
-          );
-        requirePermission(principal, "manage:all");
-        const p = request.params;
-        const correction = p.action === "correct";
-        if (
-          !/^[a-f0-9]{64}$/u.test(String(p.evidenceId)) ||
-          (p.action !== "correct" && p.action !== "retract") ||
-          Object.keys(p).some(
-            (key) =>
-              ![
-                "evidenceId",
-                "action",
-                "valuePpm",
-                "confidencePpm",
-                "expiresAt",
-              ].includes(key),
-          ) ||
-          (correction &&
-            (!Number.isSafeInteger(p.valuePpm) ||
-              Number(p.valuePpm) < 0 ||
-              Number(p.valuePpm) > 1_000_000 ||
-              !Number.isSafeInteger(p.confidencePpm) ||
-              Number(p.confidencePpm) < 0 ||
-              Number(p.confidencePpm) > 1_000_000)) ||
-          (!correction && Object.keys(p).length !== 2)
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Human feedback supersession is invalid.",
-          );
-        const stored =
-          this.store.state.modelEvidence?.records[String(p.evidenceId)];
-        if (
-          !stored ||
-          stored.record.sourceKind !== "human" ||
-          stored.record.sourceName !== `operator:${principal.id}` ||
-          Object.hasOwn(
-            this.store.state.modelEvidence?.supersededBy ?? {},
-            String(p.evidenceId),
-          )
-        )
-          throw new OrchestratorError(
-            "NOT_FOUND",
-            "Active owned human feedback was not found.",
-          );
-        const supersededAt = new Date(this.#now()).toISOString();
-        let replacement = null;
-        if (correction)
-          try {
-            replacement = correctedHumanEvidence(stored.record, {
-              valuePpm: Number(p.valuePpm),
-              confidencePpm: Number(p.confidencePpm),
-              observedAt: supersededAt,
-              ...(p.expiresAt !== undefined
-                ? { expiresAt: String(p.expiresAt) }
-                : {}),
-            });
-          } catch (error) {
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              error instanceof Error
-                ? error.message
-                : "Human feedback correction is invalid.",
-            );
-          }
-        committedEvent = await this.store.append({
-          type: "model.evidence_superseded",
-          actor: { principalId: principal.id, kind: principal.kind },
-          entityRefs: {},
-          payload: {
-            schemaVersion: 1,
-            evidenceId: String(p.evidenceId),
-            replacement,
-            reason: correction ? "corrected" : "retracted",
-            supersededAt,
-          },
-        });
-        result = {
-          evidenceId: String(p.evidenceId),
-          replacementEvidenceId: replacement?.evidenceId ?? null,
-          state: correction ? "corrected" : "retracted",
-        };
-      } else if (request.method === "model.foundation.status") {
-        requirePermission(principal, "read:state");
-        if (!exactKeys(request.params, []))
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Foundation status parameters must be empty.",
-          );
-        result = this.#foundationStatusView();
-      } else if (request.method === "model.foundation.refresh") {
-        requirePermission(principal, "configure");
-        if (!exactKeys(request.params, []))
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Foundation refresh parameters must be empty.",
-          );
-        const started = this.#scheduleFoundationRefresh(0);
-        result = { started, status: this.#foundationStatusView() };
-      } else if (request.method === "model.capabilities") {
-        requirePermission(principal, "read:state");
-        result = await this.#piCapabilities.snapshot();
-      } else if (request.method === "model.options") {
-        requirePermission(principal, "read:state");
-        const p = request.params;
-        if (
-          Object.keys(p).some(
-            (key) =>
-              ![
-                "profileId",
-                "placement",
-                "modelProfileId",
-                "projectKey",
-                "limit",
-              ].includes(key),
-          ) ||
-          typeof p.profileId !== "string" ||
-          !/^[a-z][a-z0-9_-]{0,63}$/u.test(p.profileId) ||
-          (p.placement !== undefined &&
-            p.placement !== "current-workspace" &&
-            p.placement !== "new-workspace") ||
-          (p.modelProfileId !== undefined &&
-            p.modelProfileId !== "manager" &&
-            p.modelProfileId !== "subagent") ||
-          (p.projectKey !== undefined && !safeText(p.projectKey, 4096)) ||
-          (p.limit !== undefined &&
-            (!Number.isSafeInteger(p.limit) ||
-              Number(p.limit) < 1 ||
-              Number(p.limit) > MODEL_RANKING_POLICY.maxReturnedCandidates))
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Model option parameters are invalid.",
-          );
-        const inheritedProjectKey = principal.agentId
-          ? this.store.state.agents[principal.agentId]?.cwd
-          : undefined;
-        result = availableModelOptionsView(
-          await this.#modelOptions({
-            taskProfile: p.profileId,
-            ...(p.placement
-              ? { placement: p.placement as AgentPlacement }
-              : {}),
-            ...(p.modelProfileId
-              ? { modelProfileId: p.modelProfileId as ModelProfileId }
-              : {}),
-            ...(p.projectKey
-              ? { projectKey: p.projectKey }
-              : inheritedProjectKey
-                ? { projectKey: inheritedProjectKey }
-                : {}),
-            asOf: new Date(this.#now()).toISOString(),
-            limit: MODEL_RANKING_POLICY.maxEligibleCandidates,
-          }),
-          this.#endpointPolicy,
-          p.limit === undefined ? 10 : Number(p.limit),
-        );
-      } else if (request.method === "model.policy.get") {
-        requirePermission(principal, "read:state");
-        result = {
-          policy: this.#modelPolicy,
-          operatorSettings: {
-            endpoints: this.#endpointPolicy.endpoints ?? {},
-            modelIntelligence: this.#modelIntelligence ?? {
-              schemaVersion: 1,
-              routingMode: "current_default",
-              mappings: [],
-            },
-            foundationStatus: this.#foundationStatusView(),
-          },
-          lifecyclePolicy: {
-            autoCloseCompletedTemporary: this.#autoCloseCompletedTemporary,
-          },
-          precedence: ["task", "project", "role", "global", "legacy-profile"],
-        };
-      } else if (request.method === "model.operator.settings.set") {
-        requirePermission(principal, "configure");
-        if (!this.#persistOperatorSettings)
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Agent settings require persistent broker configuration.",
-          );
-        const p = request.params;
-        if (!exactKeys(p, ["allowlist", "endpoints", "modelIntelligence"]))
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Agent settings batch is invalid.",
-          );
-        const allowlist =
-          p.allowlist === null
-            ? undefined
-            : Array.isArray(p.allowlist) &&
-                p.allowlist.length >= 1 &&
-                p.allowlist.length <= 64
-              ? p.allowlist.map((selection) =>
-                  validateModelSelection(selection),
-                )
-              : null;
-        if (allowlist === null)
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Model allowlist is invalid.",
-          );
-        if (
-          allowlist?.some((selection, index) =>
-            allowlist
-              .slice(0, index)
-              .some((candidate) => sameModelSelection(candidate, selection)),
-          )
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Model allowlist entries must be unique.",
-          );
-        const nextPolicy = { ...this.#modelPolicy };
-        if (allowlist) nextPolicy.allowlist = allowlist;
-        else delete nextPolicy.allowlist;
-        const endpointsValue =
-          p.endpoints === null ||
-          (typeof p.endpoints === "object" &&
-            p.endpoints !== null &&
-            !Array.isArray(p.endpoints) &&
-            Object.keys(p.endpoints).length === 0)
-            ? undefined
-            : p.endpoints;
-        let validatedSettings;
-        try {
-          validatedSettings = validateEndpointPolicyConfig(
-            endpointsValue,
-            p.modelIntelligence === null ? undefined : p.modelIntelligence,
-          );
-        } catch (error) {
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            error instanceof Error
-              ? error.message
-              : "Agent settings are invalid.",
-          );
-        }
-        const missingDefaults = requiredModelSelections(nextPolicy).filter(
-          (required) =>
-            allowlist &&
-            !allowlist.some((selection) =>
-              sameModelSelection(selection, required),
-            ),
-        );
-        if (
-          validatedSettings.modelIntelligence?.routingMode !==
-            "explicit_required" &&
-          missingDefaults.length > 0
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "The model allowlist must include every effective default unless model routing requires an explicit selection.",
-            { details: { missingDefaults } },
-          );
-        const capabilities = await this.#piCapabilities.snapshot();
-        await Promise.all(
-          (allowlist ?? []).map(
-            async (selection) => await this.#piCapabilities.validate(selection),
-          ),
-        );
-        for (const mapping of validatedSettings.modelIntelligence?.mappings ??
-          []) {
-          const installed = capabilities.models.some(
-            (candidate) =>
-              candidate.provider === mapping.provider &&
-              (mapping.modelId === undefined ||
-                candidate.modelId === mapping.modelId),
-          );
-          const allowed =
-            !allowlist ||
-            allowlist.some(
-              (selection) =>
-                selection.provider === mapping.provider &&
-                (mapping.modelId === undefined ||
-                  selection.modelId === mapping.modelId),
-            );
-          if (!installed || !allowed)
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Endpoint mappings must reference installed allowed models.",
-            );
-        }
-        const nextEndpointPolicy: EndpointPolicyConfig = {
-          ...(validatedSettings.endpoints
-            ? { endpoints: validatedSettings.endpoints }
-            : {}),
-          ...(validatedSettings.modelIntelligence
-            ? { mappings: validatedSettings.modelIntelligence.mappings }
-            : {}),
-        };
-        await this.#persistOperatorSettings({
-          modelPolicy: nextPolicy,
-          ...(validatedSettings.endpoints
-            ? { endpoints: validatedSettings.endpoints }
-            : {}),
-          ...(validatedSettings.modelIntelligence
-            ? { modelIntelligence: validatedSettings.modelIntelligence }
-            : {}),
-        });
-        this.#modelPolicy = nextPolicy;
-        this.#endpointPolicy = nextEndpointPolicy;
-        this.#modelIntelligence = validatedSettings.modelIntelligence;
-        this.#scheduler.replaceEndpointLimits(
-          Object.fromEntries(
-            Object.entries(nextEndpointPolicy.endpoints ?? {}).map(
-              ([endpointId, limit]) => [endpointId, limit.maxConcurrentAgents],
-            ),
-          ),
-        );
-        result = {
-          accepted: true,
-          persisted: true,
-          policy: this.#modelPolicy,
-          operatorSettings: {
-            endpoints: this.#endpointPolicy.endpoints ?? {},
-            modelIntelligence: this.#modelIntelligence ?? {
-              schemaVersion: 1,
-              routingMode: "current_default",
-              mappings: [],
-            },
-            foundationStatus: this.#foundationStatusView(),
-          },
-        };
-      } else if (request.method === "lifecycle.policy.set") {
-        requirePermission(principal, "configure");
-        const p = request.params;
-        if (
-          !exactKeys(p, ["autoCloseCompletedTemporary"]) ||
-          typeof p.autoCloseCompletedTemporary !== "boolean"
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Lifecycle policy is invalid.",
-          );
-        const nextPolicy = {
-          autoCloseCompletedTemporary: p.autoCloseCompletedTemporary,
-        };
-        if (this.#persistLifecyclePolicy)
-          await this.#persistLifecyclePolicy(nextPolicy);
-        this.#autoCloseCompletedTemporary = p.autoCloseCompletedTemporary;
-        result = {
-          accepted: true,
-          persisted: Boolean(this.#persistLifecyclePolicy),
-          lifecyclePolicy: nextPolicy,
-        };
-      } else if (request.method === "model.policy.allowlist.set") {
-        requirePermission(principal, "configure");
-        const p = request.params;
-        if (
-          !exactKeys(p, ["allowlist"]) ||
-          (p.allowlist !== null &&
-            (!Array.isArray(p.allowlist) ||
-              p.allowlist.length < 1 ||
-              p.allowlist.length > 64))
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Model allowlist is invalid.",
-          );
-        const allowlist =
-          p.allowlist === null
-            ? undefined
-            : p.allowlist.map((selection) => validateModelSelection(selection));
-        if (allowlist) {
-          if (
-            allowlist.some((selection, index) =>
-              allowlist
-                .slice(0, index)
-                .some((candidate) => sameModelSelection(candidate, selection)),
-            )
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Model allowlist entries must be unique.",
-            );
-          await Promise.all(
-            allowlist.map(
-              async (selection) =>
-                await this.#piCapabilities.validate(selection),
-            ),
-          );
-          const missingDefaults = requiredModelSelections(
-            this.#modelPolicy,
-          ).filter(
-            (required) =>
-              !allowlist.some((selection) =>
-                sameModelSelection(selection, required),
-              ),
-          );
-          if (
-            this.#modelIntelligence?.routingMode !== "explicit_required" &&
-            missingDefaults.length > 0
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "The model allowlist must include every effective default unless model routing requires an explicit selection.",
-              { details: { missingDefaults } },
-            );
-        }
-        const nextPolicy = { ...this.#modelPolicy };
-        if (allowlist) nextPolicy.allowlist = allowlist;
-        else delete nextPolicy.allowlist;
-        if (this.#persistModelPolicy)
-          await this.#persistModelPolicy(nextPolicy);
-        this.#modelPolicy = nextPolicy;
-        this.#scheduleFoundationRefresh(0);
-        result = {
-          accepted: true,
-          persisted: Boolean(this.#persistModelPolicy),
-          policy: this.#modelPolicy,
-        };
-      } else if (request.method === "model.policy.set") {
-        requirePermission(principal, "configure");
-        const p = request.params;
-        if (
-          !exactKeys(p, ["scope", "key", "model"]) ||
-          !["global", "role", "project"].includes(String(p.scope))
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Model default scope is invalid.",
-          );
-        const model = validateModelSelection(p.model);
-        await this.#piCapabilities.validate(model);
-        if (
-          this.#modelPolicy.allowlist &&
-          !this.#modelPolicy.allowlist.some(
-            (allowed) =>
-              allowed.provider === model.provider &&
-              allowed.modelId === model.modelId &&
-              allowed.thinkingLevel === model.thinkingLevel,
-          )
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "The model selection is not in the configured allowlist.",
-          );
-        const defaults = { ...(this.#modelPolicy.defaults ?? {}) };
-        if (p.scope === "global") defaults.global = model;
-        else {
-          const validKey =
-            p.scope === "project"
-              ? safeText(p.key, 4096) && (p.key as string).startsWith("/")
-              : typeof p.key === "string" &&
-                /^[a-z][a-z0-9_-]{0,63}$/u.test(p.key);
-          if (!validKey)
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Model default key is invalid.",
-            );
-          const field = p.scope === "role" ? "roles" : "projects";
-          defaults[field] = {
-            ...(defaults[field] ?? {}),
-            [p.key as string]: model,
-          };
-        }
-        const nextPolicy = { ...this.#modelPolicy, defaults };
-        if (this.#persistModelPolicy)
-          await this.#persistModelPolicy(nextPolicy);
-        this.#modelPolicy = nextPolicy;
-        this.#scheduleFoundationRefresh(0);
-        result = {
-          accepted: true,
-          persisted: Boolean(this.#persistModelPolicy),
-          policy: this.#modelPolicy,
-        };
       } else if (request.method === "agent.list") {
         requirePermission(principal, "read:state");
-        const p = request.params;
-        if (
-          !exactKeys(p, [
-            "ids",
-            "managed",
-            "state",
-            "profileId",
-            "taskId",
-            "workspaceId",
-            "connected",
-            "include",
-            "maxBytes",
-            "cursor",
-            "limit",
-          ]) ||
-          (p.ids !== undefined &&
-            (!Array.isArray(p.ids) ||
-              p.ids.length > 64 ||
-              p.ids.some((id) => !safeText(id, 256)))) ||
-          (p.managed !== undefined && typeof p.managed !== "boolean") ||
-          (p.state !== undefined &&
-            (!safeText(p.state, 64) ||
-              !AGENT_STATES.some((state) => state === p.state))) ||
-          (p.profileId !== undefined && !safeText(p.profileId, 256)) ||
-          (p.taskId !== undefined && !safeText(p.taskId, 256)) ||
-          (p.workspaceId !== undefined && !safeText(p.workspaceId, 256)) ||
-          (p.connected !== undefined && typeof p.connected !== "boolean") ||
-          (p.include !== undefined && !Array.isArray(p.include)) ||
-          (p.maxBytes !== undefined &&
-            (!Number.isSafeInteger(p.maxBytes) ||
-              Number(p.maxBytes) < 1 ||
-              Number(p.maxBytes) > 262_144)) ||
-          (p.cursor !== undefined &&
-            (typeof p.cursor !== "string" || !/^\d+$/u.test(p.cursor))) ||
-          (p.limit !== undefined &&
-            (!Number.isSafeInteger(p.limit) ||
-              Number(p.limit) < 1 ||
-              Number(p.limit) > 500))
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Agent list parameters are invalid.",
-          );
-        if ((p.include as unknown[] | undefined)?.length)
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Agent list include sections are not supported. Omit include.",
-          );
-        const requestedIds =
-          p.ids === undefined ? undefined : new Set(p.ids as string[]);
-        const requestedTaskAgentId =
-          p.taskId === undefined
-            ? undefined
-            : this.store.state.tasks[p.taskId as string]?.assignedAgentId;
-        const connectedAgentIds = new Set(
-          Object.values(this.store.state.agents)
-            .filter((agent) =>
-              [...this.#clients].some(
-                (candidate) =>
-                  !candidate.socket.destroyed &&
-                  candidate.principal?.kind === "pi_child" &&
-                  candidate.principal.agentId === agent.id &&
-                  candidate.principal.generation === agent.generation &&
-                  candidate.principal.piSessionId === agent.piSessionId,
-              ),
-            )
-            .map((agent) => agent.id),
-        );
-        const accessible = (
+        const items = (
           await Promise.all(
             Object.values(this.store.state.agents).map(async (agent) =>
               (await this.#canAccessAgent(principal, agent.id))
-                ? agent
+                ? { ...agent, tokenDigest: undefined }
                 : undefined,
             ),
           )
-        )
-          .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent))
-          .filter(
-            (agent) =>
-              (requestedIds === undefined || requestedIds.has(agent.id)) &&
-              (p.managed === undefined ||
-                (agent.managed === true) === p.managed) &&
-              (p.state === undefined || agent.state === p.state) &&
-              (p.profileId === undefined || agent.profileId === p.profileId) &&
-              (p.taskId === undefined || requestedTaskAgentId === agent.id) &&
-              (p.workspaceId === undefined ||
-                agent.workspaceId === p.workspaceId) &&
-              (p.connected === undefined ||
-                connectedAgentIds.has(agent.id) === p.connected),
-          )
-          .sort((left, right) => left.id.localeCompare(right.id));
-        const offset = p.cursor === undefined ? 0 : Number(p.cursor);
-        const limit = p.limit === undefined ? 64 : Number(p.limit);
-        const maxBytes = p.maxBytes === undefined ? 32_768 : Number(p.maxBytes);
-        const progressNow = this.#now();
-        const items: Array<Record<string, unknown>> = [];
-        for (const agent of accessible.slice(offset, offset + limit)) {
-          const item = {
-            ...agentWithLifecycle(agent, this.store.state, progressNow),
-            tokenDigest: undefined,
-          };
-          const nextItems = [...items, item];
-          const nextOffset = offset + nextItems.length;
-          const envelope = {
-            items: nextItems,
-            nextCursor:
-              nextOffset < accessible.length ? String(nextOffset) : null,
-            snapshotSeq: this.store.state.lastEventSeq,
-          };
-          if (Buffer.byteLength(JSON.stringify(envelope)) > maxBytes) break;
-          items.push(item);
-        }
-        const nextOffset = offset + items.length;
+        ).filter((agent): agent is NonNullable<typeof agent> => Boolean(agent));
         result = {
           items,
-          nextCursor:
-            nextOffset < accessible.length ? String(nextOffset) : null,
+          nextCursor: null,
           snapshotSeq: this.store.state.lastEventSeq,
         };
-        if (
-          (items.length === 0 && offset < accessible.length) ||
-          Buffer.byteLength(JSON.stringify(result)) > maxBytes
-        )
-          throw new OrchestratorError(
-            "LIMIT_EXCEEDED",
-            "Agent list cannot fit the requested output bound.",
-          );
       } else if (request.method === "agent.get") {
         requirePermission(principal, "read:state");
         if (!safeText(request.params.agentId))
@@ -4418,10 +2425,7 @@ export class Broker {
             "PERMISSION_DENIED",
             "Agent is outside the descendant scope.",
           );
-        result = {
-          ...agentWithLifecycle(agent, this.store.state, this.#now()),
-          tokenDigest: undefined,
-        };
+        result = { ...agent, tokenDigest: undefined };
       } else if (
         request.method === "agent.prompt" ||
         request.method === "agent.steer" ||
@@ -4452,21 +2456,6 @@ export class Broker {
           throw new OrchestratorError(
             "INVALID_REQUEST",
             "Agent control identity is invalid.",
-          );
-        if (
-          request.method === "agent.prompt" &&
-          ((p.timeoutMs !== undefined &&
-            (!Number.isSafeInteger(p.timeoutMs) ||
-              Number(p.timeoutMs) < 1 ||
-              Number(p.timeoutMs) > 30_000)) ||
-            p.createTask === true ||
-            ["task", "profileId", "project", "isolation", "budget"].some(
-              (key) => p[key] !== undefined,
-            ))
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Agent prompt controls are invalid.",
           );
         const agent = this.store.state.agents[p.agentId];
         if (!agent)
@@ -4553,19 +2542,9 @@ export class Broker {
             paneId: resource.paneId,
             ...(resource.terminalId ? { terminalId: resource.terminalId } : {}),
             ...(resource.sessionId ? { sessionId: resource.sessionId } : {}),
-            ...(resource.generation !== undefined
-              ? { generation: resource.generation }
-              : {}),
           } as never;
-          const controlActor = {
-            principalId: principal.id,
-            kind: principal.kind,
-          };
-          await this.#markAgentStopping(target, controlActor);
-          if (request.method === "agent.stop")
-            await this.#herdr.stop(guard, target);
-          else await this.#herdr.close(guard, target);
-          await this.#markAgentStopped(target, controlActor);
+          if (request.method === "agent.stop") await this.#herdr.stop(guard);
+          else await this.#herdr.close(guard);
           result = {
             agentId: target,
             state: request.method === "agent.stop" ? "stopped" : "closed",
@@ -4591,27 +2570,12 @@ export class Broker {
               "RUN_MISMATCH",
               "Wait run identity does not match.",
             );
-          const openQuestion = Object.values(
-            this.store.state.questions ?? {},
-          ).find(
-            (question) =>
-              question.runId === run.id && question.state === "open",
-          );
           result = {
             agentId: target,
             taskId: run.taskId,
             runId: run.id,
             state: run.state,
             settled: run.settled,
-            ...(openQuestion
-              ? {
-                  question: {
-                    questionId: openQuestion.id,
-                    state: openQuestion.state,
-                    payload: openQuestion.payload,
-                  },
-                }
-              : {}),
           };
         } else {
           const method =
@@ -4646,17 +2610,12 @@ export class Broker {
           delete params.runId;
           delete params.assignmentGeneration;
           delete params.reason;
-          delete params.timeoutMs;
-          delete params.createTask;
           result = await this.#sendAdapterRequest(
             target,
             method,
             params,
             {
               generation: agent.generation,
-              ...(agent.connectionGeneration !== undefined
-                ? { connectionGeneration: agent.connectionGeneration }
-                : {}),
               ...(agent.piSessionId ? { piSessionId: agent.piSessionId } : {}),
               ...(run ? { runId: run.id } : {}),
             },
@@ -4826,34 +2785,6 @@ export class Broker {
             throw new OrchestratorError(
               "TARGET_NOT_FOUND",
               "Wait target was not found.",
-            );
-          const permitted =
-            p.kind === "agent"
-              ? await this.#canAccessAgent(principal, p.targetId)
-              : p.kind === "task"
-                ? await this.#canAccessTask(principal, p.targetId)
-                : p.kind === "result"
-                  ? await this.#canAccessTask(
-                      principal,
-                      (value as { taskId: string }).taskId,
-                    )
-                  : p.kind === "question"
-                    ? await this.#canAccessAgent(
-                        principal,
-                        (value as { agentId: string }).agentId,
-                      )
-                    : (
-                        await Promise.all(
-                          (value as { agentIds: string[] }).agentIds.map(
-                            (agentId) =>
-                              this.#canAccessAgent(principal, agentId),
-                          ),
-                        )
-                      ).every(Boolean);
-          if (!permitted)
-            throw new OrchestratorError(
-              "PERMISSION_DENIED",
-              "Wait target is outside the descendant scope.",
             );
           state = String(
             (value as Record<string, unknown>).state ?? "available",
@@ -5034,18 +2965,9 @@ export class Broker {
                 ...(resource.sessionId
                   ? { sessionId: resource.sessionId }
                   : {}),
-                ...(resource.generation !== undefined
-                  ? { generation: resource.generation }
-                  : {}),
               } as never;
-              const controlActor = {
-                principalId: principal.id,
-                kind: principal.kind,
-              };
-              await this.#markAgentStopping(agentId, controlActor);
-              if (close) await this.#herdr.close(guard, agentId);
-              else await this.#herdr.stop(guard, agentId);
-              await this.#markAgentStopped(agentId, controlActor);
+              if (close) await this.#herdr.close(guard);
+              else await this.#herdr.stop(guard);
               outcomes.push({ agentId, state: close ? "closed" : "stopped" });
             }
             const type = close ? "group.closed" : "group.stopped";
@@ -5062,136 +2984,6 @@ export class Broker {
             result = { ...this.store.state.groups![group.id], outcomes };
           }
         }
-      } else if (request.method === "review.submit") {
-        requirePermission(principal, "manage:self");
-        const p = request.params;
-        if (
-          !exactKeys(p, [
-            "agentId",
-            "taskId",
-            "runId",
-            "assignmentGeneration",
-            "valuePpm",
-            "confidencePpm",
-          ]) ||
-          principal.kind !== "pi_child" ||
-          principal.agentId !== p.agentId ||
-          !isEntityId(p.taskId, "tsk") ||
-          !isEntityId(p.runId, "run") ||
-          !Number.isSafeInteger(p.assignmentGeneration) ||
-          !Number.isSafeInteger(p.valuePpm) ||
-          Number(p.valuePpm) < 0 ||
-          Number(p.valuePpm) > 1_000_000 ||
-          !Number.isSafeInteger(p.confidencePpm) ||
-          Number(p.confidencePpm) < 0 ||
-          Number(p.confidencePpm) > 1_000_000
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Independent review submission is invalid.",
-          );
-        const reviewerRun = this.store.state.runs[p.runId];
-        const contract = Object.values(
-          this.store.state.reviewContracts ?? {},
-        ).find((item) => item.reviewTaskId === p.taskId);
-        if (
-          !reviewerRun ||
-          !contract ||
-          reviewerRun.taskId !== p.taskId ||
-          reviewerRun.agentId !== principal.agentId ||
-          reviewerRun.assignmentGeneration !== p.assignmentGeneration ||
-          reviewerRun.settled ||
-          ["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(
-            reviewerRun.state,
-          ) ||
-          Date.parse(contract.expiresAt) <= this.#now()
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Review contract is late, unbound, or outside this assignment.",
-          );
-        const reviewedRun = this.store.state.runs[contract.reviewedRunId];
-        const reviewedResult =
-          this.store.state.results?.[contract.reviewedResultId];
-        if (
-          !reviewedRun ||
-          !reviewedResult ||
-          reviewedResult.taskId !== contract.reviewedTaskId ||
-          reviewedResult.runId !== contract.reviewedRunId ||
-          reviewedResult.payloadHash !== contract.resultDigest ||
-          !reviewedResult.piSettled
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Reviewed result bytes or binding changed.",
-          );
-        const reviewerSubject = runtimeSubjectForRun(
-          this.store.state,
-          reviewerRun,
-        );
-        const reviewedSubject = runtimeSubjectForRun(
-          this.store.state,
-          reviewedRun,
-        );
-        if (!reviewerSubject || !reviewedSubject)
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Review model identity is not attested.",
-          );
-        const reviewerModelFamily = modelFamily(
-          reviewerSubject,
-          this.#endpointPolicy,
-        );
-        if (
-          reviewerModelFamily ===
-          modelFamily(reviewedSubject, this.#endpointPolicy)
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "A model family cannot review its own output.",
-          );
-        if (
-          Object.values(this.store.state.modelEvidence?.records ?? {}).some(
-            (stored) =>
-              stored.record.sourceKind === "independent_review" &&
-              stored.record.sourceKey === contract.id,
-          )
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Review contract was already submitted.",
-          );
-        const observedAt = new Date(this.#now()).toISOString();
-        let record;
-        try {
-          record = independentReviewEvidence({
-            state: this.store.state,
-            reviewedRun,
-            sourceKey: contract.id,
-            reviewerAgentId: principal.agentId!,
-            reviewerModelFamily,
-            resultId: reviewedResult.id,
-            resultDigest: reviewedResult.payloadHash,
-            rubricVersion: contract.rubricVersion,
-            valuePpm: Number(p.valuePpm),
-            confidencePpm: Number(p.confidencePpm),
-            observedAt,
-          });
-        } catch (error) {
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            error instanceof Error
-              ? error.message
-              : "Independent review evidence is invalid.",
-          );
-        }
-        committedEvent = await this.store.append({
-          type: "model.evidence_recorded",
-          actor: { principalId: principal.id, kind: principal.kind },
-          entityRefs: {},
-          payload: { record },
-        });
-        result = { evidenceId: record.evidenceId, state: "recorded" };
       } else if (request.method === "result.publish") {
         requirePermission(principal, "manage:self");
         const p = request.params;
@@ -5307,17 +3099,10 @@ export class Broker {
         requirePermission(principal, "read:results");
         if (
           Object.keys(request.params).some(
-            (key) =>
-              !["resultId", "taskId", "include", "maxBytes"].includes(key),
+            (key) => !["resultId", "taskId"].includes(key),
           ) ||
           (!safeText(request.params.resultId) &&
-            !safeText(request.params.taskId)) ||
-          (request.params.include !== undefined &&
-            !Array.isArray(request.params.include)) ||
-          (request.params.maxBytes !== undefined &&
-            (!Number.isSafeInteger(request.params.maxBytes) ||
-              Number(request.params.maxBytes) < 1 ||
-              Number(request.params.maxBytes) > 262_144))
+            !safeText(request.params.taskId))
         )
           throw new OrchestratorError(
             "INVALID_REQUEST",
@@ -5518,13 +3303,23 @@ export class Broker {
         if (
           principal.kind === "pi_parent" &&
           run?.agentId &&
-          principal.agentId !== run.agentId &&
-          !this.#isDescendantSync(principal.agentId, run.agentId)
-        )
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Question is outside the descendant scope.",
-          );
+          principal.agentId !== run.agentId
+        ) {
+          let current: string | undefined = run.agentId;
+          let allowed = false;
+          for (let depth = 0; depth < 5 && current; depth++) {
+            if (current === principal.agentId) {
+              allowed = true;
+              break;
+            }
+            current = this.store.state.agents[current]?.parentAgentId;
+          }
+          if (!allowed)
+            throw new OrchestratorError(
+              "PERMISSION_DENIED",
+              "Question is outside the descendant scope.",
+            );
+        }
         committedEvent = await this.store.append({
           type: "question.answered",
           actor: { principalId: principal.id, kind: principal.kind },
@@ -5705,12 +3500,10 @@ export class Broker {
         requirePermission(principal, "read:results");
         if (
           Object.keys(request.params).some(
-            (key) => !["taskIds", "select", "maxBytes"].includes(key),
+            (key) => !["taskIds", "maxBytes"].includes(key),
           ) ||
           !Array.isArray(request.params.taskIds) ||
-          request.params.taskIds.length > 64 ||
-          (request.params.select !== undefined &&
-            !Array.isArray(request.params.select))
+          request.params.taskIds.length > 64
         )
           throw new OrchestratorError(
             "INVALID_REQUEST",
@@ -5806,202 +3599,7 @@ export class Broker {
             "LIMIT_EXCEEDED",
             "Collection cannot fit the requested output bound.",
           );
-        const collectedAt = new Date(this.#now()).toISOString();
-        const collectedTaskIds = bounded.flatMap((item) => {
-          const row = item as {
-            taskId?: unknown;
-            result?: unknown;
-            truncated?: unknown;
-          };
-          return typeof row.taskId === "string" &&
-            row.result &&
-            row.truncated !== true
-            ? [row.taskId]
-            : [];
-        });
-        for (const taskId of collectedTaskIds)
-          await this.store.append({
-            type: "task.collected",
-            actor: { principalId: principal.id, kind: principal.kind },
-            entityRefs: { taskId },
-            payload: { taskId, collectedAt },
-          });
-        if (this.#autoCloseCompletedTemporary && this.#herdr) {
-          for (const agent of Object.values(this.store.state.agents)) {
-            const recommendation = projectAgentLifecycle(
-              agent,
-              this.store.state,
-            );
-            const resource = this.store.state.herdrResources?.[agent.id];
-            if (
-              recommendation.closeRecommendation !== "close" ||
-              !resource?.paneId
-            )
-              continue;
-            const controlActor = {
-              principalId: principal.id,
-              kind: principal.kind,
-            };
-            await this.#markAgentStopping(agent.id, controlActor);
-            await this.#herdr.close(
-              {
-                paneId: resource.paneId,
-                ...(resource.terminalId
-                  ? { terminalId: resource.terminalId }
-                  : {}),
-                ...(resource.sessionId
-                  ? { sessionId: resource.sessionId }
-                  : {}),
-                ...(resource.generation !== undefined
-                  ? { generation: resource.generation }
-                  : {}),
-              } as never,
-              agent.id,
-            );
-            await this.#markAgentStopped(agent.id, controlActor);
-          }
-        }
         result = collection;
-      } else if (
-        request.method === "metadata.get" ||
-        request.method === "transcript.close"
-      ) {
-        requirePermission(principal, "read:state");
-        const p = request.params;
-        const close = request.method === "transcript.close";
-        if (
-          !exactKeys(
-            p,
-            close ? ["taskId", "runId", "confirm"] : ["taskId", "runId"],
-          ) ||
-          !safeText(p.taskId) ||
-          (p.runId !== undefined && !safeText(p.runId)) ||
-          (close && p.confirm !== true)
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Transcript metadata request is invalid.",
-          );
-        const task = this.store.state.tasks[p.taskId as string];
-        if (!task)
-          throw new OrchestratorError("NOT_FOUND", "Task was not found.");
-        if (!(await this.#canAccessTask(principal, task.id)))
-          throw new OrchestratorError(
-            "PERMISSION_DENIED",
-            "Task is outside the authenticated scope.",
-          );
-        const selectedRunId =
-          typeof p.runId === "string" ? p.runId : task.currentRunId;
-        if (
-          !selectedRunId ||
-          this.store.state.runs[selectedRunId]?.taskId !== task.id
-        )
-          throw new OrchestratorError(
-            "NOT_FOUND",
-            "The selected task run was not found.",
-          );
-        const matches = Object.values(
-          this.store.state.herdrMetadata ?? {},
-        ).filter(
-          (item) => item.taskId === task.id && item.runId === selectedRunId,
-        );
-        if (matches.length !== 1)
-          throw new OrchestratorError(
-            matches.length === 0 ? "NOT_FOUND" : "HERDR_IDENTITY_MISMATCH",
-            matches.length === 0
-              ? "Task metadata was not found."
-              : "Task metadata identity is ambiguous.",
-          );
-        const metadata = matches[0]!;
-        const workflowDigest = String(
-          (task.project?.compact as { workflowDigest?: unknown } | undefined)
-            ?.workflowDigest ?? "",
-        );
-        if (!/^[a-f0-9]{64}$/u.test(workflowDigest))
-          throw new OrchestratorError(
-            "STATE_CORRUPT",
-            "Compact task correlation is invalid.",
-          );
-        if (!close) result = metadata;
-        else if (metadata.state === "closed") {
-          result = {
-            taskId: metadata.taskId,
-            metadataId: metadata.metadataId,
-            transcriptRef: metadata.transcriptRef,
-            state: "closed",
-          };
-        } else {
-          if (
-            !this.#herdr ||
-            !metadata.exitedAt ||
-            !metadata.transcriptRef ||
-            metadata.transcriptPolicy !== "retain-tab"
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "The retained transcript is not ready for close.",
-            );
-          let closeIntent = metadata;
-          if (metadata.state !== "cleanup_pending") {
-            const pendingAt = new Date(this.#now()).toISOString();
-            const pending = {
-              ...metadata,
-              state: "cleanup_pending" as const,
-              updatedAt: pendingAt,
-            };
-            delete (pending as Partial<HerdrTaskMetadata>).metadataDigest;
-            committedEvent = await this.store.append({
-              type: "herdr.metadata_projected",
-              actor: { principalId: principal.id, kind: principal.kind },
-              entityRefs: {
-                workflowId: metadata.workflowId,
-                taskId: metadata.taskId,
-                runId: metadata.runId,
-                agentId: metadata.agentId,
-                workflowDigest,
-              },
-              payload: {
-                ...pending,
-                metadataDigest: sha256(canonicalJson(pending)),
-              },
-            });
-            closeIntent = this.store.state.herdrMetadata![metadata.metadataId]!;
-          }
-          await this.#herdr.closeRetainedTab({
-            workspaceId: closeIntent.workspaceId,
-            tabId: closeIntent.tabId,
-            paneId: closeIntent.paneId,
-            terminalId: closeIntent.terminalId,
-          });
-          const updatedAt = new Date(this.#now()).toISOString();
-          const closed = {
-            ...closeIntent,
-            state: "closed" as const,
-            updatedAt,
-          };
-          delete (closed as Partial<HerdrTaskMetadata>).metadataDigest;
-          committedEvent = await this.store.append({
-            type: "herdr.metadata_projected",
-            actor: { principalId: principal.id, kind: principal.kind },
-            entityRefs: {
-              workflowId: metadata.workflowId,
-              taskId: metadata.taskId,
-              runId: metadata.runId,
-              agentId: metadata.agentId,
-              workflowDigest,
-            },
-            payload: {
-              ...closed,
-              metadataDigest: sha256(canonicalJson(closed)),
-            },
-          });
-          result = {
-            taskId: metadata.taskId,
-            metadataId: metadata.metadataId,
-            transcriptRef: metadata.transcriptRef,
-            state: "closed",
-          };
-        }
       } else if (
         request.method === "agent.spawn" ||
         request.method === "delegate.execute"
@@ -6013,15 +3611,9 @@ export class Broker {
             ? [
                 "task",
                 "profileId",
-                "modelProfileId",
-                "model",
-                "placement",
-                "lifecycleClass",
-                "keepForReuse",
                 "project",
                 "isolation",
                 "budget",
-                "review",
                 "parentAgentId",
                 "wait",
                 "dryRun",
@@ -6035,9 +3627,7 @@ export class Broker {
                 "waitUntil",
                 "timeoutMs",
                 "failureMode",
-                "transcriptPolicy",
                 "dryRun",
-                "compact",
               ];
         if (Object.keys(p).some((key) => !allowedKeys.includes(key)))
           throw new OrchestratorError(
@@ -6102,52 +3692,6 @@ export class Broker {
           request.method === "agent.spawn"
             ? exactRequestedIsolation(p.isolation)
             : undefined;
-        if (
-          request.method === "agent.spawn" &&
-          ((p.lifecycleClass !== undefined &&
-            !["temporary", "reusable", "retained", "pinned"].includes(
-              p.lifecycleClass as string,
-            )) ||
-            (p.keepForReuse !== undefined &&
-              typeof p.keepForReuse !== "boolean") ||
-            (p.model !== undefined &&
-              (() => {
-                try {
-                  validateModelSelection(p.model);
-                  return false;
-                } catch {
-                  return true;
-                }
-              })()) ||
-            (p.placement !== undefined &&
-              p.placement !== "current-workspace" &&
-              p.placement !== "new-workspace") ||
-            (p.modelProfileId !== undefined &&
-              p.modelProfileId !== "manager" &&
-              p.modelProfileId !== "subagent"))
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Spawn placement or model profile is invalid.",
-          );
-        const compact =
-          p.compact &&
-          typeof p.compact === "object" &&
-          !Array.isArray(p.compact)
-            ? (p.compact as Record<string, unknown>)
-            : undefined;
-        if (
-          p.compact !== undefined &&
-          (!compact ||
-            !exactKeys(compact, ["workflowDigest", "transcriptPolicy"]) ||
-            !/^[a-f0-9]{64}$/u.test(String(compact.workflowDigest)) ||
-            compact.transcriptPolicy !== "retain-tab" ||
-            p.transcriptPolicy !== compact.transcriptPolicy)
-        )
-          throw new OrchestratorError(
-            "INVALID_REQUEST",
-            "Compact workflow metadata is invalid.",
-          );
         const dryRun = p.dryRun === true;
         const creationNow = this.#now();
         const createdAt = new Date(creationNow).toISOString();
@@ -6155,64 +3699,6 @@ export class Broker {
           creationNow,
           request.method === "delegate.execute" ? p.timeoutMs : undefined,
         );
-        let reviewTarget:
-          | {
-              taskId: string;
-              runId: string;
-              resultId: string;
-              resultDigest: string;
-              rubricVersion: string;
-              taskProfile: string;
-            }
-          | undefined;
-        if (request.method === "agent.spawn" && p.review !== undefined) {
-          const review =
-            p.review && typeof p.review === "object" && !Array.isArray(p.review)
-              ? (p.review as Record<string, unknown>)
-              : undefined;
-          if (
-            !review ||
-            !exactKeys(review, [
-              "taskId",
-              "runId",
-              "resultId",
-              "rubricVersion",
-            ]) ||
-            !isEntityId(review.taskId, "tsk") ||
-            !isEntityId(review.runId, "run") ||
-            !isEntityId(review.resultId, "res") ||
-            !safeText(review.rubricVersion, 64)
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Review target is invalid.",
-            );
-          const reviewedTask = this.store.state.tasks[review.taskId];
-          const reviewedRun = this.store.state.runs[review.runId];
-          const reviewedResult = this.store.state.results?.[review.resultId];
-          if (
-            !reviewedTask?.profileId ||
-            !reviewedRun ||
-            !reviewedResult ||
-            reviewedRun.taskId !== reviewedTask.id ||
-            reviewedResult.taskId !== reviewedTask.id ||
-            reviewedResult.runId !== reviewedRun.id ||
-            !reviewedResult.piSettled
-          )
-            throw new OrchestratorError(
-              "INVALID_REQUEST",
-              "Review target is not a settled immutable result.",
-            );
-          reviewTarget = {
-            taskId: reviewedTask.id,
-            runId: reviewedRun.id,
-            resultId: reviewedResult.id,
-            resultDigest: reviewedResult.payloadHash,
-            rubricVersion: review.rubricVersion as string,
-            taskProfile: reviewedTask.profileId,
-          };
-        }
-        const reviewContractId = reviewTarget ? createId("rvc") : undefined;
         const steps =
           request.method === "agent.spawn"
             ? [
@@ -6264,83 +3750,11 @@ export class Broker {
             "INVALID_REQUEST",
             "Delegation steps are invalid.",
           );
-        if (
-          request.method === "agent.spawn" &&
-          !dryRun &&
-          p.model === undefined &&
-          this.#modelIntelligence?.routingMode === "explicit_required"
-        )
-          throw new OrchestratorError(
-            "MODEL_SELECTION_REQUIRED",
-            "The model field is required in explicit_required mode. Call agent_model_options, then retry agent_spawn with the same visible arguments and add only model.",
-            {
-              retryable: true,
-              details: {
-                missingField: "model",
-                retryTool: "agent_spawn",
-                modelOptionsTool: "agent_model_options",
-                validatedArgumentsRetained: true,
-              },
-              remediation:
-                "Call agent_model_options, then retry agent_spawn with the same visible arguments and add only the model field.",
-            },
-          );
         const workflowId = createId("wfl");
-        let planned = steps.map((raw) => {
+        const planned = steps.map((raw) => {
           const record = raw as Record<string, unknown>;
           const profileId = record.profileId as string;
-          const requested = compact
-            ? exactRequestedIsolation({ mode: record.isolation })
-            : requestedIsolation;
-          const spawnPolicy = resolveSpawnPolicy(
-            {
-              taskProfileId: profileId,
-              ...(request.method === "agent.spawn" &&
-              (p.placement === "current-workspace" ||
-                p.placement === "new-workspace")
-                ? { placement: p.placement as AgentPlacement }
-                : {}),
-              ...(request.method === "agent.spawn" &&
-              (p.modelProfileId === "manager" ||
-                p.modelProfileId === "subagent")
-                ? { modelProfileId: p.modelProfileId as ModelProfileId }
-                : {}),
-              ...(request.method === "agent.spawn" && p.model
-                ? { model: validateModelSelection(p.model) }
-                : {}),
-              projectKey: String(inheritedProject.cwd),
-            },
-            this.#modelPolicy,
-          );
-          if (compact) {
-            if (!compactPolicyContext)
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Compact policy context is unavailable.",
-              );
-            const expectedPolicy = record.compactPolicy;
-            const effective = spawnPolicy.effective;
-            const currentPolicy = {
-              decision: "allow",
-              placement: effective.placement,
-              isolation: resolveIsolation(profileId, requested),
-              modelProfileId: effective.modelProfileId,
-              providerQualifiedModel: `${effective.model.provider}/${effective.model.modelId}`,
-              thinkingLevel: effective.model.thinkingLevel,
-              modelPolicyHash: spawnPolicy.policyHash,
-              context: compactPolicyContext,
-            };
-            if (canonicalJson(expectedPolicy) !== canonicalJson(currentPolicy))
-              throw new OrchestratorError(
-                "INVALID_REQUEST",
-                "Compact policy changed after preview acceptance.",
-              );
-          }
-          const endpoint = resolveEndpoint(
-            spawnPolicy.effective.model,
-            this.#endpointPolicy,
-            this.#scheduler.limits.maxActiveAgents,
-          );
+          const requested = requestedIsolation;
           return {
             key: safeText(record.key, 64)
               ? (record.key as string)
@@ -6356,91 +3770,9 @@ export class Broker {
             dependsOn: Array.isArray(record.dependsOn)
               ? (record.dependsOn as unknown[])
               : [],
-            resultProjection: Array.isArray(record.resultProjection)
-              ? (record.resultProjection as unknown[])
-              : [],
             isolation: resolveIsolation(profileId, requested),
-            spawnPolicy,
-            endpointId: endpoint.endpointId,
-            routingOptions: undefined as ModelOptionsView | undefined,
-            selectionReason: (request.method === "agent.spawn" && p.model
-              ? "explicit_override"
-              : "current_default") as
-              | "explicit_override"
-              | "current_default"
-              | "rated_auto"
-              | "insufficient_evidence",
-            lifecycleClass:
-              request.method === "agent.spawn" &&
-              typeof p.lifecycleClass === "string"
-                ? p.lifecycleClass
-                : "temporary",
-            keepForReuse:
-              request.method === "agent.spawn" &&
-              (p.keepForReuse === true || p.lifecycleClass === "reusable"),
           };
         });
-        if (
-          request.method === "agent.spawn" &&
-          p.model === undefined &&
-          this.#modelIntelligence?.routingMode === "rated_auto"
-        ) {
-          planned = await Promise.all(
-            planned.map(async (step) => {
-              const routingOptions = await this.#modelOptions({
-                taskProfile: step.profileId,
-                placement: step.spawnPolicy.effective.placement,
-                modelProfileId: step.spawnPolicy.effective.modelProfileId,
-                projectKey: inheritedProject.cwd as string,
-                selectedModel: step.spawnPolicy.effective.model,
-                asOf: createdAt,
-                limit: MODEL_RANKING_POLICY.maxEligibleCandidates,
-              });
-              const candidate = ratedAutomaticCandidate(routingOptions);
-              if (!candidate)
-                return {
-                  ...step,
-                  routingOptions,
-                  selectionReason: "insufficient_evidence" as const,
-                };
-              const automatic = resolveSpawnPolicy(
-                {
-                  taskProfileId: step.profileId,
-                  placement: step.spawnPolicy.effective.placement,
-                  modelProfileId: step.spawnPolicy.effective.modelProfileId,
-                  projectKey: inheritedProject.cwd as string,
-                  model: candidate.selection,
-                },
-                this.#modelPolicy,
-              );
-              const spawnPolicy: ResolvedSpawnPolicy = {
-                ...automatic,
-                requested: step.spawnPolicy.requested,
-              };
-              const selectedOptions = await this.#modelOptions({
-                taskProfile: step.profileId,
-                placement: spawnPolicy.effective.placement,
-                modelProfileId: spawnPolicy.effective.modelProfileId,
-                projectKey: inheritedProject.cwd as string,
-                selectedModel: spawnPolicy.effective.model,
-                asOf: createdAt,
-                limit: MODEL_RANKING_POLICY.maxEligibleCandidates,
-              });
-              const endpoint = resolveEndpoint(
-                spawnPolicy.effective.model,
-                this.#endpointPolicy,
-                this.#scheduler.limits.maxActiveAgents,
-              );
-              return {
-                ...step,
-                spawnPolicy,
-                endpointId: endpoint.endpointId,
-                routingOptions: selectedOptions,
-                selectionReason: "rated_auto" as const,
-              };
-            }),
-          );
-        }
         const taskIds = planned.map(() => createId("tsk"));
         try {
           validateWorkflow({
@@ -6472,9 +3804,7 @@ export class Broker {
               dependsOn: step.dependsOn.filter(
                 (item): item is string => typeof item === "string",
               ),
-              resultProjection: step.resultProjection.filter(
-                (item): item is string => typeof item === "string",
-              ),
+              resultProjection: [],
               isolationMode: step.isolation,
             })),
           });
@@ -6486,12 +3816,7 @@ export class Broker {
               : "Delegation workflow is invalid.",
           );
         }
-        const scheduler = this.#scheduler;
-        if (planned.length > scheduler.limits.maxTasksPerDelegate)
-          throw new OrchestratorError(
-            "LIMIT_EXCEEDED",
-            "Delegation exceeds the per-request task limit.",
-          );
+        const scheduler = new DeterministicScheduler();
         if (
           Object.values(this.store.state.tasks).filter(
             (task) => task.state === "queued",
@@ -6503,21 +3828,6 @@ export class Broker {
             "LIMIT_EXCEEDED",
             "The global task queue is full.",
           );
-        const advisoryReceipts = dryRun
-          ? []
-          : await Promise.all(
-              planned.map(
-                async (step) =>
-                  await this.#advisoryModelReceipt(
-                    step.profileId,
-                    step.spawnPolicy,
-                    inheritedProject.cwd as string,
-                    createdAt,
-                    step.routingOptions,
-                    step.selectionReason,
-                  ),
-              ),
-            );
         if (dryRun) {
           result = {
             workflowId,
@@ -6528,74 +3838,8 @@ export class Broker {
               title: step.title,
               objective: step.objective,
               estimatedAgentCount: 1,
-              requestedModel: step.spawnPolicy.requested,
-              effectiveModel: step.spawnPolicy.effective,
-              endpointId: step.endpointId,
             })),
           };
-        } else if (compact && compactIdempotency) {
-          const frozenResponse = {
-            workflowId,
-            state: "scheduled",
-            tasks: planned.map((step, index) => ({
-              key: step.key,
-              taskId: taskIds[index]!,
-              state: "queued",
-            })),
-          };
-          committedEvent = await this.store.append({
-            type: "compact.delegation_scheduled",
-            actor: { principalId: principal.id, kind: principal.kind },
-            entityRefs: { workflowId },
-            payload: {
-              workflowId,
-              parentAgentId,
-              mode: safeText(p.mode, 32) ? p.mode : "dag",
-              idempotencyKey: compactIdempotency.key,
-              paramsHash: compactIdempotency.paramsHash,
-              response: frozenResponse,
-              tasks: planned.map((step, index) => ({
-                taskId: taskIds[index]!,
-                title: step.title,
-                objective: step.objective,
-                createdAt,
-                parentAgentId,
-                workflowId,
-                profileId: step.profileId,
-                endpointId: step.endpointId,
-                constraints: step.constraints.filter(
-                  (item): item is string => typeof item === "string",
-                ),
-                dependencies: step.dependsOn
-                  .map((key) =>
-                    planned.find((candidate) => candidate.key === key),
-                  )
-                  .filter(Boolean)
-                  .map((candidate) => taskIds[planned.indexOf(candidate!)]),
-                project: {
-                  ...inheritedProject,
-                  isolation: step.isolation,
-                  requestedSpawnPolicy: step.spawnPolicy.requested,
-                  effectiveSpawnPolicy: step.spawnPolicy.effective,
-                  modelPolicyHash: step.spawnPolicy.policyHash,
-                  advisoryModelReceipt: advisoryReceipts[index]!,
-                  compact: {
-                    workflowDigest: compact.workflowDigest,
-                    transcriptPolicy: compact.transcriptPolicy,
-                  },
-                },
-                timeoutAt: wallDeadline,
-              })),
-            },
-          });
-          for (const taskId of taskIds)
-            this.#scheduleTaskDeadline(this.store.state.tasks[taskId]!);
-          await this.#advanceWorkflow(workflowId, {
-            principalId: principal.id,
-            kind: principal.kind,
-          });
-          result = frozenResponse;
-          compactIdempotency = undefined;
         } else {
           committedEvent = await this.store.append({
             type: "workflow.created",
@@ -6628,10 +3872,6 @@ export class Broker {
                 parentAgentId,
                 workflowId,
                 profileId: step.profileId,
-                endpointId: step.endpointId,
-                constraints: step.constraints.filter(
-                  (item): item is string => typeof item === "string",
-                ),
                 dependencies: step.dependsOn
                   .map((key) =>
                     planned.find((candidate) => candidate.key === key),
@@ -6641,55 +3881,11 @@ export class Broker {
                 project: {
                   ...inheritedProject,
                   isolation: step.isolation,
-                  requestedSpawnPolicy: step.spawnPolicy.requested,
-                  effectiveSpawnPolicy: step.spawnPolicy.effective,
-                  modelPolicyHash: step.spawnPolicy.policyHash,
-                  advisoryModelReceipt: advisoryReceipts[index]!,
-                  ...(!compact
-                    ? {
-                        lifecycleClass: step.lifecycleClass,
-                        keepForReuse: step.keepForReuse,
-                      }
-                    : {}),
-                  ...(compact
-                    ? {
-                        compact: {
-                          workflowDigest: compact.workflowDigest,
-                          transcriptPolicy: compact.transcriptPolicy,
-                        },
-                      }
-                    : {}),
                 },
                 timeoutAt: wallDeadline,
               },
             });
             this.#scheduleTaskDeadline(this.store.state.tasks[taskId]!);
-          }
-          if (reviewTarget && reviewContractId) {
-            const reviewTaskId = taskIds[0]!;
-            await this.store.append({
-              type: "review.contract_issued",
-              actor: { principalId: principal.id, kind: principal.kind },
-              entityRefs: {
-                reviewContractId,
-                taskId: reviewTaskId,
-                reviewedTaskId: reviewTarget.taskId,
-                runId: reviewTarget.runId,
-                resultId: reviewTarget.resultId,
-              },
-              payload: {
-                id: reviewContractId,
-                reviewTaskId,
-                reviewedTaskId: reviewTarget.taskId,
-                reviewedRunId: reviewTarget.runId,
-                reviewedResultId: reviewTarget.resultId,
-                resultDigest: reviewTarget.resultDigest,
-                rubricVersion: reviewTarget.rubricVersion,
-                taskProfile: reviewTarget.taskProfile,
-                issuedAt: createdAt,
-                expiresAt: wallDeadline,
-              },
-            });
           }
           await this.#advanceWorkflow(workflowId, {
             principalId: principal.id,
@@ -6699,9 +3895,6 @@ export class Broker {
             const task = this.store.state.tasks[taskIds[index]!];
             const run = task?.currentRunId
               ? this.store.state.runs[task.currentRunId]
-              : undefined;
-            const progress = task
-              ? projectTaskProgress(task, this.store.state, this.#now())
               : undefined;
             return {
               key: step.key,
@@ -6714,18 +3907,12 @@ export class Broker {
                   }
                 : {}),
               state: task?.state ?? "queued",
-              endpointId: task?.endpointId ?? step.endpointId,
-              ...(task?.admissionReason
-                ? { admissionReason: task.admissionReason }
-                : {}),
-              ...(progress ? { progress } : {}),
             };
           });
           result = {
             workflowId,
             state: this.store.state.workflows[workflowId]?.state ?? "running",
             tasks: currentTasks,
-            ...(reviewContractId ? { reviewContractId } : {}),
           };
         }
       } else if (request.method === "workflow.create") {
@@ -6770,36 +3957,15 @@ export class Broker {
         const plan = planWorkflow(p.definition as WorkflowDefinition, {
           objective: p.objective as string,
           dryRun: p.dryRun === true,
-          maxActiveAgents: this.#scheduler.limits.maxActiveAgents,
-          maxTasks: this.#scheduler.limits.maxTasksPerDelegate,
         });
-        const workflowParent = this.store.state.agents[parentAgentId];
-        const resolvedPlan = plan.steps.map((step) => {
-          const spawnPolicy = resolveSpawnPolicy(
-            {
-              taskProfileId: step.profileId,
-              ...(workflowParent?.cwd
-                ? { projectKey: workflowParent.cwd }
-                : {}),
-            },
-            this.#modelPolicy,
-          );
-          const endpoint = resolveEndpoint(
-            spawnPolicy.effective.model,
-            this.#endpointPolicy,
-            this.#scheduler.limits.maxActiveAgents,
-          );
-          return {
-            ...step,
-            isolationMode: resolveWorkflowIsolation(
-              step.profileId,
-              step.isolationMode,
-            ),
-            requestedIsolationMode: step.isolationMode,
-            spawnPolicy,
-            endpointId: endpoint.endpointId,
-          };
-        });
+        const resolvedPlan = plan.steps.map((step) => ({
+          ...step,
+          isolationMode: resolveWorkflowIsolation(
+            step.profileId,
+            step.isolationMode,
+          ),
+          requestedIsolationMode: step.isolationMode,
+        }));
         for (const step of plan.steps)
           if (
             step.isolationMode === "reuse-worktree" &&
@@ -6812,7 +3978,7 @@ export class Broker {
         const taskIds = resolvedPlan.map((step) => step.taskId);
         const creationNow = this.#now();
         const createdAt = new Date(creationNow).toISOString();
-        const queueLimit = this.#scheduler.limits.maxQueuedTasks;
+        const queueLimit = new DeterministicScheduler().limits.maxQueuedTasks;
         if (
           !p.dryRun &&
           Object.values(this.store.state.tasks).filter(
@@ -6825,25 +3991,6 @@ export class Broker {
             "LIMIT_EXCEEDED",
             "The global task queue is full.",
           );
-        const advisoryReceipts =
-          p.dryRun === true
-            ? new Map<string, AdvisoryModelReceipt>()
-            : new Map(
-                await Promise.all(
-                  resolvedPlan.map(
-                    async (step) =>
-                      [
-                        step.taskId,
-                        await this.#advisoryModelReceipt(
-                          step.profileId,
-                          step.spawnPolicy,
-                          workflowParent?.cwd,
-                          createdAt,
-                        ),
-                      ] as const,
-                  ),
-                ),
-              );
         if (p.dryRun !== true)
           committedEvent = await this.store.append({
             type: "workflow.created",
@@ -6880,18 +4027,10 @@ export class Broker {
                         workspaceId:
                           this.store.state.agents[parentAgentId]!.workspaceId,
                         isolation: step.isolationMode,
-                        requestedSpawnPolicy: step.spawnPolicy.requested,
-                        effectiveSpawnPolicy: step.spawnPolicy.effective,
-                        modelPolicyHash: step.spawnPolicy.policyHash,
-                        advisoryModelReceipt: advisoryReceipts.get(
-                          step.taskId,
-                        )!,
                       },
                     }
                   : {}),
                 profileId: step.profileId,
-                endpointId: step.endpointId,
-                constraints: [...step.constraints],
                 isolationMode: step.requestedIsolationMode,
                 dependencies: step.dependsOn
                   .map((key) => plan.steps.find((x) => x.key === key)?.taskId)
@@ -6913,18 +4052,11 @@ export class Broker {
               ? "created"
               : (this.store.state.workflows[plan.workflowId]?.state ??
                 "running"),
-          tasks: resolvedPlan.map((s) => {
-            const task = this.store.state.tasks[s.taskId];
-            return {
-              key: s.key,
-              taskId: s.taskId,
-              state: task?.state ?? "queued",
-              endpointId: task?.endpointId ?? s.endpointId,
-              ...(task?.admissionReason
-                ? { admissionReason: task.admissionReason }
-                : {}),
-            };
-          }),
+          tasks: resolvedPlan.map((s) => ({
+            key: s.key,
+            taskId: s.taskId,
+            state: "queued",
+          })),
         };
       } else if (request.method === "workflow.get") {
         requirePermission(principal, "read:state");
@@ -7139,7 +4271,6 @@ export class Broker {
             "The task wall deadline has expired.",
           );
         const runId = createId("run");
-        const endpointId = this.#endpointIdForTask(task, agent.id);
         committedEvent = await this.store.append({
           type: "run.created",
           actor: { principalId: principal.id, kind: principal.kind },
@@ -7151,7 +4282,6 @@ export class Broker {
             assignmentId: createId("asg"),
             assignmentGeneration: request.params.assignmentGeneration,
             agentGeneration: agent.generation,
-            endpointId,
             ...(task.timeoutAt ? { timeoutAt: task.timeoutAt } : {}),
             ...(safeText(request.params.piSessionId)
               ? { piSessionId: request.params.piSessionId }
@@ -7172,7 +4302,6 @@ export class Broker {
           taskId: task.id,
           agentId: agent.id,
           assignmentGeneration: request.params.assignmentGeneration,
-          endpointId,
           state: "working",
         };
       } else if (request.method === "task.create_m3") {
@@ -7223,90 +4352,31 @@ export class Broker {
         result = { taskId, state: "queued" };
       } else if (request.method === "task.list") {
         requirePermission(principal, "read:state");
-        const p = request.params;
-        if (
-          Object.keys(p).some(
-            (key) =>
-              ![
-                "state",
-                "profileId",
-                "workspaceId",
-                "include",
-                "maxBytes",
-                "cursor",
-                "limit",
-              ].includes(key),
-          ) ||
-          (p.state !== undefined && !safeText(p.state, 64)) ||
-          (p.profileId !== undefined && !safeText(p.profileId, 256)) ||
-          (p.workspaceId !== undefined && !safeText(p.workspaceId, 256)) ||
-          (p.include !== undefined && !Array.isArray(p.include)) ||
-          (p.maxBytes !== undefined &&
-            (!Number.isSafeInteger(p.maxBytes) ||
-              Number(p.maxBytes) < 1 ||
-              Number(p.maxBytes) > 262_144)) ||
-          (p.cursor !== undefined &&
-            (typeof p.cursor !== "string" || !/^\d+$/u.test(p.cursor))) ||
-          (p.limit !== undefined &&
-            (!Number.isSafeInteger(p.limit) ||
-              Number(p.limit) < 1 ||
-              Number(p.limit) > 500))
-        )
+        if (Object.keys(request.params).length)
           throw new OrchestratorError(
             "INVALID_REQUEST",
-            "Task list parameters are invalid.",
+            "M1 task list parameters must be empty.",
           );
-        const accessible = (
-          await Promise.all(
-            Object.values(this.store.state.tasks).map(async (task) =>
-              (await this.#canAccessTask(principal, task.id))
-                ? task
-                : undefined,
-            ),
-          )
-        )
-          .filter((task): task is NonNullable<typeof task> => Boolean(task))
-          .filter(
-            (task) =>
-              (p.state === undefined || task.state === p.state) &&
-              (p.profileId === undefined || task.profileId === p.profileId) &&
-              (p.workspaceId === undefined ||
-                task.project?.workspaceId === p.workspaceId),
-          )
-          .sort(
-            (left, right) =>
-              left.createdAt.localeCompare(right.createdAt) ||
-              left.id.localeCompare(right.id),
-          );
-        const offset = p.cursor === undefined ? 0 : Number(p.cursor);
-        const limit =
-          p.limit === undefined ? accessible.length : Number(p.limit);
-        const progressNow = this.#now();
-        const items = accessible
-          .slice(offset, offset + limit)
-          .map((task) => taskWithProgress(task, this.store.state, progressNow));
         result = {
-          items,
-          nextCursor:
-            offset + items.length < accessible.length
-              ? String(offset + items.length)
-              : null,
+          items: (
+            await Promise.all(
+              Object.values(this.store.state.tasks).map(async (task) =>
+                (await this.#canAccessTask(principal, task.id))
+                  ? task
+                  : undefined,
+              ),
+            )
+          ).filter((task): task is NonNullable<typeof task> => Boolean(task)),
+          nextCursor: null,
           snapshotSeq: this.store.state.lastEventSeq,
         };
       } else if (request.method === "task.get") {
         requirePermission(principal, "read:state");
         if (
-          Object.keys(request.params).some(
-            (key) => !["taskId", "include", "maxBytes"].includes(key),
-          ) ||
+          !exactKeys(request.params, ["taskId"]) ||
+          Object.keys(request.params).length !== 1 ||
           typeof request.params.taskId !== "string" ||
-          !/^tsk_[0-9A-HJKMNP-TV-Z]{26}$/.test(request.params.taskId) ||
-          (request.params.include !== undefined &&
-            !Array.isArray(request.params.include)) ||
-          (request.params.maxBytes !== undefined &&
-            (!Number.isSafeInteger(request.params.maxBytes) ||
-              Number(request.params.maxBytes) < 1 ||
-              Number(request.params.maxBytes) > 262_144))
+          !/^tsk_[0-9A-HJKMNP-TV-Z]{26}$/.test(request.params.taskId)
         )
           throw new OrchestratorError("INVALID_REQUEST", "Task ID is invalid.");
         const task = this.store.state.tasks[request.params.taskId];
@@ -7315,9 +4385,7 @@ export class Broker {
             "PERMISSION_DENIED",
             "Task is outside the descendant scope.",
           );
-        result = task
-          ? taskWithProgress(task, this.store.state, this.#now())
-          : null;
+        result = task ?? null;
       } else if (request.method === "task.create") {
         requirePermission(principal, "delegate");
         if (
@@ -7396,28 +4464,14 @@ export class Broker {
           });
         }
       } else throw new OrchestratorError("NOT_FOUND", "Method was not found.");
-      if (this.#pendingAutomaticEvidenceRunIds.size > 0) {
-        const pendingRunIds = [...this.#pendingAutomaticEvidenceRunIds];
-        this.#pendingAutomaticEvidenceRunIds.clear();
-        const evidenceEvent =
-          await this.#reconcileAutomaticModelEvidence(pendingRunIds);
-        if (evidenceEvent) committedEvent = evidenceEvent;
-      }
-      if (
-        shouldCheckpointRequestState(
-          request.method,
-          committedEvent?.seq ?? null,
-        )
-      ) {
-        assertInvariants(this.store.state);
-        await this.#writeSnapshotBestEffort();
-      }
+      assertInvariants(this.store.state);
+      if (committedEvent) await this.#writeSnapshotBestEffort();
       await responseBoundary?.();
       const response = {
         v: 1,
         type: "response",
         id: request.id,
-        method: responseMethod,
+        method: request.method,
         ok: true,
         result,
       };
@@ -7454,7 +4508,7 @@ export class Broker {
               kind: principal.kind,
             },
             entityRefs: {},
-            payload: { action: responseMethod },
+            payload: { action: request.method },
           });
         } catch (auditError: unknown) {
           this.#observeBackgroundFailure(auditError);
@@ -7465,251 +4519,15 @@ export class Broker {
         v: 1,
         type: "response",
         id: request.id,
-        method: responseMethod,
+        method: request.method,
         ok: false,
         error: {
           code: typed.code,
           message: typed.message,
           retryable: typed.retryable,
-          ...(typed.details && safeBoundedRecord(typed.details)
-            ? { details: typed.details }
-            : {}),
-          ...(typed.remediation && safeText(typed.remediation, 512)
-            ? { remediation: typed.remediation }
-            : {}),
         },
       });
     }
-  }
-  async #projectCompactMetadata(
-    event: StoredEvent,
-    forcePublication = false,
-  ): Promise<void> {
-    let taskId = event.entityRefs.taskId;
-    const referencedRun = event.entityRefs.runId
-      ? this.store.state.runs[event.entityRefs.runId]
-      : undefined;
-    if (!taskId && referencedRun) taskId = referencedRun.taskId;
-    if (!taskId && event.entityRefs.agentId) {
-      const agent = this.store.state.agents[event.entityRefs.agentId];
-      const run = agent?.currentRunId
-        ? this.store.state.runs[agent.currentRunId]
-        : undefined;
-      taskId = run?.taskId;
-    }
-    if (!taskId) return;
-    const task = this.store.state.tasks[taskId];
-    const compact = task?.project?.compact as
-      { workflowDigest?: unknown; transcriptPolicy?: unknown } | undefined;
-    if (
-      !task ||
-      !compact ||
-      !/^[a-f0-9]{64}$/u.test(String(compact.workflowDigest)) ||
-      compact.transcriptPolicy !== "retain-tab" ||
-      !task.workflowId
-    )
-      return;
-    const selectedRunId =
-      referencedRun?.taskId === task.id ? referencedRun.id : task.currentRunId;
-    if (!selectedRunId) return;
-    const run = this.store.state.runs[selectedRunId];
-    const agent = run?.agentId
-      ? this.store.state.agents[run.agentId]
-      : undefined;
-    const resource = run?.agentId
-      ? this.store.state.herdrResources?.[run.agentId]
-      : undefined;
-    const workspaceId = resource?.workspaceId ?? agent?.workspaceId;
-    const tabId = resource?.tabId ?? agent?.tabId;
-    const paneId = resource?.paneId ?? agent?.paneId;
-    const terminalId = resource?.terminalId ?? agent?.terminalId;
-    const sessionId = resource?.sessionId ?? agent?.piSessionId;
-    if (
-      !run ||
-      !agent ||
-      !workspaceId ||
-      !tabId ||
-      !paneId ||
-      !terminalId ||
-      !sessionId ||
-      !task.profileId
-    )
-      return;
-    const current = Object.values(this.store.state.herdrMetadata ?? {}).find(
-      (item) => item.taskId === task.id && item.runId === run.id,
-    );
-    if (current?.state === "closed") return;
-    const terminalState = new Map<string, HerdrMetadataState>([
-      ["succeeded", "completed"],
-      ["failed", "failed"],
-      ["cancelled", "cancelled"],
-      ["timed_out", "failed"],
-      ["lost", "failed"],
-    ]);
-    const terminalOutcome = terminalState.get(
-      task.currentRunId === run.id ? task.state : run.state,
-    );
-    const terminal = terminalOutcome !== undefined;
-    const state =
-      terminal && !current?.exitedAt
-        ? "settled"
-        : (terminalOutcome ??
-          (run.state === "result_pending" ||
-          run.state === "result_pending_missing"
-            ? "settling"
-            : run.settled
-              ? "settled"
-              : run.state === "blocked" || task.state === "blocked"
-                ? "blocked"
-                : task.state === "provisioning"
-                  ? "creating"
-                  : task.state === "assigned"
-                    ? "starting"
-                    : "working"));
-    const result = Object.values(this.store.state.results ?? {}).find(
-      (item) => item.taskId === task.id && item.runId === run.id,
-    );
-    const question = Object.values(this.store.state.questions ?? {})
-      .filter((item) => item.taskId === task.id && item.runId === run.id)
-      .sort((left, right) => left.id.localeCompare(right.id))
-      .at(-1);
-    const updatedAt = new Date(this.#now()).toISOString();
-    const metadataId =
-      current?.metadataId ??
-      `hmd_${sha256(`${task.id}:${run.id}`).slice(0, 26)}`;
-    const exitedAt = current?.exitedAt ?? null;
-    const value: Omit<HerdrTaskMetadata, "metadataDigest"> = {
-      schemaVersion: 1,
-      metadataId,
-      orchestrationId: `orc_${sha256(this.paths.sessionKey).slice(0, 26)}`,
-      workflowId: task.workflowId,
-      taskId: task.id,
-      runId: run.id,
-      agentId: agent.id,
-      ...(task.parentAgentId ? { parentAgentId: task.parentAgentId } : {}),
-      profileId: task.profileId,
-      state,
-      placement: "background",
-      transcriptPolicy: "retain-tab",
-      workspaceId,
-      tabId,
-      paneId,
-      terminalId,
-      piSessionRef: `pis_${sha256(sessionId).slice(0, 26)}`,
-      startedAt: current?.startedAt ?? task.createdAt,
-      updatedAt,
-      settledAt: run.settled ? (current?.settledAt ?? updatedAt) : null,
-      exitedAt,
-      transcriptRef: current?.transcriptRef ?? null,
-      resultRef: result?.id ?? null,
-      questionRef: question?.id ?? null,
-      errorCode: task.terminalReason?.code ?? null,
-    };
-    const appendProjection = async (
-      projection: Omit<HerdrTaskMetadata, "metadataDigest">,
-    ): Promise<StoredEvent> =>
-      await this.store.append({
-        type: "herdr.metadata_projected",
-        actor: {
-          principalId: "prn_00000000000000000000000000",
-          kind: "system",
-        },
-        entityRefs: {
-          workflowId: task.workflowId!,
-          taskId: task.id,
-          runId: run.id,
-          agentId: agent.id,
-          workflowDigest: String(compact.workflowDigest),
-        },
-        payload: {
-          ...projection,
-          metadataDigest: sha256(canonicalJson(projection)),
-        },
-      });
-    const semantic = (item: Omit<HerdrTaskMetadata, "metadataDigest">) =>
-      canonicalJson({ ...item, updatedAt: "" });
-    if (!current || semantic(value) !== semantic(current) || forcePublication) {
-      const projectedEvent = await appendProjection(value);
-      if (
-        !value.exitedAt &&
-        this.#herdr &&
-        !(terminal && current?.state === "settled" && !current.exitedAt)
-      )
-        try {
-          await this.#herdr.reportTaskMetadata(
-            { workspaceId, tabId, paneId, terminalId, sessionId },
-            this.store.state.herdrMetadata![metadataId]!,
-            projectedEvent.seq,
-          );
-        } catch (error) {
-          await appendProjection({
-            ...value,
-            state: "conflict",
-            updatedAt: new Date(this.#now()).toISOString(),
-            errorCode: "HERDR_METADATA_PUBLICATION_FAILED",
-          });
-          throw error;
-        }
-    }
-    const latest = this.store.state.herdrMetadata?.[metadataId];
-    if (terminal && !latest?.exitedAt && !this.#herdr) {
-      await appendProjection({
-        ...value,
-        state: "orphaned",
-        updatedAt: new Date(this.#now()).toISOString(),
-        errorCode: "HERDR_UNAVAILABLE",
-      });
-      return;
-    }
-    if (terminal && !latest?.exitedAt && this.#herdr) {
-      try {
-        await this.#herdr.exitRetainingTab({
-          workspaceId,
-          tabId,
-          paneId,
-          terminalId,
-          sessionId,
-        });
-      } catch (error) {
-        await appendProjection({
-          ...value,
-          state: "orphaned",
-          updatedAt: new Date(this.#now()).toISOString(),
-          errorCode: "HERDR_PROCESS_EXIT_FAILED",
-        });
-        throw error;
-      }
-      const finalTime = new Date(this.#now()).toISOString();
-      await appendProjection({
-        ...value,
-        state: terminalOutcome!,
-        updatedAt: finalTime,
-        settledAt: value.settledAt ?? finalTime,
-        exitedAt: finalTime,
-        transcriptRef: `trn_${sha256(`${metadataId}:${sessionId}`).slice(0, 26)}`,
-      });
-    }
-  }
-  #lineageSafeWithParent(agentId: string, parentAgentId: string): boolean {
-    for (const candidate of Object.values(this.store.state.agents)) {
-      let current: string | undefined = candidate.id;
-      const seen = new Set<string>();
-      let depth = 0;
-      while (current) {
-        if (seen.has(current) || depth > 4) return false;
-        seen.add(current);
-        const currentAgent: Agent | undefined =
-          this.store.state.agents[current];
-        if (!currentAgent) return false;
-        current =
-          current === agentId
-            ? parentAgentId
-            : (currentAgent.parentAgentId ??
-              this.store.state.adoptedRootLinks?.[currentAgent.id]);
-        if (current) depth++;
-      }
-    }
-    return true;
   }
   #isDescendantSync(
     parentAgentId: string | undefined,
@@ -7722,10 +4540,7 @@ export class Broker {
       if (current === parentAgentId) return true;
       if (seen.has(current)) return false;
       seen.add(current);
-      const currentAgent: Agent | undefined = this.store.state.agents[current];
-      current =
-        currentAgent?.parentAgentId ??
-        this.store.state.adoptedRootLinks?.[current];
+      current = this.store.state.agents[current]?.parentAgentId;
     }
     return false;
   }
@@ -7768,8 +4583,6 @@ export class Broker {
     if (!task) return false;
     return (
       principal.agentId === task.parentAgentId ||
-      (!!task.parentAgentId &&
-        this.#isDescendantSync(principal.agentId, task.parentAgentId)) ||
       (!!task.assignedAgentId &&
         this.#isDescendantSync(principal.agentId, task.assignedAgentId))
     );
@@ -7933,17 +4746,14 @@ export class Broker {
       return;
     }
     try {
-      await this.#herdr!.stop(
-        {
-          paneId: resource!.paneId,
-          ...(resource!.terminalId ? { terminalId: resource!.terminalId } : {}),
-          ...(resource!.sessionId ? { sessionId: resource!.sessionId } : {}),
-          ...(resource!.generation !== undefined
-            ? { generation: resource!.generation }
-            : {}),
-        } as never,
-        run.agentId,
-      );
+      await this.#herdr!.stop({
+        paneId: resource!.paneId,
+        ...(resource!.terminalId ? { terminalId: resource!.terminalId } : {}),
+        ...(resource!.sessionId ? { sessionId: resource!.sessionId } : {}),
+        ...(resource!.generation !== undefined
+          ? { generation: resource!.generation }
+          : {}),
+      } as never);
     } catch (fallbackError) {
       if (unexpectedAdapterError !== undefined)
         throw new AggregateError(
@@ -8017,50 +4827,6 @@ export class Broker {
       });
     }
     this.#clearTaskDeadline(task.id);
-  }
-  async #terminalizeMissingResult(
-    runId: string,
-    actor: { principalId: string; kind: string },
-  ): Promise<boolean> {
-    const run = this.store.state.runs[runId];
-    if (
-      !run ||
-      isTerminal(run.state) ||
-      run.resultId !== undefined ||
-      (run.resultRecoveryCount ?? 0) !== 1
-    )
-      return false;
-    await this.store.append({
-      type: "run.result_missing",
-      actor,
-      entityRefs: {
-        runId: run.id,
-        taskId: run.taskId,
-        ...(run.agentId ? { agentId: run.agentId } : {}),
-      },
-      payload: {
-        runId: run.id,
-        code: RESULT_MISSING_REASON.code,
-        message: RESULT_MISSING_REASON.message,
-      },
-    });
-    return true;
-  }
-  #scheduleResultRecoveryTimeout(
-    runId: string,
-    workflowId: string,
-    actor: { principalId: string; kind: string },
-  ): void {
-    if (this.#resultRecoveryTimers.has(runId)) return;
-    const timer = this.#setTimeout(() => {
-      this.#resultRecoveryTimers.delete(runId);
-      void this.#enqueueMutation(async () => {
-        if (await this.#terminalizeMissingResult(runId, actor))
-          await this.#advanceWorkflow(workflowId, actor);
-      }).catch((error: unknown) => this.#observeBackgroundFailure(error));
-    }, RESULT_RECOVERY_TIMEOUT_MS);
-    timer.unref();
-    this.#resultRecoveryTimers.set(runId, timer);
   }
   #scheduleTaskDeadline(task: {
     id: string;
@@ -8223,33 +4989,6 @@ export class Broker {
         this.#queueAudit("question_terminal_delivery_rejected");
     };
   }
-  async #markAgentStopping(
-    agentId: string,
-    actor: { principalId: string; kind: string },
-  ): Promise<void> {
-    const agent = this.store.state.agents[agentId];
-    if (!agent || !["idle", "working", "blocked"].includes(agent.state)) return;
-    await this.store.append({
-      type: "agent.state_changed",
-      actor,
-      entityRefs: { agentId },
-      payload: { agentId, state: "stopping" },
-    });
-  }
-  async #markAgentStopped(
-    agentId: string,
-    actor: { principalId: string; kind: string },
-  ): Promise<void> {
-    const agent = this.store.state.agents[agentId];
-    if (!agent || ["stopped", "failed", "replaced"].includes(agent.state))
-      return;
-    await this.store.append({
-      type: "agent.state_changed",
-      actor,
-      entityRefs: { agentId },
-      payload: { agentId, state: "stopped", clearCurrentRun: true },
-    });
-  }
   async #sendAdapterRequest(
     agentId: string,
     method: string,
@@ -8262,7 +5001,6 @@ export class Broker {
       runId?: string;
     },
     timeoutMs = 10_000,
-    boundClient?: Client,
   ): Promise<unknown> {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
       throw new OrchestratorError("TIMEOUT", "Adapter deadline is invalid.");
@@ -8272,11 +5010,7 @@ export class Broker {
         !item.socket.destroyed &&
         item.principal?.kind === "pi_child" &&
         item.principal.agentId === agentId &&
-        (boundClient
-          ? item === boundClient &&
-            (item.adoptedRegistration ||
-              item.managedConnectionGeneration === agent?.connectionGeneration)
-          : item.managedConnectionGeneration === agent?.connectionGeneration),
+        item.managedConnectionGeneration === agent?.connectionGeneration,
     );
     const client = clients.length === 1 ? clients[0] : undefined;
     if (
@@ -8403,12 +5137,8 @@ export class Broker {
     );
   }
   async #writeSnapshotBestEffort(): Promise<void> {
-    if (!this.#snapshotAuthentication) return;
     try {
-      await this.snapshotStore.write(
-        this.store.state,
-        this.#snapshotAuthentication,
-      );
+      await this.snapshotStore.write(this.store.state, this.#secret);
     } catch (error: unknown) {
       this.#observeBackgroundFailure(error);
     }
@@ -8428,444 +5158,6 @@ export class Broker {
       await this.#writeSnapshotBestEffort();
     });
   }
-  async #reconcileAutomaticModelEvidence(
-    runIds?: readonly string[],
-  ): Promise<StoredEvent | undefined> {
-    let last: StoredEvent | undefined;
-    const runs = runIds
-      ? [...new Set(runIds)]
-          .map((runId) => this.store.state.runs[runId])
-          .filter((run): run is Run => Boolean(run))
-      : Object.values(this.store.state.runs);
-    for (const run of runs.sort((left, right) =>
-      left.id.localeCompare(right.id),
-    )) {
-      let records;
-      try {
-        records = automaticEvidenceForRun(this.store.state, run);
-      } catch {
-        continue;
-      }
-      for (const record of records) {
-        if (this.store.state.modelEvidence?.records[record.evidenceId])
-          continue;
-        const duplicate = Object.values(
-          this.store.state.modelEvidence?.records ?? {},
-        ).some(
-          (stored) =>
-            !Object.hasOwn(
-              this.store.state.modelEvidence?.supersededBy ?? {},
-              stored.record.evidenceId,
-            ) &&
-            stored.record.sourceKind === record.sourceKind &&
-            stored.record.sourceName === record.sourceName &&
-            stored.record.sourceKey === record.sourceKey,
-        );
-        if (duplicate) continue;
-        try {
-          last = await this.store.append({
-            type: "model.evidence_recorded",
-            actor: {
-              principalId: "prn_00000000000000000000000000",
-              kind: "system",
-            },
-            entityRefs: {},
-            payload: { record },
-          });
-        } catch (error) {
-          this.#pendingAutomaticEvidenceRunIds.add(run.id);
-          this.#observeBackgroundFailure(error);
-          return last;
-        }
-      }
-    }
-    return last;
-  }
-
-  async #modelOptions(
-    input: Pick<
-      BuildModelOptionsInput,
-      | "taskProfile"
-      | "placement"
-      | "modelProfileId"
-      | "projectKey"
-      | "selectedModel"
-      | "asOf"
-      | "limit"
-    >,
-  ): Promise<ModelOptionsView> {
-    try {
-      return buildModelOptions({
-        capabilities: await this.#piCapabilities.snapshot(),
-        policy: this.#modelPolicy,
-        endpointPolicy: this.#endpointPolicy,
-        ...(this.#modelIntelligence
-          ? { modelIntelligence: this.#modelIntelligence }
-          : {}),
-        ...(this.store.state.modelEvidence
-          ? { evidence: this.store.state.modelEvidence }
-          : {}),
-        scheduler: this.#scheduler.snapshot(),
-        fallbackEndpointLimit: this.#scheduler.limits.maxActiveAgents,
-        ...input,
-      });
-    } catch (error) {
-      if (error instanceof OrchestratorError) throw error;
-      const code = error instanceof Error ? error.message : "";
-      if (code === "MODEL_SCOPE_TOO_LARGE")
-        throw new OrchestratorError(
-          "LIMIT_EXCEEDED",
-          `Eligible model scope exceeds ${MODEL_RANKING_POLICY.maxEligibleCandidates} exact pairs.`,
-        );
-      if (code === "MODEL_SCOPE_EMPTY")
-        throw new OrchestratorError(
-          "INVALID_REQUEST",
-          "No installed model is eligible for this task profile.",
-        );
-      if (code === "MODEL_OPTIONS_LIMIT_INVALID")
-        throw new OrchestratorError(
-          "INVALID_REQUEST",
-          "Model option limit is invalid.",
-        );
-      throw error;
-    }
-  }
-
-  async #advisoryModelReceipt(
-    taskProfile: string,
-    spawnPolicy: ResolvedSpawnPolicy,
-    projectKey: string | undefined,
-    asOf: string,
-    frozenOptions?: ModelOptionsView,
-    frozenReason?:
-      | "explicit_override"
-      | "current_default"
-      | "rated_auto"
-      | "insufficient_evidence",
-  ): Promise<AdvisoryModelReceipt> {
-    const options =
-      frozenOptions ??
-      (await this.#modelOptions({
-        taskProfile,
-        placement: spawnPolicy.effective.placement,
-        modelProfileId: spawnPolicy.effective.modelProfileId,
-        ...(projectKey ? { projectKey } : {}),
-        selectedModel: spawnPolicy.effective.model,
-        asOf,
-        limit: MODEL_RANKING_POLICY.maxEligibleCandidates,
-      }));
-    const endpoint = resolveEndpoint(
-      spawnPolicy.effective.model,
-      this.#endpointPolicy,
-      this.#scheduler.limits.maxActiveAgents,
-    );
-    return createAdvisoryModelReceipt({
-      options,
-      selectedModel: spawnPolicy.effective.model,
-      selectedEndpoint: modelCapacityView(
-        endpoint.endpointId,
-        endpoint.maxConcurrentAgents,
-        this.#scheduler.snapshot(),
-      ),
-      selectionReason:
-        frozenReason ??
-        (spawnPolicy.requested.model ? "explicit_override" : "current_default"),
-    });
-  }
-
-  #foundationSourceConfig() {
-    return this.#modelIntelligence?.sources?.artificialAnalysis;
-  }
-
-  #foundationStatusView(): Record<string, unknown> {
-    const config = this.#foundationSourceConfig();
-    if (!config?.enabled)
-      return {
-        source: ARTIFICIAL_ANALYSIS_SOURCE_NAME,
-        enabled: false,
-        state: "disabled",
-        stale: true,
-      };
-    const active = Object.values(this.store.state.modelEvidence?.records ?? {})
-      .map((stored) => stored.record)
-      .filter(
-        (record) =>
-          record.sourceKind === "foundation" &&
-          record.sourceName === ARTIFICIAL_ANALYSIS_SOURCE_NAME &&
-          !Object.hasOwn(
-            this.store.state.modelEvidence?.supersededBy ?? {},
-            record.evidenceId,
-          ),
-      );
-    const latest = active
-      .map((record) => record.observedAt)
-      .sort((left, right) => right.localeCompare(left))[0];
-    const stale =
-      !latest ||
-      this.#now() - Date.parse(latest) >= config.refreshHours * 3_600_000;
-    const state = ["refreshing", "failed", "no_scope"].includes(
-      this.#foundationStatus.state,
-    )
-      ? this.#foundationStatus.state
-      : stale
-        ? "stale"
-        : "fresh";
-    return {
-      source: ARTIFICIAL_ANALYSIS_SOURCE_NAME,
-      enabled: true,
-      stale,
-      refreshHours: config.refreshHours,
-      maxRequestsPerRefresh: config.maxRequestsPerRefresh,
-      lastGoodObservedAt: latest ?? null,
-      activeRecordCount: active.length,
-      ...this.#foundationStatus,
-      state,
-    };
-  }
-
-  #scheduleFoundationRefresh(delayMs: number): boolean {
-    const config = this.#foundationSourceConfig();
-    if (!config?.enabled || this.#stopping) return false;
-    if (!Number.isSafeInteger(delayMs) || delayMs < 0)
-      throw new Error("Foundation refresh delay is invalid.");
-    if (this.#foundationRefreshTimer)
-      this.#clearTimeout(this.#foundationRefreshTimer);
-    const nextRefreshAt = new Date(this.#now() + delayMs).toISOString();
-    this.#foundationStatus = {
-      ...this.#foundationStatus,
-      state:
-        this.#foundationStatus.state === "disabled"
-          ? "scheduled"
-          : this.#foundationStatus.state,
-      nextRefreshAt,
-    };
-    this.#foundationRefreshTimer = this.#setTimeout(() => {
-      this.#foundationRefreshTimer = undefined;
-      this.#trackDeferred(() => this.#refreshFoundation());
-    }, delayMs);
-    return true;
-  }
-
-  #foundationSnapshot(
-    records: readonly import("../model-intelligence/model-evidence.js").ModelEvidenceRecord[],
-    sourceName: string,
-    observedAt: string,
-  ): FoundationEvidenceSnapshot | undefined {
-    const active = Object.values(this.store.state.modelEvidence?.records ?? {})
-      .map((stored) => stored.record)
-      .filter(
-        (record) =>
-          record.sourceKind === "foundation" &&
-          record.sourceName === sourceName &&
-          !Object.hasOwn(
-            this.store.state.modelEvidence?.supersededBy ?? {},
-            record.evidenceId,
-          ),
-      );
-    const identity = (
-      record: import("../model-intelligence/model-evidence.js").ModelEvidenceRecord,
-    ): string =>
-      record.evidenceKind === "score" && record.subject.kind === "canonical"
-        ? `${record.taskProfile}\u0000${record.subject.canonicalModelId}`
-        : "";
-    const items = [...records]
-      .sort((left, right) => identity(left).localeCompare(identity(right)))
-      .flatMap((record) => {
-        const matching = active.filter(
-          (candidate) => identity(candidate) === identity(record),
-        );
-        if (
-          matching.length === 1 &&
-          matching[0]?.evidenceId === record.evidenceId
-        )
-          return [];
-        return [
-          {
-            supersedes: matching
-              .map((candidate) => candidate.evidenceId)
-              .sort((left, right) => left.localeCompare(right)),
-            record,
-          },
-        ];
-      });
-    return items.length
-      ? normalizeFoundationEvidenceSnapshot({
-          schemaVersion: 1,
-          sourceName,
-          observedAt,
-          items,
-        })
-      : undefined;
-  }
-
-  async #refreshFoundation(): Promise<void> {
-    if (this.#foundationRefreshInFlight) {
-      await this.#foundationRefreshInFlight;
-      if (!this.#stopping) await this.#refreshFoundation();
-      return;
-    }
-    const config = this.#foundationSourceConfig();
-    if (!config?.enabled || !this.#modelIntelligence || this.#stopping) return;
-    const work = (async (): Promise<void> => {
-      const attemptedAt = new Date(this.#now()).toISOString();
-      const {
-        nextRefreshAt: _nextRefreshAt,
-        errorCode: _errorCode,
-        ...priorStatus
-      } = this.#foundationStatus;
-      this.#foundationStatus = {
-        ...priorStatus,
-        state: "refreshing",
-        lastAttemptAt: attemptedAt,
-      };
-      this.#foundationRefreshAbort = new AbortController();
-      try {
-        const capabilities = await this.#piCapabilities.snapshot();
-        const scope = resolveScopedFoundationModels({
-          capabilities,
-          policy: this.#modelPolicy,
-          modelIntelligence: this.#modelIntelligence!,
-        });
-        if (scope.length === 0) {
-          this.#foundationStatus = {
-            state: "no_scope",
-            lastAttemptAt: attemptedAt,
-            scopedModelCount: 0,
-            consecutiveFailures: 0,
-          };
-          this.#scheduleFoundationRefresh(config.refreshHours * 3_600_000);
-          return;
-        }
-        let credential: string | undefined;
-        try {
-          credential = await this.#foundationCredentialProvider?.();
-        } catch {
-          throw new FoundationRefreshError(
-            "missing_credential",
-            "Foundation credential is unavailable.",
-          );
-        }
-        if (
-          credential !== undefined &&
-          (credential.length < 8 ||
-            credential.length > 512 ||
-            /[\u0000-\u0020\u007f]/u.test(credential))
-        )
-          throw new FoundationRefreshError(
-            "missing_credential",
-            "Foundation credential is unavailable.",
-          );
-        const refreshed = await this.#foundationAdapter.refresh({
-          credential,
-          scope,
-          config,
-          now: this.#now(),
-          signal: this.#foundationRefreshAbort.signal,
-        });
-        let committed = false;
-        if (refreshed.records.length > 0)
-          await this.#enqueueMutation(async () => {
-            const snapshot = this.#foundationSnapshot(
-              refreshed.records,
-              refreshed.sourceName,
-              refreshed.observedAt,
-            );
-            if (!snapshot) return;
-            await this.store.append({
-              type: "model.foundation_snapshot_recorded",
-              actor: {
-                principalId: "prn_00000000000000000000000000",
-                kind: "system",
-              },
-              entityRefs: {},
-              payload: snapshot,
-            });
-            committed = true;
-            await this.#writeSnapshotBestEffort();
-          });
-        this.#foundationStatus = {
-          state: "fresh",
-          lastAttemptAt: attemptedAt,
-          lastSuccessAt: refreshed.observedAt,
-          scopedModelCount: scope.length,
-          requestCount: refreshed.requestCount,
-          recordCount: refreshed.records.length,
-          consecutiveFailures: 0,
-          ...(committed ? {} : { errorCode: "unchanged" }),
-        };
-        this.#scheduleFoundationRefresh(config.refreshHours * 3_600_000);
-      } catch (error) {
-        if (
-          this.#stopping ||
-          (error instanceof FoundationRefreshError && error.code === "aborted")
-        )
-          return;
-        const expected = error instanceof FoundationRefreshError;
-        const failures = this.#foundationStatus.consecutiveFailures + 1;
-        this.#foundationStatus = {
-          ...this.#foundationStatus,
-          state: "failed",
-          errorCode: expected ? error.code : "commit_failed",
-          consecutiveFailures: failures,
-        };
-        if (!expected) this.#observeBackgroundFailure(error);
-        const base = Math.min(
-          config.refreshHours * 3_600_000,
-          15 * 60_000 * 2 ** Math.min(6, failures - 1),
-        );
-        const jitter =
-          Number.parseInt(
-            sha256(`${attemptedAt}:${failures}`).slice(0, 8),
-            16,
-          ) % 60_000;
-        this.#scheduleFoundationRefresh(
-          Math.min(config.refreshHours * 3_600_000, base + jitter),
-        );
-      } finally {
-        this.#foundationRefreshAbort = undefined;
-      }
-    })();
-    this.#foundationRefreshInFlight = work;
-    try {
-      await work;
-    } finally {
-      if (this.#foundationRefreshInFlight === work)
-        this.#foundationRefreshInFlight = undefined;
-    }
-  }
-
-  #endpointIdForTask(task: Task, agentId?: string): string {
-    const run = task.currentRunId
-      ? this.store.state.runs[task.currentRunId]
-      : undefined;
-    if (run?.endpointId) return run.endpointId;
-    if (task.endpointId) return task.endpointId;
-    const project = task.project;
-    const storedPolicy = project?.effectiveSpawnPolicy;
-    const storedModel =
-      storedPolicy &&
-      typeof storedPolicy === "object" &&
-      !Array.isArray(storedPolicy)
-        ? (storedPolicy as Record<string, unknown>).model
-        : undefined;
-    const agentModel = agentId
-      ? this.store.state.agents[agentId]?.effectiveModel
-      : undefined;
-    const model = storedModel
-      ? validateModelSelection(storedModel)
-      : agentModel?.provider && agentModel.modelId && agentModel.thinkingLevel
-        ? validateModelSelection(agentModel)
-        : resolveSpawnPolicy(
-            { taskProfileId: task.profileId ?? "scout" },
-            this.#modelPolicy,
-          ).effective.model;
-    return resolveEndpoint(
-      model,
-      this.#endpointPolicy,
-      this.#scheduler.limits.maxActiveAgents,
-    ).endpointId;
-  }
-
   async #advanceWorkflow(
     workflowId: string,
     actor: { principalId: string; kind: string },
@@ -8898,75 +5190,13 @@ export class Broker {
             (candidate) => candidate.runId === run.id,
           )
         : undefined;
-      if (run?.settled && !isTerminal(run.state) && published) {
+      if (run?.settled && !isTerminal(run.state) && published)
         await this.store.append({
           type: "run.state_changed",
           actor,
           entityRefs: { runId: run.id, taskId },
           payload: { runId: run.id, state: published.status },
         });
-        continue;
-      }
-      if (!run || isTerminal(run.state) || published) continue;
-      if ((run.resultRecoveryCount ?? 0) === 1 && run.state !== "settled") {
-        this.#scheduleResultRecoveryTimeout(run.id, workflowId, actor);
-        continue;
-      }
-      if (!run.settled) continue;
-      if ((run.resultRecoveryCount ?? 0) === 0) {
-        await this.store.append({
-          type: "run.result_recovery_requested",
-          actor,
-          entityRefs: {
-            runId: run.id,
-            taskId,
-            ...(run.agentId ? { agentId: run.agentId } : {}),
-          },
-          payload: { runId: run.id, attempt: 1 },
-        });
-        const agent = run.agentId
-          ? this.store.state.agents[run.agentId]
-          : undefined;
-        try {
-          if (!agent || !run.agentId)
-            throw new OrchestratorError(
-              "AGENT_DISCONNECTED",
-              "The result recovery agent is unavailable.",
-            );
-          const recovered = await this.#sendAdapterRequest(
-            run.agentId,
-            "control.prompt",
-            { message: RESULT_RECOVERY_PROMPT, delivery: "normal" },
-            {
-              generation: agent.generation,
-              ...(agent.connectionGeneration !== undefined
-                ? { connectionGeneration: agent.connectionGeneration }
-                : {}),
-              ...(agent.piSessionId ? { piSessionId: agent.piSessionId } : {}),
-              runId: run.id,
-            },
-            RESULT_RECOVERY_TIMEOUT_MS,
-          );
-          if (
-            !recovered ||
-            typeof recovered !== "object" ||
-            (recovered as Record<string, unknown>).ok !== true
-          )
-            throw new OrchestratorError(
-              "RESULT_MISSING",
-              "The result recovery prompt was rejected.",
-            );
-        } catch (error) {
-          this.#queueAudit(
-            error instanceof OrchestratorError
-              ? `result_recovery_failed:${error.code}`
-              : "result_recovery_failed",
-          );
-        }
-        this.#scheduleResultRecoveryTimeout(run.id, workflowId, actor);
-        continue;
-      }
-      await this.#terminalizeMissingResult(run.id, actor);
     }
     for (const taskId of workflow.taskIds) {
       const candidate = this.store.state.tasks[taskId];
@@ -9021,7 +5251,6 @@ export class Broker {
           );
         if (existingWorktreeId === undefined) {
           const project = {
-            ...candidate.project,
             cwd: resource.worktreePath,
             workspaceId: candidate.project.workspaceId,
             worktreeId: resource.worktreeId,
@@ -9042,7 +5271,7 @@ export class Broker {
     const tasks = workflow.taskIds
       .map((id) => this.store.state.tasks[id])
       .filter((task): task is NonNullable<typeof task> => Boolean(task));
-    const scheduler = this.#scheduler;
+    const scheduler = new DeterministicScheduler();
     const plan = {
       workflowId,
       mode: "dag" as const,
@@ -9170,33 +5399,15 @@ export class Broker {
             taskId: dependency,
             requirement: "succeeded" as const,
           })),
-          endpointId: this.#endpointIdForTask(task),
           state: (task.state === "assigned"
             ? "running"
             : task.state) as SchedulerTask["state"],
         },
       ]),
     );
-    const admissionPlan = planAdmission(scheduler, schedulerTasks);
-    for (const decision of admissionPlan.decisions) {
-      const task = this.store.state.tasks[decision.taskId];
-      if (
-        !decision.admitted &&
-        task?.state === "queued" &&
-        task.admissionReason !== decision.reason
-      )
-        await this.store.append({
-          type: "scheduler.blocked",
-          actor,
-          entityRefs: { taskId: task.id },
-          payload: {
-            taskId: task.id,
-            reason: decision.reason,
-            endpointId: this.#endpointIdForTask(task),
-          },
-        });
-    }
-    const admitted = new Set(admissionPlan.admittedTaskIds);
+    const admitted = new Set(
+      planAdmission(scheduler, schedulerTasks).admittedTaskIds,
+    );
     for (const taskId of admitted) {
       const task = this.store.state.tasks[taskId];
       if (
@@ -9227,36 +5438,6 @@ export class Broker {
           "PERMISSION_DENIED",
           "The canonical task isolation violates its profile policy.",
         );
-      const replayPolicy = resolveSpawnPolicy(
-        { taskProfileId: task.profileId ?? "scout" },
-        this.#modelPolicy,
-      );
-      const storedEffectivePolicy = project.effectiveSpawnPolicy;
-      const effectivePolicy =
-        storedEffectivePolicy &&
-        typeof storedEffectivePolicy === "object" &&
-        !Array.isArray(storedEffectivePolicy)
-          ? (storedEffectivePolicy as Record<string, unknown>)
-          : replayPolicy.effective;
-      const placement = effectivePolicy.placement;
-      const modelProfileId = effectivePolicy.modelProfileId;
-      if (
-        (placement !== "current-workspace" && placement !== "new-workspace") ||
-        (modelProfileId !== "manager" && modelProfileId !== "subagent")
-      )
-        throw new OrchestratorError(
-          "INVALID_REQUEST",
-          "The canonical task model policy is invalid.",
-        );
-      const effectiveModel = validateModelSelection(effectivePolicy.model);
-      const endpointId = this.#endpointIdForTask(task);
-      if (task.admissionReason)
-        await this.store.append({
-          type: "scheduler.admitted",
-          actor,
-          entityRefs: { taskId },
-          payload: { taskId, endpointId },
-        });
       scheduler.setProvisioning(1);
       const agentId = createId("agt"),
         runId = createId("run"),
@@ -9272,21 +5453,6 @@ export class Broker {
           parentAgentId: task.parentAgentId,
           profileId: task.profileId,
           displayName: task.title,
-          requestedModel:
-            project.requestedSpawnPolicy ?? replayPolicy.requested,
-          effectiveModel: {
-            profileId: modelProfileId,
-            placement,
-            ...effectiveModel,
-          },
-          modelPolicyHash: safeText(project.modelPolicyHash, 64)
-            ? project.modelPolicyHash
-            : replayPolicy.policyHash,
-          lifecycleClass:
-            typeof project.lifecycleClass === "string"
-              ? project.lifecycleClass
-              : "temporary",
-          keepForReuse: project.keepForReuse === true,
         },
       });
       await this.store.append({
@@ -9300,7 +5466,6 @@ export class Broker {
           assignmentId,
           assignmentGeneration: 1,
           agentGeneration: 1,
-          endpointId,
           timeoutAt: task.timeoutAt,
         },
       });
@@ -9319,8 +5484,6 @@ export class Broker {
           cwd: project.cwd,
           profileId: task.profileId ?? "scout",
           isolation,
-          placement,
-          model: effectiveModel,
           prompt: task.objective,
           ...(task.isolationMode === "reuse-worktree"
             ? {
@@ -9379,8 +5542,6 @@ export class Broker {
                 ),
           );
         }
-        if (compensationErrors.length === 0)
-          this.#trackDeferred(() => this.#advanceWorkflow(workflowId, actor));
       } finally {
         scheduler.setProvisioning(-1);
       }
@@ -9452,56 +5613,6 @@ export class Broker {
         payload: { workflowId, state: workflowState },
       });
   }
-  async #watchHerdrProvisionOutcome(
-    event: import("../state/types.js").StoredEvent,
-  ): Promise<void> {
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    const state = String(payload.state ?? "");
-    if (state !== "timed_out" && state !== "failed") return;
-    const agentId = String(payload.agentId ?? event.entityRefs?.agentId ?? "");
-    const agent = this.store.state.agents[agentId];
-    const run = agent?.currentRunId
-      ? this.store.state.runs[agent.currentRunId]
-      : undefined;
-    if (!agent || !run || isTerminal(run.state)) return;
-    const reason =
-      state === "timed_out"
-        ? "HERDR_REGISTRATION_TIMEOUT"
-        : String(payload.reason ?? "HERDR_PROVISION_FAILED");
-    await this.store.append({
-      type: "run.state_changed",
-      actor: { principalId: "system", kind: "system" },
-      entityRefs: { runId: run.id, taskId: run.taskId },
-      payload:
-        state === "timed_out"
-          ? {
-              runId: run.id,
-              state: "timed_out",
-              reason: {
-                code: "TIMEOUT",
-                message: "The task wall deadline expired.",
-              },
-            }
-          : { runId: run.id, state: "failed" },
-    });
-    const current = this.store.state.agents[agentId];
-    if (
-      current &&
-      !["replaced", "failed", "stopped", "closed"].includes(current.state)
-    )
-      await this.store.append({
-        type: "agent.state_changed",
-        actor: { principalId: "system", kind: "system" },
-        entityRefs: { agentId },
-        payload: {
-          agentId,
-          state: "replaced",
-          reason,
-          message: `Worker dispatch failed before registration: ${reason}. Retry the task or reuse an idle retained worker.`,
-        },
-      });
-  }
-
   #observeAdapterDeliveryFailure(error: unknown): void {
     // These are the only expected adapter-delivery outcomes at this boundary.
     if (!(
@@ -9536,32 +5647,6 @@ export class Broker {
     client.slowClosed = true;
     client.socket.destroy();
   }
-  #sendProviderProjectionEvent(
-    ownerAgentId: string,
-    projection: ProviderProjection | undefined,
-  ): void {
-    const event: import("../state/types.js").StoredEvent = {
-      schemaVersion: 1,
-      seq: this.store.state.lastEventSeq,
-      id: createId("evt"),
-      timestamp: new Date(this.#now()).toISOString(),
-      type: "presentation.projection.changed",
-      actor: { principalId: "broker", kind: "system" },
-      entityRefs: { agentId: ownerAgentId },
-      payload: { ownerAgentId, projection: projection ?? null },
-      prevHash: "ephemeral",
-      hash: "ephemeral",
-    };
-    for (const subscriber of this.#clients)
-      if (
-        subscriber.subscribed &&
-        subscriber.principal &&
-        this.#canAccessAgentSync(subscriber.principal, ownerAgentId) &&
-        this.#matchesFilter(subscriber.eventFilter, event)
-      )
-        this.#sendEvent(subscriber, event);
-  }
-
   #writeFrame(client: Client, frame: unknown): void {
     if (client.slowClosed || client.socket.destroyed) return;
     let encoded: Buffer;

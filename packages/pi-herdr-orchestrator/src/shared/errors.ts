@@ -3,11 +3,8 @@ export type ErrorCode =
   | "PERMISSION_DENIED"
   | "LIMIT_EXCEEDED"
   | "STATE_CORRUPT"
-  | "AUDIT_CORRUPT"
-  | "AUDIT_UNAVAILABLE"
   | "NOT_FOUND"
   | "INVALID_REQUEST"
-  | "MODEL_SELECTION_REQUIRED"
   | "BROKER_READ_ONLY"
   | "IDEMPOTENCY_CONFLICT"
   | "EVENT_CURSOR_EXPIRED"
@@ -40,14 +37,12 @@ export class OrchestratorError extends Error {
   readonly code: ErrorCode;
   readonly retryable: boolean;
   readonly details: Readonly<Record<string, unknown>> | undefined;
-  readonly remediation: string | undefined;
   constructor(
     code: ErrorCode,
     message: string,
     options: {
       retryable?: boolean;
       details?: Readonly<Record<string, unknown>>;
-      remediation?: string;
     } = {},
   ) {
     super(message);
@@ -55,7 +50,6 @@ export class OrchestratorError extends Error {
     this.code = code;
     this.retryable = options.retryable ?? false;
     this.details = options.details;
-    this.remediation = options.remediation;
   }
 }
 export function safeError(error: unknown): { code: string; message: string } {

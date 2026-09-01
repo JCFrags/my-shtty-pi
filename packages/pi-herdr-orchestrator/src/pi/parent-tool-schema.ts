@@ -1,13 +1,8 @@
 import type { ParentToolName, ParentToolRequest } from "./parent-tools.js";
 
-export const DEFAULT_PARENT_TOOL_NAMES = ["orchestrate"] as const;
-
-/** Legacy low-level controls. Register only in explicit advanced mode. */
 export const PARENT_TOOL_NAMES = [
-  "delegate_compact",
   "delegate",
   "agent_spawn",
-  "agent_model_options",
   "agent_list",
   "agent_get",
   "agent_prompt",
@@ -31,8 +26,6 @@ export const PARENT_TOOL_NAMES = [
   "task_get",
   "task_collect",
   "task_cancel",
-  "task_metadata",
-  "task_transcript_close",
 ] as const satisfies readonly ParentToolName[];
 
 export interface ParentToolMetadata {
@@ -45,13 +38,6 @@ export interface ParentToolMetadata {
 }
 
 const METADATA: Record<ParentToolName, ParentToolMetadata> = {
-  delegate_compact: {
-    method: "compact.delegate",
-    targetParameters: [],
-    requiresTarget: false,
-    requiresDelegation: true,
-    mutating: true,
-  },
   delegate: {
     method: "delegate.execute",
     targetParameters: [],
@@ -65,13 +51,6 @@ const METADATA: Record<ParentToolName, ParentToolMetadata> = {
     requiresTarget: false,
     requiresDelegation: false,
     mutating: true,
-  },
-  agent_model_options: {
-    method: "model.options",
-    targetParameters: [],
-    requiresTarget: false,
-    requiresDelegation: false,
-    mutating: false,
   },
   agent_list: {
     method: "agent.list",
@@ -229,20 +208,6 @@ const METADATA: Record<ParentToolName, ParentToolMetadata> = {
   },
   task_cancel: {
     method: "task.cancel",
-    targetParameters: ["taskId"],
-    requiresTarget: true,
-    requiresDelegation: false,
-    mutating: true,
-  },
-  task_metadata: {
-    method: "metadata.get",
-    targetParameters: ["taskId"],
-    requiresTarget: true,
-    requiresDelegation: false,
-    mutating: false,
-  },
-  task_transcript_close: {
-    method: "transcript.close",
     targetParameters: ["taskId"],
     requiresTarget: true,
     requiresDelegation: false,

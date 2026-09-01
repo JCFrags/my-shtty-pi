@@ -15,24 +15,9 @@ import type { PiAdapter } from "./adapter.js";
 import type { CorrelationState } from "./correlation.js";
 import type { PiBrokerClient } from "./broker-client.js";
 import type { PiApiLike, PiContextLike } from "./types.js";
-import {
-  SHIPPED_TASK_PROFILES,
-  THINKING_LEVELS,
-  type ThinkingLevel,
-} from "../broker/model-policy.js";
-import { AGENT_STATES } from "../state/types.js";
-import {
-  Container,
-  Text,
-  truncateToWidth,
-  visibleWidth,
-  type Component,
-} from "@pi-herdr-deck/tui";
 
 const MAX_BODY_BYTES = 262_144;
 const MAX_TEXT_BYTES = 16_384;
-const LAUNCH_LIFECYCLE_REMINDER =
-  'After each managed task becomes terminal, use orchestrate with action "collect" and its taskId. If the assigned agent remains open and is no longer needed, use action "close" with the same taskId.';
 const boundedString = (max: number) => ({
   type: "string",
   minLength: 1,
@@ -257,7 +242,6 @@ const questionSchema = {
 };
 const parentInputKeys: Readonly<Record<ParentToolName, readonly string[]>> =
   Object.freeze({
-    delegate_compact: ["text", "accept", "workflowDigest"],
     delegate: [
       "mode",
       "title",
@@ -271,23 +255,10 @@ const parentInputKeys: Readonly<Record<ParentToolName, readonly string[]>> =
     agent_spawn: [
       "task",
       "profileId",
-      "modelProfileId",
-      "model",
-      "placement",
-      "lifecycleClass",
-      "keepForReuse",
       "project",
       "isolation",
       "budget",
-      "review",
       "wait",
-    ],
-    agent_model_options: [
-      "profileId",
-      "placement",
-      "modelProfileId",
-      "projectKey",
-      "limit",
     ],
     agent_list: [
       "ids",
@@ -297,12 +268,24 @@ const parentInputKeys: Readonly<Record<ParentToolName, readonly string[]>> =
       "taskId",
       "workspaceId",
       "connected",
+      "include",
       "maxBytes",
       "cursor",
       "limit",
     ],
     agent_get: ["agentId", "include", "maxBytes"],
-    agent_prompt: ["agentId", "message", "delivery", "timeoutMs"],
+    agent_prompt: [
+      "agentId",
+      "message",
+      "delivery",
+      "timeoutMs",
+      "createTask",
+      "task",
+      "profileId",
+      "project",
+      "isolation",
+      "budget",
+    ],
     agent_steer: [
       "agentId",
       "message",
@@ -351,31 +334,7 @@ const parentInputKeys: Readonly<Record<ParentToolName, readonly string[]>> =
     task_get: ["taskId", "include", "maxBytes"],
     task_collect: ["taskIds", "select", "maxBytes"],
     task_cancel: ["taskId", "reason", "cascade"],
-    task_metadata: ["taskId", "runId"],
-    task_transcript_close: ["taskId", "runId", "confirm"],
   });
-export function withLaunchLifecycleReminder(
-  tool: ParentToolName,
-  input: Readonly<Record<string, unknown>>,
-  result: unknown,
-): unknown {
-  const launched =
-    (tool === "agent_spawn" && input.dryRun !== true) ||
-    (tool === "delegate" && input.dryRun !== true) ||
-    (tool === "delegate_compact" && input.accept === true);
-  if (
-    !launched ||
-    !result ||
-    typeof result !== "object" ||
-    Array.isArray(result)
-  )
-    return result;
-  return {
-    ...(result as Record<string, unknown>),
-    lifecycleReminder: LAUNCH_LIFECYCLE_REMINDER,
-  };
-}
-
 function validateNested(value: unknown, depth = 0): void {
   if (depth > 6) throw new Error("LIMIT_EXCEEDED");
   if (typeof value === "string") {
@@ -409,7 +368,6 @@ function validateNested(value: unknown, depth = 0): void {
 const parentRequired: Readonly<
   Partial<Record<ParentToolName, readonly string[]>>
 > = Object.freeze({
-  delegate_compact: ["text"],
   delegate: [
     "mode",
     "title",
@@ -421,7 +379,6 @@ const parentRequired: Readonly<
     "dryRun",
   ],
   agent_spawn: ["task", "profileId", "project", "isolation", "budget", "wait"],
-  agent_model_options: ["profileId"],
   agent_get: ["agentId"],
   agent_prompt: ["agentId", "message", "delivery", "timeoutMs"],
   agent_steer: ["agentId", "message", "delivery"],
@@ -442,8 +399,6 @@ const parentRequired: Readonly<
   task_get: ["taskId"],
   task_collect: ["taskIds"],
   task_cancel: ["taskId", "reason", "cascade"],
-  task_metadata: ["taskId"],
-  task_transcript_close: ["taskId", "confirm"],
 });
 function assertInputString(
   value: unknown,
@@ -472,10 +427,7 @@ function assertExactObject(
   )
     throw new Error("INVALID_REQUEST");
 }
-function validateExactNested(
-  tool: ParentToolName,
-  input: Record<string, unknown>,
-): void {
+function validateExactNested(input: Record<string, unknown>): void {
   const arrayFields = new Set([
     "ids",
     "taskIds",
@@ -493,9 +445,6 @@ function validateExactNested(
     "questionId",
     "resultId",
     "profileId",
-    "modelProfileId",
-    "placement",
-    "lifecycleClass",
     "workspaceId",
     "message",
     "reason",
@@ -535,17 +484,13 @@ function validateExactNested(
               "budgets",
             ]
           : key === "select"
-            ? ["taskId", "state", "summary", "status", "result"]
+            ? ["summary", "status", "result"]
             : undefined;
       if (allowed && value.some((item) => !allowed.includes(item as string)))
         throw new Error("INVALID_REQUEST");
       continue;
     }
-    if (
-      ["task", "project", "isolation", "budget", "answer", "model"].includes(
-        key,
-      )
-    ) {
+    if (["task", "project", "isolation", "budget", "answer"].includes(key)) {
       if (key === "task") {
         assertExactObject(
           value,
@@ -575,21 +520,6 @@ function validateExactNested(
         assertExactObject(value, ["mode"], ["mode"]);
         assertInputString(value.mode, 64);
         if (!["shared-readonly", "worktree"].includes(value.mode))
-          throw new Error("INVALID_REQUEST");
-      } else if (key === "model") {
-        assertExactObject(
-          value,
-          ["provider", "modelId", "thinkingLevel"],
-          ["provider", "modelId", "thinkingLevel"],
-        );
-        assertInputString(value.provider, 128);
-        assertInputString(value.modelId, 256);
-        assertInputString(value.thinkingLevel, 32);
-        if (
-          !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-            value.thinkingLevel,
-          )
-        )
           throw new Error("INVALID_REQUEST");
       } else if (key === "budget") {
         assertExactObject(value, ["wallTimeMs"], ["wallTimeMs"]);
@@ -624,8 +554,6 @@ function validateExactNested(
         );
         assertInputString(step.key, 256);
         assertInputString(step.profileId, 256);
-        if (!SHIPPED_TASK_PROFILES.includes(step.profileId as string))
-          throw new Error("INVALID_REQUEST");
         assertInputString(step.title);
         assertInputString(step.objective);
         if (
@@ -659,25 +587,6 @@ function validateExactNested(
       }
       continue;
     }
-    if (key === "modelProfileId") {
-      if (value !== "manager" && value !== "subagent")
-        throw new Error("INVALID_REQUEST");
-      continue;
-    }
-    if (key === "lifecycleClass") {
-      if (
-        !["temporary", "reusable", "retained", "pinned"].includes(
-          value as string,
-        )
-      )
-        throw new Error("INVALID_REQUEST");
-      continue;
-    }
-    if (key === "placement") {
-      if (value !== "current-workspace" && value !== "new-workspace")
-        throw new Error("INVALID_REQUEST");
-      continue;
-    }
     if (stringFields.has(key)) {
       assertInputString(value, key === "cursor" ? 256 : MAX_TEXT_BYTES);
       continue;
@@ -692,7 +601,6 @@ function validateExactNested(
         "confirm",
         "createTask",
         "cascade",
-        "keepForReuse",
       ].includes(key)
     ) {
       if (typeof value !== "boolean") throw new Error("INVALID_REQUEST");
@@ -713,18 +621,17 @@ function validateExactNested(
         (value as number) < 1 ||
         (key === "timeoutMs" && (value as number) > 1_800_000) ||
         (key === "maxBytes" && (value as number) > 262_144) ||
-        (key === "limit" &&
-          (value as number) > (tool === "agent_model_options" ? 16 : 500))
+        (key === "limit" && (value as number) > 500)
       )
         throw new Error("INVALID_REQUEST");
       continue;
     }
     if (key === "state") {
       const values = Array.isArray(value) ? value : [value];
-      const allowedStates =
-        tool === "agent_list"
-          ? AGENT_STATES
-          : [
+      if (
+        values.some(
+          (item) =>
+            ![
               "queued",
               "provisioning",
               "running",
@@ -738,8 +645,9 @@ function validateExactNested(
               "working",
               "connected",
               "disconnected",
-            ];
-      if (values.some((item) => !allowedStates.some((state) => state === item)))
+            ].includes(item as string),
+        )
+      )
         throw new Error("INVALID_REQUEST");
       continue;
     }
@@ -755,7 +663,7 @@ function validateParentInput(
     (parentRequired[tool] ?? []).some((key) => !Object.hasOwn(input, key))
   )
     throw new Error("INVALID_REQUEST");
-  validateExactNested(tool, input);
+  validateExactNested(input);
   for (const [key, value] of Object.entries(input)) {
     if (
       [
@@ -767,7 +675,6 @@ function validateParentInput(
         "confirm",
         "createTask",
         "cascade",
-        "accept",
       ].includes(key) &&
       typeof value !== "boolean"
     )
@@ -785,14 +692,13 @@ function validateParentInput(
         (value as number) < 1 ||
         (key === "timeoutMs" &&
           (value as number) >
-            (tool === "agent_wait" || tool === "agent_prompt"
+            (tool === "agent_wait"
               ? 30_000
               : tool === "agent_ask"
                 ? 120_000
                 : 1_800_000)) ||
         (key === "maxBytes" && (value as number) > 262_144) ||
-        (key === "limit" &&
-          (value as number) > (tool === "agent_model_options" ? 16 : 500)) ||
+        (key === "limit" && (value as number) > 500) ||
         (key === "durationMs" && (value as number) > 86_400_000) ||
         (key === "pollMs" && (value as number) > 60_000))
     )
@@ -852,8 +758,6 @@ function validateParentInput(
         value as string,
       )
     )
-      throw new Error("INVALID_REQUEST");
-    if (key === "profileId" && !SHIPPED_TASK_PROFILES.includes(value as string))
       throw new Error("INVALID_REQUEST");
     if (
       key === "delivery" &&
@@ -949,7 +853,6 @@ function schemaForKey(key: string): unknown {
       "confirm",
       "createTask",
       "cascade",
-      "accept",
     ].includes(key)
   )
     return { type: "boolean" };
@@ -971,36 +874,6 @@ function schemaForKey(key: string): unknown {
     };
   if (["delivery"].includes(key))
     return { type: "string", enum: ["normal", "steer", "follow_up"] };
-  if (key === "profileId")
-    return { type: "string", enum: [...SHIPPED_TASK_PROFILES] };
-  if (key === "projectKey")
-    return { type: "string", minLength: 1, maxLength: 4096 };
-  if (key === "modelProfileId")
-    return { type: "string", enum: ["manager", "subagent"] };
-  if (key === "model")
-    return {
-      type: "object",
-      additionalProperties: false,
-      required: ["provider", "modelId", "thinkingLevel"],
-      properties: {
-        provider: { type: "string", minLength: 1, maxLength: 128 },
-        modelId: { type: "string", minLength: 1, maxLength: 256 },
-        thinkingLevel: {
-          type: "string",
-          enum: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-        },
-      },
-    };
-  if (key === "lifecycleClass")
-    return {
-      type: "string",
-      enum: ["temporary", "reusable", "retained", "pinned"],
-    };
-  if (key === "placement")
-    return {
-      type: "string",
-      enum: ["current-workspace", "new-workspace"],
-    };
   if (["failureMode"].includes(key))
     return { type: "string", enum: ["fail_fast", "collect_all"] };
   if (["waitUntil"].includes(key))
@@ -1019,35 +892,11 @@ function schemaForKey(key: string): unknown {
         enum: ["succeeded", "failed", "cancelled", "timed_out", "blocked"],
       },
     };
-  if (key === "include")
-    return {
-      type: "array",
-      maxItems: 64,
-      items: {
-        type: "string",
-        enum: [
-          "capabilities",
-          "runHistory",
-          "auditSummary",
-          "dependencies",
-          "runs",
-          "blockers",
-          "resultValidation",
-          "worktree",
-          "budgets",
-        ],
-      },
-    };
-  if (key === "select")
-    return {
-      type: "array",
-      maxItems: 64,
-      items: {
-        type: "string",
-        enum: ["taskId", "state", "summary", "status", "result"],
-      },
-    };
-  if (["ids", "taskIds", "agentIds", "followUps"].includes(key))
+  if (
+    ["ids", "taskIds", "include", "select", "agentIds", "followUps"].includes(
+      key,
+    )
+  )
     return {
       type: "array",
       maxItems: 64,
@@ -1064,7 +913,7 @@ function schemaForKey(key: string): unknown {
         required: ["key", "profileId", "title", "objective"],
         properties: {
           key: { type: "string", maxLength: 256 },
-          profileId: { type: "string", enum: [...SHIPPED_TASK_PROFILES] },
+          profileId: { type: "string", maxLength: 256 },
           title: { type: "string", maxLength: MAX_TEXT_BYTES },
           objective: { type: "string", maxLength: MAX_TEXT_BYTES },
           constraints: {
@@ -1095,18 +944,6 @@ function schemaForKey(key: string): unknown {
         },
       },
     };
-  if (key === "review")
-    return {
-      type: "object",
-      additionalProperties: false,
-      required: ["taskId", "runId", "resultId", "rubricVersion"],
-      properties: {
-        taskId: { type: "string", pattern: "^tsk_[0-9A-HJKMNP-TV-Z]{26}$" },
-        runId: { type: "string", pattern: "^run_[0-9A-HJKMNP-TV-Z]{26}$" },
-        resultId: { type: "string", pattern: "^res_[0-9A-HJKMNP-TV-Z]{26}$" },
-        rubricVersion: { type: "string", minLength: 1, maxLength: 64 },
-      },
-    };
   if (["project"].includes(key))
     return {
       type: "object",
@@ -1120,12 +957,7 @@ function schemaForKey(key: string): unknown {
       additionalProperties: false,
       required: ["mode"],
       properties: {
-        mode: {
-          type: "string",
-          enum: ["shared-readonly", "worktree"],
-          description:
-            "shared-readonly is a broker tool-policy label for a shared checkout, not an OS-enforced read-only filesystem. Use worktree for file-writing roles or to protect the parent checkout.",
-        },
+        mode: { type: "string", enum: ["shared-readonly", "worktree"] },
       },
     };
   if (["budget"].includes(key))
@@ -1158,46 +990,39 @@ function parentInputSchema(tool: ParentToolName): unknown {
       ...Object.fromEntries(
         parentInputKeys[tool].map((key) => [
           key,
-          key === "limit" && tool === "agent_model_options"
-            ? { type: "integer", minimum: 1, maximum: 16 }
-            : key === "timeoutMs" &&
-                (tool === "agent_wait" || tool === "agent_prompt")
-              ? { type: "integer", minimum: 1, maximum: 30_000 }
-              : key === "timeoutMs" && tool === "agent_ask"
-                ? { type: "integer", minimum: 1, maximum: 120_000 }
-                : key === "mode" && tool === "group_wait"
-                  ? { type: "string", enum: ["all", "any"] }
-                  : key === "kind" && tool === "coordination_wait"
+          key === "timeoutMs" && tool === "agent_wait"
+            ? { type: "integer", minimum: 1, maximum: 30_000 }
+            : key === "timeoutMs" && tool === "agent_ask"
+              ? { type: "integer", minimum: 1, maximum: 120_000 }
+              : key === "mode" && tool === "group_wait"
+                ? { type: "string", enum: ["all", "any"] }
+                : key === "kind" && tool === "coordination_wait"
+                  ? {
+                      type: "string",
+                      enum: [
+                        "timer",
+                        "signal",
+                        "agent",
+                        "task",
+                        "result",
+                        "question",
+                        "group",
+                      ],
+                    }
+                  : key === "until" && tool !== "agent_wait"
                     ? {
-                        type: "string",
-                        enum: [
-                          "timer",
-                          "signal",
-                          "agent",
-                          "task",
-                          "result",
-                          "question",
-                          "group",
-                        ],
+                        type: "array",
+                        minItems: 1,
+                        maxItems: 16,
+                        items: { type: "string", minLength: 1, maxLength: 64 },
                       }
-                    : key === "until" && tool !== "agent_wait"
+                    : key === "followUps"
                       ? {
                           type: "array",
-                          minItems: 1,
-                          maxItems: 16,
-                          items: {
-                            type: "string",
-                            minLength: 1,
-                            maxLength: 64,
-                          },
+                          maxItems: 3,
+                          items: boundedString(MAX_TEXT_BYTES),
                         }
-                      : key === "followUps"
-                        ? {
-                            type: "array",
-                            maxItems: 3,
-                            items: boundedString(MAX_TEXT_BYTES),
-                          }
-                        : schemaForKey(key),
+                      : schemaForKey(key),
         ]),
       ),
       idempotencyKey: { type: "string", minLength: 1, maxLength: 256 },
@@ -1206,18 +1031,6 @@ function parentInputSchema(tool: ParentToolName): unknown {
   };
 }
 
-interface ToolRenderTheme {
-  fg(color: string, text: string): string;
-  bold(text: string): string;
-}
-interface ToolRenderResult {
-  content: Array<{ type: string; text?: string }>;
-  details?: unknown;
-}
-interface ToolRenderOptions {
-  expanded: boolean;
-  isPartial?: boolean;
-}
 interface ToolDefinition {
   name: string;
   label: string;
@@ -1234,17 +1047,6 @@ interface ToolDefinition {
     details?: unknown;
     isError?: boolean;
   }>;
-  renderCall?: (
-    args: Record<string, unknown>,
-    theme: ToolRenderTheme,
-    context: unknown,
-  ) => Component;
-  renderResult?: (
-    result: ToolRenderResult,
-    options: ToolRenderOptions,
-    theme: ToolRenderTheme,
-    context: unknown,
-  ) => Component;
 }
 export interface PiToolBinding {
   adapter: PiAdapter | undefined;
@@ -1252,83 +1054,8 @@ export interface PiToolBinding {
   parentAuthorized?: boolean;
   correlationState?: CorrelationState;
 }
-function prettyJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-function prettyModelText(text: string): string {
-  try {
-    return prettyJson(JSON.parse(text));
-  } catch {
-    return text;
-  }
-}
-function completeCallComponent(
-  definition: ToolDefinition,
-  args: Record<string, unknown>,
-  theme: ToolRenderTheme,
-): Component {
-  const heading = theme.fg("toolTitle", theme.bold(definition.label));
-  const label = theme.fg("muted", "LLM-submitted input (complete)");
-  return new Text(`${heading}\n${label}\n${prettyJson(args)}`, 0, 0);
-}
-function completeResultComponent(
-  result: ToolRenderResult,
-  theme: ToolRenderTheme,
-): Component {
-  const label = theme.fg("muted", "Model-visible result (complete)");
-  if (result.content.length === 0) return new Text(`${label}\n[]`, 0, 0);
-  const content = result.content
-    .map((item, index) => {
-      const text =
-        typeof item.text === "string" ? prettyModelText(item.text) : "";
-      if (result.content.length === 1 && item.type === "text") return text;
-      return `[${index + 1}] ${item.type}${text.length > 0 ? `\n${text}` : ""}`;
-    })
-    .join("\n\n");
-  return new Text(`${label}\n${content}`, 0, 0);
-}
-function combineComponents(
-  summary: Component | undefined,
-  complete: Component,
-): Component {
-  if (!summary) return complete;
-  const container = new Container();
-  container.addChild(summary);
-  container.addChild(complete);
-  return container;
-}
 function register(api: PiApiLike, definition: ToolDefinition): void {
-  const summaryCall = definition.renderCall;
-  const summaryResult = definition.renderResult;
-  const transparentDefinition: ToolDefinition = {
-    ...definition,
-    renderCall(
-      args: Record<string, unknown>,
-      theme: ToolRenderTheme,
-      context: unknown,
-    ) {
-      return combineComponents(
-        summaryCall?.(args, theme, context),
-        completeCallComponent(definition, args, theme),
-      );
-    },
-    renderResult(
-      result: ToolRenderResult,
-      options: ToolRenderOptions,
-      theme: ToolRenderTheme,
-      context: unknown,
-    ) {
-      return combineComponents(
-        summaryResult?.(result, options, theme, context),
-        completeResultComponent(result, theme),
-      );
-    },
-  };
-  api.registerTool?.(transparentDefinition);
+  api.registerTool?.(definition);
 }
 function textResult(value: unknown): {
   content: Array<{ type: "text"; text: string }>;
@@ -1356,400 +1083,6 @@ function textResult(value: unknown): {
     content: [{ type: "text", text: JSON.stringify(details) }],
     details,
   };
-}
-interface AvailableAgentModelRatings {
-  readonly overall: string;
-  readonly taskFit: string;
-  readonly reliability: string;
-  readonly speed: string;
-  readonly value: string;
-}
-interface AvailableAgentThinkingGuide {
-  readonly thinkingLevel: ThinkingLevel;
-  readonly useFor: string;
-}
-interface AvailableAgentModelCapacity {
-  readonly status: "ready" | "will_queue";
-  readonly available: number;
-  readonly limit: number;
-}
-interface AvailableAgentModelThinking {
-  readonly rank: number;
-  readonly thinkingLevel: ThinkingLevel;
-  readonly recommended: boolean;
-  readonly ratings: AvailableAgentModelRatings;
-}
-interface AvailableAgentModelOption {
-  readonly rank: number;
-  readonly provider: string;
-  readonly modelId: string;
-  readonly recommended: boolean;
-  readonly thinkingLevels: readonly AvailableAgentModelThinking[];
-  readonly capacity?: AvailableAgentModelCapacity;
-}
-interface AvailableAgentModelsDetails {
-  readonly profileId: string;
-  readonly thinkingGuide: readonly AvailableAgentThinkingGuide[];
-  readonly availableModels: readonly AvailableAgentModelOption[];
-  readonly moreAvailable: number;
-}
-function nonnegativeSafeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && Number(value) >= 0;
-}
-function hasExactKeys(
-  value: Record<string, unknown>,
-  keys: readonly string[],
-): boolean {
-  const actual = Object.keys(value);
-  return (
-    actual.length === keys.length &&
-    keys.every((key) => Object.hasOwn(value, key))
-  );
-}
-function validStarRating(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const match = /^(★{0,5})(☆{0,5}) ([0-5])\/5$/u.exec(value);
-  if (!match) return false;
-  const filled = match[1]?.length ?? 0;
-  const empty = match[2]?.length ?? 0;
-  return filled + empty === 5 && filled === Number(match[3]);
-}
-function ratingCategories(ratings: AvailableAgentModelRatings): string {
-  return [
-    `Task fit ${ratings.taskFit}`,
-    `Reliability ${ratings.reliability}`,
-    `Speed ${ratings.speed}`,
-    `Value ${ratings.value}`,
-  ].join(" · ");
-}
-function safeModelOptionText(value: unknown, max = 256): value is string {
-  try {
-    assertInputString(value, max);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function parseModelRatings(value: unknown): AvailableAgentModelRatings {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  const ratings = value as Record<string, unknown>;
-  if (
-    !hasExactKeys(ratings, [
-      "overall",
-      "taskFit",
-      "reliability",
-      "speed",
-      "value",
-    ]) ||
-    !["overall", "taskFit", "reliability", "speed", "value"].every((key) =>
-      validStarRating(ratings[key]),
-    )
-  )
-    throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  return {
-    overall: ratings.overall as string,
-    taskFit: ratings.taskFit as string,
-    reliability: ratings.reliability as string,
-    speed: ratings.speed as string,
-    value: ratings.value as string,
-  };
-}
-function parseModelCapacity(value: unknown): AvailableAgentModelCapacity {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  const capacity = value as Record<string, unknown>;
-  if (
-    !hasExactKeys(capacity, ["status", "available", "limit"]) ||
-    (capacity.status !== "ready" && capacity.status !== "will_queue") ||
-    !nonnegativeSafeInteger(capacity.available) ||
-    !Number.isSafeInteger(capacity.limit) ||
-    Number(capacity.limit) < 1 ||
-    Number(capacity.limit) > 32 ||
-    Number(capacity.available) > Number(capacity.limit) ||
-    (capacity.status === "ready"
-      ? Number(capacity.available) < 1
-      : Number(capacity.available) !== 0)
-  )
-    throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  return {
-    status: capacity.status,
-    available: Number(capacity.available),
-    limit: Number(capacity.limit),
-  };
-}
-function availableAgentModelsResult(value: unknown): {
-  content: Array<{ type: "text"; text: string }>;
-  details: AvailableAgentModelsDetails;
-} {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  const source = value as Record<string, unknown>;
-  if (
-    !hasExactKeys(source, [
-      "profileId",
-      "thinkingGuide",
-      "availableModels",
-      "moreAvailable",
-    ]) ||
-    !safeModelOptionText(source.profileId) ||
-    !Array.isArray(source.thinkingGuide) ||
-    source.thinkingGuide.length > THINKING_LEVELS.length ||
-    !Array.isArray(source.availableModels) ||
-    source.availableModels.length > 16 ||
-    !nonnegativeSafeInteger(source.moreAvailable) ||
-    source.availableModels.length + source.moreAvailable > 256
-  )
-    throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  const thinkingGuide = source.thinkingGuide.map(
-    (entry): AvailableAgentThinkingGuide => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry))
-        throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-      const guide = entry as Record<string, unknown>;
-      if (
-        !hasExactKeys(guide, ["thinkingLevel", "useFor"]) ||
-        !safeModelOptionText(guide.thinkingLevel, 32) ||
-        !THINKING_LEVELS.includes(guide.thinkingLevel as ThinkingLevel) ||
-        !safeModelOptionText(guide.useFor, 96)
-      )
-        throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-      return {
-        thinkingLevel: guide.thinkingLevel as ThinkingLevel,
-        useFor: guide.useFor,
-      };
-    },
-  );
-  const usedRanks = new Set<number>();
-  const usedModels = new Set<string>();
-  let pairCount = 0;
-  let previousGroupBestRank = 0;
-  const availableModels = source.availableModels.map(
-    (candidate, index): AvailableAgentModelOption => {
-      if (
-        !candidate ||
-        typeof candidate !== "object" ||
-        Array.isArray(candidate)
-      )
-        throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-      const option = candidate as Record<string, unknown>;
-      const expectedKeys = [
-        "rank",
-        "provider",
-        "modelId",
-        "recommended",
-        "thinkingLevels",
-        ...(Object.hasOwn(option, "capacity") ? ["capacity"] : []),
-      ];
-      if (
-        !hasExactKeys(option, expectedKeys) ||
-        !Number.isSafeInteger(option.rank) ||
-        Number(option.rank) !== index + 1 ||
-        !safeModelOptionText(option.provider) ||
-        !safeModelOptionText(option.modelId) ||
-        typeof option.recommended !== "boolean" ||
-        !Array.isArray(option.thinkingLevels) ||
-        option.thinkingLevels.length < 1 ||
-        option.thinkingLevels.length > THINKING_LEVELS.length
-      )
-        throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-      const modelKey = `${option.provider}\u0000${option.modelId}`;
-      if (usedModels.has(modelKey))
-        throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-      usedModels.add(modelKey);
-      const usedLevels = new Set<ThinkingLevel>();
-      const thinkingLevels = option.thinkingLevels.map(
-        (entry): AvailableAgentModelThinking => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry))
-            throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-          const thinking = entry as Record<string, unknown>;
-          if (
-            !hasExactKeys(thinking, [
-              "rank",
-              "thinkingLevel",
-              "recommended",
-              "ratings",
-            ]) ||
-            !Number.isSafeInteger(thinking.rank) ||
-            Number(thinking.rank) < 1 ||
-            Number(thinking.rank) > 256 ||
-            usedRanks.has(Number(thinking.rank)) ||
-            !safeModelOptionText(thinking.thinkingLevel, 32) ||
-            !THINKING_LEVELS.includes(
-              thinking.thinkingLevel as ThinkingLevel,
-            ) ||
-            usedLevels.has(thinking.thinkingLevel as ThinkingLevel) ||
-            typeof thinking.recommended !== "boolean" ||
-            thinking.recommended !== (thinking.rank === 1)
-          )
-            throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-          usedRanks.add(Number(thinking.rank));
-          usedLevels.add(thinking.thinkingLevel as ThinkingLevel);
-          pairCount++;
-          return {
-            rank: Number(thinking.rank),
-            thinkingLevel: thinking.thinkingLevel as ThinkingLevel,
-            recommended: thinking.recommended,
-            ratings: parseModelRatings(thinking.ratings),
-          };
-        },
-      );
-      if (
-        thinkingLevels.some(
-          (level, levelIndex) =>
-            levelIndex > 0 &&
-            level.rank <= (thinkingLevels[levelIndex - 1]?.rank ?? 0),
-        ) ||
-        (thinkingLevels[0]?.rank ?? 0) <= previousGroupBestRank ||
-        option.recommended !== thinkingLevels.some((level) => level.recommended)
-      )
-        throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-      previousGroupBestRank = thinkingLevels[0]!.rank;
-      return {
-        rank: Number(option.rank),
-        provider: option.provider,
-        modelId: option.modelId,
-        recommended: option.recommended,
-        thinkingLevels,
-        ...(Object.hasOwn(option, "capacity")
-          ? { capacity: parseModelCapacity(option.capacity) }
-          : {}),
-      };
-    },
-  );
-  if (pairCount > 256) throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  const presentLevels = new Set(
-    availableModels.flatMap((model) =>
-      model.thinkingLevels.map((thinking) => thinking.thinkingLevel),
-    ),
-  );
-  const expectedGuide = THINKING_LEVELS.filter((level) =>
-    presentLevels.has(level),
-  );
-  if (
-    thinkingGuide.length !== expectedGuide.length ||
-    thinkingGuide.some(
-      (guide, index) => guide.thinkingLevel !== expectedGuide[index],
-    ) ||
-    (availableModels.length > 0 && !availableModels[0]?.recommended)
-  )
-    throw new Error("MODEL_OPTIONS_RESPONSE_INVALID");
-  const details: AvailableAgentModelsDetails = {
-    profileId: source.profileId,
-    thinkingGuide,
-    availableModels,
-    moreAvailable: source.moreAvailable,
-  };
-  return {
-    content: [{ type: "text", text: JSON.stringify(details) }],
-    details,
-  };
-}
-function recommendedAgentModel(
-  value: unknown,
-  expectedProfileId: string,
-): { provider: string; modelId: string; thinkingLevel: ThinkingLevel } {
-  const { details } = availableAgentModelsResult(value);
-  if (details.profileId !== expectedProfileId)
-    throw new Error(
-      `MODEL_OPTIONS_PROFILE_MISMATCH: expected ${expectedProfileId}, received ${details.profileId}`,
-    );
-  const model = details.availableModels.find(
-    (candidate) => candidate.recommended,
-  );
-  const thinking = model?.thinkingLevels.find(
-    (candidate) => candidate.recommended,
-  );
-  if (!model || !thinking)
-    throw new Error(
-      `NO_ELIGIBLE_AGENT_MODEL: no installed, broker-allowed model is available for profile ${expectedProfileId}`,
-    );
-  return {
-    provider: model.provider,
-    modelId: model.modelId,
-    thinkingLevel: thinking.thinkingLevel,
-  };
-}
-function oneLineComponent(lines: readonly string[]): Component {
-  return {
-    render(width: number): string[] {
-      const safeWidth = Math.max(1, Math.floor(width));
-      return lines.map((line) =>
-        visibleWidth(line) <= safeWidth
-          ? line
-          : `${truncateToWidth(line, Math.max(0, safeWidth - 1))}…`,
-      );
-    },
-    invalidate(): void {},
-  };
-}
-function compactLocalCapacity(
-  capacity: AvailableAgentModelCapacity,
-  theme: ToolRenderTheme,
-): string {
-  const text =
-    capacity.status === "ready"
-      ? `local · ${capacity.available}/${capacity.limit} free`
-      : "local · will queue";
-  return theme.fg(capacity.status === "ready" ? "success" : "warning", text);
-}
-function renderAvailableAgentModels(
-  result: {
-    content: Array<{ type: string; text?: string }>;
-    details?: unknown;
-  },
-  expanded: boolean,
-  theme: ToolRenderTheme,
-): Component {
-  const details = result.details as AvailableAgentModelsDetails | undefined;
-  if (!details || !Array.isArray(details.availableModels))
-    return new Text(result.content[0]?.text ?? "", 0, 0);
-  const displayed = expanded
-    ? details.availableModels
-    : details.availableModels.slice(0, 4);
-  const total = details.availableModels.length + details.moreAvailable;
-  const guidance = new Map(
-    details.thinkingGuide.map((entry) => [entry.thinkingLevel, entry.useFor]),
-  );
-  const lines = [
-    theme.fg("success", `✓ ${total} available model${total === 1 ? "" : "s"}`) +
-      theme.fg("muted", ` for ${details.profileId}`),
-  ];
-  for (const model of displayed) {
-    const marker = model.recommended ? theme.fg("accent", "→") : " ";
-    lines.push(
-      `${marker} ${theme.fg("accent", `#${model.rank}`)} ${theme.fg("muted", `${model.provider}/${model.modelId}`)}`,
-    );
-    if (model.capacity)
-      lines.push(`    ${compactLocalCapacity(model.capacity, theme)}`);
-    for (const thinking of model.thinkingLevels) {
-      const thinkingMarker = thinking.recommended
-        ? theme.fg("accent", "→")
-        : " ";
-      lines.push(
-        `    ${thinkingMarker} ${thinking.thinkingLevel} · ${theme.fg("accent", thinking.ratings.overall)} · ${guidance.get(thinking.thinkingLevel) ?? ""}`,
-      );
-      if (expanded)
-        lines.push(
-          `      ${theme.fg("dim", ratingCategories(thinking.ratings))}`,
-        );
-    }
-  }
-  const hidden = details.availableModels.length - displayed.length;
-  if (hidden > 0)
-    lines.push(
-      theme.fg(
-        "dim",
-        `… ${hidden} more returned model${hidden === 1 ? "" : "s"}`,
-      ),
-    );
-  if (details.moreAvailable > 0)
-    lines.push(
-      theme.fg(
-        "warning",
-        `${details.moreAvailable} more available; increase limit to see them.`,
-      ),
-    );
-  return oneLineComponent(lines);
 }
 function validateResultInput(input: Record<string, unknown>): void {
   assertExactObject(
@@ -2146,52 +1479,6 @@ export function registerManagedChildTools(
     ? { adapter: adapterOrBinding as PiAdapter, client }
     : (adapterOrBinding as PiToolBinding);
   register(api, {
-    name: "orchestrator_review_submit",
-    label: "Submit independent review",
-    description:
-      "Submit one bounded quality score for the broker-issued review contract bound to the current managed task.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["valuePpm", "confidencePpm"],
-      properties: {
-        valuePpm: { type: "integer", minimum: 0, maximum: 1_000_000 },
-        confidencePpm: {
-          type: "integer",
-          minimum: 0,
-          maximum: 1_000_000,
-        },
-      },
-    },
-    async execute(_id, params, signal) {
-      if (signal.aborted) throw new Error("CANCELLED");
-      const adapter = binding.adapter;
-      const client = binding.client;
-      if (!adapter || !client || !client.connected)
-        throw new Error("AGENT_DISCONNECTED");
-      const assignment = adapter.assignmentForTools();
-      if (!assignment) throw new Error("RUN_MISMATCH");
-      if (
-        !Number.isSafeInteger(params.valuePpm) ||
-        Number(params.valuePpm) < 0 ||
-        Number(params.valuePpm) > 1_000_000 ||
-        !Number.isSafeInteger(params.confidencePpm) ||
-        Number(params.confidencePpm) < 0 ||
-        Number(params.confidencePpm) > 1_000_000
-      )
-        throw new Error("INVALID_REQUEST");
-      const result = await client.request("review.submit", {
-        agentId: assignment.agentId,
-        taskId: assignment.taskId,
-        runId: assignment.runId,
-        assignmentGeneration: assignment.assignmentGeneration,
-        valuePpm: params.valuePpm,
-        confidencePpm: params.confidencePpm,
-      });
-      return textResult(result);
-    },
-  });
-  register(api, {
     name: "orchestrator_result",
     label: "Publish orchestrator result",
     description:
@@ -2233,104 +1520,96 @@ export function registerManagedChildTools(
       if (!assignment) throw new Error("RUN_MISMATCH");
       validateQuestionInput(params);
       assertBoundedBody(params);
-      api.events?.emit("herdr:blocked", {
-        active: true,
-        label: "Waiting for an orchestrator answer",
-      });
+      const waiter = client.registerQuestionWaiter(
+        _id,
+        assignment.runId,
+        params.timeoutMs as number,
+        signal,
+      );
+      void waiter.catch(() => undefined);
+      let openPromise: Promise<unknown>;
       try {
-        const waiter = client.registerQuestionWaiter(
-          _id,
-          assignment.runId,
-          params.timeoutMs as number,
-          signal,
-        );
-        void waiter.catch(() => undefined);
-        let openPromise: Promise<unknown>;
-        try {
-          openPromise = client.request("question.open", {
-            agentId: assignment.agentId,
-            taskId: assignment.taskId,
-            runId: assignment.runId,
-            assignmentGeneration: assignment.assignmentGeneration,
-            toolCallId: _id,
-            question: params,
-          });
-        } catch (error) {
-          client.discardQuestionWaiter(_id);
-          throw error;
-        }
-        void openPromise.catch(() => undefined);
-        let ack: unknown;
-        try {
-          const first = await Promise.race([
-            openPromise.then((value) => ({ kind: "ack" as const, value })),
-            waiter.then((value) => ({ kind: "waiter" as const, value })),
-          ]);
-          if (first.kind === "waiter") {
-            const earlyQuestionId =
-              typeof client.questionIdForToolCall === "function"
-                ? client.questionIdForToolCall(_id)
-                : undefined;
-            void openPromise.then(
-              (lateAck) => {
-                try {
-                  const parsedLateAck = validateQuestionAck(
-                    lateAck,
-                    assignment,
-                    _id,
-                  );
-                  if (
-                    earlyQuestionId !== undefined &&
-                    parsedLateAck.questionId !== earlyQuestionId
-                  )
-                    throw new Error("QUESTION_DELIVERY_INVALID");
-                } catch {
-                  client.close();
-                } finally {
-                  client.discardQuestionWaiter(_id);
-                }
-              },
-              () => {
+        openPromise = client.request("question.open", {
+          agentId: assignment.agentId,
+          taskId: assignment.taskId,
+          runId: assignment.runId,
+          assignmentGeneration: assignment.assignmentGeneration,
+          toolCallId: _id,
+          question: params,
+        });
+      } catch (error) {
+        client.discardQuestionWaiter(_id);
+        throw error;
+      }
+      void openPromise.catch(() => undefined);
+      let ack: unknown;
+      try {
+        const first = await Promise.race([
+          openPromise.then((value) => ({ kind: "ack" as const, value })),
+          waiter.then((value) => ({ kind: "waiter" as const, value })),
+        ]);
+        if (first.kind === "waiter") {
+          const earlyQuestionId =
+            typeof client.questionIdForToolCall === "function"
+              ? client.questionIdForToolCall(_id)
+              : undefined;
+          void openPromise.then(
+            (lateAck) => {
+              try {
+                const parsedLateAck = validateQuestionAck(
+                  lateAck,
+                  assignment,
+                  _id,
+                );
+                if (
+                  earlyQuestionId !== undefined &&
+                  parsedLateAck.questionId !== earlyQuestionId
+                )
+                  throw new Error("QUESTION_DELIVERY_INVALID");
+              } catch {
+                client.close();
+              } finally {
                 client.discardQuestionWaiter(_id);
-              },
-            );
-            return textResult(first.value);
-          }
-          ack = first.value;
-        } catch (error) {
-          client.discardQuestionWaiter(_id);
-          throw error;
+              }
+            },
+            () => {
+              client.discardQuestionWaiter(_id);
+            },
+          );
+          return textResult(first.value);
         }
-        let parsedAck: ReturnType<typeof validateQuestionAck>;
-        try {
-          parsedAck = validateQuestionAck(ack, assignment, _id);
-        } catch (error) {
-          client.discardQuestionWaiter(_id);
-          throw error;
-        }
-        if (parsedAck.state !== "open") {
-          client.discardQuestionWaiter(_id);
-          return textResult({
-            state: parsedAck.state,
-            ...(parsedAck.state === "answered"
-              ? { answer: parsedAck.answer }
-              : {}),
-          });
-        }
-        try {
-          client.bindQuestionWaiter(_id, parsedAck.questionId);
-        } catch (error) {
-          client.discardQuestionWaiter(_id);
-          throw error;
-        }
-        try {
-          const answer = await waiter;
-          return textResult(answer);
-        } finally {
-          client.discardQuestionWaiter(_id);
-        }
+        ack = first.value;
+      } catch (error) {
+        client.discardQuestionWaiter(_id);
+        throw error;
+      }
+      let parsedAck: ReturnType<typeof validateQuestionAck>;
+      try {
+        parsedAck = validateQuestionAck(ack, assignment, _id);
+      } catch (error) {
+        client.discardQuestionWaiter(_id);
+        throw error;
+      }
+      if (parsedAck.state !== "open") {
+        client.discardQuestionWaiter(_id);
+        return textResult({
+          state: parsedAck.state,
+          ...(parsedAck.state === "answered"
+            ? { answer: parsedAck.answer }
+            : {}),
+        });
+      }
+      try {
+        client.bindQuestionWaiter(_id, parsedAck.questionId);
+      } catch (error) {
+        client.discardQuestionWaiter(_id);
+        throw error;
+      }
+      try {
+        const answer = await waiter;
+        return textResult(answer);
       } finally {
-        api.events?.emit("herdr:blocked", { active: false });
+        client.discardQuestionWaiter(_id);
       }
     },
   });
@@ -2411,635 +1690,13 @@ function executeParentWaitRequest(
   });
 }
 
-async function waitForDelegation(
-  service: ParentToolService,
-  response: ParentToolResponse,
-  principal: ToolPrincipal,
-  signal: AbortSignal,
-  timeoutMs: number,
-  waitUntil: readonly string[],
-): Promise<ParentToolResponse> {
-  if (!response.ok) return response;
-  const initial = response.result as Record<string, unknown> | undefined;
-  const initialTasks = Array.isArray(initial?.tasks) ? initial.tasks : [];
-  const taskIds = initialTasks
-    .map((item) =>
-      item && typeof item === "object" && !Array.isArray(item)
-        ? (item as Record<string, unknown>).taskId
-        : undefined,
-    )
-    .filter((id): id is string => typeof id === "string");
-  if (taskIds.length === 0) return response;
-  const wanted = new Set(waitUntil);
-  const terminal = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
-  const deadline = Date.now() + timeoutMs;
-  let latestTasks = initialTasks;
-  while (Date.now() < deadline) {
-    const snapshots: Record<string, unknown>[] = [];
-    for (const taskId of taskIds) {
-      let next: ParentToolResponse | undefined;
-      do {
-        next = await executeParentWaitRequest(
-          service,
-          { tool: "task_get", input: { taskId } },
-          principal,
-          signal,
-          deadline,
-        );
-        if (!next) throw new Error("WAIT_TIMEOUT");
-        if (
-          !next.ok &&
-          next.error?.code === "AGENT_DISCONNECTED" &&
-          Date.now() < deadline
-        ) {
-          await waitForParentPoll(
-            Math.min(100, Math.max(1, deadline - Date.now())),
-            signal,
-          );
-          next = undefined;
-        }
-      } while (!next);
-      if (!next.ok) return next;
-      if (next.result && typeof next.result === "object")
-        snapshots.push(next.result as Record<string, unknown>);
-    }
-    latestTasks = initialTasks.map((item) => {
-      const initialTask = item as Record<string, unknown>;
-      const snapshot = snapshots.find(
-        (candidate) => candidate.id === initialTask.taskId,
-      );
-      return snapshot
-        ? {
-            ...initialTask,
-            ...(typeof snapshot.state === "string"
-              ? { state: snapshot.state }
-              : {}),
-          }
-        : initialTask;
-    });
-    const states = snapshots.map((task) => String(task.state));
-    const blocked = states.some((state) => state === "blocked");
-    const allTerminal =
-      states.length === taskIds.length &&
-      states.every((state) => terminal.has(state));
-    if (
-      (wanted.has("blocked") && blocked) ||
-      (wanted.has("terminal") && allTerminal)
-    ) {
-      const state = blocked
-        ? "blocked"
-        : states.every((item) => item === "succeeded")
-          ? "succeeded"
-          : "failed";
-      return {
-        ...response,
-        result: { ...initial, state, tasks: latestTasks },
-      };
-    }
-    await waitForParentPoll(
-      Math.min(100, Math.max(1, deadline - Date.now())),
-      signal,
-    );
-  }
-  throw new Error("WAIT_TIMEOUT");
-}
-
-const FACADE_RUN_REQUEST_TIMEOUT_MS = 120_000;
-
-const ORCHESTRATE_ACTIONS = [
-  "run",
-  "models",
-  "inspect",
-  "list",
-  "wait",
-  "collect",
-  "cancel",
-  "close",
-] as const;
-
-const orchestrateInputSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["action"],
-  properties: {
-    action: {
-      type: "string",
-      enum: ORCHESTRATE_ACTIONS,
-      description:
-        'Use "run" with only task for normal creation. Other actions manage the returned taskId.',
-    },
-    task: {
-      type: "object",
-      additionalProperties: false,
-      required: ["title", "objective"],
-      properties: {
-        title: boundedString(512),
-        objective: boundedString(16_384),
-        constraints: {
-          type: "array",
-          maxItems: 64,
-          items: boundedString(16_384),
-        },
-      },
-    },
-    profileId: {
-      type: "string",
-      enum: SHIPPED_TASK_PROFILES,
-      description:
-        'Optional task role. "run" and "models" default to the safe read-only "scout" profile.',
-    },
-    modelProfileId: { type: "string", enum: ["manager", "subagent"] },
-    model: {
-      type: "object",
-      description:
-        "Optional exact override. If omitted, run uses the broker's highest-ranked installed and allowed recommendation.",
-      additionalProperties: false,
-      required: ["provider", "modelId", "thinkingLevel"],
-      properties: {
-        provider: boundedString(128),
-        modelId: boundedString(256),
-        thinkingLevel: { type: "string", enum: THINKING_LEVELS },
-      },
-    },
-    placement: {
-      type: "string",
-      enum: ["current-workspace", "new-workspace"],
-    },
-    lifecycleClass: {
-      type: "string",
-      enum: ["temporary", "reusable", "retained", "pinned"],
-    },
-    keepForReuse: { type: "boolean" },
-    project: {
-      type: "object",
-      additionalProperties: false,
-      required: ["cwd"],
-      properties: { cwd: boundedString(4096) },
-    },
-    isolation: {
-      type: "object",
-      additionalProperties: false,
-      required: ["mode"],
-      properties: {
-        mode: { type: "string", enum: ["shared-readonly", "worktree"] },
-      },
-    },
-    budget: {
-      type: "object",
-      additionalProperties: false,
-      required: ["wallTimeMs"],
-      properties: {
-        wallTimeMs: { type: "integer", minimum: 1, maximum: 86_400_000 },
-      },
-    },
-    review: { type: "object", maxProperties: 8 },
-    wait: { type: "boolean" },
-    kind: { type: "string", enum: ["task", "agent", "group"] },
-    id: boundedString(256),
-    projectKey: boundedString(4096),
-    taskId: boundedString(256),
-    taskIds: {
-      type: "array",
-      minItems: 1,
-      maxItems: 64,
-      items: boundedString(256),
-    },
-    include: {
-      type: "array",
-      maxItems: 16,
-      items: boundedString(64),
-    },
-    select: {
-      type: "array",
-      maxItems: 16,
-      items: boundedString(64),
-    },
-    state: boundedString(64),
-    limit: { type: "integer", minimum: 1, maximum: 500 },
-    maxBytes: { type: "integer", minimum: 1, maximum: 262_144 },
-    until: {
-      type: "array",
-      maxItems: 16,
-      items: boundedString(64),
-    },
-    timeoutMs: { type: "integer", minimum: 1, maximum: 1_800_000 },
-    reason: boundedString(16_384),
-    cascade: { type: "boolean" },
-    confirm: { type: "boolean" },
-    idempotencyKey: boundedString(256),
-  },
-} as const;
-
-const FACADE_KEYS: Readonly<
-  Record<(typeof ORCHESTRATE_ACTIONS)[number], readonly string[]>
-> = Object.freeze({
-  run: [
-    "action",
-    "task",
-    "profileId",
-    "modelProfileId",
-    "model",
-    "placement",
-    "lifecycleClass",
-    "keepForReuse",
-    "project",
-    "isolation",
-    "budget",
-    "review",
-    "wait",
-    "idempotencyKey",
-  ],
-  models: [
-    "action",
-    "profileId",
-    "placement",
-    "modelProfileId",
-    "projectKey",
-    "limit",
-    "idempotencyKey",
-  ],
-  inspect: ["action", "kind", "id", "include", "maxBytes", "idempotencyKey"],
-  list: [
-    "action",
-    "kind",
-    "state",
-    "profileId",
-    "limit",
-    "maxBytes",
-    "idempotencyKey",
-  ],
-  wait: ["action", "taskId", "until", "timeoutMs", "idempotencyKey"],
-  collect: ["action", "taskIds", "select", "maxBytes", "idempotencyKey"],
-  cancel: ["action", "taskId", "reason", "cascade", "idempotencyKey"],
-  close: ["action", "taskId", "reason", "confirm", "idempotencyKey"],
-});
-
 export function registerParentTools(
   api: PiApiLike,
   adapterOrBinding: PiAdapter | PiToolBinding,
   client?: PiBrokerClient,
 ): void {
   const binding: PiToolBinding = client
-    ? {
-        adapter: adapterOrBinding as PiAdapter,
-        client,
-        parentAuthorized:
-          client.principal?.permissions.includes("delegate") === true ||
-          client.principal?.permissions.includes("manage:all") === true,
-      }
-    : (adapterOrBinding as PiToolBinding);
-  const principalFromClient = (): ToolPrincipal => {
-    const adapter = binding.adapter;
-    const activeClient = binding.client;
-    if (!adapter || !activeClient || !activeClient.connected)
-      throw new Error("AGENT_DISCONNECTED");
-    const principal = activeClient.principal;
-    if (!principal?.id || !Array.isArray(principal.permissions))
-      throw new Error("BROKER_PRINCIPAL_UNAVAILABLE");
-    return {
-      id: principal.id,
-      kind: principal.kind,
-      permissions: principal.permissions,
-      ...(principal.agentId ? { agentId: principal.agentId } : {}),
-    };
-  };
-  const service = new ParentToolService({
-    invoke: async (method, params, _principal, idempotencyKey) => {
-      const activeClient = binding.client;
-      if (!activeClient?.connected) throw new Error("AGENT_DISCONNECTED");
-      return activeClient.request(method, params, {
-        ...(idempotencyKey ? { idempotencyKey } : {}),
-        ...(method === "agent.spawn"
-          ? { timeoutMs: FACADE_RUN_REQUEST_TIMEOUT_MS }
-          : {}),
-      });
-    },
-  });
-  const invoke = async (
-    tool: ParentToolName,
-    input: Record<string, unknown>,
-    principal: ToolPrincipal,
-    signal: AbortSignal | undefined,
-    idempotencyKey: string | undefined,
-  ): Promise<unknown> => {
-    validateParentInput(tool, input);
-    const request: ParentToolRequest = {
-      tool,
-      input,
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-    };
-    if (!isParentToolRequest(request)) throw new Error("INVALID_REQUEST");
-    const response = await service.execute(request, principal, signal);
-    if (response.ok) return response.result;
-    const failure = new Error(
-      response.error?.message ?? "REQUEST_FAILED",
-    ) as Error & {
-      code?: string;
-      details?: unknown;
-      remediation?: string;
-    };
-    if (response.error?.code !== undefined) failure.code = response.error.code;
-    if (response.error?.details !== undefined)
-      failure.details = response.error.details;
-    if (response.error?.remediation !== undefined)
-      failure.remediation = response.error.remediation;
-    throw failure;
-  };
-  register(api, {
-    name: "orchestrate",
-    label: "Orchestrate Agents",
-    description:
-      'Create an agent with action "run" and only a task; omitted profile defaults to scout and omitted model uses the broker\'s top installed, allowed recommendation. Optional fields override those safe defaults. Use the returned taskId for inspect, wait, collect, cancel, and close; the broker derives agent, run, and generation identity for cleanup.',
-    parameters: orchestrateInputSchema,
-    async execute(_id, params, signal, _onUpdate, context) {
-      assertExactObject(params, [
-        ...new Set(Object.values(FACADE_KEYS).flat()),
-      ]);
-      const action = params.action;
-      if (!ORCHESTRATE_ACTIONS.includes(action as never))
-        throw new Error("INVALID_REQUEST");
-      const allowed = FACADE_KEYS[action as keyof typeof FACADE_KEYS];
-      const unsupported = Object.keys(params).filter(
-        (key) => !allowed.includes(key),
-      );
-      if (unsupported.length > 0)
-        throw new Error(
-          `ORCHESTRATE_INVALID_ARGUMENTS: action ${String(action)} does not accept ${unsupported.join(", ")}; allowed fields are ${allowed.join(", ")}`,
-        );
-      const { idempotencyKey } = params;
-      if (idempotencyKey !== undefined) assertInputString(idempotencyKey, 256);
-      const principal = principalFromClient();
-      const requestKey = idempotencyKey as string | undefined;
-      let result: unknown;
-      if (action === "run") {
-        const profileId = params.profileId ?? "scout";
-        assertInputString(profileId, 256);
-        if (!SHIPPED_TASK_PROFILES.includes(profileId as string))
-          throw new Error(`ORCHESTRATE_PROFILE_INVALID: ${String(profileId)}`);
-        const input: Record<string, unknown> = { ...params, profileId };
-        delete input.action;
-        delete input.idempotencyKey;
-        if (input.project === undefined) {
-          if (!context || typeof context.cwd !== "string")
-            throw new Error(
-              "ORCHESTRATE_PROJECT_REQUIRED: run needs a project cwd when Pi does not provide the current cwd",
-            );
-          input.project = { cwd: context.cwd };
-        }
-        const projectCwd = (input.project as { cwd?: unknown }).cwd;
-        assertInputString(projectCwd, 4096);
-        input.placement ??= "current-workspace";
-        input.isolation ??= {
-          mode: profileId === "implementer" ? "worktree" : "shared-readonly",
-        };
-        input.wait ??= false;
-        input.budget ??= { wallTimeMs: 900_000 };
-        if (input.model === undefined) {
-          const optionsInput: Record<string, unknown> = {
-            profileId,
-            placement: input.placement,
-            projectKey: projectCwd,
-            ...(input.modelProfileId !== undefined
-              ? { modelProfileId: input.modelProfileId }
-              : {}),
-            limit: 1,
-          };
-          const options = await invoke(
-            "agent_model_options",
-            optionsInput,
-            principal,
-            signal,
-            undefined,
-          );
-          input.model = recommendedAgentModel(options, profileId as string);
-        }
-        result = withLaunchLifecycleReminder(
-          "agent_spawn",
-          input,
-          await invoke("agent_spawn", input, principal, signal, requestKey),
-        );
-      } else if (action === "models") {
-        const profileId = params.profileId ?? "scout";
-        assertInputString(profileId, 256);
-        const input: Record<string, unknown> = {
-          profileId,
-          ...(params.placement !== undefined
-            ? { placement: params.placement }
-            : {}),
-          ...(params.modelProfileId !== undefined
-            ? { modelProfileId: params.modelProfileId }
-            : {}),
-          ...(params.projectKey !== undefined
-            ? { projectKey: params.projectKey }
-            : {}),
-          limit: params.limit ?? 16,
-        };
-        result = await invoke(
-          "agent_model_options",
-          input,
-          principal,
-          signal,
-          requestKey,
-        );
-      } else if (action === "inspect") {
-        assertInputString(params.id, 256);
-        const kind = params.kind;
-        const tool =
-          kind === "task"
-            ? "task_get"
-            : kind === "agent"
-              ? "agent_get"
-              : kind === "group"
-                ? "group_get"
-                : undefined;
-        if (!tool) throw new Error("INVALID_REQUEST");
-        const input: Record<string, unknown> = {
-          [kind === "task"
-            ? "taskId"
-            : kind === "agent"
-              ? "agentId"
-              : "groupId"]: params.id,
-          ...(params.include !== undefined ? { include: params.include } : {}),
-          ...(params.maxBytes !== undefined
-            ? { maxBytes: params.maxBytes }
-            : {}),
-        };
-        result = await invoke(tool, input, principal, signal, requestKey);
-      } else if (action === "list") {
-        const kind = params.kind;
-        const tool =
-          kind === "task"
-            ? "task_list"
-            : kind === "agent"
-              ? "agent_list"
-              : kind === "group"
-                ? "group_list"
-                : undefined;
-        if (!tool) throw new Error("INVALID_REQUEST");
-        const input: Record<string, unknown> = {
-          ...(params.state !== undefined ? { state: params.state } : {}),
-          ...(params.profileId !== undefined
-            ? { profileId: params.profileId }
-            : {}),
-          ...(params.limit !== undefined ? { limit: params.limit } : {}),
-          ...(params.maxBytes !== undefined
-            ? { maxBytes: params.maxBytes }
-            : {}),
-        };
-        result = await invoke(tool, input, principal, signal, requestKey);
-      } else if (action === "wait") {
-        assertInputString(params.taskId, 256);
-        const timeoutMs =
-          typeof params.timeoutMs === "number" ? params.timeoutMs : 120_000;
-        const input = {
-          kind: "task",
-          targetId: params.taskId,
-          until: params.until ?? [
-            "succeeded",
-            "failed",
-            "cancelled",
-            "timed_out",
-            "blocked",
-          ],
-          timeoutMs,
-          pollMs: 100,
-        };
-        const request: ParentToolRequest = {
-          tool: "coordination_wait",
-          input,
-          ...(requestKey ? { idempotencyKey: requestKey } : {}),
-        };
-        validateParentInput("coordination_wait", input);
-        const deadline = Date.now() + timeoutMs;
-        let response = await executeParentWaitRequest(
-          service,
-          request,
-          principal,
-          signal,
-          deadline,
-        );
-        while (
-          response?.ok &&
-          (response.result as Record<string, unknown> | undefined)?.ready !==
-            true &&
-          Date.now() < deadline
-        ) {
-          await waitForParentPoll(
-            Math.min(100, Math.max(1, deadline - Date.now())),
-            signal,
-          );
-          response = await executeParentWaitRequest(
-            service,
-            { tool: "coordination_wait", input },
-            principal,
-            signal,
-            deadline,
-          );
-        }
-        if (!response) throw new Error("WAIT_TIMEOUT");
-        if (!response.ok)
-          throw new Error(response.error?.message ?? "REQUEST_FAILED");
-        const waitResult = response.result as Record<string, unknown>;
-        result = {
-          taskId: params.taskId,
-          state: waitResult.state,
-          ready: waitResult.ready,
-        };
-      } else if (action === "collect") {
-        result = await invoke(
-          "task_collect",
-          {
-            taskIds: params.taskIds,
-            ...(params.select !== undefined ? { select: params.select } : {}),
-            ...(params.maxBytes !== undefined
-              ? { maxBytes: params.maxBytes }
-              : {}),
-          },
-          principal,
-          signal,
-          requestKey,
-        );
-      } else if (action === "cancel") {
-        result = await invoke(
-          "task_cancel",
-          {
-            taskId: params.taskId,
-            reason:
-              params.reason ?? "Cancelled through the orchestration facade.",
-            cascade: params.cascade ?? false,
-          },
-          principal,
-          signal,
-          requestKey,
-        );
-      } else {
-        if (params.confirm !== true) throw new Error("INVALID_REQUEST");
-        const task = (await invoke(
-          "task_get",
-          { taskId: params.taskId },
-          principal,
-          signal,
-          undefined,
-        )) as Record<string, unknown> | null;
-        const agentId = task?.assignedAgentId;
-        if (typeof agentId !== "string") throw new Error("AGENT_NOT_FOUND");
-        const agent = (await invoke(
-          "agent_get",
-          { agentId },
-          principal,
-          signal,
-          undefined,
-        )) as Record<string, unknown> | null;
-        if (agent?.managedResourceState === "closed") {
-          result = {
-            taskId: params.taskId,
-            agentId,
-            state: "closed",
-            alreadyClosed: true,
-          };
-        } else {
-          const assignmentGeneration = agent?.currentAssignmentGeneration;
-          result = await invoke(
-            "agent_close",
-            {
-              agentId,
-              ...(typeof task?.currentRunId === "string"
-                ? { runId: task.currentRunId }
-                : {}),
-              ...(Number.isSafeInteger(assignmentGeneration) &&
-              Number(assignmentGeneration) > 0
-                ? { assignmentGeneration }
-                : {}),
-              reason:
-                params.reason ?? "Closed through the orchestration facade.",
-              confirm: true,
-            },
-            principal,
-            signal,
-            requestKey,
-          );
-        }
-      }
-      return textResult(result);
-    },
-  });
-  if (process.env.PI_HERDR_ORCH_ADVANCED_TOOLS === "1")
-    registerAdvancedParentTools(api, binding);
-}
-
-export function registerAdvancedParentTools(
-  api: PiApiLike,
-  adapterOrBinding: PiAdapter | PiToolBinding,
-  client?: PiBrokerClient,
-): void {
-  const binding: PiToolBinding = client
-    ? {
-        adapter: adapterOrBinding as PiAdapter,
-        client,
-        parentAuthorized:
-          client.principal?.permissions.includes("delegate") === true ||
-          client.principal?.permissions.includes("manage:all") === true,
-      }
+    ? { adapter: adapterOrBinding as PiAdapter, client }
     : (adapterOrBinding as PiToolBinding);
   const principalFromClient = (): ToolPrincipal => {
     const adapter = binding.adapter;
@@ -3073,60 +1730,36 @@ export function registerAdvancedParentTools(
     },
   };
   const service = new ParentToolService(broker);
+  const permissions = new Set(principalFromClient().permissions);
   for (const tool of PARENT_TOOL_NAMES) {
+    if (
+      tool === "delegate" &&
+      !permissions.has("delegate") &&
+      !permissions.has("manage:all")
+    )
+      continue;
     register(api, {
       name: tool,
-      label:
-        tool === "agent_model_options"
-          ? "Available Agent Models"
-          : `Orchestrator ${tool}`,
-      description:
-        tool === "agent_model_options"
-          ? "List only Pi-available, broker-allowed models for this task profile. Each model groups its thinking levels with simple five-star ratings and selection guidance. Slot capacity appears only for explicitly local compute."
-          : `Use broker method for ${tool}. The broker checks current state and parent scope on every call.`,
+      label: `Orchestrator ${tool}`,
+      description: `Use broker method for ${tool}. The broker checks current state and parent scope on every call.`,
       parameters: parentInputSchema(tool as ParentToolName),
-      ...(tool === "agent_model_options"
-        ? {
-            renderResult(
-              result: {
-                content: Array<{ type: string; text?: string }>;
-                details?: unknown;
-              },
-              options: { expanded: boolean },
-              theme: ToolRenderTheme,
-            ) {
-              return renderAvailableAgentModels(
-                result,
-                options.expanded,
-                theme,
-              );
-            },
-          }
-        : {}),
       async execute(_id, params, signal) {
         const { idempotencyKey, ...provided } = params;
-        const modelOptionsInput =
-          tool === "agent_model_options" && provided.limit === undefined
-            ? { ...provided, limit: 16 }
-            : provided;
         const raw =
-          tool === "coordination_wait" && modelOptionsInput.kind === "timer"
+          tool === "coordination_wait" && provided.kind === "timer"
             ? {
-                ...modelOptionsInput,
+                ...provided,
                 startedAt:
-                  typeof modelOptionsInput.startedAt === "string"
-                    ? modelOptionsInput.startedAt
+                  typeof provided.startedAt === "string"
+                    ? provided.startedAt
                     : new Date().toISOString(),
               }
-            : modelOptionsInput;
+            : provided;
         if (idempotencyKey !== undefined)
           assertInputString(idempotencyKey, 256);
-        if (
-          (tool === "delegate" || tool === "delegate_compact") &&
-          binding.parentAuthorized !== true
-        )
-          throw new Error("PERMISSION_DENIED");
         const principal = principalFromClient();
+        if (tool === "delegate" && binding.parentAuthorized === false)
+          throw new Error("PERMISSION_DENIED");
         const adapter = binding.adapter;
         const client = binding.client;
         if (!adapter || !client) throw new Error("AGENT_DISCONNECTED");
@@ -3187,25 +1820,7 @@ export function registerAdvancedParentTools(
             if (!next) break;
             response = next;
           }
-        } else {
-          response = await service.execute(request, principal, signal);
-          if (
-            (tool === "delegate" || tool === "delegate_compact") &&
-            raw.wait === true &&
-            raw.dryRun !== true &&
-            response.ok
-          )
-            response = await waitForDelegation(
-              service,
-              response,
-              principal,
-              signal,
-              typeof raw.timeoutMs === "number" ? raw.timeoutMs : 120_000,
-              Array.isArray(raw.waitUntil)
-                ? (raw.waitUntil as string[])
-                : ["terminal", "blocked"],
-            );
-        }
+        } else response = await service.execute(request, principal, signal);
         if (!response.ok) {
           const error = boundedSecretFree(
             response.error ?? {
@@ -3220,14 +1835,7 @@ export function registerAdvancedParentTools(
             isError: true,
           };
         }
-        const result = withLaunchLifecycleReminder(
-          tool as ParentToolName,
-          raw,
-          response.result,
-        );
-        return tool === "agent_model_options"
-          ? availableAgentModelsResult(result)
-          : textResult(result);
+        return textResult(response.result);
       },
     });
   }

@@ -1,18 +1,15 @@
 import type { EntityKind } from "../shared/ids.js";
-import type { ModelEvidenceState } from "../model-intelligence/model-evidence.js";
-export const AGENT_STATES = [
-  "provisioning",
-  "starting",
-  "idle",
-  "working",
-  "blocked",
-  "stopping",
-  "stopped",
-  "failed",
-  "orphaned",
-  "replaced",
-] as const;
-export type AgentState = (typeof AGENT_STATES)[number];
+export type AgentState =
+  | "provisioning"
+  | "starting"
+  | "idle"
+  | "working"
+  | "blocked"
+  | "stopping"
+  | "stopped"
+  | "failed"
+  | "orphaned"
+  | "replaced";
 export type TaskState =
   | "draft"
   | "queued"
@@ -39,12 +36,9 @@ export type RunState =
   | "timed_out"
   | "lost";
 export interface ErrorSummary {
-  code: "TIMEOUT" | "BUDGET_EXCEEDED" | "RESULT_MISSING";
+  code: "TIMEOUT" | "BUDGET_EXCEEDED";
   message: string;
 }
-export type AgentLifecycleClass =
-  "temporary" | "reusable" | "retained" | "pinned";
-export type CloseRecommendation = "close" | "keep" | "blocked";
 export interface Task {
   id: string;
   title: string;
@@ -66,20 +60,8 @@ export interface Task {
   assignedAgentId?: string;
   runIds?: string[];
   resultId?: string;
-  resultCollectedAt?: string;
   timeoutAt?: string;
   terminalReason?: ErrorSummary;
-  endpointId?: string;
-  admissionReason?:
-    | "global_limit"
-    | "parent_limit"
-    | "endpoint_capacity"
-    | "provisioning_limit"
-    | "dependency_blocked"
-    | "depth_exceeded"
-    | "queue_full"
-    | "not_queued"
-    | undefined;
   project?: Record<string, unknown>;
 }
 export interface Run {
@@ -92,26 +74,15 @@ export interface Run {
   assignmentDeliveryState?: "pending" | "accepted" | "failed";
   assignmentConnectionGeneration?: number;
   assignmentGeneration: number;
-  endpointId?: string;
   agentCycleId?: string;
   firstTurnIndex?: number;
   piSessionId?: string;
   terminalId?: string;
-  startedAt?: string;
-  terminalAt?: string;
   settled: boolean;
-  resultRecoveryCount?: 0 | 1;
   resultId?: string;
   timeoutAt?: string;
   terminalReason?: ErrorSummary;
   cancelled?: boolean;
-}
-export interface AgentModelMetadata {
-  profileId?: "manager" | "subagent";
-  placement?: "current-workspace" | "new-workspace";
-  provider?: string;
-  modelId?: string;
-  thinkingLevel?: string;
 }
 export interface Agent {
   id: string;
@@ -123,14 +94,6 @@ export interface Agent {
   displayName?: string;
   herdrName?: string;
   profileId?: string;
-  requestedModel?: AgentModelMetadata;
-  effectiveModel?: AgentModelMetadata;
-  actualModel?: AgentModelMetadata;
-  modelPolicyHash?: string;
-  lifecycleClass?: AgentLifecycleClass;
-  keepForReuse?: boolean;
-  closeRecommendation?: CloseRecommendation;
-  closeReason?: string;
   terminalId?: string;
   paneId?: string;
   workspaceId?: string;
@@ -145,18 +108,6 @@ export interface Agent {
   currentAssignmentGeneration?: number;
   lastAdapterSeq?: number;
   tokenDigest?: string;
-}
-export interface ReviewContract {
-  id: string;
-  reviewTaskId: string;
-  reviewedTaskId: string;
-  reviewedRunId: string;
-  reviewedResultId: string;
-  resultDigest: string;
-  rubricVersion: string;
-  taskProfile: string;
-  issuedAt: string;
-  expiresAt: string;
 }
 export interface ResultRecord {
   id: string;
@@ -201,53 +152,6 @@ export interface AgentGroup {
   stoppedAt?: string;
   closedAt?: string;
 }
-export type HerdrMetadataState =
-  | "requested"
-  | "compiling"
-  | "validated"
-  | "scheduled"
-  | "creating"
-  | "starting"
-  | "working"
-  | "blocked"
-  | "settling"
-  | "settled"
-  | "exited"
-  | "cleanup_pending"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "orphaned"
-  | "conflict"
-  | "closed";
-export interface HerdrTaskMetadata {
-  schemaVersion: 1;
-  metadataId: string;
-  orchestrationId: string;
-  workflowId: string;
-  taskId: string;
-  runId: string;
-  agentId: string;
-  parentAgentId?: string;
-  profileId: string;
-  state: HerdrMetadataState;
-  placement: "background";
-  transcriptPolicy: "retain-tab";
-  workspaceId: string;
-  tabId: string;
-  paneId: string;
-  terminalId: string;
-  piSessionRef: string;
-  startedAt: string;
-  updatedAt: string;
-  settledAt: string | null;
-  exitedAt: string | null;
-  transcriptRef: string | null;
-  resultRef: string | null;
-  questionRef: string | null;
-  errorCode: string | null;
-  metadataDigest: string;
-}
 export interface OrchestrationState {
   schemaVersion: number;
   lastEventSeq: number;
@@ -255,14 +159,10 @@ export interface OrchestrationState {
   tasks: Record<string, Task>;
   runs: Record<string, Run>;
   agents: Record<string, Agent>;
-  adoptedRootLinks?: Record<string, string>;
   workflows: Record<string, Workflow>;
   results?: Record<string, ResultRecord>;
   questions?: Record<string, QuestionRecord>;
   groups?: Record<string, AgentGroup>;
-  herdrMetadata?: Record<string, HerdrTaskMetadata>;
-  modelEvidence?: ModelEvidenceState;
-  reviewContracts?: Record<string, ReviewContract>;
   herdrResources?: Record<
     string,
     {

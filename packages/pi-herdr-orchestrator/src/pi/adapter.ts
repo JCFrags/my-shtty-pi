@@ -270,8 +270,10 @@ export class PiAdapter implements PiControl {
     };
   }
   clearSettledCycle(): void {
-    if (this.correlator.state.kind === "settled")
+    if (this.correlator.state.kind === "settled") {
+      this.correlator.cancel();
       this.#activeCycleId = undefined;
+    }
   }
   assignmentForTools(): PiAssignment | undefined {
     return this.correlator.activeAssignment();
@@ -470,33 +472,7 @@ export class PiAdapter implements PiControl {
   }
   async prompt(message: string): Promise<void> {
     this.require("prompt");
-    const prior = this.correlationState();
-    const rebind = prior.kind === "settled";
-    if (rebind) {
-      this.restoreAssignment(prior.assignment);
-      try {
-        this.persistCorrelation();
-      } catch (error) {
-        this.restoreCorrelation(prior);
-        throw error;
-      }
-    }
-    try {
-      await this.#api.sendUserMessage!(message);
-    } catch (error) {
-      if (rebind) {
-        this.restoreCorrelation(prior);
-        try {
-          this.persistCorrelation();
-        } catch (restoreError) {
-          throw new AggregateError(
-            [error, restoreError],
-            "Prompt delivery and settled-assignment restoration failed.",
-          );
-        }
-      }
-      throw error;
-    }
+    await this.#api.sendUserMessage!(message);
   }
   async steer(message: string): Promise<void> {
     this.require("steer");

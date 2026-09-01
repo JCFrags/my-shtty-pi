@@ -10,13 +10,6 @@ import {
 import { createId, isEntityId } from "../shared/ids.js";
 import { canonicalJson, sha256 } from "../shared/canonical-json.js";
 import { OrchestratorError } from "../shared/errors.js";
-import {
-  validateModelEvidenceCompaction,
-  validateModelEvidenceRecord,
-  validateModelEvidenceSupersession,
-} from "../model-intelligence/model-evidence.js";
-import { validateFoundationEvidenceSnapshot } from "../model-intelligence/foundation-snapshot.js";
-import { validateAdvisoryModelReceipt } from "../model-intelligence/model-ranking.js";
 import { emptyState, reduce } from "./reducer.js";
 import type {
   ErrorSummary,
@@ -52,186 +45,26 @@ function boundedText(value: unknown, max: number): value is string {
     !/[\u0000-\u001f\u007f]/u.test(value)
   );
 }
-function validEndpointId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/u.test(value);
-}
 function validTaskProject(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const project = value as Record<string, unknown>;
-  if (!boundedText(project.cwd, 4096) || !boundedText(project.workspaceId, 256))
-    return false;
-  if (Object.hasOwn(project, "advisoryModelReceipt")) {
-    try {
-      const receipt = validateAdvisoryModelReceipt(
-        project.advisoryModelReceipt,
-      );
-      const effective = project.effectiveSpawnPolicy;
-      const effectiveModel =
-        effective && typeof effective === "object" && !Array.isArray(effective)
-          ? (effective as Record<string, unknown>).model
-          : undefined;
-      if (
-        typeof project.modelPolicyHash !== "string" ||
-        receipt.modelPolicyHash !== project.modelPolicyHash ||
-        !effectiveModel ||
-        canonicalJson(receipt.selectedModel) !== canonicalJson(effectiveModel)
-      )
-        return false;
-    } catch {
-      return false;
-    }
-    const withoutReceipt = { ...project };
-    delete withoutReceipt.advisoryModelReceipt;
-    return validTaskProject(withoutReceipt);
-  }
-  if (Object.hasOwn(project, "compact")) {
-    const compact = project.compact;
-    if (
-      !compact ||
-      typeof compact !== "object" ||
-      Array.isArray(compact) ||
-      !exactKeys(compact as Record<string, unknown>, [
-        "workflowDigest",
-        "transcriptPolicy",
-      ]) ||
-      !/^[a-f0-9]{64}$/u.test(
-        String((compact as Record<string, unknown>).workflowDigest),
-      ) ||
-      (compact as Record<string, unknown>).transcriptPolicy !== "retain-tab"
-    )
-      return false;
-    const withoutCompact = { ...project };
-    delete withoutCompact.compact;
-    return validTaskProject(withoutCompact);
-  }
-  const hasModelPolicy = Object.hasOwn(project, "requestedSpawnPolicy");
-  const modelPolicyKeys = hasModelPolicy
-    ? ["requestedSpawnPolicy", "effectiveSpawnPolicy", "modelPolicyHash"]
-    : [];
-  const lifecycleKeys = Object.hasOwn(project, "lifecycleClass")
-    ? ["lifecycleClass", "keepForReuse"]
-    : [];
-  const baseKeys = ["cwd", "workspaceId"];
+  const values =
+    boundedText(project.cwd, 4096) && boundedText(project.workspaceId, 256);
+  if (!values) return false;
+  if (exactKeys(project, ["cwd", "workspaceId"])) return true;
   if (
-    !exactKeys(project, [...baseKeys, ...modelPolicyKeys, ...lifecycleKeys]) &&
-    !exactKeys(project, [
-      ...baseKeys,
-      "isolation",
-      ...modelPolicyKeys,
-      ...lifecycleKeys,
-    ]) &&
-    !exactKeys(project, [
-      ...baseKeys,
-      "worktreeId",
-      "isolation",
-      ...modelPolicyKeys,
-      ...lifecycleKeys,
-    ])
+    exactKeys(project, ["cwd", "workspaceId", "isolation"]) &&
+    (project.isolation === "shared-readonly" ||
+      project.isolation === "worktree")
   )
+    return true;
+  if (!exactKeys(project, ["cwd", "workspaceId", "worktreeId", "isolation"]))
     return false;
-  if (
-    (project.lifecycleClass !== undefined &&
-      !["temporary", "reusable", "retained", "pinned"].includes(
-        project.lifecycleClass as string,
-      )) ||
-    (project.keepForReuse !== undefined &&
-      typeof project.keepForReuse !== "boolean")
-  )
-    return false;
-  if (
-    project.isolation !== undefined &&
-    project.isolation !== "shared-readonly" &&
-    project.isolation !== "worktree"
-  )
-    return false;
-  if (project.worktreeId !== undefined && !boundedText(project.worktreeId, 256))
-    return false;
-  if (!hasModelPolicy) return true;
-  const requested = project.requestedSpawnPolicy;
-  const effective = project.effectiveSpawnPolicy;
-  if (
-    !requested ||
-    typeof requested !== "object" ||
-    Array.isArray(requested) ||
-    !effective ||
-    typeof effective !== "object" ||
-    Array.isArray(effective) ||
-    typeof project.modelPolicyHash !== "string" ||
-    !/^[0-9a-f]{64}$/u.test(project.modelPolicyHash)
-  )
-    return false;
-  const requestedRecord = requested as Record<string, unknown>;
-  if (
-    !exactKeys(
-      requestedRecord,
-      ["placement", "modelProfileId", "projectKey", "model"].filter((key) =>
-        Object.hasOwn(requestedRecord, key),
-      ),
-    ) ||
-    (requestedRecord.placement !== undefined &&
-      requestedRecord.placement !== "current-workspace" &&
-      requestedRecord.placement !== "new-workspace") ||
-    (requestedRecord.modelProfileId !== undefined &&
-      requestedRecord.modelProfileId !== "manager" &&
-      requestedRecord.modelProfileId !== "subagent") ||
-    (requestedRecord.projectKey !== undefined &&
-      !boundedText(requestedRecord.projectKey, 4096)) ||
-    (requestedRecord.model !== undefined &&
-      (!requestedRecord.model ||
-        typeof requestedRecord.model !== "object" ||
-        Array.isArray(requestedRecord.model) ||
-        !exactKeys(requestedRecord.model as Record<string, unknown>, [
-          "provider",
-          "modelId",
-          "thinkingLevel",
-        ]) ||
-        !boundedText(
-          (requestedRecord.model as Record<string, unknown>).provider,
-          128,
-        ) ||
-        !boundedText(
-          (requestedRecord.model as Record<string, unknown>).modelId,
-          256,
-        ) ||
-        !boundedText(
-          (requestedRecord.model as Record<string, unknown>).thinkingLevel,
-          32,
-        )))
-  )
-    return false;
-  const effectiveRecord = effective as Record<string, unknown>;
-  const model = effectiveRecord.model;
   return (
-    exactKeys(effectiveRecord, ["placement", "modelProfileId", "model"]) &&
-    (effectiveRecord.placement === "current-workspace" ||
-      effectiveRecord.placement === "new-workspace") &&
-    (effectiveRecord.modelProfileId === "manager" ||
-      effectiveRecord.modelProfileId === "subagent") &&
-    !!model &&
-    typeof model === "object" &&
-    !Array.isArray(model) &&
-    exactKeys(model as Record<string, unknown>, [
-      "provider",
-      "modelId",
-      "thinkingLevel",
-    ]) &&
-    boundedText((model as Record<string, unknown>).provider, 128) &&
-    boundedText((model as Record<string, unknown>).modelId, 256) &&
-    boundedText((model as Record<string, unknown>).thinkingLevel, 32)
+    boundedText(project.worktreeId, 256) &&
+    (project.isolation === "shared-readonly" ||
+      project.isolation === "worktree")
   );
-}
-function validTaskProjectProfile(value: unknown, profileId: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const receipt = (value as Record<string, unknown>).advisoryModelReceipt;
-  if (receipt === undefined) return true;
-  try {
-    return (
-      typeof profileId === "string" &&
-      validateAdvisoryModelReceipt(receipt).taskProfile === profileId
-    );
-  } catch {
-    return false;
-  }
 }
 const EVENT_KEYS = [
   "schemaVersion",
@@ -257,7 +90,6 @@ const ACTOR_KINDS = new Set([
 const ERROR_SUMMARY_MESSAGES = new Map<string, string>([
   ["TIMEOUT", "The task wall deadline expired."],
   ["BUDGET_EXCEEDED", "The configured budget was exceeded."],
-  ["RESULT_MISSING", "The managed agent settled without a structured result."],
 ]);
 function isErrorSummary(value: unknown): value is ErrorSummary {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -361,37 +193,17 @@ export class EventStore {
             "STATE_CORRUPT",
             `Noncanonical event line at ${index + 1}.`,
           );
-        index++;
-        // A checksum-authenticated snapshot already verifies the state and
-        // chain cursor before this line. Startup still reads the old prefix to
-        // prove the file shape and exact cursor position, but it does not
-        // repeatedly parse and hash hundreds of thousands of historical JSON
-        // records. `events verify` remains the explicit full-chain audit.
-        if (
-          snapshot &&
-          snapshot.lastEventSeq > 0 &&
-          index < snapshot.lastEventSeq
-        )
-          continue;
         let event: StoredEvent;
         try {
           event = JSON.parse(line) as StoredEvent;
         } catch {
           throw new OrchestratorError(
             "STATE_CORRUPT",
-            `Invalid event at line ${index}.`,
+            `Invalid event at line ${index + 1}.`,
           );
         }
-        if (event.seq !== index)
-          throw new OrchestratorError(
-            "STATE_CORRUPT",
-            `Event sequence does not match line ${index}.`,
-          );
-        const verifiedPrevious =
-          snapshot && index === snapshot.lastEventSeq
-            ? ({ seq: event.seq - 1, hash: event.prevHash } as StoredEvent)
-            : previous;
-        this.verifyEvent(event, verifiedPrevious);
+        index++;
+        this.verifyEvent(event, previous);
         previous = event;
         this.#events.push(event);
         if (this.#events.length > MAX_RETAINED_EVENTS) this.#events.shift();
@@ -512,19 +324,8 @@ export class EventStore {
     }
   }
   async readEventsFrom(fromSeq: number): Promise<StoredEvent[]> {
-    if (!Number.isSafeInteger(fromSeq) || fromSeq < 0)
-      throw new OrchestratorError("CURSOR_INVALID", "Event cursor is invalid.");
-    const firstRetained = this.#events[0]?.seq;
-    if (
-      fromSeq !== Number.MAX_SAFE_INTEGER &&
-      (fromSeq >= this.#lastSeq ||
-        (firstRetained !== undefined && fromSeq >= firstRetained - 1))
-    )
-      return this.#events.filter((event) => event.seq > fromSeq);
     const result: StoredEvent[] = [];
-    let index = 0;
     let previous: StoredEvent | undefined;
-    const fullAudit = fromSeq === Number.MAX_SAFE_INTEGER;
     const expectedFile = this.#fileIdentity;
     if (!expectedFile)
       throw new OrchestratorError(
@@ -545,37 +346,19 @@ export class EventStore {
             "STATE_CORRUPT",
             "Noncanonical event line.",
           );
-        index++;
-        // Startup already binds the owner-only file identity and verifies the
-        // current chain tail. A suffix replay only needs to hash the requested
-        // suffix back to that trusted tail. Parsing and rehashing an unrelated
-        // historical prefix can otherwise hold the broker mutation queue for
-        // minutes once heartbeat history becomes large. Full audit still
-        // verifies every event.
-        if (!fullAudit && index <= fromSeq) continue;
         let event: StoredEvent;
         try {
           event = JSON.parse(line) as StoredEvent;
         } catch {
           throw new OrchestratorError("STATE_CORRUPT", "Invalid event JSON.");
         }
-        if (event.seq !== index)
-          throw new OrchestratorError(
-            "STATE_CORRUPT",
-            "Event sequence does not match its line.",
-          );
-        const verifiedPrevious =
-          !fullAudit && previous === undefined && fromSeq > 0
-            ? ({ seq: event.seq - 1, hash: event.prevHash } as StoredEvent)
-            : previous;
-        this.verifyEvent(event, verifiedPrevious);
+        this.verifyEvent(event, previous);
         previous = event;
-        if (!fullAudit) result.push(event);
+        if (event.seq > fromSeq) result.push(event);
       }
       const closedFile = this.#identityFrom(await lstat(this.path));
       if (
         !this.#sameIdentity(expectedFile, closedFile, true) ||
-        index !== this.#lastSeq ||
         (previous?.seq ?? 0) !== this.#lastSeq ||
         (previous?.hash ?? "0".repeat(64)) !== this.#lastHash
       )
@@ -753,46 +536,17 @@ export class EventStore {
 
     const p = payload as Record<string, unknown>;
     let valid = false;
-    if (event.type === "model.evidence_recorded") {
-      try {
-        valid =
-          exactKeys(refs, []) &&
-          exactKeys(p, ["record"]) &&
-          !!validateModelEvidenceRecord(p.record);
-      } catch {
-        valid = false;
-      }
-    } else if (event.type === "model.evidence_superseded") {
-      try {
-        valid = exactKeys(refs, []) && !!validateModelEvidenceSupersession(p);
-      } catch {
-        valid = false;
-      }
-    } else if (event.type === "model.evidence_compacted") {
-      try {
-        valid = exactKeys(refs, []) && !!validateModelEvidenceCompaction(p);
-      } catch {
-        valid = false;
-      }
-    } else if (event.type === "model.foundation_snapshot_recorded") {
-      try {
-        valid = exactKeys(refs, []) && !!validateFoundationEvidenceSnapshot(p);
-      } catch {
-        valid = false;
-      }
-    } else if (event.type === "task.created_m3") {
+    if (event.type === "task.created_m3") {
       const taskKeyVariants: string[][] = [];
       const optionalTaskKeys = [
         "parentAgentId",
         "workflowId",
         "profileId",
-        "endpointId",
-        "constraints",
         "dependencies",
         "project",
         "isolationMode",
       ];
-      for (let mask = 0; mask < 1 << optionalTaskKeys.length; mask++)
+      for (let mask = 0; mask < 64; mask++)
         for (const hasTimeout of [false, true]) {
           const keys = ["taskId", "title", "objective", "createdAt"];
           if (hasTimeout) keys.push("timeoutAt");
@@ -817,11 +571,6 @@ export class EventStore {
         (p.parentAgentId === undefined || isEntityId(p.parentAgentId, "agt")) &&
         (p.workflowId === undefined || isEntityId(p.workflowId, "wfl")) &&
         (p.profileId === undefined || boundedText(p.profileId, 256)) &&
-        (p.endpointId === undefined || validEndpointId(p.endpointId)) &&
-        (p.constraints === undefined ||
-          (Array.isArray(p.constraints) &&
-            p.constraints.length <= 64 &&
-            p.constraints.every((item) => boundedText(item, 8_192)))) &&
         (p.isolationMode === undefined ||
           [
             "profile-default",
@@ -834,9 +583,7 @@ export class EventStore {
           (Array.isArray(p.dependencies) &&
             p.dependencies.length <= 64 &&
             p.dependencies.every((id) => isEntityId(id, "tsk")))) &&
-        (p.project === undefined ||
-          (validTaskProject(p.project) &&
-            validTaskProjectProfile(p.project, p.profileId)));
+        (p.project === undefined || validTaskProject(p.project));
     } else if (event.type === "task.project_bound") {
       valid =
         exactKeys(refs, ["taskId"]) &&
@@ -844,43 +591,6 @@ export class EventStore {
         exactKeys(p, ["taskId", "project"]) &&
         p.taskId === refs.taskId &&
         validTaskProject(p.project);
-    } else if (event.type === "review.contract_issued") {
-      valid =
-        exactKeys(refs, [
-          "reviewContractId",
-          "taskId",
-          "reviewedTaskId",
-          "runId",
-          "resultId",
-        ]) &&
-        isEntityId(refs.reviewContractId, "rvc") &&
-        isEntityId(refs.taskId, "tsk") &&
-        isEntityId(refs.reviewedTaskId, "tsk") &&
-        isEntityId(refs.runId, "run") &&
-        isEntityId(refs.resultId, "res") &&
-        exactKeys(p, [
-          "id",
-          "reviewTaskId",
-          "reviewedTaskId",
-          "reviewedRunId",
-          "reviewedResultId",
-          "resultDigest",
-          "rubricVersion",
-          "taskProfile",
-          "issuedAt",
-          "expiresAt",
-        ]) &&
-        p.id === refs.reviewContractId &&
-        p.reviewTaskId === refs.taskId &&
-        p.reviewedTaskId === refs.reviewedTaskId &&
-        p.reviewedRunId === refs.runId &&
-        p.reviewedResultId === refs.resultId &&
-        /^[a-f0-9]{64}$/u.test(String(p.resultDigest)) &&
-        boundedText(p.rubricVersion, 64) &&
-        /^[a-z][a-z0-9_-]{0,63}$/u.test(String(p.taskProfile)) &&
-        validTimestamp(p.issuedAt) &&
-        validTimestamp(p.expiresAt) &&
-        Date.parse(String(p.expiresAt)) > Date.parse(String(p.issuedAt));
     } else if (event.type === "run.created") {
       const runKeyVariants = [
         [
@@ -960,8 +670,6 @@ export class EventStore {
           "terminalId",
         ],
       ];
-      for (const keys of [...runKeyVariants])
-        runKeyVariants.push([...keys, "endpointId"]);
       valid =
         exactKeys(refs, ["runId", "taskId", "agentId"]) &&
         isEntityId(refs.runId, "run") &&
@@ -976,7 +684,6 @@ export class EventStore {
         Number(p.assignmentGeneration) >= 0 &&
         Number.isSafeInteger(p.agentGeneration) &&
         Number(p.agentGeneration) >= 0 &&
-        (p.endpointId === undefined || validEndpointId(p.endpointId)) &&
         (p.piSessionId === undefined || boundedText(p.piSessionId, 256)) &&
         (p.terminalId === undefined || boundedText(p.terminalId, 256)) &&
         (p.timeoutAt === undefined || validDeadlineText(p.timeoutAt));
@@ -1077,61 +784,6 @@ export class EventStore {
             (p.reason as ErrorSummary).code,
           );
       }
-    } else if (event.type === "compact.delegation_scheduled") {
-      valid =
-        exactKeys(refs, ["workflowId"]) &&
-        isEntityId(refs.workflowId, "wfl") &&
-        exactKeys(p, [
-          "workflowId",
-          "parentAgentId",
-          "mode",
-          "idempotencyKey",
-          "paramsHash",
-          "response",
-          "tasks",
-        ]) &&
-        p.workflowId === refs.workflowId &&
-        isEntityId(p.parentAgentId, "agt") &&
-        boundedText(p.mode, 32) &&
-        boundedText(p.idempotencyKey, 256) &&
-        typeof p.paramsHash === "string" &&
-        /^[a-f0-9]{64}$/u.test(p.paramsHash) &&
-        !!p.response &&
-        typeof p.response === "object" &&
-        !Array.isArray(p.response) &&
-        Array.isArray(p.tasks) &&
-        p.tasks.length >= 1 &&
-        p.tasks.length <= 16 &&
-        p.tasks.every(
-          (task) =>
-            !!task &&
-            typeof task === "object" &&
-            !Array.isArray(task) &&
-            validTaskProject((task as Record<string, unknown>).project) &&
-            validTaskProjectProfile(
-              (task as Record<string, unknown>).project,
-              (task as Record<string, unknown>).profileId,
-            ),
-        );
-    } else if (event.type === "herdr.metadata_projected") {
-      valid =
-        exactKeys(refs, [
-          "workflowId",
-          "taskId",
-          "runId",
-          "agentId",
-          "workflowDigest",
-        ]) &&
-        isEntityId(refs.workflowId, "wfl") &&
-        isEntityId(refs.taskId, "tsk") &&
-        isEntityId(refs.runId, "run") &&
-        isEntityId(refs.agentId, "agt") &&
-        typeof refs.workflowDigest === "string" &&
-        /^[a-f0-9]{64}$/u.test(refs.workflowDigest) &&
-        Object.keys(p).length <= 26 &&
-        Object.keys(p).every(
-          (key) => key.length <= 64 && !/[\u0000-\u001f\u007f]/u.test(key),
-        );
     } else if (event.type === "herdr.provision.intent") {
       valid =
         exactKeys(refs, ["agentId"]) &&
@@ -1194,23 +846,6 @@ export class EventStore {
           ].every(
             (key) => Number.isSafeInteger(p[key]) && Number(p[key]) >= 0,
           ));
-    } else if (
-      event.type === "agent.state_changed" &&
-      Object.hasOwn(p, "adoptedRootParentAgentId")
-    ) {
-      valid =
-        exactKeys(refs, ["agentId"]) &&
-        typeof refs.agentId === "string" &&
-        exactKeys(p, [
-          "agentId",
-          "adoptedRootParentAgentId",
-          "adoptedRootPaneId",
-          "adoptedRootPiSessionId",
-        ]) &&
-        p.agentId === refs.agentId &&
-        typeof p.adoptedRootParentAgentId === "string" &&
-        typeof p.adoptedRootPaneId === "string" &&
-        typeof p.adoptedRootPiSessionId === "string";
     } else if (
       [
         "agent.registered",
