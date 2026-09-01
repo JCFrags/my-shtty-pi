@@ -1,0 +1,1713 @@
+import { OrchestratorError } from "../shared/errors.js";
+import { canonicalJson, sha256 } from "../shared/canonical-json.js";
+import {
+  applyModelEvidenceCompaction,
+  applyModelEvidenceRecord,
+  applyModelEvidenceSupersession,
+  validateModelEvidenceCompaction,
+  validateModelEvidenceRecord,
+  validateModelEvidenceSupersession,
+} from "../model-intelligence/model-evidence.js";
+import {
+  applyFoundationEvidenceSnapshot,
+  validateFoundationEvidenceSnapshot,
+} from "../model-intelligence/foundation-snapshot.js";
+import type { HerdrTaskMetadata } from "./types.js";
+import type { EventInput, OrchestrationState, StoredEvent } from "./types.js";
+import type {
+  TaskState,
+  AgentState,
+  RunState,
+  Run,
+  Workflow,
+  ErrorSummary,
+  Task,
+} from "./types.js";
+const timeoutReason = (value: unknown): value is ErrorSummary => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const reason = value as Record<string, unknown>;
+  return (
+    Object.keys(reason).length === 2 &&
+    ((reason.code === "TIMEOUT" &&
+      reason.message === "The task wall deadline expired.") ||
+      (reason.code === "BUDGET_EXCEEDED" &&
+        reason.message === "The configured budget was exceeded."))
+  );
+};
+export const emptyState = (): OrchestrationState => ({
+  schemaVersion: 1,
+  lastEventSeq: 0,
+  lastEventHash: "0".repeat(64),
+  tasks: {},
+  runs: {},
+  agents: {},
+  workflows: {},
+  results: {},
+  questions: {},
+  groups: {},
+  herdrMetadata: {},
+  reviewContracts: {},
+  herdrResources: {},
+  idempotency: {},
+});
+const taskTerminal = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+const runSharedTerminal = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "lost",
+]);
+const DEFAULT_TASK_WALL_MS = 15 * 60_000;
+const validEndpointId = (value: unknown): value is string =>
+  typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/u.test(value);
+const admissionReasons = new Set([
+  "global_limit",
+  "parent_limit",
+  "endpoint_capacity",
+  "provisioning_limit",
+  "dependency_blocked",
+  "depth_exceeded",
+  "queue_full",
+  "not_queued",
+]);
+function derivedDeadline(createdAt: unknown): string | undefined {
+  if (typeof createdAt !== "string") return undefined;
+  const created = Date.parse(createdAt);
+  if (!Number.isFinite(created)) return undefined;
+  return new Date(created + DEFAULT_TASK_WALL_MS).toISOString();
+}
+const known = new Set([
+  "task.created",
+  "task.project_bound",
+  "task.state_changed",
+  "audit.action",
+  "audit.authorization_denied",
+  "herdr.provision.intent",
+  "herdr.provision.outcome",
+  "herdr.reconciled",
+  "herdr.metadata_projected",
+  "compact.delegation_scheduled",
+  "agent.registered",
+  "agent.heartbeat",
+  "agent.state_changed",
+  "agent.moved",
+  "agent.replaced",
+  "task.created_m3",
+  "run.created",
+  "assignment.delivered",
+  "assignment.accepted",
+  "assignment.delivery_failed",
+  "run.pi_started",
+  "run.pi_settled",
+  "run.state_changed",
+  "task.cancel_requested",
+  "result.published",
+  "result.validated",
+  "run.result_recovery_requested",
+  "run.result_missing",
+  "question.opened",
+  "question.answered",
+  "question.timed_out",
+  "question.cancelled",
+  "group.created",
+  "group.stopped",
+  "group.closed",
+  "workflow.created",
+  "workflow.state_changed",
+  "scheduler.admitted",
+  "scheduler.blocked",
+  "task.collected",
+  "review.contract_issued",
+  "model.evidence_recorded",
+  "model.evidence_superseded",
+  "model.evidence_compacted",
+  "model.foundation_snapshot_recorded",
+]);
+export function reduce(
+  state: OrchestrationState,
+  event: StoredEvent | EventInput,
+): OrchestrationState {
+  if (!known.has(event.type))
+    throw new OrchestratorError(
+      "STATE_CORRUPT",
+      `Unknown event type ${event.type}.`,
+    );
+  const next: OrchestrationState = {
+    ...state,
+    lastEventSeq: "seq" in event ? event.seq : state.lastEventSeq,
+    lastEventHash: "hash" in event ? event.hash : state.lastEventHash,
+    results: state.results ?? {},
+    questions: state.questions ?? {},
+    groups: state.groups ?? {},
+    herdrMetadata: state.herdrMetadata ?? {},
+    reviewContracts: state.reviewContracts ?? {},
+  };
+  const p = event.payload as Record<string, unknown>;
+  const taskId = event.entityRefs?.taskId;
+  switch (event.type) {
+    case "task.created": {
+      const id = taskId ?? String(p.id);
+      if (!id || next.tasks[id])
+        throw new OrchestratorError(
+          "INVALID_REQUEST",
+          "Task already exists or has no ID.",
+        );
+      if (typeof p.title !== "string" || typeof p.objective !== "string")
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Task payload is invalid.",
+        );
+      next.tasks = { ...next.tasks };
+      next.tasks[id] = {
+        id,
+        title: p.title,
+        objective: p.objective,
+        state: "queued",
+        createdAt: String(p.createdAt),
+        ...(typeof p.parentAgentId === "string"
+          ? { parentAgentId: p.parentAgentId }
+          : {}),
+      };
+      if (typeof p.idempotencyKey === "string") {
+        next.idempotency = { ...next.idempotency };
+        next.idempotency[p.idempotencyKey] = {
+          principalId: event.actor.principalId,
+          method: "task.create",
+          ...(typeof p.paramsHash === "string"
+            ? { paramsHash: p.paramsHash }
+            : {}),
+          response: p.response,
+        };
+      }
+      break;
+    }
+    case "compact.delegation_scheduled": {
+      const workflowId = p.workflowId;
+      const parentAgentId = p.parentAgentId;
+      const key = p.idempotencyKey;
+      const paramsHash = p.paramsHash;
+      const definitions = p.tasks;
+      const response = p.response as Record<string, unknown> | undefined;
+      const responseTasks = response?.tasks;
+      if (
+        typeof workflowId !== "string" ||
+        event.entityRefs?.workflowId !== workflowId ||
+        next.workflows[workflowId] ||
+        typeof parentAgentId !== "string" ||
+        !next.agents[parentAgentId] ||
+        p.mode !== "dag" ||
+        Object.keys(p).length !== 7 ||
+        ![
+          "workflowId",
+          "parentAgentId",
+          "mode",
+          "idempotencyKey",
+          "paramsHash",
+          "response",
+          "tasks",
+        ].every((field) => Object.hasOwn(p, field)) ||
+        typeof key !== "string" ||
+        key.length < 1 ||
+        key.length > 256 ||
+        typeof paramsHash !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(paramsHash) ||
+        next.idempotency[key] ||
+        !Array.isArray(definitions) ||
+        definitions.length < 1 ||
+        definitions.length > 16 ||
+        !response ||
+        Object.keys(response).length !== 3 ||
+        !["workflowId", "state", "tasks"].every((field) =>
+          Object.hasOwn(response, field),
+        ) ||
+        response.workflowId !== workflowId ||
+        response.state !== "scheduled" ||
+        !Array.isArray(responseTasks) ||
+        responseTasks.length !== definitions.length
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Compact delegation schedule is invalid.",
+        );
+      const taskIds: string[] = [];
+      const tasks: Record<string, Task> = { ...next.tasks };
+      for (let index = 0; index < definitions.length; index++) {
+        const definition = definitions[index] as Record<string, unknown>;
+        const responseTask = responseTasks[index] as
+          Record<string, unknown> | undefined;
+        const taskId = definition.taskId;
+        const project = definition.project as
+          Record<string, unknown> | undefined;
+        const compact = project?.compact as
+          { workflowDigest?: unknown; transcriptPolicy?: unknown } | undefined;
+        if (
+          typeof taskId !== "string" ||
+          !/^tsk_[A-Za-z0-9_-]{1,128}$/u.test(taskId) ||
+          ![10, 11, 12].includes(Object.keys(definition).length) ||
+          ![
+            "taskId",
+            "title",
+            "objective",
+            "createdAt",
+            "parentAgentId",
+            "workflowId",
+            "profileId",
+            "dependencies",
+            "project",
+            "timeoutAt",
+          ].every((field) => Object.hasOwn(definition, field)) ||
+          Object.keys(definition).some(
+            (field) =>
+              ![
+                "taskId",
+                "title",
+                "objective",
+                "createdAt",
+                "parentAgentId",
+                "workflowId",
+                "profileId",
+                "endpointId",
+                "constraints",
+                "dependencies",
+                "project",
+                "timeoutAt",
+              ].includes(field),
+          ) ||
+          tasks[taskId] ||
+          definition.workflowId !== workflowId ||
+          definition.parentAgentId !== parentAgentId ||
+          typeof definition.title !== "string" ||
+          definition.title.length < 1 ||
+          definition.title.length > 256 ||
+          typeof definition.objective !== "string" ||
+          definition.objective.length < 1 ||
+          Buffer.byteLength(definition.objective, "utf8") > 65_536 ||
+          typeof definition.createdAt !== "string" ||
+          !Number.isFinite(Date.parse(definition.createdAt)) ||
+          typeof definition.profileId !== "string" ||
+          (definition.endpointId !== undefined &&
+            !validEndpointId(definition.endpointId)) ||
+          (definition.constraints !== undefined &&
+            (!Array.isArray(definition.constraints) ||
+              definition.constraints.length > 64 ||
+              definition.constraints.some(
+                (item) =>
+                  typeof item !== "string" ||
+                  Buffer.byteLength(item, "utf8") > 8_192,
+              ))) ||
+          !Array.isArray(definition.dependencies) ||
+          definition.dependencies.some((item) => typeof item !== "string") ||
+          !project ||
+          ![7, 8].includes(Object.keys(project).length) ||
+          ![
+            "cwd",
+            "workspaceId",
+            "isolation",
+            "requestedSpawnPolicy",
+            "effectiveSpawnPolicy",
+            "modelPolicyHash",
+            "compact",
+          ].every((field) => Object.hasOwn(project, field)) ||
+          (Object.keys(project).length === 8 &&
+            !Object.hasOwn(project, "advisoryModelReceipt")) ||
+          typeof project.cwd !== "string" ||
+          typeof project.workspaceId !== "string" ||
+          !compact ||
+          Object.keys(compact).length !== 2 ||
+          !Object.hasOwn(compact, "workflowDigest") ||
+          !Object.hasOwn(compact, "transcriptPolicy") ||
+          !/^[a-f0-9]{64}$/u.test(String(compact.workflowDigest)) ||
+          compact.transcriptPolicy !== "retain-tab" ||
+          typeof definition.timeoutAt !== "string" ||
+          !Number.isFinite(Date.parse(definition.timeoutAt)) ||
+          !responseTask ||
+          Object.keys(responseTask).length !== 3 ||
+          !["key", "taskId", "state"].every((field) =>
+            Object.hasOwn(responseTask, field),
+          ) ||
+          responseTask.taskId !== taskId ||
+          responseTask.state !== "queued" ||
+          typeof responseTask.key !== "string"
+        )
+          throw new OrchestratorError(
+            "STATE_CORRUPT",
+            "Compact delegation task definition is invalid.",
+          );
+        taskIds.push(taskId);
+        tasks[taskId] = {
+          id: taskId,
+          title: definition.title,
+          objective: definition.objective,
+          state: "queued",
+          createdAt: definition.createdAt,
+          parentAgentId,
+          workflowId,
+          profileId: definition.profileId,
+          ...(validEndpointId(definition.endpointId)
+            ? { endpointId: definition.endpointId }
+            : {}),
+          constraints: Array.isArray(definition.constraints)
+            ? [...definition.constraints]
+            : [],
+          dependencies: [...(definition.dependencies as string[])],
+          timeoutAt: definition.timeoutAt,
+          project,
+          runIds: [],
+        };
+      }
+      if (
+        new Set(taskIds).size !== taskIds.length ||
+        definitions.some((definition) =>
+          (definition as { dependencies: string[] }).dependencies.some(
+            (dependency) => !taskIds.includes(dependency),
+          ),
+        )
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Compact delegation dependency correlation is invalid.",
+        );
+      next.workflows = {
+        ...next.workflows,
+        [workflowId]: { id: workflowId, state: "created", taskIds },
+      };
+      next.tasks = tasks;
+      next.idempotency = {
+        ...next.idempotency,
+        [key]: {
+          principalId: event.actor.principalId,
+          method: "compact.delegate",
+          paramsHash,
+          response,
+        },
+      };
+      break;
+    }
+    case "task.state_changed": {
+      if (!taskId)
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Task reference is missing.",
+        );
+      const task = next.tasks[taskId];
+      const to = p.to as TaskState;
+      const allowed = new Set([
+        "draft",
+        "queued",
+        "provisioning",
+        "assigned",
+        "running",
+        "blocked",
+        "collecting",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out",
+      ]);
+      if (
+        !task ||
+        !allowed.has(String(to)) ||
+        (taskTerminal.has(task.state) && task.state !== to)
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Invalid task transition.",
+        );
+      if (
+        p.reason !== undefined &&
+        (to !== "timed_out" || !timeoutReason(p.reason))
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Invalid terminal reason.",
+        );
+      next.tasks = { ...next.tasks };
+      next.tasks[taskId] = {
+        ...task,
+        state: to,
+        ...(to !== "queued" ? { admissionReason: undefined } : {}),
+        ...(to === "timed_out" && timeoutReason(p.reason)
+          ? { terminalReason: p.reason as ErrorSummary }
+          : {}),
+      };
+      break;
+    }
+    case "agent.registered": {
+      const id = String(p.agentId);
+      if (!id || next.agents[id])
+        throw new OrchestratorError("INVALID_REQUEST", "Agent already exists.");
+      next.agents = {
+        ...next.agents,
+        [id]: {
+          id,
+          state: "idle",
+          generation: Number(p.generation ?? 1),
+          managed: p.managed === true,
+          ...(typeof p.parentAgentId === "string"
+            ? { parentAgentId: p.parentAgentId }
+            : {}),
+          ...(typeof p.displayName === "string"
+            ? { displayName: p.displayName }
+            : {}),
+          ...(typeof p.profileId === "string"
+            ? { profileId: p.profileId }
+            : {}),
+          ...(p.requestedModel && typeof p.requestedModel === "object"
+            ? { requestedModel: p.requestedModel }
+            : {}),
+          ...(p.effectiveModel && typeof p.effectiveModel === "object"
+            ? { effectiveModel: p.effectiveModel }
+            : {}),
+          ...(p.actualModel && typeof p.actualModel === "object"
+            ? { actualModel: p.actualModel }
+            : {}),
+          ...(typeof p.modelPolicyHash === "string"
+            ? { modelPolicyHash: p.modelPolicyHash }
+            : {}),
+          ...(typeof p.lifecycleClass === "string"
+            ? {
+                lifecycleClass:
+                  p.lifecycleClass as import("./types.js").AgentLifecycleClass,
+              }
+            : {}),
+          ...(typeof p.keepForReuse === "boolean"
+            ? { keepForReuse: p.keepForReuse }
+            : {}),
+          ...(typeof p.paneId === "string" ? { paneId: p.paneId } : {}),
+          ...(typeof p.terminalId === "string"
+            ? { terminalId: p.terminalId }
+            : {}),
+          ...(typeof p.workspaceId === "string"
+            ? { workspaceId: p.workspaceId }
+            : {}),
+          ...(typeof p.tabId === "string" ? { tabId: p.tabId } : {}),
+          ...(typeof p.cwd === "string" ? { cwd: p.cwd } : {}),
+          ...(typeof p.worktreeId === "string"
+            ? { worktreeId: p.worktreeId }
+            : {}),
+          ...(typeof p.piSessionId === "string"
+            ? { piSessionId: p.piSessionId }
+            : {}),
+          connectionGeneration: Number(p.connectionGeneration ?? 1),
+          currentAssignmentGeneration: 0,
+        },
+      };
+      break;
+    }
+    case "agent.heartbeat":
+    case "agent.moved":
+    case "agent.state_changed":
+    case "agent.replaced": {
+      const id = String(event.entityRefs?.agentId ?? p.agentId),
+        agent = next.agents[id];
+      if (!agent)
+        throw new OrchestratorError("STATE_CORRUPT", "Agent is missing.");
+      if (
+        event.type === "agent.state_changed" &&
+        Object.hasOwn(p, "adoptedRootParentAgentId")
+      ) {
+        const parentAgentId = String(p.adoptedRootParentAgentId ?? "");
+        const parent = next.agents[parentAgentId];
+        if (
+          !parent ||
+          agent.managed ||
+          parent.managed ||
+          id === parentAgentId ||
+          agent.parentAgentId ||
+          !agent.paneId ||
+          agent.paneId !== parent.paneId ||
+          agent.paneId !== p.adoptedRootPaneId ||
+          !agent.piSessionId ||
+          agent.piSessionId !== parent.piSessionId ||
+          agent.piSessionId !== p.adoptedRootPiSessionId
+        )
+          throw new OrchestratorError(
+            "STATE_CORRUPT",
+            "Adopted lineage recovery is invalid.",
+          );
+        const existingLinks = next.adoptedRootLinks ?? {};
+        if (existingLinks[id] || existingLinks[parentAgentId])
+          throw new OrchestratorError(
+            "STATE_CORRUPT",
+            "Adopted lineage recovery is already linked.",
+          );
+        const adoptedRootLinks = {
+          ...existingLinks,
+          [id]: parentAgentId,
+        };
+        for (const candidate of Object.values(next.agents)) {
+          let current: string | undefined = candidate.id;
+          const seen = new Set<string>();
+          let depth = 0;
+          while (current) {
+            if (seen.has(current) || depth > 4)
+              throw new OrchestratorError(
+                "STATE_CORRUPT",
+                "Recovered agent lineage exceeds its safe depth.",
+              );
+            seen.add(current);
+            const currentAgent: typeof agent | undefined = next.agents[current];
+            if (!currentAgent)
+              throw new OrchestratorError(
+                "STATE_CORRUPT",
+                "Recovered agent lineage is incomplete.",
+              );
+            current =
+              currentAgent.parentAgentId ?? adoptedRootLinks[currentAgent.id];
+            if (current) depth++;
+          }
+        }
+        next.adoptedRootLinks = adoptedRootLinks;
+        break;
+      }
+      const baseAgent = { ...agent };
+      if (p.clearCurrentRun === true) {
+        delete baseAgent.currentRunId;
+        delete baseAgent.currentAssignmentGeneration;
+      }
+      next.agents = {
+        ...next.agents,
+        [id]: {
+          ...baseAgent,
+          ...(typeof p.state === "string"
+            ? { state: p.state as AgentState }
+            : {}),
+          ...(event.type === "agent.replaced" &&
+          Number.isSafeInteger(p.generation) &&
+          Number(p.generation) >= 1
+            ? { generation: p.generation as number }
+            : {}),
+          ...(typeof p.paneId === "string" ? { paneId: p.paneId } : {}),
+          ...(typeof p.terminalId === "string"
+            ? { terminalId: p.terminalId }
+            : {}),
+          ...(typeof p.workspaceId === "string"
+            ? { workspaceId: p.workspaceId }
+            : {}),
+          ...(typeof p.tabId === "string" ? { tabId: p.tabId } : {}),
+          ...(typeof p.cwd === "string" ? { cwd: p.cwd } : {}),
+          ...(typeof p.worktreeId === "string"
+            ? { worktreeId: p.worktreeId }
+            : {}),
+          ...(p.actualModel && typeof p.actualModel === "object"
+            ? { actualModel: p.actualModel }
+            : {}),
+          ...(typeof p.piSessionId === "string"
+            ? { piSessionId: p.piSessionId }
+            : {}),
+          ...(typeof p.currentRunId === "string"
+            ? { currentRunId: p.currentRunId }
+            : {}),
+          ...(Number.isSafeInteger(p.connectionGeneration)
+            ? { connectionGeneration: p.connectionGeneration as number }
+            : {}),
+          ...(Number.isSafeInteger(p.currentAssignmentGeneration)
+            ? {
+                currentAssignmentGeneration:
+                  p.currentAssignmentGeneration as number,
+              }
+            : {}),
+          ...(Number.isSafeInteger(p.adapterSeq)
+            ? { lastAdapterSeq: p.adapterSeq as number }
+            : {}),
+        },
+      };
+      break;
+    }
+    case "task.created_m3": {
+      const id = String(p.taskId);
+      if (!id || next.tasks[id])
+        throw new OrchestratorError("INVALID_REQUEST", "Task already exists.");
+      if (p.endpointId !== undefined && !validEndpointId(p.endpointId))
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Task endpoint is invalid.",
+        );
+      next.tasks = {
+        ...next.tasks,
+        [id]: {
+          id,
+          title: String(p.title),
+          objective: String(p.objective),
+          state: "queued",
+          createdAt: String(p.createdAt),
+          ...(typeof p.parentAgentId === "string"
+            ? { parentAgentId: p.parentAgentId }
+            : {}),
+          ...(typeof p.workflowId === "string"
+            ? { workflowId: p.workflowId }
+            : {}),
+          ...(typeof p.profileId === "string"
+            ? { profileId: p.profileId }
+            : {}),
+          ...(validEndpointId(p.endpointId)
+            ? { endpointId: p.endpointId }
+            : {}),
+          ...(Array.isArray(p.constraints)
+            ? {
+                constraints: p.constraints.filter(
+                  (value): value is string => typeof value === "string",
+                ),
+              }
+            : {}),
+          ...(typeof p.isolationMode === "string" &&
+          [
+            "profile-default",
+            "shared-readonly",
+            "worktree",
+            "shared-explicit",
+            "reuse-worktree",
+          ].includes(p.isolationMode)
+            ? {
+                isolationMode: p.isolationMode as NonNullable<
+                  Task["isolationMode"]
+                >,
+              }
+            : {}),
+          ...(Array.isArray(p.dependencies)
+            ? {
+                dependencies: p.dependencies.filter(
+                  (v): v is string => typeof v === "string",
+                ),
+              }
+            : {}),
+          ...(() => {
+            const timeoutAt =
+              typeof p.timeoutAt === "string"
+                ? p.timeoutAt
+                : derivedDeadline(p.createdAt);
+            return timeoutAt ? { timeoutAt } : {};
+          })(),
+          ...(p.project &&
+          typeof p.project === "object" &&
+          !Array.isArray(p.project)
+            ? { project: p.project as Record<string, unknown> }
+            : {}),
+          runIds: [],
+        },
+      };
+      break;
+    }
+    case "task.project_bound": {
+      const id = String(p.taskId);
+      const task = next.tasks[id];
+      if (
+        !task ||
+        !p.project ||
+        typeof p.project !== "object" ||
+        Array.isArray(p.project)
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Task project binding is invalid.",
+        );
+      next.tasks = {
+        ...next.tasks,
+        [id]: { ...task, project: p.project as Record<string, unknown> },
+      };
+      break;
+    }
+    case "run.created": {
+      const id = String(p.runId),
+        task = next.tasks[String(p.taskId)];
+      if (!id || next.runs[id] || !task)
+        throw new OrchestratorError("STATE_CORRUPT", "Run or task is invalid.");
+      if (taskTerminal.has(task.state))
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Run cannot be created for a terminal task.",
+        );
+      const runTimeoutAt =
+        typeof p.timeoutAt === "string" ? p.timeoutAt : task.timeoutAt;
+      if (task.timeoutAt !== runTimeoutAt)
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Run deadline does not match its task deadline.",
+        );
+      if (
+        p.endpointId !== undefined &&
+        (!validEndpointId(p.endpointId) ||
+          (task.endpointId !== undefined && task.endpointId !== p.endpointId))
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Run endpoint is invalid.",
+        );
+      const endpointId = validEndpointId(p.endpointId)
+        ? p.endpointId
+        : task.endpointId;
+      const run: Run = {
+        id,
+        taskId: task.id,
+        state: "created",
+        ...(typeof p.agentId === "string" ? { agentId: p.agentId } : {}),
+        ...(Number.isSafeInteger(p.agentGeneration)
+          ? { agentGeneration: p.agentGeneration as number }
+          : {}),
+        ...(typeof p.assignmentId === "string"
+          ? { assignmentId: p.assignmentId }
+          : {}),
+        assignmentGeneration: Number(p.assignmentGeneration ?? 1),
+        ...(endpointId ? { endpointId } : {}),
+        ...(typeof p.piSessionId === "string"
+          ? { piSessionId: p.piSessionId }
+          : {}),
+        ...(typeof p.terminalId === "string"
+          ? { terminalId: p.terminalId }
+          : {}),
+        startedAt:
+          "timestamp" in event && typeof event.timestamp === "string"
+            ? event.timestamp
+            : task.createdAt,
+        settled: false,
+        resultRecoveryCount: 0,
+        ...(typeof runTimeoutAt === "string"
+          ? { timeoutAt: runTimeoutAt }
+          : {}),
+      };
+      next.runs = { ...next.runs, [id]: run };
+      if (run.agentId && next.agents[run.agentId])
+        next.agents = {
+          ...next.agents,
+          [run.agentId]: {
+            ...next.agents[run.agentId]!,
+            currentRunId: id,
+            currentAssignmentGeneration: run.assignmentGeneration,
+          },
+        };
+      next.tasks = {
+        ...next.tasks,
+        [task.id]: {
+          ...task,
+          currentRunId: id,
+          ...(typeof p.agentId === "string"
+            ? { assignedAgentId: p.agentId }
+            : {}),
+          runIds: [...(task.runIds ?? []), id],
+          state: "assigned",
+          admissionReason: undefined,
+          ...(endpointId ? { endpointId } : {}),
+        },
+      };
+      break;
+    }
+    case "assignment.delivered":
+    case "assignment.accepted":
+    case "assignment.delivery_failed":
+    case "run.pi_started":
+    case "run.pi_settled":
+    case "run.state_changed": {
+      const id = String(event.entityRefs?.runId ?? p.runId),
+        run = next.runs[id];
+      if (!run) throw new OrchestratorError("STATE_CORRUPT", "Run is missing.");
+      const state = p.state as RunState | undefined;
+      if (
+        [
+          "assignment.delivered",
+          "assignment.accepted",
+          "assignment.delivery_failed",
+          "run.pi_started",
+          "run.pi_settled",
+        ].includes(event.type) &&
+        (runSharedTerminal.has(run.state) ||
+          (event.type !== "run.pi_started" &&
+            (run.settled || run.state === "settled")))
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Adapter progress cannot mutate a terminal run.",
+        );
+      if (
+        event.type === "run.state_changed" &&
+        runSharedTerminal.has(run.state) &&
+        state !== run.state
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "A terminal run cannot transition to another state.",
+        );
+      if (
+        p.reason !== undefined &&
+        (state !== "timed_out" || !timeoutReason(p.reason))
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Invalid terminal reason.",
+        );
+      const settled =
+        event.type === "run.pi_settled"
+          ? true
+          : event.type === "run.pi_started"
+            ? false
+            : run.settled;
+      const reason =
+        state === "timed_out" && timeoutReason(p.reason) ? p.reason : undefined;
+      next.runs = {
+        ...next.runs,
+        [id]: {
+          ...run,
+          ...(state ? { state } : {}),
+          settled,
+          ...(reason ? { terminalReason: reason } : {}),
+          ...(event.type === "run.state_changed" &&
+          state !== undefined &&
+          runSharedTerminal.has(state) &&
+          (("timestamp" in event && typeof event.timestamp === "string") ||
+            run.terminalAt)
+            ? {
+                terminalAt:
+                  "timestamp" in event && typeof event.timestamp === "string"
+                    ? event.timestamp
+                    : run.terminalAt!,
+              }
+            : {}),
+          ...(typeof p.piSessionId === "string"
+            ? { piSessionId: p.piSessionId }
+            : {}),
+          ...(typeof p.agentId === "string" ? { agentId: p.agentId } : {}),
+          ...(event.type === "run.pi_started" &&
+          typeof p.agentCycleId === "string"
+            ? { agentCycleId: p.agentCycleId }
+            : {}),
+          ...(event.type === "run.pi_started" &&
+          Number.isSafeInteger(p.turnIndex)
+            ? { firstTurnIndex: p.turnIndex as number }
+            : {}),
+          ...(event.type.startsWith("assignment.") &&
+          typeof p.assignmentId === "string"
+            ? { assignmentId: p.assignmentId }
+            : {}),
+          ...(event.type.startsWith("assignment.") &&
+          Number.isSafeInteger(p.connectionGeneration)
+            ? {
+                assignmentConnectionGeneration:
+                  p.connectionGeneration as number,
+              }
+            : {}),
+          ...(event.type === "assignment.delivered"
+            ? { assignmentDeliveryState: "pending" as const }
+            : event.type === "assignment.accepted"
+              ? { assignmentDeliveryState: "accepted" as const }
+              : event.type === "assignment.delivery_failed"
+                ? { assignmentDeliveryState: "failed" as const }
+                : {}),
+        },
+      };
+      if (
+        run.agentId &&
+        Number.isSafeInteger(p.adapterSeq) &&
+        next.agents[run.agentId]
+      )
+        next.agents = {
+          ...next.agents,
+          [run.agentId]: {
+            ...next.agents[run.agentId]!,
+            lastAdapterSeq: p.adapterSeq as number,
+          },
+        };
+      if (
+        event.type === "run.state_changed" &&
+        ["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(
+          String(state),
+        ) &&
+        next.tasks[run.taskId]
+      )
+        next.tasks = {
+          ...next.tasks,
+          [run.taskId]: {
+            ...next.tasks[run.taskId]!,
+            state: state as TaskState,
+            ...(reason ? { terminalReason: reason } : {}),
+          },
+        };
+      if (event.type === "run.pi_settled") {
+        const result = Object.values(next.results!).find(
+          (item) => item.runId === id,
+        );
+        if (result)
+          next.results = {
+            ...next.results,
+            [result.id]: { ...result, piSettled: true },
+          };
+      }
+      break;
+    }
+    case "task.cancel_requested": {
+      const id = String(event.entityRefs?.taskId ?? p.taskId),
+        task = next.tasks[id];
+      if (!task || taskTerminal.has(task.state)) break;
+      next.tasks = { ...next.tasks, [id]: { ...task, state: "cancelled" } };
+      if (task.currentRunId && next.runs[task.currentRunId])
+        next.runs = {
+          ...next.runs,
+          [task.currentRunId]: {
+            ...next.runs[task.currentRunId]!,
+            state: "cancelled",
+            cancelled: true,
+          },
+        };
+      break;
+    }
+    case "audit.action":
+    case "audit.authorization_denied":
+      break;
+    case "result.published": {
+      const id = String(p.resultId);
+      if (!id || next.results![id])
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Result already exists or has no ID.",
+        );
+      if (
+        !event.entityRefs?.taskId ||
+        !event.entityRefs.runId ||
+        !event.entityRefs.agentId ||
+        typeof p.payloadHash !== "string"
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Result correlation is invalid.",
+        );
+      next.results = {
+        ...next.results,
+        [id]: {
+          id,
+          taskId: event.entityRefs.taskId,
+          runId: event.entityRefs.runId,
+          agentId: event.entityRefs.agentId,
+          status:
+            p.status === "failed" || p.status === "cancelled"
+              ? p.status
+              : "succeeded",
+          payloadHash: p.payloadHash,
+          piSettled: p.piSettled === true,
+          ...(Number.isSafeInteger(p.assignmentGeneration)
+            ? { assignmentGeneration: p.assignmentGeneration as number }
+            : {}),
+          ...(Object.hasOwn(p, "payload") ? { payload: p.payload } : {}),
+          ...(p.validation && typeof p.validation === "object"
+            ? { validation: p.validation as Record<string, unknown> }
+            : {}),
+          ...(typeof p.publishedAt === "string"
+            ? { publishedAt: p.publishedAt }
+            : {}),
+        },
+      };
+      const resultTask = next.tasks[event.entityRefs.taskId];
+      const resultRun = next.runs[event.entityRefs.runId];
+      if (resultTask)
+        next.tasks = {
+          ...next.tasks,
+          [resultTask.id]: { ...resultTask, resultId: id },
+        };
+      if (resultRun)
+        next.runs = {
+          ...next.runs,
+          [resultRun.id]: { ...resultRun, resultId: id },
+        };
+      break;
+    }
+    case "result.validated": {
+      const id = event.entityRefs?.resultId;
+      if (!id || !next.results![id])
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Result validation has no result.",
+        );
+      const result = next.results![id];
+      next.results = {
+        ...next.results,
+        [id]: { ...result, piSettled: p.piSettled === true },
+      };
+      break;
+    }
+    case "run.result_recovery_requested": {
+      const id = String(event.entityRefs?.runId ?? p.runId);
+      const run = next.runs[id];
+      if (
+        !run ||
+        !run.settled ||
+        run.resultId !== undefined ||
+        (run.resultRecoveryCount ?? 0) !== 0 ||
+        p.attempt !== 1
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Result recovery request is invalid.",
+        );
+      next.runs = {
+        ...next.runs,
+        [id]: {
+          ...run,
+          state: "result_pending_missing",
+          resultRecoveryCount: 1,
+        },
+      };
+      break;
+    }
+    case "run.result_missing": {
+      const id = String(event.entityRefs?.runId ?? p.runId);
+      const run = next.runs[id];
+      const task = run ? next.tasks[run.taskId] : undefined;
+      if (
+        !run ||
+        !task ||
+        run.resultId !== undefined ||
+        (run.resultRecoveryCount ?? 0) !== 1 ||
+        p.code !== "RESULT_MISSING"
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Missing result outcome is invalid.",
+        );
+      const reason = {
+        code: "RESULT_MISSING" as const,
+        message: "The managed agent settled without a structured result.",
+      };
+      next.runs = {
+        ...next.runs,
+        [id]: {
+          ...run,
+          state: "failed",
+          terminalReason: reason,
+          ...(("timestamp" in event && typeof event.timestamp === "string") ||
+          run.terminalAt
+            ? {
+                terminalAt:
+                  "timestamp" in event && typeof event.timestamp === "string"
+                    ? event.timestamp
+                    : run.terminalAt!,
+              }
+            : {}),
+        },
+      };
+      next.tasks = {
+        ...next.tasks,
+        [task.id]: { ...task, state: "failed", terminalReason: reason },
+      };
+      break;
+    }
+    case "scheduler.admitted":
+    case "scheduler.blocked": {
+      const id = event.entityRefs?.taskId ?? String(p.taskId ?? "");
+      const task = next.tasks[id];
+      if (!task) break;
+      if (event.type === "scheduler.admitted") {
+        next.tasks = {
+          ...next.tasks,
+          [id]: { ...task, admissionReason: undefined },
+        };
+      } else if (admissionReasons.has(String(p.reason))) {
+        next.tasks = {
+          ...next.tasks,
+          [id]: {
+            ...task,
+            admissionReason: p.reason as NonNullable<Task["admissionReason"]>,
+          },
+        };
+      }
+      break;
+    }
+    case "task.collected": {
+      const id = event.entityRefs?.taskId ?? String(p.taskId ?? "");
+      const task = next.tasks[id];
+      if (
+        !task ||
+        typeof p.collectedAt !== "string" ||
+        !Number.isFinite(Date.parse(p.collectedAt))
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Task collection evidence is invalid.",
+        );
+      next.tasks = {
+        ...next.tasks,
+        [id]: { ...task, resultCollectedAt: p.collectedAt },
+      };
+      break;
+    }
+    case "group.created": {
+      const id = event.entityRefs?.groupId ?? String(p.groupId);
+      if (
+        !id ||
+        next.groups![id] ||
+        typeof p.name !== "string" ||
+        !Array.isArray(p.agentIds) ||
+        p.agentIds.length === 0 ||
+        p.agentIds.some((agentId) => typeof agentId !== "string") ||
+        typeof p.createdAt !== "string"
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Group payload is invalid.",
+        );
+      next.groups = { ...next.groups };
+      next.groups[id] = {
+        id,
+        name: p.name,
+        agentIds: [...p.agentIds] as string[],
+        state: "open",
+        createdAt: p.createdAt,
+        createdBy: event.actor.principalId,
+      };
+      break;
+    }
+    case "group.stopped":
+    case "group.closed": {
+      const id = event.entityRefs?.groupId ?? String(p.groupId);
+      const group = next.groups![id];
+      const closed = event.type === "group.closed";
+      if (!group || group.state === "closed" || (closed && p.confirm !== true))
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Group transition is invalid.",
+        );
+      next.groups = { ...next.groups };
+      next.groups[id] = {
+        ...group,
+        state: closed ? "closed" : "stopped",
+        ...(closed ? { closedAt: String(p.at) } : { stoppedAt: String(p.at) }),
+      };
+      break;
+    }
+    case "workflow.created": {
+      const id = String(p.workflowId);
+      if (!id || next.workflows[id])
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Workflow already exists.",
+        );
+      next.workflows = {
+        ...next.workflows,
+        [id]: {
+          id,
+          state: "created",
+          taskIds: Array.isArray(p.taskIds)
+            ? p.taskIds.filter((x): x is string => typeof x === "string")
+            : [],
+        },
+      };
+      break;
+    }
+    case "workflow.state_changed": {
+      const id = String(event.entityRefs?.workflowId ?? p.workflowId),
+        workflow = next.workflows[id];
+      if (!workflow)
+        throw new OrchestratorError("STATE_CORRUPT", "Workflow is missing.");
+      const state = String(p.state) as Workflow["state"];
+      if (
+        ![
+          "created",
+          "running",
+          "blocked",
+          "succeeded",
+          "failed",
+          "cancelled",
+        ].includes(state)
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Workflow state is invalid.",
+        );
+      next.workflows = { ...next.workflows, [id]: { ...workflow, state } };
+      break;
+    }
+    case "question.opened": {
+      const id = String(p.questionId);
+      if (!id || next.questions![id])
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Question already exists or has no ID.",
+        );
+      if (
+        !event.entityRefs?.taskId ||
+        !event.entityRefs.runId ||
+        !event.entityRefs.agentId
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Question correlation is invalid.",
+        );
+      next.questions = {
+        ...next.questions,
+        [id]: {
+          id,
+          taskId: event.entityRefs.taskId,
+          runId: event.entityRefs.runId,
+          agentId: event.entityRefs.agentId,
+          state: "open",
+          ...(Number.isSafeInteger(p.assignmentGeneration)
+            ? { assignmentGeneration: p.assignmentGeneration as number }
+            : {}),
+          ...(typeof p.toolCallId === "string"
+            ? { toolCallId: p.toolCallId }
+            : {}),
+          ...(Object.hasOwn(p, "payload") ? { payload: p.payload } : {}),
+          ...(typeof p.askedAt === "string" ? { askedAt: p.askedAt } : {}),
+        },
+      };
+      break;
+    }
+    case "question.answered": {
+      const id = event.entityRefs?.questionId;
+      if (!id || !next.questions![id] || next.questions![id].state !== "open")
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Question answer is not valid.",
+        );
+      next.questions = {
+        ...next.questions,
+        [id]: {
+          ...next.questions![id],
+          state: "answered",
+          ...(typeof p.answeredBy === "string"
+            ? { answeredBy: p.answeredBy }
+            : {}),
+          ...(typeof p.answeredAt === "string"
+            ? { answeredAt: p.answeredAt }
+            : {}),
+          ...(Object.hasOwn(p, "answer") &&
+          p.answer &&
+          typeof p.answer === "object"
+            ? {
+                answer: p.answer as {
+                  optionId: string | null;
+                  text: string | null;
+                },
+              }
+            : {}),
+        },
+      };
+      break;
+    }
+    case "question.timed_out":
+    case "question.cancelled": {
+      const id = event.entityRefs?.questionId;
+      if (!id || !next.questions![id] || next.questions![id].state !== "open")
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          event.type === "question.cancelled"
+            ? "Question cancellation is not valid."
+            : "Question timeout is not valid.",
+        );
+      next.questions = {
+        ...next.questions,
+        [id]: {
+          ...next.questions![id],
+          state:
+            event.type === "question.cancelled" ? "cancelled" : "timed_out",
+        },
+      };
+      break;
+    }
+    case "herdr.metadata_projected": {
+      const allowed = new Set([
+        "schemaVersion",
+        "metadataId",
+        "orchestrationId",
+        "workflowId",
+        "taskId",
+        "runId",
+        "agentId",
+        "parentAgentId",
+        "profileId",
+        "state",
+        "placement",
+        "transcriptPolicy",
+        "workspaceId",
+        "tabId",
+        "paneId",
+        "terminalId",
+        "piSessionRef",
+        "startedAt",
+        "updatedAt",
+        "settledAt",
+        "exitedAt",
+        "transcriptRef",
+        "resultRef",
+        "questionRef",
+        "errorCode",
+        "metadataDigest",
+      ]);
+      if (
+        Object.keys(p).some((key) => !allowed.has(key)) ||
+        [...allowed].some(
+          (key) => key !== "parentAgentId" && !Object.hasOwn(p, key),
+        )
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Herdr metadata fields are not exact.",
+        );
+      const metadata = p as unknown as HerdrTaskMetadata;
+      const states = new Set([
+        "requested",
+        "compiling",
+        "validated",
+        "scheduled",
+        "creating",
+        "starting",
+        "working",
+        "blocked",
+        "settling",
+        "settled",
+        "exited",
+        "cleanup_pending",
+        "completed",
+        "failed",
+        "cancelled",
+        "orphaned",
+        "conflict",
+        "closed",
+      ]);
+      const id = metadata.metadataId;
+      const withoutDigest = Object.fromEntries(
+        Object.entries(p).filter(([key]) => key !== "metadataDigest"),
+      );
+      if (
+        metadata.schemaVersion !== 1 ||
+        !/^hmd_[A-Za-z0-9_-]{1,128}$/u.test(id) ||
+        !states.has(metadata.state) ||
+        metadata.placement !== "background" ||
+        metadata.transcriptPolicy !== "retain-tab" ||
+        sha256(canonicalJson(withoutDigest)) !== metadata.metadataDigest ||
+        [
+          metadata.orchestrationId,
+          metadata.workflowId,
+          metadata.taskId,
+          metadata.runId,
+          metadata.agentId,
+          metadata.profileId,
+          metadata.workspaceId,
+          metadata.tabId,
+          metadata.paneId,
+          metadata.terminalId,
+          metadata.piSessionRef,
+          metadata.startedAt,
+          metadata.updatedAt,
+        ].some(
+          (value) =>
+            typeof value !== "string" ||
+            value.length === 0 ||
+            value.length > 256,
+        ) ||
+        [metadata.transcriptRef, metadata.resultRef, metadata.questionRef].some(
+          (value) =>
+            value !== null &&
+            (typeof value !== "string" ||
+              !/^[A-Za-z][A-Za-z0-9_-]{1,255}$/u.test(value)),
+        ) ||
+        [metadata.startedAt, metadata.updatedAt].some(
+          (value) => !Number.isFinite(Date.parse(value)),
+        ) ||
+        [metadata.settledAt, metadata.exitedAt].some(
+          (value) =>
+            value !== null &&
+            (typeof value !== "string" || !Number.isFinite(Date.parse(value))),
+        ) ||
+        (metadata.parentAgentId !== undefined &&
+          (typeof metadata.parentAgentId !== "string" ||
+            metadata.parentAgentId.length > 256)) ||
+        (metadata.errorCode !== null &&
+          (typeof metadata.errorCode !== "string" ||
+            !/^[A-Z][A-Z0-9_]{0,127}$/u.test(metadata.errorCode))) ||
+        event.entityRefs?.taskId !== metadata.taskId ||
+        event.entityRefs?.runId !== metadata.runId ||
+        event.entityRefs?.agentId !== metadata.agentId ||
+        event.entityRefs?.workflowId !== metadata.workflowId ||
+        !/^[a-f0-9]{64}$/u.test(event.entityRefs?.workflowDigest ?? "")
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Herdr metadata projection is invalid.",
+        );
+      const workflow = next.workflows[metadata.workflowId];
+      const task = next.tasks[metadata.taskId];
+      const run = next.runs[metadata.runId];
+      const agent = next.agents[metadata.agentId];
+      const resource = next.herdrResources?.[metadata.agentId];
+      const compact = task?.project?.compact as
+        { workflowDigest?: unknown; transcriptPolicy?: unknown } | undefined;
+      const result = metadata.resultRef
+        ? next.results?.[metadata.resultRef]
+        : undefined;
+      const question = metadata.questionRef
+        ? next.questions?.[metadata.questionRef]
+        : undefined;
+      if (
+        !workflow ||
+        !workflow.taskIds.includes(metadata.taskId) ||
+        !task ||
+        task.workflowId !== metadata.workflowId ||
+        task.profileId !== metadata.profileId ||
+        task.parentAgentId !== metadata.parentAgentId ||
+        !run ||
+        run.taskId !== metadata.taskId ||
+        run.agentId !== metadata.agentId ||
+        !agent ||
+        !resource ||
+        resource.agentId !== metadata.agentId ||
+        resource.workspaceId !== metadata.workspaceId ||
+        resource.tabId !== metadata.tabId ||
+        resource.paneId !== metadata.paneId ||
+        resource.terminalId !== metadata.terminalId ||
+        !resource.sessionId ||
+        `pis_${sha256(resource.sessionId).slice(0, 26)}` !==
+          metadata.piSessionRef ||
+        compact?.transcriptPolicy !== "retain-tab" ||
+        compact.workflowDigest !== event.entityRefs?.workflowDigest ||
+        (metadata.resultRef !== null &&
+          (!result ||
+            result.taskId !== metadata.taskId ||
+            result.runId !== metadata.runId ||
+            result.agentId !== metadata.agentId)) ||
+        (metadata.questionRef !== null &&
+          (!question ||
+            question.taskId !== metadata.taskId ||
+            question.runId !== metadata.runId ||
+            question.agentId !== metadata.agentId)) ||
+        Object.values(next.herdrMetadata ?? {}).some(
+          (item) =>
+            item.metadataId !== metadata.metadataId &&
+            item.runId === metadata.runId,
+        )
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Herdr metadata correlation is invalid.",
+        );
+      const current = next.herdrMetadata![id];
+      const terminal = new Set([
+        "completed",
+        "failed",
+        "cancelled",
+        "orphaned",
+        "conflict",
+        "closed",
+      ]);
+      if (
+        current &&
+        (current.taskId !== metadata.taskId ||
+          current.runId !== metadata.runId ||
+          current.agentId !== metadata.agentId ||
+          (terminal.has(current.state) &&
+            current.state !== metadata.state &&
+            metadata.state !== "cleanup_pending" &&
+            metadata.state !== "closed") ||
+          (current.state === "cleanup_pending" &&
+            metadata.state !== "cleanup_pending" &&
+            metadata.state !== "closed" &&
+            metadata.state !== "conflict"))
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Herdr metadata identity or terminal state changed.",
+        );
+      next.herdrMetadata = { ...next.herdrMetadata, [id]: { ...metadata } };
+      break;
+    }
+    case "review.contract_issued": {
+      const contract = p as unknown as import("./types.js").ReviewContract;
+      const reviewTask = next.tasks[contract.reviewTaskId];
+      const reviewedTask = next.tasks[contract.reviewedTaskId];
+      const reviewedRun = next.runs[contract.reviewedRunId];
+      const reviewedResult = next.results?.[contract.reviewedResultId];
+      if (
+        !contract.id ||
+        next.reviewContracts![contract.id] ||
+        Object.values(next.reviewContracts!).some(
+          (item) => item.reviewTaskId === contract.reviewTaskId,
+        ) ||
+        !reviewTask ||
+        !reviewedTask?.profileId ||
+        !reviewedRun ||
+        !reviewedResult ||
+        reviewedRun.taskId !== reviewedTask.id ||
+        reviewedResult.taskId !== reviewedTask.id ||
+        reviewedResult.runId !== reviewedRun.id ||
+        reviewedResult.payloadHash !== contract.resultDigest ||
+        contract.taskProfile !== reviewedTask.profileId
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Review contract is invalid or already exists.",
+        );
+      next.reviewContracts = {
+        ...next.reviewContracts,
+        [contract.id]: { ...contract },
+      };
+      break;
+    }
+    case "model.evidence_recorded": {
+      try {
+        const record = validateModelEvidenceRecord(p.record);
+        next.modelEvidence = applyModelEvidenceRecord(
+          next.modelEvidence,
+          record,
+          "seq" in event ? event.seq : state.lastEventSeq + 1,
+        );
+      } catch (error) {
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          `Model evidence record is invalid: ${(error as Error).message}`,
+        );
+      }
+      break;
+    }
+    case "model.evidence_superseded": {
+      try {
+        next.modelEvidence = applyModelEvidenceSupersession(
+          next.modelEvidence,
+          validateModelEvidenceSupersession(p),
+          "seq" in event ? event.seq : state.lastEventSeq + 1,
+        );
+      } catch (error) {
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          `Model evidence supersession is invalid: ${(error as Error).message}`,
+        );
+      }
+      break;
+    }
+    case "model.evidence_compacted": {
+      try {
+        next.modelEvidence = applyModelEvidenceCompaction(
+          next.modelEvidence,
+          validateModelEvidenceCompaction(p),
+        );
+      } catch (error) {
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          `Model evidence compaction is invalid: ${(error as Error).message}`,
+        );
+      }
+      break;
+    }
+    case "model.foundation_snapshot_recorded": {
+      try {
+        next.modelEvidence = applyFoundationEvidenceSnapshot(
+          next.modelEvidence,
+          validateFoundationEvidenceSnapshot(p),
+          "seq" in event ? event.seq : state.lastEventSeq + 1,
+        );
+      } catch (error) {
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          `Foundation evidence snapshot is invalid: ${(error as Error).message}`,
+        );
+      }
+      break;
+    }
+    case "herdr.provision.intent": {
+      const agentId = String(p.agentId);
+      if (!agentId)
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Herdr intent agent is invalid.",
+        );
+      next.herdrResources = {
+        ...(next.herdrResources ?? {}),
+        [agentId]: { agentId, state: "provisioning" },
+      };
+      break;
+    }
+    case "herdr.provision.outcome":
+    case "herdr.reconciled": {
+      const agentId = String(p.agentId),
+        current = next.herdrResources?.[agentId];
+      if (!current)
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Herdr resource has no intent.",
+        );
+      if (current.state === "closed" && String(p.state) !== "closed") break;
+      next.herdrResources = {
+        ...(next.herdrResources ?? {}),
+        [agentId]: {
+          ...current,
+          state: String(p.state),
+          ...(typeof p.paneId === "string" ? { paneId: p.paneId } : {}),
+          ...(typeof p.tabId === "string" ? { tabId: p.tabId } : {}),
+          ...(typeof p.worktreeId === "string"
+            ? { worktreeId: p.worktreeId }
+            : {}),
+          ...(typeof p.worktreePath === "string"
+            ? { worktreePath: p.worktreePath }
+            : {}),
+          ...(typeof p.workspaceId === "string"
+            ? { workspaceId: p.workspaceId }
+            : {}),
+          ...(typeof p.reason === "string" ? { reason: p.reason } : {}),
+          ...(typeof p.parentAgentId === "string"
+            ? { parentAgentId: p.parentAgentId }
+            : {}),
+          ...(typeof p.ownerId === "string" ? { ownerId: p.ownerId } : {}),
+          ...(typeof p.terminalId === "string"
+            ? { terminalId: p.terminalId }
+            : {}),
+          ...(typeof p.sessionId === "string"
+            ? { sessionId: p.sessionId }
+            : {}),
+          ...(Number.isSafeInteger(p.generation)
+            ? { generation: p.generation as number }
+            : {}),
+          ...(typeof p.tokenDigest === "string"
+            ? { tokenDigest: p.tokenDigest }
+            : {}),
+          ...(Number.isSafeInteger(p.promptFileDev)
+            ? { promptFileDev: p.promptFileDev as number }
+            : {}),
+          ...(Number.isSafeInteger(p.promptFileIno)
+            ? { promptFileIno: p.promptFileIno as number }
+            : {}),
+          ...(Number.isSafeInteger(p.tokenFileDev)
+            ? { tokenFileDev: p.tokenFileDev as number }
+            : {}),
+          ...(Number.isSafeInteger(p.tokenFileIno)
+            ? { tokenFileIno: p.tokenFileIno as number }
+            : {}),
+          ...(typeof p.registrationDeadline === "string"
+            ? { registrationDeadline: p.registrationDeadline }
+            : {}),
+          ...(typeof p.cleanupOutcome === "string"
+            ? { cleanupOutcome: p.cleanupOutcome }
+            : {}),
+          ...(typeof p.dirty === "boolean" ? { dirty: p.dirty } : {}),
+          ...(typeof p.replaced === "boolean" ? { replaced: p.replaced } : {}),
+          ...(typeof p.orphaned === "boolean" ? { orphaned: p.orphaned } : {}),
+          ...(typeof p.unknown === "boolean" ? { unknown: p.unknown } : {}),
+          ...(typeof p.parentGitRoot === "string"
+            ? { parentGitRoot: p.parentGitRoot }
+            : {}),
+          ...(typeof p.parentGitHead === "string"
+            ? { parentGitHead: p.parentGitHead }
+            : {}),
+          ...(typeof p.parentGitBranch === "string"
+            ? { parentGitBranch: p.parentGitBranch }
+            : {}),
+          ...(Array.isArray(p.parentGitChangedFiles) &&
+          p.parentGitChangedFiles.every((x) => typeof x === "string")
+            ? { parentGitChangedFiles: p.parentGitChangedFiles as string[] }
+            : {}),
+          ...(typeof p.worktreeGitRoot === "string"
+            ? { worktreeGitRoot: p.worktreeGitRoot }
+            : {}),
+          ...(typeof p.worktreeGitHead === "string"
+            ? { worktreeGitHead: p.worktreeGitHead }
+            : {}),
+          ...(typeof p.worktreeGitBranch === "string"
+            ? { worktreeGitBranch: p.worktreeGitBranch }
+            : {}),
+        },
+      };
+      break;
+    }
+    default:
+      throw new OrchestratorError(
+        "STATE_CORRUPT",
+        `Unhandled event type ${event.type}.`,
+      );
+  }
+  return next;
+}
