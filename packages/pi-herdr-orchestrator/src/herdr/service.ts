@@ -113,27 +113,6 @@ function exactRetainedTabAbsent(
     throw new Error("HERDR_IDENTITY_MISMATCH");
   return true;
 }
-function isDedicatedManagedTab(
-  snapshot: HerdrSnapshot,
-  tabId: string,
-  paneId: string,
-  identity: ExactPiPaneIdentity,
-): boolean {
-  const tabs = snapshot.tabs.filter((item) => item.id === tabId);
-  const panes = snapshot.panes.filter((item) => item.tabId === tabId);
-  const targetPanes = snapshot.panes.filter((item) => item.id === paneId);
-  if (
-    tabs.length !== 1 ||
-    targetPanes.length !== 1 ||
-    identity.tabId !== tabId ||
-    targetPanes[0]!.tabId !== tabId ||
-    panes.length !== 1 ||
-    panes[0]!.id !== paneId
-  )
-    return false;
-  const tabPaneIds = tabs[0]!.panes.map((item) => item.id);
-  return tabPaneIds.length === 1 && tabPaneIds[0] === paneId;
-}
 function exactPiPane(
   snapshot: HerdrSnapshot,
   paneId: string,
@@ -159,32 +138,6 @@ function exactPiPane(
         ? terminalAgents[0]
         : undefined
       : pane.occupant;
-  const legacySessionAgents = expectedLegacySessionId
-    ? snapshot.agents.filter((item) =>
-        piSessionMatches(
-          expectedLegacySessionId,
-          item.sessionId,
-          item.sessionReference,
-        ),
-      )
-    : [];
-  const expectedReferenceAgents = expectedSessionReference
-    ? snapshot.agents.filter(
-        (item) =>
-          item.sessionReference?.source === expectedSessionReference.source &&
-          item.sessionReference.agent === expectedSessionReference.agent &&
-          item.sessionReference.kind === expectedSessionReference.kind &&
-          item.sessionReference.value === expectedSessionReference.value,
-      )
-    : [];
-  const canonicalOmissionProven =
-    occupant !== undefined &&
-    ((expectedLegacySessionId !== undefined &&
-      legacySessionAgents.length === 1 &&
-      legacySessionAgents[0] === occupant) ||
-      (expectedSessionReference !== undefined &&
-        expectedReferenceAgents.length === 1 &&
-        expectedReferenceAgents[0] === occupant));
   if (
     !terminalId ||
     terminalPanes.length !== 1 ||
@@ -195,10 +148,8 @@ function exactPiPane(
     (snapshot.agents.length > 0 && occupant.paneId !== paneId) ||
     (expectedTerminalId !== undefined && expectedTerminalId !== terminalId) ||
     (expectedAgentId !== undefined &&
-      (((occupant.agentId ?? occupant.id) !== undefined &&
-        (occupant.agentId ?? occupant.id) !== expectedAgentId) ||
-        ((occupant.agentId ?? occupant.id) === undefined &&
-          !canonicalOmissionProven))) ||
+      occupant.agentId !== undefined &&
+      occupant.agentId !== expectedAgentId) ||
     (expectedLegacySessionId !== undefined &&
       !piSessionMatches(
         expectedLegacySessionId,
@@ -640,6 +591,8 @@ export class HerdrService {
           cause: primary,
         });
       }
+      const cleanupOutcome =
+        await this.#provisioner.archiveRegistration(result);
       await this.#store.append({
         type: "herdr.provision.outcome",
         actor: this.#actor,
@@ -653,34 +606,13 @@ export class HerdrService {
           generation: result.token.generation,
           tokenDigest: result.token.digest,
           registrationDeadline: undefined,
-          cleanupOutcome: "registration_cleanup_pending",
+          cleanupOutcome,
         },
       });
       this.#pending.delete(agentId);
       const timer = this.#expiryTimers.get(agentId);
       if (timer) clearTimeout(timer);
       this.#expiryTimers.delete(agentId);
-      let cleanupOutcome:
-        | "retained_registration_files"
-        | "registration_files_missing"
-        | "registration_archive_failed";
-      try {
-        cleanupOutcome = await this.#provisioner.archiveRegistration(result);
-      } catch {
-        cleanupOutcome = "registration_archive_failed";
-      }
-      await this.#store
-        .append({
-          type: "herdr.reconciled",
-          actor: this.#actor,
-          entityRefs: { agentId },
-          payload: {
-            agentId,
-            state: "registered",
-            cleanupOutcome,
-          },
-        })
-        .catch(() => undefined);
       return finalIdentity;
     });
   }
@@ -703,22 +635,15 @@ export class HerdrService {
       this.#expiryTimers.delete(agentId);
     });
   }
-  async stop(guard: OccupantGuard, expectedAgentId?: string): Promise<void> {
-    const agentId =
-      this.resolveAgentId(guard, expectedAgentId) ?? `pane:${guard.paneId}`;
+  async stop(guard: OccupantGuard): Promise<void> {
+    const agentId = this.agentForPane(guard.paneId) ?? `pane:${guard.paneId}`;
     await this.withAgentLock(agentId, async () => {
       await this.#preflight?.();
       this.#cli.requireMutationCapabilities(["agent.stop", "session.snapshot"]);
       const resource = agentId.startsWith("pane:")
         ? undefined
         : this.resources[agentId];
-      if (resource?.state === "stopped" || resource?.state === "closed") {
-        const snapshot = await this.#cli.snapshot();
-        if (resource.state === "closed")
-          assertManagedOccupantAbsent(snapshot, guard, expectedAgentId);
-        else assertManagedAgentAbsent(snapshot, guard, expectedAgentId);
-        return;
-      }
+      if (resource?.state === "stopped" || resource?.state === "closed") return;
       if (!agentId.startsWith("pane:"))
         await this.recordLifecycle(
           agentId,
@@ -726,12 +651,8 @@ export class HerdrService {
           "mutation_pending",
           true,
         );
-      await revalidateAndRun(
-        this.#cli,
-        guard,
-        () => this.#cli.stopAgent(guard.paneId),
-        assertManagedAgentAbsent,
-        expectedAgentId,
+      await revalidateAndRun(this.#cli, guard, () =>
+        this.#cli.stopAgent(guard.paneId),
       );
       if (!agentId.startsWith("pane:"))
         await this.recordLifecycle(agentId, "stopped", "stop_succeeded");
@@ -873,13 +794,11 @@ export class HerdrService {
         await this.recordLifecycle(agentId, "closed", "retained_tab_closed");
     });
   }
-  async close(guard: OccupantGuard, expectedAgentId?: string): Promise<void> {
-    const agentId =
-      this.resolveAgentId(guard, expectedAgentId) ?? `pane:${guard.paneId}`;
+  async close(guard: OccupantGuard): Promise<void> {
+    const agentId = this.agentForPane(guard.paneId) ?? `pane:${guard.paneId}`;
     await this.withAgentLock(agentId, async () => {
       await this.#preflight?.();
       this.#cli.requireMutationCapabilities([
-        "tab.close",
         "pane.close",
         "worktree.remove",
         "session.snapshot",
@@ -887,11 +806,7 @@ export class HerdrService {
       const resource = agentId.startsWith("pane:")
         ? undefined
         : this.resources[agentId];
-      if (resource?.state === "closed") {
-        const snapshot = await this.#cli.snapshot();
-        if (managedOccupantAbsent(snapshot, guard, expectedAgentId)) return;
-        throw new Error("HERDR_IDENTITY_MISMATCH");
-      }
+      if (resource?.state === "closed") return;
       if (resource?.state === "missing") {
         const snapshot = await this.#cli.snapshot();
         const terminalId = guard.terminalId ?? resource.terminalId;
@@ -910,12 +825,9 @@ export class HerdrService {
               (terminalId !== undefined && agent.terminalId === terminalId),
           );
         const managedIdentityPresent =
-          snapshot.agents.some(
-            (agent) => (agent.agentId ?? agent.id) === expectedAgentId,
-          ) ||
+          snapshot.agents.some((agent) => agent.agentId === expectedAgentId) ||
           snapshot.panes.some(
-            (pane) =>
-              (pane.occupant?.agentId ?? pane.occupant?.id) === expectedAgentId,
+            (pane) => pane.occupant?.agentId === expectedAgentId,
           );
         const hasRecordedWorktree =
           resource.worktreeId !== undefined ||
@@ -987,35 +899,19 @@ export class HerdrService {
           true,
         );
       let removedWorktree = false;
-      await revalidateAndRun(
-        this.#cli,
-        guard,
-        async (identity, snapshot) => {
-          if (resource?.worktreePath && !resource.worktreeId) {
-            if (
-              !identity.workspaceId ||
-              identity.worktreePath !== resource.worktreePath
-            )
-              throw new Error("HERDR_IDENTITY_MISMATCH");
-            await this.#cli.removeWorktree(identity.workspaceId);
-            removedWorktree = true;
-          } else if (
-            resource?.tabId &&
-            isDedicatedManagedTab(
-              snapshot,
-              resource.tabId,
-              guard.paneId,
-              identity,
-            )
-          ) {
-            await this.#cli.closeTab(resource.tabId);
-          } else {
-            await this.#cli.closePane(guard.paneId);
-          }
-        },
-        assertManagedOccupantAbsent,
-        expectedAgentId,
-      );
+      await revalidateAndRun(this.#cli, guard, async (identity) => {
+        if (resource?.worktreePath && !resource.worktreeId) {
+          if (
+            !identity.workspaceId ||
+            identity.worktreePath !== resource.worktreePath
+          )
+            throw new Error("HERDR_IDENTITY_MISMATCH");
+          await this.#cli.removeWorktree(identity.workspaceId);
+          removedWorktree = true;
+        } else {
+          await this.#cli.closePane(guard.paneId);
+        }
+      });
       if (!agentId.startsWith("pane:"))
         await this.recordLifecycle(
           agentId,
@@ -1091,40 +987,9 @@ export class HerdrService {
     this.#expiryTimers.set(agentId, timer);
   }
   private agentForPane(paneId: string): string | undefined {
-    return this.resolveAgentId({ paneId });
-  }
-  private resolveAgentId(
-    guard: OccupantGuard,
-    expectedAgentId?: string,
-  ): string | undefined {
-    if (expectedAgentId !== undefined) {
-      const resource = this.resources[expectedAgentId];
-      if (
-        !resource ||
-        resource.paneId !== guard.paneId ||
-        (guard.terminalId !== undefined &&
-          resource.terminalId !== undefined &&
-          resource.terminalId !== guard.terminalId) ||
-        (guard.sessionId !== undefined &&
-          resource.sessionId !== undefined &&
-          resource.sessionId !== guard.sessionId) ||
-        (guard.generation !== undefined &&
-          resource.generation !== undefined &&
-          resource.generation !== guard.generation)
-      )
-        throw new Error("HERDR_IDENTITY_MISMATCH");
-      return expectedAgentId;
-    }
-    const matches = Object.values(this.resources).filter(
-      (resource) =>
-        resource.paneId === guard.paneId &&
-        (guard.terminalId === undefined ||
-          resource.terminalId === guard.terminalId) &&
-        (guard.sessionId === undefined ||
-          resource.sessionId === guard.sessionId),
-    );
-    if (matches.length > 1) throw new Error("HERDR_IDENTITY_MISMATCH");
-    return matches[0]?.agentId;
+    return Object.values(this.resources).find(
+      (resource) => resource.paneId === paneId,
+    )?.agentId;
   }
   private async recordLifecycle(
     agentId: string,
@@ -1217,50 +1082,14 @@ export class HerdrService {
 function legacyOccupantIdentity(
   snapshot: HerdrSnapshot,
   guard: OccupantGuard,
-  expectedAgentId?: string,
 ): ExactPiPaneIdentity {
-  const panes = snapshot.panes.filter((item) => item.id === guard.paneId);
-  const pane = panes[0];
+  const pane = snapshot.panes.find((item) => item.id === guard.paneId);
   const occupant = pane?.occupant;
   const terminalId = occupant?.terminalId ?? pane?.terminalId;
-  const terminalPanes = terminalId
-    ? snapshot.panes.filter(
-        (item) => (item.occupant?.terminalId ?? item.terminalId) === terminalId,
-      )
-    : [];
-  const sessionPanes = guard.sessionId
-    ? snapshot.panes.filter((item) => {
-        const candidate = item.occupant;
-        return (
-          candidate !== undefined &&
-          piSessionMatches(
-            guard.sessionId!,
-            candidate.sessionId,
-            candidate.sessionReference,
-          )
-        );
-      })
-    : [];
-  const canonicalAgentId = occupant?.agentId ?? occupant?.id;
-  const canonicalOmissionProven =
-    canonicalAgentId === undefined &&
-    pane !== undefined &&
-    terminalId !== undefined &&
-    terminalPanes.length === 1 &&
-    terminalPanes[0] === pane &&
-    sessionPanes.length === 1 &&
-    sessionPanes[0] === pane;
   if (
-    panes.length !== 1 ||
     !pane ||
     !occupant ||
-    (expectedAgentId !== undefined &&
-      (((occupant.agentId ?? occupant.id) !== undefined &&
-        (occupant.agentId ?? occupant.id) !== expectedAgentId) ||
-        ((occupant.agentId ?? occupant.id) === undefined &&
-          !canonicalOmissionProven))) ||
-    (guard.terminalId !== undefined &&
-      (terminalId !== guard.terminalId || terminalPanes.length !== 1)) ||
+    (guard.terminalId !== undefined && terminalId !== guard.terminalId) ||
     (guard.sessionId !== undefined &&
       !piSessionMatches(
         guard.sessionId,
@@ -1288,95 +1117,10 @@ function legacyOccupantIdentity(
   };
 }
 
-function managedAgentAbsent(
-  snapshot: HerdrSnapshot,
-  guard: OccupantGuard,
-  expectedAgentId?: string,
-): boolean {
-  if (snapshot.agents.length > 0)
-    return !snapshot.agents.some((agent) => {
-      const canonicalAgentId = agent.agentId ?? agent.id;
-      return (
-        (expectedAgentId !== undefined &&
-          canonicalAgentId === expectedAgentId) ||
-        agent.paneId === guard.paneId ||
-        (guard.terminalId !== undefined &&
-          agent.terminalId === guard.terminalId) ||
-        (guard.sessionId !== undefined &&
-          piSessionMatches(
-            guard.sessionId,
-            agent.sessionId,
-            agent.sessionReference,
-          ))
-      );
-    });
-  return !snapshot.panes.some((pane) => {
-    const occupant = pane.occupant;
-    if (!occupant) return false;
-    return (
-      (expectedAgentId !== undefined &&
-        (occupant.agentId ?? occupant.id) === expectedAgentId) ||
-      pane.id === guard.paneId ||
-      (guard.terminalId !== undefined &&
-        (pane.terminalId === guard.terminalId ||
-          occupant.terminalId === guard.terminalId)) ||
-      (guard.sessionId !== undefined &&
-        piSessionMatches(
-          guard.sessionId,
-          occupant.sessionId,
-          occupant.sessionReference,
-        ))
-    );
-  });
-}
-
-function assertManagedAgentAbsent(
-  snapshot: HerdrSnapshot,
-  guard: OccupantGuard,
-  expectedAgentId?: string,
-): void {
-  if (!managedAgentAbsent(snapshot, guard, expectedAgentId))
-    throw new Error("HERDR_STOP_NOT_CONFIRMED");
-}
-
-function managedOccupantAbsent(
-  snapshot: HerdrSnapshot,
-  guard: OccupantGuard,
-  expectedAgentId?: string,
-): boolean {
-  return (
-    !snapshot.panes.some(
-      (pane) =>
-        pane.id === guard.paneId ||
-        (guard.terminalId !== undefined &&
-          (pane.terminalId === guard.terminalId ||
-            pane.occupant?.terminalId === guard.terminalId)),
-    ) && managedAgentAbsent(snapshot, guard, expectedAgentId)
-  );
-}
-
-function assertManagedOccupantAbsent(
-  snapshot: HerdrSnapshot,
-  guard: OccupantGuard,
-  expectedAgentId?: string,
-): void {
-  if (!managedOccupantAbsent(snapshot, guard, expectedAgentId))
-    throw new Error("HERDR_CLOSE_NOT_CONFIRMED");
-}
-
 async function revalidateAndRun(
   cli: HerdrCli,
   guard: OccupantGuard,
-  action: (
-    identity: ExactPiPaneIdentity,
-    snapshot: HerdrSnapshot,
-  ) => Promise<void>,
-  postcondition?: (
-    snapshot: HerdrSnapshot,
-    guard: OccupantGuard,
-    expectedAgentId?: string,
-  ) => void,
-  expectedAgentId?: string,
+  action: (identity: ExactPiPaneIdentity) => Promise<void>,
 ): Promise<void> {
   const snapshot = await cli.snapshot();
   const identity =
@@ -1385,21 +1129,18 @@ async function revalidateAndRun(
           snapshot,
           guard.paneId,
           guard.terminalId,
-          expectedAgentId,
+          undefined,
           undefined,
           guard.sessionId,
         )
-      : legacyOccupantIdentity(snapshot, guard, expectedAgentId);
+      : legacyOccupantIdentity(snapshot, guard);
   if (
     guard.generation !== undefined &&
-    ((identity.generation !== undefined &&
-      identity.generation !== guard.generation) ||
-      (snapshot.agents.length === 0 && identity.generation === undefined))
+    identity.generation !== guard.generation
   )
     throw new Error("HERDR_IDENTITY_MISMATCH");
-  await action(identity, snapshot);
-  const after = await cli.snapshot();
-  postcondition?.(after, guard, expectedAgentId);
+  await action(identity);
+  await cli.snapshot();
 }
 
 export interface ProductionPreflightOptions {
