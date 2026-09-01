@@ -12,12 +12,11 @@ import type {
   DeckResult,
   DeckState,
 } from "./types.js";
-import { boardRecord, type BoardRecord } from "./board-presentation.js";
-import { selectAdoptedScope, currentProviderProjection } from "./scope.js";
 import {
-  selectSignalsActivityItems,
-  selectSignalsTabPresentation,
-} from "./signals-presentation.js";
+  selectBoardPresentation,
+  type BoardRecord,
+} from "./board-presentation.js";
+import { selectAdoptedScope, currentProviderProjection } from "./scope.js";
 
 export type AgentBoardTab = "board" | "files" | "agents" | "activity";
 export type BoardSection = "attention" | "work" | "recent-signals";
@@ -100,7 +99,6 @@ export interface NormalizedQuestion {
   recommendedText?: string;
   dismissible: boolean;
   retryableDelivery: boolean;
-  answerId?: string;
   deliveryState?: string;
   terminal: boolean;
   timeoutAt?: string;
@@ -183,12 +181,19 @@ const SOURCE_PRIORITY: Record<SourceLabel, number> = {
 };
 
 function text(value: unknown, fallback: string): string {
-  if (typeof value !== "string" || value.length === 0) return fallback;
-  const sanitized = value
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-    .trim()
-    .slice(0, 4_000);
-  return sanitized.length > 0 ? sanitized : fallback;
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+function rowId(row: BoardRecord, index: number): string {
+  return text(row.id ?? row.entityId, `row-${index + 1}`);
+}
+function rowTitle(row: BoardRecord, id: string): string {
+  return text(row.title ?? row.question ?? row.detail, id);
+}
+function rowTimestamp(row: BoardRecord): string {
+  return text(
+    row.changedAt ?? row.terminalAt ?? row.updatedAt ?? row.createdAt,
+    "",
+  );
 }
 function normalizedStatus(value: string | undefined): string {
   return (value ?? "open")
@@ -196,22 +201,6 @@ function normalizedStatus(value: string | undefined): string {
     .toLowerCase()
     .replace(/[ _-]+/g, " ");
 }
-function normalizedWaitReason(value: unknown): string {
-  return text(value, "")
-    .replace(/[\u202a-\u202e\u2066-\u2069]/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
-}
-
-function stableWaitId(reason: string): string {
-  let hash = 2166136261;
-  for (const character of reason) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
-}
-
 export function isTerminalTaskState(state: TaskState): boolean {
   return TASK_TERMINAL.has(state);
 }
@@ -252,6 +241,13 @@ function activityItem<K extends ActivityItem["kind"], S>(
 ): ActivityItemBase<K, S> {
   return { ...input, id: input.uiId, status: input.state };
 }
+function signals(
+  projection: AgentBoardProjection | undefined,
+  tab: "inbox" | "updates" | "decisions" | "history",
+): BoardRecord[] {
+  return selectBoardPresentation(projection, tab).rows;
+}
+
 export function normalizeBrokerQuestion(
   question: DeckQuestion,
 ): NormalizedQuestion {
@@ -260,7 +256,7 @@ export function normalizeBrokerQuestion(
     source: "orchestrator",
     uiId: `orchestrator:question:${question.id}`,
     entityId: question.id,
-    prompt: text(question.prompt, question.id),
+    prompt: question.prompt,
     responseKind:
       options.length > 0
         ? question.allowFreeform
@@ -284,12 +280,6 @@ export function normalizeSignalsQuestion(
   question: AgentBoardPendingQuestion,
   row: BoardRecord = {},
 ): NormalizedQuestion {
-  const projection = boardRecord(row.projection);
-  const answer = boardRecord(projection.answer ?? row.answer);
-  const answerId = text(answer.id ?? answer.answerId ?? row.answerId, "");
-  const userAnswerable = projection.userAnswerable ?? row.userAnswerable;
-  const retryableDelivery =
-    projection.retryableDelivery ?? row.retryableDelivery;
   return {
     source: "signals",
     uiId: `signals:question:${question.questionId}`,
@@ -303,17 +293,10 @@ export function normalizeSignalsQuestion(
     ...(question.recommendedText
       ? { recommendedText: question.recommendedText }
       : {}),
-    dismissible: (projection.dismissible ?? row.dismissible) === true,
-    retryableDelivery: retryableDelivery === true,
-    ...(answerId ? { answerId } : {}),
-    deliveryState: text(
-      projection.deliveryState ??
-        projection.latestDeliveryAttempt ??
-        row.deliveryState ??
-        row.state,
-      "pending",
-    ),
-    terminal: userAnswerable === false && retryableDelivery !== true,
+    dismissible: row.dismissible === true,
+    retryableDelivery: row.retryableDelivery === true,
+    deliveryState: text(row.deliveryState ?? row.state, "pending"),
+    terminal: row.userAnswerable === false && row.retryableDelivery !== true,
   };
 }
 
@@ -328,7 +311,7 @@ export function selectUnifiedBoardPresentation(
   const items: BoardItem[] = [];
   for (const todo of provider?.todo.items ?? []) {
     if (isTerminalTodoStatus(todo.status)) continue;
-    const waiting = isWaitingTodo(todo);
+    const waiting = Boolean(todo.waitReason);
     const status = normalizedStatus(todo.status);
     items.push(
       boardItem({
@@ -343,40 +326,26 @@ export function selectUnifiedBoardPresentation(
         section: waiting ? "attention" : "work",
         priority: waiting ? 20 : 60,
         sortTimestamp: "",
-        actions: todo.waitReason
-          ? {
-              primary: "clear-wait",
-              actions: ["clear-wait", "mark-done"],
-            }
-          : waiting
-            ? { primary: "mark-done", actions: ["mark-done"] }
-            : { primary: "start", actions: ["start", "mark-done"] },
+        actions: {
+          primary: waiting ? "clear-wait" : "start",
+          actions: waiting ? ["clear-wait"] : ["start", "mark-done"],
+        },
       }),
     );
   }
   const openQuestions = [...scoped.questions.values()].filter(
     (q) => !normalizeBrokerQuestion(q).terminal,
   );
-  const representedTasks = new Set<string>();
-  const representedRuns = new Set<string>();
-  const representedQuestions = new Set(openQuestions.map((q) => q.id));
-  for (const question of openQuestions) {
-    if (question.taskId) representedTasks.add(question.taskId);
-    if (question.runId) {
-      representedRuns.add(question.runId);
-      const run = scoped.runs.get(question.runId);
-      if (run?.taskId) representedTasks.add(run.taskId);
-    }
-  }
-  const representedGroups = new Set<string>();
-  for (const group of scoped.groups.values()) {
-    if (
-      group.questionIds?.some((id) => representedQuestions.has(id)) ||
-      group.taskIds?.some((id) => representedTasks.has(id)) ||
-      group.runIds?.some((id) => representedRuns.has(id))
-    )
-      representedGroups.add(group.id);
-  }
+  const representedTasks = new Set(
+    openQuestions.flatMap((q) => (q.taskId ? [q.taskId] : [])),
+  );
+  const representedGroups = new Set(
+    openQuestions.flatMap((q) =>
+      [...scoped.groups.values()]
+        .filter((g) => g.questionIds?.includes(q.id))
+        .map((g) => g.id),
+    ),
+  );
   for (const question of openQuestions)
     items.push(
       boardItem({
@@ -398,13 +367,7 @@ export function selectUnifiedBoardPresentation(
       }),
     );
   for (const task of scoped.tasks.values()) {
-    if (
-      isTerminalTaskState(task.state) ||
-      representedTasks.has(task.id) ||
-      (task.currentRunId !== undefined &&
-        representedRuns.has(task.currentRunId)) ||
-      task.runIds?.some((runId) => representedRuns.has(runId))
-    )
+    if (isTerminalTaskState(task.state) || representedTasks.has(task.id))
       continue;
     const attention = task.state === "blocked";
     const assigned = task.assignedAgentId
@@ -440,12 +403,7 @@ export function selectUnifiedBoardPresentation(
     );
   }
   for (const group of scoped.groups.values()) {
-    if (
-      GROUP_TERMINAL.has(group.state) ||
-      representedGroups.has(group.id) ||
-      group.taskIds?.some((taskId) => representedTasks.has(taskId)) ||
-      group.runIds?.some((runId) => representedRuns.has(runId))
-    )
+    if (GROUP_TERMINAL.has(group.state) || representedGroups.has(group.id))
       continue;
     const attention = group.state === "blocked" || Boolean(group.blockedReason);
     items.push(
@@ -466,43 +424,36 @@ export function selectUnifiedBoardPresentation(
       }),
     );
   }
-  const signalInbox = selectSignalsTabPresentation(
-    provider?.agentBoard,
-    "inbox",
-  );
-  for (const question of signalInbox) {
-    if (question.entityType !== "question") continue;
-    const id = question.entityId;
+  const signalInbox = selectBoardPresentation(provider?.agentBoard, "inbox");
+  for (const [index, row] of signalInbox.rows.entries()) {
+    const id = rowId(row, index);
     const pending = provider?.agentBoard.pendingQuestions?.find(
-      (candidate) => candidate.questionId === id,
+      (q) => q.questionId === id,
     );
-    if (!question.userAnswerable && !question.retryableDelivery) continue;
     items.push(
       boardItem({
         uiId: `signals:question:${id}`,
         entityId: id,
         kind: "signal-question",
-        source: question as unknown as BoardRecord,
+        source: row,
         sourceLabel: "SIGNALS",
-        title: question.title,
-        summary: question.prompt,
-        state: question.statusLabel,
+        title: rowTitle(row, id),
+        summary: text(row.detail ?? row.statusLabel, "Answer required"),
+        state: text(row.state ?? row.deliveryState, "pending"),
         section: "attention",
-        priority: question.retryableDelivery ? 5 : 1,
-        sortTimestamp: question.changedAt,
-        revision: question.revision,
+        priority: row.retryableDelivery === true ? 5 : 1,
+        sortTimestamp: rowTimestamp(row),
+        revision: Number(row.revision ?? pending?.revision ?? 0),
         ...(pending ? { pendingQuestion: pending } : {}),
         actions: {
           primary: "answer",
           actions: [
             "answer",
-            ...(question.recommendedOptionIds.length || question.recommendedText
+            ...(pending?.recommendedOptionIds.length || pending?.recommendedText
               ? ["use-recommendation"]
               : []),
-            ...(question.dismissible ? ["dismiss-question"] : []),
-            ...(question.retryableDelivery && question.answerId
-              ? ["retry-delivery"]
-              : []),
+            ...(row.dismissible === true ? ["dismiss-question"] : []),
+            ...(row.retryableDelivery === true ? ["retry-delivery"] : []),
           ] as BoardAction[],
         },
       }),
@@ -511,28 +462,32 @@ export function selectUnifiedBoardPresentation(
   const signalIds = new Set(
     items.filter((i) => i.kind === "signal-question").map((i) => i.entityId),
   );
-  for (const update of selectSignalsTabPresentation(
+  for (const [index, row] of signals(
     provider?.agentBoard,
     "updates",
-  )) {
-    if (update.entityType !== "update") continue;
-    const id = update.entityId;
-    if (signalIds.has(id) || update.terminal) continue;
+  ).entries()) {
+    const id = rowId(row, index);
+    if (signalIds.has(id)) continue;
     items.push(
       boardItem({
         uiId: `signals:update:${id}`,
         entityId: id,
         kind: "signal-update",
-        source: update as unknown as BoardRecord,
+        source: row,
         sourceLabel: "SIGNALS",
-        title: update.title,
-        summary: update.detail ?? update.stage ?? "Recent update",
-        state: update.kind || update.statusLabel,
+        title: rowTitle(row, id),
+        summary: text(row.detail ?? row.stage, "Recent update"),
+        state: text(row.state ?? row.kind, "active"),
         section: "recent-signals",
         priority: 70,
-        sortTimestamp: update.changedAt,
-        revision: update.revision,
-        actions: { actions: [] },
+        sortTimestamp: rowTimestamp(row),
+        revision: Number(row.revision ?? 0),
+        actions: {
+          actions: [
+            ...(row.archivable === true ? ["archive-update"] : []),
+            ...(row.retryableDelivery === true ? ["retry-delivery"] : []),
+          ] as BoardAction[],
+        },
       }),
     );
   }
@@ -561,35 +516,23 @@ export function selectUnifiedBoardPresentation(
           },
         }),
       );
-  const itemWaitReasons = new Set(
-    (provider?.todo.items ?? [])
-      .map((item) => normalizedWaitReason(item.waitReason))
-      .filter(Boolean),
-  );
-  const providerWaitReasons = [
-    provider?.todo.waitReason,
-    ...(provider?.todo.externalWaits ?? []),
-  ]
-    .map(normalizedWaitReason)
-    .filter(Boolean);
-  const seenProviderWaits = new Set<string>();
-  for (const reason of providerWaitReasons) {
-    if (seenProviderWaits.has(reason) || itemWaitReasons.has(reason)) continue;
-    seenProviderWaits.add(reason);
-    const id = `provider-wait:${stableWaitId(reason)}`;
+  if (
+    provider?.todo.waitReason &&
+    !(provider.todo.items ?? []).some(isWaitingTodo)
+  )
     items.push(
       boardItem({
-        uiId: `todo:${id}`,
-        entityId: id,
+        uiId: "todo:provider-wait",
+        entityId: "provider-wait",
         kind: "todo",
         source: {
-          id,
+          id: "provider-wait",
           text: "Todo provider wait",
-          waitReason: reason,
+          waitReason: provider.todo.waitReason,
         },
         sourceLabel: "TODO",
         title: "Todo provider wait",
-        summary: reason,
+        summary: provider.todo.waitReason,
         state: "waiting",
         section: "attention",
         priority: 25,
@@ -597,7 +540,6 @@ export function selectUnifiedBoardPresentation(
         actions: { actions: [] },
       }),
     );
-  }
   const attention = items
     .filter((i) => i.section === "attention")
     .sort(boardSort);
@@ -631,43 +573,33 @@ export function selectUnifiedBoardPresentation(
 
 function signalActivity(
   projection: AgentBoardProjection | undefined,
+  tab: "updates" | "decisions" | "history",
 ): ActivityItem[] {
-  return selectSignalsActivityItems(projection).map((source) => {
-    const kind =
-      source.entityType === "update"
-        ? "signal-update"
-        : source.entityType === "decision"
-          ? "signal-decision"
-          : "signal-history";
-    const summary =
-      source.entityType === "update"
-        ? (source.detail ?? source.stage ?? source.statusLabel)
-        : source.entityType === "decision"
-          ? source.outcome
-          : source.statusLabel;
+  const kind =
+    tab === "updates"
+      ? "signal-update"
+      : tab === "decisions"
+        ? "signal-decision"
+        : "signal-history";
+  return signals(projection, tab).map((row, index) => {
+    const id = rowId(row, index);
     return activityItem({
-      uiId: `signals:${source.entityType}:${source.rowId}`,
-      entityId: source.entityId,
+      uiId: `signals:${tab}:${id}`,
+      entityId: id,
       kind,
-      title: source.title,
-      summary,
-      state: source.statusLabel,
-      sortTimestamp: source.changedAt,
-      source: source as unknown as BoardRecord,
-      revision: source.revision,
+      title: rowTitle(row, id),
+      summary: text(row.detail ?? row.outcome ?? row.answer, id),
+      state: text(row.statusLabel ?? row.state ?? row.kind, tab),
+      sortTimestamp: rowTimestamp(row),
+      source: row,
+      ...(Number.isSafeInteger(row.revision)
+        ? { revision: Number(row.revision) }
+        : {}),
       actions: {
         actions: [
-          ...(source.entityType === "update" &&
-          source.terminal &&
-          !source.archived
-            ? ["archive-update" as const]
-            : []),
-          ...(source.entityType === "question" &&
-          source.retryableDelivery &&
-          source.answerId
-            ? ["retry-delivery" as const]
-            : []),
-        ],
+          ...(row.archivable === true ? ["archive-update"] : []),
+          ...(row.retryableDelivery === true ? ["retry-delivery"] : []),
+        ] as BoardAction[],
       },
     });
   });
@@ -760,7 +692,23 @@ export function selectActivityPresentation(
           },
         }),
       );
-  items.push(...signalActivity(provider?.agentBoard));
+  const signalByEntity = new Map<string, ActivityItem>();
+  for (const item of [
+    ...signalActivity(provider?.agentBoard, "updates"),
+    ...signalActivity(provider?.agentBoard, "decisions"),
+    ...signalActivity(provider?.agentBoard, "history"),
+  ]) {
+    const existing = signalByEntity.get(item.entityId);
+    const rank = (value: ActivityItem) =>
+      value.kind === "signal-history"
+        ? 3
+        : value.kind === "signal-decision"
+          ? 2
+          : 1;
+    if (!existing || rank(item) > rank(existing))
+      signalByEntity.set(item.entityId, item);
+  }
+  items.push(...signalByEntity.values());
   for (const notification of notifications.slice(-100)) {
     if (
       !["failure", "timeout", "budget", "recovery"].includes(notification.kind)

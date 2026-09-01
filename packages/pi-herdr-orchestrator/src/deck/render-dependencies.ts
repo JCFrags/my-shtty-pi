@@ -30,9 +30,8 @@ export interface VisibleSurfaceContext {
   selectedAgentId?: string;
   agentFilter?: VisibleAgentFilter;
   agentPage?: number;
-  boardSelectedId?: string;
+  boardSelectionId?: string;
   boardFilter?: BoardFilter;
-  activitySelectedId?: string;
   activityFilter?: ActivityFilter;
   notifications?: readonly DeckNotification[];
   /** Shell state is visible for every tab and therefore belongs in the gate. */
@@ -238,7 +237,7 @@ function boardModel(state: DeckState, context: VisibleSurfaceContext): unknown {
   const presentation = selectUnifiedBoardPresentation(
     state,
     context.targetPaneId,
-    context.boardSelectedId,
+    context.boardSelectionId,
     context.boardFilter ?? "all-current",
   );
   const selected = presentation.selected;
@@ -311,7 +310,7 @@ function activityModel(
   const presentation = selectActivityPresentation(
     state,
     context.targetPaneId,
-    context.activitySelectedId,
+    context.boardSelectionId,
     context.activityFilter ?? "all",
     context.notifications ?? [],
   );
