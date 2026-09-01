@@ -37,10 +37,9 @@ export interface ToolAuditStartInput {
   toolCallId: string;
   toolName: string;
   input?: unknown;
-  inputBytes?: number;
-  inputSha256?: string;
+  inputBytes: number;
+  inputSha256: string;
   inputOmitted?: true;
-  inputUnavailable?: "non_canonical";
 }
 
 export interface ToolAuditCompletionInput {
@@ -71,7 +70,6 @@ export interface ToolAuditRecord {
   inputBytes?: number;
   inputSha256?: string;
   inputOmitted?: true;
-  inputUnavailable?: "non_canonical";
   status?: ToolAuditStatus;
   durationMs?: number;
   errorCode?: string;
@@ -93,10 +91,9 @@ export interface ToolAuditInvocation {
   errorCode?: string;
   errorMessage?: string;
   input?: unknown;
-  inputBytes?: number;
-  inputSha256?: string;
+  inputBytes: number;
+  inputSha256: string;
   inputOmitted?: true;
-  inputUnavailable?: "non_canonical";
   startSeq: number;
   completionSeq?: number;
 }
@@ -186,36 +183,6 @@ function safeJson(value: unknown, depth = 0): boolean {
   return false;
 }
 
-function validStartPayload(source: Record<string, unknown>): boolean {
-  if (source.inputUnavailable === "non_canonical")
-    return (
-      source.input === undefined &&
-      source.inputBytes === undefined &&
-      source.inputSha256 === undefined &&
-      source.inputOmitted === undefined
-    );
-  if (source.inputUnavailable !== undefined) return false;
-  if (source.inputOmitted === true)
-    return (
-      source.input === undefined &&
-      Number.isSafeInteger(source.inputBytes) &&
-      Number(source.inputBytes) > MAX_INPUT_BYTES &&
-      safeHash(source.inputSha256)
-    );
-  return (
-    source.inputOmitted === undefined &&
-    Object.hasOwn(source, "input") &&
-    safeJson(source.input) &&
-    Number.isSafeInteger(source.inputBytes) &&
-    Number(source.inputBytes) >= 0 &&
-    Number(source.inputBytes) <= MAX_INPUT_BYTES &&
-    safeHash(source.inputSha256) &&
-    Buffer.byteLength(canonicalJson(source.input), "utf8") ===
-      Number(source.inputBytes) &&
-    sha256(canonicalJson(source.input)) === source.inputSha256
-  );
-}
-
 function validateActor(value: unknown): ToolAuditActor {
   const source = record(value);
   if (
@@ -249,7 +216,6 @@ function validateStoredRecord(value: unknown): ToolAuditRecord {
     "inputBytes",
     "inputSha256",
     "inputOmitted",
-    "inputUnavailable",
     "status",
     "durationMs",
     "errorCode",
@@ -277,7 +243,18 @@ function validateStoredRecord(value: unknown): ToolAuditRecord {
     throw new OrchestratorError("AUDIT_CORRUPT", "Audit action is invalid.");
   if (source.phase === "started") {
     if (
-      !validStartPayload(source) ||
+      !Number.isSafeInteger(source.inputBytes) ||
+      Number(source.inputBytes) < 0 ||
+      !safeHash(source.inputSha256) ||
+      (source.inputOmitted === true
+        ? source.input !== undefined ||
+          Number(source.inputBytes) <= MAX_INPUT_BYTES
+        : source.inputOmitted !== undefined ||
+          !Object.hasOwn(source, "input") ||
+          !safeJson(source.input) ||
+          Buffer.byteLength(canonicalJson(source.input), "utf8") !==
+            Number(source.inputBytes) ||
+          sha256(canonicalJson(source.input)) !== source.inputSha256) ||
       source.status !== undefined ||
       source.durationMs !== undefined ||
       source.errorCode !== undefined ||
@@ -293,7 +270,6 @@ function validateStoredRecord(value: unknown): ToolAuditRecord {
     source.inputBytes !== undefined ||
     source.inputSha256 !== undefined ||
     source.inputOmitted !== undefined ||
-    source.inputUnavailable !== undefined ||
     (source.durationMs !== undefined &&
       (!Number.isSafeInteger(source.durationMs) ||
         Number(source.durationMs) < 0)) ||
@@ -327,7 +303,20 @@ function validateInput(input: ToolAuditInput): void {
       "Tool audit input is invalid.",
     );
   if (input.phase === "started") {
-    if (!validStartPayload(input as unknown as Record<string, unknown>))
+    if (
+      !Number.isSafeInteger(input.inputBytes) ||
+      input.inputBytes < 0 ||
+      !safeHash(input.inputSha256) ||
+      (input.inputOmitted === true
+        ? input.input !== undefined || input.inputBytes <= MAX_INPUT_BYTES
+        : input.inputOmitted !== undefined ||
+          !Object.hasOwn(input, "input") ||
+          !safeJson(input.input) ||
+          input.inputBytes > MAX_INPUT_BYTES ||
+          Buffer.byteLength(canonicalJson(input.input), "utf8") !==
+            input.inputBytes ||
+          sha256(canonicalJson(input.input)) !== input.inputSha256)
+    )
       throw new OrchestratorError(
         "INVALID_REQUEST",
         "Tool audit start is invalid.",
@@ -403,19 +392,11 @@ function inputFromRecord(record: ToolAuditRecord): ToolAuditInput {
         observedAt: record.timestamp,
         toolCallId: record.toolCallId,
         toolName: record.toolName,
-        ...(record.inputUnavailable === "non_canonical"
-          ? { inputUnavailable: "non_canonical" as const }
-          : record.inputOmitted === true
-            ? {
-                inputOmitted: true as const,
-                inputBytes: record.inputBytes!,
-                inputSha256: record.inputSha256!,
-              }
-            : {
-                input: record.input,
-                inputBytes: record.inputBytes!,
-                inputSha256: record.inputSha256!,
-              }),
+        ...(record.inputOmitted === true
+          ? { inputOmitted: true as const }
+          : { input: record.input }),
+        inputBytes: record.inputBytes!,
+        inputSha256: record.inputSha256!,
       }
     : {
         phase: "completed",
@@ -448,19 +429,11 @@ function summaryFromStart(record: ToolAuditRecord): ToolAuditInvocation {
     actor: record.actor,
     startedAt: record.timestamp,
     status: "incomplete",
-    ...(record.inputUnavailable === "non_canonical"
-      ? { inputUnavailable: "non_canonical" as const }
-      : record.inputOmitted === true
-        ? {
-            inputOmitted: true as const,
-            inputBytes: record.inputBytes!,
-            inputSha256: record.inputSha256!,
-          }
-        : {
-            input: record.input,
-            inputBytes: record.inputBytes!,
-            inputSha256: record.inputSha256!,
-          }),
+    ...(record.inputOmitted === true
+      ? { inputOmitted: true as const }
+      : { input: record.input }),
+    inputBytes: record.inputBytes!,
+    inputSha256: record.inputSha256!,
     startSeq: record.seq,
   };
 }
@@ -630,19 +603,11 @@ export class ToolInvocationAuditStore {
               ...(actionFromInput(input.input)
                 ? { action: actionFromInput(input.input) }
                 : {}),
-              ...(input.inputUnavailable === "non_canonical"
-                ? { inputUnavailable: "non_canonical" as const }
-                : input.inputOmitted === true
-                  ? {
-                      inputOmitted: true as const,
-                      inputBytes: input.inputBytes,
-                      inputSha256: input.inputSha256,
-                    }
-                  : {
-                      input: input.input,
-                      inputBytes: input.inputBytes,
-                      inputSha256: input.inputSha256,
-                    }),
+              ...(input.inputOmitted === true
+                ? { inputOmitted: true as const }
+                : { input: input.input }),
+              inputBytes: input.inputBytes,
+              inputSha256: input.inputSha256,
             }
           : {
               status: input.status,

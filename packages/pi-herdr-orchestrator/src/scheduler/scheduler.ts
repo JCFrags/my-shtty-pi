@@ -48,7 +48,13 @@ function clampLimits(input: Partial<SchedulerLimits>): SchedulerLimits {
   return result;
 }
 function activeState(state: SchedulerTask["state"]): boolean {
-  return ["provisioning", "running", "blocked", "collecting"].includes(state);
+  return [
+    "provisioning",
+    "running",
+    "blocked",
+    "collecting",
+    "cancelling",
+  ].includes(state);
 }
 
 function taskEndpointId(task: SchedulerTask): string {

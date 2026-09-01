@@ -48,10 +48,9 @@ interface AuditStartEnvelope {
   toolCallId: string;
   toolName: string;
   input?: unknown;
-  inputBytes?: number;
-  inputSha256?: string;
+  inputBytes: number;
+  inputSha256: string;
   inputOmitted?: true;
-  inputUnavailable?: "non_canonical";
 }
 
 interface AuditCompletionEnvelope {
@@ -176,39 +175,27 @@ function validateEnvelope(value: unknown): AuditEnvelope {
       "inputBytes",
       "inputSha256",
       "inputOmitted",
-      "inputUnavailable",
     ]);
     let encoded: string | undefined;
     try {
-      if (
-        item.inputUnavailable === undefined &&
-        item.inputOmitted !== true &&
-        Object.hasOwn(item, "input")
-      )
+      if (item.inputOmitted !== true && Object.hasOwn(item, "input"))
         encoded = canonicalJson(item.input);
     } catch {
       throw new Error("Tool audit spool start input is invalid.");
     }
     if (
       Object.keys(item).some((key) => !allowed.has(key)) ||
-      (item.inputUnavailable === "non_canonical"
-        ? item.input !== undefined ||
-          item.inputBytes !== undefined ||
-          item.inputSha256 !== undefined ||
-          item.inputOmitted !== undefined
-        : item.inputUnavailable !== undefined ||
-          !Number.isSafeInteger(item.inputBytes) ||
-          Number(item.inputBytes) < 0 ||
-          typeof item.inputSha256 !== "string" ||
-          !/^[a-f0-9]{64}$/u.test(item.inputSha256) ||
-          (item.inputOmitted === true
-            ? item.input !== undefined ||
-              Number(item.inputBytes) <= MAX_INPUT_BYTES
-            : item.inputOmitted !== undefined ||
-              encoded === undefined ||
-              Buffer.byteLength(encoded, "utf8") !== item.inputBytes ||
-              Buffer.byteLength(encoded, "utf8") > MAX_INPUT_BYTES ||
-              sha256(encoded) !== item.inputSha256))
+      !Number.isSafeInteger(item.inputBytes) ||
+      Number(item.inputBytes) < 0 ||
+      typeof item.inputSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(item.inputSha256) ||
+      (item.inputOmitted === true
+        ? item.input !== undefined || Number(item.inputBytes) <= MAX_INPUT_BYTES
+        : item.inputOmitted !== undefined ||
+          encoded === undefined ||
+          Buffer.byteLength(encoded, "utf8") !== item.inputBytes ||
+          Buffer.byteLength(encoded, "utf8") > MAX_INPUT_BYTES ||
+          sha256(encoded) !== item.inputSha256)
     )
       throw new Error("Tool audit spool start is invalid.");
     return item as unknown as AuditStartEnvelope;
@@ -309,44 +296,33 @@ export class ToolAuditReporter {
       return;
     const observedAtMs = this.#now();
     const observedAt = new Date(observedAtMs).toISOString();
-    let canonical: string | undefined;
+    let canonical: string;
     try {
       canonical = canonicalJson(event.args);
     } catch {
-      canonical = undefined;
+      canonical = "null";
     }
-    const bytes =
-      canonical === undefined
-        ? undefined
-        : Buffer.byteLength(canonical, "utf8");
+    const bytes = Buffer.byteLength(canonical, "utf8");
     const envelope: AuditStartEnvelope =
-      canonical === undefined
+      bytes <= MAX_INPUT_BYTES
         ? {
             phase: "started",
             observedAt,
             toolCallId: event.toolCallId,
             toolName: event.toolName,
-            inputUnavailable: "non_canonical",
+            input: JSON.parse(canonical),
+            inputBytes: bytes,
+            inputSha256: sha256(canonical),
           }
-        : bytes! <= MAX_INPUT_BYTES
-          ? {
-              phase: "started",
-              observedAt,
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              input: JSON.parse(canonical),
-              inputBytes: bytes!,
-              inputSha256: sha256(canonical),
-            }
-          : {
-              phase: "started",
-              observedAt,
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              inputBytes: bytes!,
-              inputSha256: sha256(canonical),
-              inputOmitted: true,
-            };
+        : {
+            phase: "started",
+            observedAt,
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            inputBytes: bytes,
+            inputSha256: sha256(canonical),
+            inputOmitted: true,
+          };
     if (
       this.#pending.has(event.toolCallId) ||
       this.#pending.size < MAX_SPOOL_ITEMS

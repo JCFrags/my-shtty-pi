@@ -21,6 +21,7 @@ export type TaskState =
   | "running"
   | "blocked"
   | "collecting"
+  | "cancelling"
   | "succeeded"
   | "failed"
   | "cancelled"
@@ -255,7 +256,6 @@ export interface OrchestrationState {
   tasks: Record<string, Task>;
   runs: Record<string, Run>;
   agents: Record<string, Agent>;
-  adoptedRootLinks?: Record<string, string>;
   workflows: Record<string, Workflow>;
   results?: Record<string, ResultRecord>;
   questions?: Record<string, QuestionRecord>;

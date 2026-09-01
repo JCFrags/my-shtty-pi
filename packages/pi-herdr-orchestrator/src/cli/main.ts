@@ -372,29 +372,6 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     console.log(JSON.stringify(await exportState(paths, output)));
     return;
   }
-  if (command === "recovery" && subcommand === "adopted-lineage") {
-    const planPath = option(argv, "--plan");
-    if (!planPath)
-      throw new Error("Usage: recovery adopted-lineage --plan PRIVATE_JSON.");
-    const plan = JSON.parse(await readPrivateRegular(planPath)) as Record<
-      string,
-      unknown
-    >;
-    await ensureBroker();
-    console.log(
-      JSON.stringify(
-        await brokerRequest(
-          paths.socket,
-          paths.secret,
-          "system.recover_adopted_lineage",
-          plan,
-          paths.sessionKey,
-          { timeoutMs: 30_000 },
-        ),
-      ),
-    );
-    return;
-  }
   if (command === "herdr") {
     const method =
       subcommand === "status"
@@ -610,7 +587,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   console.error(
-    "Usage: deck | doctor [--json] | broker start|stop|restart|status | audit list|show|failures|stats|verify | events verify | config validate PATH | recovery plan|export|adopted-lineage --plan PRIVATE_JSON | retention plan|policy-plan | ops plan|verify|apply | export --output DIR | version",
+    "Usage: deck | doctor [--json] | broker start|stop|restart|status | audit list|show|failures|stats|verify | events verify | config validate PATH | recovery plan|export | retention plan|policy-plan | ops plan|verify|apply | export --output DIR | version",
   );
   process.exitCode = 2;
 }
