@@ -11,6 +11,7 @@ export type EntityKind =
   | "res"
   | "rvc"
   | "art"
+  | "cmd"
   | "evt"
   | "prn"
   | "idem";
@@ -55,7 +56,7 @@ export function createId(kind: EntityKind, now = Date.now()): string {
 export function isEntityId(value: unknown, kind?: EntityKind): value is string {
   return (
     typeof value === "string" &&
-    /^(orc|agt|tsk|run|wfl|grp|asg|qst|res|rvc|art|evt|prn|idem)_[0-9A-HJKMNP-TV-Z]{26}$/.test(
+    /^(orc|agt|tsk|run|wfl|grp|asg|qst|res|rvc|art|cmd|evt|prn|idem)_[0-9A-HJKMNP-TV-Z]{26}$/.test(
       value,
     ) &&
     (kind === undefined || value.startsWith(`${kind}_`))

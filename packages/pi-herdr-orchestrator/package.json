@@ -28,7 +28,8 @@
     "LICENSE",
     "docs",
     "archive",
-    "scripts"
+    "scripts",
+    "vendor"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -51,8 +52,12 @@
     "lint": "prettier --check \".github/**/*.{yml,yaml}\" \"bin/*\" \"extensions/**/*.ts\" \"src/**/*.ts\" \"tests/**/*.{ts,json}\" \"types/**/*.ts\" \"scripts/**/*.mjs\" \"schemas/**/*.json\" \"profiles/**/*.json\" \"examples/**/*.json\" \"workflows/{parallel-scout,single}.json\" package.json package-lock.json tsconfig.json"
   },
   "dependencies": {
-    "@pi-herdr-deck/tui": "npm:@earendil-works/pi-tui@0.84.2"
+    "@pi-herdr-deck/tui": "npm:@earendil-works/pi-tui@0.84.2",
+    "pi-chrono-compact": "file:vendor/pi-chrono-compact-2.0.0-herdr.1.tgz"
   },
+  "bundledDependencies": [
+    "pi-chrono-compact"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",

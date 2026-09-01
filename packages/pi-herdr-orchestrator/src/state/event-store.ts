@@ -791,6 +791,7 @@ export class EventStore {
         "dependencies",
         "project",
         "isolationMode",
+        "completionPolicy",
       ];
       for (let mask = 0; mask < 1 << optionalTaskKeys.length; mask++)
         for (const hasTimeout of [false, true]) {
@@ -812,6 +813,11 @@ export class EventStore {
         p.objective.length > 0 &&
         p.objective.length <= 65_536 &&
         validTimestamp(p.createdAt) &&
+        (p.completionPolicy === undefined ||
+          p.completionPolicy === "until_terminal") &&
+        !(
+          p.completionPolicy === "until_terminal" && p.timeoutAt !== undefined
+        ) &&
         (p.timeoutAt === undefined ||
           validDeadline(p.timeoutAt, p.createdAt)) &&
         (p.parentAgentId === undefined || isEntityId(p.parentAgentId, "agt")) &&
@@ -858,18 +864,31 @@ export class EventStore {
         isEntityId(refs.reviewedTaskId, "tsk") &&
         isEntityId(refs.runId, "run") &&
         isEntityId(refs.resultId, "res") &&
-        exactKeys(p, [
-          "id",
-          "reviewTaskId",
-          "reviewedTaskId",
-          "reviewedRunId",
-          "reviewedResultId",
-          "resultDigest",
-          "rubricVersion",
-          "taskProfile",
-          "issuedAt",
-          "expiresAt",
-        ]) &&
+        [
+          [
+            "id",
+            "reviewTaskId",
+            "reviewedTaskId",
+            "reviewedRunId",
+            "reviewedResultId",
+            "resultDigest",
+            "rubricVersion",
+            "taskProfile",
+            "issuedAt",
+          ],
+          [
+            "id",
+            "reviewTaskId",
+            "reviewedTaskId",
+            "reviewedRunId",
+            "reviewedResultId",
+            "resultDigest",
+            "rubricVersion",
+            "taskProfile",
+            "issuedAt",
+            "expiresAt",
+          ],
+        ].some((keys) => exactKeys(p, keys)) &&
         p.id === refs.reviewContractId &&
         p.reviewTaskId === refs.taskId &&
         p.reviewedTaskId === refs.reviewedTaskId &&
@@ -879,8 +898,9 @@ export class EventStore {
         boundedText(p.rubricVersion, 64) &&
         /^[a-z][a-z0-9_-]{0,63}$/u.test(String(p.taskProfile)) &&
         validTimestamp(p.issuedAt) &&
-        validTimestamp(p.expiresAt) &&
-        Date.parse(String(p.expiresAt)) > Date.parse(String(p.issuedAt));
+        (p.expiresAt === undefined ||
+          (validTimestamp(p.expiresAt) &&
+            Date.parse(String(p.expiresAt)) > Date.parse(String(p.issuedAt))));
     } else if (event.type === "run.created") {
       const runKeyVariants = [
         [
@@ -980,6 +1000,83 @@ export class EventStore {
         (p.piSessionId === undefined || boundedText(p.piSessionId, 256)) &&
         (p.terminalId === undefined || boundedText(p.terminalId, 256)) &&
         (p.timeoutAt === undefined || validDeadlineText(p.timeoutAt));
+    } else if (event.type === "steering.command.enqueued") {
+      valid =
+        exactKeys(refs, ["commandId", "taskId", "runId", "agentId"]) &&
+        isEntityId(refs.commandId, "cmd") &&
+        isEntityId(refs.taskId, "tsk") &&
+        isEntityId(refs.runId, "run") &&
+        isEntityId(refs.agentId, "agt") &&
+        exactKeys(p, [
+          "commandId",
+          "principalId",
+          "taskId",
+          "runId",
+          "assignmentGeneration",
+          "agentId",
+          "agentGeneration",
+          "piSessionId",
+          "message",
+          "messageHash",
+          "idempotencyKey",
+          "paramsHash",
+          "timeoutMs",
+          "createdAt",
+        ]) &&
+        p.commandId === refs.commandId &&
+        p.taskId === refs.taskId &&
+        p.runId === refs.runId &&
+        p.agentId === refs.agentId &&
+        p.principalId === event.actor.principalId &&
+        isEntityId(p.principalId, "prn") &&
+        Number.isSafeInteger(p.assignmentGeneration) &&
+        Number(p.assignmentGeneration) >= 1 &&
+        Number.isSafeInteger(p.agentGeneration) &&
+        Number(p.agentGeneration) >= 1 &&
+        boundedText(p.piSessionId, 256) &&
+        typeof p.message === "string" &&
+        p.message.length > 0 &&
+        Buffer.byteLength(p.message, "utf8") <= 16_384 &&
+        !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(p.message) &&
+        typeof p.messageHash === "string" &&
+        /^[a-f0-9]{64}$/u.test(p.messageHash) &&
+        sha256(p.message) === p.messageHash &&
+        boundedText(p.idempotencyKey, 256) &&
+        typeof p.paramsHash === "string" &&
+        /^[a-f0-9]{64}$/u.test(p.paramsHash) &&
+        Number.isSafeInteger(p.timeoutMs) &&
+        Number(p.timeoutMs) >= 1 &&
+        Number(p.timeoutMs) <= 30_000 &&
+        validTimestamp(p.createdAt);
+    } else if (
+      [
+        "steering.command.dispatch_started",
+        "steering.command.delivered",
+        "steering.command.rejected",
+        "steering.command.delivery_unknown",
+        "steering.command.expired",
+      ].includes(event.type)
+    ) {
+      const needsReason = [
+        "steering.command.rejected",
+        "steering.command.delivery_unknown",
+        "steering.command.expired",
+      ].includes(event.type);
+      valid =
+        exactKeys(refs, ["commandId", "taskId", "runId", "agentId"]) &&
+        isEntityId(refs.commandId, "cmd") &&
+        isEntityId(refs.taskId, "tsk") &&
+        isEntityId(refs.runId, "run") &&
+        isEntityId(refs.agentId, "agt") &&
+        exactKeys(
+          p,
+          needsReason ? ["commandId", "at", "reasonCode"] : ["commandId", "at"],
+        ) &&
+        p.commandId === refs.commandId &&
+        validTimestamp(p.at) &&
+        (!needsReason ||
+          (typeof p.reasonCode === "string" &&
+            /^[A-Z0-9_]{1,64}$/u.test(p.reasonCode)));
     } else if (event.type === "task.created") {
       const basicKeys = ["id", "title", "objective", "createdAt"];
       const idempotentKeys = [
@@ -1034,6 +1131,7 @@ export class EventStore {
           "running",
           "blocked",
           "collecting",
+          "cancelling",
           "succeeded",
           "failed",
           "cancelled",
@@ -1194,23 +1292,6 @@ export class EventStore {
           ].every(
             (key) => Number.isSafeInteger(p[key]) && Number(p[key]) >= 0,
           ));
-    } else if (
-      event.type === "agent.state_changed" &&
-      Object.hasOwn(p, "adoptedRootParentAgentId")
-    ) {
-      valid =
-        exactKeys(refs, ["agentId"]) &&
-        typeof refs.agentId === "string" &&
-        exactKeys(p, [
-          "agentId",
-          "adoptedRootParentAgentId",
-          "adoptedRootPaneId",
-          "adoptedRootPiSessionId",
-        ]) &&
-        p.agentId === refs.agentId &&
-        typeof p.adoptedRootParentAgentId === "string" &&
-        typeof p.adoptedRootPaneId === "string" &&
-        typeof p.adoptedRootPiSessionId === "string";
     } else if (
       [
         "agent.registered",

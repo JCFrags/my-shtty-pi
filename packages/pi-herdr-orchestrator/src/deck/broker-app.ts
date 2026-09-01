@@ -2040,7 +2040,6 @@ export class BrokerDeckApp implements Component {
             ? "shared-readonly"
             : "worktree",
         },
-        budget: { wallTimeMs: 1_800_000 },
         wait: false,
       });
       this.#message = automatic

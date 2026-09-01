@@ -24,4 +24,22 @@ export function assertInvariants(state: OrchestrationState): void {
         "Task points to a missing run.",
       );
   }
+  for (const command of Object.values(state.steeringCommands ?? {})) {
+    const task = state.tasks[command.taskId];
+    const run = state.runs[command.runId];
+    const agent = state.agents[command.agentId];
+    if (
+      !task ||
+      !run ||
+      !agent ||
+      run.taskId !== task.id ||
+      run.agentId !== agent.id ||
+      run.assignmentGeneration !== command.assignmentGeneration ||
+      run.agentGeneration !== command.agentGeneration
+    )
+      throw new OrchestratorError(
+        "STATE_CORRUPT",
+        "Steering command identity is invalid.",
+      );
+  }
 }

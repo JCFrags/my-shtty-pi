@@ -1,0 +1,877 @@
+import assert from "node:assert/strict";
+import { createServer, Socket } from "node:net";
+import test from "node:test";
+import { PiBrokerClient } from "../../src/pi/broker-client.js";
+import { PiAdapter } from "../../src/pi/adapter.js";
+import type {
+  PiApiLike,
+  PiAssignment,
+  PiContextLike,
+} from "../../src/pi/types.js";
+import { encodeFrame, NdjsonDecoder } from "../../src/shared/protocol/codec.js";
+
+process.env.HERDR_PANE_ID = "p-1";
+process.env.HERDR_TERMINAL_ID = "t-1";
+const state = {
+  agentId: "agt_adopted",
+  generation: 3,
+  sessionId: "pi-session",
+  idle: false,
+  pendingMessages: 0,
+  activity: "working" as const,
+  activeTools: ["read"],
+  model: { provider: "fake", id: "model", name: "model" },
+  thinkingLevel: "medium",
+  capabilities: {
+    core: true,
+    prompt: true,
+    steer: true,
+    followUp: true,
+    abort: true,
+    compact: true,
+    model: true,
+    thinking: true,
+    tools: true,
+    toolExpansion: false,
+  },
+};
+function adapter(): PiAdapter {
+  const api: PiApiLike = {
+    on: () => undefined,
+    registerCommand: () => undefined,
+    sendUserMessage: async () => undefined,
+    setModel: () => true,
+    setThinkingLevel: () => undefined,
+    getAllowedThinkingLevels: () => ["medium"],
+    getAllTools: () => [{ name: "read" }],
+    setActiveTools: () => undefined,
+    getActiveTools: () => ["read"],
+  };
+  const context: PiContextLike = {
+    ui: {},
+    cwd: "/tmp",
+    sessionManager: { getSessionId: () => state.sessionId },
+    modelRegistry: { find: () => ({ provider: "fake", id: "model" }) },
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    abort: () => undefined,
+    compact: (options) => options?.onComplete?.(),
+    model: { provider: "fake", id: "model" },
+    thinkingLevel: "medium",
+  };
+  return new PiAdapter(api, context, state.agentId, state.generation);
+}
+async function server(
+  handler: (frame: Record<string, unknown>, socket: Socket) => void,
+): Promise<{ path: string; close: () => Promise<void> }> {
+  const path = `/tmp/pi-client-${process.pid}-${Math.random().toString(36).slice(2)}.sock`;
+  const srv = createServer((socket) => {
+    const decoder = new NdjsonDecoder<unknown>((value) => value);
+    socket.on("data", (data) => {
+      for (const item of decoder.push(data))
+        if (item.ok && item.value && typeof item.value === "object")
+          handler(item.value as Record<string, unknown>, socket);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    srv.once("error", reject);
+    srv.listen(path, resolve);
+  });
+  return {
+    path,
+    close: async () => {
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+    },
+  };
+}
+function hello(frame: Record<string, unknown>): unknown {
+  return {
+    v: 1,
+    type: "hello_result",
+    id: frame.id,
+    ok: true,
+    broker: { version: "test", status: "healthy", lastEventSeq: 7 },
+    principal: {
+      id: "prn_parent",
+      kind: "pi_parent",
+      permissions: ["read:state", "delegate"],
+    },
+    limits: { maxLineBytes: 1_048_576 },
+  };
+}
+
+test("PiBrokerClient accepts real hello_result and binds adopted registration identity", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello") socket.write(encodeFrame(hello(frame)));
+    else {
+      requests.push(frame);
+      socket.write(
+        encodeFrame({
+          v: 1,
+          type: "response",
+          id: frame.id,
+          method: frame.method,
+          ok: true,
+          result: {
+            agentId: "agt_broker",
+            generation: 4,
+            connectionGeneration: 1,
+            heartbeatMs: 5000,
+            permissions: ["read:state"],
+          },
+        }),
+      );
+    }
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+  });
+  await client.connect();
+  const registration = await client.register(state);
+  await client.request(
+    "agent.get",
+    { agentId: "agt_broker" },
+    { idempotencyKey: "idem_1" },
+  );
+  assert.equal(registration.agentId, "agt_broker");
+  assert.deepEqual(requests[0]?.params, {
+    adapterVersion: "0.1.0",
+    herdr: {
+      paneId: "p-1",
+      terminalId: "t-1",
+      detectedKind: "pi",
+      sessionReference: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: "pi-session",
+      },
+    },
+    pi: {
+      sessionId: "pi-session",
+      capabilities: state.capabilities,
+      state: {
+        activity: "working",
+        idle: false,
+        pendingMessages: 0,
+        model: { provider: "fake", modelId: "model" },
+        thinkingLevel: "medium",
+      },
+    },
+  });
+  assert.equal(client.principal?.id, "prn_parent");
+  assert.equal(client.principal?.agentId, "agt_broker");
+  assert.equal(requests[1]?.idempotencyKey, "idem_1");
+  assert.equal(
+    Object.hasOwn(
+      (requests[1]?.params ?? {}) as Record<string, unknown>,
+      "idempotencyKey",
+    ),
+    false,
+  );
+  client.close();
+  await fake.close();
+});
+
+test("PiBrokerClient keeps a bounded response replay window during parallel rollover", async () => {
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello") {
+      socket.write(encodeFrame(hello(frame)));
+      return;
+    }
+    socket.write(
+      encodeFrame({
+        v: 1,
+        type: "response",
+        id: frame.id,
+        method: frame.method,
+        ok: true,
+        result: {},
+      }),
+    );
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+  });
+  await client.connect();
+  for (let index = 0; index < 4095; index++)
+    await client.request("state.get", {});
+  await Promise.all([
+    client.request("state.get", {}),
+    client.request("state.get", {}),
+  ]);
+  assert.equal(client.connected, true);
+  client.close();
+  await fake.close();
+});
+
+test("PiBrokerClient delivers bounded subscribed events without closing the connection", async () => {
+  let resolveEvent!: (value: {
+    event: string;
+    refs: Record<string, string>;
+    data: Record<string, unknown>;
+  }) => void;
+  const delivered = new Promise<{
+    event: string;
+    refs: Record<string, string>;
+    data: Record<string, unknown>;
+  }>((resolve) => {
+    resolveEvent = resolve;
+  });
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello") {
+      socket.write(encodeFrame(hello(frame)));
+      return;
+    }
+    socket.write(
+      encodeFrame({
+        v: 1,
+        type: "response",
+        id: frame.id,
+        method: frame.method,
+        ok: true,
+        result: { subscriptionId: "sub-1" },
+      }),
+    );
+    socket.write(
+      encodeFrame({
+        v: 1,
+        type: "event",
+        seq: 8,
+        id: "evt_terminal",
+        event: "task.state_changed",
+        timestamp: "2026-08-21T00:00:00.000Z",
+        refs: { taskId: "tsk_done" },
+        data: { to: "succeeded" },
+      }),
+    );
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+    onEvent: (event) => resolveEvent(event),
+  });
+  await client.connect();
+  await client.request("events.subscribe", {
+    fromSeq: 7,
+    filters: { events: ["task.state_changed"] },
+    includeSnapshot: false,
+  });
+  const event = await delivered;
+  assert.equal(event.event, "task.state_changed");
+  assert.deepEqual(event.refs, { taskId: "tsk_done" });
+  assert.deepEqual(event.data, { to: "succeeded" });
+  assert.equal(client.connected, true);
+  client.close();
+  await fake.close();
+});
+
+test("PiBrokerClient emits the exact managed registration frame", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello") socket.write(encodeFrame(hello(frame)));
+    else {
+      requests.push(frame);
+      socket.write(
+        encodeFrame({
+          v: 1,
+          type: "response",
+          id: frame.id,
+          method: frame.method,
+          ok: true,
+          result: {
+            agentId: "agt_managed",
+            generation: 1,
+            connectionGeneration: 2,
+            heartbeatMs: 5000,
+            permissions: ["read:state"],
+          },
+        }),
+      );
+    }
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    agentId: "agt_managed",
+    generation: 1,
+    token: "token_value",
+  });
+  await client.connect();
+  await client.register(state);
+  assert.deepEqual(requests[0]?.params, {
+    adapterVersion: "0.1.0",
+    agentId: "agt_managed",
+    generation: 1,
+    herdr: {
+      paneId: "p-1",
+      terminalId: "t-1",
+      detectedKind: "pi",
+      sessionReference: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: "pi-session",
+      },
+    },
+    pi: {
+      sessionId: "pi-session",
+      capabilities: state.capabilities,
+      state: {
+        activity: "working",
+        idle: false,
+        pendingMessages: 0,
+        model: { provider: "fake", modelId: "model" },
+        thinkingLevel: "medium",
+      },
+    },
+  });
+  client.close();
+  await fake.close();
+});
+
+test("PiBrokerClient rejects a hello_result with a wrong correlated id", async () => {
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello")
+      socket.write(
+        encodeFrame({
+          ...(hello(frame) as Record<string, unknown>),
+          id: "wrong",
+        }),
+      );
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+  });
+  const result = client.connect();
+  await assert.rejects(result, /AGENT_DISCONNECTED|BROKER_HELLO_INVALID/);
+  client.close();
+  await fake.close();
+});
+
+test("PiAdapter rejects wrong control identity and unsupported capabilities", async () => {
+  const pi = adapter();
+  await assert.rejects(
+    () =>
+      pi.handleControl("control.set_tools", {
+        agentId: "wrong",
+        generation: state.generation,
+        piSessionId: state.sessionId,
+        tools: ["read"],
+      }),
+    /PI_IDENTITY_MISMATCH/,
+  );
+  await assert.rejects(
+    () =>
+      pi.handleControl("control.set_tool_expansion", {
+        agentId: state.agentId,
+        generation: state.generation,
+        piSessionId: state.sessionId,
+        name: "read",
+        expanded: true,
+      }),
+    /PI_CAPABILITY_MISSING/,
+  );
+});
+
+test("PiAdapter validates durable steering identity and suppresses duplicate command IDs", async () => {
+  const assignment: PiAssignment = {
+    id: "asg_steering",
+    taskId: "tsk_steering",
+    runId: "run_steering",
+    agentId: state.agentId,
+    generation: state.generation,
+    assignmentGeneration: 7,
+    piSessionId: state.sessionId,
+    objective: "inspect",
+    constraints: [],
+    deadline: "2099-01-01T00:00:00.000Z",
+  };
+  const sends: Array<{ message: string; options?: unknown }> = [];
+  const entries: Array<{ customType: string; data: unknown }> = [];
+  const pi = new PiAdapter(
+    {
+      on: () => undefined,
+      registerCommand: () => undefined,
+      sendUserMessage: async (message, options) => {
+        sends.push({ message, options });
+      },
+      appendEntry: (customType, data) => entries.push({ customType, data }),
+    },
+    {
+      ui: {},
+      cwd: "/tmp",
+      sessionManager: {
+        getSessionId: () => state.sessionId,
+        getEntries: () => entries,
+      },
+      modelRegistry: {},
+      isIdle: () => false,
+      hasPendingMessages: () => false,
+      abort: () => undefined,
+      compact: (options) => options?.onComplete?.(),
+    },
+    state.agentId,
+    state.generation,
+  );
+  pi.bindIdentity(state.agentId, state.generation, 9);
+  pi.restorePersisted("accepted", assignment);
+  const params = {
+    agentId: state.agentId,
+    generation: state.generation,
+    connectionGeneration: 9,
+    piSessionId: state.sessionId,
+    commandId: `cmd_${"0".repeat(26)}`,
+    taskId: assignment.taskId,
+    runId: assignment.runId,
+    assignmentGeneration: assignment.assignmentGeneration,
+    message: "Inspect the failing test.\nDo not edit yet.",
+    delivery: "steer",
+  };
+  assert.deepEqual(await pi.handleControl("control.steer", params), {
+    ok: true,
+  });
+  assert.deepEqual(await pi.handleControl("control.steer", params), {
+    ok: true,
+  });
+  assert.deepEqual(sends, [
+    {
+      message: params.message,
+      options: { deliverAs: "steer" },
+    },
+  ]);
+  assert.equal(entries.length, 1);
+  assert.equal(
+    entries[0]?.customType,
+    "pi-herdr-orchestrator-steering-receipt",
+  );
+  const restoredSends: string[] = [];
+  const restored = new PiAdapter(
+    {
+      on: () => undefined,
+      registerCommand: () => undefined,
+      sendUserMessage: async (value) => {
+        restoredSends.push(value);
+      },
+    },
+    {
+      ui: {},
+      cwd: "/tmp",
+      sessionManager: {
+        getSessionId: () => state.sessionId,
+        getEntries: () => entries,
+      },
+      modelRegistry: {},
+      isIdle: () => false,
+      hasPendingMessages: () => false,
+      abort: () => undefined,
+      compact: (options) => options?.onComplete?.(),
+    },
+    state.agentId,
+    state.generation,
+  );
+  restored.bindIdentity(state.agentId, state.generation, 9);
+  restored.restorePersisted("accepted", assignment);
+  assert.deepEqual(await restored.handleControl("control.steer", params), {
+    ok: true,
+  });
+  assert.deepEqual(restoredSends, []);
+  await assert.rejects(
+    () =>
+      pi.handleControl("control.steer", {
+        ...params,
+        commandId: `cmd_${"1".repeat(26)}`,
+        runId: "run_stale",
+      }),
+    /PI_ASSIGNMENT_MISMATCH/u,
+  );
+  assert.equal(sends.length, 1);
+});
+
+test("PiAdapter rebinds a settled assignment for a parent prompt and restores it on failure", async () => {
+  const assignment: PiAssignment = {
+    id: "asg_prompt_rebind",
+    taskId: "tsk_prompt_rebind",
+    runId: "run_prompt_rebind",
+    agentId: state.agentId,
+    generation: state.generation,
+    assignmentGeneration: 2,
+    piSessionId: state.sessionId,
+    objective: "publish the result",
+    constraints: [],
+    deadline: "2099-01-01T00:00:00.000Z",
+  };
+  const persisted: string[] = [];
+  let pi!: PiAdapter;
+  const api: PiApiLike = {
+    on: () => undefined,
+    registerCommand: () => undefined,
+    appendEntry: (_type, value) => {
+      persisted.push(String((value as Record<string, unknown>).kind));
+    },
+    sendUserMessage: async () => {
+      assert.equal(pi.correlationState().kind, "accepted");
+      assert.equal(pi.assignmentForTools()?.runId, assignment.runId);
+      assert.equal(
+        pi.onLifecycle({
+          type: "agent_start",
+          agentId: assignment.agentId,
+          generation: assignment.generation,
+          piSessionId: assignment.piSessionId,
+          assignmentGeneration: assignment.assignmentGeneration,
+          turnIndex: 1,
+        }),
+        "bound",
+      );
+      assert.equal(pi.assignmentForTools()?.runId, assignment.runId);
+      assert.equal(
+        pi.onLifecycle({
+          type: "agent_settled",
+          agentId: assignment.agentId,
+          generation: assignment.generation,
+          piSessionId: assignment.piSessionId,
+          assignmentGeneration: assignment.assignmentGeneration,
+        }),
+        "settled",
+      );
+    },
+    getActiveTools: () => ["read"],
+  };
+  const context: PiContextLike = {
+    ui: {},
+    cwd: "/tmp",
+    sessionManager: { getSessionId: () => state.sessionId },
+    modelRegistry: {},
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    abort: () => undefined,
+    compact: (options) => options?.onComplete?.(),
+  };
+  pi = new PiAdapter(api, context, state.agentId, state.generation);
+  pi.bindIdentity(state.agentId, state.generation, 4);
+  pi.restorePersisted("settled", assignment, "prior-cycle", 0);
+  pi.clearSettledCycle();
+  assert.equal(pi.correlationState().kind, "settled");
+  assert.equal(pi.assignmentForTools(), undefined);
+  assert.deepEqual(
+    await pi.handleControl("control.prompt", {
+      agentId: state.agentId,
+      generation: state.generation,
+      connectionGeneration: 4,
+      piSessionId: state.sessionId,
+      message: "continue",
+      delivery: "normal",
+    }),
+    { ok: true },
+  );
+  assert.equal(pi.correlationState().kind, "settled");
+  assert.deepEqual(persisted, ["accepted", "bound", "settled"]);
+
+  const failedEntries: string[] = [];
+  const failed = new PiAdapter(
+    {
+      ...api,
+      appendEntry: (_type, value) => {
+        failedEntries.push(String((value as Record<string, unknown>).kind));
+      },
+      sendUserMessage: async () => {
+        throw new Error("PROMPT_FAILED");
+      },
+    },
+    context,
+    state.agentId,
+    state.generation,
+  );
+  failed.bindIdentity(state.agentId, state.generation, 5);
+  failed.restorePersisted("settled", assignment, "failed-cycle", 0);
+  await assert.rejects(
+    () =>
+      failed.handleControl("control.prompt", {
+        agentId: state.agentId,
+        generation: state.generation,
+        connectionGeneration: 5,
+        piSessionId: state.sessionId,
+        message: "continue",
+        delivery: "normal",
+      }),
+    /PROMPT_FAILED/,
+  );
+  assert.equal(failed.correlationState().kind, "settled");
+  assert.deepEqual(failedEntries, ["accepted", "settled"]);
+
+  let deliveries = 0;
+  const persistenceFailure = new PiAdapter(
+    {
+      ...api,
+      appendEntry: () => {
+        throw new Error("PERSIST_FAILED");
+      },
+      sendUserMessage: async () => {
+        deliveries++;
+      },
+    },
+    context,
+    state.agentId,
+    state.generation,
+  );
+  persistenceFailure.bindIdentity(state.agentId, state.generation, 6);
+  persistenceFailure.restorePersisted(
+    "settled",
+    assignment,
+    "persist-cycle",
+    0,
+  );
+  await assert.rejects(
+    () =>
+      persistenceFailure.handleControl("control.prompt", {
+        agentId: state.agentId,
+        generation: state.generation,
+        connectionGeneration: 6,
+        piSessionId: state.sessionId,
+        message: "continue",
+        delivery: "normal",
+      }),
+    /PERSIST_FAILED/,
+  );
+  assert.equal(persistenceFailure.correlationState().kind, "settled");
+  assert.equal(deliveries, 0);
+});
+
+test("question waiter binds early delivery and rejects duplicate or mismatched delivery", async () => {
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello") socket.write(encodeFrame(hello(frame)));
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+  });
+  await client.connect();
+  const waiter = client.registerQuestionWaiter("tool-1", "run-1", 10_000);
+  assert.equal(
+    client.resolveQuestionDelivery("q-1", "run-1", "tool-1", {
+      state: "answered",
+    }),
+    true,
+  );
+  assert.equal(
+    client.resolveQuestionDelivery("q-1", "run-1", "tool-1", {
+      state: "answered",
+    }),
+    false,
+  );
+  await assert.doesNotReject(waiter);
+  client.bindQuestionWaiter("tool-1", "q-1");
+  const mismatch = client.registerQuestionWaiter("tool-2", "run-2", 10_000);
+  assert.equal(
+    client.resolveQuestionDelivery("q-2", "run-2", "tool-2", {
+      state: "answered",
+    }),
+    true,
+  );
+  assert.throws(
+    () => client.bindQuestionWaiter("tool-2", "q-3"),
+    /QUESTION_DELIVERY_INVALID/,
+  );
+  client.discardQuestionWaiter("tool-2");
+  await assert.doesNotReject(mismatch);
+  await assert.rejects(
+    client.registerQuestionWaiter("tool-3", "run-3", 9_999),
+    /INVALID_REQUEST/,
+  );
+  client.close();
+  await fake.close();
+});
+test("PiBrokerClient gates coalesced registration and server request until explicit readiness", async () => {
+  const delivered: string[] = [];
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello") socket.write(encodeFrame(hello(frame)));
+    else if (frame.method === "agent.register_adopted") {
+      socket.write(
+        encodeFrame({
+          v: 1,
+          type: "response",
+          id: frame.id,
+          method: frame.method,
+          ok: true,
+          result: {
+            agentId: "agt_broker",
+            generation: 4,
+            connectionGeneration: 1,
+            heartbeatMs: 5000,
+            permissions: ["read:state"],
+          },
+        }),
+      );
+      socket.write(
+        encodeFrame({
+          v: 1,
+          type: "server_request",
+          id: "srv-ready",
+          method: "control.abort",
+          params: {
+            agentId: "agt_broker",
+            generation: 4,
+            piSessionId: "pi-session",
+            connectionGeneration: 1,
+          },
+        }),
+      );
+    }
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+    onControlRequest: async (request) => {
+      delivered.push(request.id);
+      return { ok: true };
+    },
+  });
+  await client.connect();
+  await client.register(state);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(delivered, []);
+  client.markRegistrationReady();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(delivered, ["srv-ready"]);
+  client.close();
+  await fake.close();
+});
+test("PiBrokerClient ignores delayed close from an old socket after replacement connect", async () => {
+  const peers: Socket[] = [];
+  const fake = await server((frame, socket) => {
+    if (!peers.includes(socket)) peers.push(socket);
+    if (frame.type === "hello") socket.write(encodeFrame(hello(frame)));
+    else if (frame.type === "request")
+      socket.write(
+        encodeFrame({
+          v: 1,
+          type: "response",
+          id: frame.id,
+          method: frame.method,
+          ok: true,
+          result: { healthy: true },
+        }),
+      );
+  });
+  const originalOn = Socket.prototype.on;
+  const errorHandlers: Array<(error: Error) => void> = [];
+  Socket.prototype.on = function (
+    event: string | symbol,
+    listener: (...args: any[]) => void,
+  ): Socket {
+    if (event === "error")
+      errorHandlers.push(listener as (error: Error) => void);
+    return (originalOn as any).call(this, event, listener);
+  };
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+  });
+  try {
+    await client.connect();
+    assert.ok(errorHandlers.length > 0);
+    errorHandlers.at(-1)!(new Error("old socket error"));
+    await client.connect();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(client.connected, true);
+    assert.deepEqual(
+      await client.request("agent.get", { agentId: "agt_broker" }),
+      { healthy: true },
+    );
+  } finally {
+    Socket.prototype.on = originalOn;
+    client.close();
+    for (const peer of peers) peer.destroy();
+    await fake.close();
+  }
+});
+test("PiBrokerClient rejects and clears a question waiter on socket disconnect", async () => {
+  let peer: import("node:net").Socket | undefined;
+  const fake = await server((frame, socket) => {
+    peer = socket;
+    if (frame.type === "hello") socket.write(encodeFrame(hello(frame)));
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: "pi-session",
+    secret: "secret",
+  });
+  await client.connect();
+  const waiter = client.registerQuestionWaiter(
+    "tool-disconnect",
+    "run-disconnect",
+    10_000,
+  );
+  peer?.destroy();
+  await assert.rejects(waiter, /AGENT_DISCONNECTED/);
+  client.close();
+  await fake.close();
+});
+test("PiBrokerClient routes control server requests with identity guards and server_response", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const pi = adapter();
+  const fake = await server((frame, socket) => {
+    if (frame.type === "hello") {
+      socket.write(encodeFrame(hello(frame)));
+      setTimeout(() => {
+        socket.write(
+          encodeFrame({
+            v: 1,
+            type: "server_request",
+            id: "control-1",
+            method: "control.set_tools",
+            params: {
+              agentId: state.agentId,
+              generation: state.generation,
+              piSessionId: state.sessionId,
+              tools: ["read"],
+            },
+          }),
+        );
+        socket.write(
+          encodeFrame({
+            v: 2,
+            type: "server_request",
+            id: "bad-1",
+            method: "control.set_tools",
+            params: {},
+          }),
+        );
+      }, 5);
+    } else if (frame.type === "server_response") seen.push(frame);
+  });
+  const client = new PiBrokerClient({
+    socketPath: fake.path,
+    sessionKey: "session",
+    piSessionId: state.sessionId,
+    secret: "secret",
+    onControlRequest: (request) =>
+      pi.handleControl(request.method, request.params),
+  });
+  await client.connect();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(client.connected, false);
+  client.close();
+  await fake.close();
+});

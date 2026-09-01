@@ -11,12 +11,51 @@ import type {
 import { modelChoiceFromPi } from "./types.js";
 import { LifecycleCorrelator, type CorrelationState } from "./correlation.js";
 import { createId } from "../shared/ids.js";
+import {
+  projectRecentWorkWithChrono,
+  type RecentWorkSnapshot,
+} from "./recent-work.js";
 
 function sessionId(context: PiContextLike): string {
   const id = context.sessionManager.getSessionId?.();
   if (!id || !/^[\x21-\x7e]{1,256}$/.test(id))
     throw new Error("PI_SESSION_ID_UNAVAILABLE");
   return id;
+}
+function hasPersistedSteeringReceipt(
+  context: PiContextLike,
+  expected: {
+    commandId: string;
+    taskId: string;
+    runId: string;
+    assignmentGeneration: number;
+    piSessionId: string;
+  },
+): boolean {
+  const entries = context.sessionManager.getEntries?.() ?? [];
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const source = entry as Record<string, unknown>;
+    if (
+      source.customType !== "pi-herdr-orchestrator-steering-receipt" ||
+      !source.data ||
+      typeof source.data !== "object" ||
+      Array.isArray(source.data)
+    )
+      continue;
+    const data = source.data as Record<string, unknown>;
+    if (data.commandId !== expected.commandId) continue;
+    return (
+      Object.keys(data).length === 6 &&
+      data.taskId === expected.taskId &&
+      data.runId === expected.runId &&
+      data.assignmentGeneration === expected.assignmentGeneration &&
+      data.piSessionId === expected.piSessionId &&
+      data.status === "accepted"
+    );
+  }
+  return false;
 }
 function latestAssistantText(context: PiContextLike): string | undefined {
   const entries = context.sessionManager.getEntries?.() ?? [];
@@ -79,6 +118,8 @@ export class PiAdapter implements PiControl {
   #connectionGeneration: number | undefined;
   #capabilities: PiAdapterCapabilities;
   #activeCycleId: string | undefined;
+  #steeringReceipts = new Set<string>();
+  #steeringReceiptOrder: string[] = [];
   #peerAsk:
     | {
         resolve: (answer: string) => void;
@@ -325,7 +366,11 @@ export class PiAdapter implements PiControl {
   async handleControl(
     method: string,
     params: Record<string, unknown>,
-  ): Promise<{ ok: true; answer?: string }> {
+  ): Promise<{
+    ok: true;
+    answer?: string;
+    recentWork?: RecentWorkSnapshot;
+  }> {
     const state = this.safeState();
     const identity = [
       "agentId",
@@ -349,6 +394,25 @@ export class PiAdapter implements PiControl {
       )
     )
       throw new Error("PI_IDENTITY_MISMATCH");
+    const durableSteer =
+      method === "control.steer" && params.commandId !== undefined;
+    if (durableSteer) {
+      const assignment = this.assignmentForTools();
+      if (
+        typeof params.commandId !== "string" ||
+        !/^cmd_[0-9A-HJKMNP-TV-Z]{26}$/u.test(params.commandId) ||
+        typeof params.taskId !== "string" ||
+        typeof params.runId !== "string" ||
+        !Number.isSafeInteger(params.assignmentGeneration) ||
+        !assignment ||
+        assignment.taskId !== params.taskId ||
+        assignment.runId !== params.runId ||
+        assignment.agentId !== state.agentId ||
+        assignment.generation !== state.generation ||
+        assignment.assignmentGeneration !== params.assignmentGeneration
+      )
+        throw new Error("PI_ASSIGNMENT_MISMATCH");
+    }
     const allowed = new Set([
       ...identity,
       ...(method === "control.prompt" ||
@@ -357,6 +421,9 @@ export class PiAdapter implements PiControl {
         ? [
             "message",
             "delivery",
+            ...(durableSteer
+              ? ["commandId", "taskId", "runId", "assignmentGeneration"]
+              : []),
             ...(method === "control.ask" ? ["timeoutMs"] : []),
           ]
         : method === "control.set_model"
@@ -367,7 +434,16 @@ export class PiAdapter implements PiControl {
               ? ["tools"]
               : method === "control.set_tool_expansion"
                 ? ["name", "expanded"]
-                : []),
+                : method === "control.monitor_snapshot"
+                  ? [
+                      "taskId",
+                      "runId",
+                      "assignmentId",
+                      "assignmentGeneration",
+                      "maxItems",
+                      "maxBytes",
+                    ]
+                  : []),
     ]);
     if (
       ![
@@ -380,6 +456,7 @@ export class PiAdapter implements PiControl {
         "control.set_thinking",
         "control.set_tools",
         "control.set_tool_expansion",
+        "control.monitor_snapshot",
       ].includes(method) ||
       Object.keys(params).some((key) => !allowed.has(key))
     )
@@ -393,7 +470,7 @@ export class PiAdapter implements PiControl {
         typeof params.message !== "string" ||
         params.message.length === 0 ||
         Buffer.byteLength(params.message, "utf8") > 65_536 ||
-        /[\u0000-\u001f\u007f]/u.test(params.message)
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(params.message)
       )
         throw new Error("INVALID_REQUEST");
       if (method === "control.ask") {
@@ -428,8 +505,40 @@ export class PiAdapter implements PiControl {
           throw new Error("INVALID_REQUEST");
         await this.prompt(params.message);
       } else {
-        if (params.delivery === "steer") await this.steer(params.message);
-        else if (params.delivery === "follow_up")
+        if (params.delivery === "steer") {
+          const commandId = durableSteer ? (params.commandId as string) : null;
+          if (
+            commandId &&
+            (this.#steeringReceipts.has(commandId) ||
+              hasPersistedSteeringReceipt(this.#context, {
+                commandId,
+                taskId: params.taskId as string,
+                runId: params.runId as string,
+                assignmentGeneration: Number(params.assignmentGeneration),
+                piSessionId: state.sessionId,
+              }))
+          ) {
+            this.#steeringReceipts.add(commandId);
+            return { ok: true };
+          }
+          await this.steer(params.message);
+          if (commandId) {
+            this.#api.appendEntry?.("pi-herdr-orchestrator-steering-receipt", {
+              commandId,
+              taskId: params.taskId,
+              runId: params.runId,
+              assignmentGeneration: params.assignmentGeneration,
+              piSessionId: state.sessionId,
+              status: "accepted",
+            });
+            this.#steeringReceipts.add(commandId);
+            this.#steeringReceiptOrder.push(commandId);
+            if (this.#steeringReceiptOrder.length > 256) {
+              const oldest = this.#steeringReceiptOrder.shift();
+              if (oldest) this.#steeringReceipts.delete(oldest);
+            }
+          }
+        } else if (params.delivery === "follow_up")
           await this.followUp(params.message);
         else throw new Error("INVALID_REQUEST");
       }
@@ -456,6 +565,48 @@ export class PiAdapter implements PiControl {
       )
         throw new Error("INVALID_REQUEST");
       await this.setTools(params.tools);
+    } else if (method === "control.monitor_snapshot") {
+      const correlation = this.correlator.state;
+      if (
+        correlation.kind !== "accepted" &&
+        correlation.kind !== "bound" &&
+        correlation.kind !== "settled"
+      )
+        throw new Error("RECENT_WORK_SCOPE_UNAVAILABLE");
+      const assignment = correlation.assignment;
+      if (
+        params.taskId !== assignment.taskId ||
+        params.runId !== assignment.runId ||
+        params.assignmentId !== assignment.id ||
+        params.assignmentGeneration !== assignment.assignmentGeneration
+      )
+        throw new Error("PI_IDENTITY_MISMATCH");
+      if (
+        (params.maxItems !== undefined &&
+          !Number.isSafeInteger(params.maxItems)) ||
+        (params.maxBytes !== undefined &&
+          !Number.isSafeInteger(params.maxBytes))
+      )
+        throw new Error("INVALID_REQUEST");
+      const entries =
+        this.#context.sessionManager.getBranch?.() ??
+        this.#context.sessionManager.getEntries?.() ??
+        [];
+      return {
+        ok: true,
+        recentWork: await projectRecentWorkWithChrono({
+          entries,
+          taskId: assignment.taskId,
+          runId: assignment.runId,
+          assignmentId: assignment.id,
+          ...(params.maxItems !== undefined
+            ? { maxItems: Number(params.maxItems) }
+            : {}),
+          ...(params.maxBytes !== undefined
+            ? { maxBytes: Number(params.maxBytes) }
+            : {}),
+        }),
+      };
     } else {
       if (
         typeof params.name !== "string" ||
@@ -556,7 +707,10 @@ export class PiAdapter implements PiControl {
 export function renderAssignment(assignment: PiAssignment): string {
   const constraints =
     assignment.constraints.map((item) => `- ${item}`).join("\n") || "- None";
-  return `# Managed Orchestrator Task\n\nTask ID: ${assignment.taskId}\nRun: ${assignment.runId}\nDeadline: ${assignment.deadline}\n\n## Objective\n${assignment.objective}\n\n## Constraints\n${constraints}\n\n## Completion contract\nBefore ending, call the managed result tool exactly once. Use the structured question tool for blocking questions.`;
+  const completion = assignment.deadline
+    ? `Deadline: ${assignment.deadline}`
+    : "Completion: continue until the task reaches a terminal result.";
+  return `# Managed Orchestrator Task\n\nTask ID: ${assignment.taskId}\nRun: ${assignment.runId}\n${completion}\n\n## Objective\n${assignment.objective}\n\n## Constraints\n${constraints}\n\n## Completion contract\nBefore ending, call the managed result tool exactly once. Use the structured question tool for blocking questions.`;
 }
 export function piSessionId(context: PiContextLike): string {
   return sessionId(context);

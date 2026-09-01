@@ -21,6 +21,7 @@ export type TaskState =
   | "running"
   | "blocked"
   | "collecting"
+  | "cancelling"
   | "succeeded"
   | "failed"
   | "cancelled"
@@ -44,6 +45,7 @@ export interface ErrorSummary {
 }
 export type AgentLifecycleClass =
   "temporary" | "reusable" | "retained" | "pinned";
+export type TaskCompletionPolicy = "until_terminal";
 export type CloseRecommendation = "close" | "keep" | "blocked";
 export interface Task {
   id: string;
@@ -67,6 +69,7 @@ export interface Task {
   runIds?: string[];
   resultId?: string;
   resultCollectedAt?: string;
+  completionPolicy?: TaskCompletionPolicy;
   timeoutAt?: string;
   terminalReason?: ErrorSummary;
   endpointId?: string;
@@ -156,7 +159,7 @@ export interface ReviewContract {
   rubricVersion: string;
   taskProfile: string;
   issuedAt: string;
-  expiresAt: string;
+  expiresAt?: string;
 }
 export interface ResultRecord {
   id: string;
@@ -190,6 +193,28 @@ export interface Workflow {
   state:
     "created" | "running" | "blocked" | "succeeded" | "failed" | "cancelled";
   taskIds: string[];
+}
+export type SteeringCommandState =
+  "pending" | "delivered" | "rejected" | "delivery_unknown" | "expired";
+export interface SteeringCommand {
+  id: string;
+  state: SteeringCommandState;
+  principalId: string;
+  taskId: string;
+  runId: string;
+  assignmentGeneration: number;
+  agentId: string;
+  agentGeneration: number;
+  piSessionId: string;
+  message: string;
+  messageHash: string;
+  idempotencyKey: string;
+  timeoutMs: number;
+  createdAt: string;
+  dispatchStartedAt?: string;
+  deliveredAt?: string;
+  terminalAt?: string;
+  reasonCode?: string;
 }
 export interface AgentGroup {
   id: string;
@@ -255,7 +280,6 @@ export interface OrchestrationState {
   tasks: Record<string, Task>;
   runs: Record<string, Run>;
   agents: Record<string, Agent>;
-  adoptedRootLinks?: Record<string, string>;
   workflows: Record<string, Workflow>;
   results?: Record<string, ResultRecord>;
   questions?: Record<string, QuestionRecord>;
@@ -263,6 +287,7 @@ export interface OrchestrationState {
   herdrMetadata?: Record<string, HerdrTaskMetadata>;
   modelEvidence?: ModelEvidenceState;
   reviewContracts?: Record<string, ReviewContract>;
+  steeringCommands?: Record<string, SteeringCommand>;
   herdrResources?: Record<
     string,
     {

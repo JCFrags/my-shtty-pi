@@ -47,6 +47,7 @@ export const emptyState = (): OrchestrationState => ({
   groups: {},
   herdrMetadata: {},
   reviewContracts: {},
+  steeringCommands: {},
   herdrResources: {},
   idempotency: {},
 });
@@ -79,6 +80,12 @@ function derivedDeadline(createdAt: unknown): string | undefined {
 }
 const known = new Set([
   "task.created",
+  "steering.command.enqueued",
+  "steering.command.dispatch_started",
+  "steering.command.delivered",
+  "steering.command.rejected",
+  "steering.command.delivery_unknown",
+  "steering.command.expired",
   "task.project_bound",
   "task.state_changed",
   "audit.action",
@@ -142,10 +149,175 @@ export function reduce(
     groups: state.groups ?? {},
     herdrMetadata: state.herdrMetadata ?? {},
     reviewContracts: state.reviewContracts ?? {},
+    steeringCommands: state.steeringCommands ?? {},
   };
   const p = event.payload as Record<string, unknown>;
   const taskId = event.entityRefs?.taskId;
   switch (event.type) {
+    case "steering.command.enqueued": {
+      const commandId = event.entityRefs?.commandId ?? String(p.commandId);
+      const fields = [
+        "commandId",
+        "principalId",
+        "taskId",
+        "runId",
+        "assignmentGeneration",
+        "agentId",
+        "agentGeneration",
+        "piSessionId",
+        "message",
+        "messageHash",
+        "idempotencyKey",
+        "paramsHash",
+        "timeoutMs",
+        "createdAt",
+      ];
+      const task = next.tasks[String(p.taskId)];
+      const run = next.runs[String(p.runId)];
+      const agent = next.agents[String(p.agentId)];
+      if (
+        !/^cmd_[0-9A-HJKMNP-TV-Z]{26}$/u.test(commandId) ||
+        next.steeringCommands![commandId] ||
+        Object.keys(p).length !== fields.length ||
+        !fields.every((field) => Object.hasOwn(p, field)) ||
+        p.commandId !== commandId ||
+        typeof p.principalId !== "string" ||
+        p.principalId !== event.actor.principalId ||
+        typeof p.taskId !== "string" ||
+        typeof p.runId !== "string" ||
+        typeof p.agentId !== "string" ||
+        !Number.isSafeInteger(p.assignmentGeneration) ||
+        Number(p.assignmentGeneration) < 1 ||
+        !Number.isSafeInteger(p.agentGeneration) ||
+        Number(p.agentGeneration) < 1 ||
+        typeof p.piSessionId !== "string" ||
+        p.piSessionId.length < 1 ||
+        p.piSessionId.length > 256 ||
+        typeof p.message !== "string" ||
+        p.message.length < 1 ||
+        Buffer.byteLength(p.message, "utf8") > 16_384 ||
+        /\u0000/u.test(p.message) ||
+        typeof p.messageHash !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(p.messageHash) ||
+        sha256(p.message) !== p.messageHash ||
+        typeof p.idempotencyKey !== "string" ||
+        p.idempotencyKey.length < 1 ||
+        p.idempotencyKey.length > 256 ||
+        typeof p.paramsHash !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(p.paramsHash) ||
+        !Number.isSafeInteger(p.timeoutMs) ||
+        Number(p.timeoutMs) < 1 ||
+        Number(p.timeoutMs) > 30_000 ||
+        typeof p.createdAt !== "string" ||
+        !Number.isFinite(Date.parse(p.createdAt)) ||
+        !task ||
+        !run ||
+        !agent ||
+        task.currentRunId !== run.id ||
+        task.assignedAgentId !== agent.id ||
+        run.taskId !== task.id ||
+        run.agentId !== agent.id ||
+        run.assignmentGeneration !== p.assignmentGeneration ||
+        run.agentGeneration !== p.agentGeneration ||
+        run.piSessionId !== p.piSessionId ||
+        agent.generation !== p.agentGeneration ||
+        agent.piSessionId !== p.piSessionId ||
+        next.idempotency[p.idempotencyKey]
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Steering command admission is invalid.",
+        );
+      next.steeringCommands = {
+        ...next.steeringCommands,
+        [commandId]: {
+          id: commandId,
+          state: "pending",
+          principalId: p.principalId,
+          taskId: p.taskId,
+          runId: p.runId,
+          assignmentGeneration: Number(p.assignmentGeneration),
+          agentId: p.agentId,
+          agentGeneration: Number(p.agentGeneration),
+          piSessionId: p.piSessionId,
+          message: p.message,
+          messageHash: p.messageHash,
+          idempotencyKey: p.idempotencyKey,
+          timeoutMs: Number(p.timeoutMs),
+          createdAt: p.createdAt,
+        },
+      };
+      next.idempotency = {
+        ...next.idempotency,
+        [p.idempotencyKey]: {
+          principalId: p.principalId,
+          method: "task.steer",
+          paramsHash: p.paramsHash,
+          response: { commandId },
+        },
+      };
+      break;
+    }
+    case "steering.command.dispatch_started":
+    case "steering.command.delivered":
+    case "steering.command.rejected":
+    case "steering.command.delivery_unknown":
+    case "steering.command.expired": {
+      const commandId = event.entityRefs?.commandId ?? String(p.commandId);
+      const command = next.steeringCommands![commandId];
+      const terminal =
+        event.type === "steering.command.delivered"
+          ? "delivered"
+          : event.type === "steering.command.rejected"
+            ? "rejected"
+            : event.type === "steering.command.expired"
+              ? "expired"
+              : "delivery_unknown";
+      const needsReason = [
+        "steering.command.rejected",
+        "steering.command.delivery_unknown",
+        "steering.command.expired",
+      ].includes(event.type);
+      if (
+        !command ||
+        p.commandId !== commandId ||
+        typeof p.at !== "string" ||
+        !Number.isFinite(Date.parse(p.at)) ||
+        Object.keys(p).length !== (needsReason ? 3 : 2) ||
+        (needsReason &&
+          (typeof p.reasonCode !== "string" ||
+            !/^[A-Z0-9_]{1,64}$/u.test(p.reasonCode))) ||
+        (event.type === "steering.command.dispatch_started" &&
+          command.state !== "pending") ||
+        (event.type === "steering.command.delivered" &&
+          command.state !== "delivery_unknown") ||
+        (event.type === "steering.command.delivery_unknown" &&
+          command.state !== "delivery_unknown") ||
+        ((event.type === "steering.command.rejected" ||
+          event.type === "steering.command.expired") &&
+          command.state !== "pending" &&
+          command.state !== "delivery_unknown")
+      )
+        throw new OrchestratorError(
+          "STATE_CORRUPT",
+          "Steering command transition is invalid.",
+        );
+      next.steeringCommands = {
+        ...next.steeringCommands,
+        [commandId]: {
+          ...command,
+          state: terminal,
+          ...(event.type === "steering.command.dispatch_started"
+            ? { dispatchStartedAt: p.at }
+            : {}),
+          ...(terminal === "delivered" ? { deliveredAt: p.at } : {}),
+          ...(needsReason
+            ? { terminalAt: p.at, reasonCode: p.reasonCode as string }
+            : {}),
+        },
+      };
+      break;
+    }
     case "task.created": {
       const id = taskId ?? String(p.id);
       if (!id || next.tasks[id])
@@ -255,7 +427,6 @@ export function reduce(
             "profileId",
             "dependencies",
             "project",
-            "timeoutAt",
           ].every((field) => Object.hasOwn(definition, field)) ||
           Object.keys(definition).some(
             (field) =>
@@ -271,6 +442,7 @@ export function reduce(
                 "constraints",
                 "dependencies",
                 "project",
+                "completionPolicy",
                 "timeoutAt",
               ].includes(field),
           ) ||
@@ -319,8 +491,13 @@ export function reduce(
           !Object.hasOwn(compact, "transcriptPolicy") ||
           !/^[a-f0-9]{64}$/u.test(String(compact.workflowDigest)) ||
           compact.transcriptPolicy !== "retain-tab" ||
-          typeof definition.timeoutAt !== "string" ||
-          !Number.isFinite(Date.parse(definition.timeoutAt)) ||
+          !(
+            (definition.completionPolicy === "until_terminal" &&
+              definition.timeoutAt === undefined) ||
+            (definition.completionPolicy === undefined &&
+              typeof definition.timeoutAt === "string" &&
+              Number.isFinite(Date.parse(definition.timeoutAt)))
+          ) ||
           !responseTask ||
           Object.keys(responseTask).length !== 3 ||
           !["key", "taskId", "state"].every((field) =>
@@ -351,7 +528,9 @@ export function reduce(
             ? [...definition.constraints]
             : [],
           dependencies: [...(definition.dependencies as string[])],
-          timeoutAt: definition.timeoutAt,
+          ...(definition.completionPolicy === "until_terminal"
+            ? { completionPolicy: "until_terminal" as const }
+            : { timeoutAt: definition.timeoutAt as string }),
           project,
           runIds: [],
         };
@@ -400,6 +579,7 @@ export function reduce(
         "running",
         "blocked",
         "collecting",
+        "cancelling",
         "succeeded",
         "failed",
         "cancelled",
@@ -503,64 +683,6 @@ export function reduce(
         agent = next.agents[id];
       if (!agent)
         throw new OrchestratorError("STATE_CORRUPT", "Agent is missing.");
-      if (
-        event.type === "agent.state_changed" &&
-        Object.hasOwn(p, "adoptedRootParentAgentId")
-      ) {
-        const parentAgentId = String(p.adoptedRootParentAgentId ?? "");
-        const parent = next.agents[parentAgentId];
-        if (
-          !parent ||
-          agent.managed ||
-          parent.managed ||
-          id === parentAgentId ||
-          agent.parentAgentId ||
-          !agent.paneId ||
-          agent.paneId !== parent.paneId ||
-          agent.paneId !== p.adoptedRootPaneId ||
-          !agent.piSessionId ||
-          agent.piSessionId !== parent.piSessionId ||
-          agent.piSessionId !== p.adoptedRootPiSessionId
-        )
-          throw new OrchestratorError(
-            "STATE_CORRUPT",
-            "Adopted lineage recovery is invalid.",
-          );
-        const existingLinks = next.adoptedRootLinks ?? {};
-        if (existingLinks[id] || existingLinks[parentAgentId])
-          throw new OrchestratorError(
-            "STATE_CORRUPT",
-            "Adopted lineage recovery is already linked.",
-          );
-        const adoptedRootLinks = {
-          ...existingLinks,
-          [id]: parentAgentId,
-        };
-        for (const candidate of Object.values(next.agents)) {
-          let current: string | undefined = candidate.id;
-          const seen = new Set<string>();
-          let depth = 0;
-          while (current) {
-            if (seen.has(current) || depth > 4)
-              throw new OrchestratorError(
-                "STATE_CORRUPT",
-                "Recovered agent lineage exceeds its safe depth.",
-              );
-            seen.add(current);
-            const currentAgent: typeof agent | undefined = next.agents[current];
-            if (!currentAgent)
-              throw new OrchestratorError(
-                "STATE_CORRUPT",
-                "Recovered agent lineage is incomplete.",
-              );
-            current =
-              currentAgent.parentAgentId ?? adoptedRootLinks[currentAgent.id];
-            if (current) depth++;
-          }
-        }
-        next.adoptedRootLinks = adoptedRootLinks;
-        break;
-      }
       const baseAgent = { ...agent };
       if (p.clearCurrentRun === true) {
         delete baseAgent.currentRunId;
@@ -672,13 +794,15 @@ export function reduce(
                 ),
               }
             : {}),
-          ...(() => {
-            const timeoutAt =
-              typeof p.timeoutAt === "string"
-                ? p.timeoutAt
-                : derivedDeadline(p.createdAt);
-            return timeoutAt ? { timeoutAt } : {};
-          })(),
+          ...(p.completionPolicy === "until_terminal"
+            ? { completionPolicy: "until_terminal" as const }
+            : (() => {
+                const timeoutAt =
+                  typeof p.timeoutAt === "string"
+                    ? p.timeoutAt
+                    : derivedDeadline(p.createdAt);
+                return timeoutAt ? { timeoutAt } : {};
+              })()),
           ...(p.project &&
           typeof p.project === "object" &&
           !Array.isArray(p.project)
@@ -894,6 +1018,28 @@ export function reduce(
                 : {}),
         },
       };
+      const task = next.tasks[run.taskId];
+      if (task && !taskTerminal.has(task.state)) {
+        const lifecycleTaskState =
+          event.type === "assignment.accepted" && task.state !== "cancelling"
+            ? ("assigned" as const)
+            : event.type === "run.pi_started" && task.state !== "cancelling"
+              ? ("running" as const)
+              : event.type === "run.pi_settled"
+                ? task.state === "cancelling"
+                  ? ("cancelling" as const)
+                  : ("collecting" as const)
+                : undefined;
+        if (lifecycleTaskState)
+          next.tasks = {
+            ...next.tasks,
+            [task.id]: {
+              ...task,
+              state: lifecycleTaskState,
+              admissionReason: undefined,
+            },
+          };
+      }
       if (
         run.agentId &&
         Number.isSafeInteger(p.adapterSeq) &&
@@ -937,15 +1083,25 @@ export function reduce(
       const id = String(event.entityRefs?.taskId ?? p.taskId),
         task = next.tasks[id];
       if (!task || taskTerminal.has(task.state)) break;
-      next.tasks = { ...next.tasks, [id]: { ...task, state: "cancelled" } };
-      if (task.currentRunId && next.runs[task.currentRunId])
+      const run = task.currentRunId ? next.runs[task.currentRunId] : undefined;
+      const waitsForQuiescence =
+        p.completionMode === "quiescent" &&
+        run !== undefined &&
+        !runSharedTerminal.has(run.state) &&
+        !run.settled;
+      next.tasks = {
+        ...next.tasks,
+        [id]: {
+          ...task,
+          state: waitsForQuiescence ? "cancelling" : "cancelled",
+        },
+      };
+      if (run)
         next.runs = {
           ...next.runs,
-          [task.currentRunId]: {
-            ...next.runs[task.currentRunId]!,
-            state: "cancelled",
-            cancelled: true,
-          },
+          [run.id]: waitsForQuiescence
+            ? { ...run, cancelled: true }
+            : { ...run, state: "cancelled", cancelled: true },
         };
       break;
     }

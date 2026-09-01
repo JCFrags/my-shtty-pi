@@ -278,7 +278,6 @@ const parentInputKeys: Readonly<Record<ParentToolName, readonly string[]>> =
       "keepForReuse",
       "project",
       "isolation",
-      "budget",
       "review",
       "wait",
     ],
@@ -420,7 +419,7 @@ const parentRequired: Readonly<
     "failureMode",
     "dryRun",
   ],
-  agent_spawn: ["task", "profileId", "project", "isolation", "budget", "wait"],
+  agent_spawn: ["task", "profileId", "project", "isolation", "wait"],
   agent_model_options: ["profileId"],
   agent_get: ["agentId"],
   agent_prompt: ["agentId", "message", "delivery", "timeoutMs"],
@@ -533,6 +532,10 @@ function validateExactNested(
               "resultValidation",
               "worktree",
               "budgets",
+              "recentWork",
+              "definition",
+              "lineage",
+              "project",
             ]
           : key === "select"
             ? ["taskId", "state", "summary", "status", "result"]
@@ -589,14 +592,6 @@ function validateExactNested(
           !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
             value.thinkingLevel,
           )
-        )
-          throw new Error("INVALID_REQUEST");
-      } else if (key === "budget") {
-        assertExactObject(value, ["wallTimeMs"], ["wallTimeMs"]);
-        if (
-          !Number.isSafeInteger(value.wallTimeMs) ||
-          (value.wallTimeMs as number) < 1 ||
-          (value.wallTimeMs as number) > 86_400_000
         )
           throw new Error("INVALID_REQUEST");
       } else {
@@ -904,14 +899,6 @@ function validateParentInput(
     )
       throw new Error("INVALID_REQUEST");
     if (
-      key === "budget" &&
-      (!value ||
-        typeof value !== "object" ||
-        Array.isArray(value) ||
-        !Number.isSafeInteger((value as Record<string, unknown>).wallTimeMs))
-    )
-      throw new Error("INVALID_REQUEST");
-    if (
       ["waitUntil"].includes(key) &&
       (value as unknown[]).some(
         (item) => !["terminal", "blocked"].includes(item as string),
@@ -1035,6 +1022,10 @@ function schemaForKey(key: string): unknown {
           "resultValidation",
           "worktree",
           "budgets",
+          "recentWork",
+          "definition",
+          "lineage",
+          "project",
         ],
       },
     };
@@ -1126,15 +1117,6 @@ function schemaForKey(key: string): unknown {
           description:
             "shared-readonly is a broker tool-policy label for a shared checkout, not an OS-enforced read-only filesystem. Use worktree for file-writing roles or to protect the parent checkout.",
         },
-      },
-    };
-  if (["budget"].includes(key))
-    return {
-      type: "object",
-      additionalProperties: false,
-      required: ["wallTimeMs"],
-      properties: {
-        wallTimeMs: { type: "integer", minimum: 1, maximum: 86_400_000 },
       },
     };
   if (["answer"].includes(key))
@@ -2512,6 +2494,7 @@ const ORCHESTRATE_ACTIONS = [
   "inspect",
   "list",
   "wait",
+  "steer",
   "collect",
   "cancel",
   "close",
@@ -2584,20 +2567,14 @@ const orchestrateInputSchema = {
         mode: { type: "string", enum: ["shared-readonly", "worktree"] },
       },
     },
-    budget: {
-      type: "object",
-      additionalProperties: false,
-      required: ["wallTimeMs"],
-      properties: {
-        wallTimeMs: { type: "integer", minimum: 1, maximum: 86_400_000 },
-      },
-    },
     review: { type: "object", maxProperties: 8 },
     wait: { type: "boolean" },
     kind: { type: "string", enum: ["task", "agent", "group"] },
     id: boundedString(256),
     projectKey: boundedString(4096),
     taskId: boundedString(256),
+    message: boundedString(16_384),
+    timeoutMs: { type: "integer", minimum: 1, maximum: 30_000 },
     taskIds: {
       type: "array",
       minItems: 1,
@@ -2606,6 +2583,8 @@ const orchestrateInputSchema = {
     },
     include: {
       type: "array",
+      description:
+        'Optional detail sections. Task inspection accepts "runs", "definition", "lineage", and "project"; bounded recent work is always requested.',
       maxItems: 16,
       items: boundedString(64),
     },
@@ -2616,14 +2595,21 @@ const orchestrateInputSchema = {
     },
     state: boundedString(64),
     limit: { type: "integer", minimum: 1, maximum: 500 },
-    maxBytes: { type: "integer", minimum: 1, maximum: 262_144 },
-    until: {
-      type: "array",
-      maxItems: 16,
-      items: boundedString(64),
+    maxBytes: {
+      type: "integer",
+      description: "Maximum UTF-8 bytes for the JSON result.",
+      minimum: 1,
+      maximum: 262_144,
     },
-    timeoutMs: { type: "integer", minimum: 1, maximum: 1_800_000 },
-    reason: boundedString(16_384),
+    wakeOn: {
+      type: "array",
+      description:
+        "Optional reasons to wake before the task finishes. Omit this field to wait only for task completion.",
+      minItems: 1,
+      maxItems: 1,
+      uniqueItems: true,
+      items: { type: "string", enum: ["blocked"] },
+    },
     cascade: { type: "boolean" },
     confirm: { type: "boolean" },
     idempotencyKey: boundedString(256),
@@ -2644,7 +2630,6 @@ const FACADE_KEYS: Readonly<
     "keepForReuse",
     "project",
     "isolation",
-    "budget",
     "review",
     "wait",
     "idempotencyKey",
@@ -2668,10 +2653,11 @@ const FACADE_KEYS: Readonly<
     "maxBytes",
     "idempotencyKey",
   ],
-  wait: ["action", "taskId", "until", "timeoutMs", "idempotencyKey"],
+  wait: ["action", "taskId", "wakeOn", "idempotencyKey"],
+  steer: ["action", "taskId", "message", "timeoutMs", "idempotencyKey"],
   collect: ["action", "taskIds", "select", "maxBytes", "idempotencyKey"],
-  cancel: ["action", "taskId", "reason", "cascade", "idempotencyKey"],
-  close: ["action", "taskId", "reason", "confirm", "idempotencyKey"],
+  cancel: ["action", "taskId", "cascade", "idempotencyKey"],
+  close: ["action", "taskId", "confirm", "idempotencyKey"],
 });
 
 export function registerParentTools(
@@ -2749,9 +2735,9 @@ export function registerParentTools(
     name: "orchestrate",
     label: "Orchestrate Agents",
     description:
-      'Create an agent with action "run" and only a task; omitted profile defaults to scout and omitted model uses the broker\'s top installed, allowed recommendation. Optional fields override those safe defaults. Use the returned taskId for inspect, wait, collect, cancel, and close; the broker derives agent, run, and generation identity for cleanup.',
+      'Create an agent with action "run" and only a task; omitted profile defaults to scout and omitted model uses the broker\'s top installed, allowed recommendation. Optional fields override those safe defaults. Use the returned taskId for inspect, wait, steer, collect, cancel, and close. Task inspection returns only critical state plus bounded recent child work by default; definition, lineage, project policy, and run history are explicit detail sections. Wait sleeps until the task finishes unless wakeOn names an explicit earlier reason; it has no model-visible countdown. The broker derives exact task, run, agent, generation, and session identity.',
     parameters: orchestrateInputSchema,
-    async execute(_id, params, signal, _onUpdate, context) {
+    async execute(toolCallId, params, signal, _onUpdate, context) {
       assertExactObject(params, [
         ...new Set(Object.values(FACADE_KEYS).flat()),
       ]);
@@ -2769,7 +2755,8 @@ export function registerParentTools(
       const { idempotencyKey } = params;
       if (idempotencyKey !== undefined) assertInputString(idempotencyKey, 256);
       const principal = principalFromClient();
-      const requestKey = idempotencyKey as string | undefined;
+      const requestKey = (idempotencyKey ??
+        (action === "steer" ? toolCallId : undefined)) as string | undefined;
       let result: unknown;
       if (action === "run") {
         const profileId = params.profileId ?? "scout";
@@ -2793,7 +2780,6 @@ export function registerParentTools(
           mode: profileId === "implementer" ? "worktree" : "shared-readonly",
         };
         input.wait ??= false;
-        input.budget ??= { wallTimeMs: 900_000 };
         if (input.model === undefined) {
           const optionsInput: Record<string, unknown> = {
             profileId,
@@ -2853,13 +2839,18 @@ export function registerParentTools(
                 ? "group_get"
                 : undefined;
         if (!tool) throw new Error("INVALID_REQUEST");
+        const requestedInclude = params.include as unknown[] | undefined;
+        const include =
+          kind === "task"
+            ? [...new Set([...(requestedInclude ?? []), "recentWork"])]
+            : requestedInclude;
         const input: Record<string, unknown> = {
           [kind === "task"
             ? "taskId"
             : kind === "agent"
               ? "agentId"
               : "groupId"]: params.id,
-          ...(params.include !== undefined ? { include: params.include } : {}),
+          ...(include !== undefined ? { include } : {}),
           ...(params.maxBytes !== undefined
             ? { maxBytes: params.maxBytes }
             : {}),
@@ -2889,20 +2880,27 @@ export function registerParentTools(
         result = await invoke(tool, input, principal, signal, requestKey);
       } else if (action === "wait") {
         assertInputString(params.taskId, 256);
-        const timeoutMs =
-          typeof params.timeoutMs === "number" ? params.timeoutMs : 120_000;
+        const wakeOn = params.wakeOn;
+        if (
+          wakeOn !== undefined &&
+          (!Array.isArray(wakeOn) ||
+            wakeOn.length !== 1 ||
+            wakeOn[0] !== "blocked")
+        )
+          throw new Error("INVALID_REQUEST");
+        const terminalStates = [
+          "succeeded",
+          "failed",
+          "cancelled",
+          "timed_out",
+        ] as const;
+        const terminal = new Set<string>(terminalStates);
         const input = {
           kind: "task",
           targetId: params.taskId,
-          until: params.until ?? [
-            "succeeded",
-            "failed",
-            "cancelled",
-            "timed_out",
-            "blocked",
-          ],
-          timeoutMs,
-          pollMs: 100,
+          until: [...terminalStates, ...(wakeOn ?? [])],
+          timeoutMs: 15_000,
+          pollMs: 250,
         };
         const request: ParentToolRequest = {
           tool: "coordination_wait",
@@ -2910,41 +2908,71 @@ export function registerParentTools(
           ...(requestKey ? { idempotencyKey: requestKey } : {}),
         };
         validateParentInput("coordination_wait", input);
-        const deadline = Date.now() + timeoutMs;
-        let response = await executeParentWaitRequest(
-          service,
-          request,
-          principal,
-          signal,
-          deadline,
-        );
-        while (
-          response?.ok &&
-          (response.result as Record<string, unknown> | undefined)?.ready !==
-            true &&
-          Date.now() < deadline
-        ) {
-          await waitForParentPoll(
-            Math.min(100, Math.max(1, deadline - Date.now())),
-            signal,
-          );
+        const waitSignal = signal ?? new AbortController().signal;
+        let response: ParentToolResponse | undefined;
+        let nextRequest = request;
+        while (true) {
           response = await executeParentWaitRequest(
             service,
-            { tool: "coordination_wait", input },
+            nextRequest,
             principal,
-            signal,
-            deadline,
+            waitSignal,
+            Date.now() + 20_000,
           );
+          if (!response) continue;
+          if (!response.ok) {
+            if (
+              response.error?.code === "AGENT_DISCONNECTED" ||
+              (response.error?.code === "REQUEST_FAILED" &&
+                ["AGENT_DISCONNECTED", "BROKER_TIMEOUT"].includes(
+                  response.error.message,
+                ))
+            ) {
+              await waitForParentPoll(250, waitSignal);
+              continue;
+            }
+            throw new Error(response.error?.message ?? "REQUEST_FAILED");
+          }
+          nextRequest = { tool: "coordination_wait", input };
+          if (
+            (response.result as Record<string, unknown> | undefined)?.ready ===
+            true
+          )
+            break;
+          await waitForParentPoll(250, waitSignal);
         }
-        if (!response) throw new Error("WAIT_TIMEOUT");
-        if (!response.ok)
-          throw new Error(response.error?.message ?? "REQUEST_FAILED");
         const waitResult = response.result as Record<string, unknown>;
+        const state = String(waitResult.state);
         result = {
           taskId: params.taskId,
-          state: waitResult.state,
-          ready: waitResult.ready,
+          state,
+          ready: true,
+          wakeReason: terminal.has(state) ? "task_finished" : state,
         };
+      } else if (action === "steer") {
+        assertInputString(params.taskId, 256);
+        assertInputString(params.message, 16_384);
+        const timeoutMs = params.timeoutMs ?? 10_000;
+        if (
+          !Number.isSafeInteger(timeoutMs) ||
+          Number(timeoutMs) < 1 ||
+          Number(timeoutMs) > 30_000
+        )
+          throw new Error("INVALID_REQUEST");
+        const activeClient = binding.client;
+        if (!activeClient?.connected) throw new Error("AGENT_DISCONNECTED");
+        result = await activeClient.request(
+          "task.steer",
+          {
+            taskId: params.taskId,
+            message: params.message,
+            timeoutMs,
+          },
+          {
+            ...(requestKey ? { idempotencyKey: requestKey } : {}),
+            timeoutMs: Number(timeoutMs) + 5_000,
+          },
+        );
       } else if (action === "collect") {
         result = await invoke(
           "task_collect",
@@ -2964,8 +2992,7 @@ export function registerParentTools(
           "task_cancel",
           {
             taskId: params.taskId,
-            reason:
-              params.reason ?? "Cancelled through the orchestration facade.",
+            reason: "Cancelled through the orchestration facade.",
             cascade: params.cascade ?? false,
           },
           principal,
@@ -3010,8 +3037,7 @@ export function registerParentTools(
               Number(assignmentGeneration) > 0
                 ? { assignmentGeneration }
                 : {}),
-              reason:
-                params.reason ?? "Closed through the orchestration facade.",
+              reason: "Closed through the orchestration facade.",
               confirm: true,
             },
             principal,

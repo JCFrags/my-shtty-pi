@@ -17,6 +17,7 @@ export interface PiSessionManagerLike {
   getSessionId?(): string;
   getSessionFile?(): string | undefined;
   getCwd?(): string;
+  getBranch?(fromId?: string): unknown[];
   getEntries?(): unknown[];
   [key: string]: unknown;
 }
@@ -146,7 +147,7 @@ export interface PiAssignment {
   piSessionId: string;
   objective: string;
   constraints: string[];
-  deadline: string;
+  deadline?: string;
 }
 export type PiLifecycleEventType =
   | "before_agent_start"

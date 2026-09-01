@@ -318,7 +318,9 @@ export function validateAssignment(
         : text(source.piSessionId, 256),
     objective: text(source.objective, 16_384),
     constraints: [],
-    deadline: text(source.deadline, 128),
+    ...(source.deadline === undefined
+      ? {}
+      : { deadline: text(source.deadline, 128) }),
   };
   if (
     assignment.agentId !== state.agentId ||

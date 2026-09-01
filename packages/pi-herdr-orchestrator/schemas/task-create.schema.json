@@ -12,9 +12,7 @@
     "profileId",
     "priority",
     "dependsOn",
-    "isolation",
-    "budget",
-    "timeoutMs"
+    "isolation"
   ],
   "properties": {
     "version": {
@@ -73,36 +71,6 @@
           "maxLength": 256
         }
       }
-    },
-    "budget": {
-      "type": ["object", "null"],
-      "additionalProperties": false,
-      "properties": {
-        "wallTimeMs": {
-          "type": "integer",
-          "minimum": 10000,
-          "maximum": 86400000
-        },
-        "maxTurns": {
-          "type": ["integer", "null"],
-          "minimum": 1,
-          "maximum": 1000
-        },
-        "maxContextPercent": {
-          "type": ["number", "null"],
-          "exclusiveMinimum": 0,
-          "maximum": 100
-        },
-        "maxCostUsd": {
-          "type": ["number", "null"],
-          "exclusiveMinimum": 0
-        }
-      }
-    },
-    "timeoutMs": {
-      "type": "integer",
-      "minimum": 10000,
-      "maximum": 86400000
     },
     "contextReferences": {
       "type": "array",

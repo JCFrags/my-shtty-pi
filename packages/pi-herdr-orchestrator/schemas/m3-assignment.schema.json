@@ -14,8 +14,7 @@
     "assignmentGeneration",
     "piSessionId",
     "objective",
-    "constraints",
-    "deadline"
+    "constraints"
   ],
   "properties": {
     "version": { "const": 1 },
