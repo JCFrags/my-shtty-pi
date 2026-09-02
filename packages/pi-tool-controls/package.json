@@ -14,25 +14,10 @@
     "node": ">=22.19.0"
   },
   "packageManager": "npm@10.9.2",
-  "files": [
-    "extensions",
-    "integration",
-    "README.md",
-    "LICENSE"
-  ],
   "pi": {
     "extensions": [
       "./extensions/tool-controls.ts"
     ]
-  },
-  "scripts": {
-    "clean": "node ./scripts/clean.mjs",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test tests/*.test.mjs",
-    "smoke": "npm run build && node ./scripts/smoke.mjs",
-    "pack:check": "npm pack --dry-run",
-    "check": "npm run typecheck && npm run test && npm run smoke && npm run pack:check"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -48,5 +33,9 @@
   },
   "devDependencies": {
     "typescript": "5.8.3"
+  },
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

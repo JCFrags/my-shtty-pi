@@ -24,8 +24,6 @@
   },
   "include": [
     "extensions/**/*.ts",
-    "src/**/*.ts",
-    "test/**/*.ts",
-    "scripts/**/*.ts"
+    "src/**/*.ts"
   ]
 }
