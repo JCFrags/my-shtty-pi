@@ -74,6 +74,9 @@ function readJson(path) {
 function walk(dir) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    // Dependency trees are not repository-owned discovery roots. Force-tracked
+    // dependency content is rejected separately through git ls-files below.
+    if (entry.isDirectory() && entry.name === "node_modules") continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...walk(path));
     else if (entry.isFile() || entry.isSymbolicLink()) out.push(path);
@@ -383,6 +386,8 @@ for (const product of inactive) {
 
 // Every tracked file must fit categories A-G. Runtime resources are also reported as an explicit subset of A.
 const tracked = trackedWorkingFiles();
+const trackedDependencyFiles = tracked.filter((rel) => rel.split("/").includes("node_modules"));
+if (trackedDependencyFiles.length > 0) throw new Error(`tracked dependency-tree files are forbidden: ${trackedDependencyFiles.join(",")}`);
 const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, rootVerification: 0, unexplained: 0 };
 const unexplainedPaths = [];
 for (const rel of tracked) {
