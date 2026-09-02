@@ -24,4 +24,11 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm run verify
+      - name: Verify with an ignored dependency-tree fixture
+        run: |
+          fixture=packages/files-ui/node_modules/verifier-regression
+          trap 'rm -rf "$fixture"' EXIT
+          mkdir -p "$fixture"
+          printf '{"name":"ignored-verifier-regression"}\n' > "$fixture/package.json"
+          printf '{"compilerOptions":{}}\n' > "$fixture/tsconfig.json"
+          npm run verify
