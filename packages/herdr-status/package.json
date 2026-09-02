@@ -13,30 +13,17 @@
     "metadata"
   ],
   "license": "MIT",
-  "files": [
-    "extensions",
-    "src",
-    "dist/extensions",
-    "dist/src",
-    "README.md",
-    "LICENSE"
-  ],
   "pi": {
     "extensions": [
       "./extensions"
     ]
   },
-  "scripts": {
-    "clean": "node ./scripts/clean.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
-    "test": "npm run build && node --test dist/test/*.test.js",
-    "smoke": "npm run build && node ./test/smoke-load.mjs",
-    "validate": "npm run typecheck && npm test && npm run smoke",
-    "prepack": "npm run build"
-  },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3"
+  },
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

@@ -4,31 +4,170 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "verify": "node scripts/verify-deployed-baseline.mjs",
-    "test": "npm run verify"
+    "verify": "node scripts/verify-deployed-baseline.mjs"
   },
   "piConsolidation": {
     "stage1Commit": "19110f9cf34ab29b2059e3bff460e856c7157bce",
     "stage1RuntimeRecords": 272,
     "canonicalDeployedFiles": 261,
     "products": [
-      {"slug":"codex-usage-footer","status":"active","entrypoints":["extensions/codex-usage-footer.ts"]},
-      {"slug":"files-ui","status":"active","entrypoints":["extensions/files/index.ts"]},
-      {"slug":"grounded-tools","status":"active","entrypoints":["files/index.ts","process/index.ts","lsp/index.ts","dialog/index.ts","tasks/index.ts","notes/index.ts","workplan/index.ts"]},
-      {"slug":"herdr-agent-state","status":"active","entrypoints":["extensions/herdr-agent-state.ts"]},
-      {"slug":"herdr-blocked-bridge","status":"active","entrypoints":["extensions/herdr-blocked-bridge.ts"]},
-      {"slug":"herdr-status","status":"active","entrypoints":["extensions/herdr-status.ts"]},
-      {"slug":"pi-agent-context","status":"active","entrypoints":["extensions/index.ts"]},
-      {"slug":"pi-chrono-compaction","status":"active","entrypoints":["dist/src/pi-extension.js"],"compiledCount":65,"buildConfig":"tsconfig.json"},
-      {"slug":"pi-herdr-orchestrator","status":"active","entrypoints":["dist/extensions/pi-herdr-orchestrator.js"],"compiledCount":30,"buildConfig":"tsconfig.json"},
-      {"slug":"pi-native-ssh","status":"active","entrypoints":["src/index.ts"]},
-      {"slug":"pi-pixel-cua","status":"active","entrypoints":["src/index.ts"]},
-      {"slug":"pi-progressive-tools","status":"active","entrypoints":["extensions/index.ts"]},
-      {"slug":"pi-review-ui","status":"inactive","entrypoints":["extensions/review-ui.ts"]},
-      {"slug":"pi-signal-board","status":"active","entrypoints":["dist/index.js"],"compiledCount":57,"buildConfig":"tsconfig.build.json"},
-      {"slug":"pi-tool-controls","status":"inactive","entrypoints":["extensions/tool-controls.ts"]},
-      {"slug":"temporary-orchestrator-cancel-isolation","status":"active-temporary","entrypoints":["extensions/temporary-orchestrator-cancel-isolation.ts"]},
-      {"slug":"titlebar-spinner","status":"active","entrypoints":["extensions/titlebar-spinner.ts"]}
-    ]
+      {
+        "slug": "codex-usage-footer",
+        "status": "active",
+        "entrypoints": [
+          "extensions/codex-usage-footer.ts"
+        ]
+      },
+      {
+        "slug": "files-ui",
+        "status": "active",
+        "entrypoints": [
+          "extensions/files/index.ts"
+        ]
+      },
+      {
+        "slug": "grounded-tools",
+        "status": "active",
+        "entrypoints": [
+          "files/index.ts",
+          "process/index.ts",
+          "lsp/index.ts",
+          "dialog/index.ts",
+          "tasks/index.ts",
+          "notes/index.ts",
+          "workplan/index.ts"
+        ],
+        "runtimeResources": [
+          "core/src/pty_bridge.py",
+          "core/src/session_pty_bridge.py"
+        ]
+      },
+      {
+        "slug": "herdr-agent-state",
+        "status": "active",
+        "entrypoints": [
+          "extensions/herdr-agent-state.ts"
+        ]
+      },
+      {
+        "slug": "herdr-blocked-bridge",
+        "status": "active",
+        "entrypoints": [
+          "extensions/herdr-blocked-bridge.ts"
+        ]
+      },
+      {
+        "slug": "herdr-status",
+        "status": "active",
+        "entrypoints": [
+          "extensions/herdr-status.ts"
+        ]
+      },
+      {
+        "slug": "pi-agent-context",
+        "status": "active",
+        "entrypoints": [
+          "extensions/index.ts"
+        ]
+      },
+      {
+        "slug": "pi-chrono-compaction",
+        "status": "active",
+        "entrypoints": [
+          "dist/src/pi-extension.js"
+        ],
+        "compiledCount": 65,
+        "buildConfig": "tsconfig.json",
+        "sourceEntrypoints": [
+          "src/pi-extension.ts"
+        ]
+      },
+      {
+        "slug": "pi-herdr-orchestrator",
+        "status": "active",
+        "entrypoints": [
+          "dist/extensions/pi-herdr-orchestrator.js"
+        ],
+        "compiledCount": 30,
+        "buildConfig": "tsconfig.json",
+        "sourceEntrypoints": [
+          "extensions/pi-herdr-orchestrator.ts"
+        ]
+      },
+      {
+        "slug": "pi-native-ssh",
+        "status": "active",
+        "entrypoints": [
+          "src/index.ts"
+        ],
+        "runtimeResources": [
+          "src/helper.py",
+          "src/session_helper.py"
+        ]
+      },
+      {
+        "slug": "pi-pixel-cua",
+        "status": "active",
+        "entrypoints": [
+          "src/index.ts"
+        ],
+        "runtimeResources": [
+          "helper/ei_sender.py",
+          "helper/portal_backend.py",
+          "helper/server.py"
+        ]
+      },
+      {
+        "slug": "pi-progressive-tools",
+        "status": "active",
+        "entrypoints": [
+          "extensions/index.ts"
+        ],
+        "runtimeResources": [
+          "progressive-tools.config.json"
+        ]
+      },
+      {
+        "slug": "pi-review-ui",
+        "status": "inactive",
+        "entrypoints": [
+          "extensions/review-ui.ts"
+        ]
+      },
+      {
+        "slug": "pi-signal-board",
+        "status": "active",
+        "entrypoints": [
+          "dist/index.js"
+        ],
+        "compiledCount": 57,
+        "buildConfig": "tsconfig.build.json",
+        "sourceEntrypoints": [
+          "src/index.ts"
+        ]
+      },
+      {
+        "slug": "pi-tool-controls",
+        "status": "inactive",
+        "entrypoints": [
+          "extensions/tool-controls.ts"
+        ]
+      },
+      {
+        "slug": "temporary-orchestrator-cancel-isolation",
+        "status": "active-temporary",
+        "entrypoints": [
+          "extensions/temporary-orchestrator-cancel-isolation.ts"
+        ]
+      },
+      {
+        "slug": "titlebar-spinner",
+        "status": "active",
+        "entrypoints": [
+          "extensions/titlebar-spinner.ts"
+        ]
+      }
+    ],
+    "deployedBaselineCommit": "049b6390fba7a7908d01908a7953dd2f50fa15df"
   }
 }

@@ -4,7 +4,6 @@
   "description": "Shared evidence-preserving primitives for Grounded Pi tools",
   "type": "module",
   "license": "MIT",
-  "files": ["src"],
   "exports": {
     "./ask-user-v1": "./src/ask-user-v1.ts",
     "./anchors": "./src/anchors.ts",
@@ -30,5 +29,8 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
 }

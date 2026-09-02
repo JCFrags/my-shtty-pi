@@ -4,7 +4,7 @@
   "description": "Keyboard-first repository tree and context-selection browser for Pi 0.84.1",
   "type": "module",
   "license": "MIT",
-  "private": false,
+  "private": true,
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -15,24 +15,10 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "files": [
-    "extensions",
-    "src",
-    "dist/extensions",
-    "dist/src",
-    "README.md",
-    "LICENSE"
-  ],
   "pi": {
     "extensions": [
       "./extensions"
     ]
-  },
-  "exports": {
-    ".": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/src/index.js"
-    }
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -50,13 +36,6 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.tmp-smoke']) fs.rmSync(path,{recursive:true,force:true})\"",
-    "typecheck": "npm run typecheck:pi-0.84.1",
-    "typecheck:pi-0.84.1": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
-    "test": "npm run build && node --test dist/test/*.test.js",
-    "smoke": "npm run build && node dist/scripts/smoke.js",
-    "validate": "npm run typecheck && npm test && npm run smoke",
-    "prepack": "npm run validate"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

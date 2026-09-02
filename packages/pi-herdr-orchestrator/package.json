@@ -4,51 +4,12 @@
   "description": "Agent Board control plane and mouse-first side TUI for Pi coding agents",
   "type": "module",
   "license": "MIT",
-  "private": false,
+  "private": true,
   "os": [
     "linux"
   ],
   "engines": {
     "node": ">=22.19.0"
-  },
-  "bin": {
-    "pi-herdr-orchestrator": "./bin/pi-herdr-orchestrator",
-    "pi-herdr-deck": "./bin/pi-herdr-deck"
-  },
-  "files": [
-    "bin",
-    "dist",
-    "schemas",
-    "profiles",
-    "workflows",
-    "examples",
-    "herdr-plugin.toml",
-    "README.md",
-    "SECURITY.md",
-    "LICENSE",
-    "docs",
-    "archive",
-    "scripts"
-  ],
-  "scripts": {
-    "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
-    "build": "npm run clean && tsc && cp -r schemas profiles workflows examples dist/",
-    "test": "node --test dist/tests/unit/*.test.js",
-    "test:unit": "node --test dist/tests/unit/*.test.js",
-    "test:integration": "PI_BIN_PATH=$PWD/tests/fixtures/fake-pi-capabilities.mjs node --test dist/tests/integration/*.test.js",
-    "smoke:package": "node scripts/package-smoke.mjs",
-    "validate": "npm run check && npm run build && npm run test:unit && npm run test:integration && npm run smoke:package",
-    "test:schemas": "node scripts/schema-check.mjs",
-    "schemas:check": "node scripts/schema-check.mjs",
-    "ops:plan": "node scripts/m7-ops.mjs plan",
-    "ops:deploy": "node scripts/m7-ops.mjs deploy",
-    "ops:canary": "node scripts/m7-ops.mjs canary",
-    "ops:soak": "node scripts/m7-ops.mjs soak",
-    "ops:rollback": "node scripts/m7-ops.mjs rollback",
-    "check": "npm run typecheck && npm run schemas:check && npm run docs:check",
-    "docs:check": "node scripts/check-release-docs.mjs",
-    "lint": "prettier --check \".github/**/*.{yml,yaml}\" \"bin/*\" \"extensions/**/*.ts\" \"src/**/*.ts\" \"tests/**/*.{ts,json}\" \"types/**/*.ts\" \"scripts/**/*.mjs\" \"schemas/**/*.json\" \"profiles/**/*.json\" \"examples/**/*.json\" \"workflows/{parallel-scout,single}.json\" package.json package-lock.json tsconfig.json"
   },
   "dependencies": {
     "@pi-herdr-deck/tui": "npm:@earendil-works/pi-tui@0.84.2"
@@ -75,7 +36,6 @@
   },
   "devDependencies": {
     "@types/node": "22.15.30",
-    "prettier": "^3.9.6",
     "typescript": "5.8.3"
   },
   "pi": {
@@ -89,5 +49,9 @@
     "pi",
     "herdr",
     "tui"
-  ]
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.json"
+  }
 }

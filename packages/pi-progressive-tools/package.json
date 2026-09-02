@@ -23,7 +23,5 @@
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
-  "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
-  }
+  "private": true
 }

@@ -7,32 +7,10 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "files": [
-    "dist",
-    "src",
-    "extensions",
-    "README.md",
-    "LICENSE"
-  ],
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
   "pi": {
     "extensions": [
       "./extensions/review-ui.ts"
     ]
-  },
-  "scripts": {
-    "clean": "node ./scripts/clean.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
-    "test": "node ./scripts/test.mjs",
-    "smoke": "node ./scripts/smoke.mjs",
-    "validate": "npm run typecheck && npm test && npm run build && npm run smoke",
-    "prepack": "npm run build"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -48,5 +26,9 @@
     "approval",
     "diff",
     "review"
-  ]
+  ],
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
 }

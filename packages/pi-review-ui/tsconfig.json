@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -11,13 +13,27 @@
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": false,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@earendil-works/pi-coding-agent": ["./types/pi-coding-agent.d.ts"],
-      "@earendil-works/pi-tui": ["./types/pi-tui.d.ts"]
+      "@earendil-works/pi-coding-agent": [
+        "./types/pi-coding-agent.d.ts"
+      ],
+      "@earendil-works/pi-tui": [
+        "./types/pi-tui.d.ts"
+      ]
     }
   },
-  "include": ["src/**/*.ts", "types/**/*.d.ts"],
-  "exclude": ["dist", ".test-dist", "node_modules"]
+  "include": [
+    "extensions/**/*.ts",
+    "src/**/*.ts",
+    "types/**/*.d.ts"
+  ],
+  "exclude": [
+    "dist",
+    ".test-dist",
+    "node_modules"
+  ]
 }
