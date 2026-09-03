@@ -1,14 +1,23 @@
-export const REGISTRY_VERSION = 1 as const;
-export const CANARY_VERSION = 1 as const;
-export const CANARY_PROTOCOL = "pi-herdr-orchestrate-v2-m01" as const;
+export const REGISTRY_VERSION = 2 as const;
+export const CANARY_VERSION = 2 as const;
+export const CANARY_PROTOCOL = "pi-herdr-orchestrate-v2-m02" as const;
 
 export type ProcessState = "starting" | "live" | "missing" | "closed" | "failed";
 export type RunPhase = "starting" | "running" | "closed" | "failed" | "unknown";
+export type AgentTopology = "parent-split-v1" | "managed-subagents-tab-v2";
 
 export interface ParentIdentity {
   workspaceId: string;
   tabId: string;
   paneId: string;
+}
+
+export interface ManagedTabRecord {
+  workspaceId: string;
+  tabId: string;
+  requestedLabel: string;
+  createdAt: string;
+  verifiedAt: string;
 }
 
 export interface AgentRecord {
@@ -18,6 +27,7 @@ export interface AgentRecord {
   herdrAgentName: string;
   agentGeneration: 1;
   assignmentGeneration: 1;
+  topology: AgentTopology;
   workspaceId: string;
   tabId: string;
   paneId: string;
@@ -35,6 +45,7 @@ export interface Registry {
   domainId: string;
   projectRoot: string;
   parent: ParentIdentity;
+  managedTab: ManagedTabRecord | null;
   createdAt: string;
   updatedAt: string;
   agents: AgentRecord[];

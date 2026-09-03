@@ -34,13 +34,13 @@ function errorCode(stderr: string): string | undefined {
     const code = error?.code ?? parsed?.code;
     if (typeof code === "string" && code.length > 0) return code;
   } catch {
-    // Herdr normally emits JSON errors, but the command can fail before the API responds.
+    // Herdr normally emits JSON errors, but a command can fail before the API responds.
   }
   return undefined;
 }
 
 function isNotFound(code: string): boolean {
-  return /(?:not[_-]?found|unknown[_-]?(?:agent|pane)|missing)/iu.test(code);
+  return /(?:not[_-]?found|unknown[_-]?(?:agent|pane|tab)|missing)/iu.test(code);
 }
 
 function responseResult(value: unknown): JsonObject {
@@ -49,6 +49,13 @@ function responseResult(value: unknown): JsonObject {
 
 function responseObject(value: unknown, key: string): JsonObject {
   return nestedObject(responseResult(value), key) ?? responseResult(value);
+}
+
+function environmentArgs(environment: Record<string, string>): string[] {
+  const args: string[] = [];
+  for (const [key, value] of Object.entries(environment).sort(([a], [b]) => a.localeCompare(b)))
+    args.push("--env", `${key}=${value}`);
+  return args;
 }
 
 export class HerdrCli {
@@ -111,6 +118,32 @@ export class HerdrCli {
     }
   }
 
+  async tabCreate(
+    workspaceId: string,
+    cwd: string,
+    label: string,
+    environment: Record<string, string>,
+  ): Promise<{ tab: JsonObject; rootPane: JsonObject }> {
+    const result = responseResult(
+      await this.json([
+        "tab", "create", "--workspace", workspaceId, "--cwd", cwd,
+        "--label", label, "--no-focus", ...environmentArgs(environment),
+      ]),
+    );
+    return {
+      tab: nestedObject(result, "tab") ?? {},
+      rootPane: nestedObject(result, "root_pane") ?? {},
+    };
+  }
+
+  async tabGet(tabId: string): Promise<JsonObject> {
+    return responseObject(await this.json(["tab", "get", tabId]), "tab");
+  }
+
+  async tabClose(tabId: string): Promise<JsonObject> {
+    return responseResult(await this.json(["tab", "close", tabId]));
+  }
+
   async paneCurrent(): Promise<JsonObject> {
     return responseObject(await this.json(["pane", "current", "--current"]), "pane");
   }
@@ -119,25 +152,29 @@ export class HerdrCli {
     return responseObject(await this.json(["pane", "get", paneId]), "pane");
   }
 
+  async paneList(workspaceId: string): Promise<JsonObject[]> {
+    const result = responseResult(await this.json(["pane", "list", "--workspace", workspaceId]));
+    const panes = result.panes;
+    return Array.isArray(panes) ? panes.map(object).filter((pane): pane is JsonObject => pane !== undefined) : [];
+  }
+
+  async paneLayout(paneId: string): Promise<JsonObject> {
+    return responseObject(await this.json(["pane", "layout", "--pane", paneId]), "layout");
+  }
+
   async paneSplit(
     paneId: string,
+    direction: "right" | "down",
     cwd: string,
     environment: Record<string, string>,
   ): Promise<JsonObject> {
-    const args = [
+    return responseObject(
+      await this.json([
+        "pane", "split", "--pane", paneId, "--direction", direction,
+        "--cwd", cwd, "--no-focus", ...environmentArgs(environment),
+      ]),
       "pane",
-      "split",
-      "--pane",
-      paneId,
-      "--direction",
-      "right",
-      "--cwd",
-      cwd,
-      "--no-focus",
-    ];
-    for (const [key, value] of Object.entries(environment).sort(([a], [b]) => a.localeCompare(b)))
-      args.push("--env", `${key}=${value}`);
-    return responseObject(await this.json(args), "pane");
+    );
   }
 
   async paneClose(paneId: string): Promise<JsonObject> {
@@ -151,15 +188,7 @@ export class HerdrCli {
   async agentStart(name: string, paneId: string): Promise<JsonObject> {
     return responseObject(
       await this.json([
-        "agent",
-        "start",
-        name,
-        "--kind",
-        "pi",
-        "--pane",
-        paneId,
-        "--timeout",
-        "30000",
+        "agent", "start", name, "--kind", "pi", "--pane", paneId, "--timeout", "30000",
       ]),
       "agent",
     );
@@ -171,15 +200,8 @@ export class HerdrCli {
 
   async agentRead(target: string, lines: number): Promise<string> {
     return this.run(this.binary, [
-      "agent",
-      "read",
-      target,
-      "--source",
-      "recent-unwrapped",
-      "--lines",
-      String(lines),
-      "--format",
-      "text",
+      "agent", "read", target, "--source", "recent-unwrapped",
+      "--lines", String(lines), "--format", "text",
     ]);
   }
 }

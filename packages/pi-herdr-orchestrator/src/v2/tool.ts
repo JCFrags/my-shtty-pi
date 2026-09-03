@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
+import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { RegistryError, RegistryStore } from "./store.js";
@@ -10,6 +10,7 @@ import {
   CANARY_VERSION,
   type AgentRecord,
   type JsonObject,
+  type ManagedTabRecord,
   type OrchestrateV2Params,
   type ParentIdentity,
 } from "./types.js";
@@ -20,8 +21,11 @@ const MAX_MESSAGE_BYTES = 8192;
 const MAX_LABEL_BYTES = 160;
 const MAX_PATH_BYTES = 4096;
 const MAX_LINES = 40;
+const MAX_ACTIVE_CHILDREN = 6;
+const MANAGED_TAB_LABEL = "subagents";
 const CAPABILITIES = {
   visiblePaneCreation: true,
+  managedSubagentTab: true,
   namedAgentStart: true,
   prompt: true,
   inspectRead: true,
@@ -33,28 +37,20 @@ const ORCHESTRATE_V2_SCHEMA = {
   oneOf: [
     { type: "object", additionalProperties: false, required: ["action"], properties: { action: { const: "health" } } },
     {
-      type: "object",
-      additionalProperties: false,
-      required: ["action", "task"],
+      type: "object", additionalProperties: false, required: ["action", "task"],
       properties: { action: { const: "spawn" }, task: stringProperty(MAX_TASK_BYTES), label: stringProperty(MAX_LABEL_BYTES), cwd: stringProperty(MAX_PATH_BYTES) },
     },
     { type: "object", additionalProperties: false, required: ["action"], properties: { action: { const: "list" } } },
     {
-      type: "object",
-      additionalProperties: false,
-      required: ["action"],
+      type: "object", additionalProperties: false, required: ["action"],
       properties: { action: { const: "inspect" }, agentId: stringProperty(128), runId: stringProperty(128), lines: { type: "integer", minimum: 1, maximum: MAX_LINES } },
     },
     {
-      type: "object",
-      additionalProperties: false,
-      required: ["action", "agentId", "message"],
+      type: "object", additionalProperties: false, required: ["action", "agentId", "message"],
       properties: { action: { const: "send" }, agentId: stringProperty(128), message: stringProperty(MAX_MESSAGE_BYTES) },
     },
     {
-      type: "object",
-      additionalProperties: false,
-      required: ["action", "agentId"],
+      type: "object", additionalProperties: false, required: ["action", "agentId"],
       properties: { action: { const: "close" }, agentId: stringProperty(128) },
     },
   ],
@@ -98,6 +94,16 @@ type IdentityResult =
   | { kind: "absent" }
   | { kind: "mismatch" };
 
+type ManagedTabState = "absent" | "live" | "missing" | "mismatch";
+type ManagedTabResult = {
+  record: ManagedTabRecord;
+  rootPaneId?: string;
+  created: boolean;
+  active: AgentRecord[];
+};
+
+const domainLocks = new Map<string, Promise<void>>();
+
 function object(value: unknown): JsonObject | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonObject)
@@ -118,6 +124,10 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function idFrom(value: unknown, key: string): string | undefined {
   return stringValue(object(value)?.[key]);
 }
@@ -132,9 +142,8 @@ function attention(agent: JsonObject): string {
 }
 
 function paneAgentName(pane: JsonObject): string | undefined {
-  const direct = stringValue(pane.name) ?? stringValue(pane.agent_name);
-  if (direct) return direct;
-  return stringValue(object(pane.agent_session)?.name);
+  return stringValue(pane.name) ?? stringValue(pane.agent_name) ??
+    stringValue(object(pane.agent_session)?.name);
 }
 
 function isNotFound(error: unknown): boolean {
@@ -146,6 +155,21 @@ function publicError(error: unknown): CanaryError {
   if (error instanceof RegistryError) return new CanaryError(error.code);
   if (error instanceof HerdrCliError) return new CanaryError(error.code);
   return new CanaryError("V2_OPERATION_FAILED");
+}
+
+async function withDomainLock<T>(domainId: string, action: () => Promise<T>): Promise<T> {
+  const previous = domainLocks.get(domainId) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const queued = previous.then(() => gate);
+  domainLocks.set(domainId, queued);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (domainLocks.get(domainId) === queued) domainLocks.delete(domainId);
+  }
 }
 
 async function projectRoot(cwd: string): Promise<string> {
@@ -186,7 +210,6 @@ async function requireContext(context: PiContext): Promise<V2Context> {
   const parent = parentFromPane(pane);
   const root = await projectRoot(context.cwd);
   const store = new RegistryStore(root, parent);
-  await store.load();
   return { cli, parent, store };
 }
 
@@ -204,10 +227,12 @@ async function identity(cli: HerdrCli, agent: AgentRecord): Promise<IdentityResu
     }
     return { kind: "mismatch" };
   }
-
-  if (idFrom(herdrAgent, "pane_id") !== agent.paneId) return { kind: "mismatch" };
-  if (stringValue(herdrAgent.name) && herdrAgent.name !== agent.herdrAgentName)
-    return { kind: "mismatch" };
+  if (
+    idFrom(herdrAgent, "pane_id") !== agent.paneId ||
+    idFrom(herdrAgent, "workspace_id") !== agent.workspaceId ||
+    idFrom(herdrAgent, "tab_id") !== agent.tabId ||
+    stringValue(herdrAgent.name) !== agent.herdrAgentName
+  ) return { kind: "mismatch" };
   let pane: JsonObject;
   try {
     pane = await cli.paneGet(agent.paneId);
@@ -215,7 +240,11 @@ async function identity(cli: HerdrCli, agent: AgentRecord): Promise<IdentityResu
     if (isNotFound(error)) return { kind: "absent" };
     throw error;
   }
-  if (idFrom(pane, "pane_id") !== agent.paneId) return { kind: "mismatch" };
+  if (
+    idFrom(pane, "pane_id") !== agent.paneId ||
+    idFrom(pane, "workspace_id") !== agent.workspaceId ||
+    idFrom(pane, "tab_id") !== agent.tabId
+  ) return { kind: "mismatch" };
   const currentName = paneAgentName(pane);
   if (currentName && currentName !== agent.herdrAgentName) return { kind: "mismatch" };
   return { kind: "present", agent: herdrAgent, pane, attention: attention(herdrAgent) };
@@ -226,7 +255,11 @@ function recordView(agent: AgentRecord, identityState?: IdentityResult["kind"]):
     agentId: agent.agentId,
     agentName: agent.herdrAgentName,
     runId: agent.runId,
+    agentGeneration: agent.agentGeneration,
     assignmentGeneration: agent.assignmentGeneration,
+    topology: agent.topology,
+    workspaceId: agent.workspaceId,
+    tabId: agent.tabId,
     paneId: agent.paneId,
     processState: agent.processState,
     herdrAttention: agent.herdrAttention,
@@ -253,11 +286,239 @@ async function refresh(
     return { agent: updated, identityState: "present" };
   }
   const updated = await store.updateAgent(agent.agentId, {
-    processState: result.kind === "absent" ? "missing" : "missing",
+    processState: "missing",
     runPhase: agent.runPhase === "closed" || agent.runPhase === "failed" ? agent.runPhase : "unknown",
     herdrAttention: "unknown",
   });
   return { agent: updated, identityState: result.kind };
+}
+
+async function verifyTab(
+  current: V2Context,
+  record: ManagedTabRecord,
+): Promise<"live" | "missing" | "mismatch"> {
+  let tab: JsonObject;
+  try {
+    tab = await current.cli.tabGet(record.tabId);
+  } catch (error) {
+    if (isNotFound(error)) return "missing";
+    throw error;
+  }
+  return idFrom(tab, "tab_id") === record.tabId &&
+    idFrom(tab, "workspace_id") === current.parent.workspaceId &&
+    record.workspaceId === current.parent.workspaceId
+    ? "live"
+    : "mismatch";
+}
+
+async function activeManagedAgents(current: V2Context, tabId: string): Promise<AgentRecord[]> {
+  const active: AgentRecord[] = [];
+  for (const agent of await current.store.list()) {
+    if (agent.topology !== "managed-subagents-tab-v2" || agent.tabId !== tabId ||
+        agent.processState === "closed" || agent.processState === "failed") continue;
+    const result = await identity(current.cli, agent);
+    if (result.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
+    if (result.kind === "present") {
+      active.push(await current.store.updateAgent(agent.agentId, {
+        processState: "live",
+        herdrAttention: result.attention,
+      }));
+    } else {
+      await current.store.updateAgent(agent.agentId, {
+        processState: "missing",
+        runPhase: "unknown",
+        herdrAttention: "unknown",
+      });
+    }
+  }
+  return active;
+}
+
+async function clearMissingTab(current: V2Context, record: ManagedTabRecord): Promise<void> {
+  await current.store.markManagedTabAgentsMissing(record.tabId);
+  await current.store.clearManagedTab(record.tabId);
+}
+
+async function cleanCreatedTab(
+  current: V2Context,
+  tabId: string,
+  paneId?: string,
+): Promise<void> {
+  try {
+    const tab = await current.cli.tabGet(tabId);
+    if (idFrom(tab, "tab_id") !== tabId || idFrom(tab, "workspace_id") !== current.parent.workspaceId)
+      return;
+    const panes = (await current.cli.paneList(current.parent.workspaceId))
+      .filter((pane) => idFrom(pane, "tab_id") === tabId);
+    if (panes.length === 1 && (!paneId || idFrom(panes[0], "pane_id") === paneId)) {
+      await current.cli.tabClose(tabId);
+    } else if (paneId) {
+      const exact = panes.find((pane) => idFrom(pane, "pane_id") === paneId);
+      if (exact) await current.cli.paneClose(paneId);
+    }
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+  } finally {
+    await current.store.clearManagedTab(tabId).catch(() => false);
+  }
+}
+
+async function createManagedTab(
+  current: V2Context,
+  cwd: string,
+  environment: Record<string, string>,
+): Promise<ManagedTabResult> {
+  const created = await current.cli.tabCreate(
+    current.parent.workspaceId,
+    cwd,
+    MANAGED_TAB_LABEL,
+    { ...environment, PI_HERDR_PARENT_PANE_ID: current.parent.paneId },
+  );
+  const tabId = idFrom(created.tab, "tab_id");
+  const paneId = idFrom(created.rootPane, "pane_id");
+  if (!tabId) throw new CanaryError("MANAGED_TAB_CREATE_FAILED");
+  if (!paneId) {
+    await cleanCreatedTab(current, tabId).catch(() => undefined);
+    throw new CanaryError("MANAGED_TAB_CREATE_FAILED");
+  }
+  const timestamp = now();
+  const record: ManagedTabRecord = {
+    workspaceId: current.parent.workspaceId,
+    tabId,
+    requestedLabel: MANAGED_TAB_LABEL,
+    createdAt: timestamp,
+    verifiedAt: timestamp,
+  };
+  try {
+    await current.store.setManagedTab(record);
+    if (
+      idFrom(created.tab, "workspace_id") !== current.parent.workspaceId ||
+      idFrom(created.rootPane, "workspace_id") !== current.parent.workspaceId ||
+      idFrom(created.rootPane, "tab_id") !== tabId
+    ) throw new CanaryError("MANAGED_TAB_IDENTITY_MISMATCH");
+    const [tab, pane] = await Promise.all([
+      current.cli.tabGet(tabId),
+      current.cli.paneGet(paneId),
+    ]);
+    if (
+      idFrom(tab, "tab_id") !== tabId || idFrom(tab, "workspace_id") !== current.parent.workspaceId ||
+      idFrom(pane, "pane_id") !== paneId || idFrom(pane, "workspace_id") !== current.parent.workspaceId ||
+      idFrom(pane, "tab_id") !== tabId
+    ) throw new CanaryError("MANAGED_TAB_IDENTITY_MISMATCH");
+    return { record, rootPaneId: paneId, created: true, active: [] };
+  } catch (error) {
+    await cleanCreatedTab(current, tabId, paneId).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function ensureManagedSubagentTab(
+  current: V2Context,
+  cwd: string,
+  environment: Record<string, string>,
+): Promise<ManagedTabResult> {
+  const existing = await current.store.managedTab();
+  if (!existing) return createManagedTab(current, cwd, environment);
+  const state = await verifyTab(current, existing);
+  if (state === "mismatch") throw new CanaryError("MANAGED_TAB_IDENTITY_MISMATCH");
+  if (state === "missing") {
+    await clearMissingTab(current, existing);
+    return createManagedTab(current, cwd, environment);
+  }
+  const verified = { ...existing, verifiedAt: now() };
+  await current.store.setManagedTab(verified);
+  const active = await activeManagedAgents(current, existing.tabId);
+  if (active.length === 0) {
+    await current.store.clearManagedTab(existing.tabId);
+    return createManagedTab(current, cwd, environment);
+  }
+  return { record: verified, created: false, active };
+}
+
+function layoutChoice(layout: JsonObject, active: AgentRecord[]): {
+  paneId: string;
+  direction: "right" | "down";
+} {
+  const owned = new Map(active.map((agent) => [agent.paneId, agent]));
+  const panes = Array.isArray(layout.panes) ? layout.panes.map(object).filter(Boolean) : [];
+  const geometry = panes.flatMap((pane) => {
+    if (!pane) return [];
+    const paneId = idFrom(pane, "pane_id");
+    const rect = object(pane.rect);
+    const width = numberValue(rect?.width);
+    const height = numberValue(rect?.height);
+    if (!paneId || !owned.has(paneId) || !width || !height) return [];
+    return [{ paneId, width, height, area: width * height }];
+  });
+  if (geometry.length > 0) {
+    geometry.sort((a, b) => b.area - a.area || a.paneId.localeCompare(b.paneId));
+    const target = geometry[0];
+    if (target) return {
+      paneId: target.paneId,
+      direction: target.width >= target.height * 3 ? "right" : "down",
+    };
+  }
+  const paneIds = active.map((agent) => agent.paneId).sort();
+  const index = active.length <= 2 ? 0 : (active.length - 2) % paneIds.length;
+  const paneId = paneIds[index];
+  if (!paneId) throw new CanaryError("MANAGED_TAB_HAS_NO_TARGET");
+  return { paneId, direction: active.length === 1 ? "right" : "down" };
+}
+
+async function createChildPane(
+  current: V2Context,
+  managed: ManagedTabResult,
+  cwd: string,
+  environment: Record<string, string>,
+): Promise<string> {
+  if (managed.created) {
+    if (!managed.rootPaneId) throw new CanaryError("MANAGED_TAB_HAS_NO_ROOT_PANE");
+    return managed.rootPaneId;
+  }
+  if (managed.active.length >= MAX_ACTIVE_CHILDREN)
+    throw new CanaryError("SUBAGENT_CAPACITY_REACHED");
+  let layout: JsonObject = {};
+  try {
+    const first = managed.active[0];
+    if (first) layout = await current.cli.paneLayout(first.paneId);
+  } catch {
+    // Deterministic fallback below is sufficient when geometry is unavailable.
+  }
+  const target = layoutChoice(layout, managed.active);
+  const pane = await current.cli.paneSplit(
+    target.paneId,
+    target.direction,
+    cwd,
+    { ...environment, PI_HERDR_PARENT_PANE_ID: target.paneId,
+      PI_HERDR_SUBAGENT_TAB_ID: managed.record.tabId },
+  );
+  const paneId = idFrom(pane, "pane_id");
+  try {
+    if (!paneId) throw new CanaryError("PANE_CREATE_FAILED");
+    const exact = await current.cli.paneGet(paneId);
+    if (
+      idFrom(pane, "workspace_id") !== current.parent.workspaceId ||
+      idFrom(pane, "tab_id") !== managed.record.tabId ||
+      idFrom(exact, "pane_id") !== paneId ||
+      idFrom(exact, "workspace_id") !== current.parent.workspaceId ||
+      idFrom(exact, "tab_id") !== managed.record.tabId
+    ) throw new CanaryError("PANE_CREATE_FAILED");
+    return paneId;
+  } catch (error) {
+    if (paneId) {
+      try {
+        const exact = await current.cli.paneGet(paneId);
+        if (
+          idFrom(exact, "pane_id") === paneId &&
+          idFrom(exact, "workspace_id") === current.parent.workspaceId &&
+          idFrom(exact, "tab_id") === managed.record.tabId
+        ) await current.cli.paneClose(paneId);
+      } catch {
+        // Do not guess when the returned pane identity is absent or incompatible.
+      }
+    }
+    throw error;
+  }
 }
 
 function parseParams(value: unknown): OrchestrateV2Params {
@@ -282,6 +543,34 @@ function requireAgentId(params: OrchestrateV2Params): string {
   return params.agentId;
 }
 
+async function managedHealth(current: V2Context): Promise<{
+  tabId: string | null;
+  state: ManagedTabState;
+  activePaneCount: number;
+}> {
+  const record = await current.store.managedTab();
+  if (!record) return { tabId: null, state: "absent", activePaneCount: 0 };
+  const state = await verifyTab(current, record);
+  if (state === "missing") {
+    await clearMissingTab(current, record);
+    return { tabId: record.tabId, state, activePaneCount: 0 };
+  }
+  if (state === "mismatch") return { tabId: record.tabId, state, activePaneCount: 0 };
+  await current.store.setManagedTab({ ...record, verifiedAt: now() });
+  try {
+    const active = await activeManagedAgents(current, record.tabId);
+    if (active.length === 0) {
+      await current.store.clearManagedTab(record.tabId);
+      return { tabId: null, state: "absent", activePaneCount: 0 };
+    }
+    return { tabId: record.tabId, state: "live", activePaneCount: active.length };
+  } catch (error) {
+    if (error instanceof CanaryError && error.code === "IDENTITY_MISMATCH")
+      return { tabId: record.tabId, state: "mismatch", activePaneCount: 0 };
+    throw error;
+  }
+}
+
 async function health(context: PiContext): Promise<JsonObject> {
   const cli = new HerdrCli();
   const [herdrVersion, piVersion] = await Promise.all([
@@ -299,32 +588,42 @@ async function health(context: PiContext): Promise<JsonObject> {
     parent: null,
     piVersion: piVersion ?? null,
     herdrVersion: herdrVersion ?? null,
-    capabilities:
-      running && inside && process.env.HERDR_SOCKET_PATH && process.env.HERDR_PANE_ID
-        ? CAPABILITIES
-        : Object.fromEntries(Object.keys(CAPABILITIES).map((key) => [key, false])),
+    capabilities: running && inside && process.env.HERDR_SOCKET_PATH && process.env.HERDR_PANE_ID
+      ? CAPABILITIES
+      : Object.fromEntries(Object.keys(CAPABILITIES).map((key) => [key, false])),
     registryPath: null,
     trackedAgentCount: 0,
+    managedTabId: null,
+    managedTabState: "absent",
+    managedActivePaneCount: 0,
+    capacityLimit: MAX_ACTIVE_CHILDREN,
   };
   if (!inside) return { ...base, ok: false, errorCode: "NOT_IN_HERDR" };
   if (!running) return { ...base, ok: false, errorCode: "HERDR_UNAVAILABLE" };
   try {
-    const current = await requireContext(context);
-    const agents = await current.store.list();
-    return {
-      ...base,
-      domainId: current.store.domainId,
-      parent: current.parent,
-      registryPath: current.store.path,
-      trackedAgentCount: agents.length,
-    };
+    const scope = await requireContext(context);
+    return await withDomainLock(scope.store.domainId, async () => {
+      const current = await requireContext(context);
+      const managed = await managedHealth(current);
+      const agents = await current.store.list();
+      return {
+        ...base,
+        domainId: current.store.domainId,
+        parent: current.parent,
+        registryPath: current.store.path,
+        trackedAgentCount: agents.length,
+        managedTabId: managed.tabId,
+        managedTabState: managed.state,
+        managedActivePaneCount: managed.activePaneCount,
+      };
+    });
   } catch (error) {
     const safe = publicError(error);
     return { ...base, ok: false, errorCode: safe.code };
   }
 }
 
-async function spawn(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
   const task = params.task;
   if (!task) throw new CanaryError("TASK_REQUIRED");
   const current = await requireContext(context);
@@ -337,12 +636,13 @@ async function spawn(context: PiContext, params: OrchestrateV2Params): Promise<J
   const createdAt = now();
   const environment = {
     PI_HERDR_DOMAIN_ID: current.store.domainId,
-    PI_HERDR_PARENT_PANE_ID: current.parent.paneId,
+    PI_HERDR_ROOT_PARENT_PANE_ID: current.parent.paneId,
     PI_HERDR_AGENT_ID: agentId,
     PI_HERDR_RUN_ID: runId,
     PI_HERDR_AGENT_GENERATION: "1",
     PI_HERDR_ASSIGNMENT_GENERATION: "1",
   };
+  const managed = await ensureManagedSubagentTab(current, cwd, environment);
   let paneId: string | undefined;
   let recordAdded = false;
   const agent: AgentRecord = {
@@ -352,8 +652,9 @@ async function spawn(context: PiContext, params: OrchestrateV2Params): Promise<J
     herdrAgentName,
     agentGeneration: 1,
     assignmentGeneration: 1,
+    topology: "managed-subagents-tab-v2",
     workspaceId: current.parent.workspaceId,
-    tabId: current.parent.tabId,
+    tabId: managed.record.tabId,
     paneId: "pending",
     cwd,
     label,
@@ -364,9 +665,8 @@ async function spawn(context: PiContext, params: OrchestrateV2Params): Promise<J
     updatedAt: createdAt,
   };
   try {
-    const split = await current.cli.paneSplit(current.parent.paneId, cwd, environment);
-    paneId = idFrom(split, "pane_id");
-    if (!paneId) throw new CanaryError("PANE_CREATE_FAILED");
+    paneId = await createChildPane(current, managed, cwd, environment);
+    if (paneId === current.parent.paneId) throw new CanaryError("PARENT_PANE_TARGET_REFUSED");
     agent.paneId = paneId;
     await current.store.addAgent(agent);
     recordAdded = true;
@@ -390,44 +690,41 @@ async function spawn(context: PiContext, params: OrchestrateV2Params): Promise<J
       ok: true,
       action: "spawn",
       domainId: current.store.domainId,
-      agentId: live.agentId,
-      runId: live.runId,
-      agentName: live.herdrAgentName,
-      agentGeneration: live.agentGeneration,
-      assignmentGeneration: live.assignmentGeneration,
-      workspaceId: live.workspaceId,
-      tabId: live.tabId,
-      paneId: live.paneId,
+      ...recordView(live),
+      managedTabId: live.tabId,
+      tabCreatedByRequest: managed.created,
       cwd: live.cwd,
-      processState: live.processState,
-      delegatedRunPhase: live.runPhase,
-      herdrAttention: live.herdrAttention,
     };
   } catch (error) {
     if (paneId) {
-      try {
-        const pane = await current.cli.paneGet(paneId);
-        if (
-          idFrom(pane, "pane_id") === paneId &&
-          idFrom(pane, "workspace_id") === current.parent.workspaceId &&
-          idFrom(pane, "tab_id") === current.parent.tabId
-        )
-          await current.cli.paneClose(paneId);
-      } catch {
-        // The cleanup target is intentionally only this request's exact pane.
+      if (managed.created) {
+        await cleanCreatedTab(current, managed.record.tabId, paneId).catch(() => undefined);
+      } else {
+        try {
+          const pane = await current.cli.paneGet(paneId);
+          if (
+            idFrom(pane, "pane_id") === paneId &&
+            idFrom(pane, "workspace_id") === current.parent.workspaceId &&
+            idFrom(pane, "tab_id") === managed.record.tabId
+          ) await current.cli.paneClose(paneId);
+        } catch {
+          // Cleanup is intentionally limited to this request's exact pane.
+        }
       }
     }
     if (recordAdded) {
-      await current.store
-        .updateAgent(agentId, {
-          processState: "failed",
-          runPhase: "failed",
-          herdrAttention: "unknown",
-        })
-        .catch(() => undefined);
+      await current.store.updateAgent(agentId, {
+        processState: "failed",
+        runPhase: "failed",
+        herdrAttention: "unknown",
+      }).catch(() => undefined);
     }
     throw publicError(error);
   }
+}
+
+async function spawn(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+  return spawnUnlocked(context, params);
 }
 
 async function list(context: PiContext): Promise<JsonObject> {
@@ -446,7 +743,8 @@ async function inspect(context: PiContext, params: OrchestrateV2Params): Promise
   const agent = await current.store.getAgent(params.agentId, params.runId);
   if (!agent) throw new CanaryError("AGENT_NOT_REGISTERED");
   const lines = params.lines === undefined ? MAX_LINES : params.lines;
-  if (!Number.isSafeInteger(lines) || lines < 1 || lines > MAX_LINES) throw new CanaryError("INVALID_LINE_COUNT");
+  if (!Number.isSafeInteger(lines) || lines < 1 || lines > MAX_LINES)
+    throw new CanaryError("INVALID_LINE_COUNT");
   let refreshed = agent;
   let identityState: IdentityResult["kind"] = "absent";
   if (agent.processState !== "closed") {
@@ -475,7 +773,6 @@ async function inspect(context: PiContext, params: OrchestrateV2Params): Promise
         action: "inspect",
         domainId: current.store.domainId,
         ...recordView(refreshed, identityState),
-        agentGeneration: refreshed.agentGeneration,
         recentOutput,
         recentOutputLineCount: recentOutput.length === 0 ? 0 : recentOutput.split("\n").length,
       };
@@ -486,7 +783,6 @@ async function inspect(context: PiContext, params: OrchestrateV2Params): Promise
     action: "inspect",
     domainId: current.store.domainId,
     ...recordView(refreshed, identityState),
-    agentGeneration: refreshed.agentGeneration,
     recentOutput: "",
     recentOutputLineCount: 0,
   };
@@ -508,20 +804,30 @@ async function send(context: PiContext, params: OrchestrateV2Params): Promise<Js
   const updated = await current.store.updateAgent(agent.agentId, {
     processState: afterPrompt.kind === "present" ? "live" : "missing",
     herdrAttention: afterPrompt.kind === "present" ? afterPrompt.attention : "unknown",
-    runPhase: afterPrompt.kind === "present" ? (agent.runPhase === "starting" ? "running" : agent.runPhase) : "unknown",
+    runPhase: afterPrompt.kind === "present"
+      ? (agent.runPhase === "starting" ? "running" : agent.runPhase)
+      : "unknown",
   });
-  return {
-    ok: true,
-    action: "send",
-    domainId: current.store.domainId,
-    agentId: updated.agentId,
-    runId: updated.runId,
-    agentName: updated.herdrAgentName,
-    paneId: updated.paneId,
-    assignmentGeneration: updated.assignmentGeneration,
-    delegatedRunPhase: updated.runPhase,
-    herdrAttention: updated.herdrAttention,
-  };
+  return { ok: true, action: "send", domainId: current.store.domainId, ...recordView(updated) };
+}
+
+async function detachIfNoManagedPanes(current: V2Context, tabId: string): Promise<void> {
+  let active = false;
+  for (const agent of await current.store.list()) {
+    if (agent.topology !== "managed-subagents-tab-v2" || agent.tabId !== tabId ||
+        agent.processState === "closed" || agent.processState === "failed") continue;
+    const result = await identity(current.cli, agent);
+    if (result.kind === "present" || result.kind === "mismatch") {
+      active = true;
+    } else {
+      await current.store.updateAgent(agent.agentId, {
+        processState: "missing",
+        runPhase: "unknown",
+        herdrAttention: "unknown",
+      });
+    }
+  }
+  if (!active) await current.store.clearManagedTab(tabId);
 }
 
 async function close(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
@@ -529,46 +835,43 @@ async function close(context: PiContext, params: OrchestrateV2Params): Promise<J
   const agentId = requireAgentId(params);
   const agent = await current.store.getAgent(agentId);
   if (!agent) throw new CanaryError("AGENT_NOT_REGISTERED");
+  if (agent.paneId === current.parent.paneId) throw new CanaryError("PARENT_PANE_TARGET_REFUSED");
   if (agent.processState === "closed")
-    return { ok: true, action: "close", domainId: current.store.domainId, agentId, paneId: agent.paneId, alreadyAbsent: true, processState: "closed", delegatedRunPhase: "closed" };
+    return { ok: true, action: "close", domainId: current.store.domainId,
+      ...recordView(agent, "absent"), alreadyAbsent: true };
   const result = await identity(current.cli, agent);
   if (result.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
-  if (result.kind === "absent") {
-    const updated = await current.store.updateAgent(agentId, {
-      processState: "closed",
-      runPhase: "closed",
-      herdrAttention: "unknown",
-    });
-    return { ok: true, action: "close", domainId: current.store.domainId, agentId, paneId: updated.paneId, alreadyAbsent: true, processState: updated.processState, delegatedRunPhase: updated.runPhase };
-  }
-  try {
-    await current.cli.paneClose(agent.paneId);
-  } catch (error) {
-    if (!isNotFound(error)) throw error;
+  if (result.kind !== "absent") {
+    try {
+      await current.cli.paneClose(agent.paneId);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
   }
   const updated = await current.store.updateAgent(agentId, {
     processState: "closed",
     runPhase: "closed",
     herdrAttention: "unknown",
   });
-  return { ok: true, action: "close", domainId: current.store.domainId, agentId, paneId: updated.paneId, alreadyAbsent: false, processState: updated.processState, delegatedRunPhase: updated.runPhase };
+  if (updated.topology === "managed-subagents-tab-v2")
+    await detachIfNoManagedPanes(current, updated.tabId);
+  return { ok: true, action: "close", domainId: current.store.domainId,
+    ...recordView(updated, "absent"), alreadyAbsent: result.kind === "absent" };
 }
 
 async function execute(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
-  switch (params.action) {
-    case "health":
-      return health(context);
-    case "spawn":
-      return spawn(context, params);
-    case "list":
-      return list(context);
-    case "inspect":
-      return inspect(context, params);
-    case "send":
-      return send(context, params);
-    case "close":
-      return close(context, params);
-  }
+  if (params.action === "health") return health(context);
+  const scope = await requireContext(context);
+  return withDomainLock(scope.store.domainId, async () => {
+    switch (params.action) {
+      case "health": return health(context);
+      case "spawn": return spawn(context, params);
+      case "list": return list(context);
+      case "inspect": return inspect(context, params);
+      case "send": return send(context, params);
+      case "close": return close(context, params);
+    }
+  });
 }
 
 export function registerOrchestrateV2(api: ExtensionAPI): void {
@@ -576,8 +879,8 @@ export function registerOrchestrateV2(api: ExtensionAPI): void {
     name: "orchestrate_v2",
     label: "Orchestrate v2 Canary",
     description:
-      "M01 canary: directly control visible Herdr Pi agent panes with health, spawn, list, inspect, send, and close. This is independent of legacy orchestrate and has no task-completion inference: Herdr idle/done and Pi settlement never complete a delegated run.",
-    promptSnippet: "Direct Herdr visible-agent canary control",
+      "M02 canary: directly control visible Pi agent panes grouped in one managed Herdr subagents tab. This remains independent of legacy orchestrate and never infers delegated completion from Herdr idle/done, Pi settlement, compaction, silence, or terminal state.",
+    promptSnippet: "Direct Herdr shared-tab visible-agent canary control",
     parameters: ORCHESTRATE_V2_SCHEMA as unknown as ToolRegistration["parameters"],
     async execute(_toolCallId, rawParams, _signal, _onUpdate, context) {
       try {
