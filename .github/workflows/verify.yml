@@ -33,12 +33,10 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify public review content boundary
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: >-
           node scripts/verify-chrono-v3-privacy.mjs
           --self-test --worktree --index --all-refs
-          --require-public-review --repository "$GITHUB_REPOSITORY"
+          --require-public-review --repository "JCFrags/my-shtty-pi"
           --ci-event "$GITHUB_EVENT_PATH"
       - name: Verify frozen ChronoCompact baseline
         run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only

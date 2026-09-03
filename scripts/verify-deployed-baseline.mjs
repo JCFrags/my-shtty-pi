@@ -215,6 +215,9 @@ function verifyWorkflowBoundary() {
   for (const required of ["--self-test", "--worktree", "--index", "--all-refs", "--require-public-review", "--repository", "--ci-event", "$GITHUB_EVENT_PATH"]) {
     if (!workflow.includes(required)) throw new Error(`verify workflow lacks public review scan argument ${required}`);
   }
+  if (!workflow.includes('--repository "JCFrags/my-shtty-pi"') || workflow.includes('--repository "$GITHUB_REPOSITORY"')) {
+    throw new Error("verify workflow must bind public review to the canonical repository identity");
+  }
   if (!workflow.includes("--allow-missing-live") || !workflow.includes("--static-only")) throw new Error("verify workflow lacks static baseline mode");
   if (workflow.includes("consolidation/clean-monorepo-20260901")) throw new Error("verify workflow retains the deleted consolidation trigger");
 }
