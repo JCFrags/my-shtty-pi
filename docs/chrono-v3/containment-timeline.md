@@ -13,6 +13,7 @@ This timeline records only bounded, reproducible project events. It does not rep
 | 2026-09-03 | Directing-assistant project-lead review 1 | Review record | Review 1 requested changes. Local secondary reviews performed during R1 were advisory and did not grant acceptance. |
 | 2026-09-03 | R1 push and CI evidence | GitHub Actions metadata and review records | R1 correction commits were pushed normally and the recorded push and pull-request runs succeeded. This was not M00 acceptance and did not authorize M01. |
 | 2026-09-03 | Directing-assistant project-lead review 2 | Review record and current instruction | Review 2 requested R2-F001 through R2-F010. The current correction tree addresses those findings and is ready for directing-assistant project-lead re-review. |
-| 2026-09-03 | R2 local validation and publication preparation | Local command records | Scanner, baseline, ChronoCompact, and root gates are being run against synthetic or sanitized inputs only. No runtime/live/original-worktree change occurred. |
+| 2026-09-03 | R2 local validation and publication preparation | Local command records | Scanner, baseline, ChronoCompact, and root gates passed against synthetic or sanitized inputs only. No runtime/live/original-worktree change occurred. |
+| 2026-09-03 | R2 push and CI evidence | GitHub Actions metadata | Commits `9057c1a` and `c074fe9` were pushed normally. Push run `33816038570` and pull-request run `33816041445` passed. This is not M00 acceptance and does not authorize M01. |
 
 The timeline is not an M00 acceptance record and does not authorize M01. M00 remains unaccepted until the directing assistant records an explicit decision after reviewing the corrected pushed head.
