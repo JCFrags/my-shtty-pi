@@ -2,14 +2,21 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   cpSync,
   existsSync,
+  fstatSync,
+  fsyncSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import {
@@ -119,6 +126,185 @@ function trackedWorkingFiles() {
     .filter((rel) => existsSync(join(root, rel)));
 }
 
+function gitPathList(args) {
+  const separator = args.indexOf("--");
+  const command = separator < 0
+    ? [...args, "-z"]
+    : [...args.slice(0, separator), "-z", ...args.slice(separator)];
+  return execFileSync("git", command, { cwd: root })
+    .toString("utf8").split("\0").filter(Boolean);
+}
+
+function projectGlanceIndexFiles() {
+  const prefix = `packages/${projectGlanceSlug}`;
+  const untracked = gitPathList(["ls-files", "--others", "--exclude-standard", "--", prefix]);
+  if (untracked.length > 0) {
+    throw new Error(`pi-project-glance: untracked package input(s): ${untracked.join(", ")}`);
+  }
+  const indexed = gitPathList(["ls-files", "--cached", "--", prefix]);
+  if (indexed.length === 0) throw new Error("pi-project-glance: Git index contains no package inputs");
+  for (const rel of indexed) {
+    if (!rel.startsWith(`${prefix}/`) || rel.includes("\0") || rel.split("/").includes("..")) {
+      throw new Error(`pi-project-glance: invalid indexed package input ${rel}`);
+    }
+    const path = join(root, rel);
+    let entry;
+    try {
+      entry = lstatSync(path);
+    } catch {
+      throw new Error(`pi-project-glance: indexed package input is missing ${rel}`);
+    }
+    if (entry.isSymbolicLink()) throw new Error(`pi-project-glance: indexed symlink is forbidden ${rel}`);
+    if (!entry.isFile()) throw new Error(`pi-project-glance: indexed package input is not a file ${rel}`);
+  }
+  return indexed;
+}
+
+function assertNoSymlinkComponents(rootDir, path, label) {
+  const rel = relative(rootDir, path);
+  if (rel.startsWith(`..${sep}`) || rel === ".." || rel.includes("\0")) {
+    throw new Error(`pi-project-glance: path escapes package while copying ${label}`);
+  }
+  let current = rootDir;
+  for (const part of rel.split(sep).filter(Boolean)) {
+    current = join(current, part);
+    const entry = lstatSync(current);
+    if (entry.isSymbolicLink()) throw new Error(`pi-project-glance: symlink is forbidden while copying ${label}`);
+  }
+}
+
+function copyIndexedFile(source, destination, packageRoot) {
+  assertNoSymlinkComponents(packageRoot, source, relative(packageRoot, source));
+  const sourceHandle = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const sourceStat = fstatSync(sourceHandle);
+    if (!sourceStat.isFile()) throw new Error(`pi-project-glance: indexed input is not a regular file ${relative(packageRoot, source)}`);
+    const bytes = readFileSync(sourceHandle);
+    const mode = sourceStat.mode & 0o7777;
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+    const destinationHandle = openSync(
+      destination,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      mode,
+    );
+    try {
+      writeFileSync(destinationHandle, bytes);
+      fsyncSync(destinationHandle);
+    } finally {
+      closeSync(destinationHandle);
+    }
+    chmodSync(destination, mode);
+  } finally {
+    closeSync(sourceHandle);
+  }
+}
+
+function copyIndexedProjectGlance(packageRoot, work, indexed) {
+  mkdirSync(work, { recursive: true, mode: 0o700 });
+  const prefix = `packages/${projectGlanceSlug}/`;
+  for (const repoRel of indexed) {
+    const packageRel = repoRel.slice(prefix.length);
+    copyIndexedFile(join(root, repoRel), join(work, packageRel), packageRoot);
+  }
+}
+
+const projectGlanceFirstPartyRoots = ["package.json", "herdr-plugin.toml", "README.md"];
+function isProjectGlanceFirstPartyPath(rel) {
+  return projectGlanceFirstPartyRoots.includes(rel) ||
+    rel.startsWith("bin/") || rel.startsWith("scripts/") || rel.startsWith("src/") ||
+    rel.startsWith("test/") || /^tsconfig(?:\.[^.]+)?\.json$/u.test(rel);
+}
+
+const projectGlanceBoundaryPatterns = [
+  ["pi-signal-board", /\bpi-signal-board\b/iu],
+  ["signal-board", /\bsignal-board\b/iu],
+  ["signalboard", /\bsignalboard\b/iu],
+  ["signal_board", /\bsignal_board\b/iu],
+  ["SignalBoard", /\bSignalBoard\b/u],
+  ["signals route", /\/(?:signals|signalboard)\b/iu],
+  ["signal command", /\bsignal_board_(?:update|question|ack)\b/iu],
+  ["pi-agent-board", /\bpi-agent-board\b/iu],
+  ["agent-board", /\bagent-board\b/iu],
+  ["AgentBoard", /\bAgentBoard\b/u],
+  ["agent-board route", /\/agent-board\b/iu],
+  ["pi-herd route", /\/pi-herd\b/iu],
+  ["openPiHerd", /\bopenPiHerd\b/u],
+  ["pi-herdr-deck", /\bpi-herdr-deck\b/iu],
+  ["legacy TUI alias", /@pi-herdr-deck\/tui/iu],
+  ["legacy deck registry", /\bpi-herdr-decks\.json\b/iu],
+  ["legacy deck entrypoint", /["']deck["']/u],
+  ["orchestrator identity", /\bpi\.herdr\.orchestrator\b/iu],
+  ["tool registration", /\bregisterTool\s*\(/u],
+  ["shortcut registration", /\bregister(?:Shortcut|Keybind|Hotkey)\s*\(/u],
+  ["widget registration", /\b(?:setWidget|registerWidget|registerEditorWidget)\s*\(/u],
+];
+const projectGlanceImportPatterns = [
+  ["orchestrator import", /(?:from|import|require)\s*(?:\(\s*)?["'][^"']*(?:pi-herdr-orchestrator|pi\.herdr\.orchestrator|packages\/pi-herdr-orchestrator)[^"']*["']/iu],
+  ["files import", /(?:from|import|require)\s*(?:\(\s*)?["'][^"']*(?:files-ui|packages\/files-ui)[^"']*["']/iu],
+  ["signal-board import", /(?:from|import|require)\s*(?:\(\s*)?["'][^"']*(?:pi-signal-board|signal-board|packages\/pi-signal-board)[^"']*["']/iu],
+  ["orchestration import", /(?:from|import|require)\s*(?:\(\s*)?["'][^"']*(?:orchestrat(?:ion|or)|broker|scheduler|model-policy|(?:^|[/.:-])state(?:$|[/.:-]))[^"']*["']/iu],
+];
+
+function assertNoProjectGlanceRuntimeArtifact(rel, label) {
+  if (rel === "package-lock.json") return;
+  const generatedOutput = label === "generated output" || label === "packed output";
+  if (/(^|\/)(?:node_modules|\.runtime)(?:\/|$)/u.test(rel) ||
+      (!generatedOutput && /(^|\/)dist(?:\/|$)/u.test(rel)) ||
+      /(?:^|\/)(?:connection-[a-f0-9]{24}\.json|relay-[a-f0-9]{24}\.sock|pane-[a-f0-9]{24}\.(?:json|lock))$/u.test(rel) ||
+      /\.(?:sock|tgz|jsonl|log|zip|tar)$/iu.test(rel)) {
+    throw new Error(`pi-project-glance: runtime-secret artifact is not allowed in ${label}: ${rel}`);
+  }
+}
+
+function scanProjectGlanceText(text, label) {
+  for (const [name, pattern] of projectGlanceBoundaryPatterns) {
+    if (pattern.test(text)) throw new Error(`pi-project-glance: forbidden boundary ${name} in ${label}`);
+  }
+  for (const [name, pattern] of projectGlanceImportPatterns) {
+    if (pattern.test(text)) throw new Error(`pi-project-glance: forbidden ${name} in ${label}`);
+  }
+  for (const match of text.matchAll(/\bregisterCommand\s*\(\s*["']([^"']+)["']/gu)) {
+    if (match[1] !== "project-glance") throw new Error(`pi-project-glance: compatibility command alias in ${label}`);
+  }
+}
+
+function scanProjectGlanceBoundary(packageRoot, indexed, includeGenerated) {
+  for (const repoRel of indexed) {
+    const rel = repoRel.slice(`packages/${projectGlanceSlug}/`.length);
+    assertNoProjectGlanceRuntimeArtifact(rel, "tracked input");
+    if (!isProjectGlanceFirstPartyPath(rel) || rel === "package-lock.json") continue;
+    const path = join(packageRoot, rel);
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink()) throw new Error(`pi-project-glance: unsafe first-party scan input ${rel}`);
+    const bytes = readFileSync(path);
+    if (bytes.includes(0)) throw new Error(`pi-project-glance: binary first-party scan input ${rel}`);
+    scanProjectGlanceText(bytes.toString("utf8"), `tracked ${rel}`);
+  }
+  if (!includeGenerated) return;
+  const distRoot = join(packageRoot, "dist");
+  if (!existsSync(distRoot)) throw new Error("pi-project-glance: generated dist output is missing");
+  for (const path of walk(distRoot)) {
+    const rel = relative(packageRoot, path).replaceAll(sep, "/");
+    assertNoProjectGlanceRuntimeArtifact(rel, "generated output");
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink()) throw new Error(`pi-project-glance: unsafe generated scan input ${rel}`);
+    const bytes = readFileSync(path);
+    if (bytes.includes(0)) continue;
+    scanProjectGlanceText(bytes.toString("utf8"), `generated output ${rel}`);
+  }
+}
+
+function scanProjectGlancePackFiles(work, packFiles) {
+  for (const rel of packFiles) {
+    assertNoProjectGlanceRuntimeArtifact(rel, "packed output");
+    if (rel === "package-lock.json") continue;
+    const path = join(work, rel);
+    const bytes = readFileSync(path);
+    if (bytes.includes(0)) continue;
+    scanProjectGlanceText(bytes.toString("utf8"), `packed ${rel}`);
+  }
+}
+
 // Repository identity, product set, activation status, and root boundary.
 const actualSlugs = products.map((product) => product.slug);
 if (!jsonEqual(actualSlugs, expectedSlugs)) throw new Error(`unexpected product order/set: ${actualSlugs.join(",")}`);
@@ -140,6 +326,20 @@ if (existsSync(join(root, "packages/pi-herdr-orchestrator/extensions/temporary-o
 const rootEntries = readdirSync(root).filter((name) => name !== ".git").sort();
 const allowedRootEntries = [".github", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "packages", "scripts"].sort();
 if (!jsonEqual(rootEntries, allowedRootEntries)) throw new Error(`unexpected root entries: ${rootEntries.join(",")}`);
+const rootReadme = readFileSync(join(root, "README.md"), "utf8");
+for (const required of [
+  /September 1, 2026/u,
+  /17 original products/u,
+  /15 active families/u,
+  /21 active entrypoints/u,
+  /272 runtime records/u,
+  /261 deployed hashes/u,
+  /packages\/pi-project-glance/u,
+  /not part of the captured deployed-hash inventory/iu,
+  /provider integration remains incomplete/iu,
+]) {
+  if (!required.test(rootReadme)) throw new Error(`root README lacks required Project Glance contract: ${required}`);
+}
 const workflows = walk(join(root, ".github/workflows")).map((path) => relative(join(root, ".github/workflows"), path));
 if (!jsonEqual(workflows, ["verify.yml"])) throw new Error("exactly one verify workflow is required");
 const workflow = readFileSync(join(root, ".github/workflows/verify.yml"), "utf8");
@@ -503,6 +703,7 @@ function executeScripts(plan) {
 
 function verifyProjectGlanceStatic() {
   const packageRoot = join(root, "packages", projectGlanceSlug);
+  const indexed = projectGlanceIndexFiles();
   const manifestPath = join(packageRoot, "package.json");
   const manifest = readJson(manifestPath);
   if (manifest.name !== projectGlanceSlug || manifest.version !== "0.1.0" || manifest.private !== true || manifest.type !== "module") {
@@ -546,13 +747,15 @@ function verifyProjectGlanceStatic() {
   ]) {
     if (!herdrManifest.includes(required)) throw new Error(`pi-project-glance: Herdr manifest lacks ${required}`);
   }
-  const projectTracked = tracked.filter((rel) => rel.startsWith(`packages/${projectGlanceSlug}/`));
+  const projectTracked = indexed;
   const allowedTracked = new RegExp(`^packages/${projectGlanceSlug}/(?:README\\.md|herdr-plugin\\.toml|package(?:-lock)?\\.json|tsconfig(?:\\.build)?\\.json|bin/pi-project-glance|src/.+\\.ts|scripts/dev-(?:doctor|fixture|link|unlink)\\.mjs|test/.+\\.mjs)$`, "u");
   if (projectTracked.length === 0 || projectTracked.some((rel) => !allowedTracked.test(rel))) throw new Error("pi-project-glance: unexplained tracked file");
   if (existsSync(join(packageRoot, "DEPLOYED.sha256"))) throw new Error("pi-project-glance: additive package must not enter the frozen deployed manifest");
   const launcher = join(packageRoot, "bin/pi-project-glance");
   if (!lstatSync(launcher).isFile() || (lstatSync(launcher).mode & 0o111) === 0) throw new Error("pi-project-glance: launcher is not executable");
-  const sourceFiles = walk(join(packageRoot, "src")).filter((path) => path.endsWith(".ts"));
+  const sourceFiles = indexed
+    .filter((rel) => rel.startsWith(`packages/${projectGlanceSlug}/src/`) && rel.endsWith(".ts"))
+    .map((rel) => join(root, rel));
   if (sourceFiles.length === 0) throw new Error("pi-project-glance: source is missing");
   for (const source of sourceFiles) {
     const text = readFileSync(source, "utf8");
@@ -572,6 +775,7 @@ function verifyProjectGlanceStatic() {
       if (!target || !isWithin(packageRoot, target)) throw new Error(`pi-project-glance: unresolved local import ${specifier}`);
     }
   }
+  scanProjectGlanceBoundary(packageRoot, indexed, false);
   return {
     package: manifest.name,
     trackedFiles: projectTracked.length,
@@ -585,19 +789,12 @@ function verifyProjectGlance() {
   const staticResult = verifyProjectGlanceStatic();
   if (staticOnly) return { ...staticResult, status: "static-only" };
   const packageRoot = join(root, "packages", projectGlanceSlug);
+  const indexed = projectGlanceIndexFiles();
   const temp = mkdtempSync(join(tmpdir(), `pi-project-glance-verify-${process.pid}-`));
   chmodSync(temp, 0o700);
   const work = join(temp, "package");
   try {
-    cpSync(packageRoot, work, {
-      recursive: true,
-      filter: (path) => {
-        const rel = relative(packageRoot, path).replaceAll(sep, "/");
-        if (rel === "") return true;
-        if (["dist", "node_modules", ".runtime"].some((name) => rel === name || rel.startsWith(`${name}/`))) return false;
-        return !rel.endsWith(".tgz");
-      },
-    });
+    copyIndexedProjectGlance(packageRoot, work, indexed);
     execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
     const isolatedEnv = { ...process.env, PI_PROJECT_GLANCE_VERIFIER_COPY: "1" };
     execFileSync("npm", ["run", "typecheck"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
@@ -610,6 +807,8 @@ function verifyProjectGlance() {
       .map((path) => relative(work, path).replaceAll(sep, "/"))
       .sort();
     const packFiles = result[0].files.map((entry) => entry.path).sort();
+    scanProjectGlanceBoundary(work, indexed, true);
+    scanProjectGlancePackFiles(work, packFiles);
     const required = ["README.md", "bin/pi-project-glance", "herdr-plugin.toml", "package.json", ...distFiles].sort();
     for (const path of required) if (!packFiles.includes(path)) throw new Error(`pi-project-glance: pack omitted ${path}`);
     for (const path of packFiles) {

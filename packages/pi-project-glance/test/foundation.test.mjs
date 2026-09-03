@@ -50,7 +50,11 @@ import {
   ensurePrivateDirectory,
   runtimePathsForSession,
 } from "../dist/runtime/paths.js";
-import { ProjectGlancePaneRegistry } from "../dist/runtime/pane-registry.js";
+import {
+  createProjectGlanceRegistryLockRecord,
+  currentProjectGlanceProcessIdentity,
+  ProjectGlancePaneRegistry,
+} from "../dist/runtime/pane-registry.js";
 import {
   createStaticSnapshot,
   STATIC_FIXTURE_LONG_FEED_COUNT,
@@ -106,6 +110,11 @@ function mode(path) {
 
 function sendRawFrame(socket, frame) {
   socket.write(encodeFrame(frame));
+}
+
+function childTestEnvironment(extra = {}) {
+  const { NODE_TEST_CONTEXT: _context, NODE_TEST_WORKER_ID: _worker, ...base } = process.env;
+  return { ...base, ...extra };
 }
 
 async function waitForUnauthorizedResponse(descriptor) {
@@ -381,6 +390,39 @@ test("opener focuses a registered pane and opens only when focus cannot find it"
   });
 });
 
+test("actual concurrent opens share one pane and focus the registered result", async () => {
+  await withTemporaryRuntime(async ({ relay, environment }) => {
+    const calls = [];
+    const runner = async (_executable, args) => {
+      calls.push([...args]);
+      if (args[0] === "plugin" && args[2] === "open") {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return { ok: true, stdout: JSON.stringify({ result: { pane_id: "pane-concurrent" } }), stderr: "" };
+      }
+      if (args[0] === "plugin" && args[2] === "focus") {
+        return { ok: true, stdout: "", stderr: "" };
+      }
+      return { ok: false, stdout: "", stderr: "" };
+    };
+    const options = {
+      sessionKey: relay.sessionKey,
+      descriptorPath: relay.paths.descriptorPath,
+      currentPaneId: "pane-current",
+      workspaceId: "workspace-test",
+      cwd: "/tmp",
+      environment: { ...environment, HERDR_ENV: "1" },
+      runner,
+    };
+    const results = await Promise.all([
+      openOrFocusProjectGlancePane(options),
+      openOrFocusProjectGlancePane(options),
+    ]);
+    assert.equal(calls.filter((args) => args[2] === "open").length, 1);
+    assert.deepEqual(new Set(results.map((result) => result.action)), new Set(["opened", "focused"]));
+    assert.deepEqual(results.map((result) => result.paneId), ["pane-concurrent", "pane-concurrent"]);
+  });
+});
+
 test("Pi extension boundary registers one command and lifecycle hooks only", async () => {
   const { default: extension } = await import("../dist/pi/extension.js");
   const commands = [];
@@ -400,7 +442,7 @@ test("Pi extension boundary registers one command and lifecycle hooks only", asy
   assert.equal("registerWidget" in pi, false);
 });
 
-test("snapshot frames stay within the correlated wire budget near the boundary", () => {
+test("coalesced hello and correlated near-limit snapshot stay within the wire budget", () => {
   const base = createStaticSnapshot(STATIC_FIXTURE_SESSION_KEY, FIXTURE_NOW);
   const makeSnapshot = (textLength) => ({
     ...base,
@@ -426,12 +468,22 @@ test("snapshot frames stay within the correlated wire budget near the boundary",
   assert.ok(accepted);
   assert.ok(Buffer.byteLength(JSON.stringify(accepted), "utf8") <= MAX_SNAPSHOT_BYTES);
   assert.ok(snapshotFrameBodyBytes(accepted, MAX_SNAPSHOT_REQUEST_ID) <= MAX_FRAME_BYTES);
-  assert.doesNotThrow(() => encodeFrame({
+  const hello = {
+    version: PROJECT_GLANCE_PROTOCOL_VERSION,
+    type: "hello",
+    requestId: "hello-request",
+    accepted: true,
+    sessionKey: STATIC_FIXTURE_SESSION_KEY,
+    generation: "a".repeat(32),
+  };
+  const snapshotFrame = {
     version: PROJECT_GLANCE_PROTOCOL_VERSION,
     type: "snapshot",
     requestId: MAX_SNAPSHOT_REQUEST_ID,
     snapshot: accepted,
-  }));
+  };
+  const decoder = new ProjectGlanceFrameDecoder();
+  assert.deepEqual(decoder.push(Buffer.concat([encodeFrame(hello), encodeFrame(snapshotFrame)])), [hello, snapshotFrame]);
 });
 
 test("client enforces hello and snapshot request correlation", async () => {
@@ -577,7 +629,8 @@ test("registry records do not lose concurrent sessions and same-session locks se
     const pathsA = runtimePathsForSession(sessionA, environment);
     const pathsB = runtimePathsForSession(sessionB, environment);
     assert.equal(pathsA.runtimeDirectory, pathsB.runtimeDirectory);
-    assert.equal(pathsA.registryPath, pathsB.registryPath);
+    assert.notEqual(pathsA.registryPath, pathsB.registryPath);
+    assert.notEqual(pathsA.registryLockPath, pathsB.registryLockPath);
     const registry = new ProjectGlancePaneRegistry(pathsA);
     const registryB = new ProjectGlancePaneRegistry(pathsB);
     let active = 0;
@@ -603,6 +656,48 @@ test("registry records do not lose concurrent sessions and same-session locks se
     ]);
     assert.deepEqual(await registry.get(sessionA), { paneId: "pane-session-a", updatedAt: (await registry.get(sessionA)).updatedAt });
     assert.deepEqual(await registryB.get(sessionB), { paneId: "pane-session-b", updatedAt: (await registryB.get(sessionB)).updatedAt });
+    await registry.remove(sessionA);
+    assert.equal(await registry.get(sessionA), undefined);
+    assert.deepEqual(await registryB.get(sessionB), { paneId: "pane-session-b", updatedAt: (await registryB.get(sessionB)).updatedAt });
+    await registry.clear();
+    assert.equal(await registryB.get(sessionB), undefined);
+  });
+});
+
+test("registry recovers stale locks and never releases a replacement lock", async () => {
+  await withTemporaryRuntime(async ({ environment }) => {
+    const sessionKey = deriveSessionKey("registry-lock-recovery");
+    const paths = runtimePathsForSession(sessionKey, environment);
+    const registry = new ProjectGlancePaneRegistry(paths);
+    const stale = createProjectGlanceRegistryLockRecord(
+      sessionKey,
+      { pid: 2 ** 31 - 1, processStartTime: "1" },
+      "a".repeat(32),
+    );
+    await writeFile(paths.registryLockPath, JSON.stringify(stale), { mode: 0o600 });
+    await registry.set(sessionKey, "pane-after-stale");
+    assert.deepEqual(await registry.get(sessionKey), {
+      paneId: "pane-after-stale",
+      updatedAt: (await registry.get(sessionKey)).updatedAt,
+    });
+
+    const replacement = createProjectGlanceRegistryLockRecord(
+      sessionKey,
+      currentProjectGlanceProcessIdentity(),
+      "b".repeat(32),
+    );
+    const replacementTemp = join(paths.runtimeDirectory, ".replacement-lock.tmp");
+    let entered;
+    const enteredPromise = new Promise((resolve) => { entered = resolve; });
+    await registry.withSessionLock(sessionKey, async () => {
+      await unlink(paths.registryLockPath);
+      await writeFile(replacementTemp, JSON.stringify(replacement), { mode: 0o600 });
+      await rename(replacementTemp, paths.registryLockPath);
+      entered();
+    });
+    await enteredPromise;
+    assert.deepEqual(JSON.parse(await readFile(paths.registryLockPath, "utf8")), replacement);
+    await unlink(paths.registryLockPath);
   });
 });
 
@@ -659,6 +754,84 @@ test("fixture restart is serialized and restores the old descriptor on replaceme
   }
 });
 
+test("root verifier rejects nonignored untracked Project Glance inputs", async () => {
+  if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
+  const untracked = join(process.cwd(), "untracked-verifier-input.mjs");
+  await writeFile(untracked, "export default 1;\n", "utf8");
+  try {
+    assert.throws(() => execFileSync(process.execPath, [
+      join(process.cwd(), "../../scripts/verify-deployed-baseline.mjs"),
+      "--static-only",
+    ], {
+      cwd: join(process.cwd(), "../.."),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }), (error) => {
+      const output = `${error?.stdout ?? ""}${error?.stderr ?? ""}`;
+      return error?.status !== 0 && output.includes("untracked package input");
+    });
+  } finally {
+    await unlink(untracked).catch(() => undefined);
+  }
+});
+
+test("doctor emits deterministic stable sanitized checks", () => {
+  if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
+  const expectedChecks = [
+    "platformLinux", "nodeVersionSupported", "packageIdentity", "canonicalTuiPeer",
+    "canonicalTuiDevelopmentDependency", "legacyTuiAliasAbsent", "piManifestEntrypoint",
+    "piEntrypointBuilt", "paneEntrypointBuilt", "launcherRegularFile", "launcherExecutable",
+    "launcherNotSymlink", "piLinkPresent", "piLinkRootMatches", "herdrPluginPresent",
+    "herdrPluginRootMatches", "herdrPluginEnabled", "herdrPanePresent", "herdrPaneCommandExact",
+    "relayHandshake", "runtimeDirectoryMode", "descriptorMode", "socketMode",
+    "relaySnapshotBounded", "disposableArtifactsRemoved",
+  ];
+  const runDoctor = () => execFileSync(process.execPath, ["scripts/dev-doctor.mjs"], {
+    cwd: process.cwd(),
+    env: childTestEnvironment({ HERDR_ENV: "1" }),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const first = runDoctor();
+  const second = runDoctor();
+  assert.equal(first, second);
+  const report = JSON.parse(first);
+  assert.deepEqual(Object.keys(report.checks), expectedChecks);
+  assert.equal(report.healthy, true);
+  assert.ok(Object.values(report.checks).every(Boolean));
+  assert.ok(!first.includes("PI_PROJECT_GLANCE_DESCRIPTOR"));
+  assert.ok(!first.includes("/home/"));
+  assert.ok(!first.includes("/tmp/"));
+});
+
+test("generated boundary output is rejected by the root verifier", async () => {
+  const generated = join(process.cwd(), "dist", "generated-boundary-proof.js");
+  if (process.env.PI_PROJECT_GLANCE_GENERATED_SCAN_PROOF === "1") {
+    const forbidden = ["pi-", "signal-", "board"].join("");
+    await writeFile(generated, `export const forbidden = "${forbidden}";\n`, "utf8");
+    return;
+  }
+  if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
+  let failure;
+  try {
+    execFileSync(process.execPath, [
+      join(process.cwd(), "../../scripts/verify-deployed-baseline.mjs"),
+      "--product",
+      "pi-project-glance",
+    ], {
+      cwd: join(process.cwd(), "../.."),
+      env: childTestEnvironment({ HERDR_ENV: "1", PI_PROJECT_GLANCE_GENERATED_SCAN_PROOF: "1" }),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure, "generated boundary output unexpectedly passed root verification");
+  assert.equal(failure.status, 1);
+  assert.match(`${failure.stdout ?? ""}${failure.stderr ?? ""}${failure.message ?? ""}`, /generated output/);
+});
+
 test("root Project Glance verification leaves source dist artifacts untouched", async () => {
   // The outer root verifier owns this proof. Its disposable package copy must
   // not recursively invoke the root verifier against its temporary cwd.
@@ -675,7 +848,7 @@ test("root Project Glance verification leaves source dist artifacts untouched", 
       "pi-project-glance",
     ], {
       cwd: join(process.cwd(), "../.."),
-      env: { ...process.env, HERDR_ENV: "1" },
+      env: childTestEnvironment({ HERDR_ENV: "1" }),
       stdio: "ignore",
     });
     assert.equal(await readFile(sentinel, "utf8"), "keep-me\n");

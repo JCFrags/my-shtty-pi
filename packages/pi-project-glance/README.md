@@ -12,9 +12,11 @@ Pi Project Glance is the static foundation for a persistent, read-only Herdr sid
 
 ## Foundation behavior
 
-The Pi extension starts one private local relay for the current session. The pane receives an authenticated, versioned, bounded static snapshot and renders the `CURRENT` and `PROGRESS FEED` sections. `CURRENT` is pinned while only `PROGRESS FEED` scrolls. V1 is read-only: Todo, Workplan, provider projections, and session messages are intentionally not connected, and no pane state is persisted.
+The Pi extension starts one private local relay for the current session. The pane receives an authenticated, versioned, bounded static snapshot and renders the `CURRENT` and `PROGRESS FEED` sections. `CURRENT` is pinned while only `PROGRESS FEED` scrolls. V1 is read-only: Todo, Workplan, provider projections, and session messages are intentionally not connected. No Project Glance content is persisted; only the pane registration needed for focus-existing is retained.
 
-The relay uses protocol version 1 with 64 KiB frame and snapshot budgets, bounded text/feed limits, and a reconnecting generation-aware client. Its owner-only Unix socket and connection descriptor are kept under an owner-only runtime directory and the descriptor is passed to the pane through `PI_PROJECT_GLANCE_DESCRIPTOR`; authentication material is never printed or placed in process arguments.
+The relay uses protocol version 1 with a 64 KiB **wire-frame** limit. The accepted snapshot payload budget is smaller because the snapshot must fit inside both the initial snapshot envelope and a correlated `snapshot_request` response envelope. Every accepted snapshot is checked against both envelopes, in addition to bounded text and feed limits. The reconnecting client is generation-aware. Its owner-only Unix socket and connection descriptor are kept under an owner-only runtime directory and the descriptor is passed to the pane through `PI_PROJECT_GLANCE_DESCRIPTOR`; authentication material is never printed or placed in process arguments.
+
+Pane registrations use one owner-only record and one short-lived acquisition lock per hashed session key. A lock records a bounded PID/process-start identity and nonce, so a dead or mismatched owner can be recovered without treating elapsed time alone as stale. Live locks remain busy until released, and an owner removes only the lock instance it acquired. Registration records are atomically replaced and contain only the protocol version, hashed session key, pane ID, and update time; they never contain relay credentials or filesystem paths.
 
 ## Development commands
 

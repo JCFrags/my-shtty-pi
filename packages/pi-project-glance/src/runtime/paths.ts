@@ -35,6 +35,7 @@ export interface ProjectGlanceRuntimePaths {
   socketPath: string;
   descriptorPath: string;
   registryPath: string;
+  registryLockPath: string;
   source: "xdg" | "tmp";
 }
 
@@ -61,14 +62,15 @@ function candidateFor(
   const shortKey = sessionKey.slice(0, 24);
   const socketPath = join(directory, `relay-${shortKey}.sock`);
   const descriptorPath = join(directory, `connection-${shortKey}.json`);
-  // Keep the original shared registry path; the registry's private lock
-  // serializes read-modify-write updates without dropping other sessions.
-  const registryPath = join(directory, "pi-project-glance-panes.json");
+  // Keep each session's pane record and acquisition lock independent.
+  const registryPath = join(directory, `pane-${shortKey}.json`);
+  const registryLockPath = join(directory, `pane-${shortKey}.lock`);
   if (
     Buffer.byteLength(socketPath, "utf8") > MAX_UNIX_SOCKET_PATH_BYTES ||
     Buffer.byteLength(directory, "utf8") > MAX_RUNTIME_PATH_BYTES ||
     Buffer.byteLength(descriptorPath, "utf8") > MAX_RUNTIME_PATH_BYTES ||
-    Buffer.byteLength(registryPath, "utf8") > MAX_RUNTIME_PATH_BYTES
+    Buffer.byteLength(registryPath, "utf8") > MAX_RUNTIME_PATH_BYTES ||
+    Buffer.byteLength(registryLockPath, "utf8") > MAX_RUNTIME_PATH_BYTES
   ) {
     return undefined;
   }
@@ -77,6 +79,7 @@ function candidateFor(
     socketPath,
     descriptorPath,
     registryPath,
+    registryLockPath,
     source,
   };
 }
