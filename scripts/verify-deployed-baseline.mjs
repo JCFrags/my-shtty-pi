@@ -53,6 +53,7 @@ const expectedSafeScripts = Object.freeze({
   "pi-chrono-compaction": {
     typecheck: "tsc -p tsconfig.json --noEmit",
     build: "rm -rf dist && tsc -p tsconfig.json",
+    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test dist-test/test/*.test.js",
   },
   "pi-herdr-orchestrator": {
     typecheck: "tsc -p tsconfig.json --noEmit",
@@ -137,9 +138,11 @@ if (!jsonEqual(inactive.map((product) => product.slug), ["pi-review-ui", "pi-too
 if (products.find((product) => product.slug === "temporary-orchestrator-cancel-isolation")?.status !== "active-temporary") throw new Error("temporary shim status changed");
 if (!existsSync(join(root, "packages/temporary-orchestrator-cancel-isolation"))) throw new Error("temporary cancellation isolation must remain separate");
 if (existsSync(join(root, "packages/pi-herdr-orchestrator/extensions/temporary-orchestrator-cancel-isolation.ts"))) throw new Error("temporary cancellation isolation was folded into the orchestrator");
-const rootEntries = readdirSync(root).filter((name) => name !== ".git").sort();
-const allowedRootEntries = [".github", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "packages", "scripts"].sort();
+const rootEntries = readdirSync(root).filter((name) => ![".git", ".chrono-v3-private"].includes(name)).sort();
+const allowedRootEntries = [".github", ".gitignore", "LICENSE", "README.md", "docs", "package-lock.json", "package.json", "packages", "scripts"].sort();
 if (!jsonEqual(rootEntries, allowedRootEntries)) throw new Error(`unexpected root entries: ${rootEntries.join(",")}`);
+const northStarPath = join(root, "docs/chrono-v3/master-goal-and-work-plan.md");
+if (!existsSync(northStarPath) || sha256(northStarPath) !== "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f") throw new Error("ChronoCompact north-star charter is not byte-preserved");
 const workflows = walk(join(root, ".github/workflows")).map((path) => relative(join(root, ".github/workflows"), path));
 if (!jsonEqual(workflows, ["verify.yml"])) throw new Error("exactly one verify workflow is required");
 const workflow = readFileSync(join(root, ".github/workflows/verify.yml"), "utf8");
@@ -148,7 +151,7 @@ for (const required of ["pull_request:", "- main", "push:", "workflow_dispatch:"
 }
 if (workflow.includes("consolidation/clean-monorepo-20260901")) throw new Error("verify workflow retains the deleted consolidation trigger");
 const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path));
-if (!jsonEqual(scriptFiles, ["verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifier is allowed under scripts/");
+if (!jsonEqual(scriptFiles, ["verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers are allowed under scripts/");
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
@@ -260,7 +263,7 @@ for (const manifestPath of packageManifestPaths) {
     }
   }
 }
-if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 12) throw new Error("expected exactly 12 retained safe package scripts");
+if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 13) throw new Error("expected exactly 13 retained safe package scripts");
 
 function globRegex(pattern) {
   let out = "^";
@@ -378,7 +381,7 @@ const missingRuntimeCode = [...deployedRuntimeCode].filter((path) => !activeRunt
 if (missingRuntimeCode.length > 0) throw new Error(`deployed runtime code is unreachable: ${missingRuntimeCode.map((path) => relative(root, path)).join(",")}`);
 for (const product of products.filter((candidate) => candidate.compiledCount !== undefined)) {
   const packageRoot = join(root, "packages", product.slug);
-  const sourceFiles = walk(packageRoot).filter((path) => !path.includes(`${sep}dist${sep}`) && (path.endsWith(".ts") || path.endsWith(".d.ts")));
+  const sourceFiles = walk(packageRoot).filter((path) => !path.includes(`${sep}dist${sep}`) && !path.includes(`${sep}test${sep}`) && (path.endsWith(".ts") || path.endsWith(".d.ts")));
   const unexplained = sourceFiles.filter((path) => !sourceBuildGraph.has(path));
   if (unexplained.length > 0) throw new Error(`${product.slug}: source cannot reproduce deployed closure: ${unexplained.map((path) => relative(packageRoot, path)).join(",")}`);
 }
@@ -393,7 +396,7 @@ for (const product of inactive) {
 const tracked = trackedWorkingFiles();
 const trackedDependencyFiles = tracked.filter((rel) => rel.split("/").includes("node_modules"));
 if (trackedDependencyFiles.length > 0) throw new Error(`tracked dependency-tree files are forbidden: ${trackedDependencyFiles.join(",")}`);
-const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, rootVerification: 0, unexplained: 0 };
+const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, tests: 0, testSupport: 0, rootVerification: 0, unexplained: 0 };
 const unexplainedPaths = [];
 for (const rel of tracked) {
   // Project Glance is verified in its own additive phase below; it must not
@@ -404,9 +407,11 @@ for (const rel of tracked) {
   if (deployedPaths.has(rel)) category = "deployedRuntime";
   else if (sourceBuildGraph.has(path)) category = "sourceBuildInputs";
   else if (inactiveGraph.has(path) || (rel.startsWith("packages/pi-review-ui/") || rel.startsWith("packages/pi-tool-controls/")) && path.endsWith(".d.ts")) category = "inactiveSource";
+  else if (rel.startsWith("packages/pi-chrono-compaction/test/")) category = "tests";
+  else if (rel.startsWith("packages/pi-chrono-compaction/docs/") || rel.startsWith("packages/pi-chrono-compaction/scripts/")) category = "testSupport";
   else if (/^packages\/[^/]+\/(?:DEPLOYED\.sha256|LICENSE|package(?:-lock)?\.json|tsconfig(?:\.[^.]+)?\.json)$/u.test(rel) || /^packages\/grounded-tools\/[^/]+\/package\.json$/u.test(rel)) category = "metadata";
-  else if (/^packages\/[^/]+\/README\.md$/u.test(rel)) category = "docs";
-  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
+  else if (/^packages\/[^/]+\/README\.md$/u.test(rel) || rel.startsWith("docs/")) category = "docs";
+  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/verify-chrono-v3-baseline.mjs", "scripts/verify-chrono-v3-privacy.mjs", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
   else {
     category = "unexplained";
     unexplainedPaths.push(rel);
@@ -444,7 +449,7 @@ function packDryRun(product, source) {
   chmodSync(temp, 0o700);
   const work = join(temp, "package");
   try {
-    cpSync(source, work, { recursive: true, filter: (path) => basename(path) !== "node_modules" });
+    cpSync(source, work, { recursive: true, filter: (path) => !["node_modules", "dist-test"].includes(basename(path)) });
     const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
     const result = JSON.parse(output);
     if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error(`${product.slug}: invalid npm pack result`);
@@ -637,7 +642,9 @@ if (!staticOnly) {
     if (result.buildResult !== undefined) buildResults[plan.slug] = result.buildResult;
   }
 }
-const expectedScriptTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length : 12;
+const expectedScriptTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug
+  ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length
+  : Object.values(expectedSafeScripts).reduce((total, scripts) => total + Object.keys(scripts).length, 0);
 const expectedPackTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? 1 : 17;
 if (!staticOnly && safeScriptsPassed !== expectedScriptTotal) throw new Error(`safe scripts passed ${safeScriptsPassed}/${expectedScriptTotal}`);
 if (!staticOnly && packPassed !== expectedPackTotal) throw new Error(`pack dry runs passed ${packPassed}/${expectedPackTotal}`);

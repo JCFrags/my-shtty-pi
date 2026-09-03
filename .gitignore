@@ -1,6 +1,8 @@
 node_modules/
 dist-tmp/
+dist-test/
 coverage/
+.chrono-v3-private/
 packages/pi-project-glance/dist/
 packages/pi-project-glance/.runtime/
 packages/pi-project-glance/*.tgz

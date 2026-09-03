@@ -24,6 +24,10 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify repository privacy boundary
+        run: node scripts/verify-chrono-v3-privacy.mjs --self-test
+      - name: Verify ChronoCompact baseline metadata
+        run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live
       - name: Verify with an ignored dependency-tree fixture
         run: |
           fixture=packages/files-ui/node_modules/verifier-regression

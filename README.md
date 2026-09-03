@@ -23,3 +23,7 @@ This repository consolidates extension source and the September 1, 2026 deployed
 | `titlebar-spinner` | active |
 
 Run `npm run verify` to validate deployed hashes, entrypoints, manifests, product boundaries, privacy, and isolated compiled reproducibility. `pi-web` is external and excluded from this repository.
+
+## ChronoCompact M00
+
+The M00 baseline, privacy policy, evidence boundary, amendments, rollback record, and restored-test boundary are documented in [`docs/chrono-v3/`](docs/chrono-v3/). M00 is containment and verification only: it does not deploy, reload, or change ChronoCompact runtime behavior.
