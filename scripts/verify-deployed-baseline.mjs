@@ -36,6 +36,34 @@ const selectedSlug = productIndex >= 0 ? args[productIndex + 1] : undefined;
 if (productIndex >= 0 && !selectedSlug) throw new Error("--product requires a slug");
 const staticOnly = args.includes("--static-only");
 const projectGlanceSlug = "pi-project-glance";
+const m00BaselineCommit = "1887c77b39c42fb0b5d35b38baac94aff13465e9";
+const correctionArtifactPaths = new Set([
+  ".github/workflows/verify.yml",
+  ".gitignore",
+  "README.md",
+  "packages/pi-chrono-compaction/package.json",
+  "scripts/verify-chrono-v3-baseline.mjs",
+  "scripts/verify-chrono-v3-privacy.mjs",
+  "scripts/verify-deployed-baseline.mjs",
+  "scripts/test/verify-chrono-v3-baseline.test.mjs",
+  "scripts/test/verify-chrono-v3-privacy.test.mjs",
+  "docs/chrono-v3/README.md",
+  "docs/chrono-v3/amendments/A-0001-private-repository-containment.md",
+  "docs/chrono-v3/amendments/A-0002-m00-baseline-provenance.md",
+  "docs/chrono-v3/amendments/A-0003-m00-r1-corrections.md",
+  "docs/chrono-v3/baseline.md",
+  "docs/chrono-v3/baseline-evidence.json",
+  "docs/chrono-v3/containment-timeline.md",
+  "docs/chrono-v3/decisions.md",
+  "docs/chrono-v3/evidence.md",
+  "docs/chrono-v3/historical-test-inventory.md",
+  "docs/chrono-v3/independent-review.md",
+  "docs/chrono-v3/known-incidents.md",
+  "docs/chrono-v3/milestone-ledger.md",
+  "docs/chrono-v3/privacy-policy.md",
+  "docs/chrono-v3/rollback.md",
+  "docs/chrono-v3/test-recovery.md",
+]);
 
 const expectedSlugs = [
   "codex-usage-footer", "files-ui", "grounded-tools", "herdr-agent-state",
@@ -114,6 +142,30 @@ function gitBytesAt(commit, rel) {
 function jsonEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
+function gitNameList(args) {
+  try {
+    return execFileSync("git", args, { cwd: root, encoding: null, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+      .toString("utf8").split("\0").filter(Boolean);
+  } catch {
+    throw new Error("git boundary query failed");
+  }
+}
+function verifyCorrectionScope() {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", m00BaselineCommit, "HEAD"], { cwd: root, stdio: "ignore" });
+  } catch {
+    throw new Error("M00 baseline is not an ancestor");
+  }
+  const changed = new Set([
+    ...gitNameList(["diff", "--name-only", "-z", `${m00BaselineCommit}..HEAD`, "--"]),
+    ...gitNameList(["diff", "--name-only", "-z", "HEAD", "--"]),
+    ...gitNameList(["diff", "--cached", "--name-only", "-z", "--"]),
+    ...gitNameList(["ls-files", "--others", "--exclude-standard", "-z"]),
+  ]);
+  for (const path of changed) {
+    if (!correctionArtifactPaths.has(path)) throw new Error(`unexpected correction artifact: ${path}`);
+  }
+}
 function trackedWorkingFiles() {
   return execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], { cwd: root })
     .toString("utf8").split("\0").filter(Boolean)
@@ -146,12 +198,30 @@ if (!existsSync(northStarPath) || sha256(northStarPath) !== "7bdf3f9b1a2bc1ec7ab
 const workflows = walk(join(root, ".github/workflows")).map((path) => relative(join(root, ".github/workflows"), path));
 if (!jsonEqual(workflows, ["verify.yml"])) throw new Error("exactly one verify workflow is required");
 const workflow = readFileSync(join(root, ".github/workflows/verify.yml"), "utf8");
-for (const required of ["pull_request:", "- main", "push:", "workflow_dispatch:"]) {
-  if (!workflow.includes(required)) throw new Error(`verify workflow lacks ${required}`);
+function verifyWorkflowBoundary() {
+  if (!workflow.includes("pull_request:") || !workflow.includes("push:") || !workflow.includes("schedule:") || !workflow.includes("workflow_dispatch:")) {
+    throw new Error("verify workflow trigger set is incomplete");
+  }
+  const allBranchTriggers = (workflow.match(/branches:\s*\n\s*-\s*"\*\*"/gu) ?? []).length;
+  if (allBranchTriggers !== 2 || workflow.includes("- main")) throw new Error("verify workflow must cover all push and pull-request branches");
+  if (!workflow.includes("fetch-depth: 0") || !workflow.includes("fetch-tags: true") || !workflow.includes("ref: ${{ github.sha }}")) {
+    throw new Error("verify workflow lacks explicit full-ref checkout");
+  }
+  if (!workflow.includes("git fetch --force --prune --tags origin") || !workflow.includes("refs/pull/*/head")) {
+    throw new Error("verify workflow lacks explicit all-ref fetch");
+  }
+  const actionPins = workflow.match(/uses:\s+actions\/(?:checkout|setup-node)@[0-9a-f]{40}(?:\s|$)/gu) ?? [];
+  if (actionPins.length !== 2 || /uses:\s+actions\/(?:checkout|setup-node)@v/iu.test(workflow)) throw new Error("verify workflow actions are not pinned");
+  for (const required of ["--self-test", "--worktree", "--index", "--all-refs", "--require-public-review", "--repository", "--ci-event", "$GITHUB_EVENT_PATH"]) {
+    if (!workflow.includes(required)) throw new Error(`verify workflow lacks public review scan argument ${required}`);
+  }
+  if (!workflow.includes("--allow-missing-live") || !workflow.includes("--static-only")) throw new Error("verify workflow lacks static baseline mode");
+  if (workflow.includes("consolidation/clean-monorepo-20260901")) throw new Error("verify workflow retains the deleted consolidation trigger");
 }
-if (workflow.includes("consolidation/clean-monorepo-20260901")) throw new Error("verify workflow retains the deleted consolidation trigger");
-const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path));
-if (!jsonEqual(scriptFiles, ["verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers are allowed under scripts/");
+verifyWorkflowBoundary();
+verifyCorrectionScope();
+const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path)).sort();
+if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/verify-chrono-v3-privacy.test.mjs", "verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers and their tests are allowed under scripts/");
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
@@ -411,7 +481,7 @@ for (const rel of tracked) {
   else if (rel.startsWith("packages/pi-chrono-compaction/docs/") || rel.startsWith("packages/pi-chrono-compaction/scripts/")) category = "testSupport";
   else if (/^packages\/[^/]+\/(?:DEPLOYED\.sha256|LICENSE|package(?:-lock)?\.json|tsconfig(?:\.[^.]+)?\.json)$/u.test(rel) || /^packages\/grounded-tools\/[^/]+\/package\.json$/u.test(rel)) category = "metadata";
   else if (/^packages\/[^/]+\/README\.md$/u.test(rel) || rel.startsWith("docs/")) category = "docs";
-  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/verify-chrono-v3-baseline.mjs", "scripts/verify-chrono-v3-privacy.mjs", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
+  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/test/verify-chrono-v3-baseline.test.mjs", "scripts/test/verify-chrono-v3-privacy.test.mjs", "scripts/verify-chrono-v3-baseline.mjs", "scripts/verify-chrono-v3-privacy.mjs", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
   else {
     category = "unexplained";
     unexplainedPaths.push(rel);

@@ -3,10 +3,12 @@ name: Verify deployed baseline
 on:
   pull_request:
     branches:
-      - main
+      - "**"
   push:
     branches:
-      - main
+      - "**"
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -14,20 +16,34 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact event revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          fetch-tags: true
+      - name: Fetch all repository refs
+        run: git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*' '+refs/pull/*/head:refs/remotes/origin/pr/*'
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Verify repository privacy boundary
-        run: node scripts/verify-chrono-v3-privacy.mjs --self-test
-      - name: Verify ChronoCompact baseline metadata
-        run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live
+      - name: Verify public review content boundary
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: >-
+          node scripts/verify-chrono-v3-privacy.mjs
+          --self-test --worktree --index --all-refs
+          --require-public-review --repository "$GITHUB_REPOSITORY"
+          --ci-event "$GITHUB_EVENT_PATH"
+      - name: Verify frozen ChronoCompact baseline
+        run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
+      - name: Verify correction verifier tests
+        run: node --test scripts/test/verify-chrono-v3-baseline.test.mjs scripts/test/verify-chrono-v3-privacy.test.mjs
       - name: Verify with an ignored dependency-tree fixture
         run: |
           fixture=packages/files-ui/node_modules/verifier-regression

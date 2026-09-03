@@ -1,133 +1,409 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import {
+  dirname,
+  extname,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packageRoot = join(repoRoot, "packages", "pi-chrono-compaction");
-const args = process.argv.slice(2);
-const allowMissingLive = args.includes("--allow-missing-live");
-const liveOption = args.indexOf("--live");
-if (liveOption >= 0 && !args[liveOption + 1]) fail("invalid-live-option");
-const configuredLiveRoot = liveOption >= 0 ? args[liveOption + 1] : undefined;
-const liveRoot = configuredLiveRoot ?? join(homedir(), ".pi", "agent", "packages", "pi-chrono-compaction");
+const packageSlug = "pi-chrono-compaction";
+const packageRoot = join(repoRoot, "packages", packageSlug);
+const packageRelative = `packages/${packageSlug}`;
+const entrypointRelative = "dist/src/pi-extension.js";
+const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
+
+// These values are the frozen M00 runtime boundary. A later runtime milestone
+// must deliberately replace this verifier rather than silently moving it.
+const EXPECTED = Object.freeze({
+  schemaVersion: 2,
+  m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
+  runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
+  deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
+  sourceFiles: 66,
+  sourceTreeHash: "f85564ddbf1f6d726d96b81dc9af65e22612245c83ec6d2a7dc6d444217d5ecc",
+  distFiles: 65,
+  distTreeHash: "58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31",
+  entrypointHash: "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50",
+  m00PackageHash: "872d4a4b65d12d8919e6cfbda5c6d57915c631d3bb7c6834616f9ce9ada850dc",
+  m00LockHash: "5410bbdf139f5e89059233c010217c7683e2e36e3265b0c7ba4bdae939676f1d",
+  livePackageHash: "43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869",
+  deployedPackageHash: "56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d",
+  northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
+  stage1RuntimeRecords: 272,
+  canonicalDeployedFiles: 261,
+});
+
+const correctionPaths = new Set([
+  ".github/workflows/verify.yml",
+  "packages/pi-chrono-compaction/package.json",
+  "scripts/verify-chrono-v3-baseline.mjs",
+  "scripts/verify-chrono-v3-privacy.mjs",
+  "scripts/verify-deployed-baseline.mjs",
+  "scripts/test/verify-chrono-v3-baseline.test.mjs",
+  "scripts/test/verify-chrono-v3-privacy.test.mjs",
+  "docs/chrono-v3/README.md",
+  "docs/chrono-v3/amendments/A-0001-private-repository-containment.md",
+  "docs/chrono-v3/amendments/A-0002-m00-baseline-provenance.md",
+  "docs/chrono-v3/amendments/A-0003-m00-r1-corrections.md",
+  "docs/chrono-v3/baseline.md",
+  "docs/chrono-v3/baseline-evidence.json",
+  "docs/chrono-v3/containment-timeline.md",
+  "docs/chrono-v3/decisions.md",
+  "docs/chrono-v3/evidence.md",
+  "docs/chrono-v3/historical-test-inventory.md",
+  "docs/chrono-v3/independent-review.md",
+  "docs/chrono-v3/known-incidents.md",
+  "docs/chrono-v3/milestone-ledger.md",
+  "docs/chrono-v3/privacy-policy.md",
+  "docs/chrono-v3/rollback.md",
+  "docs/chrono-v3/test-recovery.md",
+]);
+
+class BaselineVerificationError extends Error {
+  constructor(code) {
+    super(code);
+    this.code = code;
+  }
+}
 
 function fail(code) {
-  console.error(JSON.stringify({ schemaVersion: 1, status: "failed", code }));
-  process.exitCode = 1;
-  throw new Error(code);
+  throw new BaselineVerificationError(code);
 }
-function bytesHash(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
-function fileHash(path) { return bytesHash(readFileSync(path)); }
+
+function bytesHash(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function jsonEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function readRegularFile(path, missingCode = "unscanned-input") {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) fail("unsafe-file-type");
+    return readFileSync(path);
+  } catch (error) {
+    if (error instanceof BaselineVerificationError) throw error;
+    fail(missingCode);
+  }
+}
+
+function fileHash(path) {
+  return bytesHash(readRegularFile(path));
+}
+
+function isWithin(parent, path) {
+  return path === parent || path.startsWith(`${parent}${sep}`);
+}
+
+function safeRelativePath(path) {
+  if (
+    typeof path !== "string" ||
+    path.length === 0 ||
+    path.includes("\0") ||
+    path.includes("\\") ||
+    path.startsWith("/") ||
+    path.split("/").some((part) => part.length === 0 || part === "." || part === "..")
+  ) {
+    fail("unsafe-relative-path");
+  }
+  return path;
+}
+
 function filesUnder(root) {
-  if (!existsSync(root) || !statSync(root).isDirectory()) return [];
+  let rootStat;
+  try {
+    rootStat = lstatSync(root);
+  } catch {
+    fail("missing-tree");
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) fail("unsafe-tree");
   const output = [];
   function visit(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      fail("unreadable-tree");
+    }
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       const path = join(directory, entry.name);
-      if (entry.isDirectory()) visit(path);
-      else if (entry.isFile()) output.push(relative(root, path).replaceAll("\\", "/"));
-      else if (entry.isSymbolicLink()) fail("unexpected-symlink-in-tree");
+      let stat;
+      try {
+        stat = lstatSync(path);
+      } catch {
+        fail("unreadable-tree");
+      }
+      if (stat.isSymbolicLink()) fail("unsafe-tree");
+      if (stat.isDirectory()) visit(path);
+      else if (stat.isFile()) output.push(relative(root, path).replaceAll("\\", "/"));
+      else fail("unsupported-file-type");
     }
   }
   visit(root);
-  return output;
+  return output.sort();
 }
-function treeHash(root, paths = filesUnder(root)) {
+
+function treeHash(root, paths) {
   const hash = createHash("sha256");
   for (const path of [...paths].sort()) {
-    hash.update(path).update("\0").update(readFileSync(join(root, path))).update("\0");
+    safeRelativePath(path);
+    const absolute = resolve(root, path);
+    if (!isWithin(resolve(root), absolute)) fail("unsafe-relative-path");
+    hash.update(path).update("\0").update(readRegularFile(absolute)).update("\0");
   }
   return hash.digest("hex");
 }
-function gitLines(...args) {
-  return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim().split("\n").filter(Boolean);
+
+function gitBytes(args, code = "git-unavailable") {
+  try {
+    return execFileSync("git", args, {
+      cwd: repoRoot,
+      encoding: null,
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    fail(code);
+  }
 }
-function readJson(path) { return JSON.parse(readFileSync(path, "utf8")); }
-function manifestEntries(path) {
-  return readFileSync(path, "utf8").trimEnd().split("\n").map((line) => {
-    const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
-    if (!match) fail("invalid-deployed-manifest");
-    return { hash: match[1], path: match[2] };
-  });
+
+function gitText(args, code = "git-unavailable") {
+  return gitBytes(args, code).toString("utf8");
 }
-function compareManifest() {
-  const metadataNames = new Set(["package.json", "package-lock.json"]);
-  const metadataMismatches = [];
-  const runtimeMismatches = [];
-  for (const entry of manifestEntries(join(packageRoot, "DEPLOYED.sha256"))) {
-    const path = join(packageRoot, entry.path);
-    if (!existsSync(path) || !statSync(path).isFile()) {
-      runtimeMismatches.push(entry.path);
-      continue;
-    }
-    if (fileHash(path) !== entry.hash) {
-      (metadataNames.has(entry.path) ? metadataMismatches : runtimeMismatches).push(entry.path);
+
+function gitLines(args, code = "git-unavailable") {
+  return gitText(args, code).split("\n").filter(Boolean);
+}
+
+function gitNames(args, code = "git-unavailable") {
+  return gitBytes(args, code).toString("utf8").split("\0").filter(Boolean).map(safeRelativePath);
+}
+
+function gitBytesAt(commit, path) {
+  safeRelativePath(path);
+  return gitBytes(["show", `${commit}:${path}`], "baseline-git-object-unavailable");
+}
+
+function readJson(path, code = "invalid-json") {
+  try {
+    return JSON.parse(readRegularFile(path, code).toString("utf8"));
+  } catch (error) {
+    if (error instanceof BaselineVerificationError) throw error;
+    fail(code);
+  }
+}
+
+function parseArgs() {
+  const parsed = { allowMissingLive: false, staticOnly: false, live: undefined };
+  const args = process.argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--allow-missing-live") parsed.allowMissingLive = true;
+    else if (arg === "--static-only") parsed.staticOnly = true;
+    else if (arg === "--live") {
+      if (parsed.live !== undefined || !args[index + 1] || args[index + 1].startsWith("--")) fail("invalid-live-option");
+      parsed.live = args[++index];
+    } else {
+      fail("invalid-invocation");
     }
   }
-  return { metadataMismatches, runtimeMismatches };
+  return parsed;
 }
+
+function parseManifest(path) {
+  const text = readRegularFile(path, "deployed-manifest-missing").toString("utf8");
+  const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
+  if (lines.length === 0 || lines.some((line) => line.length === 0)) fail("invalid-deployed-manifest");
+  const entries = new Map();
+  for (const line of lines) {
+    const match = /^([0-9a-f]{64})  ([^\r\n]+)$/u.exec(line);
+    if (!match) fail("invalid-deployed-manifest");
+    const pathValue = safeRelativePath(match[2]);
+    if (entries.has(pathValue)) fail("duplicate-deployed-manifest-path");
+    const absolute = resolve(packageRoot, pathValue);
+    if (!isWithin(resolve(packageRoot), absolute)) fail("unsafe-deployed-manifest-path");
+    entries.set(pathValue, match[1]);
+  }
+  return entries;
+}
+
+function verifyCorrectionScope() {
+  const ancestor = gitBytes(["merge-base", "--is-ancestor", EXPECTED.m00Commit, "HEAD"], "baseline-history-unavailable");
+  void ancestor;
+  const changed = new Set([
+    ...gitNames(["diff", "--name-only", "-z", `${EXPECTED.m00Commit}..HEAD`, "--"]),
+    ...gitNames(["diff", "--name-only", "-z", "HEAD", "--"]),
+    ...gitNames(["diff", "--cached", "--name-only", "-z", "--"]),
+    ...gitNames(["ls-files", "--others", "--exclude-standard", "-z"]),
+  ]);
+  for (const path of changed) if (!correctionPaths.has(path)) fail("unexpected-correction-artifact");
+}
+
+function verifyNorthStar() {
+  const path = join(repoRoot, "docs", "chrono-v3", "master-goal-and-work-plan.md");
+  if (fileHash(path) !== EXPECTED.northStarHash) fail("north-star-changed");
+}
+
+function verifyPackageCorrection() {
+  const currentPath = join(packageRoot, "package.json");
+  const currentBytes = readRegularFile(currentPath);
+  if (bytesHash(currentBytes) !== EXPECTED.m00PackageHash) fail("chrono-package-metadata-changed");
+  const current = readJson(currentPath);
+  const runtimeBaseline = readJsonFromBytes(gitBytesAt(EXPECTED.runtimeBaselineCommit, `${packageRelative}/package.json`));
+  const expectedScripts = {
+    ...runtimeBaseline.scripts,
+    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test dist-test/test/*.test.js",
+  };
+  const currentWithoutCorrection = { ...current, scripts: { ...current.scripts } };
+  delete currentWithoutCorrection.scripts.test;
+  const baselineWithoutScripts = { ...runtimeBaseline, scripts: { ...runtimeBaseline.scripts } };
+  if (!jsonEqual(currentWithoutCorrection, baselineWithoutScripts)) fail("chrono-package-metadata-changed");
+  if (!jsonEqual(current.scripts, expectedScripts)) fail("chrono-package-test-script-changed");
+  const lockPath = join(packageRoot, "package-lock.json");
+  if (fileHash(lockPath) !== EXPECTED.m00LockHash) fail("chrono-package-lock-changed");
+  const baselineLock = gitBytesAt(EXPECTED.m00Commit, `${packageRelative}/package-lock.json`);
+  if (bytesHash(readRegularFile(lockPath)) !== bytesHash(baselineLock)) fail("chrono-package-lock-changed");
+}
+
+function readJsonFromBytes(bytes) {
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    fail("invalid-json");
+  }
+}
+
+function verifyRepositoryFiles() {
+  if (!existsSync(packageRoot)) fail("repository-package-missing");
+  const sourcePaths = gitLines(["ls-files", "--", `${packageRelative}/src`])
+    .map((path) => {
+      const prefix = `${packageRelative}/`;
+      if (!path.startsWith(prefix)) fail("invalid-source-path");
+      return safeRelativePath(path.slice(prefix.length));
+    });
+  if (sourcePaths.length !== EXPECTED.sourceFiles) fail("source-file-count-changed");
+  const sourceTreeHash = treeHash(packageRoot, sourcePaths);
+  if (sourceTreeHash !== EXPECTED.sourceTreeHash) fail("source-baseline-mismatch");
+  const distFilePaths = filesUnder(join(packageRoot, "dist")).map(safeRelativePath);
+  if (distFilePaths.length !== EXPECTED.distFiles) fail("dist-file-count-changed");
+  const distPaths = distFilePaths.map((path) => `dist/${path}`);
+  const distTreeHash = treeHash(join(packageRoot, "dist"), distFilePaths);
+  if (distTreeHash !== EXPECTED.distTreeHash) fail("dist-baseline-mismatch");
+  const entrypointHash = fileHash(join(packageRoot, entrypointRelative));
+  if (entrypointHash !== EXPECTED.entrypointHash) fail("entrypoint-baseline-mismatch");
+  const manifest = parseManifest(join(packageRoot, "DEPLOYED.sha256"));
+  const expectedManifestPaths = new Set(["package.json", ...distPaths]);
+  if (!jsonEqual([...manifest.keys()].sort(), [...expectedManifestPaths].sort())) fail("deployed-manifest-scope-changed");
+  if (manifest.get("package.json") !== EXPECTED.deployedPackageHash) fail("deployed-metadata-record-changed");
+  for (const path of distPaths) {
+    if (fileHash(join(packageRoot, path)) !== manifest.get(path)) fail("deployed-runtime-mismatch");
+  }
+  if (fileHash(join(packageRoot, "package.json")) === manifest.get("package.json")) fail("metadata-correction-missing");
+  verifyPackageCorrection();
+  const packageJson = readJson(join(packageRoot, "package.json"));
+  if (packageJson.version !== "2.0.0") fail("package-version-changed");
+  const rootPackage = readJson(join(repoRoot, "package.json"));
+  if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
+  if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");
+  if (rootPackage.piConsolidation?.deployedBaselineCommit !== EXPECTED.deployedBaselineCommit) fail("deployed-baseline-commit-changed");
+  return { sourcePaths, distPaths, distFilePaths, sourceTreeHash, distTreeHash, entrypointHash, manifest };
+}
+
 function statusSummary() {
-  const lines = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repoRoot, encoding: "utf8" }).trim().split("\n").filter(Boolean);
-  return { clean: lines.length === 0, changedFileCount: lines.length };
+  const changed = new Set([
+    ...gitNames(["diff", "--name-only", "-z", "HEAD", "--"]),
+    ...gitNames(["diff", "--cached", "--name-only", "-z", "--"]),
+    ...gitNames(["ls-files", "--others", "--exclude-standard", "-z"]),
+  ]);
+  return { clean: changed.size === 0, changedFileCount: changed.size };
 }
 
-if (!existsSync(packageRoot)) fail("repository-package-missing");
-const sourcePaths = gitLines("ls-files", "packages/pi-chrono-compaction/src").map((path) => path.slice("packages/pi-chrono-compaction/".length));
-if (sourcePaths.length === 0) fail("repository-source-missing");
-const repoSourceHash = treeHash(packageRoot, sourcePaths);
-const repoDistPaths = filesUnder(join(packageRoot, "dist"));
-if (repoDistPaths.length === 0) fail("repository-dist-missing");
-const repoDistHash = treeHash(join(packageRoot, "dist"), repoDistPaths);
-const entrypointRelative = "dist/src/pi-extension.js";
-const repoEntrypointHash = fileHash(join(packageRoot, entrypointRelative));
-const manifest = compareManifest();
-const repository = {
-  commit: gitLines("rev-parse", "HEAD")[0],
-  sourceFiles: sourcePaths.length,
-  sourceTreeHash: repoSourceHash,
-  distFiles: repoDistPaths.length,
-  distTreeHash: repoDistHash,
-  entrypointHash: repoEntrypointHash,
-  packageVersion: readJson(join(packageRoot, "package.json")).version,
-  workingTree: statusSummary(),
-  deployedManifest: {
-    runtimeMismatches: manifest.runtimeMismatches,
-    metadataMismatches: manifest.metadataMismatches,
-  },
-};
-
-const liveExists = existsSync(liveRoot);
-if (!liveExists) {
-  if (!allowMissingLive) fail("live-package-missing");
-  console.log(JSON.stringify({ schemaVersion: 1, status: "ok", live: { state: "missing-allowed" }, repository }, null, 2));
-  process.exit(0);
+function verifyLive(liveRoot, repository) {
+  let liveResolved;
+  try {
+    const stat = lstatSync(liveRoot);
+    if (!stat.isDirectory() && !stat.isSymbolicLink()) fail("live-package-not-directory");
+    liveResolved = realpathSync(liveRoot);
+  } catch (error) {
+    if (error instanceof BaselineVerificationError) throw error;
+    fail("live-package-missing");
+  }
+  const livePackage = join(liveResolved, "package.json");
+  if (fileHash(livePackage) !== EXPECTED.livePackageHash) fail("live-metadata-mismatch");
+  const liveSourcePaths = filesUnder(join(liveResolved, "src")).map((path) => `src/${safeRelativePath(path)}`);
+  if (!jsonEqual(liveSourcePaths, repository.sourcePaths.sort())) fail("live-runtime-files-missing");
+  const liveDistFilePaths = filesUnder(join(liveResolved, "dist")).map(safeRelativePath);
+  const liveDistPaths = liveDistFilePaths.map((path) => `dist/${path}`);
+  if (!jsonEqual(liveDistPaths, repository.distPaths.sort())) fail("live-runtime-files-missing");
+  const liveSourceHash = treeHash(liveResolved, repository.sourcePaths);
+  const liveDistHash = treeHash(join(liveResolved, "dist"), liveDistFilePaths);
+  const liveEntrypointHash = fileHash(join(liveResolved, entrypointRelative));
+  if (liveSourceHash !== EXPECTED.sourceTreeHash || liveDistHash !== EXPECTED.distTreeHash || liveEntrypointHash !== EXPECTED.entrypointHash) fail("live-runtime-mismatch");
+  return {
+    state: "present",
+    sourceFiles: liveSourcePaths.length,
+    sourceTreeHash: liveSourceHash,
+    distFiles: liveDistFilePaths.length,
+    distTreeHash: liveDistHash,
+    entrypointHash: liveEntrypointHash,
+    packageHash: EXPECTED.livePackageHash,
+    sourceMatch: true,
+    distMatch: true,
+    entrypointMatch: true,
+  };
 }
-if (!lstatSync(liveRoot).isDirectory() && !lstatSync(liveRoot).isSymbolicLink()) fail("live-package-not-directory");
-const liveResolved = resolve(liveRoot);
-if (!existsSync(join(liveResolved, "package.json"))) fail("live-manifest-missing");
-const liveSourcePaths = sourcePaths;
-const liveSourceMissing = liveSourcePaths.filter((path) => !existsSync(join(liveResolved, path)));
-const liveSourceHash = liveSourceMissing.length === 0 ? treeHash(liveResolved, liveSourcePaths) : undefined;
-const liveDistPaths = filesUnder(join(liveResolved, "dist"));
-const liveDistHash = liveDistPaths.length > 0 ? treeHash(join(liveResolved, "dist"), liveDistPaths) : undefined;
-const liveEntrypoint = join(liveResolved, entrypointRelative);
-const liveEntrypointHash = existsSync(liveEntrypoint) ? fileHash(liveEntrypoint) : undefined;
-const live = {
-  state: "present",
-  sourceFiles: liveSourceMissing.length === 0 ? liveSourcePaths.length : liveSourcePaths.length - liveSourceMissing.length,
-  sourceTreeHash: liveSourceHash ?? null,
-  distFiles: liveDistPaths.length,
-  distTreeHash: liveDistHash ?? null,
-  entrypointHash: liveEntrypointHash ?? null,
-  packageVersion: readJson(join(liveResolved, "package.json")).version,
-  sourceMatch: liveSourceHash === repoSourceHash,
-  distMatch: liveDistHash === repoDistHash && liveDistPaths.length === repoDistPaths.length,
-  entrypointMatch: liveEntrypointHash === repoEntrypointHash,
-};
-if (liveSourceMissing.length > 0 || live.distFiles === 0) fail("live-runtime-files-missing");
-if (!live.sourceMatch || !live.distMatch || !live.entrypointMatch) fail("live-runtime-mismatch");
-console.log(JSON.stringify({ schemaVersion: 1, status: "ok", repository, live }, null, 2));
+
+function verify() {
+  const options = parseArgs();
+  verifyCorrectionScope();
+  verifyNorthStar();
+  const repository = verifyRepositoryFiles();
+  const repositoryOutput = {
+    commit: gitLines(["rev-parse", "HEAD"])[0],
+    sourceFiles: repository.sourcePaths.length,
+    sourceTreeHash: repository.sourceTreeHash,
+    distFiles: repository.distPaths.length,
+    distTreeHash: repository.distTreeHash,
+    entrypointHash: repository.entrypointHash,
+    packageVersion: readJson(join(packageRoot, "package.json")).version,
+    workingTree: statusSummary(),
+    deployedManifest: { runtimeMismatches: [], metadataMismatches: ["package.json"] },
+  };
+  if (options.staticOnly) return { schemaVersion: EXPECTED.schemaVersion, status: "ok", repository: repositoryOutput, live: { state: "not-checked" } };
+  const configuredLiveRoot = options.live ?? join(homedir(), ".pi", "agent", "packages", packageSlug);
+  let liveExists = false;
+  try {
+    liveExists = existsSync(configuredLiveRoot);
+  } catch {
+    fail("live-package-missing");
+  }
+  if (!liveExists) {
+    if (!options.allowMissingLive) fail("live-package-missing");
+    return { schemaVersion: EXPECTED.schemaVersion, status: "ok", repository: repositoryOutput, live: { state: "missing-allowed" } };
+  }
+  return { schemaVersion: EXPECTED.schemaVersion, status: "ok", repository: repositoryOutput, live: verifyLive(configuredLiveRoot, repository) };
+}
+
+try {
+  console.log(JSON.stringify(verify(), null, 2));
+} catch (error) {
+  const code = error instanceof BaselineVerificationError ? error.code : "unscanned-input";
+  console.error(JSON.stringify({ schemaVersion: EXPECTED.schemaVersion, status: "failed", code }));
+  process.exitCode = 1;
+}
