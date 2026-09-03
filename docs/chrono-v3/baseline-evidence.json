@@ -1,58 +1,177 @@
 {
-  "schemaVersion": 1,
-  "milestone": "M00-R1",
-  "status": "reviewed-pending-acceptance",
-  "baseline": {
-    "sha": "eb9742c318a76eeaf753e87a620fae83ca9048d1",
-    "m00Commit": "1887c77b39c42fb0b5d35b38baac94aff13465e9",
-    "northStarSha256": "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f"
-  },
-  "runtime": {
-    "sourceFiles": 66,
-    "sourceTreeSha256": "f85564ddbf1f6d726d96b81dc9af65e22612245c83ec6d2a7dc6d444217d5ecc",
-    "distFiles": 65,
-    "distTreeSha256": "58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31",
-    "entrypointSha256": "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50",
-    "packageVersion": "2.0.0",
-    "deployedRuntimeFilesVerified": 261,
-    "deployedRuntimeFilesExpected": 261
-  },
-  "metadataCorrection": {
-    "scope": "packages/pi-chrono-compaction/package.json",
-    "m00PackageSha256": "5814ef926fb2f4bf74ccc8138c06a8030950c34b8e6a01ee5ab40cf273ceac5d",
-    "m00LockSha256": "5410bbdf139f5e89059233c010217c7683e2e36e3265b0c7ba4bdae939676f1d",
-    "livePackageSha256": "43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869",
-    "manifestHistoricalPackageSha256": "56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d",
-    "reconciliation": "The manifest-derived value is a valid 64-character SHA-256 record and matches the deployed-baseline Git object. A separately supplied 66-character candidate was rejected as invalid input."
-  },
-  "privacy": {
-    "repository": "JCFrags/my-shtty-pi",
+  "schemaVersion": 2,
+  "milestone": "M00-R2",
+  "status": "R2 corrections implemented; local validation complete; CI pending",
+  "capturedDate": "2026-09-03",
+  "lastCorrectedDate": "2026-09-03",
+  "reviewState": "changes-requested-directing-assistant-project-lead-review-2",
+  "repository": {
+    "name": "JCFrags/my-shtty-pi",
     "visibility": "PUBLIC",
     "isFork": false,
-    "historicalAuditCommits": 141,
-    "historicalAuditReachableObjects": 2486,
-    "currentBranches": 13,
-    "currentTags": 3,
-    "privacyScanObservedAtCommit": "7e3d5cb5f84e33c3dd72b804ba42f3b5421de6b3",
-    "allRefBlobsScanned": 2908,
-    "worktreeFilesScanned": 648,
-    "indexFilesScanned": 648,
-    "findings": 0,
-    "confirmedP2Material": false,
-    "confirmedP3Surface": false,
-    "classification": "P1-limited-metadata"
+    "defaultBranch": "main",
+    "integrationBranch": "rebuild/chrono-memory-v3",
+    "milestoneBranch": "work/chrono-v3-m00-baseline",
+    "pullRequest": {
+      "number": 30,
+      "base": "rebuild/chrono-memory-v3",
+      "head": "work/chrono-v3-m00-baseline",
+      "draft": true,
+      "merged": false
+    },
+    "baselineSha": "eb9742c318a76eeaf753e87a620fae83ca9048d1",
+    "originalM00Sha": "1887c77b39c42fb0b5d35b38baac94aff13465e9",
+    "r1ReviewTargetSha": "370cbf1522c8ec7acfe49907a969e633e829b6bb"
+  },
+  "northStar": {
+    "path": "docs/chrono-v3/master-goal-and-work-plan.md",
+    "sha256": "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
+    "gitBlobSha1": "dab84641d6f27c61cbaa6db8c2e2d6bebe84bb26",
+    "bytePreserved": true
+  },
+  "runtime": {
+    "packageVersion": "2.0.0",
+    "sourceFileCount": 66,
+    "sourceTreeSha256": "f85564ddbf1f6d726d96b81dc9af65e22612245c83ec6d2a7dc6d444217d5ecc",
+    "distFileCount": 65,
+    "distTreeSha256": "58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31",
+    "entrypointSha256": "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50",
+    "sourceMatch": true,
+    "distMatch": true,
+    "entrypointMatch": true,
+    "runtimeMismatches": [],
+    "metadataExceptions": [
+      {
+        "path": "package.json",
+        "code": "test-script-only-metadata-divergence"
+      }
+    ],
+    "packageLockStatus": "match"
+  },
+  "configuration": {
+    "isolatedWorker": false,
+    "incrementalPrecompute": false,
+    "rollupShadow": false,
+    "valueWorker": false,
+    "rankedSearch": true,
+    "editableMemory": true,
+    "hybridSummary": true,
+    "cache": true,
+    "hostWorkerSlots": 1,
+    "workerTimeoutSeconds": 900,
+    "workerNiceLevel": 10
+  },
+  "scheduler": {
+    "directoryPermissions": "0700",
+    "slotArtifactCount": 0,
+    "ticketArtifactCount": 0,
+    "mutationPerformed": false,
+    "captureLimitation": "owner-only aggregate inspection; no scheduler repair or live failure was induced"
+  },
+  "affectedSession": {
+    "aliasOnly": true,
+    "bytes": 205035658,
+    "lineRecords": 23017,
+    "maximumLineBytes": 1658763,
+    "finalLineComplete": true,
+    "readerChunkBound": 1048576,
+    "contentEmitted": false,
+    "sourceChangedDuringMeasurement": false
+  },
+  "workerIncident": {
+    "incidentId": "I-0002",
+    "observedSymptom": "fallback path observed during a worker failure",
+    "actualSafeFailureCode": "unresolved",
+    "reproduced": false,
+    "syntheticCoverage": [
+      "worker-disabled",
+      "worker-timeout",
+      "worker-aborted",
+      "worker-crashed",
+      "branch-not-persisted",
+      "invalid-cut",
+      "source-changed"
+    ],
+    "schedulerCausality": "unresolved",
+    "carryForwardMilestone": "M01"
   },
   "tests": {
-    "m00ChronoTestsPassed": 294,
-    "m00ChronoTestsExpected": 294,
-    "r1CorrectionTestsPassed": 30,
-    "r1CorrectionTestsExpected": 30
+    "historicalFiles": 55,
+    "runnableFiles": 54,
+    "excludedFiles": 1,
+    "chronoCompact": {
+      "passed": 294,
+      "failed": 0,
+      "skipped": 0,
+      "command": "npm run test"
+    },
+    "publicationVerifier": {
+      "passed": 40,
+      "failed": 0,
+      "skipped": 0
+    },
+    "baselineVerifier": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 0
+    },
+    "rootVerification": {
+      "status": "pass"
+    },
+    "latestCiRun": {
+      "push": null,
+      "pullRequest": null,
+      "conclusion": "pending"
+    },
+    "ciConclusion": "pending"
+  },
+  "privacyAudit": {
+    "classification": "P1-limited-metadata",
+    "p2Found": false,
+    "p3Found": false,
+    "branchesScanned": 13,
+    "tagsScanned": 3,
+    "pullRequestHeadsScanned": 27,
+    "blobCount": 1701,
+    "pathContextCount": 70136,
+    "worktreeFileCount": 652,
+    "indexFileCount": 648,
+    "findings": 0,
+    "residualPriorCopyRisk": "historical public copies may persist; retraction is not attested",
+    "knownUnavailableSurfaces": [
+      "deleted or unreachable GitHub-object retention was not independently verified",
+      "secret-alert endpoint was unavailable",
+      "external public-cache inventory was not independently verified"
+    ]
+  },
+  "rollback": {
+    "created": true,
+    "verified": true,
+    "used": false,
+    "exactPathOmitted": true
   },
   "deployment": {
-    "liveChanged": false,
+    "runtimeSourceChanged": false,
+    "runtimeDistChanged": false,
+    "liveFilesChanged": false,
     "settingsChanged": false,
     "schedulerChanged": false,
     "sessionsChanged": false,
-    "m01Started": false
+    "piReloaded": false,
+    "fixesLocallyUsable": false,
+    "firstPlannedDeploymentMilestone": "M01"
+  },
+  "review": {
+    "projectLeadReview1": {
+      "result": "changes-requested",
+      "record": "reviews/M00-project-lead-review-1.md"
+    },
+    "projectLeadReview2": {
+      "result": "changes-requested",
+      "record": "reviews/M00-project-lead-review-2.md"
+    },
+    "currentState": "M00-R2 corrections complete; ready for directing-assistant project-lead re-review",
+    "m00Accepted": false,
+    "m01Authorized": false
   }
 }

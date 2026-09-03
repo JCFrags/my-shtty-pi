@@ -25,7 +25,7 @@ The local baseline verifier (`scripts/verify-chrono-v3-baseline.mjs`) hashes rel
 
 The live entrypoint hash is `282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50`, equal to the committed entrypoint. The independent containment audit used a different tree-fingerprint encoding; its source, dist, and entrypoint fingerprints also matched the repository content. The two tree-hash formats must not be compared numerically.
 
-`packages/pi-chrono-compaction/DEPLOYED.sha256` has no runtime mismatch. Its only mismatch is the historical `package.json` metadata record: expected `56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d`, current `43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869`. The verifier accepts this documented metadata-only exception; it does not accept a runtime mismatch. A separately supplied 66-character candidate was rejected as an invalid SHA-256 record; the 64-character manifest-derived value above is the verified record.
+`packages/pi-chrono-compaction/DEPLOYED.sha256` has no runtime mismatch. Its only mismatch is the historical `package.json` metadata record: expected `56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d`, current `43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869`. The verifier accepts exactly one typed exception, `test-script-only-metadata-divergence`; it does not accept a runtime mismatch. A separately supplied invalid candidate was rejected as an invalid SHA-256 record; the 64-character manifest-derived value above is the verified record.
 
 ## Runtime settings at capture
 
@@ -45,7 +45,7 @@ The authoritative settings projection was recorded without model/provider names 
 | worker timeout | 900 seconds |
 | worker nice level | 10 |
 
-No setting, scheduler file, Pi agent, live package, or session JSONL was changed for M00.
+No setting, scheduler file, Pi agent, live package, or session JSONL was changed for M00-R2.
 
 ## Session and scheduler boundary
 
@@ -55,7 +55,7 @@ The host-worker scheduler directory was owner-only (`0700`) and contained no art
 
 ## Safe failure-code boundary
 
-No live failure was induced during M00. The characterization suite exercised these safe outcomes: `worker-disabled`, `worker-timeout`, `worker-aborted`, `worker-crashed`, `branch-not-persisted`, `invalid-cut`, `source-changed`, `shadow-invalid-cut`, `shadow-source-changed`, and `shadow-memory-gate`. The current protocol contains 16 general worker codes and 22 rollup-shadow codes; private evidence records the complete vocabulary without any raw error message, stderr, source path, or session content.
+No live failure was induced during M00. The characterization suite exercised these safe outcomes: `worker-disabled`, `worker-timeout`, `worker-aborted`, `worker-crashed`, `branch-not-persisted`, `invalid-cut`, `source-changed`, `shadow-invalid-cut`, `shadow-source-changed`, and `shadow-memory-gate`. The actual safe failure code for I-0002 remains unresolved. The current protocol contains 16 general worker codes and 22 rollup-shadow codes; private evidence records the complete vocabulary without any raw error message, stderr, source path, or session content.
 
 ## Toolchain and tests
 
@@ -65,8 +65,8 @@ No live failure was induced during M00. The characterization suite exercised the
 - TypeScript `5.9.3`
 - ChronoCompact package `2.0.0`
 
-The restored suite contains 55 historical test files, with 54 in the runnable test project. `incremental-context.test.ts` is retained as an explicit compatibility boundary but excluded because the selected source tree does not contain its former runtime module. `npm run test` passed 294/294 tests.
+The complete historical inventory is in [`historical-test-inventory.md`](./historical-test-inventory.md): 55 historical files, 54 runnable files, and one retained compatibility exclusion. The restored suite runs serially with `--test-concurrency=1` as test-harness containment; this does not prove cross-agent runtime safety, fix the worker scheduler, or authorize a runtime change. `npm run test` passed 294/294 tests.
 
 ## M00 acceptance boundary
 
-This document establishes provenance and evidence. It does not authorize deployment, a live reload, a release, a package publication, a force push, history rewrite, merge to `main`, or M01 work. The current public-review state is governed by A-0003 and does not change the frozen baseline.
+This document establishes provenance and evidence. It does not authorize deployment, a live reload, a release, a package publication, a force push, history rewrite, merge to `main`, or M01 work. The current public-review state is governed by A-0003 and the R2 review records. M00 remains unaccepted pending explicit directing-assistant project-lead review.

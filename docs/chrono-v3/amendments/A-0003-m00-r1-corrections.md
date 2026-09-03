@@ -1,6 +1,6 @@
 # A-0003 — M00-R1 public-review correction
 
-**Status:** applied in the R1 tree; independent read-only review completed 2026-09-03 with no blocking defect; explicit acceptance remains pending
+**Status:** applied in the R1 tree; the directing-assistant project-lead review 1 requested corrections; R2 is now ready for directing-assistant project-lead re-review; explicit M00 acceptance remains pending
 **Date:** 2026-09-03
 **Applies to:** M00 repository review and publication gates
 
@@ -13,7 +13,7 @@ The content boundary remains fail-closed and independent of repository visibilit
 ## Controls
 
 - Before every push, pull request update, or final report, verify the exact repository identity and public visibility through an authenticated API check.
-- Scan the worktree, staged index, all local refs, branches, tags, and fetched pull-request heads with the privacy verifier.
+- Scan the worktree, staged index, all local refs, branches, tags, and fetched pull-request heads with the privacy verifier. Event-scoped CI scans the exact event range or complete newly reachable ancestry as appropriate.
 - Require CI event identity to match `JCFrags/my-shtty-pi` and to report public visibility; reject forks, identity mismatches, malformed event data, and unscanned input.
 - Keep full-ref checkout and explicit branch/tag/pull-request-head fetching in CI.
 - Keep the frozen M00 runtime baseline, north-star hash, correction-artifact allowlist, and no-deployment boundary; any synthetic test-timing correction must remain explicitly allowlisted and must not change deployed runtime source or dist.
@@ -21,4 +21,4 @@ The content boundary remains fail-closed and independent of repository visibilit
 
 ## Review boundary
 
-A-0003 records the correction and its controls; it is not an acceptance attestation. Complete validation and independent review found no blocking defect. M00-R1 remains pending an explicit acceptance decision, and M01 remains blocked.
+A-0003 records the correction and its controls; it is not an acceptance attestation. The earlier local secondary reviews are advisory. The directing-assistant project-lead review 1 requested the R1 correction set, and review 2 requested R2-F001 through R2-F010. The corrected state is `M00-R2 corrections complete; ready for directing-assistant project-lead re-review`. M00 remains unaccepted, and M01 remains blocked.

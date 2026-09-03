@@ -55,10 +55,25 @@ function assertBlocked(result, category) {
   assert.ok(["blocked", "unscanned-input", "invalid-invocation"].includes(result.json.status), result.output);
   if (category) assert.ok(result.json.findings.some((finding) => finding.category === category), result.output);
 }
-function eventFile(root, repository) {
-  const path = join(root, "..", "event.json");
-  writeFileSync(path, JSON.stringify({ repository }));
+function eventFile(root, repository, extra = {}) {
+  const path = join(root, "event.json");
+  writeFileSync(path, JSON.stringify({ repository, ...extra }));
   return path;
+}
+function publicRepository() {
+  return { full_name: expectedRepository, visibility: "public", private: false, fork: false };
+}
+function historicalObject(root, objectId) {
+  return execFileSync("git", ["cat-file", "-p", objectId], {
+    cwd: process.cwd(),
+    encoding: null,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+function assertFindingPaths(result, category, paths) {
+  assertBlocked(result, category);
+  const found = result.json.findings.filter((finding) => finding.category === category).map((finding) => finding.path);
+  for (const path of paths) assert.ok(found.includes(path), result.output);
 }
 
 // Safe and current-tree/index behavior.
@@ -66,7 +81,7 @@ test("safe current tree passes", () => withRepo((root) => {
   const result = runScanner(root, "--self-test", "--worktree", "--index");
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "passed");
-  assert.equal(result.json.schemaVersion, 2);
+  assert.equal(result.json.schemaVersion, 3);
 }));
 
 test("unsafe worktree file fails", () => withRepo((root) => {
@@ -250,5 +265,160 @@ test("malformed CI event fails closed", () => withRepo((root) => {
   const result = runScanner(root, "--worktree", "--require-public-review", "--repository", expectedRepository, "--ci-event", event);
   assert.equal(result.json.status, "invalid-invocation");
   assert.equal(result.json.code, "invalid-ci-event");
+  assert.ok(!result.output.includes(root));
+}));
+
+// R2 historical path-context and event-scope coverage.
+test("range scanning blocks a safe blob when it also occupied .env", () => withRepo((root) => {
+  const base = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, ".env"), "ordinary historical bytes\n");
+  const added = commit(root, "synthetic env alias");
+  rmSync(join(root, ".env"));
+  const head = commit(root, "remove env alias");
+  assert.notEqual(base, added);
+  const result = runScanner(root, "--range", `${base}..${head}`);
+  assertFindingPaths(result, "credential-file", [".env"]);
+}));
+
+test("range scanning blocks a safe blob when it also occupied session.jsonl", () => withRepo((root) => {
+  const base = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, "session.jsonl"), "ordinary historical bytes\n");
+  commit(root, "synthetic session alias");
+  const head = git(root, "rev-parse", "HEAD");
+  const result = runScanner(root, "--range", `${base}..${head}`);
+  assertFindingPaths(result, "raw-session-jsonl", ["session.jsonl"]);
+}));
+
+test("approved historical fixture content still blocks at an unapproved alias", () => withRepo((root) => {
+  const base = git(root, "rev-parse", "HEAD");
+  const fixture = join(root, "packages", "herdr-status", "test");
+  mkdirSync(fixture, { recursive: true });
+  const bytes = historicalObject(root, "1590f61a6f57accf641d4093d588b5b531f33662");
+  writeFileSync(join(fixture, "sanitize.test.ts"), bytes);
+  writeFileSync(join(root, "notes.txt"), bytes);
+  const head = commit(root, "approved fixture with unapproved alias");
+  const result = runScanner(root, "--range", `${base}..${head}`);
+  assertFindingPaths(result, "credential-url", ["notes.txt"]);
+  assert.ok(!result.json.findings.some((finding) => finding.path === "packages/herdr-status/test/sanitize.test.ts" && finding.category === "credential-url"), result.output);
+}));
+
+test("range scanning detects a symlink added and removed inside the range", () => withRepo((root) => {
+  const base = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, "target.txt"), "safe target\n");
+  execFileSync("ln", ["-s", "target.txt", join(root, "historical-link.txt")], { cwd: root });
+  commit(root, "add historical symlink");
+  rmSync(join(root, "historical-link.txt"));
+  const head = commit(root, "remove historical symlink");
+  const result = runScanner(root, "--range", `${base}..${head}`);
+  assertFindingPaths(result, "symlink", ["historical-link.txt"]);
+}));
+
+test("range scanning detects a rename into a forbidden path", () => withRepo((root) => {
+  writeFileSync(join(root, "ordinary.txt"), "safe historical bytes\n");
+  const base = commit(root, "safe historical file");
+  execFileSync("mv", [join(root, "ordinary.txt"), join(root, ".env")], { cwd: root });
+  const head = commit(root, "rename into env");
+  const result = runScanner(root, "--range", `${base}..${head}`);
+  assertFindingPaths(result, "credential-file", [".env"]);
+}));
+
+test("commit scanning covers every forbidden path context for one deduplicated blob", () => withRepo((root) => {
+  const token = ["ghp_", "x".repeat(40)].join("");
+  writeFileSync(join(root, ".env"), token);
+  writeFileSync(join(root, "session.jsonl"), token);
+  writeFileSync(join(root, "notes.txt"), token);
+  const head = commit(root, "duplicate secret contexts");
+  const result = runScanner(root, "--commit", head);
+  assertFindingPaths(result, "credential-file", [".env"]);
+  assertFindingPaths(result, "raw-session-jsonl", ["session.jsonl"]);
+  assertFindingPaths(result, "github-token", [".env", "session.jsonl", "notes.txt"]);
+  assert.ok(!result.output.includes(token));
+}));
+
+test("all-ref scanning detects a forbidden alias on a non-current branch", () => withRepo((root) => {
+  git(root, "checkout", "--quiet", "-b", "historical-alias");
+  writeFileSync(join(root, ".env"), "safe branch alias\n");
+  commit(root, "non-current env alias");
+  git(root, "checkout", "--quiet", "main");
+  const result = runScanner(root, "--all-refs");
+  assertFindingPaths(result, "credential-file", [".env"]);
+}));
+
+test("path-context limits fail closed without truncating the scan", () => withRepo((root) => {
+  writeFileSync(join(root, "second.txt"), "second path\n");
+  const head = commit(root, "second path for context limit");
+  const result = runScanner(root, "--commit", head, "--max-path-contexts", "1");
+  assert.equal(result.json.status, "unscanned-input", result.output);
+  assert.equal(result.json.code, "unscanned-path-context-limit");
+}));
+
+test("commit limits fail closed without truncating the scan", () => withRepo((root) => {
+  const base = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, "one.txt"), "one\n");
+  commit(root, "first introduced commit");
+  writeFileSync(join(root, "two.txt"), "two\n");
+  const head = commit(root, "second introduced commit");
+  const result = runScanner(root, "--range", `${base}..${head}`, "--max-commits", "1");
+  assert.equal(result.json.status, "unscanned-input", result.output);
+  assert.equal(result.json.code, "unscanned-commit-limit");
+}));
+
+test("pull-request event scope scans the exact introduced range", () => withRepo((root) => {
+  const base = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, "pr-secret.txt"), ["sk-ant-", "x".repeat(32)].join(""));
+  const head = commit(root, "pull request secret");
+  const event = eventFile(root, publicRepository(), {
+    pull_request: {
+      base: { sha: base, repo: { full_name: expectedRepository } },
+      head: { sha: head, repo: { full_name: expectedRepository } },
+    },
+  });
+  const result = runScanner(root, "--event-scope", "--event-name", "pull_request", "--require-public-review", "--repository", expectedRepository, "--ci-event", event);
+  assertBlocked(result, "anthropic-key");
+  assert.ok(result.json.scopes.includes("event-scope"));
+}));
+
+test("ordinary push event scope scans before..after and the resulting tree", () => withRepo((root) => {
+  const before = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, "push-secret.txt"), ["AIza", "x".repeat(24)].join(""));
+  const after = commit(root, "push secret");
+  const event = eventFile(root, publicRepository(), { before, after, ref: "refs/heads/main" });
+  const result = runScanner(root, "--event-scope", "--event-name", "push", "--require-public-review", "--repository", expectedRepository, "--ci-event", event);
+  assertBlocked(result, "google-api-key");
+}));
+
+test("new-branch push event scope scans complete newly reachable ancestry", () => withRepo((root) => {
+  writeFileSync(join(root, "new-branch-secret.txt"), ["npm_", "x".repeat(36)].join(""));
+  const after = commit(root, "new branch secret");
+  const event = eventFile(root, publicRepository(), { before: "0".repeat(40), after, ref: "refs/heads/new-branch" });
+  const result = runScanner(root, "--event-scope", "--event-name", "push", "--require-public-review", "--repository", expectedRepository, "--ci-event", event);
+  assertBlocked(result, "npm-token");
+}));
+
+test("scheduled event scope scans all fetched refs", () => withRepo((root) => {
+  git(root, "checkout", "--quiet", "-b", "scheduled-hidden");
+  writeFileSync(join(root, "scheduled-secret.txt"), ["sk-proj-", "x".repeat(32)].join(""));
+  commit(root, "scheduled hidden secret");
+  git(root, "checkout", "--quiet", "main");
+  const event = eventFile(root, publicRepository());
+  const result = runScanner(root, "--event-scope", "--event-name", "schedule", "--require-public-review", "--repository", expectedRepository, "--ci-event", event);
+  assertBlocked(result, "openai-key");
+}));
+
+test("workflow-dispatch event scope scans all fetched refs", () => withRepo((root) => {
+  git(root, "checkout", "--quiet", "-b", "manual-hidden");
+  writeFileSync(join(root, "manual-secret.txt"), ["xoxb-", "x".repeat(20)].join(""));
+  commit(root, "manual hidden secret");
+  git(root, "checkout", "--quiet", "main");
+  const event = eventFile(root, publicRepository());
+  const result = runScanner(root, "--event-scope", "--event-name", "workflow_dispatch", "--require-public-review", "--repository", expectedRepository, "--ci-event", event);
+  assertBlocked(result, "slack-token");
+}));
+
+test("incomplete event-scope payload fails closed", () => withRepo((root) => {
+  const event = eventFile(root, publicRepository());
+  const result = runScanner(root, "--event-scope", "--event-name", "pull_request", "--require-public-review", "--repository", expectedRepository, "--ci-event", event);
+  assert.equal(result.json.status, "invalid-invocation", result.output);
+  assert.equal(result.json.code, "pull-request-event-incomplete");
   assert.ok(!result.output.includes(root));
 }));

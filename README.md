@@ -26,4 +26,4 @@ Run `npm run verify` to validate deployed hashes, entrypoints, manifests, produc
 
 ## ChronoCompact M00
 
-The M00 baseline, privacy policy, evidence boundary, amendments, rollback record, and restored-test boundary are documented in [`docs/chrono-v3/`](docs/chrono-v3/). M00 is containment and verification only: it does not deploy, reload, or change ChronoCompact runtime behavior.
+The M00 baseline, privacy policy, evidence boundary, amendments, rollback record, restored-test inventory, review records, and decision/update protocol are documented in [`docs/chrono-v3/`](docs/chrono-v3/). M00-R2 corrections are ready for directing-assistant project-lead re-review; M00 remains unaccepted. M00 is containment and verification only: it does not deploy, reload, or change ChronoCompact runtime behavior. `ChronoCompact V3 runtime fixes deployed: none`; live extension behavior is unchanged; the first expected usable fix milestone is M01.

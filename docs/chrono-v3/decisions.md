@@ -26,12 +26,24 @@ Restore the historical suite from `9a4d25a46f329bd91828a22a925e5de81c71eee4`, ad
 
 ## D-0005 — Do not deploy M00
 
-**Status:** accepted 2026-09-02 and unchanged by R1
+**Status:** accepted 2026-09-02 and unchanged by R1/R2
 
-M00 adds evidence, privacy controls, tests, and diagnostics only. The live package, settings, scheduler configuration, Pi agents, and session JSONL remain unchanged.
+M00 adds evidence, privacy controls, tests, and diagnostics only. The live package, settings, scheduler configuration, Pi agents, and session JSONL remain unchanged. No new ChronoCompact runtime fix is locally usable from this milestone.
 
 ## D-0006 — Permit public review without weakening the content boundary
 
-**Status:** applied 2026-09-03; independent review completed with no blocking defect; explicit acceptance pending
+**Status:** applied 2026-09-03; project-lead acceptance remains pending
 
 The repository is public for source review under A-0003. This is not a release, package publication, deployment, or M01 authorization. Public identity and visibility are checked separately from the fail-closed worktree/index/history privacy scan. A finding, malformed input, identity mismatch, unverified ref, or correction-scope violation blocks publication.
+
+## D-0007 — Keep R2 review provenance explicit
+
+**Status:** applied 2026-09-03; M00 remains unaccepted
+
+The canonical review records distinguish local secondary review from directing-assistant project-lead review. The directing-assistant project-lead review 1 and review 2 are recorded with their changes-requested findings. The current status is `M00-R2 corrections complete; ready for directing-assistant project-lead re-review`. No local agent may self-accept M00 or authorize M01.
+
+## D-0008 — Keep event identity and content scanning independent
+
+**Status:** applied 2026-09-03; unchanged by R2
+
+The publication scanner must independently validate canonical public repository identity and scan content. A passing content scan does not establish visibility, and public visibility does not permit private evidence. Both gates must pass before a push or public review update.

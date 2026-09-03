@@ -19,9 +19,10 @@ import {
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+let repoRoot = defaultRepoRoot;
 const packageSlug = "pi-chrono-compaction";
-const packageRoot = join(repoRoot, "packages", packageSlug);
+let packageRoot = join(repoRoot, "packages", packageSlug);
 const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
@@ -73,6 +74,10 @@ const correctionPaths = new Set([
   "docs/chrono-v3/privacy-policy.md",
   "docs/chrono-v3/rollback.md",
   "docs/chrono-v3/test-recovery.md",
+  "docs/chrono-v3/decision-and-update-protocol.md",
+  "docs/chrono-v3/reviews/README.md",
+  "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
+  "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
 ]);
 
 class BaselineVerificationError extends Error {
@@ -212,15 +217,23 @@ function readJson(path, code = "invalid-json") {
 }
 
 function parseArgs() {
-  const parsed = { allowMissingLive: false, staticOnly: false, live: undefined };
+  const parsed = { allowMissingLive: false, allowDirty: false, staticOnly: false, live: undefined, repositoryRoot: defaultRepoRoot };
   const args = process.argv.slice(2);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--allow-missing-live") parsed.allowMissingLive = true;
+    else if (arg === "--allow-dirty") parsed.allowDirty = true;
     else if (arg === "--static-only") parsed.staticOnly = true;
-    else if (arg === "--live") {
-      if (parsed.live !== undefined || !args[index + 1] || args[index + 1].startsWith("--")) fail("invalid-live-option");
-      parsed.live = args[++index];
+    else if (arg === "--live" || arg === "--repository-root") {
+      if (!args[index + 1] || args[index + 1].startsWith("--")) fail(arg === "--live" ? "invalid-live-option" : "invalid-repository-root-option");
+      const value = args[++index];
+      if (arg === "--live") {
+        if (parsed.live !== undefined) fail("invalid-live-option");
+        parsed.live = value;
+      } else {
+        if (parsed.repositoryRoot !== defaultRepoRoot) fail("invalid-repository-root-option");
+        parsed.repositoryRoot = resolve(value);
+      }
     } else {
       fail("invalid-invocation");
     }
@@ -245,14 +258,14 @@ function parseManifest(path) {
   return entries;
 }
 
-function verifyCorrectionScope() {
+function verifyCorrectionScope(allowDirty = false) {
   const ancestor = gitBytes(["merge-base", "--is-ancestor", EXPECTED.m00Commit, "HEAD"], "baseline-history-unavailable");
   void ancestor;
   const changed = new Set([
     ...gitNames(["diff", "--name-only", "-z", `${EXPECTED.m00Commit}..HEAD`, "--"]),
-    ...gitNames(["diff", "--name-only", "-z", "HEAD", "--"]),
-    ...gitNames(["diff", "--cached", "--name-only", "-z", "--"]),
-    ...gitNames(["ls-files", "--others", "--exclude-standard", "-z"]),
+    ...(allowDirty ? [] : gitNames(["diff", "--name-only", "-z", "HEAD", "--"])),
+    ...(allowDirty ? [] : gitNames(["diff", "--cached", "--name-only", "-z", "--"])),
+    ...(allowDirty ? [] : gitNames(["ls-files", "--others", "--exclude-standard", "-z"])),
   ]);
   for (const path of changed) if (!correctionPaths.has(path)) fail("unexpected-correction-artifact");
 }
@@ -281,6 +294,7 @@ function verifyPackageCorrection() {
   if (fileHash(lockPath) !== EXPECTED.m00LockHash) fail("chrono-package-lock-changed");
   const baselineLock = gitBytesAt(EXPECTED.m00Commit, `${packageRelative}/package-lock.json`);
   if (bytesHash(readRegularFile(lockPath)) !== bytesHash(baselineLock)) fail("chrono-package-lock-changed");
+  return [{ path: "package.json", code: "test-script-only-metadata-divergence" }];
 }
 
 function readJsonFromBytes(bytes) {
@@ -291,14 +305,38 @@ function readJsonFromBytes(bytes) {
   }
 }
 
+function validateRepositoryRoot(candidate) {
+  try {
+    const stat = lstatSync(candidate);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) fail("invalid-repository-root");
+    const resolved = realpathSync(candidate);
+    const discovered = execFileSync("git", ["-C", resolved, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (realpathSync(discovered) !== resolved) fail("invalid-repository-root");
+  } catch (error) {
+    if (error instanceof BaselineVerificationError) throw error;
+    fail("invalid-repository-root");
+  }
+  repoRoot = candidate;
+  packageRoot = join(repoRoot, "packages", packageSlug);
+}
+
+function verifyWorkingTree(allowDirty) {
+  let status;
+  try {
+    status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    fail("git-status-unavailable");
+  }
+  const entries = status.split("\0").filter(Boolean);
+  if (entries.length > 0 && !allowDirty) fail("dirty-repository");
+  const trackedModes = gitBytes(["ls-files", "-s", "-z"], "git-status-unavailable").toString("utf8");
+  if (/\b120000\b/u.test(trackedModes) && !allowDirty) fail("unsafe-repository-symlink");
+  return { clean: entries.length === 0, allowDirtyUsed: Boolean(allowDirty) };
+}
+
 function verifyRepositoryFiles() {
   if (!existsSync(packageRoot)) fail("repository-package-missing");
-  const sourcePaths = gitLines(["ls-files", "--", `${packageRelative}/src`])
-    .map((path) => {
-      const prefix = `${packageRelative}/`;
-      if (!path.startsWith(prefix)) fail("invalid-source-path");
-      return safeRelativePath(path.slice(prefix.length));
-    });
+  const sourcePaths = filesUnder(join(packageRoot, "src")).map((path) => safeRelativePath(`src/${path}`));
   if (sourcePaths.length !== EXPECTED.sourceFiles) fail("source-file-count-changed");
   const sourceTreeHash = treeHash(packageRoot, sourcePaths);
   if (sourceTreeHash !== EXPECTED.sourceTreeHash) fail("source-baseline-mismatch");
@@ -317,23 +355,23 @@ function verifyRepositoryFiles() {
     if (fileHash(join(packageRoot, path)) !== manifest.get(path)) fail("deployed-runtime-mismatch");
   }
   if (fileHash(join(packageRoot, "package.json")) === manifest.get("package.json")) fail("metadata-correction-missing");
-  verifyPackageCorrection();
+  const metadataExceptions = verifyPackageCorrection();
   const packageJson = readJson(join(packageRoot, "package.json"));
   if (packageJson.version !== "2.0.0") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");
   if (rootPackage.piConsolidation?.deployedBaselineCommit !== EXPECTED.deployedBaselineCommit) fail("deployed-baseline-commit-changed");
-  return { sourcePaths, distPaths, distFilePaths, sourceTreeHash, distTreeHash, entrypointHash, manifest };
+  return { sourcePaths, distPaths, distFilePaths, sourceTreeHash, distTreeHash, entrypointHash, manifest, metadataExceptions };
 }
 
-function statusSummary() {
+function statusSummary(workingTree) {
   const changed = new Set([
     ...gitNames(["diff", "--name-only", "-z", "HEAD", "--"]),
     ...gitNames(["diff", "--cached", "--name-only", "-z", "--"]),
     ...gitNames(["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
-  return { clean: changed.size === 0, changedFileCount: changed.size };
+  return { ...workingTree, clean: changed.size === 0, changedFileCount: changed.size };
 }
 
 function verifyLive(liveRoot, repository) {
@@ -373,7 +411,9 @@ function verifyLive(liveRoot, repository) {
 
 function verify() {
   const options = parseArgs();
-  verifyCorrectionScope();
+  validateRepositoryRoot(options.repositoryRoot);
+  const workingTree = verifyWorkingTree(options.allowDirty);
+  verifyCorrectionScope(options.allowDirty);
   verifyNorthStar();
   const repository = verifyRepositoryFiles();
   const repositoryOutput = {
@@ -384,8 +424,10 @@ function verify() {
     distTreeHash: repository.distTreeHash,
     entrypointHash: repository.entrypointHash,
     packageVersion: readJson(join(packageRoot, "package.json")).version,
-    workingTree: statusSummary(),
-    deployedManifest: { runtimeMismatches: [], metadataMismatches: ["package.json"] },
+    workingTree: statusSummary(workingTree),
+    runtimeMismatches: [],
+    metadataExceptions: repository.metadataExceptions,
+    deployedManifest: { runtimeMismatches: [], metadataExceptions: repository.metadataExceptions },
   };
   if (options.staticOnly) return { schemaVersion: EXPECTED.schemaVersion, status: "ok", repository: repositoryOutput, live: { state: "not-checked" } };
   const configuredLiveRoot = options.live ?? join(homedir(), ".pi", "agent", "packages", packageSlug);

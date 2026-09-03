@@ -1,22 +1,14 @@
-# Independent review record
+# Review compatibility index
 
-## M00 review
+Canonical M00 review provenance is maintained in [`reviews/`](./reviews/):
 
-Two independent read-only reviews of the original M00 baseline were completed before the R1 correction pass. They found no blocking defect within their reviewed scope. Their result does not approve the later R1 changes.
+- [`M00-project-lead-review-1.md`](./reviews/M00-project-lead-review-1.md) records the first directing-assistant project-lead review and its R1 changes-requested result.
+- [`M00-project-lead-review-2.md`](./reviews/M00-project-lead-review-2.md) records the second directing-assistant project-lead review and R2-F001 through R2-F010.
 
-## M00-R1 review status
+Historical references to “independent review” in earlier records mean local secondary review unless the record explicitly names a directing-assistant project-lead review. Local secondary review is advisory evidence only; it is not project-lead acceptance.
 
-- **Review state:** independent project-lead review completed 2026-09-03; no blocking defect found; explicit M00 acceptance remains pending.
-- **Required scope:** frozen correction diff, public-review policy, scanner fail-closed behavior, baseline and root allowlists, workflow ref coverage, staged/public scans, complete local gates, GitHub Actions result, and noninterference checks.
-- **Reviewer boundary:** read-only isolation; no reviewer edited the execution clone or original worktree.
-- **Acceptance rule:** a completion claim requires reproduced evidence for the requested behavior. A passing local targeted test is not acceptance by itself.
+## Current state
 
-## Current bounded evidence
+`M00-R2 corrections complete; ready for directing-assistant project-lead re-review.`
 
-At pushed HEAD `8e02568fb1a15a9db6c30e8c494531dd13a6094d`, the correction tests pass 30/30, the serial ChronoCompact suite passes 294/294 repeatedly, schema-2 privacy scanning passes over worktree/index/all refs with the valid public-review event gate, the live baseline matches, and the root/CI gates pass. The prior stale 28/28 evidence count and CI timing-sensitive synthetic tests were corrected before this final review.
-
-## Independent result
-
-The final independent read-only audit reproduced the requested gates and found no blocking defect. It confirmed the canonical public non-fork identity binding, fail-closed content and correction-scope checks, preserved runtime/baseline boundaries, bounded synthetic timing corrections, and absence of Project Glance changes. The result does not authorize deployment, merge, release, or M01.
-
-M00-R1 remains pending an explicit project-lead/user acceptance decision; I-0002 remains unresolved, and M01 must not begin.
+M00 remains unaccepted. M01 remains unauthorized. No runtime fix has been deployed, and no new ChronoCompact runtime fix is locally usable. The current live extension behavior is unchanged.
