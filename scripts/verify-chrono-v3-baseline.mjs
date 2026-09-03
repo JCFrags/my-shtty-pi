@@ -50,6 +50,8 @@ const EXPECTED = Object.freeze({
 const correctionPaths = new Set([
   ".github/workflows/verify.yml",
   "packages/pi-chrono-compaction/package.json",
+  "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
+  "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
   "scripts/verify-chrono-v3-baseline.mjs",
   "scripts/verify-chrono-v3-privacy.mjs",
   "scripts/verify-deployed-baseline.mjs",
