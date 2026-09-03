@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -31,7 +31,7 @@ import {
   ProjectGlanceRelayRuntime,
 } from "../dist/pi/lifecycle.js";
 import { probeProjectGlanceRelay } from "../dist/protocol/client.js";
-import { deriveSessionKey } from "../dist/runtime/paths.js";
+import { deriveSessionKey, runtimePathsForSession } from "../dist/runtime/paths.js";
 import { BRANCH_NORMALIZATION_CASES } from "./fixtures/branch-normalization.mjs";
 
 class EventBus {
@@ -389,7 +389,7 @@ test("runtime reconciles authoritative branches through navigation, restart, ens
     assert.deepEqual(snapshot.feed, []);
 
     state.activeBranch = "B";
-    runtime.onSessionTree(sessionB);
+    await runtime.onSessionTree(sessionB);
     assert.equal(runtime.branchId, "B");
     assert.deepEqual(runtime.current, {});
     await waitFor(() => runtime.current.step === "B-T1  B task");
@@ -398,13 +398,13 @@ test("runtime reconciles authoritative branches through navigation, restart, ens
 
     state.delayNextA = true;
     state.activeBranch = "A";
-    runtime.onSessionTree(sessionA);
+    await runtime.onSessionTree(sessionA);
     await waitFor(() => runtime.current.step === "A-T1  A task");
     runtime.refreshCurrent();
     await waitFor(() => state.delayedA !== undefined);
 
     state.activeBranch = "B";
-    runtime.onSessionTree(sessionB);
+    await runtime.onSessionTree(sessionB);
     await waitFor(() => runtime.current.step === "B-T1  B task");
     state.pauseResponses = true;
     await runtime.restart("2026-09-03T00:00:01.000Z");
@@ -440,6 +440,59 @@ test("runtime reconciles authoritative branches through navigation, restart, ens
     assert.ok(state.requests.some(({ request }) => request.branchId === "B"));
     assert.ok(state.requests.some(({ request }) => request.branchId === "C"));
     assert.ok(state.requests.some(({ request }) => request.branchId === "A"));
+  } finally {
+    await runtime.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("serialized navigation and restart follow invocation order and clean up", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-project-glance-race-"));
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const bus = new EventBus();
+  const state = { activeBranch: "A", requests: [], rejected: 0, pauseResponses: false };
+  installBranchEnforcingProviders(bus, state);
+  const runtime = new ProjectGlanceRelayRuntime(environment, bus);
+  const sessionA = context("A", [], "race-session");
+  const sessionB = context("B", [], "race-session");
+  const sessionKey = deriveSessionKey("race-session");
+  const paths = runtimePathsForSession(sessionKey, environment);
+  try {
+    await runtime.ensureForContext(sessionA);
+    await waitFor(() => runtime.current.step === "A-T1  A task");
+
+    state.activeBranch = "B";
+    await Promise.all([
+      runtime.restart("2026-09-03T00:00:01.000Z"),
+      runtime.onSessionTree(sessionB),
+    ]);
+    await waitFor(() => runtime.current.step === "B-T1  B task");
+    assert.equal(runtime.branchId, "B");
+
+    state.activeBranch = "A";
+    await runtime.onSessionTree(sessionA);
+    await waitFor(() => runtime.current.step === "A-T1  A task");
+    state.activeBranch = "B";
+    await Promise.all([
+      runtime.onSessionTree(sessionB),
+      runtime.restart("2026-09-03T00:00:02.000Z"),
+    ]);
+    await waitFor(() => runtime.current.step === "B-T1  B task");
+    assert.equal(runtime.branchId, "B");
+    const beforeDuplicate = (await probeProjectGlanceRelay(runtime.descriptorPath)).revision;
+    runtime.refreshCurrent();
+    await nextTick();
+    assert.equal((await probeProjectGlanceRelay(runtime.descriptorPath)).revision, beforeDuplicate);
+
+    const stop = runtime.stop();
+    const navigationAfterStop = runtime.onSessionTree(sessionB);
+    await Promise.all([stop, navigationAfterStop]);
+    assert.equal(runtime.started, false);
+    assert.equal(runtime.branchId, "B");
+    assert.deepEqual(runtime.current, {});
+    assert.equal(runtime.descriptorPath, undefined);
+    await assert.rejects(access(paths.descriptorPath));
+    await assert.rejects(access(paths.socketPath));
   } finally {
     await runtime.stop();
     await rm(root, { recursive: true, force: true });

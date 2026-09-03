@@ -43,6 +43,14 @@ export interface OpenProjectGlanceOptions {
   runner?: HerdrCommandRunner;
 }
 
+export interface ProjectGlanceCommandPreparation {
+  sessionKey: string;
+  descriptorPath: string;
+  currentPaneId: string;
+  cwd?: string;
+  environment: NodeJS.ProcessEnv;
+}
+
 export interface OpenProjectGlanceResult {
   action: "opened" | "focused";
   paneId: string;
@@ -246,25 +254,34 @@ export async function openOrFocusProjectGlancePane(
   });
 }
 
+export async function prepareProjectGlanceCommand(
+  ctx: ExtensionCommandContext,
+  runtime: ProjectGlanceRelayRuntime,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<ProjectGlanceCommandPreparation> {
+  await runtime.ensureForContext(ctx);
+  runtime.refreshCurrent();
+  const descriptorPath = runtime.descriptorPath;
+  const sessionKey = runtime.sessionKey;
+  if (!descriptorPath || !sessionKey) throw new Error("PROJECT_GLANCE_RUNTIME_MISSING");
+  const herdr = requireHerdrContext(environment);
+  return {
+    sessionKey,
+    descriptorPath,
+    currentPaneId: herdr.paneId,
+    cwd: ctx.cwd,
+    environment,
+  };
+}
+
 export async function handleProjectGlanceCommand(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   runtime: ProjectGlanceRelayRuntime,
 ): Promise<void> {
   try {
-    const environment = process.env;
-    const herdr = requireHerdrContext(environment);
-    await runtime.ensureForContext(ctx);
-    const descriptorPath = runtime.descriptorPath;
-    const sessionKey = runtime.sessionKey;
-    if (!descriptorPath || !sessionKey) throw new Error("PROJECT_GLANCE_RUNTIME_MISSING");
-    const result = await openOrFocusProjectGlancePane({
-      sessionKey,
-      descriptorPath,
-      currentPaneId: herdr.paneId,
-      cwd: ctx.cwd,
-      environment,
-    });
+    const preparation = await prepareProjectGlanceCommand(ctx, runtime);
+    const result = await openOrFocusProjectGlancePane(preparation);
     ctx.ui.notify(
       result.action === "opened"
         ? "Project Glance opened."

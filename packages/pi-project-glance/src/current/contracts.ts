@@ -79,19 +79,21 @@ function text(value: unknown, maximumBytes: number, optional = false): string | 
   return Buffer.byteLength(normalized, "utf8") <= maximumBytes ? normalized : undefined;
 }
 
+function opaqueIdentifier(value: unknown, maximumBytes: number, rejectPathSeparators = false): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  if (/[\uD800-\uDFFF]/u.test(value) || /\p{Cc}/u.test(value)) return undefined;
+  if (rejectPathSeparators && /[\/\\\0]/u.test(value)) return undefined;
+  return Buffer.byteLength(value, "utf8") <= maximumBytes ? value : undefined;
+}
+
 function branch(value: unknown, expected: string): boolean {
-  return typeof value === "string"
-    && !/[\/\\\0]/u.test(value)
-    && !/[\uD800-\uDFFF]/u.test(value)
-    && !/\p{Cc}/u.test(value)
-    && Buffer.byteLength(value, "utf8") <= ID_BYTES
-    && value === expected;
+  return opaqueIdentifier(value, ID_BYTES, true) === expected;
 }
 
 function request(value: unknown, expectedRequestId: string, expectedBranchId: string, payload: "snapshot" | "summary"): Record<string, unknown> | undefined {
   const candidate = record(value);
   if (!candidate || !exact(candidate, ["version", "requestId", "branchId", payload])) return undefined;
-  if (candidate.version !== VERSION || text(candidate.requestId, REQUEST_ID_BYTES) !== expectedRequestId || !branch(candidate.branchId, expectedBranchId)) return undefined;
+  if (candidate.version !== VERSION || opaqueIdentifier(candidate.requestId, REQUEST_ID_BYTES) !== expectedRequestId || !branch(candidate.branchId, expectedBranchId)) return undefined;
   return candidate;
 }
 

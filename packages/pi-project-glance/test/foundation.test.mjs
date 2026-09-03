@@ -228,7 +228,8 @@ test("validation separates display text from filesystem paths and enforces the w
   const snapshot = createStaticSnapshot(STATIC_FIXTURE_SESSION_KEY, FIXTURE_NOW);
   assert.equal(validateSnapshot(snapshot).feed.length, 2);
   assert.throws(() => validateSnapshot({ ...snapshot, extra: true }), /INVALID_FRAME/);
-  assert.throws(() => validateSnapshot({ ...snapshot, current: { focus: "/private/secret" } }), /INVALID_FRAME/);
+  assert.deepEqual(validateSnapshot({ ...snapshot, current: { focus: "/private/secret" } }).current, {});
+  assert.deepEqual(validateSnapshot({ ...snapshot, current: { step: "safe", toward: "/private/secret", focus: "also safe" } }).current, { step: "safe", focus: "also safe" });
   assert.throws(() => validateSnapshot({ ...snapshot, feed: [{ ...snapshot.feed[0], text: "x".repeat(4097) }] }), /INVALID_FRAME/);
   assert.throws(() => validateRuntimeDescriptor({
     protocolVersion: 1,
@@ -788,7 +789,7 @@ test("doctor emits deterministic stable sanitized checks", () => {
     "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
     "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
     "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
-    "currentStateIntegrationFixture", "liveSnapshotFeedEmpty",
+    "currentStateIntegrationFixture", "currentProjectionPrivacySafe", "opaqueProviderCorrelationExact", "liveSnapshotFeedEmpty",
   ];
   const runDoctor = () => execFileSync(process.execPath, ["scripts/dev-doctor.mjs"], {
     cwd: process.cwd(),

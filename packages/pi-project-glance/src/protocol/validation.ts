@@ -21,6 +21,7 @@ import {
   type ProjectGlanceSnapshot,
 } from "./model.js";
 import { assertSnapshotFrameBudget } from "./framing.js";
+import { validateProjectionText } from "./projection-text.js";
 
 export class ProjectGlanceValidationError extends Error {
   constructor(code = "INVALID_FRAME") {
@@ -61,13 +62,8 @@ function boundedText(value: unknown, maxBytes: number): string {
 }
 
 function displayText(value: unknown, maxBytes: number): string {
-  const text = boundedText(value, maxBytes);
-  if (
-    /(?:^|[\s(])\/(?:home|Users|private|var)\//u.test(text) ||
-    /[A-Za-z]:\\/u.test(text)
-  ) {
-    throw new ProjectGlanceValidationError();
-  }
+  const text = validateProjectionText(value, maxBytes);
+  if (text === undefined) throw new ProjectGlanceValidationError();
   return text;
 }
 
@@ -85,7 +81,11 @@ function optionalDisplayText(
   maxBytes: number,
 ): string | undefined {
   if (!Object.hasOwn(source, key)) return undefined;
-  return displayText(source[key], maxBytes);
+  try {
+    return displayText(source[key], maxBytes);
+  } catch {
+    return undefined;
+  }
 }
 
 function boundedInteger(value: unknown, max: number): number {

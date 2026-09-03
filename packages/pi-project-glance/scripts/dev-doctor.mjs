@@ -204,7 +204,12 @@ async function groundedToolsLinkState() {
 }
 
 async function currentStateFixture() {
-  const result = { currentStateIntegrationFixture: false, liveSnapshotFeedEmpty: false };
+  const result = {
+    currentStateIntegrationFixture: false,
+    currentProjectionPrivacySafe: false,
+    opaqueProviderCorrelationExact: false,
+    liveSnapshotFeedEmpty: false,
+  };
   try {
     const {
       parseTodoSummaryChanged,
@@ -217,7 +222,9 @@ async function currentStateFixture() {
       WORKPLAN_SUMMARY_REQUEST_EVENT,
     } = await import("../dist/current/contracts.js");
     const { ProjectGlanceCurrentController } = await import("../dist/current/controller.js");
+    const { formatCurrentProjection } = await import("../dist/current/format.js");
     const { createLiveSnapshot } = await import("../dist/pi/lifecycle.js");
+    const { validateSnapshot } = await import("../dist/protocol/validation.js");
     const bus = {
       listeners: new Map(),
       on(channel, handler) {
@@ -277,6 +284,68 @@ async function currentStateFixture() {
       && parseWorkplanSummaryChanged({ version: 1, branchId }, branchId) !== undefined
       && parseTodoSummary({ version: 1, requestId: "fixture-todo", branchId, snapshot: { version: 1 } }, "fixture-todo", branchId) !== undefined
       && parseWorkplanSummary({ version: 1, requestId: "fixture-workplan", branchId, summary: { version: 1 } }, "fixture-workplan", branchId) !== undefined;
+
+    const home = homedir().replace(/\/+$/u, "");
+    const privacyPlan = {
+      id: "WP1",
+      title: "Doctor plan",
+      objective: "Doctor objective",
+      revision: 1,
+      currentMilestone: { id: "WP1-M1", title: "Doctor milestone", status: "in_progress" },
+      latestCheckpoint: { id: "WP1-K1", summary: "Doctor checkpoint", currentFocus: `Focus ${home}/checkpoint`, at: "2026-09-03T00:00:00.000Z" },
+    };
+    const privacyCurrent = formatCurrentProjection(
+      { text: `Inspect ${home}/project/file.ts`, status: "pending" },
+      privacyPlan,
+    );
+    const isolatedCurrent = formatCurrentProjection(
+      { text: "/private/secret", status: "pending" },
+      privacyPlan,
+    );
+    const isolatedSnapshot = validateSnapshot({
+      ...createLiveSnapshot("c".repeat(16), "2026-09-03T00:00:00.000Z"),
+      current: isolatedCurrent,
+    });
+    const unsafeLocalPathRows = [
+      formatCurrentProjection({ text: "\\\\server\\share\\private\\file.ts", status: "pending" }, undefined),
+      formatCurrentProjection({ text: "file://localhost/tmp/private/file.ts", status: "pending" }, undefined),
+    ].every((current) => sameJson(current, {}));
+    result.currentProjectionPrivacySafe = sameJson(privacyCurrent, {
+      step: "Inspect $HOME/project/file.ts",
+      toward: "WP1-M1  Doctor milestone",
+      focus: "Focus $HOME/checkpoint",
+    })
+      && sameJson(isolatedCurrent, { toward: "WP1-M1  Doctor milestone", focus: `Focus $HOME/checkpoint` })
+      && sameJson(isolatedSnapshot.current, isolatedCurrent)
+      && unsafeLocalPathRows
+      && !JSON.stringify({ privacyCurrent, isolatedCurrent }).includes(home);
+
+    const spacedRequestId = " doctor request  1 ";
+    const spacedBranchId = " doctor branch  A ";
+    result.opaqueProviderCorrelationExact = parseTodoSummary({
+      version: 1,
+      requestId: spacedRequestId,
+      branchId: spacedBranchId,
+      snapshot: { version: 1 },
+    }, spacedRequestId, spacedBranchId) !== undefined
+      && parseTodoSummary({
+        version: 1,
+        requestId: "doctor request  1",
+        branchId: spacedBranchId,
+        snapshot: { version: 1 },
+      }, spacedRequestId, spacedBranchId) === undefined
+      && parseWorkplanSummary({
+        version: 1,
+        requestId: spacedRequestId,
+        branchId: spacedBranchId,
+        summary: { version: 1 },
+      }, spacedRequestId, spacedBranchId) !== undefined
+      && parseWorkplanSummary({
+        version: 1,
+        requestId: "doctor request  1",
+        branchId: spacedBranchId,
+        summary: { version: 1 },
+      }, spacedRequestId, spacedBranchId) === undefined;
     controller.dispose();
     result.liveSnapshotFeedEmpty = createLiveSnapshot("doctor-session", "2026-09-03T00:00:00.000Z").feed.length === 0;
   } catch {
@@ -386,6 +455,8 @@ function initialChecks(manifest) {
     workplanSummaryContractV1Available: false,
     workplanActivityContractV1Available: false,
     currentStateIntegrationFixture: false,
+    currentProjectionPrivacySafe: false,
+    opaqueProviderCorrelationExact: false,
     liveSnapshotFeedEmpty: false,
   };
 }

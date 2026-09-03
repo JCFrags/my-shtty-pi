@@ -87,10 +87,7 @@ export class ProjectGlanceRelayRuntime {
     const branchId = branchIdForContext(ctx);
     return this.#enqueue(async () => {
       if (this.#sessionKey === sessionKey && this.#server?.started) {
-        if (this.#branchId !== branchId) {
-          this.#branchId = branchId;
-          this.#controller?.onSessionTree(branchId);
-        }
+        if (this.#branchId !== branchId) await this.#transitionBranch(branchId);
         return;
       }
       await this.#stopNow();
@@ -99,7 +96,7 @@ export class ProjectGlanceRelayRuntime {
   }
 
   async start(sessionKey: string, now = new Date().toISOString()): Promise<void> {
-    return this.#enqueue(() => this.#startNow(sessionKey, now, 0, "root"));
+    return this.#enqueue(() => this.#startNow(sessionKey, now, 0, this.#branchId));
   }
 
   async #startNow(
@@ -166,15 +163,25 @@ export class ProjectGlanceRelayRuntime {
     this.#controller?.refresh();
   }
 
-  onSessionTree(ctx: ExtensionContext): void {
+  async onSessionTree(ctx: ExtensionContext): Promise<void> {
     const branchId = branchIdForContext(ctx);
-    this.#branchId = branchId;
-    this.#controller?.onSessionTree(branchId);
+    return this.#enqueue(() => this.#transitionBranch(branchId));
   }
 
-  #publishCurrent(current: ProjectGlanceCurrent): void {
+  async #transitionBranch(branchId: string): Promise<void> {
+    if (this.#branchId === branchId) return;
+    this.#branchId = branchId;
+    if (this.#controller) {
+      this.#controller.onSessionTree(branchId);
+    } else {
+      this.#current = {};
+    }
+  }
+
+  #publishCurrent(current: ProjectGlanceCurrent): boolean {
     const server = this.#server;
-    if (!server?.started || JSON.stringify(current) === JSON.stringify(this.#current)) return;
+    if (!server?.started) return false;
+    if (JSON.stringify(current) === JSON.stringify(this.#current)) return true;
     const nextRevision = this.#revision + 1;
     const next: ProjectGlanceSnapshot = {
       protocolVersion: PROJECT_GLANCE_PROTOCOL_VERSION,
@@ -184,9 +191,14 @@ export class ProjectGlanceRelayRuntime {
       current: { ...current },
       feed: [],
     };
-    if (!server.publish(next)) return;
+    try {
+      if (!server.publish(next)) return false;
+    } catch {
+      return false;
+    }
     this.#revision = nextRevision;
     this.#current = { ...current };
+    return true;
   }
 
   async #stopNow(): Promise<void> {
@@ -200,6 +212,8 @@ export class ProjectGlanceRelayRuntime {
     if (server) await server.stop();
     if (paths) await removeConnectionDescriptor(paths);
     this.#sessionKey = undefined;
+    this.#revision = 1;
+    this.#current = {};
     this.#branchId = "root";
   }
 

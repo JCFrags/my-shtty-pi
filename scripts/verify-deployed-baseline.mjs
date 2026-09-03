@@ -321,7 +321,8 @@ const projectGlanceDoctorChecks = [
   "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
   "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
   "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
-  "currentStateIntegrationFixture", "liveSnapshotFeedEmpty",
+  "currentStateIntegrationFixture", "currentProjectionPrivacySafe", "opaqueProviderCorrelationExact",
+  "liveSnapshotFeedEmpty",
 ];
 
 function sourceSection(text, start, end) {
@@ -336,7 +337,13 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   const controller = source("src/current/controller.ts");
   const lifecycle = source("src/pi/lifecycle.ts");
   const format = source("src/current/format.ts");
+  const projectionText = source("src/protocol/projection-text.ts");
+  const extension = source("src/pi/extension.ts");
+  const openPane = source("src/pi/open-pane.ts");
   const doctor = source("scripts/dev-doctor.mjs");
+  const currentTest = indexed.includes(`packages/${projectGlanceSlug}/test/current.test.mjs`)
+    ? source("test/current.test.mjs")
+    : "";
   const integrationTest = indexed.includes(`packages/${projectGlanceSlug}/test/provider-integration.test.mjs`)
     ? source("test/provider-integration.test.mjs")
     : "";
@@ -358,13 +365,16 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   if (!todoSource.includes("TODO_SUMMARY_CHANGED_EVENT") || !todoSource.includes("snapshot: summary()")) {
     throw new Error("pi-project-glance: Todo provider changed envelope is not represented");
   }
+  if (!contracts.includes("opaqueIdentifier(candidate.requestId") || contracts.includes("text(candidate.requestId")) {
+    throw new Error("pi-project-glance: Project Glance request IDs must remain opaque");
+  }
 
-  const tree = sourceSection(lifecycle, "  onSessionTree(ctx", "  #publishCurrent(");
-  if (!tree.includes("this.#branchId = branchId") || !tree.includes("this.#controller?.onSessionTree(branchId)")) {
-    throw new Error("pi-project-glance: session-tree branch reconciliation is incomplete");
+  const tree = sourceSection(lifecycle, "  async onSessionTree(ctx", "  async #transitionBranch(");
+  if (!tree.includes("return this.#enqueue") || !tree.includes("#transitionBranch(branchId)")) {
+    throw new Error("pi-project-glance: session-tree branch transition bypasses lifecycle serialization");
   }
   const ensure = sourceSection(lifecycle, "  async ensureForContext(ctx", "  async start(");
-  if (!ensure.includes("this.#branchId !== branchId") || !ensure.includes("this.#controller?.onSessionTree(branchId)")) {
+  if (!ensure.includes("this.#branchId !== branchId") || !ensure.includes("#transitionBranch(branchId)")) {
     throw new Error("pi-project-glance: same-session branch reconciliation is missing");
   }
   const restart = sourceSection(lifecycle, "  async restart(", "  async stop(");
@@ -372,17 +382,58 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
     throw new Error("pi-project-glance: relay restart does not preserve the latest branch");
   }
 
+  const publish = sourceSection(lifecycle, "  #publishCurrent(", "  async #stopNow(");
+  const visibleAssignment = publish.indexOf("this.#current = { ...current }");
+  const publishResult = publish.indexOf("server.publish(next)");
+  if (!publish.includes("return false") || !publish.includes("return true") || publishResult < 0 ||
+      visibleAssignment < publishResult) {
+    throw new Error("pi-project-glance: relay publication is not transactional");
+  }
+  const controllerPublish = sourceSection(controller, "  #publish(): boolean", "  #cancelRetries(");
+  const controllerVisible = controllerPublish.indexOf("this.#visible = next");
+  const callback = controllerPublish.indexOf("this.#onChange({ ...next })");
+  if (controllerVisible < 0 || callback < 0 || controllerVisible < callback || !controllerPublish.includes("=== false")) {
+    throw new Error("pi-project-glance: controller visible state advances before publication acceptance");
+  }
+
   if (!integrationTest || !integrationTest.includes("groundedTasks") || !integrationTest.includes("groundedWorkplan") ||
       !integrationTest.includes("actual Todo mutation") || !integrationTest.includes("branch-enforcing") && !integrationTest.includes("installBranchEnforcingProviders")) {
     throw new Error("pi-project-glance: real-provider integration coverage is missing");
   }
-  if (!format.includes("${id}  ${text}")) throw new Error("pi-project-glance: current ID separator is not two spaces");
-  if (!integrationTest.includes("BRANCH_NORMALIZATION_CASES") || !integrationTest.includes("T1  ") || !integrationTest.includes("WP1-M1  ")) {
-    throw new Error("pi-project-glance: current-state conformance coverage is incomplete");
+  if (!format.includes("${id}  ${text}") || !format.includes("${id}  ${title}") ||
+      format.includes("${id} ${text}") || format.includes("${id} ${title}")) {
+    throw new Error("pi-project-glance: current ID separator is not exactly two spaces");
+  }
+  if (!currentTest.includes("T1  Do the bounded work") || !currentTest.includes("WP1-M1  Milestone") ||
+      !currentTest.includes("T1 Do the bounded work") || !currentTest.includes("WP1-M1 Milestone") ||
+      !integrationTest.includes("T1  ") || !integrationTest.includes("WP1-M1  ")) {
+    throw new Error("pi-project-glance: behavioral two-space formatting coverage is incomplete");
+  }
+  if (!projectionText.includes("replaceHomeOccurrences") || projectionText.includes("startsWith(`${home}/`)") ||
+      !projectionText.includes("posixDoubleSlashPath") || !projectionText.includes("windowsUncPath") ||
+      !projectionText.includes("fileUri") || !projectionText.includes("homeShortcut") ||
+      !format.includes("projectDisplayText")) {
+    throw new Error("pi-project-glance: projection privacy must use the shared embedded-home boundary");
+  }
+  if (!summarySource.includes("opaqueContractIdentifier(value.requestId") ||
+      summarySource.includes("validateOptionalBranchId(value: unknown): string | undefined {\n  return value === undefined ? undefined : boundedContractText")) {
+    throw new Error("pi-project-glance: Workplan request/branch identifiers use prose normalization");
+  }
+  if (!openPane.includes("await runtime.ensureForContext(ctx)") || !openPane.includes("runtime.refreshCurrent()") ||
+      openPane.indexOf("await runtime.ensureForContext(ctx)") > openPane.indexOf("runtime.refreshCurrent()") ||
+      openPane.indexOf("runtime.refreshCurrent()") > openPane.indexOf("const descriptorPath")) {
+    throw new Error("pi-project-glance: command refresh must follow authoritative context reconciliation");
+  }
+  if (extension.includes("runtime.refreshCurrent()") || !extension.includes("await runtime.onSessionTree(ctx)")) {
+    throw new Error("pi-project-glance: extension lifecycle/command ordering is unsafe");
   }
   if (!workplanTest.includes("plan completion activity requires") || !workplanTest.includes("plan_completed") ||
       !workplanTest.includes("validateWorkplanActivity")) {
     throw new Error("pi-project-glance: plan completion activity coverage is missing");
+  }
+  if (!currentTest.includes("projection privacy") || !currentTest.includes("publication is transactional") ||
+      !currentTest.includes("command preparation")) {
+    throw new Error("pi-project-glance: COMMAND 3R2 focused tests are missing");
   }
   if (!hasTextWithoutProductionGroundedImport(packageRoot, indexed)) {
     throw new Error("pi-project-glance: production grounded-tools import is forbidden");

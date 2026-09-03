@@ -4,8 +4,12 @@ import test from "node:test";
 import {
   buildWorkplanActivity,
   buildWorkplanSummary,
+  matchesWorkplanRequest,
   validateWorkplanSummary,
+  validateWorkplanSummaryChanged,
   validateWorkplanSummaryRequest,
+  validateWorkplanSummaryResponse,
+  workplanBranchId,
   WORKPLAN_SUMMARY_CHANGED_EVENT,
   WORKPLAN_SUMMARY_LIMITS,
 } from "../../core/src/workplan-summary.ts";
@@ -81,6 +85,38 @@ test("contract validates exact request keys and branch identity", () => {
   assert.deepEqual(request, { version: 1, requestId: "request-1", branchId: "leaf-1" });
   assert.throws(() => validateWorkplanSummaryRequest({ version: 1, requestId: "request-1", extra: true }));
   assert.equal(WORKPLAN_SUMMARY_CHANGED_EVENT, "pi-workplan:summary-changed-v1");
+});
+
+test("opaque request and branch identifiers preserve bytes and reject unsafe input", () => {
+  const requestId = " request  1 ";
+  const branchId = " branch  A ";
+  const request = validateWorkplanSummaryRequest({ version: 1, requestId, branchId });
+  assert.equal(request.requestId, requestId);
+  assert.equal(request.branchId, branchId);
+  assert.equal(workplanBranchId(branchId), branchId);
+  assert.equal(workplanBranchId("branch\nA"), "root");
+
+  const response = validateWorkplanSummaryResponse({ version: 1, requestId, branchId, summary: { version: 1 } });
+  assert.equal(response.requestId, requestId);
+  assert.equal(response.branchId, branchId);
+  assert.equal(validateWorkplanSummaryChanged({ version: 1, branchId }).branchId, branchId);
+  assert.equal(matchesWorkplanRequest(response, request), true);
+  assert.equal(matchesWorkplanRequest({ ...response, requestId: "request  1" }, request), false);
+  assert.equal(matchesWorkplanRequest({ ...response, branchId: "branch  A" }, request), false);
+
+  for (const invalidRequestId of ["request\n1", "request\u00001", "\u0000"]) {
+    assert.throws(() => validateWorkplanSummaryRequest({ version: 1, requestId: invalidRequestId }));
+  }
+  for (const invalidBranchId of ["branch\nA", "branch/A", "branch\\A", "branch\u0000A"]) {
+    assert.throws(() => validateWorkplanSummaryRequest({ version: 1, requestId: "request-1", branchId: invalidBranchId }));
+    assert.equal(workplanBranchId(invalidBranchId), "root");
+  }
+  assert.equal(validateWorkplanSummaryRequest({ version: 1, requestId: "a".repeat(128) }).requestId, "a".repeat(128));
+  assert.throws(() => validateWorkplanSummaryRequest({ version: 1, requestId: "a".repeat(129) }));
+  assert.equal(validateWorkplanSummaryRequest({ version: 1, requestId: "é".repeat(64) }).requestId, "é".repeat(64));
+  assert.throws(() => validateWorkplanSummaryRequest({ version: 1, requestId: "é".repeat(64) + "a" }));
+  assert.equal(validateWorkplanSummaryRequest({ version: 1, requestId: "request-1", branchId: "a".repeat(128) }).branchId, "a".repeat(128));
+  assert.throws(() => validateWorkplanSummaryRequest({ version: 1, requestId: "request-1", branchId: "a".repeat(129) }));
 });
 
 test("activities are deterministic and limited to authoritative completion/checkpoint events", () => {

@@ -1,5 +1,8 @@
 export const BRANCH_NORMALIZATION_CASES = Object.freeze([
   { name: "ordinary Pi entry ID", leafId: "entry-2026-09-03", expected: "entry-2026-09-03" },
+  { name: "valid leading and trailing spaces", leafId: " branch-A ", expected: " branch-A " },
+  { name: "valid repeated internal spaces", leafId: "branch  A", expected: "branch  A" },
+  { name: "valid ordinary internal space", leafId: "branch A", expected: "branch A" },
   { name: "empty value", leafId: "", expected: "root" },
   { name: "null value", leafId: null, expected: "root" },
   { name: "slash", leafId: "branch/name", expected: "root" },

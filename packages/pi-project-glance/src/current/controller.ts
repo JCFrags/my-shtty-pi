@@ -22,7 +22,7 @@ export interface ProjectGlanceEventBus {
 
 export interface ProjectGlanceCurrentControllerOptions {
   eventBus: ProjectGlanceEventBus;
-  onChange(current: ProjectGlanceCurrent): void;
+  onChange(current: ProjectGlanceCurrent): void | boolean;
   retryDelaysMs?: readonly number[];
 }
 
@@ -39,7 +39,7 @@ const DEFAULT_RETRY_DELAYS_MS = [50, 200, 1_000] as const;
 
 export class ProjectGlanceCurrentController {
   readonly #eventBus: ProjectGlanceEventBus;
-  readonly #onChange: (current: ProjectGlanceCurrent) => void;
+  readonly #onChange: (current: ProjectGlanceCurrent) => void | boolean;
   readonly #retryDelaysMs: readonly number[];
   readonly #removers: Array<() => void> = [];
   readonly #retryTimers = new Map<Source, Set<ReturnType<typeof setTimeout>>>();
@@ -202,15 +202,17 @@ export class ProjectGlanceCurrentController {
     this.#publish();
   }
 
-  #publish(): void {
+  #publish(): boolean {
     const next = formatCurrentProjection(this.#todo, this.#workplan);
-    if (JSON.stringify(next) === JSON.stringify(this.#visible)) return;
-    this.#visible = next;
+    if (JSON.stringify(next) === JSON.stringify(this.#visible)) return true;
     try {
-      this.#onChange({ ...next });
+      if (this.#onChange({ ...next }) === false) return false;
     } catch {
       // A relay may be stopping concurrently; source state remains safe.
+      return false;
     }
+    this.#visible = next;
+    return true;
   }
 
   #cancelRetries(source?: Source): void {

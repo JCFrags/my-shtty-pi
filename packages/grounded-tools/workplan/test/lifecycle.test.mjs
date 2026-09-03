@@ -45,10 +45,10 @@ class FakePi {
   }
 }
 
-function context(branch = []) {
+function context(branch = [], leafId = null) {
   return {
     sessionManager: {
-      getLeafId: () => null,
+      getLeafId: () => leafId,
       getBranch: () => branch,
     },
   };
@@ -143,6 +143,23 @@ test("provider responds with a bounded summary and emits activity only after mes
   await nextTick();
   assert.equal(activities.length, activityCount);
   assert.ok(changes.length >= 2);
+});
+
+test("provider echoes opaque request and branch identifiers exactly", async () => {
+  const pi = new FakePi();
+  groundedWorkplan(pi);
+  const branchId = " branch  A ";
+  const requestId = " request  1 ";
+  const responses = [];
+  pi.events.on(WORKPLAN_SUMMARY_EVENT, (value) => responses.push(value));
+  await pi.emitLifecycle("session_start", { type: "session_start" }, context([], branchId));
+  pi.events.emit(WORKPLAN_SUMMARY_REQUEST_EVENT, { version: 1, requestId, branchId });
+  assert.deepEqual(responses.at(-1), {
+    version: 1,
+    requestId,
+    branchId,
+    summary: { version: 1 },
+  });
 });
 
 test("provider ignores wrong-branch summary requests and repeated persistence does not duplicate activity", async () => {

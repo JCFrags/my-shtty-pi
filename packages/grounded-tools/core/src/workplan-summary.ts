@@ -110,6 +110,16 @@ function boundedContractText(value: unknown, maximumBytes: number, field: string
   return normalized;
 }
 
+function opaqueContractIdentifier(value: unknown, maximumBytes: number, field: string, rejectPathSeparators = false): string {
+  if (typeof value !== "string") throw new Error(`${field} must be a string`);
+  if (!value) throw new Error(`${field} must not be empty`);
+  if (/[\uD800-\uDFFF]/u.test(value)) throw new Error(`${field} contains an unpaired surrogate`);
+  if (/\p{Cc}/u.test(value)) throw new Error(`${field} contains a control character`);
+  if (rejectPathSeparators && /[\/\\\0]/u.test(value)) throw new Error(`${field} contains a path separator`);
+  if (Buffer.byteLength(value, "utf8") > maximumBytes) throw new Error(`${field} exceeds ${maximumBytes} UTF-8 bytes`);
+  return value;
+}
+
 function positiveRevision(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`${field} must be a positive safe integer`);
   return value as number;
@@ -126,13 +136,15 @@ function version(value: unknown, field: string): void {
 }
 
 function validateOptionalBranchId(value: unknown): string | undefined {
-  return value === undefined ? undefined : boundedContractText(value, WORKPLAN_SUMMARY_LIMITS.branchIdBytes, "branchId");
+  return value === undefined
+    ? undefined
+    : opaqueContractIdentifier(value, WORKPLAN_SUMMARY_LIMITS.branchIdBytes, "branchId", true);
 }
 
 export function validateWorkplanSummaryRequest(value: unknown): WorkplanSummaryRequestV1 {
   exact(value, ["version", "requestId"], ["branchId"], "workplan summary request");
   version(value.version, "workplan summary request");
-  const requestId = boundedContractText(value.requestId, WORKPLAN_SUMMARY_LIMITS.requestIdBytes, "requestId");
+  const requestId = opaqueContractIdentifier(value.requestId, WORKPLAN_SUMMARY_LIMITS.requestIdBytes, "requestId");
   const branchId = validateOptionalBranchId(value.branchId);
   return { version: WORKPLAN_SUMMARY_VERSION, requestId, ...(branchId ? { branchId } : {}) };
 }
@@ -149,7 +161,7 @@ function validateMilestone(value: unknown): WorkplanSummaryMilestone {
   const status = value.status;
   if (status !== "pending" && status !== "in_progress" && status !== "blocked") throw new Error("summary milestone.status is invalid");
   return {
-    id: boundedContractText(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "summary milestone.id"),
+    id: opaqueContractIdentifier(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "summary milestone.id"),
     title: boundedContractText(value.title, WORKPLAN_SUMMARY_LIMITS.titleBytes, "summary milestone.title"),
     status,
   };
@@ -166,7 +178,7 @@ function validateCheckpoint(value: unknown): WorkplanSummaryCheckpoint {
     nextActions = value.nextActions.map((item, index) => boundedContractText(item, WORKPLAN_SUMMARY_LIMITS.nextActionBytes, `summary checkpoint.nextActions[${index}]`));
   }
   return {
-    id: boundedContractText(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "summary checkpoint.id"),
+    id: opaqueContractIdentifier(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "summary checkpoint.id"),
     summary: boundedContractText(value.summary, WORKPLAN_SUMMARY_LIMITS.checkpointSummaryBytes, "summary checkpoint.summary"),
     ...(currentFocus ? { currentFocus } : {}),
     ...(nextActions ? { nextActions } : {}),
@@ -179,7 +191,7 @@ function validatePlan(value: unknown): WorkplanSummaryPlan {
   const currentMilestone = value.currentMilestone === undefined ? undefined : validateMilestone(value.currentMilestone);
   const latestCheckpoint = value.latestCheckpoint === undefined ? undefined : validateCheckpoint(value.latestCheckpoint);
   return {
-    id: boundedContractText(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "summary activePlan.id"),
+    id: opaqueContractIdentifier(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "summary activePlan.id"),
     title: boundedContractText(value.title, WORKPLAN_SUMMARY_LIMITS.titleBytes, "summary activePlan.title"),
     objective: boundedContractText(value.objective, WORKPLAN_SUMMARY_LIMITS.objectiveBytes, "summary activePlan.objective"),
     revision: positiveRevision(value.revision, "summary activePlan.revision"),
@@ -198,7 +210,7 @@ export function validateWorkplanSummary(value: unknown): WorkplanSummaryV1 {
 export function validateWorkplanSummaryResponse(value: unknown): WorkplanSummaryResponseV1 {
   exact(value, ["version", "requestId", "summary"], ["branchId"], "workplan summary response");
   version(value.version, "workplan summary response");
-  const requestId = boundedContractText(value.requestId, WORKPLAN_SUMMARY_LIMITS.requestIdBytes, "requestId");
+  const requestId = opaqueContractIdentifier(value.requestId, WORKPLAN_SUMMARY_LIMITS.requestIdBytes, "requestId");
   const branchId = validateOptionalBranchId(value.branchId);
   return {
     version: WORKPLAN_SUMMARY_VERSION,
@@ -212,7 +224,7 @@ export function validateWorkplanActivity(value: unknown): WorkplanActivityV1 {
   exact(value, ["version", "id", "type", "planId", "at"], ["milestoneId", "title", "summary", "currentFocus", "nextActions"], "workplan activity");
   version(value.version, "workplan activity");
   if (value.type !== "checkpoint_recorded" && value.type !== "milestone_completed" && value.type !== "plan_completed") throw new Error("workplan activity.type is invalid");
-  const milestoneId = value.milestoneId === undefined ? undefined : boundedContractText(value.milestoneId, WORKPLAN_SUMMARY_LIMITS.idBytes, "workplan activity.milestoneId");
+  const milestoneId = value.milestoneId === undefined ? undefined : opaqueContractIdentifier(value.milestoneId, WORKPLAN_SUMMARY_LIMITS.idBytes, "workplan activity.milestoneId");
   const title = value.title === undefined ? undefined : boundedContractText(value.title, WORKPLAN_SUMMARY_LIMITS.titleBytes, "workplan activity.title");
   const summary = value.summary === undefined ? undefined : boundedContractText(value.summary, WORKPLAN_SUMMARY_LIMITS.checkpointSummaryBytes, "workplan activity.summary");
   const currentFocus = value.currentFocus === undefined ? undefined : boundedContractText(value.currentFocus, WORKPLAN_SUMMARY_LIMITS.currentFocusBytes, "workplan activity.currentFocus");
@@ -223,9 +235,9 @@ export function validateWorkplanActivity(value: unknown): WorkplanActivityV1 {
   }
   return {
     version: WORKPLAN_SUMMARY_VERSION,
-    id: boundedContractText(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "workplan activity.id"),
+    id: opaqueContractIdentifier(value.id, WORKPLAN_SUMMARY_LIMITS.idBytes, "workplan activity.id"),
     type: value.type,
-    planId: boundedContractText(value.planId, WORKPLAN_SUMMARY_LIMITS.idBytes, "workplan activity.planId"),
+    planId: opaqueContractIdentifier(value.planId, WORKPLAN_SUMMARY_LIMITS.idBytes, "workplan activity.planId"),
     ...(milestoneId ? { milestoneId } : {}),
     ...(title ? { title } : {}),
     ...(summary ? { summary } : {}),
@@ -244,7 +256,11 @@ function safeText(value: unknown, maximumBytes: number): string | undefined {
 }
 
 function safeId(value: unknown): string | undefined {
-  return safeText(value, WORKPLAN_SUMMARY_LIMITS.idBytes);
+  try {
+    return opaqueContractIdentifier(value, WORKPLAN_SUMMARY_LIMITS.idBytes, "id");
+  } catch {
+    return undefined;
+  }
 }
 
 function safeTimestamp(value: unknown): string | undefined {

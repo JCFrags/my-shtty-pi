@@ -1,5 +1,5 @@
-import { homedir } from "node:os";
 import type { ProjectGlanceCurrent } from "../protocol/model.js";
+import { projectDisplayText } from "../protocol/projection-text.js";
 import type { TodoCurrentTask, WorkplanCurrentPlan } from "./contracts.js";
 
 const MAX_CURRENT_TEXT_BYTES = 512;
@@ -14,17 +14,8 @@ function clipUtf8(value: string, maximumBytes: number): string {
   return `${output}…`;
 }
 
-function replaceHome(value: string): string {
-  const home = homedir();
-  if (!home || home === "/") return value;
-  return value === home ? "$HOME" : value.startsWith(`${home}/`) ? `$HOME${value.slice(home.length)}` : value;
-}
-
 export function displayText(value: string, maximumBytes = MAX_CURRENT_TEXT_BYTES): string | undefined {
-  if (/[\uD800-\uDFFF]/u.test(value)) return undefined;
-  const normalized = replaceHome(value.normalize("NFC").replace(/\p{Cc}/gu, " ").replace(/\s+/gu, " ").trim());
-  if (!normalized) return undefined;
-  return clipUtf8(normalized, maximumBytes);
+  return projectDisplayText(value, maximumBytes);
 }
 
 function displayId(value: string | undefined): string | undefined {
