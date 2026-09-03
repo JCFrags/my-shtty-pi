@@ -44,7 +44,6 @@ if (restartAfterMs !== undefined && (!Number.isSafeInteger(restartAfterMs) || re
         sessionKey: relay.sessionKey,
         descriptorPath: relay.paths.descriptorPath,
         currentPaneId: process.env.HERDR_PANE_ID,
-        cwd: process.cwd(),
         environment,
         herdrEnvironment: process.env,
       };

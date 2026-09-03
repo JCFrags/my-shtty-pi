@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
-import { access, lstat, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { lstatSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -96,6 +96,72 @@ async function pathExists(path) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function isolatedPiCommandLoad() {
+  const sandbox = await mkdtemp(join(tmpdir(), "pi-project-glance-pi-load-"));
+  const agentDir = join(sandbox, "agent");
+  const runtimeDirectory = join(sandbox, "runtime");
+  await mkdir(agentDir, { recursive: true, mode: 0o700 });
+  await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(agentDir, "settings.json"),
+    `${JSON.stringify({ packages: [packageRoot] })}\n`,
+    { mode: 0o600 },
+  );
+  const child = spawn("pi", ["--mode", "rpc", "--no-session", "--no-tools"], {
+    env: { ...env, PI_CODING_AGENT_DIR: agentDir, XDG_RUNTIME_DIR: runtimeDirectory },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let overLimit = false;
+  child.stdout.on("data", (chunk) => {
+    if (overLimit) return;
+    stdout += chunk.toString("utf8");
+    if (Buffer.byteLength(stdout, "utf8") > 128 * 1024) {
+      overLimit = true;
+      child.kill("SIGTERM");
+    }
+  });
+  const result = await new Promise((resolveResult) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      resolveResult({ code: undefined });
+    }, 10_000);
+    child.once("error", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({ code: undefined });
+    });
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({ code });
+    });
+    child.stdin.end('{"id":"project-glance-doctor","type":"get_commands"}\n');
+  });
+  try {
+    if (overLimit || result.code !== 0) return false;
+    const events = stdout.split("\n").filter(Boolean).flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+    const response = events.find((item) => item?.type === "response" && item?.command === "get_commands");
+    const commands = Array.isArray(response?.data?.commands) ? response.data.commands : [];
+    return response?.success === true &&
+      events.every((item) => item?.type !== "extension_error") &&
+      commands.filter((item) => item?.name === "project-glance" && item?.source === "extension").length === 1;
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
   }
 }
 
@@ -428,6 +494,7 @@ function initialChecks(manifest) {
     canonicalTuiDevelopmentDependency: manifest.devDependencies?.["@earendil-works/pi-tui"] === "0.84.2",
     legacyTuiAliasAbsent: !JSON.stringify({ dependencies: manifest.dependencies, devDependencies: manifest.devDependencies, peerDependencies: manifest.peerDependencies }).includes(legacyTuiAlias),
     piManifestEntrypoint: sameJson(manifest.pi?.extensions, ["./dist/pi/extension.js"]),
+    isolatedPiCommandLoad: false,
     piEntrypointBuilt: false,
     paneEntrypointBuilt: false,
     launcherRegularFile: false,
@@ -475,6 +542,7 @@ async function run() {
   checks.launcherNotSymlink = launcherFacts.notSymlink;
 
   if (checks.platformLinux && process.env.HERDR_ENV === "1") {
+    checks.isolatedPiCommandLoad = await isolatedPiCommandLoad();
     const piList = await execFileAsync("pi", ["list"], { env });
     const piLinks = await piLinkState();
     checks.piLinkPresent = piList.ok && piLinks.present;
@@ -539,7 +607,12 @@ async function run() {
   }
 
   const healthy = Object.values(checks).every(Boolean);
-  process.stdout.write(`${JSON.stringify({ product: "Pi Project Glance", package: packageJson.name, checks, healthy }, null, 2)}\n`);
+  const activation = {
+    status: "reload-required",
+    activeRuntime: "unverified",
+    next: "Run /reload in the active Pi session, then /project-glance.",
+  };
+  process.stdout.write(`${JSON.stringify({ product: "Pi Project Glance", package: packageJson.name, activation, checks, healthy }, null, 2)}\n`);
   if (!healthy) process.exitCode = 1;
 }
 

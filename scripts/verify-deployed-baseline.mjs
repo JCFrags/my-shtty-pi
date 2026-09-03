@@ -318,7 +318,7 @@ function scanProjectGlancePackFiles(work, packFiles) {
 }
 
 const projectGlanceDoctorChecks = [
-  "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
+  "isolatedPiCommandLoad", "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
   "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
   "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
   "currentStateIntegrationFixture", "currentProjectionPrivacySafe", "opaqueProviderCorrelationExact",
@@ -340,7 +340,11 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   const projectionText = source("src/protocol/projection-text.ts");
   const extension = source("src/pi/extension.ts");
   const openPane = source("src/pi/open-pane.ts");
+  const errors = source("src/pi/errors.ts");
   const doctor = source("scripts/dev-doctor.mjs");
+  const smoke = indexed.includes(`packages/${projectGlanceSlug}/scripts/dev-smoke.mjs`)
+    ? source("scripts/dev-smoke.mjs")
+    : "";
   const currentTest = indexed.includes(`packages/${projectGlanceSlug}/test/current.test.mjs`)
     ? source("test/current.test.mjs")
     : "";
@@ -423,6 +427,23 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
       openPane.indexOf("await runtime.ensureForContext(ctx)") > openPane.indexOf("runtime.refreshCurrent()") ||
       openPane.indexOf("runtime.refreshCurrent()") > openPane.indexOf("const descriptorPath")) {
     throw new Error("pi-project-glance: command refresh must follow authoritative context reconciliation");
+  }
+  if (!openPane.includes("[\"plugin\", \"list\", \"--json\"]") ||
+      !openPane.includes("[\"pane\", \"get\", paneId]") ||
+      !openPane.includes("resultRecord.plugin_pane") ||
+      !openPane.includes("PROJECT_GLANCE_OPEN_RESPONSE_INVALID")) {
+    throw new Error("pi-project-glance: command must use the versioned Herdr pane response and presence boundary");
+  }
+  if (!errors.includes("PROJECT_GLANCE_RELOAD_REQUIRED") ||
+      !errors.includes("PROJECT_GLANCE_RUNTIME_START_FAILED") ||
+      !errors.includes("PROJECT_GLANCE_OPEN_RESPONSE_INVALID") ||
+      !errors.includes("PROJECT_GLANCE_PLUGIN_NOT_LINKED")) {
+    throw new Error("pi-project-glance: stable actionable diagnostics are missing");
+  }
+  if (!smoke.includes("startStaticFixtureRelay") || !smoke.includes("plugin", 0) ||
+      !smoke.includes("connectedClients") || !smoke.includes("PROGRESS FEED") ||
+      !smoke.includes("PROJECT_GLANCE_PANE_SMOKE_PASS")) {
+    throw new Error("pi-project-glance: isolated real-pane smoke coverage is missing");
   }
   if (extension.includes("runtime.refreshCurrent()") || !extension.includes("await runtime.onSessionTree(ctx)")) {
     throw new Error("pi-project-glance: extension lifecycle/command ordering is unsafe");
@@ -872,6 +893,7 @@ function verifyProjectGlanceStatic() {
     "dev:link": "node scripts/dev-link.mjs",
     "dev:unlink": "node scripts/dev-unlink.mjs",
     "dev:doctor": "node scripts/dev-doctor.mjs",
+    "dev:smoke": "npm run build && node scripts/dev-smoke.mjs",
     "dev:fixture": "npm run build && node scripts/dev-fixture.mjs",
   };
   if (!jsonEqual(manifest.scripts, expectedScripts)) throw new Error("pi-project-glance: safe script set changed");
@@ -900,7 +922,7 @@ function verifyProjectGlanceStatic() {
     if (!herdrManifest.includes(required)) throw new Error(`pi-project-glance: Herdr manifest lacks ${required}`);
   }
   const projectTracked = indexed;
-  const allowedTracked = new RegExp(`^packages/${projectGlanceSlug}/(?:README\\.md|herdr-plugin\\.toml|package(?:-lock)?\\.json|tsconfig(?:\\.build)?\\.json|bin/pi-project-glance|src/.+\\.ts|scripts/dev-(?:doctor|fixture|link|unlink)\\.mjs|test/.+\\.mjs)$`, "u");
+  const allowedTracked = new RegExp(`^packages/${projectGlanceSlug}/(?:README\\.md|herdr-plugin\\.toml|package(?:-lock)?\\.json|tsconfig(?:\\.build)?\\.json|bin/pi-project-glance|src/.+\\.ts|scripts/dev-(?:doctor|fixture|link|smoke|unlink)\\.mjs|test/.+\\.mjs)$`, "u");
   if (projectTracked.length === 0 || projectTracked.some((rel) => !allowedTracked.test(rel))) throw new Error("pi-project-glance: unexplained tracked file");
   if (existsSync(join(packageRoot, "DEPLOYED.sha256"))) throw new Error("pi-project-glance: additive package must not enter the frozen deployed manifest");
   const launcher = join(packageRoot, "bin/pi-project-glance");

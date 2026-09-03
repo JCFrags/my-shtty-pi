@@ -296,6 +296,7 @@ test("command preparation reconciles command context before one refresh", async 
   assert.equal(prepared.sessionKey, runtime.sessionKey);
   assert.equal(prepared.descriptorPath, runtime.descriptorPath);
   assert.equal(prepared.currentPaneId, "pane-b");
+  assert.equal(prepared.cwd, undefined);
 });
 
 test("controller defers initial requests for provider restore ordering", async () => {

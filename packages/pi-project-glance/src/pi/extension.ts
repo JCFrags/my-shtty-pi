@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   PROJECT_GLANCE_COMMAND,
 } from "../protocol/model.js";
+import { projectGlanceDiagnostic, projectGlanceError } from "./errors.js";
 import { handleProjectGlanceCommand } from "./open-pane.js";
 import { ProjectGlanceRelayRuntime } from "./lifecycle.js";
 
@@ -22,7 +23,15 @@ function globalRuntime(): GlobalRuntime {
 
 export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<void> {
   const previous = globalRuntime()[RUNTIME_SLOT];
-  if (previous) await previous.dispose();
+  if (previous) {
+    try {
+      await previous.dispose();
+    } catch {
+      // Keep command registration available on /reload; the next command
+      // reports the actionable runtime diagnostic instead of losing the whole
+      // extension because an old relay cleanup failed.
+    }
+  }
 
   const runtime = new ProjectGlanceRelayRuntime(process.env, pi.events);
   let disposed = false;
@@ -46,8 +55,12 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   pi.on("session_start", async (_event, ctx) => {
     try {
       await runtime.ensureForContext(ctx);
-    } catch {
-      ctx.ui.notify("Project Glance relay is unavailable.", "warning");
+    } catch (error) {
+      const diagnostic =
+        error instanceof Error && error.name === "ProjectGlanceCommandError"
+          ? error
+          : projectGlanceError("PROJECT_GLANCE_RUNTIME_START_FAILED");
+      ctx.ui.notify(projectGlanceDiagnostic(diagnostic), "warning");
     }
   });
   pi.on("session_tree", async (_event, ctx) => {

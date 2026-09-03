@@ -129,7 +129,9 @@ async function run() {
   if (afterPi.matches.length !== 1 || !afterHerdr.rootMatches || afterHerdr.plugin?.enabled !== true) {
     throw new Error("LINK_VERIFICATION_FAILED");
   }
+  process.stdout.write("BUILD + LINK COMPLETE\n");
   process.stdout.write("Project Glance links are healthy.\n");
+  process.stdout.write("PROJECT_GLANCE_RELOAD_REQUIRED: run /reload in each already-running Pi session, then /project-glance.\n");
 }
 
 try {

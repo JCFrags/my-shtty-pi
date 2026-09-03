@@ -75,6 +75,7 @@ import {
 } from "../dist/pane/renderer.js";
 import {
   buildPaneOpenArgs,
+  handleProjectGlanceCommand,
   openOrFocusProjectGlancePane,
   parsePaneOpenOutput,
 } from "../dist/pi/open-pane.js";
@@ -364,8 +365,26 @@ test("opener focuses a registered pane and opens only when focus cannot find it"
     const calls = [];
     const runner = async (_executable, args) => {
       calls.push([...args]);
+      if (args[0] === "plugin" && args[1] === "list") return {
+        ok: true,
+        stdout: JSON.stringify({ result: { plugins: [{
+          plugin_id: "pi.project-glance",
+          plugin_root: process.cwd(),
+          enabled: true,
+          panes: [{ id: "glance", command: ["./bin/pi-project-glance", "glance"] }],
+        }] } }),
+        stderr: "",
+      };
       if (args[0] === "plugin" && args[2] === "focus") return { ok: true, stdout: "", stderr: "" };
-      if (args[0] === "plugin" && args[2] === "open") return { ok: true, stdout: JSON.stringify({ result: { pane_id: "pane-test-2" } }), stderr: "" };
+      if (args[0] === "plugin" && args[2] === "open") return {
+        ok: true,
+        stdout: JSON.stringify({ result: { type: "plugin_pane_opened", plugin_pane: {
+          plugin_id: "pi.project-glance",
+          entrypoint: "glance",
+          pane: { pane_id: "pane-test-2" },
+        } } }),
+        stderr: "",
+      };
       return { ok: false, stdout: "", stderr: "" };
     };
     const options = {
@@ -373,7 +392,6 @@ test("opener focuses a registered pane and opens only when focus cannot find it"
       descriptorPath: relay.paths.descriptorPath,
       currentPaneId: "pane-current",
       workspaceId: "workspace-test",
-      cwd: "/tmp",
       environment: { ...environment, HERDR_ENV: "1" },
       runner,
     };
@@ -381,13 +399,24 @@ test("opener focuses a registered pane and opens only when focus cannot find it"
     assert.deepEqual(await openOrFocusProjectGlancePane(options), { action: "focused", paneId: "pane-test-2" });
     assert.equal(calls.filter((args) => args[2] === "open").length, 1);
     assert.equal(calls.filter((args) => args[2] === "focus").length, 1);
+    assert.equal(calls.find((args) => args[2] === "open").includes("--cwd"), false);
     assert.deepEqual(buildPaneOpenArgs(options), [
       "plugin", "pane", "open", "--plugin", "pi.project-glance", "--entrypoint", "glance",
       "--placement", "split", "--workspace", "workspace-test", "--target-pane", "pane-current",
-      "--direction", "right", "--cwd", "/tmp", "--env", "PI_PROJECT_GLANCE_DESCRIPTOR=" + relay.paths.descriptorPath,
+      "--direction", "right", "--env", "PI_PROJECT_GLANCE_DESCRIPTOR=" + relay.paths.descriptorPath,
       "--focus",
     ]);
-    assert.equal(parsePaneOpenOutput(JSON.stringify({ result: { pane_id: "pane-test-2" } })), "pane-test-2");
+    assert.equal(parsePaneOpenOutput(JSON.stringify({ result: { type: "plugin_pane_opened", plugin_pane: {
+      plugin_id: "pi.project-glance",
+      entrypoint: "glance",
+      pane: { pane_id: "pane-test-2" },
+    } } })), "pane-test-2");
+    assert.throws(() => parsePaneOpenOutput(JSON.stringify({ result: { pane_id: "pane-test-2" } })), /PROJECT_GLANCE_OPEN_RESPONSE_INVALID/);
+    assert.throws(() => parsePaneOpenOutput(JSON.stringify({ result: { type: "plugin_pane_opened", plugin_pane: {
+      plugin_id: "wrong.plugin",
+      entrypoint: "glance",
+      pane: { pane_id: "pane-test-2" },
+    } } })), /PROJECT_GLANCE_OPEN_RESPONSE_INVALID/);
   });
 });
 
@@ -396,9 +425,23 @@ test("actual concurrent opens share one pane and focus the registered result", a
     const calls = [];
     const runner = async (_executable, args) => {
       calls.push([...args]);
+      if (args[0] === "plugin" && args[1] === "list") return {
+        ok: true,
+        stdout: JSON.stringify({ result: { plugins: [{
+          plugin_id: "pi.project-glance",
+          plugin_root: process.cwd(),
+          enabled: true,
+          panes: [{ id: "glance", command: ["./bin/pi-project-glance", "glance"] }],
+        }] } }),
+        stderr: "",
+      };
       if (args[0] === "plugin" && args[2] === "open") {
         await new Promise((resolve) => setTimeout(resolve, 40));
-        return { ok: true, stdout: JSON.stringify({ result: { pane_id: "pane-concurrent" } }), stderr: "" };
+        return { ok: true, stdout: JSON.stringify({ result: { type: "plugin_pane_opened", plugin_pane: {
+          plugin_id: "pi.project-glance",
+          entrypoint: "glance",
+          pane: { pane_id: "pane-concurrent" },
+        } } }), stderr: "" };
       }
       if (args[0] === "plugin" && args[2] === "focus") {
         return { ok: true, stdout: "", stderr: "" };
@@ -410,7 +453,6 @@ test("actual concurrent opens share one pane and focus the registered result", a
       descriptorPath: relay.paths.descriptorPath,
       currentPaneId: "pane-current",
       workspaceId: "workspace-test",
-      cwd: "/tmp",
       environment: { ...environment, HERDR_ENV: "1" },
       runner,
     };
@@ -441,6 +483,27 @@ test("Pi extension boundary registers one command and lifecycle hooks only", asy
   assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "session_shutdown"]);
   assert.equal("registerTool" in pi, false);
   assert.equal("registerWidget" in pi, false);
+});
+
+test("command failures expose stable actionable diagnostics", async () => {
+  const notifications = [];
+  const ctx = {
+    ui: { notify: (message, level) => notifications.push({ message, level }) },
+    sessionManager: {
+      getSessionId: () => "diagnostic-session",
+      getLeafId: () => "root",
+    },
+  };
+  const runtime = {
+    ensureForContext: async () => { throw new Error("relay startup detail is private"); },
+    refreshCurrent: () => undefined,
+  };
+  await handleProjectGlanceCommand({}, ctx, runtime);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, "error");
+  assert.match(notifications[0].message, /PROJECT_GLANCE_RUNTIME_START_FAILED/u);
+  assert.match(notifications[0].message, /dev:doctor/u);
+  assert.doesNotMatch(notifications[0].message, /relay startup detail/u);
 });
 
 test("coalesced hello and correlated near-limit snapshot stay within the wire budget", () => {
@@ -776,12 +839,27 @@ test("root verifier rejects nonignored untracked Project Glance inputs", async (
   }
 });
 
+test("activation scripts distinguish link completion from active Pi reload", async () => {
+  const manifest = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8"));
+  const link = await readFile(join(process.cwd(), "scripts/dev-link.mjs"), "utf8");
+  const smoke = await readFile(join(process.cwd(), "scripts/dev-smoke.mjs"), "utf8");
+  assert.equal(manifest.scripts["dev:smoke"], "npm run build && node scripts/dev-smoke.mjs");
+  assert.match(link, /BUILD \+ LINK COMPLETE/u);
+  assert.match(link, /PROJECT_GLANCE_RELOAD_REQUIRED/u);
+  assert.match(link, /run \/reload.*then \/project-glance/u);
+  assert.match(smoke, /startStaticFixtureRelay/u);
+  assert.match(smoke, /connectedClients/u);
+  assert.match(smoke, /PROJECT_GLANCE_PANE_SMOKE_PASS/u);
+  assert.match(smoke, /plugin.*pane.*close/su);
+  assert.match(smoke, /XDG_RUNTIME_DIR/u);
+});
+
 test("doctor emits deterministic stable sanitized checks", () => {
   if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
   const expectedChecks = [
     "platformLinux", "nodeVersionSupported", "packageIdentity", "canonicalTuiPeer",
     "canonicalTuiDevelopmentDependency", "legacyTuiAliasAbsent", "piManifestEntrypoint",
-    "piEntrypointBuilt", "paneEntrypointBuilt", "launcherRegularFile", "launcherExecutable",
+    "isolatedPiCommandLoad", "piEntrypointBuilt", "paneEntrypointBuilt", "launcherRegularFile", "launcherExecutable",
     "launcherNotSymlink", "piLinkPresent", "piLinkRootMatches", "herdrPluginPresent",
     "herdrPluginRootMatches", "herdrPluginEnabled", "herdrPanePresent", "herdrPaneCommandExact",
     "relayHandshake", "runtimeDirectoryMode", "descriptorMode", "socketMode",
@@ -802,6 +880,9 @@ test("doctor emits deterministic stable sanitized checks", () => {
   assert.equal(first, second);
   const report = JSON.parse(first);
   assert.deepEqual(Object.keys(report.checks), expectedChecks);
+  assert.equal(report.activation.status, "reload-required");
+  assert.equal(report.activation.activeRuntime, "unverified");
+  assert.equal(report.activation.next, "Run /reload in the active Pi session, then /project-glance.");
   assert.equal(report.healthy, true);
   assert.ok(Object.values(report.checks).every(Boolean));
   assert.ok(!first.includes("PI_PROJECT_GLANCE_DESCRIPTOR"));

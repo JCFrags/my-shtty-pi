@@ -50,6 +50,7 @@
     "dev:link": "node scripts/dev-link.mjs",
     "dev:unlink": "node scripts/dev-unlink.mjs",
     "dev:doctor": "node scripts/dev-doctor.mjs",
+    "dev:smoke": "npm run build && node scripts/dev-smoke.mjs",
     "dev:fixture": "npm run build && node scripts/dev-fixture.mjs"
   }
 }

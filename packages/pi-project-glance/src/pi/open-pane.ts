@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { access, stat } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { isAbsolute } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -14,11 +15,22 @@ import {
 } from "../protocol/model.js";
 import { runtimePathsForSession } from "../runtime/paths.js";
 import { ProjectGlancePaneRegistry } from "../runtime/pane-registry.js";
+import {
+  ProjectGlanceCommandError,
+  projectGlanceDiagnostic,
+  projectGlanceError,
+  type ProjectGlanceErrorCode,
+} from "./errors.js";
 import type { ProjectGlanceRelayRuntime } from "./lifecycle.js";
 
 const execFileAsync = promisify(execFile);
 const COMMAND_OUTPUT_LIMIT = 128 * 1024;
 const PANE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
+const EXPECTED_PANE_COMMAND = ["./bin/pi-project-glance", "glance"] as const;
+const PROJECT_GLANCE_PACKAGE_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
 
 export interface HerdrCommandResult {
   ok: boolean;
@@ -37,7 +49,6 @@ export interface OpenProjectGlanceOptions {
   descriptorPath: string;
   currentPaneId: string;
   workspaceId?: string;
-  cwd?: string;
   environment?: NodeJS.ProcessEnv;
   herdrEnvironment?: NodeJS.ProcessEnv;
   runner?: HerdrCommandRunner;
@@ -47,7 +58,6 @@ export interface ProjectGlanceCommandPreparation {
   sessionKey: string;
   descriptorPath: string;
   currentPaneId: string;
-  cwd?: string;
   environment: NodeJS.ProcessEnv;
 }
 
@@ -57,7 +67,9 @@ export interface OpenProjectGlanceResult {
 }
 
 function validatePaneId(value: string): string {
-  if (!PANE_ID_PATTERN.test(value)) throw new Error("INVALID_PANE_ID");
+  if (!PANE_ID_PATTERN.test(value)) {
+    throw projectGlanceError("PROJECT_GLANCE_PANE_ID_MISSING");
+  }
   return value;
 }
 
@@ -99,20 +111,22 @@ export function defaultHerdrRunner(
 
 async function resolveHerdrExecutable(environment: NodeJS.ProcessEnv): Promise<string> {
   const configured = environment.HERDR_BIN_PATH;
-  if (configured !== undefined) {
-    if (!isAbsolute(configured)) throw new Error("INVALID_HERDR_PATH");
+  if (configured === undefined) return "herdr";
+  try {
+    if (!isAbsolute(configured)) throw new Error("relative");
     await access(configured);
     const entry = await stat(configured);
-    if (!entry.isFile() || (entry.mode & 0o111) === 0) {
-      throw new Error("INVALID_HERDR_PATH");
-    }
+    if (!entry.isFile() || (entry.mode & 0o111) === 0) throw new Error("not executable");
     return configured;
+  } catch {
+    throw projectGlanceError("PROJECT_GLANCE_HERDR_UNAVAILABLE");
   }
-  return "herdr";
 }
 
 function requireHerdrContext(environment: NodeJS.ProcessEnv): { paneId: string } {
-  if (environment.HERDR_ENV !== "1") throw new Error("HERDR_CONTEXT_REQUIRED");
+  if (environment.HERDR_ENV !== "1") {
+    throw projectGlanceError("PROJECT_GLANCE_HERDR_CONTEXT_REQUIRED");
+  }
   return { paneId: validatePaneId(environment.HERDR_PANE_ID ?? "") };
 }
 
@@ -120,10 +134,11 @@ export function buildPaneOpenArgs(options: {
   descriptorPath: string;
   currentPaneId: string;
   workspaceId?: string;
-  cwd?: string;
 }): string[] {
   const currentPaneId = validatePaneId(options.currentPaneId);
-  if (!isAbsolute(options.descriptorPath)) throw new Error("INVALID_DESCRIPTOR_PATH");
+  if (!isAbsolute(options.descriptorPath)) {
+    throw projectGlanceError("PROJECT_GLANCE_DESCRIPTOR_UNAVAILABLE");
+  }
   const args = [
     "plugin",
     "pane",
@@ -137,7 +152,6 @@ export function buildPaneOpenArgs(options: {
   ];
   if (options.workspaceId) args.push("--workspace", options.workspaceId);
   args.push("--target-pane", currentPaneId, "--direction", "right");
-  if (options.cwd) args.push("--cwd", options.cwd);
   args.push(
     "--env",
     `${PROJECT_GLANCE_DESCRIPTOR_ENV}=${options.descriptorPath}`,
@@ -146,45 +160,44 @@ export function buildPaneOpenArgs(options: {
   return args;
 }
 
-function findPaneId(value: unknown): string | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  if (Array.isArray(value)) {
-    const candidates = value.flatMap((item) => {
-      const found = findPaneId(item);
-      return found ? [found] : [];
-    });
-    return candidates.length === 1 ? candidates[0] : undefined;
-  }
-  const source = value as Record<string, unknown>;
-  for (const key of ["pane_id", "paneId"]) {
-    if (typeof source[key] === "string" && PANE_ID_PATTERN.test(source[key])) {
-      return source[key];
-    }
-  }
-  const candidates = Object.values(source).flatMap((item) => {
-    const found = findPaneId(item);
-    return found ? [found] : [];
-  });
-  const unique = [...new Set(candidates)];
-  return unique.length === 1 ? unique[0] : undefined;
-}
-
 export function parsePaneOpenOutput(stdout: string): string {
   if (Buffer.byteLength(stdout, "utf8") > COMMAND_OUTPUT_LIMIT) {
-    throw new Error("INVALID_PANE_RESPONSE");
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
   }
   let value: unknown;
   try {
     value = JSON.parse(stdout.trim()) as unknown;
   } catch {
-    throw new Error("INVALID_PANE_RESPONSE");
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
   }
-  const result =
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>).result ?? value
-      : value;
-  const paneId = findPaneId(result);
-  if (!paneId) throw new Error("INVALID_PANE_RESPONSE");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
+  }
+  const envelope = value as Record<string, unknown>;
+  const result = envelope.result;
+  if (result === null || typeof result !== "object" || Array.isArray(result)) {
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
+  }
+  const resultRecord = result as Record<string, unknown>;
+  const pluginPane = resultRecord.plugin_pane;
+  if (pluginPane === null || typeof pluginPane !== "object" || Array.isArray(pluginPane)) {
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
+  }
+  const pluginPaneRecord = pluginPane as Record<string, unknown>;
+  if (
+    pluginPaneRecord.plugin_id !== PROJECT_GLANCE_PLUGIN_ID ||
+    pluginPaneRecord.entrypoint !== PROJECT_GLANCE_ENTRYPOINT
+  ) {
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
+  }
+  const pane = pluginPaneRecord.pane;
+  if (pane === null || typeof pane !== "object" || Array.isArray(pane)) {
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
+  }
+  const paneId = (pane as Record<string, unknown>).pane_id;
+  if (typeof paneId !== "string" || !PANE_ID_PATTERN.test(paneId)) {
+    throw projectGlanceError("PROJECT_GLANCE_OPEN_RESPONSE_INVALID");
+  }
   return paneId;
 }
 
@@ -200,6 +213,68 @@ async function runCommand(
   });
 }
 
+async function inspectProjectGlancePlugin(
+  executable: string,
+  environment: NodeJS.ProcessEnv,
+  runner: HerdrCommandRunner,
+): Promise<void> {
+  const result = await runCommand(
+    executable,
+    ["plugin", "list", "--json"],
+    environment,
+    runner,
+  );
+  if (!result.ok) {
+    throw projectGlanceError("PROJECT_GLANCE_HERDR_INSPECTION_FAILED");
+  }
+  let plugins: unknown;
+  try {
+    plugins = JSON.parse(result.stdout).result?.plugins;
+  } catch {
+    throw projectGlanceError("PROJECT_GLANCE_HERDR_INSPECTION_FAILED");
+  }
+  if (!Array.isArray(plugins)) {
+    throw projectGlanceError("PROJECT_GLANCE_HERDR_INSPECTION_FAILED");
+  }
+  const matches = plugins.filter(
+    (item) =>
+      item !== null &&
+      typeof item === "object" &&
+      (item as Record<string, unknown>).plugin_id === PROJECT_GLANCE_PLUGIN_ID,
+  );
+  if (matches.length === 0) {
+    throw projectGlanceError("PROJECT_GLANCE_PLUGIN_NOT_LINKED");
+  }
+  if (matches.length !== 1) {
+    throw projectGlanceError("PROJECT_GLANCE_PLUGIN_ROOT_MISMATCH");
+  }
+  const plugin = matches[0] as Record<string, unknown>;
+  if (typeof plugin.plugin_root !== "string") {
+    throw projectGlanceError("PROJECT_GLANCE_PLUGIN_ROOT_MISMATCH");
+  }
+  try {
+    if ((await realpath(plugin.plugin_root)) !== (await realpath(PROJECT_GLANCE_PACKAGE_ROOT))) {
+      throw projectGlanceError("PROJECT_GLANCE_PLUGIN_ROOT_MISMATCH");
+    }
+  } catch (error) {
+    if (error instanceof ProjectGlanceCommandError) throw error;
+    throw projectGlanceError("PROJECT_GLANCE_PLUGIN_ROOT_MISMATCH");
+  }
+  if (plugin.enabled !== true) {
+    throw projectGlanceError("PROJECT_GLANCE_PLUGIN_DISABLED");
+  }
+  const panes = Array.isArray(plugin.panes) ? plugin.panes : [];
+  const pane = panes.find(
+    (item) =>
+      item !== null &&
+      typeof item === "object" &&
+      (item as Record<string, unknown>).id === PROJECT_GLANCE_ENTRYPOINT,
+  ) as Record<string, unknown> | undefined;
+  if (!pane || JSON.stringify(pane.command) !== JSON.stringify(EXPECTED_PANE_COMMAND)) {
+    throw projectGlanceError("PROJECT_GLANCE_ENTRYPOINT_MISSING");
+  }
+}
+
 async function paneIsPresent(
   executable: string,
   paneId: string,
@@ -208,7 +283,7 @@ async function paneIsPresent(
 ): Promise<boolean> {
   const result = await runCommand(
     executable,
-    ["plugin", "pane", "get", paneId],
+    ["pane", "get", paneId],
     environment,
     runner,
   );
@@ -223,35 +298,44 @@ export async function openOrFocusProjectGlancePane(
   const currentPaneId = validatePaneId(options.currentPaneId);
   const executable = await resolveHerdrExecutable(commandEnvironment);
   const runner = options.runner ?? defaultHerdrRunner;
+  await inspectProjectGlancePlugin(executable, commandEnvironment, runner);
   const paths = runtimePathsForSession(options.sessionKey, environment);
   const registry = new ProjectGlancePaneRegistry(paths);
-  return registry.withSessionLock(options.sessionKey, async (lockedRegistry) => {
-    const registered = await lockedRegistry.get(options.sessionKey);
-    if (registered) {
-      const focus = await runCommand(
-        executable,
-        ["plugin", "pane", "focus", registered.paneId],
-        commandEnvironment,
-        runner,
-      );
-      if (focus.ok) return { action: "focused", paneId: registered.paneId };
-      if (await paneIsPresent(executable, registered.paneId, commandEnvironment, runner)) {
-        throw new Error("PROJECT_GLANCE_FOCUS_FAILED");
+  try {
+    return await registry.withSessionLock(options.sessionKey, async (lockedRegistry) => {
+      const registered = await lockedRegistry.get(options.sessionKey);
+      if (registered) {
+        const focus = await runCommand(
+          executable,
+          ["plugin", "pane", "focus", registered.paneId],
+          commandEnvironment,
+          runner,
+        );
+        if (focus.ok) return { action: "focused", paneId: registered.paneId };
+        if (await paneIsPresent(executable, registered.paneId, commandEnvironment, runner)) {
+          throw projectGlanceError("PROJECT_GLANCE_FOCUS_FAILED");
+        }
+        await lockedRegistry.remove(options.sessionKey);
       }
-      await lockedRegistry.remove(options.sessionKey);
-    }
-    const args = buildPaneOpenArgs({
-      descriptorPath: options.descriptorPath,
-      currentPaneId,
-      ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      const args = buildPaneOpenArgs({
+        descriptorPath: options.descriptorPath,
+        currentPaneId,
+        ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
+      });
+      const opened = await runCommand(executable, args, commandEnvironment, runner);
+      if (!opened.ok) throw projectGlanceError("PROJECT_GLANCE_OPEN_FAILED");
+      const paneId = parsePaneOpenOutput(opened.stdout);
+      try {
+        await lockedRegistry.set(options.sessionKey, paneId);
+      } catch {
+        throw projectGlanceError("PROJECT_GLANCE_REGISTRY_FAILED");
+      }
+      return { action: "opened", paneId };
     });
-    const opened = await runCommand(executable, args, commandEnvironment, runner);
-    if (!opened.ok) throw new Error("PROJECT_GLANCE_OPEN_FAILED");
-    const paneId = parsePaneOpenOutput(opened.stdout);
-    await lockedRegistry.set(options.sessionKey, paneId);
-    return { action: "opened", paneId };
-  });
+  } catch (error) {
+    if (error instanceof ProjectGlanceCommandError) throw error;
+    throw projectGlanceError("PROJECT_GLANCE_REGISTRY_FAILED");
+  }
 }
 
 export async function prepareProjectGlanceCommand(
@@ -259,17 +343,23 @@ export async function prepareProjectGlanceCommand(
   runtime: ProjectGlanceRelayRuntime,
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<ProjectGlanceCommandPreparation> {
-  await runtime.ensureForContext(ctx);
+  try {
+    await runtime.ensureForContext(ctx);
+  } catch (error) {
+    if (error instanceof ProjectGlanceCommandError) throw error;
+    throw projectGlanceError("PROJECT_GLANCE_RUNTIME_START_FAILED");
+  }
   runtime.refreshCurrent();
   const descriptorPath = runtime.descriptorPath;
   const sessionKey = runtime.sessionKey;
-  if (!descriptorPath || !sessionKey) throw new Error("PROJECT_GLANCE_RUNTIME_MISSING");
+  if (!descriptorPath || !sessionKey) {
+    throw projectGlanceError("PROJECT_GLANCE_RUNTIME_MISSING");
+  }
   const herdr = requireHerdrContext(environment);
   return {
     sessionKey,
     descriptorPath,
     currentPaneId: herdr.paneId,
-    cwd: ctx.cwd,
     environment,
   };
 }
@@ -288,8 +378,8 @@ export async function handleProjectGlanceCommand(
         : "Project Glance focused.",
       "info",
     );
-  } catch {
-    ctx.ui.notify("Project Glance could not open in the current Herdr pane.", "error");
+  } catch (error) {
+    ctx.ui.notify(projectGlanceDiagnostic(error), "error");
   }
   void pi;
 }

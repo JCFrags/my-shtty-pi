@@ -35,6 +35,7 @@ export interface StaticFixtureRelayOptions {
 export interface StaticFixtureRelay {
   readonly paths: ProjectGlanceRuntimePaths;
   readonly sessionKey: string;
+  readonly connectedClients: number;
   get descriptor(): ProjectGlanceRuntimeDescriptor;
   restart(now?: string): Promise<void>;
   stop(): Promise<void>;
@@ -67,6 +68,10 @@ class StaticFixtureRelayImpl implements StaticFixtureRelay {
 
   get descriptor(): ProjectGlanceRuntimeDescriptor {
     return this.#descriptor;
+  }
+
+  get connectedClients(): number {
+    return this.#server?.connectedClients ?? 0;
   }
 
   async restart(now = new Date().toISOString()): Promise<void> {

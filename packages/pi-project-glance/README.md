@@ -20,7 +20,7 @@ Pane registrations use one owner-only record and one short-lived acquisition loc
 
 ## Development commands
 
-Run these commands from this package directory:
+Run these commands from this package directory and from a Herdr-managed pane:
 
 ```text
 npm ci --ignore-scripts
@@ -28,12 +28,15 @@ npm run typecheck
 npm test
 npm run build
 npm pack --dry-run
-npm run dev:doctor
 npm run dev:link
-npm run dev:unlink
-npm run dev:fixture -- --open
+npm run dev:doctor
+npm run dev:smoke
 ```
 
-`dev:link` and `dev:unlink` use Pi's supported local package commands and Herdr's supported local plugin commands. They only manage this package's registrations. `dev:doctor` checks the built entrypoints, both links, and a disposable authenticated relay. Run the link and doctor commands from a Herdr-managed pane. `dev:fixture` starts a disposable static fixture relay (fixture code is not used by production) and accepts `--open` to open the pane in the current Herdr workspace; `--restart-after-ms=500` exercises generation reconnect. Stop it with Ctrl-C after closing the disposable pane.
+`dev:link` uses Pi's supported local package command and Herdr's supported local plugin commands. It prints `BUILD + LINK COMPLETE`, but linking cannot activate an already-running Pi process. Run `/reload` in that active Pi session, then run `/project-glance`; the link and doctor output deliberately remain `reload-required` until that user checkpoint. `dev:doctor` checks the built entrypoints, both links, a disposable authenticated relay, and an isolated real Pi loader. It does not claim that the current interactive Pi process has loaded the package.
 
-The build output in `dist/` and local dependencies are development artifacts and are not committed. Add `--long-feed` to `dev:fixture` when testing the feed viewport and terminal-width wrapping.
+`dev:smoke` opens the real Herdr `pi.project-glance` pane from a disposable static relay, waits for the pane process and authenticated relay connection, checks the rendered `Project Glance`, `CURRENT`, and `PROGRESS FEED` sections, then closes the pane and removes its temporary runtime. It never reads or mutates real Todo, Workplan, session, or user state. Its stable failure output includes a `PROJECT_GLANCE_*` diagnostic code and never prints command stderr, descriptor paths, or credentials.
+
+`dev:fixture` remains available for manual static-fixture inspection. It accepts `--open`, `--restart-after-ms=500`, and `--long-feed`; stop it with Ctrl-C after closing the disposable pane. The build output in `dist/` and local dependencies are development artifacts and are not committed.
+
+The Pi command and Herdr opener report stable actionable diagnostics such as `PROJECT_GLANCE_RELOAD_REQUIRED`, `PROJECT_GLANCE_PLUGIN_NOT_LINKED`, `PROJECT_GLANCE_RUNTIME_START_FAILED`, and `PROJECT_GLANCE_OPEN_RESPONSE_INVALID`. No Progress Feed extraction, history, paging, unread, dismissal, expansion, or compact status is implemented in this slice.
