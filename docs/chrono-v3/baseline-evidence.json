@@ -45,8 +45,8 @@
   "tests": {
     "m00ChronoTestsPassed": 294,
     "m00ChronoTestsExpected": 294,
-    "r1CorrectionTestsPassed": 28,
-    "r1CorrectionTestsExpected": 28
+    "r1CorrectionTestsPassed": 30,
+    "r1CorrectionTestsExpected": 30
   },
   "deployment": {
     "liveChanged": false,
