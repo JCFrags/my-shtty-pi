@@ -32,6 +32,6 @@ M00 adds evidence, privacy controls, tests, and diagnostics only. The live packa
 
 ## D-0006 — Permit public review without weakening the content boundary
 
-**Status:** applied 2026-09-03; pending independent project-lead review
+**Status:** applied 2026-09-03; independent review completed with no blocking defect; explicit acceptance pending
 
 The repository is public for source review under A-0003. This is not a release, package publication, deployment, or M01 authorization. Public identity and visibility are checked separately from the fail-closed worktree/index/history privacy scan. A finding, malformed input, identity mismatch, unverified ref, or correction-scope violation blocks publication.

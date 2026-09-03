@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "milestone": "M00-R1",
-  "status": "pending-independent-review",
+  "status": "reviewed-pending-acceptance",
   "baseline": {
     "sha": "eb9742c318a76eeaf753e87a620fae83ca9048d1",
     "m00Commit": "1887c77b39c42fb0b5d35b38baac94aff13465e9",

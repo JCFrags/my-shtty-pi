@@ -1,6 +1,6 @@
 # A-0003 — M00-R1 public-review correction
 
-**Status:** applied in the R1 working tree; pending independent project-lead review
+**Status:** applied in the R1 tree; independent read-only review completed 2026-09-03 with no blocking defect; explicit acceptance remains pending
 **Date:** 2026-09-03
 **Applies to:** M00 repository review and publication gates
 
@@ -21,4 +21,4 @@ The content boundary remains fail-closed and independent of repository visibilit
 
 ## Review boundary
 
-A-0003 records the correction and its controls; it is not an acceptance attestation. M00-R1 remains pending the complete validation gates and an independent project-lead review.
+A-0003 records the correction and its controls; it is not an acceptance attestation. Complete validation and independent review found no blocking defect. M00-R1 remains pending an explicit acceptance decision, and M01 remains blocked.
