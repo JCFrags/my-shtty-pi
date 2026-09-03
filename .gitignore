@@ -1,5 +1,8 @@
 node_modules/
 dist-tmp/
 coverage/
+packages/pi-project-glance/dist/
+packages/pi-project-glance/.runtime/
+packages/pi-project-glance/*.tgz
 *.log
 .DS_Store

@@ -1,0 +1,55 @@
+{
+  "name": "pi-project-glance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "os": [
+    "linux"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "description": "Pi Project Glance static foundation and private local pane relay.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "herdr",
+    "tui"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/pi/extension.js"
+    ]
+  },
+  "bin": {
+    "pi-project-glance": "./bin/pi-project-glance"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "herdr-plugin.toml",
+    "README.md",
+    "package.json",
+    "package-lock.json"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2 <0.85.0",
+    "@earendil-works/pi-tui": ">=0.84.2 <0.85.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x bin/pi-project-glance && test -f dist/pi/extension.js && test -f dist/pane/main.js",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "dev:link": "node scripts/dev-link.mjs",
+    "dev:unlink": "node scripts/dev-unlink.mjs",
+    "dev:doctor": "node scripts/dev-doctor.mjs",
+    "dev:fixture": "npm run build && node scripts/dev-fixture.mjs"
+  }
+}

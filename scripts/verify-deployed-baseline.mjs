@@ -35,6 +35,7 @@ const productIndex = args.indexOf("--product");
 const selectedSlug = productIndex >= 0 ? args[productIndex + 1] : undefined;
 if (productIndex >= 0 && !selectedSlug) throw new Error("--product requires a slug");
 const staticOnly = args.includes("--static-only");
+const projectGlanceSlug = "pi-project-glance";
 
 const expectedSlugs = [
   "codex-usage-footer", "files-ui", "grounded-tools", "herdr-agent-state",
@@ -121,11 +122,13 @@ function trackedWorkingFiles() {
 // Repository identity, product set, activation status, and root boundary.
 const actualSlugs = products.map((product) => product.slug);
 if (!jsonEqual(actualSlugs, expectedSlugs)) throw new Error(`unexpected product order/set: ${actualSlugs.join(",")}`);
-if (selectedSlug && !products.some((product) => product.slug === selectedSlug)) throw new Error(`unknown product ${selectedSlug}`);
-const packageDirs = readdirSync(join(root, "packages"), { withFileTypes: true })
+if (selectedSlug && selectedSlug !== projectGlanceSlug && !products.some((product) => product.slug === selectedSlug)) throw new Error(`unknown product ${selectedSlug}`);
+const allPackageDirs = readdirSync(join(root, "packages"), { withFileTypes: true })
   .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-if (!jsonEqual(packageDirs, [...expectedSlugs].sort())) throw new Error(`packages/ must contain exactly 17 products: ${packageDirs.join(",")}`);
-if (packageDirs.some((name) => name.toLowerCase().includes("pi-web"))) throw new Error("pi-web package directory is forbidden");
+const packageDirs = allPackageDirs.filter((name) => name !== projectGlanceSlug);
+if (!allPackageDirs.includes(projectGlanceSlug)) throw new Error("pi-project-glance package directory is missing");
+if (!jsonEqual(packageDirs, [...expectedSlugs].sort())) throw new Error(`baseline packages/ set changed: ${packageDirs.join(",")}`);
+if (allPackageDirs.some((name) => name.toLowerCase().includes("pi-web"))) throw new Error("pi-web package directory is forbidden");
 const active = products.filter((product) => product.status === "active" || product.status === "active-temporary");
 const inactive = products.filter((product) => product.status === "inactive");
 const activeEntrypoints = active.flatMap((product) => product.entrypoints.map((entry) => `${product.slug}/${entry}`));
@@ -194,10 +197,12 @@ for (const product of inactive) {
 }
 
 // Package manifests, locks, configuration paths, and the exact safe script set.
-const packageManifestPaths = walk(join(root, "packages")).filter((path) => basename(path) === "package.json").sort();
+const packageManifestPaths = walk(join(root, "packages"))
+  .filter((path) => basename(path) === "package.json" && !relative(root, path).startsWith(`packages/${projectGlanceSlug}/`))
+  .sort();
 const topManifests = expectedSlugs.map((slug) => join(root, "packages", slug, "package.json"));
 if (topManifests.some((path) => !packageManifestPaths.includes(path))) throw new Error("one or more product manifests are missing");
-if (packageManifestPaths.length !== 25) throw new Error(`expected 25 total manifests across 17 products; got ${packageManifestPaths.length}`);
+if (packageManifestPaths.length !== 25) throw new Error(`expected 25 baseline manifests across 17 products; got ${packageManifestPaths.length}`);
 const localPackages = new Map();
 const scriptPlans = [];
 const lockComparedFields = ["name", "version", "license", "os", "cpu", "engines", "dependencies", "devDependencies", "peerDependencies", "peerDependenciesMeta", "bin", "bundleDependencies", "bundledDependencies"];
@@ -391,6 +396,9 @@ if (trackedDependencyFiles.length > 0) throw new Error(`tracked dependency-tree 
 const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, rootVerification: 0, unexplained: 0 };
 const unexplainedPaths = [];
 for (const rel of tracked) {
+  // Project Glance is verified in its own additive phase below; it must not
+  // enter the frozen Stage 1 product/category counts.
+  if (rel.startsWith(`packages/${projectGlanceSlug}/`)) continue;
   const path = resolve(root, rel);
   let category;
   if (deployedPaths.has(rel)) category = "deployedRuntime";
@@ -493,30 +501,138 @@ function executeScripts(plan) {
   }
 }
 
+function verifyProjectGlanceStatic() {
+  const packageRoot = join(root, "packages", projectGlanceSlug);
+  const manifestPath = join(packageRoot, "package.json");
+  const manifest = readJson(manifestPath);
+  if (manifest.name !== projectGlanceSlug || manifest.version !== "0.1.0" || manifest.private !== true || manifest.type !== "module") {
+    throw new Error("pi-project-glance: package identity changed");
+  }
+  if (!jsonEqual(manifest.os, ["linux"])) throw new Error("pi-project-glance: Linux-only package boundary changed");
+  if (!jsonEqual(manifest.pi?.extensions, ["./dist/pi/extension.js"])) throw new Error("pi-project-glance: Pi extension entrypoint changed");
+  if (!jsonEqual(manifest.bin, { "pi-project-glance": "./bin/pi-project-glance" })) throw new Error("pi-project-glance: launcher changed");
+  if (!jsonEqual(manifest.files, ["bin", "dist", "herdr-plugin.toml", "README.md", "package.json", "package-lock.json"])) throw new Error("pi-project-glance: package file boundary changed");
+  const expectedScripts = {
+    typecheck: "tsc -p tsconfig.json --noEmit",
+    build: "rm -rf dist && tsc -p tsconfig.build.json && chmod +x bin/pi-project-glance && test -f dist/pi/extension.js && test -f dist/pane/main.js",
+    test: "npm run build && node --test test/*.test.mjs",
+    "dev:link": "node scripts/dev-link.mjs",
+    "dev:unlink": "node scripts/dev-unlink.mjs",
+    "dev:doctor": "node scripts/dev-doctor.mjs",
+    "dev:fixture": "npm run build && node scripts/dev-fixture.mjs",
+  };
+  if (!jsonEqual(manifest.scripts, expectedScripts)) throw new Error("pi-project-glance: safe script set changed");
+  for (const forbidden of ["main", "module", "types", "exports", "publishConfig"]) {
+    if (Object.hasOwn(manifest, forbidden)) throw new Error(`pi-project-glance: forbidden manifest field ${forbidden}`);
+  }
+  const lockPath = join(packageRoot, "package-lock.json");
+  const lockRoot = readJson(lockPath).packages?.[""];
+  if (!lockRoot) throw new Error("pi-project-glance: lockfile lacks packages[\"\"]");
+  for (const field of lockComparedFields) {
+    const manifestValue = field === "bin" && manifest.bin
+      ? Object.fromEntries(Object.entries(manifest.bin).map(([name, value]) => [name, value.replace(/^\.\//u, "")]))
+      : manifest[field];
+    if (!jsonEqual(manifestValue, lockRoot[field])) throw new Error(`pi-project-glance: package-lock mismatch for ${field}`);
+  }
+  const herdrManifest = readFileSync(join(packageRoot, "herdr-plugin.toml"), "utf8");
+  for (const required of [
+    'id = "pi.project-glance"',
+    'name = "Project Glance"',
+    'version = "0.1.0"',
+    'min_herdr_version = "0.8.2"',
+    'id = "glance"',
+    'title = "Project Glance"',
+    'command = ["./bin/pi-project-glance", "glance"]',
+  ]) {
+    if (!herdrManifest.includes(required)) throw new Error(`pi-project-glance: Herdr manifest lacks ${required}`);
+  }
+  const projectTracked = tracked.filter((rel) => rel.startsWith(`packages/${projectGlanceSlug}/`));
+  const allowedTracked = new RegExp(`^packages/${projectGlanceSlug}/(?:README\\.md|herdr-plugin\\.toml|package(?:-lock)?\\.json|tsconfig(?:\\.build)?\\.json|bin/pi-project-glance|src/.+\\.ts|scripts/dev-(?:doctor|fixture|link|unlink)\\.mjs|test/.+\\.mjs)$`, "u");
+  if (projectTracked.length === 0 || projectTracked.some((rel) => !allowedTracked.test(rel))) throw new Error("pi-project-glance: unexplained tracked file");
+  if (existsSync(join(packageRoot, "DEPLOYED.sha256"))) throw new Error("pi-project-glance: additive package must not enter the frozen deployed manifest");
+  const launcher = join(packageRoot, "bin/pi-project-glance");
+  if (!lstatSync(launcher).isFile() || (lstatSync(launcher).mode & 0o111) === 0) throw new Error("pi-project-glance: launcher is not executable");
+  const sourceFiles = walk(join(packageRoot, "src")).filter((path) => path.endsWith(".ts"));
+  if (sourceFiles.length === 0) throw new Error("pi-project-glance: source is missing");
+  for (const source of sourceFiles) {
+    const text = readFileSync(source, "utf8");
+    if (text.includes("pi-herdr-orchestrator") || text.includes("pi.herdr.orchestrator")) throw new Error("pi-project-glance: direct orchestrator coupling is forbidden");
+    if (/register(?:Tool|Widget|Shortcut|Flag)\s*\(/u.test(text)) throw new Error("pi-project-glance: V1 control registration is forbidden");
+    for (const specifier of localSpecs(source)) {
+      if (specifier.startsWith("node:") || specifier.startsWith("@earendil-works/")) continue;
+      if (!specifier.startsWith(".")) throw new Error(`pi-project-glance: unexpected external import ${specifier}`);
+      const base = resolve(dirname(source), specifier);
+      const ext = extname(base);
+      const candidates = ext === ".js" || ext === ".mjs"
+        ? [base.slice(0, -ext.length) + ".ts", base]
+        : ext === ""
+          ? [`${base}.ts`, `${base}.js`, join(base, "index.ts"), join(base, "index.js")]
+          : [base];
+      const target = candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile());
+      if (!target || !isWithin(packageRoot, target)) throw new Error(`pi-project-glance: unresolved local import ${specifier}`);
+    }
+  }
+  return {
+    package: manifest.name,
+    trackedFiles: projectTracked.length,
+    sourceFiles: sourceFiles.length,
+    identifiers: "locked",
+    baselineBoundary: "separate",
+  };
+}
+
+function verifyProjectGlance() {
+  const staticResult = verifyProjectGlanceStatic();
+  if (staticOnly) return { ...staticResult, status: "static-only" };
+  const packageRoot = join(root, "packages", projectGlanceSlug);
+  execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: packageRoot, stdio: "inherit" });
+  execFileSync("npm", ["run", "typecheck"], { cwd: packageRoot, stdio: "inherit" });
+  execFileSync("npm", ["test"], { cwd: packageRoot, stdio: "inherit" });
+  const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  const result = JSON.parse(output);
+  if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error("pi-project-glance: invalid pack result");
+  const distFiles = walk(join(packageRoot, "dist"))
+    .filter((path) => statSync(path).isFile())
+    .map((path) => relative(packageRoot, path).replaceAll(sep, "/"))
+    .sort();
+  const packFiles = result[0].files.map((entry) => entry.path).sort();
+  const required = ["README.md", "bin/pi-project-glance", "herdr-plugin.toml", "package.json", ...distFiles].sort();
+  for (const path of required) if (!packFiles.includes(path)) throw new Error(`pi-project-glance: pack omitted ${path}`);
+  for (const path of packFiles) {
+    if (!required.includes(path) && path !== "package-lock.json") throw new Error(`pi-project-glance: pack includes unexplained file ${path}`);
+  }
+  return { ...staticResult, status: "pass", tests: "pass", packFiles: packFiles.length };
+}
+
 let safeScriptsPassed = 0;
 let packPassed = 0;
 const packFiles = {};
 const buildResults = {};
+const baselineScopeSelected = selectedSlug !== projectGlanceSlug;
 if (!staticOnly) {
-  for (const product of products.filter((candidate) => !selectedSlug || candidate.slug === selectedSlug)) {
+  for (const product of products.filter((candidate) => baselineScopeSelected && (!selectedSlug || candidate.slug === selectedSlug))) {
     packFiles[product.slug] = packDryRun(product, join(root, "packages", product.slug));
     packPassed += 1;
   }
-  for (const plan of scriptPlans.filter((candidate) => !selectedSlug || candidate.slug === selectedSlug)) {
+  for (const plan of scriptPlans.filter((candidate) => baselineScopeSelected && (!selectedSlug || candidate.slug === selectedSlug))) {
     const result = executeScripts(plan);
     safeScriptsPassed += result.passed;
     if (result.buildResult !== undefined) buildResults[plan.slug] = result.buildResult;
   }
 }
-const expectedScriptTotal = selectedSlug ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length : 12;
-const expectedPackTotal = selectedSlug ? 1 : 17;
+const expectedScriptTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length : 12;
+const expectedPackTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? 1 : 17;
 if (!staticOnly && safeScriptsPassed !== expectedScriptTotal) throw new Error(`safe scripts passed ${safeScriptsPassed}/${expectedScriptTotal}`);
 if (!staticOnly && packPassed !== expectedPackTotal) throw new Error(`pack dry runs passed ${packPassed}/${expectedPackTotal}`);
 if (!staticOnly) {
-  for (const product of products.filter((candidate) => candidate.compiledCount !== undefined && (!selectedSlug || candidate.slug === selectedSlug))) {
+  for (const product of products.filter((candidate) => baselineScopeSelected && candidate.compiledCount !== undefined && (!selectedSlug || candidate.slug === selectedSlug))) {
     if (buildResults[product.slug] !== product.compiledCount) throw new Error(`${product.slug}: build matched ${buildResults[product.slug] ?? 0}/${product.compiledCount}`);
   }
 }
+
+const projectGlanceResult = !selectedSlug || selectedSlug === projectGlanceSlug
+  ? verifyProjectGlance()
+  : { status: "skipped" };
 
 console.log(JSON.stringify({
   products: products.length,
@@ -532,6 +648,7 @@ console.log(JSON.stringify({
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),
   safeScripts: staticOnly ? "skipped" : `${safeScriptsPassed}/${expectedScriptTotal}`,
   packDryRuns: staticOnly ? "skipped" : `${packPassed}/${expectedPackTotal}`,
+  projectGlance: projectGlanceResult,
   dependencyRuntimeGraph: {
     deployedRuntime: categories.deployedRuntime,
     sourceBuildInputs: categories.sourceBuildInputs + categories.inactiveSource,
