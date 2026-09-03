@@ -38,7 +38,7 @@ const EXPECTED = Object.freeze({
   distFiles: 65,
   distTreeHash: "58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31",
   entrypointHash: "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50",
-  m00PackageHash: "872d4a4b65d12d8919e6cfbda5c6d57915c631d3bb7c6834616f9ce9ada850dc",
+  m00PackageHash: "5814ef926fb2f4bf74ccc8138c06a8030950c34b8e6a01ee5ab40cf273ceac5d",
   m00LockHash: "5410bbdf139f5e89059233c010217c7683e2e36e3265b0c7ba4bdae939676f1d",
   livePackageHash: "43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869",
   deployedPackageHash: "56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d",
@@ -268,7 +268,7 @@ function verifyPackageCorrection() {
   const runtimeBaseline = readJsonFromBytes(gitBytesAt(EXPECTED.runtimeBaselineCommit, `${packageRelative}/package.json`));
   const expectedScripts = {
     ...runtimeBaseline.scripts,
-    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test dist-test/test/*.test.js",
+    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test --test-concurrency=1 dist-test/test/*.test.js",
   };
   const currentWithoutCorrection = { ...current, scripts: { ...current.scripts } };
   delete currentWithoutCorrection.scripts.test;

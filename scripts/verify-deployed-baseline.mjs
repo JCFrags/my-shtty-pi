@@ -81,7 +81,7 @@ const expectedSafeScripts = Object.freeze({
   "pi-chrono-compaction": {
     typecheck: "tsc -p tsconfig.json --noEmit",
     build: "rm -rf dist && tsc -p tsconfig.json",
-    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test dist-test/test/*.test.js",
+    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test --test-concurrency=1 dist-test/test/*.test.js",
   },
   "pi-herdr-orchestrator": {
     typecheck: "tsc -p tsconfig.json --noEmit",

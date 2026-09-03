@@ -17,4 +17,4 @@ The restored test support includes the test-only compatibility barrel, temporary
 
 ## Verification
 
-`npm run test` passed the restored ChronoCompact suite with 294/294 tests. R1 adds 5 baseline-verifier tests and 23 privacy-verifier tests; the combined correction suite passed 28/28. Tests do not open or depend on the affected live session. Timing, memory, and source-boundary details remain aggregate and owner-only.
+`npm run test` passed the restored ChronoCompact suite with 294/294 tests. R1 adds 5 baseline-verifier tests and 25 privacy-verifier tests; the combined correction suite passed 30/30. Tests do not open or depend on the affected live session. Timing, memory, and source-boundary details remain aggregate and owner-only.
