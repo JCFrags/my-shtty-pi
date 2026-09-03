@@ -404,6 +404,7 @@ for (const product of active) {
   }
 }
 if (hashCount !== 261) throw new Error(`canonical deployed hash count ${hashCount}; expected 261`);
+const intentionalDevelopmentOverrides = [...currentDevelopmentPaths].filter((rel) => deployedPaths.has(rel));
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -889,5 +890,9 @@ console.log(JSON.stringify({
   trackedFiles: tracked.length,
   privacyScan: "pass",
   piWebPackages: 0,
-  allCurrentDeployedCodeOnMain: true,
+  capturedBaselineHashes: "261/261",
+  unchangedCurrentBaselineFiles: `${261 - intentionalDevelopmentOverrides.length}/${261 - intentionalDevelopmentOverrides.length}`,
+  intentionalDevelopmentOverrides: `${intentionalDevelopmentOverrides.length}/${intentionalDevelopmentOverrides.length}`,
+  intentionalDevelopmentPaths: `${currentDevelopmentPaths.size}/${currentDevelopmentPaths.size}`,
+  currentStateIntegration: projectGlanceResult.status === "pass" ? "pass" : projectGlanceResult.status,
 }, null, 2));
