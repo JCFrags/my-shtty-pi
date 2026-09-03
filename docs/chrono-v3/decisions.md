@@ -2,9 +2,9 @@
 
 ## D-0001 — Keep the repository private
 
-**Status:** accepted 2026-09-02
+**Status:** superseded by D-0006 and A-0003 on 2026-09-03; retained as the original containment decision
 
-The repository remains private after containment. The earlier public interval is recorded as exposure history, not treated as retracted. No public release or package publication is allowed.
+During the original containment interval, the repository remained private. The earlier public interval is recorded as exposure history, not treated as retracted. No public release or package publication was allowed by this decision.
 
 ## D-0002 — Use a clean execution clone
 
@@ -26,6 +26,12 @@ Restore the historical suite from `9a4d25a46f329bd91828a22a925e5de81c71eee4`, ad
 
 ## D-0005 — Do not deploy M00
 
-**Status:** accepted 2026-09-02
+**Status:** accepted 2026-09-02 and unchanged by R1
 
 M00 adds evidence, privacy controls, tests, and diagnostics only. The live package, settings, scheduler configuration, Pi agents, and session JSONL remain unchanged.
+
+## D-0006 — Permit public review without weakening the content boundary
+
+**Status:** applied 2026-09-03; pending independent project-lead review
+
+The repository is public for source review under A-0003. This is not a release, package publication, deployment, or M01 authorization. Public identity and visibility are checked separately from the fail-closed worktree/index/history privacy scan. A finding, malformed input, identity mismatch, unverified ref, or correction-scope violation blocks publication.

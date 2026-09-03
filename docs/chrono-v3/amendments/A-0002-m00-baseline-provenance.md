@@ -1,6 +1,6 @@
 # A-0002 — M00 baseline provenance
 
-**Status:** accepted 2026-09-02
+**Status:** accepted 2026-09-02; visibility wording superseded by A-0003 on 2026-09-03
 **Applies to:** M00 baseline records
 
 ## Change
@@ -13,4 +13,4 @@ The original worktree contained unrelated local work and must not be modified or
 
 ## Boundary
 
-This amendment does not authorize merging the baseline to `main`, deploying it, rewriting history, or beginning M01. Later milestones must record their own commit, build, deployment, and rollback evidence.
+This amendment does not authorize merging the baseline to `main`, deploying it, rewriting history, or beginning M01. A-0003 supersedes only the earlier private-visibility assumption; it does not change this baseline or authorize a release, package publication, or deployment. Later milestones must record their own commit, build, deployment, and rollback evidence.

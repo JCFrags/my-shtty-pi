@@ -23,9 +23,9 @@ The local baseline verifier (`scripts/verify-chrono-v3-baseline.mjs`) hashes rel
 | live `src/` | 66 | `f85564ddbf1f6d726d96b81dc9af65e22612245c83ec6d2a7dc6d444217d5ecc` |
 | live `dist/` | 65 | `58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31` |
 
-The live entrypoint hash is `282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50`, equal to the committed entrypoint. The package version is `2.0.0`. The independent containment audit used a different tree-fingerprint encoding; its source, dist, and entrypoint fingerprints also matched the repository content. The two tree-hash formats must not be compared numerically.
+The live entrypoint hash is `282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50`, equal to the committed entrypoint. The independent containment audit used a different tree-fingerprint encoding; its source, dist, and entrypoint fingerprints also matched the repository content. The two tree-hash formats must not be compared numerically.
 
-`packages/pi-chrono-compaction/DEPLOYED.sha256` has no runtime mismatch. Its only mismatch is the historical `package.json` metadata record: expected `56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d`, current `43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869`. The verifier accepts this documented metadata-only exception; it does not accept a runtime mismatch.
+`packages/pi-chrono-compaction/DEPLOYED.sha256` has no runtime mismatch. Its only mismatch is the historical `package.json` metadata record: expected `56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d`, current `43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869`. The verifier accepts this documented metadata-only exception; it does not accept a runtime mismatch. A separately supplied 66-character candidate was rejected as an invalid SHA-256 record; the 64-character manifest-derived value above is the verified record.
 
 ## Runtime settings at capture
 
@@ -69,4 +69,4 @@ The restored suite contains 55 historical test files, with 54 in the runnable te
 
 ## M00 acceptance boundary
 
-This document establishes provenance and evidence. It does not authorize deployment, a live reload, a release, a public repository, a force push, history rewrite, merge to `main`, or M01 work.
+This document establishes provenance and evidence. It does not authorize deployment, a live reload, a release, a package publication, a force push, history rewrite, merge to `main`, or M01 work. The current public-review state is governed by A-0003 and does not change the frozen baseline.

@@ -2,6 +2,8 @@
 
 M00 does not deploy or reload ChronoCompact. The rollback point is therefore a read-only backup of the current live package, retained in owner-only local evidence. Its identity and hash are recorded privately and are not copied into Git.
 
+The repository is currently public for review under A-0003. That visibility change does not alter the rollback rule and does not authorize a live switch.
+
 Rollback rule:
 
 1. Do not remove or overwrite the current live package during M00.

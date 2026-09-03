@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "milestone": "M00-R1",
+  "status": "pending-independent-review",
+  "baseline": {
+    "sha": "eb9742c318a76eeaf753e87a620fae83ca9048d1",
+    "m00Commit": "1887c77b39c42fb0b5d35b38baac94aff13465e9",
+    "northStarSha256": "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f"
+  },
+  "runtime": {
+    "sourceFiles": 66,
+    "sourceTreeSha256": "f85564ddbf1f6d726d96b81dc9af65e22612245c83ec6d2a7dc6d444217d5ecc",
+    "distFiles": 65,
+    "distTreeSha256": "58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31",
+    "entrypointSha256": "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50",
+    "packageVersion": "2.0.0",
+    "deployedRuntimeFilesVerified": 261,
+    "deployedRuntimeFilesExpected": 261
+  },
+  "metadataCorrection": {
+    "scope": "packages/pi-chrono-compaction/package.json",
+    "m00PackageSha256": "872d4a4b65d12d8919e6cfbda5c6d57915c631d3bb7c6834616f9ce9ada850dc",
+    "m00LockSha256": "5410bbdf139f5e89059233c010217c7683e2e36e3265b0c7ba4bdae939676f1d",
+    "livePackageSha256": "43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869",
+    "manifestHistoricalPackageSha256": "56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d",
+    "reconciliation": "The manifest-derived value is a valid 64-character SHA-256 record and matches the deployed-baseline Git object. A separately supplied 66-character candidate was rejected as invalid input."
+  },
+  "privacy": {
+    "repository": "JCFrags/my-shtty-pi",
+    "visibility": "PUBLIC",
+    "isFork": false,
+    "historicalAuditCommits": 141,
+    "historicalAuditReachableObjects": 2486,
+    "currentBranches": 13,
+    "currentTags": 3,
+    "currentAllRefBlobsScanned": 2877,
+    "currentWorktreeFilesScanned": 641,
+    "currentIndexFilesScanned": 639,
+    "currentFindings": 0,
+    "confirmedP2Material": false,
+    "confirmedP3Surface": false,
+    "classification": "P1-limited-metadata"
+  },
+  "tests": {
+    "m00ChronoTestsPassed": 294,
+    "m00ChronoTestsExpected": 294,
+    "r1CorrectionTestsPassed": 28,
+    "r1CorrectionTestsExpected": 28
+  },
+  "deployment": {
+    "liveChanged": false,
+    "settingsChanged": false,
+    "schedulerChanged": false,
+    "sessionsChanged": false,
+    "m01Started": false
+  }
+}
