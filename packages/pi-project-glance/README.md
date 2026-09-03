@@ -1,6 +1,6 @@
 # Pi Project Glance
 
-Pi Project Glance is the static foundation for a persistent, read-only Herdr side pane. The package contains the Pi extension relay and the standalone `glance` pane.
+Pi Project Glance is a persistent, read-only Herdr side pane. The package contains the Pi extension relay and the standalone `glance` pane.
 
 ## Fixed identity
 
@@ -12,7 +12,7 @@ Pi Project Glance is the static foundation for a persistent, read-only Herdr sid
 
 ## Foundation behavior
 
-The Pi extension starts one private local relay for the current session. The pane receives an authenticated, versioned, bounded static snapshot and renders the `CURRENT` and `PROGRESS FEED` sections. `CURRENT` is pinned while only `PROGRESS FEED` scrolls. V1 is read-only: Todo, Workplan, provider projections, and session messages are intentionally not connected. No Project Glance content is persisted; only the pane registration needed for focus-existing is retained.
+The Pi extension starts one private local relay for the current session. The pane receives an authenticated, versioned, bounded snapshot and renders the `CURRENT` and `PROGRESS FEED` sections. `CURRENT` is pinned while only `PROGRESS FEED` scrolls. The live relay begins with an empty current projection and an empty feed, then consumes only the public Todo summary and versioned Workplan summary event contracts. It projects the current useful Todo task to `Step`, the selected Workplan milestone to `Toward`, and the latest checkpoint focus to `Focus`. It never mutates either provider, the orchestration broker, or session state. No Project Glance content is persisted; only the pane registration needed for focus-existing is retained.
 
 The relay uses protocol version 1 with a 64 KiB **wire-frame** limit. The accepted snapshot payload budget is smaller because the snapshot must fit inside both the initial snapshot envelope and a correlated `snapshot_request` response envelope. Every accepted snapshot is checked against both envelopes, in addition to bounded text and feed limits. The reconnecting client is generation-aware. Its owner-only Unix socket and connection descriptor are kept under an owner-only runtime directory and the descriptor is passed to the pane through `PI_PROJECT_GLANCE_DESCRIPTOR`; authentication material is never printed or placed in process arguments.
 
@@ -34,6 +34,6 @@ npm run dev:unlink
 npm run dev:fixture -- --open
 ```
 
-`dev:link` and `dev:unlink` use Pi's supported local package commands and Herdr's supported local plugin commands. They only manage this package's registrations. `dev:doctor` checks the built entrypoints, both links, and a disposable authenticated relay. Run the link and doctor commands from a Herdr-managed pane. `dev:fixture` starts a disposable static relay and accepts `--open` to open the pane in the current Herdr workspace; `--restart-after-ms=500` exercises generation reconnect. Stop it with Ctrl-C after closing the disposable pane.
+`dev:link` and `dev:unlink` use Pi's supported local package commands and Herdr's supported local plugin commands. They only manage this package's registrations. `dev:doctor` checks the built entrypoints, both links, and a disposable authenticated relay. Run the link and doctor commands from a Herdr-managed pane. `dev:fixture` starts a disposable static fixture relay (fixture code is not used by production) and accepts `--open` to open the pane in the current Herdr workspace; `--restart-after-ms=500` exercises generation reconnect. Stop it with Ctrl-C after closing the disposable pane.
 
 The build output in `dist/` and local dependencies are development artifacts and are not committed. Add `--long-feed` to `dev:fixture` when testing the feed viewport and terminal-width wrapping.

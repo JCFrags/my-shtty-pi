@@ -22,6 +22,7 @@
     "./state": "./src/state.ts",
     "./notes": "./src/notes.ts",
     "./workplan": "./src/workplan.ts",
+    "./workplan-summary": "./src/workplan-summary.ts",
     "./syntax": "./src/syntax.ts",
     "./tasks": "./src/tasks.ts",
     "./text": "./src/text.ts"

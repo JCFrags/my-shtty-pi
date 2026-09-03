@@ -10,6 +10,7 @@ import {
   renderWorkplanMutation,
   renderWorkplanStatus,
   workplanContextLine,
+  type WorkplanEvent,
 } from "@grounded/pi-core/workplan";
 import {
   boundedStateOutput,
@@ -19,6 +20,16 @@ import {
   StateToolError,
   type StateToolDetails,
 } from "@grounded/pi-core/state";
+import {
+  buildWorkplanActivity,
+  buildWorkplanSummary,
+  validateWorkplanSummaryRequest,
+  workplanBranchId,
+  WORKPLAN_ACTIVITY_EVENT,
+  WORKPLAN_SUMMARY_CHANGED_EVENT,
+  WORKPLAN_SUMMARY_EVENT,
+  WORKPLAN_SUMMARY_REQUEST_EVENT,
+} from "@grounded/pi-core/workplan-summary";
 
 export const WorkplanParams = Type.Object({
   action: StringEnum([
@@ -96,8 +107,27 @@ function latestVisibleRecovery(messages: readonly unknown[]): { planId: string; 
 export default function groundedWorkplan(pi: ExtensionAPI) {
   let state = emptyWorkplanState();
   let corruptEntryId: string | undefined;
+  let currentBranchId = "root";
+  let lifecycleEpoch = 0;
+  const eventBus = pi.events;
+  const pendingMutations = new Map<string, { event: WorkplanEvent; state: ReturnType<typeof cloneWorkplanState>; branchId: string; epoch: number }>();
+
+  const eventKey = (event: WorkplanEvent): string => {
+    const data = event.data as Record<string, unknown>;
+    const planId = event.action === "create"
+      ? ((data.plan as Record<string, unknown> | undefined)?.id ?? "create")
+      : (data.planId ?? "unknown");
+    return `${event.stateRevision}:${event.action}:${String(planId)}:${String(data.revision ?? 1)}`;
+  };
+
+  const emitSummaryChanged = () => {
+    eventBus.emit(WORKPLAN_SUMMARY_CHANGED_EVENT, { version: 1, branchId: currentBranchId });
+  };
 
   const restore = (ctx: ExtensionContext) => {
+    lifecycleEpoch += 1;
+    pendingMutations.clear();
+    currentBranchId = workplanBranchId(ctx.sessionManager.getLeafId());
     state = emptyWorkplanState();
     corruptEntryId = undefined;
     for (const raw of ctx.sessionManager.getBranch() as EntryLike[]) {
@@ -117,10 +147,58 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
         break;
       }
     }
+    // Restore is replay-only: publish the current summary invalidation, never an activity.
+    emitSummaryChanged();
   };
+
+  const removeSummaryListener = eventBus.on(WORKPLAN_SUMMARY_REQUEST_EVENT, (data: unknown) => {
+    let request;
+    try {
+      request = validateWorkplanSummaryRequest(data);
+    } catch {
+      return;
+    }
+    if (request.branchId !== undefined && request.branchId !== currentBranchId) return;
+    const response = {
+      version: 1 as const,
+      requestId: request.requestId,
+      branchId: request.branchId === undefined ? undefined : currentBranchId,
+      summary: buildWorkplanSummary(state),
+    };
+    eventBus.emit(WORKPLAN_SUMMARY_EVENT, {
+      ...response,
+      ...(response.branchId === undefined ? {} : { branchId: response.branchId }),
+    });
+  });
+
+  pi.on("message_end", (event) => {
+    const message = event.message as { role?: string; toolName?: string; details?: unknown };
+    if (message.role !== "toolResult" || message.toolName !== "workplan" || !message.details || typeof message.details !== "object" || Array.isArray(message.details)) return;
+    const details = message.details as Record<string, unknown>;
+    const candidate = details.event;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return;
+    const envelope = candidate as Record<string, unknown>;
+    if (envelope.protocol !== STATE_EVENT_PROTOCOL || envelope.tool !== "workplan") return;
+    const pending = pendingMutations.get(eventKey(candidate as WorkplanEvent));
+    if (!pending) return;
+    pendingMutations.delete(eventKey(candidate as WorkplanEvent));
+    const epoch = pending.epoch;
+    const branchId = pending.branchId;
+    setImmediate(() => {
+      if (epoch !== lifecycleEpoch || branchId !== currentBranchId) return;
+      const activity = buildWorkplanActivity(pending.event, pending.state);
+      if (activity) eventBus.emit(WORKPLAN_ACTIVITY_EVENT, activity);
+      emitSummaryChanged();
+    });
+  });
 
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
+  pi.on("session_shutdown", () => {
+    lifecycleEpoch += 1;
+    pendingMutations.clear();
+    removeSummaryListener();
+  });
   pi.on("context", (event) => {
     const text = corruptEntryId ? `[workplan state] corrupt entry=${corruptEntryId}` : workplanContextLine(state, latestVisibleRecovery(event.messages));
     if (!text) return;
@@ -153,7 +231,15 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
       text = bounded.text;
       const fullOutputPath = bounded.fullOutputPath;
       cancelled(signal);
-      if (operation.event) state = cloneWorkplanState(operation.state);
+      if (operation.event) {
+        state = cloneWorkplanState(operation.state);
+        pendingMutations.set(eventKey(operation.event), {
+          event: operation.event,
+          state: cloneWorkplanState(operation.state),
+          branchId: currentBranchId,
+          epoch: lifecycleEpoch,
+        });
+      }
       const recoveryPlan = params.action === "recover" ? operation.state.plans.find((plan) => plan.id === params.planId) : undefined;
       const details: StateToolDetails & { recovery?: { planId: string; revision: number } } = {
         protocol: STATE_RESULT_PROTOCOL,

@@ -28,6 +28,6 @@ The September 1, 2026 baseline contains 17 original products: 15 active families
 
 ## Additive development product
 
-`packages/pi-project-glance` is a separate additive development product. It is not part of the captured deployed-hash inventory and contains both the Pi extension and the Herdr `glance` pane. It is currently a static foundation with private local IPC plus build, test, link, unlink, and doctor workflows. Provider integration remains incomplete; Todo, Workplan, assistant-message extraction, unread state, and other real V1 sources are not yet integrated. This is not a claim that V1 is complete.
+`packages/pi-project-glance` is a separate additive development product. It is not part of the captured deployed-hash inventory and contains both the Pi extension and the Herdr `glance` pane. Its private local IPC and read-only relay now project bounded Step, Toward, and Focus values from public Todo and Workplan event contracts while keeping the live Progress Feed empty. Workplan activity is contracted for later feed work but is not rendered in this slice. Assistant-message extraction, unread state, and other feed behavior remain intentionally out of scope. This is not a claim that V1 is complete.
 
 Run `npm run verify` to validate the captured baseline and the isolated Project Glance development product. `pi-web` is external and excluded from this repository.

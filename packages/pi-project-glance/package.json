@@ -9,7 +9,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "description": "Pi Project Glance static foundation and private local pane relay.",
+  "description": "Pi Project Glance bounded current-state projection and private local pane relay.",
   "license": "MIT",
   "keywords": [
     "pi-package",

@@ -72,15 +72,23 @@ export interface TodoSummarySnapshot {
 }
 
 interface TodoSummaryRequest {
+  version?: 1;
   requestId?: string;
+  branchId?: string;
 }
 
 const SUMMARY_TASK_LIMIT = 5;
+const SUMMARY_BRANCH_ID_LIMIT = 128;
 const SUMMARY_TEXT_LIMIT = 240;
 const SUMMARY_WAIT_LIMIT = 240;
 
 function bounded(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function summaryBranchId(leafId: string | null | undefined): string {
+  if (typeof leafId !== "string" || !leafId || /[\\/\\0]/u.test(leafId) || /[\uD800-\uDFFF]/u.test(leafId) || /\p{Cc}/u.test(leafId) || Buffer.byteLength(leafId, "utf8") > SUMMARY_BRANCH_ID_LIMIT) return "root";
+  return leafId;
 }
 
 function taskSummary(task: Task): TodoTaskSummary {
@@ -180,6 +188,7 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
   let state = emptyTaskState();
   let currentContext: ExtensionContext | undefined;
   let displayMode: TodoDisplayMode = "compact";
+  let currentBranchId = "root";
 
   const snapshot = () => cloneTaskState(state);
   const eventBus = pi.events;
@@ -208,10 +217,12 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
     };
   };
   const emitSummary = (event: string, requestId?: string) => {
-    eventBus.emit(event, { version: 1, ...(requestId ? { requestId } : {}), snapshot: summary() });
+    eventBus.emit(event, { version: 1, ...(requestId ? { requestId } : {}), branchId: currentBranchId, snapshot: summary() });
   };
   removeSummaryListener = eventBus.on(TODO_SUMMARY_REQUEST_EVENT, (data: unknown) => {
-    const request = data && typeof data === "object" ? data as TodoSummaryRequest : {};
+    const request = data && typeof data === "object" && !Array.isArray(data) ? data as TodoSummaryRequest : {};
+    if (request.version !== undefined && request.version !== 1) return;
+    if (request.branchId !== undefined && (typeof request.branchId !== "string" || request.branchId !== currentBranchId)) return;
     emitSummary(TODO_SUMMARY_EVENT, typeof request.requestId === "string" ? bounded(request.requestId, 128) : undefined);
   });
 
@@ -237,6 +248,7 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
   });
 
   const restore = (ctx: ExtensionContext) => {
+    currentBranchId = summaryBranchId(ctx.sessionManager.getLeafId());
     state = emptyTaskState();
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "todo") {

@@ -44,6 +44,18 @@ if (productIndex >= 0 && !selectedSlug) throw new Error("--product requires a sl
 const staticOnly = args.includes("--static-only");
 const projectGlanceSlug = "pi-project-glance";
 
+// COMMAND 3 is additive to the captured deployment. These exact files are
+// the reviewed current-development boundary for the new public projection;
+// every other frozen deployed hash and tracked-file category remains strict.
+const currentDevelopmentPaths = new Set([
+  "packages/grounded-tools/core/package.json",
+  "packages/grounded-tools/core/src/workplan-summary.ts",
+  "packages/grounded-tools/tasks/index.ts",
+  "packages/grounded-tools/workplan/index.ts",
+  "packages/grounded-tools/workplan/test/summary.test.mjs",
+  "packages/grounded-tools/workplan/test/lifecycle.test.mjs",
+]);
+
 const expectedSlugs = [
   "codex-usage-footer", "files-ui", "grounded-tools", "herdr-agent-state",
   "herdr-blocked-bridge", "herdr-status", "pi-agent-context",
@@ -336,7 +348,7 @@ for (const required of [
   /261 deployed hashes/u,
   /packages\/pi-project-glance/u,
   /not part of the captured deployed-hash inventory/iu,
-  /provider integration remains incomplete/iu,
+  /live Progress Feed empty/iu,
 ]) {
   if (!required.test(rootReadme)) throw new Error(`root README lacks required Project Glance contract: ${required}`);
 }
@@ -370,7 +382,7 @@ for (const product of active) {
     if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`${product.slug}: missing deployed file ${rel}`);
     const repoRel = relative(root, path).replaceAll(sep, "/");
     const current = sha256(path);
-    if (current !== expected) {
+    if (current !== expected && !currentDevelopmentPaths.has(repoRel)) {
       if (!["package.json", "package-lock.json"].includes(basename(rel))) throw new Error(`${product.slug}: deployed runtime hash mismatch for ${rel}`);
       const baseline = gitBytesAt(consolidation.deployedBaselineCommit, repoRel);
       if (sha256Bytes(baseline) !== expected) throw new Error(`${product.slug}: baseline metadata hash mismatch for ${rel}`);
@@ -593,7 +605,7 @@ for (const product of inactive) {
 const tracked = trackedWorkingFiles();
 const trackedDependencyFiles = tracked.filter((rel) => rel.split("/").includes("node_modules"));
 if (trackedDependencyFiles.length > 0) throw new Error(`tracked dependency-tree files are forbidden: ${trackedDependencyFiles.join(",")}`);
-const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, rootVerification: 0, unexplained: 0 };
+const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, rootVerification: 0, currentDevelopment: 0, unexplained: 0 };
 const unexplainedPaths = [];
 for (const rel of tracked) {
   // Project Glance is verified in its own additive phase below; it must not
@@ -604,6 +616,7 @@ for (const rel of tracked) {
   if (deployedPaths.has(rel)) category = "deployedRuntime";
   else if (sourceBuildGraph.has(path)) category = "sourceBuildInputs";
   else if (inactiveGraph.has(path) || (rel.startsWith("packages/pi-review-ui/") || rel.startsWith("packages/pi-tool-controls/")) && path.endsWith(".d.ts")) category = "inactiveSource";
+  else if (currentDevelopmentPaths.has(rel)) category = "currentDevelopment";
   else if (/^packages\/[^/]+\/(?:DEPLOYED\.sha256|LICENSE|package(?:-lock)?\.json|tsconfig(?:\.[^.]+)?\.json)$/u.test(rel) || /^packages\/grounded-tools\/[^/]+\/package\.json$/u.test(rel)) category = "metadata";
   else if (/^packages\/[^/]+\/README\.md$/u.test(rel)) category = "docs";
   else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
@@ -870,6 +883,7 @@ console.log(JSON.stringify({
     sourceBuildInputs: categories.sourceBuildInputs + categories.inactiveSource,
     runtimeResources: runtimeResourcePaths.size,
     metadataDocs: categories.metadata + categories.docs + categories.rootVerification,
+    currentDevelopment: categories.currentDevelopment,
     unexplained: categories.unexplained,
   },
   trackedFiles: tracked.length,

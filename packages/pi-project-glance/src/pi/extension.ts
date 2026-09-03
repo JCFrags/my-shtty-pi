@@ -24,7 +24,7 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   const previous = globalRuntime()[RUNTIME_SLOT];
   if (previous) await previous.dispose();
 
-  const runtime = new ProjectGlanceRelayRuntime();
+  const runtime = new ProjectGlanceRelayRuntime(process.env, pi.events);
   let disposed = false;
   const dispose = async (): Promise<void> => {
     if (disposed) return;
@@ -39,6 +39,7 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   pi.registerCommand(PROJECT_GLANCE_COMMAND, {
     description: "Open the Project Glance side pane.",
     handler: async (_args, ctx) => {
+      runtime.refreshCurrent();
       await handleProjectGlanceCommand(pi, ctx, runtime);
     },
   });
@@ -50,8 +51,8 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
       ctx.ui.notify("Project Glance relay is unavailable.", "warning");
     }
   });
-  pi.on("session_tree", (_event, _ctx) => {
-    runtime.onSessionTree();
+  pi.on("session_tree", (_event, ctx) => {
+    runtime.onSessionTree(ctx);
   });
   pi.on("session_shutdown", async (_event, _ctx) => {
     await runtime.stop();
