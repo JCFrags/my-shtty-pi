@@ -1,29 +1,33 @@
 import { createHash } from "node:crypto";
 import {
-  chmod,
-  lstat,
-  mkdir,
-  realpath,
-  stat,
-} from "node:fs/promises";
-import {
+  constants,
   chmodSync,
   lstatSync,
   mkdirSync,
   realpathSync,
   statSync,
 } from "node:fs";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  stat,
+} from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
 import {
   MAX_SESSION_KEY_BYTES,
+  MAX_UNIX_SOCKET_PATH_BYTES,
   PROJECT_GLANCE_RUNTIME_KEY,
 } from "../protocol/model.js";
 import { ProjectGlanceValidationError, validateSessionKey } from "../protocol/validation.js";
 
 export const PRIVATE_DIRECTORY_MODE = 0o700;
 export const PRIVATE_FILE_MODE = 0o600;
-export const MAX_UNIX_SOCKET_PATH_BYTES = 103;
+export { MAX_UNIX_SOCKET_PATH_BYTES };
+export const MAX_RUNTIME_PATH_BYTES = 512;
 export const MAX_DESCRIPTOR_BYTES = 8 * 1024;
 
 export interface ProjectGlanceRuntimePaths {
@@ -39,7 +43,12 @@ function uid(): number {
 }
 
 function cleanBase(value: string | undefined): string | undefined {
-  if (!value || !isAbsolute(value) || /\p{Cc}/u.test(value)) return undefined;
+  if (
+    !value ||
+    !isAbsolute(value) ||
+    Buffer.byteLength(value, "utf8") > MAX_RUNTIME_PATH_BYTES ||
+    /\p{Cc}/u.test(value)
+  ) return undefined;
   return resolve(value);
 }
 
@@ -52,11 +61,14 @@ function candidateFor(
   const shortKey = sessionKey.slice(0, 24);
   const socketPath = join(directory, `relay-${shortKey}.sock`);
   const descriptorPath = join(directory, `connection-${shortKey}.json`);
+  // Keep the original shared registry path; the registry's private lock
+  // serializes read-modify-write updates without dropping other sessions.
   const registryPath = join(directory, "pi-project-glance-panes.json");
   if (
     Buffer.byteLength(socketPath, "utf8") > MAX_UNIX_SOCKET_PATH_BYTES ||
-    Buffer.byteLength(directory, "utf8") > 512 ||
-    Buffer.byteLength(descriptorPath, "utf8") > 512
+    Buffer.byteLength(directory, "utf8") > MAX_RUNTIME_PATH_BYTES ||
+    Buffer.byteLength(descriptorPath, "utf8") > MAX_RUNTIME_PATH_BYTES ||
+    Buffer.byteLength(registryPath, "utf8") > MAX_RUNTIME_PATH_BYTES
   ) {
     return undefined;
   }
@@ -98,8 +110,20 @@ export function runtimePathsForSession(
   throw new Error("Project Glance runtime path is unavailable.");
 }
 
+function assertPathSyntax(path: string): string {
+  if (
+    typeof path !== "string" ||
+    !isAbsolute(path) ||
+    Buffer.byteLength(path, "utf8") > MAX_RUNTIME_PATH_BYTES ||
+    /\p{Cc}/u.test(path)
+  ) {
+    throw new Error("Invalid Project Glance runtime path.");
+  }
+  return resolve(path);
+}
+
 function assertPrivateMode(actual: number, expected: number): void {
-  if ((actual & 0o777) !== expected) throw new Error("Unsafe Project Glance permissions.");
+  if ((actual & 0o7777) !== expected) throw new Error("Unsafe Project Glance permissions.");
 }
 
 function assertOwner(actual: number): void {
@@ -115,31 +139,71 @@ function assertCanonical(path: string, canonical: string): void {
   }
 }
 
-export async function ensurePrivateDirectory(path: string): Promise<void> {
-  await mkdir(path, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
-  const entry = await lstat(path);
+export function assertPathInRuntimeDirectory(
+  runtimeDirectory: string,
+  path: string,
+): void {
+  const root = assertPathSyntax(runtimeDirectory);
+  const candidate = assertPathSyntax(path);
+  if (candidate !== root && !candidate.startsWith(`${root}/`)) {
+    throw new Error("Project Glance path escapes its runtime directory.");
+  }
+}
+
+export async function assertPrivateRuntimeDirectory(path: string): Promise<void> {
+  const resolved = assertPathSyntax(path);
+  let entry;
+  try {
+    entry = await lstat(resolved);
+  } catch {
+    throw new Error("Project Glance runtime directory is unavailable.");
+  }
   if (!entry.isDirectory() || entry.isSymbolicLink()) {
     throw new Error("Unsafe Project Glance runtime directory.");
   }
   assertOwner(entry.uid);
-  await chmod(path, PRIVATE_DIRECTORY_MODE);
-  const canonical = await realpath(path);
-  assertCanonical(path, canonical);
-  const checked = await stat(path);
-  assertPrivateMode(checked.mode, PRIVATE_DIRECTORY_MODE);
+  assertPrivateMode(entry.mode, PRIVATE_DIRECTORY_MODE);
+  let canonical: string;
+  try {
+    canonical = await realpath(resolved);
+  } catch {
+    throw new Error("Unsafe Project Glance runtime directory.");
+  }
+  assertCanonical(resolved, canonical);
+}
+
+export function assertPrivateRuntimeDirectorySync(path: string): void {
+  const resolved = assertPathSyntax(path);
+  let entry;
+  try {
+    entry = lstatSync(resolved);
+  } catch {
+    throw new Error("Project Glance runtime directory is unavailable.");
+  }
+  if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    throw new Error("Unsafe Project Glance runtime directory.");
+  }
+  assertOwner(entry.uid);
+  assertPrivateMode(entry.mode, PRIVATE_DIRECTORY_MODE);
+  let canonical: string;
+  try {
+    canonical = realpathSync(resolved);
+  } catch {
+    throw new Error("Unsafe Project Glance runtime directory.");
+  }
+  assertCanonical(resolved, canonical);
+}
+
+export async function ensurePrivateDirectory(path: string): Promise<void> {
+  const resolved = assertPathSyntax(path);
+  await mkdir(resolved, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  await assertPrivateRuntimeDirectory(resolved);
 }
 
 export function ensurePrivateDirectorySync(path: string): void {
-  mkdirSync(path, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
-  const entry = lstatSync(path);
-  if (!entry.isDirectory() || entry.isSymbolicLink()) {
-    throw new Error("Unsafe Project Glance runtime directory.");
-  }
-  assertOwner(entry.uid);
-  chmodSync(path, PRIVATE_DIRECTORY_MODE);
-  const canonical = realpathSync(path);
-  assertCanonical(path, canonical);
-  assertPrivateMode(statSync(path).mode, PRIVATE_DIRECTORY_MODE);
+  const resolved = assertPathSyntax(path);
+  mkdirSync(resolved, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  assertPrivateRuntimeDirectorySync(resolved);
 }
 
 export async function assertPrivateRegularFile(path: string, maxBytes: number): Promise<void> {
@@ -158,20 +222,43 @@ export function assertPrivateRegularFileSync(path: string, maxBytes: number): vo
   if (entry.size > maxBytes) throw new Error("Project Glance file is too large.");
 }
 
-export async function assertPrivateSocket(path: string): Promise<void> {
-  const entry = await lstat(path);
-  if (!entry.isSocket() || entry.isSymbolicLink()) throw new Error("Unsafe Project Glance socket.");
-  assertOwner(entry.uid);
-  if ((entry.mode & 0o077) !== 0) throw new Error("Unsafe Project Glance socket permissions.");
+/** Read a private regular file through an O_NOFOLLOW handle after parent validation. */
+export async function readPrivateFile(
+  path: string,
+  maxBytes: number,
+  runtimeDirectory = dirname(path),
+): Promise<Buffer> {
+  const resolvedRuntime = assertPathSyntax(runtimeDirectory);
+  const resolvedPath = assertPathSyntax(path);
+  await assertPrivateRuntimeDirectory(resolvedRuntime);
+  assertPathInRuntimeDirectory(resolvedRuntime, resolvedPath);
+  const handle = await open(
+    resolvedPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  try {
+    const entry = await handle.stat();
+    if (!entry.isFile() || entry.isSymbolicLink()) throw new Error("Unsafe Project Glance file.");
+    assertOwner(entry.uid);
+    assertPrivateMode(entry.mode, PRIVATE_FILE_MODE);
+    if (entry.size > maxBytes) throw new Error("Project Glance file is too large.");
+    const body = await handle.readFile();
+    if (body.byteLength > maxBytes) throw new Error("Project Glance file is too large.");
+    return body;
+  } finally {
+    await handle.close();
+  }
 }
 
-export function assertPathInRuntimeDirectory(
-  runtimeDirectory: string,
-  path: string,
-): void {
-  const root = resolve(runtimeDirectory);
-  const candidate = resolve(path);
-  if (candidate !== root && !candidate.startsWith(`${root}/`)) {
-    throw new Error("Project Glance path escapes its runtime directory.");
+export async function assertPrivateSocket(path: string, runtimeDirectory?: string): Promise<void> {
+  const resolvedPath = assertPathSyntax(path);
+  if (runtimeDirectory !== undefined) {
+    const resolvedRuntime = assertPathSyntax(runtimeDirectory);
+    await assertPrivateRuntimeDirectory(resolvedRuntime);
+    assertPathInRuntimeDirectory(resolvedRuntime, resolvedPath);
   }
+  const entry = await lstat(resolvedPath);
+  if (!entry.isSocket() || entry.isSymbolicLink()) throw new Error("Unsafe Project Glance socket.");
+  assertOwner(entry.uid);
+  assertPrivateMode(entry.mode, PRIVATE_FILE_MODE);
 }

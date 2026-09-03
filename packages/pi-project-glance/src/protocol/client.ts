@@ -16,10 +16,15 @@ export type ProjectGlanceConnectionState =
   | "reconnecting"
   | "disconnected";
 
+export interface ProjectGlanceSnapshotContext {
+  sessionKey: string;
+  generation: string;
+}
+
 export interface ProjectGlanceClientOptions {
   descriptorPath: string;
   onState?(state: ProjectGlanceConnectionState): void;
-  onSnapshot?(snapshot: ProjectGlanceSnapshot): void;
+  onSnapshot?(snapshot: ProjectGlanceSnapshot, context: ProjectGlanceSnapshotContext): void;
   onDescriptor?(descriptor: Pick<ProjectGlanceRuntimeDescriptor, "sessionKey" | "generation">): void;
   onError?(code: "descriptor" | "frame" | "server"): void;
   reconnectMinMs?: number;
@@ -33,7 +38,7 @@ const HANDSHAKE_TIMEOUT_MS = 2_000;
 export class ProjectGlanceClient {
   readonly #descriptorPath: string;
   readonly #onState: (state: ProjectGlanceConnectionState) => void;
-  readonly #onSnapshot: (snapshot: ProjectGlanceSnapshot) => void;
+  readonly #onSnapshot: (snapshot: ProjectGlanceSnapshot, context: ProjectGlanceSnapshotContext) => void;
   readonly #onDescriptor: (
     descriptor: Pick<ProjectGlanceRuntimeDescriptor, "sessionKey" | "generation">,
   ) => void;
@@ -45,11 +50,18 @@ export class ProjectGlanceClient {
   #socket: Socket | undefined;
   #decoder: ProjectGlanceFrameDecoder | undefined;
   #descriptor: ProjectGlanceRuntimeDescriptor | undefined;
+  #connectionSerial = 0;
+  #activeConnectionId = 0;
   #requestCounter = 0;
   #attempt = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   #handshakeTimer: ReturnType<typeof setTimeout> | undefined;
   #authenticated = false;
+  #pendingHelloRequestId: string | undefined;
+  #helloCompleted = false;
+  #initialSnapshotPending = false;
+  #pendingSnapshotRequestId: string | undefined;
+  #snapshotNotificationPending = false;
 
   constructor(options: ProjectGlanceClientOptions) {
     this.#descriptorPath = options.descriptorPath;
@@ -75,10 +87,12 @@ export class ProjectGlanceClient {
   stop(): void {
     this.#running = false;
     this.#clearTimers();
+    this.#activeConnectionId = 0;
     this.#socket?.destroy();
     this.#socket = undefined;
     this.#decoder = undefined;
     this.#authenticated = false;
+    this.#clearRequestState();
     this.#setState("disconnected");
   }
 
@@ -86,6 +100,10 @@ export class ProjectGlanceClient {
     if (this.#state === state) return;
     this.#state = state;
     this.#onState(state);
+  }
+
+  #isCurrent(socket: Socket, connectionId: number): boolean {
+    return this.#socket === socket && this.#activeConnectionId === connectionId;
   }
 
   async #connect(): Promise<void> {
@@ -99,34 +117,51 @@ export class ProjectGlanceClient {
       this.#scheduleReconnect();
       return;
     }
-    if (!this.#running) return;
+    if (!this.#running || this.#socket) return;
     this.#descriptor = descriptor;
     this.#onDescriptor({
       sessionKey: descriptor.sessionKey,
       generation: descriptor.generation,
     });
-    const socket = createConnection(descriptor.socketPath);
+
+    let socket: Socket;
+    try {
+      socket = createConnection(descriptor.socketPath);
+    } catch {
+      this.#onError("server");
+      this.#setState("reconnecting");
+      this.#scheduleReconnect();
+      return;
+    }
+    const connectionId = ++this.#connectionSerial;
+    this.#activeConnectionId = connectionId;
     this.#socket = socket;
     this.#decoder = new ProjectGlanceFrameDecoder();
     this.#authenticated = false;
+    this.#pendingHelloRequestId = undefined;
+    this.#helloCompleted = false;
+    this.#initialSnapshotPending = false;
+    this.#clearRequestState(false);
     let failed = false;
     const fail = (code: "frame" | "server"): void => {
-      if (failed) return;
+      if (failed || !this.#isCurrent(socket, connectionId)) return;
       failed = true;
       this.#onError(code);
-      this.#dropConnection();
+      this.#dropConnection(socket, connectionId);
     };
     this.#handshakeTimer = setTimeout(() => fail("server"), HANDSHAKE_TIMEOUT_MS);
     this.#handshakeTimer.unref?.();
     socket.setNoDelay(true);
     socket.on("connect", () => {
-      if (!this.#running || this.#descriptor !== descriptor) return;
+      if (!this.#running || !this.#isCurrent(socket, connectionId)) return;
+      const requestId = this.#nextRequestId();
+      this.#pendingHelloRequestId = requestId;
       try {
         socket.write(
           encodeFrame({
             version: PROJECT_GLANCE_PROTOCOL_VERSION,
             type: "hello",
-            requestId: this.#nextRequestId(),
+            requestId,
             sessionKey: descriptor.sessionKey,
             token: descriptor.token,
             generation: descriptor.generation,
@@ -137,10 +172,11 @@ export class ProjectGlanceClient {
       }
     });
     socket.on("data", (chunk: Buffer) => {
+      if (!this.#isCurrent(socket, connectionId)) return;
       try {
         for (const value of this.#decoder?.push(chunk) ?? []) {
           const frame = validateServerFrame(value);
-          this.#handleFrame(frame, descriptor, fail);
+          this.#handleFrame(frame, descriptor, socket, connectionId, fail);
         }
       } catch {
         fail("frame");
@@ -148,27 +184,36 @@ export class ProjectGlanceClient {
     });
     socket.on("error", () => fail("server"));
     socket.on("close", () => {
-      if (!failed) this.#dropConnection();
+      if (!failed && this.#isCurrent(socket, connectionId)) this.#dropConnection(socket, connectionId);
     });
   }
 
   #handleFrame(
     frame: ProjectGlanceServerFrame,
     descriptor: ProjectGlanceRuntimeDescriptor,
+    socket: Socket,
+    connectionId: number,
     fail: (code: "frame" | "server") => void,
   ): void {
+    if (!this.#isCurrent(socket, connectionId)) return;
     if (frame.type === "error") {
       fail("server");
       return;
     }
     if (frame.type === "hello") {
       if (
+        this.#helloCompleted ||
+        this.#pendingHelloRequestId === undefined ||
+        frame.requestId !== this.#pendingHelloRequestId ||
         frame.sessionKey !== descriptor.sessionKey ||
         frame.generation !== descriptor.generation
       ) {
         fail("frame");
         return;
       }
+      this.#pendingHelloRequestId = undefined;
+      this.#helloCompleted = true;
+      this.#initialSnapshotPending = true;
       this.#authenticated = true;
       this.#attempt = 0;
       if (this.#handshakeTimer) clearTimeout(this.#handshakeTimer);
@@ -176,7 +221,7 @@ export class ProjectGlanceClient {
       this.#setState("connected");
       return;
     }
-    if (!this.#authenticated) {
+    if (!this.#authenticated || !this.#helloCompleted) {
       fail("frame");
       return;
     }
@@ -185,29 +230,69 @@ export class ProjectGlanceClient {
         fail("frame");
         return;
       }
-      this.#onSnapshot(frame.snapshot);
+      let requestAgain = false;
+      if (frame.requestId === undefined) {
+        if (!this.#initialSnapshotPending) {
+          fail("frame");
+          return;
+        }
+        this.#initialSnapshotPending = false;
+      } else {
+        if (
+          this.#pendingSnapshotRequestId === undefined ||
+          frame.requestId !== this.#pendingSnapshotRequestId
+        ) {
+          fail("frame");
+          return;
+        }
+        this.#pendingSnapshotRequestId = undefined;
+        requestAgain = this.#snapshotNotificationPending;
+        this.#snapshotNotificationPending = false;
+      }
+      try {
+        this.#onSnapshot(frame.snapshot, {
+          sessionKey: descriptor.sessionKey,
+          generation: descriptor.generation,
+        });
+      } catch {
+        fail("frame");
+        return;
+      }
+      if (requestAgain && this.#isCurrent(socket, connectionId)) {
+        this.#sendSnapshotRequest(socket, connectionId, fail);
+      }
       return;
     }
     if (frame.type === "snapshot_changed") {
-      this.#sendSnapshotRequest();
+      this.#sendSnapshotRequest(socket, connectionId, fail);
       return;
     }
-    if (frame.type === "pong") return;
+    // The client does not send ping in V1, so no uncorrelated pong is valid.
+    fail("frame");
   }
 
-  #sendSnapshotRequest(): void {
-    const socket = this.#socket;
-    if (!socket || !socket.writable || !this.#authenticated) return;
+  #sendSnapshotRequest(
+    socket: Socket,
+    connectionId: number,
+    fail: (code: "frame" | "server") => void,
+  ): void {
+    if (!this.#isCurrent(socket, connectionId) || !socket.writable || !this.#authenticated) return;
+    if (this.#pendingSnapshotRequestId !== undefined) {
+      this.#snapshotNotificationPending = true;
+      return;
+    }
+    const requestId = this.#nextRequestId();
+    this.#pendingSnapshotRequestId = requestId;
     try {
       socket.write(
         encodeFrame({
           version: PROJECT_GLANCE_PROTOCOL_VERSION,
           type: "snapshot_request",
-          requestId: this.#nextRequestId(),
+          requestId,
         }),
       );
     } catch {
-      this.#dropConnection();
+      fail("frame");
     }
   }
 
@@ -216,13 +301,23 @@ export class ProjectGlanceClient {
     return `glance-${this.#requestCounter.toString(36)}-${randomUUID().slice(0, 8)}`;
   }
 
-  #dropConnection(): void {
+  #clearRequestState(clearHello = true): void {
+    if (clearHello) this.#pendingHelloRequestId = undefined;
+    this.#helloCompleted = false;
+    this.#initialSnapshotPending = false;
+    this.#pendingSnapshotRequestId = undefined;
+    this.#snapshotNotificationPending = false;
+  }
+
+  #dropConnection(socket: Socket, connectionId: number): void {
+    if (!this.#isCurrent(socket, connectionId)) return;
     this.#clearHandshakeTimer();
-    const socket = this.#socket;
     this.#socket = undefined;
     this.#decoder = undefined;
+    this.#activeConnectionId = 0;
     this.#authenticated = false;
-    socket?.destroy();
+    this.#clearRequestState();
+    socket.destroy();
     if (!this.#running) {
       this.#setState("disconnected");
       return;
@@ -263,6 +358,9 @@ export async function probeProjectGlanceRelay(
   return await new Promise<ProjectGlanceSnapshot>((resolve, reject) => {
     const socket = createConnection(descriptor.socketPath);
     const decoder = new ProjectGlanceFrameDecoder();
+    const helloRequestId = "probe";
+    let helloCompleted = false;
+    let initialSnapshotReceived = false;
     let finished = false;
     const finish = (error?: Error, snapshot?: ProjectGlanceSnapshot): void => {
       if (finished) return;
@@ -281,7 +379,7 @@ export async function probeProjectGlanceRelay(
           encodeFrame({
             version: PROJECT_GLANCE_PROTOCOL_VERSION,
             type: "hello",
-            requestId: "probe",
+            requestId: helloRequestId,
             sessionKey: descriptor.sessionKey,
             token: descriptor.token,
             generation: descriptor.generation,
@@ -295,14 +393,33 @@ export async function probeProjectGlanceRelay(
       try {
         for (const value of decoder.push(chunk)) {
           const frame = validateServerFrame(value);
-          if (frame.type === "snapshot") {
-            if (frame.snapshot.sessionKey !== descriptor.sessionKey) {
+          if (frame.type === "hello") {
+            if (
+              helloCompleted ||
+              frame.requestId !== helloRequestId ||
+              frame.sessionKey !== descriptor.sessionKey ||
+              frame.generation !== descriptor.generation
+            ) {
               finish(new Error("RELAY_PROBE_FAILED"));
-            } else {
-              finish(undefined, frame.snapshot);
+              return;
             }
-          } else if (frame.type === "error") {
+            helloCompleted = true;
+          } else if (frame.type === "snapshot") {
+            if (
+              !helloCompleted ||
+              initialSnapshotReceived ||
+              frame.requestId !== undefined ||
+              frame.snapshot.sessionKey !== descriptor.sessionKey
+            ) {
+              finish(new Error("RELAY_PROBE_FAILED"));
+              return;
+            }
+            initialSnapshotReceived = true;
+            finish(undefined, frame.snapshot);
+            return;
+          } else {
             finish(new Error("RELAY_PROBE_FAILED"));
+            return;
           }
         }
       } catch {

@@ -23,7 +23,24 @@ export const MAX_ITEM_ID_BYTES = 128;
 export const MAX_ITEM_TEXT_BYTES = 4 * 1024;
 export const MAX_CURRENT_TEXT_BYTES = 512;
 export const MAX_FEED_ITEMS = 50;
-export const MAX_SNAPSHOT_BYTES = 64 * 1024;
+export const MAX_UNIX_SOCKET_PATH_BYTES = 103;
+
+// Backslashes are valid request-ID bytes but each one expands to two bytes in
+// JSON. This deliberately exercises the worst valid escaped request ID when
+// deriving the correlated snapshot envelope overhead.
+export const MAX_SNAPSHOT_REQUEST_ID = "\\".repeat(MAX_REQUEST_ID_BYTES);
+export const MAX_SNAPSHOT_FRAME_OVERHEAD_BYTES =
+  Buffer.byteLength(
+    JSON.stringify({
+      version: PROJECT_GLANCE_PROTOCOL_VERSION,
+      type: "snapshot",
+      requestId: MAX_SNAPSHOT_REQUEST_ID,
+      snapshot: null,
+    }),
+    "utf8",
+  ) - Buffer.byteLength("null", "utf8");
+export const MAX_SNAPSHOT_BYTES =
+  MAX_FRAME_BYTES - MAX_SNAPSHOT_FRAME_OVERHEAD_BYTES;
 
 export const PROJECT_GLANCE_ITEM_TYPES = [
   "assistant_update",

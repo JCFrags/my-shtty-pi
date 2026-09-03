@@ -8,6 +8,7 @@ import {
   MAX_SESSION_KEY_BYTES,
   MAX_SNAPSHOT_BYTES,
   MAX_TOKEN_BYTES,
+  MAX_UNIX_SOCKET_PATH_BYTES,
   PROJECT_GLANCE_ITEM_TYPES,
   PROJECT_GLANCE_PROTOCOL_VERSION,
   type ProjectGlanceClientFrame,
@@ -19,6 +20,7 @@ import {
   type ProjectGlanceServerFrame,
   type ProjectGlanceSnapshot,
 } from "./model.js";
+import { assertSnapshotFrameBudget } from "./framing.js";
 
 export class ProjectGlanceValidationError extends Error {
   constructor(code = "INVALID_FRAME") {
@@ -48,29 +50,42 @@ function exactKeys(
   }
 }
 
-function boundedString(value: unknown, maxBytes: number): string {
+function boundedText(value: unknown, maxBytes: number): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new ProjectGlanceValidationError();
   }
   if (Buffer.byteLength(value, "utf8") > maxBytes || /\p{Cc}/u.test(value)) {
     throw new ProjectGlanceValidationError();
   }
-  if (
-    /(?:^|[\s(])\/(?:home|Users|private|var)\//u.test(value) ||
-    /[A-Za-z]:\\/u.test(value)
-  ) {
-    throw new ProjectGlanceValidationError();
-  }
   return value;
 }
 
-function optionalString(
+function displayText(value: unknown, maxBytes: number): string {
+  const text = boundedText(value, maxBytes);
+  if (
+    /(?:^|[\s(])\/(?:home|Users|private|var)\//u.test(text) ||
+    /[A-Za-z]:\\/u.test(text)
+  ) {
+    throw new ProjectGlanceValidationError();
+  }
+  return text;
+}
+
+function filesystemPath(value: unknown, maxBytes: number): string {
+  const path = boundedText(value, maxBytes);
+  if (!path.startsWith("/") || path.endsWith("/") || /\\/u.test(path)) {
+    throw new ProjectGlanceValidationError();
+  }
+  return path;
+}
+
+function optionalDisplayText(
   source: Record<string, unknown>,
   key: string,
   maxBytes: number,
 ): string | undefined {
   if (!Object.hasOwn(source, key)) return undefined;
-  return boundedString(source[key], maxBytes);
+  return displayText(source[key], maxBytes);
 }
 
 function boundedInteger(value: unknown, max: number): number {
@@ -81,7 +96,7 @@ function boundedInteger(value: unknown, max: number): number {
 }
 
 export function validateSessionKey(value: unknown): string {
-  const sessionKey = boundedString(value, MAX_SESSION_KEY_BYTES);
+  const sessionKey = boundedText(value, MAX_SESSION_KEY_BYTES);
   if (!/^[a-f0-9]{16,64}$/u.test(sessionKey)) {
     throw new ProjectGlanceValidationError();
   }
@@ -89,19 +104,19 @@ export function validateSessionKey(value: unknown): string {
 }
 
 function validateRequestId(value: unknown): string {
-  return boundedString(value, MAX_REQUEST_ID_BYTES);
+  return boundedText(value, MAX_REQUEST_ID_BYTES);
 }
 
-function validateGeneration(value: unknown): string {
-  const generation = boundedString(value, MAX_GENERATION_BYTES);
+export function validateGeneration(value: unknown): string {
+  const generation = boundedText(value, MAX_GENERATION_BYTES);
   if (!/^[a-f0-9]{16,128}$/u.test(generation)) {
     throw new ProjectGlanceValidationError();
   }
   return generation;
 }
 
-function validateToken(value: unknown): string {
-  const token = boundedString(value, MAX_TOKEN_BYTES);
+export function validateToken(value: unknown): string {
+  const token = boundedText(value, MAX_TOKEN_BYTES);
   if (!/^[a-f0-9]{32,128}$/u.test(token)) {
     throw new ProjectGlanceValidationError();
   }
@@ -109,7 +124,7 @@ function validateToken(value: unknown): string {
 }
 
 function validateTimestamp(value: unknown): string {
-  const timestamp = boundedString(value, 64);
+  const timestamp = boundedText(value, 64);
   if (!Number.isFinite(Date.parse(timestamp))) {
     throw new ProjectGlanceValidationError();
   }
@@ -120,9 +135,9 @@ function validateCurrent(value: unknown): ProjectGlanceCurrent {
   const source = sourceRecord(value);
   exactKeys(source, [], ["step", "toward", "focus"]);
   const current: ProjectGlanceCurrent = {};
-  const step = optionalString(source, "step", MAX_CURRENT_TEXT_BYTES);
-  const toward = optionalString(source, "toward", MAX_CURRENT_TEXT_BYTES);
-  const focus = optionalString(source, "focus", MAX_CURRENT_TEXT_BYTES);
+  const step = optionalDisplayText(source, "step", MAX_CURRENT_TEXT_BYTES);
+  const toward = optionalDisplayText(source, "toward", MAX_CURRENT_TEXT_BYTES);
+  const focus = optionalDisplayText(source, "focus", MAX_CURRENT_TEXT_BYTES);
   if (step !== undefined) current.step = step;
   if (toward !== undefined) current.toward = toward;
   if (focus !== undefined) current.focus = focus;
@@ -132,15 +147,15 @@ function validateCurrent(value: unknown): ProjectGlanceCurrent {
 function validateItem(value: unknown): ProjectGlanceFeedItem {
   const source = sourceRecord(value);
   exactKeys(source, ["id", "type", "text", "createdAt"]);
-  const id = boundedString(source.id, MAX_ITEM_ID_BYTES);
-  const type = boundedString(source.type, 64);
+  const id = boundedText(source.id, MAX_ITEM_ID_BYTES);
+  const type = boundedText(source.type, 64);
   if (!(PROJECT_GLANCE_ITEM_TYPES as readonly string[]).includes(type)) {
     throw new ProjectGlanceValidationError();
   }
   return {
     id,
     type: type as ProjectGlanceFeedItem["type"],
-    text: boundedString(source.text, MAX_ITEM_TEXT_BYTES),
+    text: displayText(source.text, MAX_ITEM_TEXT_BYTES),
     createdAt: validateTimestamp(source.createdAt),
   };
 }
@@ -171,7 +186,13 @@ export function validateSnapshot(value: unknown): ProjectGlanceSnapshot {
     current: validateCurrent(source.current),
     feed,
   };
-  if (Buffer.byteLength(JSON.stringify(snapshot), "utf8") > MAX_SNAPSHOT_BYTES) {
+  const payloadBytes = Buffer.byteLength(JSON.stringify(snapshot), "utf8");
+  if (payloadBytes > MAX_SNAPSHOT_BYTES) {
+    throw new ProjectGlanceValidationError();
+  }
+  try {
+    assertSnapshotFrameBudget(snapshot);
+  } catch {
     throw new ProjectGlanceValidationError();
   }
   return snapshot;
@@ -192,8 +213,7 @@ export function validateRuntimeDescriptor(
   if (source.protocolVersion !== PROJECT_GLANCE_PROTOCOL_VERSION) {
     throw new ProjectGlanceValidationError();
   }
-  const socketPath = boundedString(source.socketPath, 256);
-  if (!socketPath.startsWith("/")) throw new ProjectGlanceValidationError();
+  const socketPath = filesystemPath(source.socketPath, MAX_UNIX_SOCKET_PATH_BYTES);
   return {
     protocolVersion: PROJECT_GLANCE_PROTOCOL_VERSION,
     sessionKey: validateSessionKey(source.sessionKey),
@@ -240,7 +260,7 @@ export function validateClientFrame(value: unknown): ProjectGlanceClientFrame {
 }
 
 function validateErrorCode(value: unknown): ProjectGlanceErrorCode {
-  const code = boundedString(value, 64);
+  const code = boundedText(value, 64);
   if (
     ![
       "invalid_frame",
@@ -318,7 +338,7 @@ export function validateServerFrame(value: unknown): ProjectGlanceServerFrame {
       type,
       ...(requestId === undefined ? {} : { requestId }),
       code: validateErrorCode(source.code),
-      message: boundedString(source.message, 512),
+      message: displayText(source.message, 512),
     };
   }
   throw new ProjectGlanceValidationError();

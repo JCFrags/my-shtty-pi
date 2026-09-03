@@ -7,6 +7,7 @@ import { startStaticFixtureRelay } from "../dist/fixture/runtime.js";
 import { openOrFocusProjectGlancePane } from "../dist/pi/open-pane.js";
 
 const openPane = process.argv.includes("--open");
+const longFeed = process.argv.includes("--long-feed");
 const restartArgument = process.argv.find((argument) => argument.startsWith("--restart-after-ms="));
 const restartAfterMs = restartArgument === undefined ? undefined : Number(restartArgument.slice("--restart-after-ms=".length));
 if (restartAfterMs !== undefined && (!Number.isSafeInteger(restartAfterMs) || restartAfterMs < 1 || restartAfterMs > 60_000)) {
@@ -36,7 +37,7 @@ if (restartAfterMs !== undefined && (!Number.isSafeInteger(restartAfterMs) || re
   }
 
   try {
-    relay = await startStaticFixtureRelay(environment);
+    relay = await startStaticFixtureRelay(environment, undefined, { longFeed });
     if (openPane) {
       if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_PANE_ID) throw new Error("HERDR_CONTEXT_REQUIRED");
       const options = {

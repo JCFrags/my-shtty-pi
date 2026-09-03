@@ -11,12 +11,12 @@ import {
 } from "../runtime/paths.js";
 import { createStaticSnapshot } from "../fixture/static-snapshot.js";
 import { ProjectGlanceServer } from "../protocol/server.js";
-import type { ProjectGlanceRuntimeDescriptor } from "../protocol/model.js";
 
 export class ProjectGlanceRelayRuntime {
   #paths: ProjectGlanceRuntimePaths | undefined;
   #server: ProjectGlanceServer | undefined;
   #sessionKey: string | undefined;
+  #generationIndex = 0;
   #environment: NodeJS.ProcessEnv;
   #operation: Promise<void> = Promise.resolve();
 
@@ -42,15 +42,19 @@ export class ProjectGlanceRelayRuntime {
     return this.#enqueue(async () => {
       if (this.#sessionKey === sessionKey && this.#server?.started) return;
       await this.#stopNow();
-      await this.#startNow(sessionKey);
+      await this.#startNow(sessionKey, new Date().toISOString(), 0);
     });
   }
 
   async start(sessionKey: string, now = new Date().toISOString()): Promise<void> {
-    return this.#enqueue(() => this.#startNow(sessionKey, now));
+    return this.#enqueue(() => this.#startNow(sessionKey, now, 0));
   }
 
-  async #startNow(sessionKey: string, now = new Date().toISOString()): Promise<void> {
+  async #startNow(
+    sessionKey: string,
+    now = new Date().toISOString(),
+    generationIndex = 0,
+  ): Promise<void> {
     if (this.#server?.started && this.#sessionKey === sessionKey) return;
     await this.#stopNow();
     const paths = runtimePathsForSession(sessionKey, this.#environment);
@@ -60,26 +64,33 @@ export class ProjectGlanceRelayRuntime {
       sessionKey: descriptor.sessionKey,
       token: descriptor.token,
       generation: descriptor.generation,
-      snapshot: createStaticSnapshot(descriptor.sessionKey, now),
+      snapshot: createStaticSnapshot(descriptor.sessionKey, now, generationIndex),
     });
     try {
       await server.start();
       await writeConnectionDescriptor(paths, descriptor);
     } catch (error) {
       await server.stop();
+      try {
+        await removeConnectionDescriptor(paths);
+      } catch {
+        // Best-effort cleanup must not replace the original startup failure.
+      }
       throw error;
     }
     this.#paths = paths;
     this.#server = server;
     this.#sessionKey = descriptor.sessionKey;
+    this.#generationIndex = generationIndex;
   }
 
   async restart(now = new Date().toISOString()): Promise<void> {
     return this.#enqueue(async () => {
       const sessionKey = this.#sessionKey;
       if (!sessionKey) throw new Error("PROJECT_GLANCE_RUNTIME_MISSING");
+      const nextGenerationIndex = this.#generationIndex + 1;
       await this.#stopNow();
-      await this.#startNow(sessionKey, now);
+      await this.#startNow(sessionKey, now, nextGenerationIndex);
     });
   }
 

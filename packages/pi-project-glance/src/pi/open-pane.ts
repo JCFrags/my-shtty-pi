@@ -217,31 +217,33 @@ export async function openOrFocusProjectGlancePane(
   const runner = options.runner ?? defaultHerdrRunner;
   const paths = runtimePathsForSession(options.sessionKey, environment);
   const registry = new ProjectGlancePaneRegistry(paths);
-  const registered = await registry.get(options.sessionKey);
-  if (registered) {
-    const focus = await runCommand(
-      executable,
-      ["plugin", "pane", "focus", registered.paneId],
-      commandEnvironment,
-      runner,
-    );
-    if (focus.ok) return { action: "focused", paneId: registered.paneId };
-    if (await paneIsPresent(executable, registered.paneId, commandEnvironment, runner)) {
-      throw new Error("PROJECT_GLANCE_FOCUS_FAILED");
+  return registry.withSessionLock(options.sessionKey, async (lockedRegistry) => {
+    const registered = await lockedRegistry.get(options.sessionKey);
+    if (registered) {
+      const focus = await runCommand(
+        executable,
+        ["plugin", "pane", "focus", registered.paneId],
+        commandEnvironment,
+        runner,
+      );
+      if (focus.ok) return { action: "focused", paneId: registered.paneId };
+      if (await paneIsPresent(executable, registered.paneId, commandEnvironment, runner)) {
+        throw new Error("PROJECT_GLANCE_FOCUS_FAILED");
+      }
+      await lockedRegistry.remove(options.sessionKey);
     }
-    await registry.remove(options.sessionKey);
-  }
-  const args = buildPaneOpenArgs({
-    descriptorPath: options.descriptorPath,
-    currentPaneId,
-    ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    const args = buildPaneOpenArgs({
+      descriptorPath: options.descriptorPath,
+      currentPaneId,
+      ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    });
+    const opened = await runCommand(executable, args, commandEnvironment, runner);
+    if (!opened.ok) throw new Error("PROJECT_GLANCE_OPEN_FAILED");
+    const paneId = parsePaneOpenOutput(opened.stdout);
+    await lockedRegistry.set(options.sessionKey, paneId);
+    return { action: "opened", paneId };
   });
-  const opened = await runCommand(executable, args, commandEnvironment, runner);
-  if (!opened.ok) throw new Error("PROJECT_GLANCE_OPEN_FAILED");
-  const paneId = parsePaneOpenOutput(opened.stdout);
-  await registry.set(options.sessionKey, paneId);
-  return { action: "opened", paneId };
 }
 
 export async function handleProjectGlanceCommand(

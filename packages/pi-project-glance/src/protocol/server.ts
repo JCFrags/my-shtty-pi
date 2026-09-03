@@ -14,11 +14,14 @@ import { ProjectGlanceFrameDecoder, encodeFrame } from "./framing.js";
 import {
   ProjectGlanceValidationError,
   validateClientFrame,
+  validateGeneration,
   validateSessionKey,
   validateSnapshot,
+  validateToken,
 } from "./validation.js";
 import {
   assertPathInRuntimeDirectory,
+  assertPrivateRuntimeDirectory,
   assertPrivateSocket,
   ensurePrivateDirectory,
   PRIVATE_FILE_MODE,
@@ -63,7 +66,23 @@ function closeSocket(client: ClientState): void {
   client.socket.destroy();
 }
 
-async function probeSocket(path: string): Promise<SocketProbe> {
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve) => {
+    try {
+      server.close(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
+async function probeSocket(
+  path: string,
+  runtimeDirectory: string,
+): Promise<SocketProbe> {
+  await assertPrivateRuntimeDirectory(runtimeDirectory);
+  assertPathInRuntimeDirectory(runtimeDirectory, path);
   let entry;
   try {
     entry = await lstat(path);
@@ -72,7 +91,7 @@ async function probeSocket(path: string): Promise<SocketProbe> {
     throw error;
   }
   if (!entry.isSocket() || entry.isSymbolicLink()) throw new Error("Unsafe Project Glance socket.");
-  await assertPrivateSocket(path);
+  await assertPrivateSocket(path, runtimeDirectory);
   return await new Promise<SocketProbe>((resolve, reject) => {
     const socket = createConnection(path);
     let settled = false;
@@ -102,9 +121,13 @@ async function probeSocket(path: string): Promise<SocketProbe> {
   });
 }
 
-export async function recoverStaleSocket(path: string, runtimeDirectory: string): Promise<"absent" | "removed"> {
+export async function recoverStaleSocket(
+  path: string,
+  runtimeDirectory: string,
+): Promise<"absent" | "removed"> {
+  await assertPrivateRuntimeDirectory(runtimeDirectory);
   assertPathInRuntimeDirectory(runtimeDirectory, path);
-  const state = await probeSocket(path);
+  const state = await probeSocket(path, runtimeDirectory);
   if (state === "absent") return "absent";
   if (state !== "stale") throw new Error("A Project Glance relay is already listening.");
   await unlink(path);
@@ -149,8 +172,8 @@ export class ProjectGlanceServer {
   constructor(options: ProjectGlanceServerOptions) {
     this.#paths = options.paths;
     this.#sessionKey = validateSessionKey(options.sessionKey);
-    this.#token = options.token;
-    this.#generation = options.generation;
+    this.#token = validateToken(options.token);
+    this.#generation = validateGeneration(options.generation);
     this.#snapshot = validateSnapshot(options.snapshot);
     if (this.#snapshot.sessionKey !== this.#sessionKey) {
       throw new ProjectGlanceValidationError();
@@ -177,32 +200,30 @@ export class ProjectGlanceServer {
     const server = createServer((socket) => this.#accept(socket));
     this.#server = server;
     try {
-      const previousUmask = process.umask(0o077);
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const onError = (error: Error): void => {
-            server.off("listening", onListening);
-            reject(error);
-          };
-          const onListening = (): void => {
-            server.off("error", onError);
-            resolve();
-          };
-          server.once("error", onError);
-          server.once("listening", onListening);
-          server.listen(this.#paths.socketPath);
-        });
-      } finally {
-        process.umask(previousUmask);
-      }
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error): void => {
+          server.off("listening", onListening);
+          reject(error);
+        };
+        const onListening = (): void => {
+          server.off("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(this.#paths.socketPath);
+      });
+      // The private parent prevents access before this explicit socket mode is
+      // asserted; no process-global umask is changed during this await.
       await chmod(this.#paths.socketPath, PRIVATE_FILE_MODE);
-      await assertPrivateSocket(this.#paths.socketPath);
+      await assertPrivateSocket(this.#paths.socketPath, this.#paths.runtimeDirectory);
       this.#started = true;
     } catch (error) {
-      server.close();
+      await closeServer(server);
       this.#server = undefined;
       try {
-        await unlink(this.#paths.socketPath);
+        const state = await probeSocket(this.#paths.socketPath, this.#paths.runtimeDirectory);
+        if (state !== "live") await unlink(this.#paths.socketPath);
       } catch {
         // The socket may not have been created.
       }
@@ -233,17 +254,10 @@ export class ProjectGlanceServer {
     const server = this.#server;
     this.#server = undefined;
     this.#started = false;
-    if (server) {
-      await new Promise<void>((resolve) => {
-        if (!server.listening) {
-          resolve();
-          return;
-        }
-        server.close(() => resolve());
-      });
-    }
+    if (server) await closeServer(server);
     try {
-      const state = await probeSocket(this.#paths.socketPath);
+      await assertPrivateRuntimeDirectory(this.#paths.runtimeDirectory);
+      const state = await probeSocket(this.#paths.socketPath, this.#paths.runtimeDirectory);
       if (state === "stale") await unlink(this.#paths.socketPath);
     } catch {
       // Cleanup must not expose local paths or interrupt the caller.

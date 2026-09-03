@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { access, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,7 +100,7 @@ async function realpathSafe(path) {
 async function fileIsFile(path) {
   try {
     await access(path);
-    return (await stat(path)).isFile();
+    return (await stat(path)).isFile() && !lstatSync(path).isSymbolicLink();
   } catch {
     return false;
   }
