@@ -785,6 +785,10 @@ test("doctor emits deterministic stable sanitized checks", () => {
     "herdrPluginRootMatches", "herdrPluginEnabled", "herdrPanePresent", "herdrPaneCommandExact",
     "relayHandshake", "runtimeDirectoryMode", "descriptorMode", "socketMode",
     "relaySnapshotBounded", "disposableArtifactsRemoved",
+    "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
+    "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
+    "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
+    "currentStateIntegrationFixture", "liveSnapshotFeedEmpty",
   ];
   const runDoctor = () => execFileSync(process.execPath, ["scripts/dev-doctor.mjs"], {
     cwd: process.cwd(),

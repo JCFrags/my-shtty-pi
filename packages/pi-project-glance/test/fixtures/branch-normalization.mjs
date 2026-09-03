@@ -1,0 +1,15 @@
+export const BRANCH_NORMALIZATION_CASES = Object.freeze([
+  { name: "ordinary Pi entry ID", leafId: "entry-2026-09-03", expected: "entry-2026-09-03" },
+  { name: "empty value", leafId: "", expected: "root" },
+  { name: "null value", leafId: null, expected: "root" },
+  { name: "slash", leafId: "branch/name", expected: "root" },
+  { name: "backslash", leafId: "branch\\name", expected: "root" },
+  { name: "NUL", leafId: "branch\u0000name", expected: "root" },
+  { name: "newline", leafId: "branch\nname", expected: "root" },
+  { name: "control", leafId: "branch\u0001name", expected: "root" },
+  { name: "unpaired surrogate", leafId: "branch\ud800name", expected: "root" },
+  { name: "exactly 128 UTF-8 bytes", leafId: "a".repeat(128), expected: "a".repeat(128) },
+  { name: "129 UTF-8 bytes", leafId: "a".repeat(129), expected: "root" },
+  { name: "multibyte exactly 128 bytes", leafId: "é".repeat(64), expected: "é".repeat(64) },
+  { name: "multibyte over 128 bytes", leafId: `${"é".repeat(64)}a`, expected: "root" },
+]);

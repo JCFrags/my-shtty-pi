@@ -123,6 +123,233 @@ async function launcherState(path) {
   }
 }
 
+const groundedPackageDefinitions = [
+  { key: "todo", name: "@grounded/pi-tasks", directory: "tasks" },
+  { key: "workplan", name: "@grounded/pi-workplan", directory: "workplan" },
+];
+const summaryEventNames = [
+  "pi-todo:request-summary-v1",
+  "pi-todo:summary-v1",
+  "pi-todo:summary-changed-v1",
+  "pi-workplan:request-summary-v1",
+  "pi-workplan:summary-v1",
+  "pi-workplan:summary-changed-v1",
+  "pi-workplan:activity-v1",
+];
+
+function hasAll(text, values) {
+  return values.every((value) => text.includes(value));
+}
+
+async function regularEntrypoint(path) {
+  try {
+    const entry = await lstat(path);
+    return entry.isFile() && !entry.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function expectedGroundedSuffix(definition) {
+  return `/packages/grounded-tools/${definition.directory}`;
+}
+
+async function groundedToolsLinkState() {
+  const states = new Map(groundedPackageDefinitions.map((definition) => [definition.key, {
+    present: false,
+    rootMatches: false,
+    root: undefined,
+    entrypointPresent: false,
+  }]));
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+  let settings;
+  try {
+    settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8"));
+  } catch {
+    return { piListOk: false, states };
+  }
+  const entries = Array.isArray(settings.packages) ? settings.packages : [];
+  const piList = await execFileAsync("pi", ["list"], { env });
+  for (const item of entries) {
+    const source = typeof item === "string" ? item : item?.source;
+    const candidate = configuredLocalPath(source, agentDir)
+      ?? (typeof source === "string" && source && !source.startsWith("/") && !source.startsWith("~")
+        ? resolve(agentDir, source)
+        : undefined);
+    if (!candidate) continue;
+    try {
+      const candidateReal = await realpath(candidate);
+      const metadata = JSON.parse(await readFile(join(candidateReal, "package.json"), "utf8"));
+      const definition = groundedPackageDefinitions.find((value) => value.name === metadata.name);
+      if (!definition) continue;
+      const state = states.get(definition.key);
+      state.present = true;
+      const expectedRoot = resolve(packageRoot, "../../packages/grounded-tools", definition.directory);
+      let expectedReal;
+      try {
+        expectedReal = await realpath(expectedRoot);
+      } catch {
+        // The isolated verifier copy has no sibling repository tree.
+      }
+      const suffix = expectedGroundedSuffix(definition);
+      const rootMatches = expectedReal ? candidateReal === expectedReal : candidateReal.endsWith(suffix);
+      if (rootMatches || !state.root) state.root = candidateReal;
+      state.rootMatches ||= rootMatches;
+      state.entrypointPresent ||= await regularEntrypoint(join(candidateReal, "index.ts"));
+    } catch {
+      // Missing or malformed local entries are not healthy grounded-tools links.
+    }
+  }
+  return { piListOk: piList.ok, states };
+}
+
+async function currentStateFixture() {
+  const result = { currentStateIntegrationFixture: false, liveSnapshotFeedEmpty: false };
+  try {
+    const {
+      parseTodoSummaryChanged,
+      parseTodoSummary,
+      parseWorkplanSummaryChanged,
+      parseWorkplanSummary,
+      TODO_SUMMARY_EVENT,
+      TODO_SUMMARY_REQUEST_EVENT,
+      WORKPLAN_SUMMARY_EVENT,
+      WORKPLAN_SUMMARY_REQUEST_EVENT,
+    } = await import("../dist/current/contracts.js");
+    const { ProjectGlanceCurrentController } = await import("../dist/current/controller.js");
+    const { createLiveSnapshot } = await import("../dist/pi/lifecycle.js");
+    const bus = {
+      listeners: new Map(),
+      on(channel, handler) {
+        const listeners = this.listeners.get(channel) ?? new Set();
+        listeners.add(handler);
+        this.listeners.set(channel, listeners);
+        return () => listeners.delete(handler);
+      },
+      emit(channel, value) {
+        for (const handler of [...(this.listeners.get(channel) ?? [])]) handler(value);
+      },
+    };
+    const branchId = "doctor-branch";
+    bus.on(TODO_SUMMARY_REQUEST_EVENT, (request) => bus.emit(TODO_SUMMARY_EVENT, {
+      version: 1,
+      requestId: request.requestId,
+      branchId,
+      snapshot: {
+        version: 1,
+        currentUsefulTask: { id: "T1", text: "Doctor task", status: "pending" },
+        unfinishedTasks: [],
+        countsByState: { pending: 1, in_progress: 0, blocked: 0, done: 0 },
+        externalWaits: [],
+        planSize: 1,
+      },
+    }));
+    bus.on(WORKPLAN_SUMMARY_REQUEST_EVENT, (request) => bus.emit(WORKPLAN_SUMMARY_EVENT, {
+      version: 1,
+      requestId: request.requestId,
+      branchId,
+      summary: {
+        version: 1,
+        activePlan: {
+          id: "WP1",
+          title: "Doctor plan",
+          objective: "Doctor objective",
+          revision: 1,
+          currentMilestone: { id: "WP1-M1", title: "Doctor milestone", status: "in_progress" },
+          latestCheckpoint: { id: "WP1-K1", summary: "Doctor checkpoint", currentFocus: "Doctor focus", at: "2026-09-03T00:00:00.000Z" },
+        },
+      },
+    }));
+    let current = {};
+    const controller = new ProjectGlanceCurrentController({
+      eventBus: bus,
+      retryDelaysMs: [],
+      onChange: (next) => { current = next; },
+    });
+    controller.start(branchId);
+    controller.refresh();
+    result.currentStateIntegrationFixture = sameJson(current, {
+      step: "T1  Doctor task",
+      toward: "WP1-M1  Doctor milestone",
+      focus: "Doctor focus",
+    })
+      && parseTodoSummaryChanged({ version: 1, branchId, snapshot: { version: 1 } }, branchId) !== undefined
+      && parseWorkplanSummaryChanged({ version: 1, branchId }, branchId) !== undefined
+      && parseTodoSummary({ version: 1, requestId: "fixture-todo", branchId, snapshot: { version: 1 } }, "fixture-todo", branchId) !== undefined
+      && parseWorkplanSummary({ version: 1, requestId: "fixture-workplan", branchId, summary: { version: 1 } }, "fixture-workplan", branchId) !== undefined;
+    controller.dispose();
+    result.liveSnapshotFeedEmpty = createLiveSnapshot("doctor-session", "2026-09-03T00:00:00.000Z").feed.length === 0;
+  } catch {
+    // Failed checks remain false.
+  }
+  return result;
+}
+
+async function providerContractChecks(states) {
+  const result = {
+    groundedToolsLinkPresent: false,
+    groundedToolsLinkRootMatches: false,
+    todoEntrypointPresent: false,
+    workplanEntrypointPresent: false,
+    todoSummaryContractV1Available: false,
+    todoChangedEnvelopeCompatible: false,
+    workplanSummaryContractV1Available: false,
+    workplanActivityContractV1Available: false,
+  };
+  const todo = states.get("todo");
+  const workplan = states.get("workplan");
+  if (!todo || !workplan) return result;
+  result.groundedToolsLinkPresent = todo.present && workplan.present;
+  result.groundedToolsLinkRootMatches = todo.rootMatches && workplan.rootMatches;
+  result.todoEntrypointPresent = todo.entrypointPresent;
+  result.workplanEntrypointPresent = workplan.entrypointPresent;
+  if (!todo.root || !workplan.root) return result;
+  try {
+    const todoSource = await readFile(join(todo.root, "index.ts"), "utf8");
+    const workplanSource = await readFile(join(workplan.root, "index.ts"), "utf8");
+    const summarySource = await readFile(join(workplan.root, "../core/src/workplan-summary.ts"), "utf8");
+    result.todoSummaryContractV1Available = hasAll(todoSource, [
+      ...summaryEventNames.filter((name) => name.startsWith("pi-todo:")),
+      "interface TodoSummarySnapshot",
+      "snapshot: summary()",
+    ]);
+    result.workplanSummaryContractV1Available = hasAll(`${summarySource}\\n${workplanSource}`, [
+      ...summaryEventNames.filter((name) => name.startsWith("pi-workplan:") && !name.endsWith("activity-v1")),
+      "validateWorkplanSummaryRequest",
+      "validateWorkplanSummaryResponse",
+      "buildWorkplanSummary",
+      "workplanBranchId",
+    ]);
+    result.workplanActivityContractV1Available = hasAll(summarySource, [
+      "pi-workplan:activity-v1",
+      "WORKPLAN_ACTIVITY_EVENT",
+      "WorkplanActivityV1",
+      "buildWorkplanActivity",
+      "validateWorkplanActivity",
+    ]);
+    const { parseTodoSummaryChanged } = await import("../dist/current/contracts.js");
+    const changed = {
+      version: 1,
+      branchId: "doctor-branch",
+      snapshot: {
+        version: 1,
+        currentUsefulTask: { id: "T1", text: "Provider task", status: "pending" },
+        unfinishedTasks: [],
+        countsByState: { pending: 1, in_progress: 0, blocked: 0, done: 0 },
+        externalWaits: [],
+        planSize: 1,
+      },
+    };
+    const parsed = parseTodoSummaryChanged(changed, "doctor-branch");
+    result.todoChangedEnvelopeCompatible = parsed !== undefined
+      && sameJson(parsed, { version: 1, branchId: "doctor-branch", snapshot: { version: 1 } })
+      && !JSON.stringify(parsed).includes("Provider task");
+  } catch {
+    // Failed checks remain false.
+  }
+  return result;
+}
+
 function initialChecks(manifest) {
   return {
     platformLinux: process.platform === "linux",
@@ -150,6 +377,16 @@ function initialChecks(manifest) {
     socketMode: false,
     relaySnapshotBounded: false,
     disposableArtifactsRemoved: false,
+    groundedToolsLinkPresent: false,
+    groundedToolsLinkRootMatches: false,
+    todoEntrypointPresent: false,
+    workplanEntrypointPresent: false,
+    todoSummaryContractV1Available: false,
+    todoChangedEnvelopeCompatible: false,
+    workplanSummaryContractV1Available: false,
+    workplanActivityContractV1Available: false,
+    currentStateIntegrationFixture: false,
+    liveSnapshotFeedEmpty: false,
   };
 }
 
@@ -171,6 +408,12 @@ async function run() {
     const piLinks = await piLinkState();
     checks.piLinkPresent = piList.ok && piLinks.present;
     checks.piLinkRootMatches = piList.ok && piLinks.rootMatches;
+
+    const grounded = await groundedToolsLinkState();
+    Object.assign(checks, await providerContractChecks(grounded.states));
+    checks.groundedToolsLinkPresent = piList.ok && grounded.piListOk && checks.groundedToolsLinkPresent;
+    checks.groundedToolsLinkRootMatches = piList.ok && grounded.piListOk && checks.groundedToolsLinkRootMatches;
+    Object.assign(checks, await currentStateFixture());
 
     const plugin = await pluginInfo();
     checks.herdrPluginPresent = plugin !== undefined;

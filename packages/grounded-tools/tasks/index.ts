@@ -87,7 +87,7 @@ function bounded(value: string, limit: number): string {
 }
 
 function summaryBranchId(leafId: string | null | undefined): string {
-  if (typeof leafId !== "string" || !leafId || /[\\/\\0]/u.test(leafId) || /[\uD800-\uDFFF]/u.test(leafId) || /\p{Cc}/u.test(leafId) || Buffer.byteLength(leafId, "utf8") > SUMMARY_BRANCH_ID_LIMIT) return "root";
+  if (typeof leafId !== "string" || !leafId || /[\/\\\0]/u.test(leafId) || /[\uD800-\uDFFF]/u.test(leafId) || /\p{Cc}/u.test(leafId) || Buffer.byteLength(leafId, "utf8") > SUMMARY_BRANCH_ID_LIMIT) return "root";
   return leafId;
 }
 

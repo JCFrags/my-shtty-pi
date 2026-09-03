@@ -81,6 +81,7 @@ function text(value: unknown, maximumBytes: number, optional = false): string | 
 
 function branch(value: unknown, expected: string): boolean {
   return typeof value === "string"
+    && !/[\/\\\0]/u.test(value)
     && !/[\uD800-\uDFFF]/u.test(value)
     && !/\p{Cc}/u.test(value)
     && Buffer.byteLength(value, "utf8") <= ID_BYTES
@@ -94,10 +95,33 @@ function request(value: unknown, expectedRequestId: string, expectedBranchId: st
   return candidate;
 }
 
-export function isCurrentChanged(value: unknown, expectedBranchId: string): boolean {
+export interface TodoSummaryChangedV1 {
+  version: typeof VERSION;
+  branchId: string;
+  snapshot?: { version: typeof VERSION };
+}
+
+export interface WorkplanSummaryChangedV1 {
+  version: typeof VERSION;
+  branchId: string;
+}
+
+export function parseTodoSummaryChanged(value: unknown, expectedBranchId: string): TodoSummaryChangedV1 | undefined {
   const candidate = record(value);
-  if (!candidate || !exact(candidate, ["version", "branchId"])) return false;
-  return candidate.version === VERSION && branch(candidate.branchId, expectedBranchId);
+  if (!candidate || !exact(candidate, ["version", "branchId"], ["snapshot"])) return undefined;
+  if (candidate.version !== VERSION || !branch(candidate.branchId, expectedBranchId)) return undefined;
+  if (candidate.snapshot === undefined) return { version: VERSION, branchId: expectedBranchId };
+  const snapshot = record(candidate.snapshot);
+  if (!snapshot || snapshot.version !== VERSION) return undefined;
+  return { version: VERSION, branchId: expectedBranchId, snapshot: { version: VERSION } };
+}
+
+export function parseWorkplanSummaryChanged(value: unknown, expectedBranchId: string): WorkplanSummaryChangedV1 | undefined {
+  const candidate = record(value);
+  if (!candidate || !exact(candidate, ["version", "branchId"])) return undefined;
+  return candidate.version === VERSION && branch(candidate.branchId, expectedBranchId)
+    ? { version: VERSION, branchId: expectedBranchId }
+    : undefined;
 }
 
 function parseTodoTask(value: unknown): TodoCurrentTask | undefined {

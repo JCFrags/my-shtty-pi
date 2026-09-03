@@ -20,9 +20,9 @@ import {
   type ProjectGlanceEventBus,
 } from "../current/controller.js";
 
-function branchIdForContext(ctx: ExtensionContext): string {
+export function branchIdForContext(ctx: ExtensionContext): string {
   const leafId = ctx.sessionManager.getLeafId();
-  if (typeof leafId !== "string" || !leafId || /[\\/\0]/u.test(leafId) || /[\uD800-\uDFFF]/u.test(leafId) || /\p{Cc}/u.test(leafId) || Buffer.byteLength(leafId, "utf8") > 128) return "root";
+  if (typeof leafId !== "string" || !leafId || /[\/\\\0]/u.test(leafId) || /[\uD800-\uDFFF]/u.test(leafId) || /\p{Cc}/u.test(leafId) || Buffer.byteLength(leafId, "utf8") > 128) return "root";
   return leafId;
 }
 
@@ -73,6 +73,10 @@ export class ProjectGlanceRelayRuntime {
     return this.#server?.started === true;
   }
 
+  get branchId(): string {
+    return this.#branchId;
+  }
+
   get current(): ProjectGlanceCurrent {
     return { ...this.#current };
   }
@@ -82,7 +86,13 @@ export class ProjectGlanceRelayRuntime {
     const sessionKey = deriveSessionKey(sessionId);
     const branchId = branchIdForContext(ctx);
     return this.#enqueue(async () => {
-      if (this.#sessionKey === sessionKey && this.#server?.started) return;
+      if (this.#sessionKey === sessionKey && this.#server?.started) {
+        if (this.#branchId !== branchId) {
+          this.#branchId = branchId;
+          this.#controller?.onSessionTree(branchId);
+        }
+        return;
+      }
       await this.#stopNow();
       await this.#startNow(sessionKey, new Date().toISOString(), 0, branchId);
     });
@@ -157,7 +167,9 @@ export class ProjectGlanceRelayRuntime {
   }
 
   onSessionTree(ctx: ExtensionContext): void {
-    this.#controller?.onSessionTree(branchIdForContext(ctx));
+    const branchId = branchIdForContext(ctx);
+    this.#branchId = branchId;
+    this.#controller?.onSessionTree(branchId);
   }
 
   #publishCurrent(current: ProjectGlanceCurrent): void {
@@ -184,11 +196,11 @@ export class ProjectGlanceRelayRuntime {
     this.#controller = undefined;
     this.#server = undefined;
     this.#paths = undefined;
-    this.#sessionKey = undefined;
-    this.#branchId = "root";
     controller?.dispose();
     if (server) await server.stop();
     if (paths) await removeConnectionDescriptor(paths);
+    this.#sessionKey = undefined;
+    this.#branchId = "root";
   }
 
   #enqueue(operation: () => Promise<void>): Promise<void> {

@@ -317,6 +317,93 @@ function scanProjectGlancePackFiles(work, packFiles) {
   }
 }
 
+const projectGlanceDoctorChecks = [
+  "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
+  "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
+  "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
+  "currentStateIntegrationFixture", "liveSnapshotFeedEmpty",
+];
+
+function sourceSection(text, start, end) {
+  const startIndex = text.indexOf(start);
+  const endIndex = end === undefined ? text.length : text.indexOf(end, startIndex + start.length);
+  return startIndex >= 0 && (end === undefined || endIndex >= 0) ? text.slice(startIndex, endIndex) : "";
+}
+
+function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
+  const source = (rel) => readFileSync(join(packageRoot, rel), "utf8");
+  const contracts = source("src/current/contracts.ts");
+  const controller = source("src/current/controller.ts");
+  const lifecycle = source("src/pi/lifecycle.ts");
+  const format = source("src/current/format.ts");
+  const doctor = source("scripts/dev-doctor.mjs");
+  const integrationTest = indexed.includes(`packages/${projectGlanceSlug}/test/provider-integration.test.mjs`)
+    ? source("test/provider-integration.test.mjs")
+    : "";
+  const todoSource = readFileSync(join(root, "packages/grounded-tools/tasks/index.ts"), "utf8");
+  const summarySource = readFileSync(join(root, "packages/grounded-tools/core/src/workplan-summary.ts"), "utf8");
+  const workplanTest = readFileSync(join(root, "packages/grounded-tools/workplan/test/lifecycle.test.mjs"), "utf8");
+
+  if (contracts.includes("isCurrentChanged") || controller.includes("isCurrentChanged") ||
+      !controller.includes("parseTodoSummaryChanged") || !controller.includes("parseWorkplanSummaryChanged")) {
+    throw new Error("pi-project-glance: changed events must use source-specific parsers");
+  }
+  const changed = sourceSection(controller, "  #changed(", "  #acceptTodo(");
+  if (!changed.includes("parseTodoSummaryChanged") || !changed.includes("parseWorkplanSummaryChanged") || !changed.includes("this.#request(source)")) {
+    throw new Error("pi-project-glance: changed events must invalidate through correlated requests");
+  }
+  if (changed.includes("currentUsefulTask") || changed.includes("snapshot.")) {
+    throw new Error("pi-project-glance: changed-event snapshots must not become current state");
+  }
+  if (!todoSource.includes("TODO_SUMMARY_CHANGED_EVENT") || !todoSource.includes("snapshot: summary()")) {
+    throw new Error("pi-project-glance: Todo provider changed envelope is not represented");
+  }
+
+  const tree = sourceSection(lifecycle, "  onSessionTree(ctx", "  #publishCurrent(");
+  if (!tree.includes("this.#branchId = branchId") || !tree.includes("this.#controller?.onSessionTree(branchId)")) {
+    throw new Error("pi-project-glance: session-tree branch reconciliation is incomplete");
+  }
+  const ensure = sourceSection(lifecycle, "  async ensureForContext(ctx", "  async start(");
+  if (!ensure.includes("this.#branchId !== branchId") || !ensure.includes("this.#controller?.onSessionTree(branchId)")) {
+    throw new Error("pi-project-glance: same-session branch reconciliation is missing");
+  }
+  const restart = sourceSection(lifecycle, "  async restart(", "  async stop(");
+  if (!restart.includes("const branchId = this.#branchId") || !restart.includes("#startNow(sessionKey, now, nextGenerationIndex, branchId)")) {
+    throw new Error("pi-project-glance: relay restart does not preserve the latest branch");
+  }
+
+  if (!integrationTest || !integrationTest.includes("groundedTasks") || !integrationTest.includes("groundedWorkplan") ||
+      !integrationTest.includes("actual Todo mutation") || !integrationTest.includes("branch-enforcing") && !integrationTest.includes("installBranchEnforcingProviders")) {
+    throw new Error("pi-project-glance: real-provider integration coverage is missing");
+  }
+  if (!format.includes("${id}  ${text}")) throw new Error("pi-project-glance: current ID separator is not two spaces");
+  if (!integrationTest.includes("BRANCH_NORMALIZATION_CASES") || !integrationTest.includes("T1  ") || !integrationTest.includes("WP1-M1  ")) {
+    throw new Error("pi-project-glance: current-state conformance coverage is incomplete");
+  }
+  if (!workplanTest.includes("plan completion activity requires") || !workplanTest.includes("plan_completed") ||
+      !workplanTest.includes("validateWorkplanActivity")) {
+    throw new Error("pi-project-glance: plan completion activity coverage is missing");
+  }
+  if (!hasTextWithoutProductionGroundedImport(packageRoot, indexed)) {
+    throw new Error("pi-project-glance: production grounded-tools import is forbidden");
+  }
+  if (!lifecycle.includes("current: {},") || !lifecycle.includes("feed: [],")) {
+    throw new Error("pi-project-glance: live current snapshot/feed must start empty");
+  }
+  if (!projectGlanceDoctorChecks.every((name) => doctor.includes(name))) {
+    throw new Error("pi-project-glance: doctor lacks current-state checks");
+  }
+}
+
+function hasTextWithoutProductionGroundedImport(packageRoot, indexed) {
+  const production = indexed.filter((repoRel) => {
+    const rel = repoRel.slice(`packages/${projectGlanceSlug}/`.length);
+    return rel.startsWith("src/") && rel.endsWith(".ts");
+  });
+  const forbidden = new RegExp(String.raw`(?:from|import|require)\s*(?:\(\s*)?["'][^"']*(?:@grounded|grounded-tools|packages/grounded-tools)[^"']*["']`, "iu");
+  return production.every((repoRel) => !forbidden.test(readFileSync(join(packageRoot, repoRel.slice(`packages/${projectGlanceSlug}/`.length),), "utf8")));
+}
+
 // Repository identity, product set, activation status, and root boundary.
 const actualSlugs = products.map((product) => product.slug);
 if (!jsonEqual(actualSlugs, expectedSlugs)) throw new Error(`unexpected product order/set: ${actualSlugs.join(",")}`);
@@ -730,7 +817,7 @@ function verifyProjectGlanceStatic() {
   const expectedScripts = {
     typecheck: "tsc -p tsconfig.json --noEmit",
     build: "rm -rf dist && tsc -p tsconfig.build.json && chmod +x bin/pi-project-glance && test -f dist/pi/extension.js && test -f dist/pane/main.js",
-    test: "npm run build && node --test test/*.test.mjs",
+    test: "npm run build && node --experimental-transform-types --test test/*.test.mjs",
     "dev:link": "node scripts/dev-link.mjs",
     "dev:unlink": "node scripts/dev-unlink.mjs",
     "dev:doctor": "node scripts/dev-doctor.mjs",
@@ -790,6 +877,7 @@ function verifyProjectGlanceStatic() {
     }
   }
   scanProjectGlanceBoundary(packageRoot, indexed, false);
+  verifyProjectGlanceRepairStatic(packageRoot, indexed);
   return {
     package: manifest.name,
     trackedFiles: projectTracked.length,
@@ -797,6 +885,14 @@ function verifyProjectGlanceStatic() {
     identifiers: "locked",
     baselineBoundary: "separate",
   };
+}
+
+function verifyGroundedCurrentState() {
+  const workplanRoot = join(root, "packages/grounded-tools/workplan");
+  execFileSync(process.execPath, ["--experimental-transform-types", "--test", "test/*.test.mjs"], {
+    cwd: workplanRoot,
+    stdio: "inherit",
+  });
 }
 
 function verifyProjectGlance() {
@@ -810,9 +906,14 @@ function verifyProjectGlance() {
   try {
     copyIndexedProjectGlance(packageRoot, work, indexed);
     execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
-    const isolatedEnv = { ...process.env, PI_PROJECT_GLANCE_VERIFIER_COPY: "1" };
+    const isolatedEnv = {
+      ...process.env,
+      PI_PROJECT_GLANCE_VERIFIER_COPY: "1",
+      PI_PROJECT_GLANCE_PROVIDER_ROOT: root,
+    };
     execFileSync("npm", ["run", "typecheck"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
     execFileSync("npm", ["test"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
+    verifyGroundedCurrentState();
     const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
     const result = JSON.parse(output);
     if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error("pi-project-glance: invalid pack result");

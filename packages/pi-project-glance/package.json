@@ -46,7 +46,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x bin/pi-project-glance && test -f dist/pi/extension.js && test -f dist/pane/main.js",
-    "test": "npm run build && node --test test/*.test.mjs",
+    "test": "npm run build && node --experimental-transform-types --test test/*.test.mjs",
     "dev:link": "node scripts/dev-link.mjs",
     "dev:unlink": "node scripts/dev-unlink.mjs",
     "dev:doctor": "node scripts/dev-doctor.mjs",

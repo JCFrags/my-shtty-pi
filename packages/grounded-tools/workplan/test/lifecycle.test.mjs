@@ -3,6 +3,7 @@ import test from "node:test";
 
 import groundedWorkplan from "../index.ts";
 import {
+  validateWorkplanActivity,
   WORKPLAN_ACTIVITY_EVENT,
   WORKPLAN_SUMMARY_CHANGED_EVENT,
   WORKPLAN_SUMMARY_EVENT,
@@ -63,6 +64,15 @@ function signal() {
 
 function nextTick() {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function executePersisted(pi, input, persist = true) {
+  const result = await pi.tool.execute(input.action, input, signal());
+  if (persist) {
+    await pi.emitLifecycle("message_end", messageEnd(result.details));
+    await nextTick();
+  }
+  return result;
 }
 
 test("provider responds with a bounded summary and emits activity only after message persistence", async () => {
@@ -156,4 +166,130 @@ test("provider ignores wrong-branch summary requests and repeated persistence do
   await pi.emitLifecycle("message_end", end);
   await nextTick();
   assert.deepEqual(activities, []);
+});
+
+test("milestone completion activity follows the real evidence transition exactly once", async () => {
+  const pi = new FakePi();
+  groundedWorkplan(pi);
+  const activities = [];
+  pi.events.on(WORKPLAN_ACTIVITY_EVENT, (value) => activities.push(value));
+  await pi.emitLifecycle("session_start", { type: "session_start" }, context());
+
+  await executePersisted(pi, { action: "create", content: { title: "Plan", objective: "Objective", approach: "Approach" } });
+  await executePersisted(pi, { action: "resume", planId: "WP1", expectedRevision: 1, rationale: "Start" });
+  await executePersisted(pi, { action: "add_milestone", planId: "WP1", expectedRevision: 2, content: { title: "Milestone" } });
+  await executePersisted(pi, {
+    action: "update_milestone",
+    planId: "WP1",
+    milestoneId: "WP1-M1",
+    expectedRevision: 3,
+    content: { status: "in_progress" },
+  });
+  const completed = await executePersisted(pi, {
+    action: "update_milestone",
+    planId: "WP1",
+    milestoneId: "WP1-M1",
+    expectedRevision: 4,
+    content: { evidence: ["verified"], status: "completed" },
+  }, false);
+  assert.equal(activities.length, 0);
+  const end = messageEnd(completed.details);
+  await pi.emitLifecycle("message_end", end);
+  assert.equal(activities.length, 0);
+  await nextTick();
+  assert.equal(activities.length, 1);
+  assert.deepEqual(activities[0], {
+    version: 1,
+    id: "workplan:WP1:5:milestone_completed",
+    type: "milestone_completed",
+    planId: "WP1",
+    milestoneId: "WP1-M1",
+    title: "Milestone",
+    at: completed.details.event.at,
+  });
+  assert.deepEqual(validateWorkplanActivity(activities[0]), activities[0]);
+  await pi.emitLifecycle("message_end", end);
+  await nextTick();
+  assert.equal(activities.length, 1);
+
+  await assert.rejects(() => pi.tool.execute("invalid", {
+    action: "update_milestone",
+    planId: "WP1",
+    milestoneId: "WP1-M1",
+    expectedRevision: 4,
+    content: { status: "completed" },
+  }, signal()));
+  assert.equal(activities.length, 1);
+});
+
+test("plan completion activity requires actual completion and checkpoint evidence", async () => {
+  const pi = new FakePi();
+  groundedWorkplan(pi);
+  const activities = [];
+  pi.events.on(WORKPLAN_ACTIVITY_EVENT, (value) => activities.push(value));
+  await pi.emitLifecycle("session_start", { type: "session_start" }, context());
+
+  await executePersisted(pi, { action: "create", content: { title: "Completable", objective: "Objective", approach: "Approach", acceptanceCriteria: ["Criterion"] } });
+  await executePersisted(pi, { action: "resume", planId: "WP1", expectedRevision: 1, rationale: "Start" });
+  await executePersisted(pi, { action: "add_milestone", planId: "WP1", expectedRevision: 2, content: { title: "Milestone" } });
+  await executePersisted(pi, {
+    action: "update_milestone",
+    planId: "WP1",
+    milestoneId: "WP1-M1",
+    expectedRevision: 3,
+    content: { status: "in_progress" },
+  });
+  await executePersisted(pi, {
+    action: "update_milestone",
+    planId: "WP1",
+    milestoneId: "WP1-M1",
+    expectedRevision: 4,
+    content: { evidence: ["verified"], status: "completed" },
+  });
+  await executePersisted(pi, {
+    action: "checkpoint",
+    planId: "WP1",
+    expectedRevision: 5,
+    content: { summary: "Evidence checkpoint", currentFocus: "Done", nextActions: ["Complete"], criterionEvidence: [{ criterionId: "WP1-C1", evidence: "Verified" }] },
+  });
+  const completed = await executePersisted(pi, { action: "complete", planId: "WP1", expectedRevision: 6, rationale: "All evidence is recorded" }, false);
+  assert.equal(activities.length, 2);
+  const end = messageEnd(completed.details);
+  await pi.emitLifecycle("message_end", end);
+  assert.equal(activities.length, 2);
+  await nextTick();
+  assert.equal(activities.length, 3);
+  assert.deepEqual(activities[2], {
+    version: 1,
+    id: "workplan:WP1:7:plan_completed",
+    type: "plan_completed",
+    planId: "WP1",
+    title: "Completable",
+    at: completed.details.event.at,
+  });
+  assert.deepEqual(validateWorkplanActivity(activities[2]), activities[2]);
+  await pi.emitLifecycle("message_end", end);
+  await nextTick();
+  assert.equal(activities.length, 3);
+});
+
+test("pending activity cannot cross shutdown or replay restore", async () => {
+  const pi = new FakePi();
+  groundedWorkplan(pi);
+  const activities = [];
+  pi.events.on(WORKPLAN_ACTIVITY_EVENT, (value) => activities.push(value));
+  await pi.emitLifecycle("session_start", { type: "session_start" }, context());
+  const created = await executePersisted(pi, { action: "create", content: { title: "Plan", objective: "Objective", approach: "Approach" } }, false);
+  assert.equal(activities.length, 0);
+  await pi.emitLifecycle("session_tree", { type: "session_tree" }, context());
+  await pi.emitLifecycle("message_end", messageEnd(created.details), context());
+  await nextTick();
+  assert.equal(activities.length, 0);
+
+  await pi.emitLifecycle("session_start", { type: "session_start" }, context());
+  const reloaded = await executePersisted(pi, { action: "create", content: { title: "Reloaded", objective: "Objective", approach: "Approach" } }, false);
+  await pi.emitLifecycle("session_shutdown", { type: "session_shutdown" }, context());
+  await pi.emitLifecycle("message_end", messageEnd(reloaded.details), context());
+  await nextTick();
+  assert.equal(activities.length, 0);
 });

@@ -1,7 +1,8 @@
 import type { ProjectGlanceCurrent } from "../protocol/model.js";
 import {
-  isCurrentChanged,
+  parseTodoSummaryChanged,
   parseTodoSummary,
+  parseWorkplanSummaryChanged,
   parseWorkplanSummary,
   TODO_SUMMARY_CHANGED_EVENT,
   TODO_SUMMARY_EVENT,
@@ -171,7 +172,11 @@ export class ProjectGlanceCurrentController {
   }
 
   #changed(source: Source, value: unknown): void {
-    if (!this.#started || this.#disposed || !isCurrentChanged(value, this.#branchId)) return;
+    if (!this.#started || this.#disposed) return;
+    const accepted = source === "todo"
+      ? parseTodoSummaryChanged(value, this.#branchId)
+      : parseWorkplanSummaryChanged(value, this.#branchId);
+    if (!accepted) return;
     this.#request(source);
   }
 

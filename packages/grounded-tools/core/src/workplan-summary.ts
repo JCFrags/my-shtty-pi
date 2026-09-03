@@ -86,7 +86,7 @@ export interface WorkplanActivityV1 {
 }
 
 export function workplanBranchId(leafId: string | null | undefined): string {
-  if (typeof leafId !== "string" || !leafId || /[\uD800-\uDFFF]/u.test(leafId) || /\p{Cc}/u.test(leafId) || Buffer.byteLength(leafId, "utf8") > WORKPLAN_SUMMARY_LIMITS.branchIdBytes) return "root";
+  if (typeof leafId !== "string" || !leafId || /[\/\\\0]/u.test(leafId) || /[\uD800-\uDFFF]/u.test(leafId) || /\p{Cc}/u.test(leafId) || Buffer.byteLength(leafId, "utf8") > WORKPLAN_SUMMARY_LIMITS.branchIdBytes) return "root";
   return leafId;
 }
 
