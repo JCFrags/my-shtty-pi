@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "milestone": "M00-R2",
-  "status": "R2 corrections pushed; CI passed; ready for directing-assistant project-lead re-review",
+  "status": "R2 corrections pushed; CI passed for validation target fd596f6; ready for directing-assistant project-lead re-review",
   "capturedDate": "2026-09-03",
   "lastCorrectedDate": "2026-09-03",
   "reviewState": "changes-requested-directing-assistant-project-lead-review-2",
@@ -21,7 +21,8 @@
     },
     "baselineSha": "eb9742c318a76eeaf753e87a620fae83ca9048d1",
     "originalM00Sha": "1887c77b39c42fb0b5d35b38baac94aff13465e9",
-    "r1ReviewTargetSha": "370cbf1522c8ec7acfe49907a969e633e829b6bb"
+    "r1ReviewTargetSha": "370cbf1522c8ec7acfe49907a969e633e829b6bb",
+    "r2ValidationTargetSha": "fd596f60cdb2b27fc522aef48dc8e798e2129712"
   },
   "northStar": {
     "path": "docs/chrono-v3/master-goal-and-work-plan.md",
@@ -119,8 +120,9 @@
       "status": "pass"
     },
     "latestCiRun": {
-      "push": 33816038570,
-      "pullRequest": 33816041445,
+      "validationTargetCommit": "fd596f60cdb2b27fc522aef48dc8e798e2129712",
+      "push": 33817442403,
+      "pullRequest": 33817446062,
       "conclusion": "success"
     },
     "ciConclusion": "success"
@@ -132,10 +134,11 @@
     "branchesScanned": 13,
     "tagsScanned": 3,
     "pullRequestHeadsScanned": 27,
-    "blobCount": 1701,
-    "pathContextCount": 70136,
+    "scanTargetCommit": "fd596f60cdb2b27fc522aef48dc8e798e2129712",
+    "blobCount": 1706,
+    "pathContextCount": 72096,
     "worktreeFileCount": 652,
-    "indexFileCount": 648,
+    "indexFileCount": 652,
     "findings": 0,
     "residualPriorCopyRisk": "historical public copies may persist; retraction is not attested",
     "knownUnavailableSurfaces": [
