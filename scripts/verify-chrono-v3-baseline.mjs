@@ -49,6 +49,7 @@ const EXPECTED = Object.freeze({
 });
 
 const correctionPaths = new Set([
+  "README.md",
   ".github/workflows/verify.yml",
   "packages/pi-chrono-compaction/package.json",
   "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
