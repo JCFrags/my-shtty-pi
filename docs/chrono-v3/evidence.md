@@ -12,6 +12,6 @@ This register names evidence without copying private source data. The owner-only
 | Scheduler | aggregate artifact counts and permissions | owner-only directory inspection | no stale host-worker artifact at capture |
 | Affected session | size and line-boundary counts only | streaming hash and boundary measurement | source untouched; whole file was not materialized |
 | Rollback | backup existence and non-deployment rule | owner-only backup | backup exists; no live switch performed |
-| Tests and gates | commands and aggregate results | bounded command logs | M00 suite 294/294; R1 correction tests 28/28; latest all-ref scan 2,877 blobs with zero findings |
+| Tests and gates | commands and aggregate results | bounded command logs | M00 suite 294/294; R1 correction tests 30/30; R1 checkpoint all-ref scan at `7e3d5cb5f84e33c3dd72b804ba42f3b5421de6b3` scanned 2,908 blobs with zero findings |
 
 The content gate and public identity gate are separate. A passing content scan does not prove repository visibility, and public visibility does not permit private evidence. The register is not an attestation that public history was retracted. It is a reproducible record of the containment decision, R1 correction controls, and M00 inputs. M00-R1 remains pending complete validation and independent project-lead review.
