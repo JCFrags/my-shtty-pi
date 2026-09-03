@@ -11,6 +11,6 @@ This timeline records only bounded, reproducible project events. It does not rep
 | 2026-09-03 | R1 preflight | PR #30 retargeted to `rebuild/chrono-memory-v3`; merge-base equals the frozen baseline parent and the comparison excludes `packages/pi-project-glance/`. |
 | 2026-09-03 | R1 scanner/baseline correction | Fail-closed scanner, frozen baseline verifier, root allowlists, correction tests, and all-ref CI workflow edits were made in the execution clone only. |
 | 2026-09-03 | R1 local gate checkpoint | Targeted syntax, correction tests, all-ref privacy scan, and static root verification passed. Full validation, push, CI confirmation, and independent project-lead review were pending at this checkpoint. |
-| 2026-09-03 | R1 final validation and independent review | Commit `beb26a542e8a969696fa01165e4600d552bc4ab2` was pushed normally; both push and pull-request CI runs passed, the evidence count was corrected to 30/30, and independent read-only review found no blocking defect. Explicit M00 acceptance remains pending; M01 remains blocked. |
+| 2026-09-03 | R1 final validation and independent review | Commit `8e02568fb1a15a9db6c30e8c494531dd13a6094d` was pushed normally; both push and pull-request CI runs passed, the evidence count and synthetic timing checks were corrected, and independent read-only review found no blocking defect. Explicit M00 acceptance remains pending; M01 remains blocked. |
 
 The timeline is not an M00 acceptance record and does not authorize M01.

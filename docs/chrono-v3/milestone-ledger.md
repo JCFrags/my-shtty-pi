@@ -3,7 +3,7 @@
 | Milestone | State | Evidence | Boundary |
 | --- | --- | --- | --- |
 | M00 — baseline, containment, and test recovery | published baseline; acceptance carried into R1 review | commit `1887c77b39c42fb0b5d35b38baac94aff13465e9`; baseline hashes, restored tests, privacy evidence, and rollback record | no runtime deployment, reload, settings change, scheduler change, or session change |
-| M00-R1 — correction and public-review hardening | reviewed; acceptance pending | A-0003, fail-closed scanner v2, hardened baseline verifier, root allowlists, CI workflow, correction tests, pushed commit `beb26a542e8a969696fa01165e4600d552bc4ab2`, successful CI, and independent review with no blocking defect | explicit project-lead/user acceptance is still required; no deployment or M01 authorization |
+| M00-R1 — correction and public-review hardening | reviewed; acceptance pending | A-0003, fail-closed scanner v2, hardened baseline verifier, root allowlists, CI workflow, correction tests, pushed commit `8e02568fb1a15a9db6c30e8c494531dd13a6094d`, successful CI, synthetic timing corrections, and independent review with no blocking defect | explicit project-lead/user acceptance is still required; no deployment or M01 authorization |
 | M01 — runtime safety work | blocked | no M01 implementation started | cannot begin until M00 acceptance is reviewed and explicitly cleared |
 
 ## R1 acceptance gates
