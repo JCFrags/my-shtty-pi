@@ -1,7 +1,7 @@
 {
   "name": "pi-herdr-orchestrator",
   "version": "0.1.0",
-  "description": "Agent Board control plane and mouse-first side TUI for Pi coding agents",
+  "description": "Direct Herdr orchestration for Pi with temporary Agent Board compatibility",
   "type": "module",
   "license": "MIT",
   "private": true,
@@ -40,7 +40,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/extensions/pi-herdr-orchestrator.js"
+      "./dist/extensions/pi-herdr-orchestrator-v2.js"
     ]
   },
   "keywords": [

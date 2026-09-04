@@ -40,7 +40,9 @@ function errorCode(stderr: string): string | undefined {
 }
 
 function isNotFound(code: string): boolean {
-  return /(?:not[_-]?found|unknown[_-]?(?:agent|pane|tab)|missing)/iu.test(code);
+  return /(?:not[_-]?found|unknown[_-]?(?:agent|pane|tab)|missing)/iu.test(
+    code,
+  );
 }
 
 function responseResult(value: unknown): JsonObject {
@@ -53,7 +55,9 @@ function responseObject(value: unknown, key: string): JsonObject {
 
 function environmentArgs(environment: Record<string, string>): string[] {
   const args: string[] = [];
-  for (const [key, value] of Object.entries(environment).sort(([a], [b]) => a.localeCompare(b)))
+  for (const [key, value] of Object.entries(environment).sort(([a], [b]) =>
+    a.localeCompare(b),
+  ))
     args.push("--env", `${key}=${value}`);
   return args;
 }
@@ -76,9 +80,16 @@ export class HerdrCli {
     } catch (cause: unknown) {
       const failure = cause as { code?: string | number; stderr?: unknown };
       const parsedCode =
-        typeof failure.stderr === "string" ? errorCode(failure.stderr) : undefined;
-      const systemCode = typeof failure.code === "string" ? failure.code : undefined;
-      const code = parsedCode ?? (systemCode === "ENOENT" ? "HERDR_UNAVAILABLE" : "HERDR_COMMAND_FAILED");
+        typeof failure.stderr === "string"
+          ? errorCode(failure.stderr)
+          : undefined;
+      const systemCode =
+        typeof failure.code === "string" ? failure.code : undefined;
+      const code =
+        parsedCode ??
+        (systemCode === "ENOENT"
+          ? "HERDR_UNAVAILABLE"
+          : "HERDR_COMMAND_FAILED");
       throw new HerdrCliError(code, isNotFound(code));
     }
   }
@@ -111,7 +122,9 @@ export class HerdrCli {
 
   async piVersion(): Promise<string | undefined> {
     try {
-      const output = await this.run(process.env.PI_BIN_PATH || "pi", ["--version"]);
+      const output = await this.run(process.env.PI_BIN_PATH || "pi", [
+        "--version",
+      ]);
       return output.trim().split(/\r?\n/u)[0]?.slice(0, 64) || undefined;
     } catch {
       return undefined;
@@ -126,8 +139,16 @@ export class HerdrCli {
   ): Promise<{ tab: JsonObject; rootPane: JsonObject }> {
     const result = responseResult(
       await this.json([
-        "tab", "create", "--workspace", workspaceId, "--cwd", cwd,
-        "--label", label, "--no-focus", ...environmentArgs(environment),
+        "tab",
+        "create",
+        "--workspace",
+        workspaceId,
+        "--cwd",
+        cwd,
+        "--label",
+        label,
+        "--no-focus",
+        ...environmentArgs(environment),
       ]),
     );
     return {
@@ -145,7 +166,10 @@ export class HerdrCli {
   }
 
   async paneCurrent(): Promise<JsonObject> {
-    return responseObject(await this.json(["pane", "current", "--current"]), "pane");
+    return responseObject(
+      await this.json(["pane", "current", "--current"]),
+      "pane",
+    );
   }
 
   async paneGet(paneId: string): Promise<JsonObject> {
@@ -153,13 +177,22 @@ export class HerdrCli {
   }
 
   async paneList(workspaceId: string): Promise<JsonObject[]> {
-    const result = responseResult(await this.json(["pane", "list", "--workspace", workspaceId]));
+    const result = responseResult(
+      await this.json(["pane", "list", "--workspace", workspaceId]),
+    );
     const panes = result.panes;
-    return Array.isArray(panes) ? panes.map(object).filter((pane): pane is JsonObject => pane !== undefined) : [];
+    return Array.isArray(panes)
+      ? panes
+          .map(object)
+          .filter((pane): pane is JsonObject => pane !== undefined)
+      : [];
   }
 
   async paneLayout(paneId: string): Promise<JsonObject> {
-    return responseObject(await this.json(["pane", "layout", "--pane", paneId]), "layout");
+    return responseObject(
+      await this.json(["pane", "layout", "--pane", paneId]),
+      "layout",
+    );
   }
 
   async paneSplit(
@@ -170,8 +203,16 @@ export class HerdrCli {
   ): Promise<JsonObject> {
     return responseObject(
       await this.json([
-        "pane", "split", "--pane", paneId, "--direction", direction,
-        "--cwd", cwd, "--no-focus", ...environmentArgs(environment),
+        "pane",
+        "split",
+        "--pane",
+        paneId,
+        "--direction",
+        direction,
+        "--cwd",
+        cwd,
+        "--no-focus",
+        ...environmentArgs(environment),
       ]),
       "pane",
     );
@@ -185,14 +226,24 @@ export class HerdrCli {
     return responseObject(await this.json(["agent", "get", target]), "agent");
   }
 
-  async agentStart(name: string, paneId: string, extensionPath: string): Promise<JsonObject> {
-    return responseObject(
-      await this.json([
-        "agent", "start", name, "--kind", "pi", "--pane", paneId, "--timeout", "30000",
-        "--", "--extension", extensionPath,
-      ]),
+  async agentStart(
+    name: string,
+    paneId: string,
+    extensionPath?: string,
+  ): Promise<JsonObject> {
+    const args = [
       "agent",
-    );
+      "start",
+      name,
+      "--kind",
+      "pi",
+      "--pane",
+      paneId,
+      "--timeout",
+      "30000",
+    ];
+    if (extensionPath) args.push("--", "--extension", extensionPath);
+    return responseObject(await this.json(args), "agent");
   }
 
   async agentPrompt(target: string, text: string): Promise<JsonObject> {
@@ -200,13 +251,22 @@ export class HerdrCli {
   }
 
   async agentInterrupt(target: string): Promise<JsonObject> {
-    return responseResult(await this.json(["agent", "send-keys", target, "esc"]));
+    return responseResult(
+      await this.json(["agent", "send-keys", target, "esc"]),
+    );
   }
 
   async agentRead(target: string, lines: number): Promise<string> {
     return this.run(this.binary, [
-      "agent", "read", target, "--source", "recent-unwrapped",
-      "--lines", String(lines), "--format", "text",
+      "agent",
+      "read",
+      target,
+      "--source",
+      "recent-unwrapped",
+      "--lines",
+      String(lines),
+      "--format",
+      "text",
     ]);
   }
 }
