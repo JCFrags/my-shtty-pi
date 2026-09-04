@@ -41,7 +41,7 @@ const expectedSlugs = [
   "herdr-blocked-bridge", "herdr-status", "pi-agent-context",
   "pi-chrono-compaction", "pi-herdr-orchestrator", "pi-native-ssh",
   "pi-pixel-cua", "pi-progressive-tools", "pi-review-ui", "pi-signal-board",
-  "pi-tool-controls", "temporary-orchestrator-cancel-isolation", "titlebar-spinner",
+  "pi-tool-controls", "titlebar-spinner",
 ];
 const expectedSafeScripts = Object.freeze({
   "files-ui": { typecheck: "tsc -p tsconfig.json --noEmit" },
@@ -124,16 +124,15 @@ if (!jsonEqual(actualSlugs, expectedSlugs)) throw new Error(`unexpected product 
 if (selectedSlug && !products.some((product) => product.slug === selectedSlug)) throw new Error(`unknown product ${selectedSlug}`);
 const packageDirs = readdirSync(join(root, "packages"), { withFileTypes: true })
   .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-if (!jsonEqual(packageDirs, [...expectedSlugs].sort())) throw new Error(`packages/ must contain exactly 17 products: ${packageDirs.join(",")}`);
+if (!jsonEqual(packageDirs, [...expectedSlugs].sort())) throw new Error(`packages/ must contain exactly 16 products: ${packageDirs.join(",")}`);
 if (packageDirs.some((name) => name.toLowerCase().includes("pi-web"))) throw new Error("pi-web package directory is forbidden");
 const active = products.filter((product) => product.status === "active" || product.status === "active-temporary");
 const inactive = products.filter((product) => product.status === "inactive");
 const activeEntrypoints = active.flatMap((product) => product.entrypoints.map((entry) => `${product.slug}/${entry}`));
-if (active.length !== 15 || activeEntrypoints.length !== 21) throw new Error(`expected 15 active families and 21 entrypoints; got ${active.length}/${activeEntrypoints.length}`);
+if (active.length !== 14 || activeEntrypoints.length !== 20) throw new Error(`expected 14 active families and 20 entrypoints; got ${active.length}/${activeEntrypoints.length}`);
 if (!jsonEqual(inactive.map((product) => product.slug), ["pi-review-ui", "pi-tool-controls"])) throw new Error("inactive product set changed");
-if (products.find((product) => product.slug === "temporary-orchestrator-cancel-isolation")?.status !== "active-temporary") throw new Error("temporary shim status changed");
-if (!existsSync(join(root, "packages/temporary-orchestrator-cancel-isolation"))) throw new Error("temporary cancellation isolation must remain separate");
-if (existsSync(join(root, "packages/pi-herdr-orchestrator/extensions/temporary-orchestrator-cancel-isolation.ts"))) throw new Error("temporary cancellation isolation was folded into the orchestrator");
+if (existsSync(join(root, "packages/temporary-orchestrator-cancel-isolation"))) throw new Error("temporary cancellation isolation must be deleted");
+if (existsSync(join(root, "packages/pi-herdr-orchestrator/extensions/temporary-orchestrator-cancel-isolation.ts"))) throw new Error("temporary cancellation isolation must not be folded into the orchestrator");
 const rootEntries = readdirSync(root).filter((name) => name !== ".git").sort();
 const allowedRootEntries = [".github", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "packages", "scripts"].sort();
 if (!jsonEqual(rootEntries, allowedRootEntries)) throw new Error(`unexpected root entries: ${rootEntries.join(",")}`);
@@ -149,7 +148,7 @@ if (!jsonEqual(scriptFiles, ["verify-deployed-baseline.mjs"])) throw new Error("
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
-if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 261) throw new Error("Stage 1 record or canonical deployed-file count changed");
+if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 238) throw new Error("Stage 1 record or canonical deployed-file count changed");
 if (consolidation.deployedBaselineCommit !== "049b6390fba7a7908d01908a7953dd2f50fa15df") throw new Error("unexpected deployed baseline commit");
 let hashCount = 0;
 let historicalMetadataHashes = 0;
@@ -188,7 +187,7 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-if (hashCount !== 261) throw new Error(`canonical deployed hash count ${hashCount}; expected 261`);
+if (hashCount !== 238) throw new Error(`canonical deployed hash count ${hashCount}; expected 238`);
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -197,7 +196,7 @@ for (const product of inactive) {
 const packageManifestPaths = walk(join(root, "packages")).filter((path) => basename(path) === "package.json").sort();
 const topManifests = expectedSlugs.map((slug) => join(root, "packages", slug, "package.json"));
 if (topManifests.some((path) => !packageManifestPaths.includes(path))) throw new Error("one or more product manifests are missing");
-if (packageManifestPaths.length !== 25) throw new Error(`expected 25 total manifests across 17 products; got ${packageManifestPaths.length}`);
+if (packageManifestPaths.length !== 24) throw new Error(`expected 24 total manifests across 16 products; got ${packageManifestPaths.length}`);
 const localPackages = new Map();
 const scriptPlans = [];
 const lockComparedFields = ["name", "version", "license", "os", "cpu", "engines", "dependencies", "devDependencies", "peerDependencies", "peerDependenciesMeta", "bin", "bundleDependencies", "bundledDependencies"];
@@ -509,7 +508,7 @@ if (!staticOnly) {
   }
 }
 const expectedScriptTotal = selectedSlug ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length : 12;
-const expectedPackTotal = selectedSlug ? 1 : 17;
+const expectedPackTotal = selectedSlug ? 1 : 16;
 if (!staticOnly && safeScriptsPassed !== expectedScriptTotal) throw new Error(`safe scripts passed ${safeScriptsPassed}/${expectedScriptTotal}`);
 if (!staticOnly && packPassed !== expectedPackTotal) throw new Error(`pack dry runs passed ${packPassed}/${expectedPackTotal}`);
 if (!staticOnly) {
@@ -526,7 +525,7 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: "261/261",
+  deployedHashesVerified: "238/238",
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),

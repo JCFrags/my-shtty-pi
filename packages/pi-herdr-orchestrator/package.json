@@ -1,7 +1,7 @@
 {
   "name": "pi-herdr-orchestrator",
   "version": "0.1.0",
-  "description": "Agent Board control plane and mouse-first side TUI for Pi coding agents",
+  "description": "Direct Herdr orchestration for Pi with Agent Board opener compatibility",
   "type": "module",
   "license": "MIT",
   "private": true,
@@ -10,29 +10,6 @@
   ],
   "engines": {
     "node": ">=22.19.0"
-  },
-  "dependencies": {
-    "@pi-herdr-deck/tui": "npm:@earendil-works/pi-tui@0.84.2"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-agent-core": {
-      "optional": true
-    },
-    "@earendil-works/pi-ai": {
-      "optional": true
-    },
-    "@earendil-works/pi-coding-agent": {
-      "optional": false
-    },
-    "@earendil-works/pi-tui": {
-      "optional": false
-    }
   },
   "devDependencies": {
     "@types/node": "22.15.30",
