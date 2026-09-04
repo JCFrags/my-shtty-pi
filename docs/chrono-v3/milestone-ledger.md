@@ -5,7 +5,7 @@
 | M00 — baseline, containment, and test recovery | accepted by directing assistant at reviewed head `9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2` | original commit `1887c77b39c42fb0b5d35b38baac94aff13465e9`; baseline hashes, restored tests, privacy evidence, rollback record, R1/R2 corrections, and project-lead acceptance record | no runtime deployment occurred during M00 |
 | M00-R1 — correction and public-review hardening | completed as part of accepted M00 | A-0003, fail-closed scanner v2, hardened baseline verifier, root allowlists, CI workflow, correction tests, and R1 history through `370cbf1522c8ec7acfe49907a969e633e829b6bb` | no deployment occurred |
 | M00-R2 — close the remaining independent-review gaps | completed and accepted as part of M00 | R2-F001 through R2-F010, schema-3 publication scanner, event-scoped workflow, baseline/root gates, typed evidence, review records, complete inventory, test-only timing corrections, and final reviewed head `9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2` | no deployment occurred |
-| M01 — runtime safety work | release candidate complete; activation deferred | exact head `1a4d784a30087a9b46705dcfb6de5ecee0fa6079`, [M01 safety report](./reviews/M01-safety-report.md), synthetic safety tests, schema-3 verifier, root verification, privacy scan, and passing PR #31 checks | draft and unmerged; no `main` merge, package activation, reload, or live smoke occurred |
+| M01 — runtime safety work | safety release `2.0.1` activated locally; project-lead review pending | deployed commit `24c6f13f1f6ac9468dfbeba4cad8021b44ecae7f`, [M01 safety report](./reviews/M01-safety-report.md), 307/307 package tests, fixed-heap guard, schema-3 verifier, root/privacy gates, two passing CI runs, verified rollback backup, and live synthetic smokes | draft and unmerged; no `main` merge; persistent isolated worker enabled only after success, append, internal-error, crash, and resource canaries passed |
 
 ## R2 acceptance gates
 
@@ -20,4 +20,4 @@
 9. Record local secondary reviews as advisory only and require a fresh directing-assistant project-lead review of the pushed R2 head.
 10. Keep runtime source/dist, live files, settings, scheduler, sessions, releases, and M01 untouched.
 
-The R2 gates were accepted by the directing assistant at reviewed head `9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2`. M01 is authorized; its implementation and deployment remain separately gated.
+The R2 gates were accepted by the directing assistant at reviewed head `9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2`. M01 was authorized and is now activated locally at deployed commit `24c6f13f1f6ac9468dfbeba4cad8021b44ecae7f`; PR #31 remains draft and unmerged pending project-lead review.
