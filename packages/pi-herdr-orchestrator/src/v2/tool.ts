@@ -1168,9 +1168,6 @@ async function drainNotificationsUnlocked(
         .slice(0, remaining);
 
       for (const event of fresh) {
-        await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
-          notifiedSequence: event.sequence,
-        });
         notify(
           context,
           event.kind,
@@ -1178,15 +1175,15 @@ async function drainNotificationsUnlocked(
           event.agentId,
           event.runId,
         );
+        await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
+          notifiedSequence: event.sequence,
+        });
         remaining -= 1;
       }
 
       entry = await current.store.getRun(snapshot.runId);
       if (!entry || remaining <= 0) return;
       if (entry.run.terminal && !entry.run.terminalNotified) {
-        await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
-          terminalNotified: true,
-        });
         notify(
           context,
           entry.run.terminal.status,
@@ -1194,6 +1191,9 @@ async function drainNotificationsUnlocked(
           entry.agent.agentId,
           entry.run.runId,
         );
+        await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
+          terminalNotified: true,
+        });
         remaining -= 1;
       }
     }

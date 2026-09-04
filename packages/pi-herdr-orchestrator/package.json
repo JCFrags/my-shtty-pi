@@ -1,7 +1,7 @@
 {
   "name": "pi-herdr-orchestrator",
   "version": "0.1.0",
-  "description": "Direct Herdr orchestration for Pi with temporary Agent Board compatibility",
+  "description": "Direct Herdr orchestration for Pi with Agent Board opener compatibility",
   "type": "module",
   "license": "MIT",
   "private": true,

@@ -1,7 +1,7 @@
 # Pi Herdr Orchestrator and Agent Board
 
-- Purpose: Run direct Herdr subagents and keep the temporary Agent Board opener commands.
-- Status: M05 production pilot
+- Purpose: Run direct Herdr subagents and keep the Agent Board opener commands.
+- Status: M06 local hard cutover
 - Pi entrypoint: `dist/extensions/pi-herdr-orchestrator-v2.js`
 - Root tool: `orchestrate`
 - Managed-child tool: `subagent_channel`
@@ -9,4 +9,4 @@
 - Load form: compiled-loaded
 - Build/check commands: `npm run typecheck` and `npm run build`
 
-The production entrypoint does not load the legacy broker orchestration extension. The legacy source and Agent Board plugin code remain in this package as rollback material, but they do not register, activate, intercept, or reconcile orchestration tools in the pilot.
+The production build emits only the direct-Herdr entrypoint and its runtime closure. Legacy broker source remains preserved for history and rollback, but it is excluded from `dist` and cannot be discovered through the package manifest. New root and child orchestration make no broker requests.

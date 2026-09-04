@@ -35,7 +35,7 @@ function registerBoardCommands(api: ExtensionAPI): void {
   });
 }
 
-/** M05 production pilot: direct-Herdr root orchestration or exact child channel. */
+/** Direct-Herdr root orchestration or exact managed-child channel. */
 export default function piHerdrOrchestratorV2(api: ExtensionAPI): void {
   if (process.env.PI_HERDR_AGENT_ID) {
     registerSubagentChannel(api);

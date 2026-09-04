@@ -962,20 +962,20 @@ async function drainNotificationsUnlocked(current, context) {
                 .sort((left, right) => left.sequence - right.sequence)
                 .slice(0, remaining);
             for (const event of fresh) {
+                notify(context, event.kind, event.summary.slice(0, 2048), event.agentId, event.runId);
                 await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
                     notifiedSequence: event.sequence,
                 });
-                notify(context, event.kind, event.summary.slice(0, 2048), event.agentId, event.runId);
                 remaining -= 1;
             }
             entry = await current.store.getRun(snapshot.runId);
             if (!entry || remaining <= 0)
                 return;
             if (entry.run.terminal && !entry.run.terminalNotified) {
+                notify(context, entry.run.terminal.status, entry.run.terminal.summary.slice(0, 2048), entry.agent.agentId, entry.run.runId);
                 await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
                     terminalNotified: true,
                 });
-                notify(context, entry.run.terminal.status, entry.run.terminal.summary.slice(0, 2048), entry.agent.agentId, entry.run.runId);
                 remaining -= 1;
             }
         }
