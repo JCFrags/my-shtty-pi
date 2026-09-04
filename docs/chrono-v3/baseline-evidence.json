@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
   "milestone": "M00-R2",
-  "status": "R2 corrections pushed; CI passed for validation target fd596f6; ready for directing-assistant project-lead re-review",
+  "status": "M00 accepted at reviewed head 9a2dbe1; M01 authorized",
   "capturedDate": "2026-09-03",
   "lastCorrectedDate": "2026-09-03",
-  "reviewState": "changes-requested-directing-assistant-project-lead-review-2",
+  "reviewState": "accepted-directing-assistant-project-lead",
   "repository": {
     "name": "JCFrags/my-shtty-pi",
     "visibility": "PUBLIC",
@@ -22,7 +22,8 @@
     "baselineSha": "eb9742c318a76eeaf753e87a620fae83ca9048d1",
     "originalM00Sha": "1887c77b39c42fb0b5d35b38baac94aff13465e9",
     "r1ReviewTargetSha": "370cbf1522c8ec7acfe49907a969e633e829b6bb",
-    "r2ValidationTargetSha": "fd596f60cdb2b27fc522aef48dc8e798e2129712"
+    "r2ValidationTargetSha": "fd596f60cdb2b27fc522aef48dc8e798e2129712",
+    "acceptedReviewedHeadSha": "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2"
   },
   "northStar": {
     "path": "docs/chrono-v3/master-goal-and-work-plan.md",
@@ -173,8 +174,13 @@
       "result": "changes-requested",
       "record": "reviews/M00-project-lead-review-2.md"
     },
-    "currentState": "M00-R2 corrections complete; ready for directing-assistant project-lead re-review",
-    "m00Accepted": false,
-    "m01Authorized": false
+    "projectLeadAcceptance": {
+      "result": "accepted",
+      "reviewedHead": "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2",
+      "record": "reviews/M00-project-lead-acceptance.md"
+    },
+    "currentState": "M00 accepted; M01 authorized",
+    "m00Accepted": true,
+    "m01Authorized": true
   }
 }

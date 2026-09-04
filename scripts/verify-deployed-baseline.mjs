@@ -69,6 +69,7 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/reviews/README.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
+  "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
 ]);
 
 const expectedSlugs = [
@@ -242,6 +243,7 @@ const requiredGovernanceFiles = [
   "docs/chrono-v3/reviews/README.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
+  "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
 ];
 function governanceFail(message) {
   throw new Error(`governance boundary: ${message}`);
@@ -309,7 +311,7 @@ function verifyBaselineEvidence() {
   const repository = evidence.repository;
   if (repository.name !== "JCFrags/my-shtty-pi" || repository.visibility !== "PUBLIC" || repository.isFork !== false || repository.defaultBranch !== "main" || repository.integrationBranch !== "rebuild/chrono-memory-v3" || repository.milestoneBranch !== "work/chrono-v3-m00-baseline") governanceFail("repository identity projection is invalid");
   if (!jsonEqual(repository.pullRequest, { number: 30, base: "rebuild/chrono-memory-v3", head: "work/chrono-v3-m00-baseline", draft: true, merged: false })) governanceFail("pull-request projection is invalid");
-  if (repository.baselineSha !== "eb9742c318a76eeaf753e87a620fae83ca9048d1" || repository.originalM00Sha !== m00BaselineCommit || repository.r1ReviewTargetSha !== "370cbf1522c8ec7acfe49907a969e633e829b6bb") governanceFail("repository baseline projection is invalid");
+  if (repository.baselineSha !== "eb9742c318a76eeaf753e87a620fae83ca9048d1" || repository.originalM00Sha !== m00BaselineCommit || repository.r1ReviewTargetSha !== "370cbf1522c8ec7acfe49907a969e633e829b6bb" || repository.acceptedReviewedHeadSha !== "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2") governanceFail("repository baseline projection is invalid");
   if (!jsonEqual(evidence.northStar, { path: "docs/chrono-v3/master-goal-and-work-plan.md", sha256: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f", gitBlobSha1: "dab84641d6f27c61cbaa6db8c2e2d6bebe84bb26", bytePreserved: true })) governanceFail("north-star projection is invalid");
   const runtime = evidence.runtime;
   if (runtime.packageVersion !== "2.0.0" || runtime.sourceFileCount !== 66 || runtime.distFileCount !== 65 || runtime.sourceMatch !== true || runtime.distMatch !== true || runtime.entrypointMatch !== true || runtime.packageLockStatus !== "match") governanceFail("runtime projection is invalid");
@@ -326,7 +328,7 @@ function verifyBaselineEvidence() {
   if (privacy.classification !== "P1-limited-metadata" || privacy.p2Found !== false || privacy.p3Found !== false || privacy.findings !== 0 || !Number.isInteger(privacy.branchesScanned) || !Number.isInteger(privacy.tagsScanned) || !Number.isInteger(privacy.pullRequestHeadsScanned) || !Number.isInteger(privacy.blobCount) || !Number.isInteger(privacy.pathContextCount)) governanceFail("privacy evidence projection is invalid");
   if (!jsonEqual(evidence.rollback, { created: true, verified: true, used: false, exactPathOmitted: true })) governanceFail("rollback projection is invalid");
   if (evidence.deployment.runtimeSourceChanged !== false || evidence.deployment.runtimeDistChanged !== false || evidence.deployment.liveFilesChanged !== false || evidence.deployment.settingsChanged !== false || evidence.deployment.schedulerChanged !== false || evidence.deployment.sessionsChanged !== false || evidence.deployment.piReloaded !== false || evidence.deployment.fixesLocallyUsable !== false || evidence.deployment.firstPlannedDeploymentMilestone !== "M01") governanceFail("deployment boundary is invalid");
-  if (evidence.review.projectLeadReview1.result !== "changes-requested" || evidence.review.projectLeadReview2.result !== "changes-requested" || evidence.review.m00Accepted !== false || evidence.review.m01Authorized !== false || evidence.review.currentState !== "M00-R2 corrections complete; ready for directing-assistant project-lead re-review") governanceFail("review state is invalid");
+  if (evidence.review.projectLeadReview1.result !== "changes-requested" || evidence.review.projectLeadReview2.result !== "changes-requested" || !jsonEqual(evidence.review.projectLeadAcceptance, { result: "accepted", reviewedHead: "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2", record: "reviews/M00-project-lead-acceptance.md" }) || evidence.review.m00Accepted !== true || evidence.review.m01Authorized !== true || evidence.review.currentState !== "M00 accepted; M01 authorized") governanceFail("review state is invalid");
   const serialized = readFileSync(path, "utf8");
   if (/\/home\/|\.chrono-v3-private|-----BEGIN|github_pat_|gh[opsu]_/u.test(serialized)) governanceFail("evidence contains a private path or secret-like value");
   return { schemaVersion: evidence.schemaVersion, status: evidence.status, rootVerification: evidence.tests.rootVerification.status };
@@ -339,8 +341,6 @@ function verifyGovernanceArtifacts() {
   const docs = ["README.md", ...walk(join(root, "docs/chrono-v3")).filter((path) => !path.endsWith("master-goal-and-work-plan.md"))].map((path) => readFileSync(path, "utf8"));
   const prohibited = [
     /independent(?: read-only)? project-lead review(?: completed| passed| found no blocking defect)/iu,
-    /\bM00\s+(?:is\s+)?(?:accepted|approved)\b/iu,
-    /\bM01\s+(?:is\s+)?(?:authorized|ready)\b/iu,
   ];
   for (const text of docs) for (const pattern of prohibited) if (pattern.test(text)) governanceFail("a document claims project-lead acceptance or M01 authorization");
   const requiredTerms = ["local secondary review", "directing-assistant project-lead review", "M00-R2 corrections complete; ready for directing-assistant project-lead re-review"];
