@@ -5,7 +5,7 @@
 | M00 — baseline, containment, and test recovery | accepted by directing assistant at reviewed head `9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2` | original commit `1887c77b39c42fb0b5d35b38baac94aff13465e9`; baseline hashes, restored tests, privacy evidence, rollback record, R1/R2 corrections, and project-lead acceptance record | no runtime deployment occurred during M00 |
 | M00-R1 — correction and public-review hardening | completed as part of accepted M00 | A-0003, fail-closed scanner v2, hardened baseline verifier, root allowlists, CI workflow, correction tests, and R1 history through `370cbf1522c8ec7acfe49907a969e633e829b6bb` | no deployment occurred |
 | M00-R2 — close the remaining independent-review gaps | completed and accepted as part of M00 | R2-F001 through R2-F010, schema-3 publication scanner, event-scoped workflow, baseline/root gates, typed evidence, review records, complete inventory, test-only timing corrections, and final reviewed head `9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2` | no deployment occurred |
-| M01 — runtime safety work | authorized | project-lead acceptance record authorizes M01 | implementation, release, and deployment remain subject to M01 gates |
+| M01 — runtime safety work | release candidate complete; activation deferred | exact head `1a4d784a30087a9b46705dcfb6de5ecee0fa6079`, [M01 safety report](./reviews/M01-safety-report.md), synthetic safety tests, schema-3 verifier, root verification, privacy scan, and passing PR #31 checks | draft and unmerged; no `main` merge, package activation, reload, or live smoke occurred |
 
 ## R2 acceptance gates
 

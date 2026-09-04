@@ -5,6 +5,7 @@ This directory is the canonical index for M00 review provenance.
 - [`M00-project-lead-review-1.md`](./M00-project-lead-review-1.md) records the directing-assistant project-lead review that identified the R1 correction set.
 - [`M00-project-lead-review-2.md`](./M00-project-lead-review-2.md) records the directing-assistant project-lead review that identified R2-F001 through R2-F010.
 - [`M00-project-lead-acceptance.md`](./M00-project-lead-acceptance.md) records explicit M00 acceptance at reviewed head `9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2` and M01 authorization.
+- [`M01-safety-report.md`](./M01-safety-report.md) records the exact M01 release-candidate boundary, validation, corrections, and deferred activation state at `1a4d784a30087a9b46705dcfb6de5ecee0fa6079`.
 
 ## Latest advisory audit
 

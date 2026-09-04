@@ -91,6 +91,7 @@ const correctionPaths = new Set([
   "docs/chrono-v3/test-recovery.md",
   "docs/chrono-v3/decision-and-update-protocol.md",
   "docs/chrono-v3/reviews/README.md",
+  "docs/chrono-v3/reviews/M01-safety-report.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
   "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
