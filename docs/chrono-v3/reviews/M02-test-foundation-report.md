@@ -4,11 +4,11 @@
 
 - Branch: `work/chrono-v3-m02-test-foundation`
 - Base and M01 merge commit: `0a1ca2ff16d8b79db3fda88f156ea5b9c6864427`
-- Package candidate: ChronoCompact `2.0.2`
-- Implementation commit: `77cf5dd08486fd9ea6352a474aaac8a5e484f33a`
-- Draft pull request: #34 into `rebuild/chrono-memory-v3`
+- Accepted evidence head: `2bd0195a6d84f20fad016ba7eba61786393edeeb`
+- Deployed package: ChronoCompact `2.0.2` from `0c7173ff03ed010747ab9b5d7be6f8f84d423819`
+- Pull request: #34 into `rebuild/chrono-memory-v3`
 
-M02 remains unmerged. It does not request or authorize a merge to `main`, and M03 has not started.
+The directing assistant accepted M02 at the evidence head above and authorized M03. This does not authorize a merge to `main`.
 
 ## Generator and unified commands
 
@@ -48,6 +48,8 @@ Both temporary M01 limitations were real safety gaps:
 
 The narrow `2.0.2` candidate opens the source without following symlinks, admits its size before allocation, reads no more than the admitted byte count, and revalidates handle and path identity before parsing. Search indexing now admits sources only through a 16 MiB source cap, charges eight times source bytes with a 1 MiB minimum against the existing 128 MiB aggregate budget, serializes differing builds, uses generation-specific keys, evicts least-recently-used indexes, and limits each index to 64 cached query results.
 
+M02 acceptance carries a material accounting limitation into M03. In the measured workload, retained memory was about `24,735,000` bytes while the new admission charge was about `8,747,272` bytes. The M02 pass condition reported the ratio but did not require the declared charge or budget to cover measured retained memory. Therefore, the eight-times-source charge is not a proven retained-memory bound. M03 must reserve capacity before source loading and parsing, account for pending loads and builds, live indexes, query results, and retained references, and require each measured workload either to complete within declared limits or return a controlled refusal.
+
 Repository source, generated distribution, and deployment manifest currently resolve to:
 
 - Source tree: `a3f5047d1358394e2e44807dc331f5ca28392a76c2ee1334cbd24448e6835a18` (66 files).
@@ -68,7 +70,7 @@ The pre-push candidate passed:
 - Schema-3 worktree, index, and all-ref privacy scan: 175 commits, 82,593 path contexts, 1,794 blobs, 666 worktree/index files, zero findings.
 - Complete repository root verification: 17/17 manifests, 261/261 deployed hashes, 15/15 safe scripts, 17/17 package dry runs, and zero unexplained dependency-graph files.
 
-CI is split into publication, typecheck, unit/integration, determinism, 512/1024 MiB fixed-heap, build-consistency, and dependent root-verification jobs. All seven push lanes passed at source and deployment commit `0c7173ff03ed010747ab9b5d7be6f8f84d423819`. Final evidence-head push and pull-request CI remain required.
+CI is split into publication, typecheck, unit/integration, determinism, 512/1024 MiB fixed-heap, build-consistency, and dependent root-verification jobs. All source/deployment lanes passed at `0c7173ff03ed010747ab9b5d7be6f8f84d423819`. Exact-head push run `33923128456` and pull-request run `33923132025` then passed every reported job at accepted head `2bd0195a6d84f20fad016ba7eba61786393edeeb`.
 
 ## Guarded 2.0.2 activation
 
@@ -87,4 +89,4 @@ Live `2.0.2` checks passed:
 
 ## Current disposition
 
-User input is not required. M02 is complete locally and deployed; draft PR #34 remains unmerged. The final gate is green push and pull-request CI on the deployment-evidence head, after which the milestone is ready for project-lead review.
+User input is not required. M02 is accepted at `2bd0195a6d84f20fad016ba7eba61786393edeeb`; live `2.0.2` remains deployed from `0c7173ff03ed010747ab9b5d7be6f8f84d423819`. M03 is authorized. PR #34 may merge only into `rebuild/chrono-memory-v3` after this acceptance record passes CI. The accepted memory-accounting limitation above is the first M03 correction gate.
