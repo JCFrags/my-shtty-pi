@@ -42,6 +42,8 @@ const m01MutableHistoricalTests = new Set([
   "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
   "packages/pi-chrono-compaction/test/extension.test.ts",
   "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
+  "packages/pi-chrono-compaction/test/ledger-branch.test.ts",
+  "packages/pi-chrono-compaction/test/source-ledger.test.ts",
 ]);
 const correctionArtifactPaths = new Set([
   ".github/workflows/verify.yml",
