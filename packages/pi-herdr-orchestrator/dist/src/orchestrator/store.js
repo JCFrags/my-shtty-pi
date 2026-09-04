@@ -298,6 +298,7 @@ function migrate(v, domainId) {
     };
 }
 function stateBase() {
+    // This deployed v2-era directory name is a durable compatibility boundary.
     const configured = process.env.XDG_STATE_HOME;
     return resolve(configured && isAbsolute(configured)
         ? configured

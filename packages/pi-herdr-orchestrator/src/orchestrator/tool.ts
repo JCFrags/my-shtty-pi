@@ -7,12 +7,12 @@ import { ChannelStore, ChannelStoreError } from "./channel-store.js";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { RegistryError, RegistryStore } from "./store.js";
 import {
-  CANARY_PROTOCOL,
-  CANARY_VERSION,
+  PROTOCOL,
+  PROTOCOL_VERSION,
   type AgentRecord,
   type JsonObject,
   type ManagedTabRecord,
-  type OrchestrateV2Params,
+  type OrchestrateParams,
   type ParentIdentity,
   type RunRecord,
   type RunResult,
@@ -25,6 +25,8 @@ const MAX_LABEL_BYTES = 160;
 const MAX_PATH_BYTES = 4096;
 const MAX_LINES = 40;
 const MAX_ACTIVE_CHILDREN = 6;
+const MAX_LIST_AGENTS = 32;
+const MAX_RECENT_RUNS = 8;
 const MANAGED_TAB_LABEL = "subagents";
 const CAPABILITIES = {
   visiblePaneCreation: true,
@@ -46,7 +48,7 @@ const stringProperty = (maxLength: number) => ({
   minLength: 1,
   maxLength,
 });
-const ORCHESTRATE_V2_SCHEMA = {
+const ORCHESTRATE_SCHEMA = {
   oneOf: [
     {
       type: "object",
@@ -169,7 +171,7 @@ type ToolRegistration = {
     details: JsonObject;
   }>;
 };
-type CanaryApi = {
+type OrchestrationApi = {
   registerTool(tool: ToolRegistration): void;
   on(
     event: string,
@@ -177,17 +179,17 @@ type CanaryApi = {
   ): void;
 };
 
-class CanaryError extends Error {
+class OrchestrationError extends Error {
   readonly code: string;
 
   constructor(code: string) {
     super(code);
-    this.name = "CanaryError";
+    this.name = "OrchestrationError";
     this.code = code;
   }
 }
 
-interface V2Context {
+interface OrchestrationContext {
   cli: HerdrCli;
   parent: ParentIdentity;
   store: RegistryStore;
@@ -224,11 +226,11 @@ function text(
     value.length === 0 ||
     Buffer.byteLength(value, "utf8") > maxBytes
   )
-    throw new CanaryError("INVALID_REQUEST");
+    throw new OrchestrationError("INVALID_REQUEST");
   const invalid = allowWhitespace
     ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
     : /[\u0000-\u001f\u007f]/u;
-  if (invalid.test(value)) throw new CanaryError("INVALID_REQUEST");
+  if (invalid.test(value)) throw new OrchestrationError("INVALID_REQUEST");
   return value;
 }
 
@@ -269,12 +271,12 @@ function isNotFound(error: unknown): boolean {
   return error instanceof HerdrCliError && error.notFound;
 }
 
-function publicError(error: unknown): CanaryError {
-  if (error instanceof CanaryError) return error;
+function publicError(error: unknown): OrchestrationError {
+  if (error instanceof OrchestrationError) return error;
   if (error instanceof RegistryError || error instanceof ChannelStoreError)
-    return new CanaryError(error.code);
-  if (error instanceof HerdrCliError) return new CanaryError(error.code);
-  return new CanaryError("V2_OPERATION_FAILED");
+    return new OrchestrationError(error.code);
+  if (error instanceof HerdrCliError) return new OrchestrationError(error.code);
+  return new OrchestrationError("ORCHESTRATION_OPERATION_FAILED");
 }
 
 async function withDomainLock<T>(
@@ -322,21 +324,21 @@ function parentFromPane(pane: JsonObject): ParentIdentity {
   const tabId = idFrom(pane, "tab_id") ?? process.env.HERDR_TAB_ID;
   const paneId = idFrom(pane, "pane_id") ?? process.env.HERDR_PANE_ID;
   if (!workspaceId || !tabId || !paneId)
-    throw new CanaryError("HERDR_CONTEXT_INCOMPLETE");
+    throw new OrchestrationError("HERDR_CONTEXT_INCOMPLETE");
   for (const [name, actual, expected] of [
     ["workspace", workspaceId, process.env.HERDR_WORKSPACE_ID],
     ["tab", tabId, process.env.HERDR_TAB_ID],
     ["pane", paneId, process.env.HERDR_PANE_ID],
   ] as const)
     if (expected && actual !== expected)
-      throw new CanaryError(`PARENT_${name.toUpperCase()}_MISMATCH`);
+      throw new OrchestrationError(`PARENT_${name.toUpperCase()}_MISMATCH`);
   return { workspaceId, tabId, paneId };
 }
 
-async function requireContext(context: PiContext): Promise<V2Context> {
-  if (process.env.HERDR_ENV !== "1") throw new CanaryError("NOT_IN_HERDR");
+async function requireContext(context: PiContext): Promise<OrchestrationContext> {
+  if (process.env.HERDR_ENV !== "1") throw new OrchestrationError("NOT_IN_HERDR");
   if (!process.env.HERDR_SOCKET_PATH || !process.env.HERDR_PANE_ID)
-    throw new CanaryError("HERDR_CONTEXT_INCOMPLETE");
+    throw new OrchestrationError("HERDR_CONTEXT_INCOMPLETE");
   const cli = new HerdrCli();
   const pane = await cli.paneCurrent();
   const parent = parentFromPane(pane);
@@ -413,17 +415,66 @@ function recordView(
     latestProgress: agent.latestProgress,
     explicitTerminal: agent.terminal,
     runCount: agent.runs.length,
-    historicalRuns: agent.runs.map((run) => ({
-      runId: run.runId,
-      assignmentGeneration: run.assignmentGeneration,
-      phase: run.phase,
-      terminal: run.terminal,
-    })),
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
     label: agent.label,
     ...(identityState ? { identityState } : {}),
   };
+}
+
+function listRecordView(
+  agent: AgentRecord,
+  identityState?: IdentityResult["kind"],
+): JsonObject {
+  return {
+    agentId: agent.agentId,
+    agentName: agent.herdrAgentName,
+    runId: agent.runId,
+    agentGeneration: agent.agentGeneration,
+    assignmentGeneration: agent.assignmentGeneration,
+    topology: agent.topology,
+    workspaceId: agent.workspaceId,
+    tabId: agent.tabId,
+    paneId: agent.paneId,
+    processState: agent.processState,
+    herdrAttention: agent.herdrAttention,
+    delegatedRunPhase: agent.runPhase,
+    latestProgress: agent.latestProgress
+      ? {
+          eventSequence: agent.latestProgress.eventSequence,
+          summary: agent.latestProgress.summary.slice(0, 256),
+          createdAt: agent.latestProgress.createdAt,
+        }
+      : null,
+    terminal: agent.terminal
+      ? {
+          status: agent.terminal.status,
+          completedAt: agent.terminal.completedAt,
+          resultAvailable: true,
+        }
+      : null,
+    runCount: agent.runs.length,
+    updatedAt: agent.updatedAt,
+    label: agent.label,
+    ...(identityState ? { identityState } : {}),
+  };
+}
+
+function recentRunHistory(agent: AgentRecord): JsonObject[] {
+  return agent.runs.slice(-MAX_RECENT_RUNS).reverse().map((run) => ({
+    runId: run.runId,
+    assignmentGeneration: run.assignmentGeneration,
+    phase: run.phase,
+    terminalStatus: run.terminal?.status ?? null,
+    completedAt: run.terminal?.completedAt ?? null,
+    resultAvailable: run.terminal !== null,
+  }));
+}
+
+function newestAgents(agents: AgentRecord[]): AgentRecord[] {
+  return [...agents]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, MAX_LIST_AGENTS);
 }
 
 async function refresh(
@@ -455,7 +506,7 @@ async function refresh(
 }
 
 async function verifyTab(
-  current: V2Context,
+  current: OrchestrationContext,
   record: ManagedTabRecord,
 ): Promise<"live" | "missing" | "mismatch"> {
   let tab: JsonObject;
@@ -473,7 +524,7 @@ async function verifyTab(
 }
 
 async function activeManagedAgents(
-  current: V2Context,
+  current: OrchestrationContext,
   tabId: string,
 ): Promise<AgentRecord[]> {
   const active: AgentRecord[] = [];
@@ -486,7 +537,7 @@ async function activeManagedAgents(
     )
       continue;
     const result = await identity(current.cli, agent);
-    if (result.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
+    if (result.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
     if (result.kind === "present") {
       active.push(
         await current.store.updateAgent(agent.agentId, {
@@ -509,7 +560,7 @@ async function activeManagedAgents(
 }
 
 async function clearMissingTab(
-  current: V2Context,
+  current: OrchestrationContext,
   record: ManagedTabRecord,
 ): Promise<void> {
   await current.store.markManagedTabAgentsMissing(record.tabId);
@@ -517,7 +568,7 @@ async function clearMissingTab(
 }
 
 async function cleanCreatedTab(
-  current: V2Context,
+  current: OrchestrationContext,
   tabId: string,
   paneId?: string,
 ): Promise<void> {
@@ -548,7 +599,7 @@ async function cleanCreatedTab(
 }
 
 async function createManagedTab(
-  current: V2Context,
+  current: OrchestrationContext,
   cwd: string,
   environment: Record<string, string>,
 ): Promise<ManagedTabResult> {
@@ -560,10 +611,10 @@ async function createManagedTab(
   );
   const tabId = idFrom(created.tab, "tab_id");
   const paneId = idFrom(created.rootPane, "pane_id");
-  if (!tabId) throw new CanaryError("MANAGED_TAB_CREATE_FAILED");
+  if (!tabId) throw new OrchestrationError("MANAGED_TAB_CREATE_FAILED");
   if (!paneId) {
     await cleanCreatedTab(current, tabId).catch(() => undefined);
-    throw new CanaryError("MANAGED_TAB_CREATE_FAILED");
+    throw new OrchestrationError("MANAGED_TAB_CREATE_FAILED");
   }
   const timestamp = now();
   const record: ManagedTabRecord = {
@@ -580,7 +631,7 @@ async function createManagedTab(
       idFrom(created.rootPane, "workspace_id") !== current.parent.workspaceId ||
       idFrom(created.rootPane, "tab_id") !== tabId
     )
-      throw new CanaryError("MANAGED_TAB_IDENTITY_MISMATCH");
+      throw new OrchestrationError("MANAGED_TAB_IDENTITY_MISMATCH");
     const [tab, pane] = await Promise.all([
       current.cli.tabGet(tabId),
       current.cli.paneGet(paneId),
@@ -592,7 +643,7 @@ async function createManagedTab(
       idFrom(pane, "workspace_id") !== current.parent.workspaceId ||
       idFrom(pane, "tab_id") !== tabId
     )
-      throw new CanaryError("MANAGED_TAB_IDENTITY_MISMATCH");
+      throw new OrchestrationError("MANAGED_TAB_IDENTITY_MISMATCH");
     return { record, rootPaneId: paneId, created: true, active: [] };
   } catch (error) {
     await cleanCreatedTab(current, tabId, paneId).catch(() => undefined);
@@ -601,7 +652,7 @@ async function createManagedTab(
 }
 
 async function ensureManagedSubagentTab(
-  current: V2Context,
+  current: OrchestrationContext,
   cwd: string,
   environment: Record<string, string>,
 ): Promise<ManagedTabResult> {
@@ -609,7 +660,7 @@ async function ensureManagedSubagentTab(
   if (!existing) return createManagedTab(current, cwd, environment);
   const state = await verifyTab(current, existing);
   if (state === "mismatch")
-    throw new CanaryError("MANAGED_TAB_IDENTITY_MISMATCH");
+    throw new OrchestrationError("MANAGED_TAB_IDENTITY_MISMATCH");
   if (state === "missing") {
     await clearMissingTab(current, existing);
     return createManagedTab(current, cwd, environment);
@@ -658,23 +709,23 @@ function layoutChoice(
   const paneIds = active.map((agent) => agent.paneId).sort();
   const index = active.length <= 2 ? 0 : (active.length - 2) % paneIds.length;
   const paneId = paneIds[index];
-  if (!paneId) throw new CanaryError("MANAGED_TAB_HAS_NO_TARGET");
+  if (!paneId) throw new OrchestrationError("MANAGED_TAB_HAS_NO_TARGET");
   return { paneId, direction: active.length === 1 ? "right" : "down" };
 }
 
 async function createChildPane(
-  current: V2Context,
+  current: OrchestrationContext,
   managed: ManagedTabResult,
   cwd: string,
   environment: Record<string, string>,
 ): Promise<string> {
   if (managed.created) {
     if (!managed.rootPaneId)
-      throw new CanaryError("MANAGED_TAB_HAS_NO_ROOT_PANE");
+      throw new OrchestrationError("MANAGED_TAB_HAS_NO_ROOT_PANE");
     return managed.rootPaneId;
   }
   if (managed.active.length >= MAX_ACTIVE_CHILDREN)
-    throw new CanaryError("SUBAGENT_CAPACITY_REACHED");
+    throw new OrchestrationError("SUBAGENT_CAPACITY_REACHED");
   let layout: JsonObject = {};
   try {
     const first = managed.active[0];
@@ -695,7 +746,7 @@ async function createChildPane(
   );
   const paneId = idFrom(pane, "pane_id");
   try {
-    if (!paneId) throw new CanaryError("PANE_CREATE_FAILED");
+    if (!paneId) throw new OrchestrationError("PANE_CREATE_FAILED");
     const exact = await current.cli.paneGet(paneId);
     if (
       idFrom(pane, "workspace_id") !== current.parent.workspaceId ||
@@ -704,7 +755,7 @@ async function createChildPane(
       idFrom(exact, "workspace_id") !== current.parent.workspaceId ||
       idFrom(exact, "tab_id") !== managed.record.tabId
     )
-      throw new CanaryError("PANE_CREATE_FAILED");
+      throw new OrchestrationError("PANE_CREATE_FAILED");
     return paneId;
   } catch (error) {
     if (paneId) {
@@ -724,10 +775,10 @@ async function createChildPane(
   }
 }
 
-function parseParams(value: unknown): OrchestrateV2Params {
+function parseParams(value: unknown): OrchestrateParams {
   const params = object(value);
   const action = stringValue(params?.action) as
-    OrchestrateV2Params["action"] | undefined;
+    OrchestrateParams["action"] | undefined;
   if (
     !action ||
     ![
@@ -745,7 +796,7 @@ function parseParams(value: unknown): OrchestrateV2Params {
       "recover",
     ].includes(action)
   )
-    throw new CanaryError("INVALID_REQUEST");
+    throw new OrchestrationError("INVALID_REQUEST");
   return {
     action,
     ...(params?.task !== undefined
@@ -776,12 +827,12 @@ function parseParams(value: unknown): OrchestrateV2Params {
   };
 }
 
-function requireAgentId(params: OrchestrateV2Params): string {
-  if (!params.agentId) throw new CanaryError("AGENT_ID_REQUIRED");
+function requireAgentId(params: OrchestrateParams): string {
+  if (!params.agentId) throw new OrchestrationError("AGENT_ID_REQUIRED");
   return params.agentId;
 }
 
-async function managedHealth(current: V2Context): Promise<{
+async function managedHealth(current: OrchestrationContext): Promise<{
   tabId: string | null;
   state: ManagedTabState;
   activePaneCount: number;
@@ -808,7 +859,7 @@ async function managedHealth(current: V2Context): Promise<{
       activePaneCount: active.length,
     };
   } catch (error) {
-    if (error instanceof CanaryError && error.code === "IDENTITY_MISMATCH")
+    if (error instanceof OrchestrationError && error.code === "IDENTITY_MISMATCH")
       return { tabId: record.tabId, state: "mismatch", activePaneCount: 0 };
     throw error;
   }
@@ -829,8 +880,9 @@ async function health(context: PiContext): Promise<JsonObject> {
       .catch(() => false);
   const base: JsonObject = {
     ok: true,
-    canaryProtocol: CANARY_PROTOCOL,
-    canaryVersion: CANARY_VERSION,
+    protocol: PROTOCOL,
+    protocolVersion: PROTOCOL_VERSION,
+    registryVersion: 5,
     domainId: null,
     parent: null,
     piVersion: piVersion ?? null,
@@ -886,11 +938,11 @@ function assignmentPrompt(
 
 async function spawnUnlocked(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
   extensionPath?: string,
 ): Promise<JsonObject> {
   const task = params.task;
-  if (!task) throw new CanaryError("TASK_REQUIRED");
+  if (!task) throw new OrchestrationError("TASK_REQUIRED");
   const current = await requireContext(context);
   const cwdInput = params.cwd
     ? text(params.cwd, MAX_PATH_BYTES, false)
@@ -898,10 +950,10 @@ async function spawnUnlocked(
   const cwd = resolve(context.cwd, cwdInput);
   const label = params.label
     ? text(params.label, MAX_LABEL_BYTES, false)
-    : "v2-agent";
+    : "subagent";
   const agentId = `a-${randomUUID()}`;
   const runId = `r-${randomUUID()}`;
-  const herdrAgentName = `v2-${randomUUID().replaceAll("-", "").slice(0, 27)}`;
+  const herdrAgentName = `agent-${randomUUID().replaceAll("-", "").slice(0, 26)}`;
   const createdAt = now();
   const environment = {
     PI_HERDR_DOMAIN_ID: current.store.domainId,
@@ -956,13 +1008,13 @@ async function spawnUnlocked(
   try {
     paneId = await createChildPane(current, managed, cwd, environment);
     if (paneId === current.parent.paneId)
-      throw new CanaryError("PARENT_PANE_TARGET_REFUSED");
+      throw new OrchestrationError("PARENT_PANE_TARGET_REFUSED");
     agent.paneId = paneId;
     await current.store.addAgent(agent);
     recordAdded = true;
     await current.cli.agentStart(herdrAgentName, paneId, extensionPath);
     const started = await identity(current.cli, agent);
-    if (started.kind !== "present") throw new CanaryError("AGENT_START_FAILED");
+    if (started.kind !== "present") throw new OrchestrationError("AGENT_START_FAILED");
     await current.store.updateAgent(agentId, {
       processState: "live",
       runPhase: "running",
@@ -974,7 +1026,7 @@ async function spawnUnlocked(
     );
     const prompted = await identity(current.cli, agent);
     if (prompted.kind !== "present")
-      throw new CanaryError("AGENT_PROMPT_FAILED");
+      throw new OrchestrationError("AGENT_PROMPT_FAILED");
     const live = await current.store.updateAgent(agentId, {
       processState: "live",
       runPhase: "running",
@@ -1024,7 +1076,7 @@ async function spawnUnlocked(
 
 async function spawn(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
   extensionPath?: string,
 ): Promise<JsonObject> {
   return spawnUnlocked(context, params, extensionPath);
@@ -1059,7 +1111,7 @@ function terminalPhase(status: RunResult["status"]): RunRecord["phase"] {
 }
 
 async function reconcile(
-  current: V2Context,
+  current: OrchestrationContext,
   runIds?: Set<string>,
 ): Promise<void> {
   const channel = new ChannelStore(current.store.domainId);
@@ -1102,7 +1154,7 @@ async function reconcile(
       const result = await channel.result(run.runId);
       if (!result) continue;
       if (!resultValid(result, original, run))
-        throw new CanaryError("RESULT_IDENTITY_MISMATCH");
+        throw new OrchestrationError("RESULT_IDENTITY_MISMATCH");
       if (!run.terminal)
         await current.store.updateRun(original.agentId, run.runId, {
           terminal: {
@@ -1118,7 +1170,7 @@ async function reconcile(
         run.terminal.summary !== result.summary ||
         run.terminal.completedAt !== result.completedAt
       )
-        throw new CanaryError("COMPLETION_CONFLICT");
+        throw new OrchestrationError("COMPLETION_CONFLICT");
     }
   }
 }
@@ -1140,7 +1192,7 @@ function notify(
 }
 
 async function drainNotificationsUnlocked(
-  current: V2Context,
+  current: OrchestrationContext,
   context: PiContext,
 ): Promise<void> {
   if (!context.hasUI || !context.ui?.notify) return;
@@ -1202,7 +1254,7 @@ async function drainNotificationsUnlocked(
 
 async function waitRuns(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
 ): Promise<JsonObject> {
   if (
     !Array.isArray(params.runIds) ||
@@ -1212,16 +1264,16 @@ async function waitRuns(
       (id) => typeof id !== "string" || !/^r-[0-9a-f-]{36}$/u.test(id),
     )
   )
-    throw new CanaryError("INVALID_RUN_IDS");
+    throw new OrchestrationError("INVALID_RUN_IDS");
   const timeoutMs = params.timeoutMs ?? 30000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 120000)
-    throw new CanaryError("INVALID_TIMEOUT");
+    throw new OrchestrationError("INVALID_TIMEOUT");
   const current = await requireContext(context),
     wanted = new Set(params.runIds),
     channel = new ChannelStore(current.store.domainId);
   for (const runId of wanted)
     if (!(await current.store.getRun(runId)))
-      throw new CanaryError("RUN_NOT_REGISTERED");
+      throw new OrchestrationError("RUN_NOT_REGISTERED");
   const deadline = Date.now() + timeoutMs;
   while (true) {
     await reconcile(current, wanted);
@@ -1307,18 +1359,18 @@ async function waitRuns(
 
 async function collect(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
 ): Promise<JsonObject> {
-  if (!params.runId) throw new CanaryError("RUN_ID_REQUIRED");
+  if (!params.runId) throw new OrchestrationError("RUN_ID_REQUIRED");
   const current = await requireContext(context),
     entry = await current.store.getRun(params.runId);
-  if (!entry) throw new CanaryError("RUN_NOT_REGISTERED");
+  if (!entry) throw new OrchestrationError("RUN_NOT_REGISTERED");
   await reconcile(current, new Set([params.runId]));
   const result = await new ChannelStore(current.store.domainId).result(
     params.runId,
   );
   if (!result || !resultValid(result, entry.agent, entry.run))
-    throw new CanaryError(
+    throw new OrchestrationError(
       result ? "RESULT_IDENTITY_MISMATCH" : "RESULT_NOT_READY",
     );
   return {
@@ -1336,40 +1388,46 @@ async function collect(
 
 async function list(context: PiContext): Promise<JsonObject> {
   const current = await requireContext(context);
-  await reconcile(current);
+  const tracked = await current.store.list();
+  const selected = newestAgents(tracked);
+  await reconcile(current, new Set(selected.map((agent) => agent.runId)));
   const rows: JsonObject[] = [];
-  for (const agent of await current.store.list()) {
+  for (const agent of selected) {
     const refreshed = await refresh(current.store, current.cli, agent);
-    rows.push(recordView(refreshed.agent, refreshed.identityState));
+    rows.push(listRecordView(refreshed.agent, refreshed.identityState));
   }
   return {
     ok: true,
     action: "list",
     domainId: current.store.domainId,
     agents: rows,
+    returnedAgentCount: rows.length,
+    trackedAgentCount: tracked.length,
+    truncated: tracked.length > rows.length,
   };
 }
 
 async function inspect(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
 ): Promise<JsonObject> {
   const current = await requireContext(context);
   if (!params.agentId && !params.runId)
-    throw new CanaryError("AGENT_OR_RUN_ID_REQUIRED");
+    throw new OrchestrationError("AGENT_OR_RUN_ID_REQUIRED");
   let agent = await current.store.getAgent(params.agentId, params.runId);
-  if (!agent) throw new CanaryError("AGENT_NOT_REGISTERED");
-  await reconcile(current, new Set([agent.runId]));
+  if (!agent) throw new OrchestrationError("AGENT_NOT_REGISTERED");
+  const selectedRunId = params.runId ?? agent.runId;
+  await reconcile(current, new Set([selectedRunId]));
   agent = (await current.store.getAgent(agent.agentId)) ?? agent;
   const lines = params.lines === undefined ? MAX_LINES : params.lines;
   if (!Number.isSafeInteger(lines) || lines < 1 || lines > MAX_LINES)
-    throw new CanaryError("INVALID_LINE_COUNT");
+    throw new OrchestrationError("INVALID_LINE_COUNT");
   let refreshed = agent;
   let identityState: IdentityResult["kind"] = "absent";
   if (agent.processState !== "closed") {
     const result = await identity(current.cli, agent);
     identityState = result.kind;
-    if (result.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
+    if (result.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
     if (result.kind === "absent") {
       refreshed = await current.store.updateAgent(agent.agentId, {
         processState: "missing",
@@ -1403,6 +1461,10 @@ async function inspect(
         action: "inspect",
         domainId: current.store.domainId,
         ...recordView(refreshed, identityState),
+        requestedRunId: selectedRunId,
+        recentRuns: recentRunHistory(refreshed),
+        recentRunLimit: MAX_RECENT_RUNS,
+        historyTruncated: refreshed.runs.length > MAX_RECENT_RUNS,
         recentOutput,
         recentOutputLineCount:
           recentOutput.length === 0 ? 0 : recentOutput.split("\n").length,
@@ -1414,6 +1476,10 @@ async function inspect(
     action: "inspect",
     domainId: current.store.domainId,
     ...recordView(refreshed, identityState),
+    requestedRunId: selectedRunId,
+    recentRuns: recentRunHistory(refreshed),
+    recentRunLimit: MAX_RECENT_RUNS,
+    historyTruncated: refreshed.runs.length > MAX_RECENT_RUNS,
     recentOutput: "",
     recentOutputLineCount: 0,
   };
@@ -1421,21 +1487,21 @@ async function inspect(
 
 async function send(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
 ): Promise<JsonObject> {
   const current = await requireContext(context);
   const agentId = requireAgentId(params);
-  if (!params.message) throw new CanaryError("MESSAGE_REQUIRED");
+  if (!params.message) throw new OrchestrationError("MESSAGE_REQUIRED");
   const agent = await current.store.getAgent(agentId);
-  if (!agent) throw new CanaryError("AGENT_NOT_REGISTERED");
-  if (agent.processState === "closed") throw new CanaryError("AGENT_CLOSED");
+  if (!agent) throw new OrchestrationError("AGENT_NOT_REGISTERED");
+  if (agent.processState === "closed") throw new OrchestrationError("AGENT_CLOSED");
   const result = await identity(current.cli, agent);
-  if (result.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
-  if (result.kind === "absent") throw new CanaryError("AGENT_MISSING");
+  if (result.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
+  if (result.kind === "absent") throw new OrchestrationError("AGENT_MISSING");
   await current.cli.agentPrompt(agent.herdrAgentName, params.message);
   const afterPrompt = await identity(current.cli, agent);
   if (afterPrompt.kind === "mismatch")
-    throw new CanaryError("IDENTITY_MISMATCH");
+    throw new OrchestrationError("IDENTITY_MISMATCH");
   const updated = await current.store.updateAgent(agent.agentId, {
     processState: afterPrompt.kind === "present" ? "live" : "missing",
     herdrAttention:
@@ -1458,7 +1524,7 @@ async function send(
 }
 
 async function settleCancelled(
-  current: V2Context,
+  current: OrchestrationContext,
   agent: AgentRecord,
   run: RunRecord,
   summary: string,
@@ -1475,13 +1541,13 @@ async function settleCancelled(
     finalResult: null,
   });
   if (!resultValid(settled.result, agent, run))
-    throw new CanaryError("RESULT_IDENTITY_MISMATCH");
+    throw new OrchestrationError("RESULT_IDENTITY_MISMATCH");
   await reconcile(current, new Set([run.runId]));
   return settled.result;
 }
 
 function cancellationResponse(
-  current: V2Context,
+  current: OrchestrationContext,
   agent: AgentRecord,
   run: RunRecord,
 ): JsonObject {
@@ -1502,20 +1568,20 @@ function cancellationResponse(
 
 async function cancel(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
 ): Promise<JsonObject> {
-  if (!params.runId) throw new CanaryError("RUN_ID_REQUIRED");
+  if (!params.runId) throw new OrchestrationError("RUN_ID_REQUIRED");
   const current = await requireContext(context);
   await reconcile(current, new Set([params.runId]));
   const initial = await current.store.getRun(params.runId);
-  if (!initial) throw new CanaryError("RUN_NOT_REGISTERED");
+  if (!initial) throw new OrchestrationError("RUN_NOT_REGISTERED");
   if (initial.agent.runId !== initial.run.runId)
-    throw new CanaryError("RUN_NOT_CURRENT");
+    throw new OrchestrationError("RUN_NOT_CURRENT");
   if (initial.run.terminal)
     return cancellationResponse(current, initial.agent, initial.run);
 
   const exact = await identity(current.cli, initial.agent);
-  if (exact.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
+  if (exact.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
   const newlyRequested = initial.run.phase !== "cancel_requested";
   if (newlyRequested) {
     await current.store.updateRun(initial.agent.agentId, initial.run.runId, {
@@ -1558,7 +1624,7 @@ async function cancel(
     return cancellationResponse(current, entry.agent, entry.run);
 
   const after = await identity(current.cli, entry.agent);
-  if (after.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
+  if (after.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
   if (after.kind === "absent") {
     await current.store.updateAgent(entry.agent.agentId, {
       processState: "missing",
@@ -1577,22 +1643,22 @@ async function cancel(
 
 async function reuse(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
 ): Promise<JsonObject> {
   const current = await requireContext(context),
     agentId = requireAgentId(params);
-  if (!params.task) throw new CanaryError("TASK_REQUIRED");
+  if (!params.task) throw new OrchestrationError("TASK_REQUIRED");
   const found = await current.store.getAgent(agentId);
-  if (!found) throw new CanaryError("AGENT_NOT_REGISTERED");
+  if (!found) throw new OrchestrationError("AGENT_NOT_REGISTERED");
   await reconcile(current, new Set([found.runId]));
   let agent = (await current.store.getAgent(agentId))!;
   const previous = agent.runs.find((run) => run.runId === agent.runId)!;
-  if (!previous.terminal) throw new CanaryError("RUN_NOT_TERMINAL");
+  if (!previous.terminal) throw new OrchestrationError("RUN_NOT_TERMINAL");
   if (agent.processState === "closed" || agent.processState === "failed")
-    throw new CanaryError("AGENT_NOT_REUSABLE");
+    throw new OrchestrationError("AGENT_NOT_REUSABLE");
   const exact = await identity(current.cli, agent);
-  if (exact.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
-  if (exact.kind === "absent") throw new CanaryError("AGENT_MISSING");
+  if (exact.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
+  if (exact.kind === "absent") throw new OrchestrationError("AGENT_MISSING");
   const createdAt = now(),
     run: RunRecord = {
       runId: `r-${randomUUID()}`,
@@ -1622,7 +1688,7 @@ async function reuse(
   });
   const after = await identity(current.cli, agent);
   if (after.kind !== "present")
-    throw new CanaryError(
+    throw new OrchestrationError(
       after.kind === "mismatch" ? "IDENTITY_MISMATCH" : "AGENT_MISSING",
     );
   agent = await current.store.updateAgent(agent.agentId, {
@@ -1655,13 +1721,13 @@ async function recover(context: PiContext): Promise<JsonObject> {
   const recovered: JsonObject[] = [];
   for (const agent of await current.store.list()) {
     if (agent.processState === "closed") {
-      recovered.push(recordView(agent, "absent"));
+      recovered.push(listRecordView(agent, "absent"));
       continue;
     }
     const exact = await identity(current.cli, agent);
     if (exact.kind === "mismatch") {
       recovered.push({
-        ...recordView(agent, "mismatch"),
+        ...listRecordView(agent, "mismatch"),
         recoveryStatus: "identity-mismatch",
       });
       continue;
@@ -1697,7 +1763,7 @@ async function recover(context: PiContext): Promise<JsonObject> {
       );
     }
     recovered.push({
-      ...recordView(updated, exact.kind),
+      ...listRecordView(updated, exact.kind),
       recoveryStatus: exact.kind,
     });
   }
@@ -1708,12 +1774,19 @@ async function recover(context: PiContext): Promise<JsonObject> {
     parent: current.parent,
     managedTabId: managed?.tabId ?? null,
     managedTabState,
-    agents: recovered,
+    agents: recovered
+      .sort((left, right) =>
+        String(right.updatedAt).localeCompare(String(left.updatedAt)),
+      )
+      .slice(0, MAX_LIST_AGENTS),
+    returnedAgentCount: Math.min(recovered.length, MAX_LIST_AGENTS),
+    trackedAgentCount: recovered.length,
+    truncated: recovered.length > MAX_LIST_AGENTS,
   };
 }
 
 async function detachIfNoManagedPanes(
-  current: V2Context,
+  current: OrchestrationContext,
   tabId: string,
 ): Promise<void> {
   let active = false;
@@ -1744,14 +1817,14 @@ async function detachIfNoManagedPanes(
 
 async function close(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
 ): Promise<JsonObject> {
   const current = await requireContext(context);
   const agentId = requireAgentId(params);
   const agent = await current.store.getAgent(agentId);
-  if (!agent) throw new CanaryError("AGENT_NOT_REGISTERED");
+  if (!agent) throw new OrchestrationError("AGENT_NOT_REGISTERED");
   if (agent.paneId === current.parent.paneId)
-    throw new CanaryError("PARENT_PANE_TARGET_REFUSED");
+    throw new OrchestrationError("PARENT_PANE_TARGET_REFUSED");
   if (agent.processState === "closed")
     return {
       ok: true,
@@ -1766,7 +1839,7 @@ async function close(
     (run) => run.runId === currentAgent.runId,
   )!;
   const result = await identity(current.cli, currentAgent);
-  if (result.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
+  if (result.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
   if (!currentRun.terminal && currentRun.phase !== "cancel_requested") {
     await current.store.updateRun(currentAgent.agentId, currentRun.runId, {
       phase: "cancel_requested",
@@ -1781,9 +1854,9 @@ async function close(
     }
   }
   const confirmed = await identity(current.cli, currentAgent);
-  if (confirmed.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
+  if (confirmed.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
   if (confirmed.kind !== "absent")
-    throw new CanaryError("PANE_TERMINATION_UNCONFIRMED");
+    throw new OrchestrationError("PANE_TERMINATION_UNCONFIRMED");
 
   const latest = (await current.store.getRun(currentRun.runId))!;
   if (!latest.run.terminal)
@@ -1814,7 +1887,7 @@ async function close(
 
 async function execute(
   context: PiContext,
-  params: OrchestrateV2Params,
+  params: OrchestrateParams,
   extensionPath?: string,
 ): Promise<JsonObject> {
   if (params.action === "health") return health(context);
@@ -1845,11 +1918,11 @@ async function execute(
       case "recover":
         return recover(context);
     }
-    throw new CanaryError("INVALID_REQUEST");
+    throw new OrchestrationError("INVALID_REQUEST");
   });
 }
 
-export function registerOrchestrateV2(
+export function registerOrchestrate(
   api: ExtensionAPI,
   extensionPath?: string,
 ): void {
@@ -1861,7 +1934,7 @@ export function registerOrchestrateV2(
     promptSnippet:
       "Run and manage direct Herdr subagents with exact identity and explicit results",
     parameters:
-      ORCHESTRATE_V2_SCHEMA as unknown as ToolRegistration["parameters"],
+      ORCHESTRATE_SCHEMA as unknown as ToolRegistration["parameters"],
     async execute(_toolCallId, rawParams, _signal, _onUpdate, context) {
       try {
         const result = await execute(
@@ -1878,7 +1951,7 @@ export function registerOrchestrateV2(
       }
     },
   };
-  const runtime = api as unknown as CanaryApi;
+  const runtime = api as unknown as OrchestrationApi;
   runtime.registerTool(tool);
 
   let timer: NodeJS.Timeout | undefined;

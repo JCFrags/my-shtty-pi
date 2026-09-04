@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { openPiHerd } from "../src/herdr/pi-herd-command.js";
-import { registerSubagentChannel } from "../src/v2/child-tool.js";
-import { registerOrchestrateV2 } from "../src/v2/tool.js";
+import { registerSubagentChannel } from "../src/orchestrator/child-tool.js";
+import { registerOrchestrate } from "../src/orchestrator/tool.js";
 
 type CommandContext = {
   ui?: {
@@ -36,11 +36,11 @@ function registerBoardCommands(api: ExtensionAPI): void {
 }
 
 /** Direct-Herdr root orchestration or exact managed-child channel. */
-export default function piHerdrOrchestratorV2(api: ExtensionAPI): void {
+export default function piHerdrOrchestrator(api: ExtensionAPI): void {
   if (process.env.PI_HERDR_AGENT_ID) {
     registerSubagentChannel(api);
     return;
   }
-  registerOrchestrateV2(api);
+  registerOrchestrate(api);
   registerBoardCommands(api);
 }

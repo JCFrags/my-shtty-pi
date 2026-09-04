@@ -17,7 +17,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/extensions/pi-herdr-orchestrator-v2.js"
+      "./dist/extensions/pi-herdr-orchestrator.js"
     ]
   },
   "keywords": [

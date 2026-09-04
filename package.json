@@ -9,7 +9,7 @@
   "piConsolidation": {
     "stage1Commit": "19110f9cf34ab29b2059e3bff460e856c7157bce",
     "stage1RuntimeRecords": 272,
-    "canonicalDeployedFiles": 261,
+    "canonicalDeployedFiles": 238,
     "products": [
       {
         "slug": "codex-usage-footer",
@@ -88,7 +88,7 @@
         "entrypoints": [
           "dist/extensions/pi-herdr-orchestrator.js"
         ],
-        "compiledCount": 30,
+        "compiledCount": 8,
         "buildConfig": "tsconfig.json",
         "sourceEntrypoints": [
           "extensions/pi-herdr-orchestrator.ts"
@@ -151,13 +151,6 @@
         "status": "inactive",
         "entrypoints": [
           "extensions/tool-controls.ts"
-        ]
-      },
-      {
-        "slug": "temporary-orchestrator-cancel-isolation",
-        "status": "active-temporary",
-        "entrypoints": [
-          "extensions/temporary-orchestrator-cancel-isolation.ts"
         ]
       },
       {

@@ -1,6 +1,6 @@
 # Pi extension monorepo
 
-This repository consolidates extension source and the September 1, 2026 deployed baseline without changing extension behavior. The 15 active families reproduce 21 active entrypoints. Review UI and Tool Controls remain inactive.
+This repository contains the canonical Pi extension deployment. The 14 active families reproduce 20 active entrypoints. Review UI and Tool Controls remain inactive.
 
 | Product | Status |
 |---|---|
@@ -12,14 +12,13 @@ This repository consolidates extension source and the September 1, 2026 deployed
 | `herdr-status` | active |
 | `pi-agent-context` | active |
 | `pi-chrono-compaction` | active; compiled runtime retained |
-| `pi-herdr-orchestrator` | active; compiled runtime retained |
+| `pi-herdr-orchestrator` | active; canonical direct-Herdr runtime retained |
 | `pi-native-ssh` | active |
 | `pi-pixel-cua` | active |
 | `pi-progressive-tools` | active |
 | `pi-review-ui` | inactive |
 | `pi-signal-board` | active; compiled runtime retained |
 | `pi-tool-controls` | inactive |
-| `temporary-orchestrator-cancel-isolation` | active temporary; separate from the orchestrator |
 | `titlebar-spinner` | active |
 
 Run `npm run verify` to validate deployed hashes, entrypoints, manifests, product boundaries, privacy, and isolated compiled reproducibility. `pi-web` is external and excluded from this repository.

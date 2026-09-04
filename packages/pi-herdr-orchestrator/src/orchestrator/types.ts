@@ -1,6 +1,6 @@
 export const REGISTRY_VERSION = 5 as const;
-export const CANARY_VERSION = 5 as const;
-export const CANARY_PROTOCOL = "pi-herdr-orchestrate-v2-m05" as const;
+export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL = "pi-herdr-orchestrator" as const;
 
 export type ProcessState =
   "starting" | "live" | "missing" | "closed" | "failed";
@@ -112,7 +112,7 @@ export interface RunResult {
   finalResult: string | null;
   completedAt: string;
 }
-export type OrchestrateV2Action =
+export type OrchestrateAction =
   | "health"
   | "run"
   | "spawn"
@@ -125,8 +125,8 @@ export type OrchestrateV2Action =
   | "reuse"
   | "cancel"
   | "recover";
-export interface OrchestrateV2Params {
-  action: OrchestrateV2Action;
+export interface OrchestrateParams {
+  action: OrchestrateAction;
   task?: string;
   label?: string;
   cwd?: string;
