@@ -322,7 +322,7 @@ const projectGlanceDoctorChecks = [
   "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
   "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
   "currentStateIntegrationFixture", "currentProjectionPrivacySafe", "opaqueProviderCorrelationExact",
-  "liveSnapshotFeedEmpty",
+  "liveSnapshotFeedEmpty", "progressFeedFixture",
 ];
 
 function sourceSection(text, start, end) {
@@ -336,6 +336,7 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   const contracts = source("src/current/contracts.ts");
   const controller = source("src/current/controller.ts");
   const lifecycle = source("src/pi/lifecycle.ts");
+  const feed = source("src/feed/index.ts");
   const format = source("src/current/format.ts");
   const projectionText = source("src/protocol/projection-text.ts");
   const extension = source("src/pi/extension.ts");
@@ -348,10 +349,14 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   const currentTest = indexed.includes(`packages/${projectGlanceSlug}/test/current.test.mjs`)
     ? source("test/current.test.mjs")
     : "";
+  const feedTest = indexed.includes(`packages/${projectGlanceSlug}/test/feed.test.mjs`)
+    ? source("test/feed.test.mjs")
+    : "";
   const integrationTest = indexed.includes(`packages/${projectGlanceSlug}/test/provider-integration.test.mjs`)
     ? source("test/provider-integration.test.mjs")
     : "";
   const todoSource = readFileSync(join(root, "packages/grounded-tools/tasks/index.ts"), "utf8");
+  const workplanSource = readFileSync(join(root, "packages/grounded-tools/workplan/index.ts"), "utf8");
   const summarySource = readFileSync(join(root, "packages/grounded-tools/core/src/workplan-summary.ts"), "utf8");
   const workplanTest = readFileSync(join(root, "packages/grounded-tools/workplan/test/lifecycle.test.mjs"), "utf8");
 
@@ -368,6 +373,22 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   }
   if (!todoSource.includes("TODO_SUMMARY_CHANGED_EVENT") || !todoSource.includes("snapshot: summary()")) {
     throw new Error("pi-project-glance: Todo provider changed envelope is not represented");
+  }
+  if (!feed.includes("parseTextSignature") || !feed.includes("TextSignatureV1") ||
+      !feed.includes("extractAssistantEntryItems") || !feed.includes("extractWorkplanEntryItem") ||
+      !feed.includes("rebuildProgressFeed") || !feed.includes("boundRecentFeed") ||
+      !feed.includes("ASSISTANT_STOP_REASONS") || !feed.includes("toolCall") ||
+      !feed.includes("PROJECT GLANCE FEED CHECKPOINT:") || !feed.includes("PROJECT GLANCE LIVE UPDATE:")) {
+    throw new Error("pi-project-glance: bounded feed extraction contract is missing");
+  }
+  if (!feedTest.includes("thinking") || !feedTest.includes("final_answer") || !feedTest.includes("active getBranch") ||
+      !feedTest.includes("PROJECT GLANCE FEED CHECKPOINT") || !feedTest.includes("PROJECT GLANCE LIVE UPDATE") ||
+      !feedTest.includes("plan_completed") || !feedTest.includes("homedir")) {
+    throw new Error("pi-project-glance: feed privacy and active-branch tests are missing");
+  }
+  if (!workplanSource.includes("buildWorkplanActivity") || !workplanSource.includes("validateWorkplanActivity") ||
+      !workplanSource.includes("activity") || !workplanSource.includes("message_end")) {
+    throw new Error("pi-project-glance: Workplan activity persistence contract is missing");
   }
   if (!contracts.includes("opaqueIdentifier(candidate.requestId") || contracts.includes("text(candidate.requestId")) {
     throw new Error("pi-project-glance: Project Glance request IDs must remain opaque");
@@ -445,7 +466,8 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
       !smoke.includes("PROJECT_GLANCE_PANE_SMOKE_PASS")) {
     throw new Error("pi-project-glance: isolated real-pane smoke coverage is missing");
   }
-  if (extension.includes("runtime.refreshCurrent()") || !extension.includes("await runtime.onSessionTree(ctx)")) {
+  if (extension.includes("runtime.refreshCurrent()") || !extension.includes("await runtime.onSessionTree(ctx)") ||
+      !extension.includes('pi.on("message_end"')) {
     throw new Error("pi-project-glance: extension lifecycle/command ordering is unsafe");
   }
   if (!workplanTest.includes("plan completion activity requires") || !workplanTest.includes("plan_completed") ||
@@ -507,7 +529,7 @@ for (const required of [
   /261 deployed hashes/u,
   /packages\/pi-project-glance/u,
   /not part of the captured deployed-hash inventory/iu,
-  /live Progress Feed empty/iu,
+  /bounded Progress Feed cards/iu,
 ]) {
   if (!required.test(rootReadme)) throw new Error(`root README lacks required Project Glance contract: ${required}`);
 }

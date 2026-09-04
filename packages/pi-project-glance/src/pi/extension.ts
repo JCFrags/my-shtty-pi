@@ -66,6 +66,9 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   pi.on("session_tree", async (_event, ctx) => {
     await runtime.onSessionTree(ctx);
   });
+  pi.on("message_end", (event, ctx) => {
+    runtime.onMessageEnd(ctx);
+  });
   pi.on("session_shutdown", async (_event, _ctx) => {
     await runtime.stop();
   });

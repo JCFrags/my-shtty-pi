@@ -480,7 +480,7 @@ test("Pi extension boundary registers one command and lifecycle hooks only", asy
   };
   await extension(pi);
   assert.deepEqual(commands.map((entry) => entry.name), ["project-glance"]);
-  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "session_shutdown"]);
+  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "message_end", "session_shutdown"]);
   assert.equal("registerTool" in pi, false);
   assert.equal("registerWidget" in pi, false);
 });
@@ -867,7 +867,7 @@ test("doctor emits deterministic stable sanitized checks", () => {
     "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
     "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
     "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
-    "currentStateIntegrationFixture", "currentProjectionPrivacySafe", "opaqueProviderCorrelationExact", "liveSnapshotFeedEmpty",
+    "currentStateIntegrationFixture", "currentProjectionPrivacySafe", "opaqueProviderCorrelationExact", "liveSnapshotFeedEmpty", "progressFeedFixture",
   ];
   const runDoctor = () => execFileSync(process.execPath, ["scripts/dev-doctor.mjs"], {
     cwd: process.cwd(),

@@ -23,7 +23,9 @@ import {
 import {
   buildWorkplanActivity,
   buildWorkplanSummary,
+  validateWorkplanActivity,
   validateWorkplanSummaryRequest,
+  type WorkplanActivityV1,
   workplanBranchId,
   WORKPLAN_ACTIVITY_EVENT,
   WORKPLAN_SUMMARY_CHANGED_EVENT,
@@ -110,7 +112,13 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
   let currentBranchId = "root";
   let lifecycleEpoch = 0;
   const eventBus = pi.events;
-  const pendingMutations = new Map<string, { event: WorkplanEvent; state: ReturnType<typeof cloneWorkplanState>; branchId: string; epoch: number }>();
+  const pendingMutations = new Map<string, {
+    event: WorkplanEvent;
+    state: ReturnType<typeof cloneWorkplanState>;
+    activity?: WorkplanActivityV1;
+    branchId: string;
+    epoch: number;
+  }>();
 
   const eventKey = (event: WorkplanEvent): string => {
     const data = event.data as Record<string, unknown>;
@@ -181,12 +189,23 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
     if (envelope.protocol !== STATE_EVENT_PROTOCOL || envelope.tool !== "workplan") return;
     const pending = pendingMutations.get(eventKey(candidate as WorkplanEvent));
     if (!pending) return;
+    const persistedActivity = details.activity;
+    let activity: WorkplanActivityV1 | undefined;
+    if (persistedActivity !== undefined) {
+      try {
+        activity = validateWorkplanActivity(persistedActivity);
+      } catch {
+        return;
+      }
+      if (!pending.activity || JSON.stringify(activity) !== JSON.stringify(pending.activity)) return;
+    } else if (pending.activity !== undefined) {
+      return;
+    }
     pendingMutations.delete(eventKey(candidate as WorkplanEvent));
     const epoch = pending.epoch;
     const branchId = pending.branchId;
     setImmediate(() => {
       if (epoch !== lifecycleEpoch || branchId !== currentBranchId) return;
-      const activity = buildWorkplanActivity(pending.event, pending.state);
       if (activity) eventBus.emit(WORKPLAN_ACTIVITY_EVENT, activity);
       emitSummaryChanged();
     });
@@ -231,20 +250,26 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
       text = bounded.text;
       const fullOutputPath = bounded.fullOutputPath;
       cancelled(signal);
+      const activity = operation.event ? buildWorkplanActivity(operation.event, operation.state) : undefined;
       if (operation.event) {
         state = cloneWorkplanState(operation.state);
         pendingMutations.set(eventKey(operation.event), {
           event: operation.event,
           state: cloneWorkplanState(operation.state),
+          ...(activity ? { activity } : {}),
           branchId: currentBranchId,
           epoch: lifecycleEpoch,
         });
       }
       const recoveryPlan = params.action === "recover" ? operation.state.plans.find((plan) => plan.id === params.planId) : undefined;
-      const details: StateToolDetails & { recovery?: { planId: string; revision: number } } = {
+      const details: StateToolDetails & {
+        activity?: WorkplanActivityV1;
+        recovery?: { planId: string; revision: number };
+      } = {
         protocol: STATE_RESULT_PROTOCOL,
         action: params.action,
         ...(operation.event ? { event: operation.event } : {}),
+        ...(activity ? { activity } : {}),
         result: operation.result,
         ...(recoveryPlan ? { recovery: { planId: recoveryPlan.id, revision: recoveryPlan.revision } } : {}),
         ...(fullOutputPath ? { fullOutputPath } : {}),

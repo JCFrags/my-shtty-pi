@@ -122,6 +122,7 @@ test("provider responds with a bounded summary and emits activity only after mes
     expectedRevision: 2,
     content: { summary: "Saved", currentFocus: "Focus", nextActions: ["Next"] },
   }, signal());
+  assert.deepEqual(validateWorkplanActivity(checkpoint.details.activity), checkpoint.details.activity);
   assert.equal(activities.length, 0);
   await pi.emitLifecycle("message_end", messageEnd(checkpoint.details));
   assert.equal(activities.length, 0);
@@ -209,6 +210,7 @@ test("milestone completion activity follows the real evidence transition exactly
     expectedRevision: 4,
     content: { evidence: ["verified"], status: "completed" },
   }, false);
+  assert.deepEqual(validateWorkplanActivity(completed.details.activity), completed.details.activity);
   assert.equal(activities.length, 0);
   const end = messageEnd(completed.details);
   await pi.emitLifecycle("message_end", end);
@@ -270,6 +272,7 @@ test("plan completion activity requires actual completion and checkpoint evidenc
     content: { summary: "Evidence checkpoint", currentFocus: "Done", nextActions: ["Complete"], criterionEvidence: [{ criterionId: "WP1-C1", evidence: "Verified" }] },
   });
   const completed = await executePersisted(pi, { action: "complete", planId: "WP1", expectedRevision: 6, rationale: "All evidence is recorded" }, false);
+  assert.deepEqual(validateWorkplanActivity(completed.details.activity), completed.details.activity);
   assert.equal(activities.length, 2);
   const end = messageEnd(completed.details);
   await pi.emitLifecycle("message_end", end);

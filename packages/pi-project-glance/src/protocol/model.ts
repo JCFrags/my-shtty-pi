@@ -46,6 +46,7 @@ export const PROJECT_GLANCE_ITEM_TYPES = [
   "assistant_update",
   "checkpoint",
   "milestone_completed",
+  "plan_completed",
 ] as const;
 export type ProjectGlanceItemType = (typeof PROJECT_GLANCE_ITEM_TYPES)[number];
 

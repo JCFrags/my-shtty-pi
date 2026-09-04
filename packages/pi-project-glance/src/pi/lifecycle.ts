@@ -13,8 +13,15 @@ import { ProjectGlanceServer } from "../protocol/server.js";
 import {
   PROJECT_GLANCE_PROTOCOL_VERSION,
   type ProjectGlanceCurrent,
+  type ProjectGlanceFeedItem,
   type ProjectGlanceSnapshot,
 } from "../protocol/model.js";
+import { validateSnapshot } from "../protocol/validation.js";
+import {
+  boundRecentFeed,
+  rebuildProgressFeed,
+  compareFeedItems,
+} from "../feed/index.js";
 import {
   ProjectGlanceCurrentController,
   type ProjectGlanceEventBus,
@@ -40,6 +47,33 @@ export function createLiveSnapshot(
   };
 }
 
+type ProjectGlanceSessionContext = Pick<ExtensionContext, "sessionManager">;
+
+function boundedSnapshot(
+  sessionKey: string,
+  revision: number,
+  generatedAt: string,
+  current: ProjectGlanceCurrent,
+  feed: readonly ProjectGlanceFeedItem[],
+): ProjectGlanceSnapshot | undefined {
+  const candidates = boundRecentFeed(feed);
+  for (let removed = 0; removed <= candidates.length; removed += 1) {
+    try {
+      return validateSnapshot({
+        protocolVersion: PROJECT_GLANCE_PROTOCOL_VERSION,
+        sessionKey,
+        revision,
+        generatedAt,
+        current: { ...current },
+        feed: candidates.slice(removed).map((item) => ({ ...item })),
+      });
+    } catch {
+      // Remove the oldest useful item until the correlated wire budget fits.
+    }
+  }
+  return undefined;
+}
+
 export class ProjectGlanceRelayRuntime {
   #paths: ProjectGlanceRuntimePaths | undefined;
   #server: ProjectGlanceServer | undefined;
@@ -48,10 +82,14 @@ export class ProjectGlanceRelayRuntime {
   #generationIndex = 0;
   #revision = 1;
   #current: ProjectGlanceCurrent = {};
+  #feed: ProjectGlanceFeedItem[] = [];
   #branchId = "root";
   #environment: NodeJS.ProcessEnv;
   #eventBus: ProjectGlanceEventBus | undefined;
   #operation: Promise<void> = Promise.resolve();
+  #lifecycleEpoch = 0;
+  #feedSyncTimers = new Set<ReturnType<typeof setImmediate>>();
+  #context: ProjectGlanceSessionContext | undefined;
 
   constructor(
     environment: NodeJS.ProcessEnv = process.env,
@@ -81,17 +119,25 @@ export class ProjectGlanceRelayRuntime {
     return { ...this.#current };
   }
 
+  get feed(): ProjectGlanceFeedItem[] {
+    return this.#feed.map((item) => ({ ...item }));
+  }
+
   async ensureForContext(ctx: ExtensionContext): Promise<void> {
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionKey = deriveSessionKey(sessionId);
     const branchId = branchIdForContext(ctx);
     return this.#enqueue(async () => {
+      this.#context = ctx;
       if (this.#sessionKey === sessionKey && this.#server?.started) {
         if (this.#branchId !== branchId) await this.#transitionBranch(branchId);
+        await this.#syncFeedFromContext(ctx);
         return;
       }
       await this.#stopNow();
       await this.#startNow(sessionKey, new Date().toISOString(), 0, branchId);
+      this.#context = ctx;
+      await this.#syncFeedFromContext(ctx);
     });
   }
 
@@ -134,6 +180,7 @@ export class ProjectGlanceRelayRuntime {
     this.#generationIndex = generationIndex;
     this.#revision = 1;
     this.#current = {};
+    this.#feed = [];
     this.#branchId = branchId;
     if (this.#eventBus) {
       this.#controller = new ProjectGlanceCurrentController({
@@ -150,8 +197,13 @@ export class ProjectGlanceRelayRuntime {
       if (!sessionKey) throw new Error("PROJECT_GLANCE_RUNTIME_MISSING");
       const nextGenerationIndex = this.#generationIndex + 1;
       const branchId = this.#branchId;
-      await this.#stopNow();
+      const context = this.#context;
+      await this.#stopNow(true);
       await this.#startNow(sessionKey, now, nextGenerationIndex, branchId);
+      if (context) {
+        this.#context = context;
+        await this.#syncFeedFromContext(context);
+      }
     });
   }
 
@@ -163,34 +215,85 @@ export class ProjectGlanceRelayRuntime {
     this.#controller?.refresh();
   }
 
+  /** Rebuild the bounded feed from the supplied active session branch. */
+  async syncFeed(ctx: ProjectGlanceSessionContext): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#context = ctx;
+      await this.#syncFeedFromContext(ctx);
+    });
+  }
+
+  /**
+   * Schedule a rebuild after Pi's message_end handler returns. AgentSession
+   * persists the finalized message immediately after extension handlers and
+   * listeners, so the next turn sees the stable SessionManager entry ID.
+   */
+  onMessageEnd(ctx: ProjectGlanceSessionContext): void {
+    const sessionKey = (() => {
+      try {
+        return deriveSessionKey(ctx.sessionManager.getSessionId());
+      } catch {
+        return undefined;
+      }
+    })();
+    if (!sessionKey) return;
+    const epoch = this.#lifecycleEpoch;
+    const timer = setImmediate(() => {
+      this.#feedSyncTimers.delete(timer);
+      void this.#enqueue(async () => {
+        if (epoch !== this.#lifecycleEpoch || sessionKey !== this.#sessionKey || !this.#server?.started) return;
+        await this.#syncFeedFromContext(ctx);
+      }).catch(() => undefined);
+    });
+    timer.unref?.();
+    this.#feedSyncTimers.add(timer);
+  }
+
   async onSessionTree(ctx: ExtensionContext): Promise<void> {
     const branchId = branchIdForContext(ctx);
-    return this.#enqueue(() => this.#transitionBranch(branchId));
+    return this.#enqueue(async () => {
+      this.#context = ctx;
+      await this.#transitionBranch(branchId);
+      await this.#syncFeedFromContext(ctx);
+    });
   }
 
   async #transitionBranch(branchId: string): Promise<void> {
     if (this.#branchId === branchId) return;
+    this.#lifecycleEpoch += 1;
     this.#branchId = branchId;
+    this.#feed = [];
     if (this.#controller) {
       this.#controller.onSessionTree(branchId);
     } else {
-      this.#current = {};
+      this.#publishCurrent({}, []);
     }
   }
 
-  #publishCurrent(current: ProjectGlanceCurrent): boolean {
+  async #syncFeedFromContext(ctx: ProjectGlanceSessionContext): Promise<void> {
+    if (!this.#server?.started || !this.#sessionKey) return;
+    let nextFeed: ProjectGlanceFeedItem[];
+    try {
+      nextFeed = rebuildProgressFeed(ctx.sessionManager.getBranch());
+    } catch {
+      return;
+    }
+    this.#publishCurrent(this.#current, nextFeed);
+  }
+
+  #publishCurrent(current: ProjectGlanceCurrent, feed: readonly ProjectGlanceFeedItem[] = this.#feed): boolean {
     const server = this.#server;
-    if (!server?.started) return false;
-    if (JSON.stringify(current) === JSON.stringify(this.#current)) return true;
+    if (!server?.started || !this.#sessionKey) return false;
+    if (JSON.stringify(current) === JSON.stringify(this.#current) && compareFeedItems(feed, this.#feed)) return true;
     const nextRevision = this.#revision + 1;
-    const next: ProjectGlanceSnapshot = {
-      protocolVersion: PROJECT_GLANCE_PROTOCOL_VERSION,
-      sessionKey: this.#sessionKey!,
-      revision: nextRevision,
-      generatedAt: new Date().toISOString(),
-      current: { ...current },
-      feed: [],
-    };
+    const next = boundedSnapshot(
+      this.#sessionKey,
+      nextRevision,
+      new Date().toISOString(),
+      current,
+      feed,
+    );
+    if (!next) return false;
     try {
       if (!server.publish(next)) return false;
     } catch {
@@ -198,10 +301,14 @@ export class ProjectGlanceRelayRuntime {
     }
     this.#revision = nextRevision;
     this.#current = { ...current };
+    this.#feed = next.feed.map((item) => ({ ...item }));
     return true;
   }
 
-  async #stopNow(): Promise<void> {
+  async #stopNow(preserveContext = false): Promise<void> {
+    this.#lifecycleEpoch += 1;
+    for (const timer of this.#feedSyncTimers) clearImmediate(timer);
+    this.#feedSyncTimers.clear();
     const controller = this.#controller;
     const server = this.#server;
     const paths = this.#paths;
@@ -214,7 +321,9 @@ export class ProjectGlanceRelayRuntime {
     this.#sessionKey = undefined;
     this.#revision = 1;
     this.#current = {};
+    this.#feed = [];
     this.#branchId = "root";
+    if (!preserveContext) this.#context = undefined;
   }
 
   #enqueue(operation: () => Promise<void>): Promise<void> {

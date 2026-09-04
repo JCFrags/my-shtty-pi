@@ -275,6 +275,7 @@ async function currentStateFixture() {
     currentProjectionPrivacySafe: false,
     opaqueProviderCorrelationExact: false,
     liveSnapshotFeedEmpty: false,
+    progressFeedFixture: false,
   };
   try {
     const {
@@ -291,6 +292,7 @@ async function currentStateFixture() {
     const { formatCurrentProjection } = await import("../dist/current/format.js");
     const { createLiveSnapshot } = await import("../dist/pi/lifecycle.js");
     const { validateSnapshot } = await import("../dist/protocol/validation.js");
+    const { rebuildProgressFeed } = await import("../dist/feed/index.js");
     const bus = {
       listeners: new Map(),
       on(channel, handler) {
@@ -352,6 +354,48 @@ async function currentStateFixture() {
       && parseWorkplanSummary({ version: 1, requestId: "fixture-workplan", branchId, summary: { version: 1 } }, "fixture-workplan", branchId) !== undefined;
 
     const home = homedir().replace(/\/+$/u, "");
+    const feed = rebuildProgressFeed([
+      {
+        type: "message",
+        id: "doctor-assistant-entry",
+        timestamp: "2026-09-03T00:00:00.000Z",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{
+            type: "text",
+            text: `Inspect ${home}/project/file.ts`,
+            textSignature: JSON.stringify({ v: 1, id: "doctor-commentary", phase: "commentary" }),
+          }],
+        },
+      },
+      {
+        type: "message",
+        id: "doctor-workplan-entry",
+        timestamp: "2026-09-03T00:00:01.000Z",
+        message: {
+          role: "toolResult",
+          toolName: "workplan",
+          details: {
+            activity: {
+              version: 1,
+              id: "doctor-workplan-activity",
+              type: "checkpoint_recorded",
+              planId: "WP1",
+              summary: `Checkpoint ${home}/checkpoint`,
+              at: "2026-09-03T00:00:01.000Z",
+            },
+          },
+        },
+      },
+    ]);
+    result.progressFeedFixture = feed.length === 2
+      && feed[0]?.type === "assistant_update"
+      && feed[0]?.text === "Inspect $HOME/project/file.ts"
+      && feed[1]?.type === "checkpoint"
+      && feed[1]?.text === "Checkpoint: Checkpoint $HOME/checkpoint"
+      && !JSON.stringify(feed).includes(home);
+
     const privacyPlan = {
       id: "WP1",
       title: "Doctor plan",
@@ -525,6 +569,7 @@ function initialChecks(manifest) {
     currentProjectionPrivacySafe: false,
     opaqueProviderCorrelationExact: false,
     liveSnapshotFeedEmpty: false,
+    progressFeedFixture: false,
   };
 }
 

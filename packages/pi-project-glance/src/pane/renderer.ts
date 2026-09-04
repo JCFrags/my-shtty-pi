@@ -67,9 +67,16 @@ function renderCurrent(current: ProjectGlanceCurrent, width: number): string[] {
   return rows;
 }
 
+function feedItemLabel(type: ProjectGlanceFeedItem["type"]): string {
+  if (type === "assistant_update") return "Assistant update";
+  if (type === "checkpoint") return "Checkpoint";
+  if (type === "milestone_completed") return "Milestone completed";
+  return "Plan completed";
+}
+
 function renderItem(item: ProjectGlanceFeedItem, width: number): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
-  const label = truncateToWidth(`• ${item.type}`, safeWidth);
+  const label = truncateToWidth(`• ${feedItemLabel(item.type)}`, safeWidth);
   const indent = safeWidth > 2 ? "  " : " ".repeat(Math.max(0, safeWidth - 1));
   const textWidth = Math.max(1, safeWidth - visibleWidth(indent));
   return [label, ...wrapText(item.text, textWidth).map((line) => `${indent}${line}`)];
