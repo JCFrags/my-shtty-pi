@@ -97,7 +97,18 @@ finally {
     await rm(temporary, { force: true });
 } }
 function wait(ms, signal) { return new Promise((resolve, reject) => { if (signal?.aborted)
-    return reject(new Error("worker-aborted")); const timer = setTimeout(resolve, ms); signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("worker-aborted")); }, { once: true }); }); }
+    return reject(new Error("worker-aborted")); let settled = false; const cleanup = () => signal?.removeEventListener("abort", onAbort); const finish = (error) => { if (settled)
+    return; settled = true; clearTimeout(timer); cleanup(); if (error)
+    reject(error);
+else
+    resolve(); }; const onAbort = () => finish(new Error("worker-aborted")); const timer = setTimeout(() => finish(), ms); try {
+    signal?.addEventListener("abort", onAbort, { once: true });
+}
+catch (error) {
+    finish(error instanceof Error ? error : new Error(String(error)));
+    return;
+} if (signal?.aborted)
+    onAbort(); }); }
 function priorityValue(value) { return value === "high" ? 0 : 1; }
 export async function acquireHostWorkerSlot(options) {
     const slots = Math.floor(options.slots ?? 1);
