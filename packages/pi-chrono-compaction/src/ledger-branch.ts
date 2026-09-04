@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { open } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import type { SessionEntryLike } from "./types.js";
 import type { SourceLedger, SourceLedgerEntry } from "./source-ledger.js";
@@ -55,6 +55,34 @@ const DEFAULT_MAXIMUM_RANGE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAXIMUM_ENTRIES_PER_RANGE = 2_048;
 function hash(value: Uint8Array): string { return createHash("sha256").update(value).digest("hex"); }
 function noFollowFlags(): number { return fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0); }
+
+async function verifyOpenedLedgerSource(handle: FileHandle, ledger: SourceLedger): Promise<number> {
+  const checkpoint = ledger.checkpoint;
+  if (!Number.isSafeInteger(checkpoint.sourceFileSize) || checkpoint.sourceFileSize < 0
+    || !Number.isSafeInteger(checkpoint.sourceBytePosition) || checkpoint.sourceBytePosition < 0
+    || checkpoint.sourceBytePosition > checkpoint.sourceFileSize
+    || !Number.isSafeInteger(checkpoint.anchorSourceOffset) || checkpoint.anchorSourceOffset < 0
+    || !Number.isSafeInteger(checkpoint.anchorByteLength) || checkpoint.anchorByteLength < 0
+    || checkpoint.anchorSourceOffset + checkpoint.anchorByteLength !== checkpoint.sourceBytePosition
+    || typeof checkpoint.anchorContentHash !== "string" || !/^[a-f0-9]{64}$/.test(checkpoint.anchorContentHash)) {
+    throw new LedgerBranchError("source-changed", "The source ledger checkpoint anchor is invalid.");
+  }
+  const metadata = await handle.stat({ bigint: true });
+  if (!metadata.isFile()) throw new LedgerBranchError("source-changed", "The selected source is not a regular file.");
+  if (String(metadata.dev) !== ledger.sourceIdentity.deviceId || String(metadata.ino) !== ledger.sourceIdentity.inodeId) {
+    throw new LedgerBranchError("source-changed", "The selected source identity changed.");
+  }
+  const sourceFileBytes = Number(metadata.size);
+  if (!Number.isSafeInteger(sourceFileBytes) || sourceFileBytes < checkpoint.sourceFileSize) {
+    throw new LedgerBranchError("source-changed", "The selected source was truncated before its ledger checkpoint.");
+  }
+  const anchor = Buffer.alloc(checkpoint.anchorByteLength);
+  const read = await handle.read(anchor, 0, anchor.length, checkpoint.anchorSourceOffset);
+  if (read.bytesRead !== anchor.length || hash(anchor) !== checkpoint.anchorContentHash) {
+    throw new LedgerBranchError("source-changed", "The selected source checkpoint anchor failed verification.");
+  }
+  return sourceFileBytes;
+}
 
 export function resolveSourceLedgerBranch(ledger: SourceLedger, leafId: string): LedgerBranchResolution {
   const started = performance.now();
@@ -136,11 +164,7 @@ export async function readSourceLedgerEntries(sessionPath: string, ledger: Sourc
   const handle = await open(sessionPath, noFollowFlags());
   let sourceFileBytes = 0;
   try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile()) throw new LedgerBranchError("source-changed", "The selected source is not a regular file.");
-    if (String(metadata.dev) !== ledger.sourceIdentity.deviceId || String(metadata.ino) !== ledger.sourceIdentity.inodeId) throw new LedgerBranchError("source-changed", "The selected source identity changed.");
-    sourceFileBytes = metadata.size;
-    if (sourceFileBytes !== ledger.checkpoint.sourceFileSize) throw new LedgerBranchError("source-changed", "The selected source size changed.");
+    sourceFileBytes = await verifyOpenedLedgerSource(handle, ledger);
     for (const range of ranges) {
       const length = range.endByte - range.startByte;
       maximumRangeBytes = Math.max(maximumRangeBytes, length);
@@ -161,8 +185,7 @@ export async function readSourceLedgerEntries(sessionPath: string, ledger: Sourc
         rawTexts.push(content.toString("utf8"));
       }
     }
-    const after = await handle.stat();
-    if (!after.isFile() || String(after.dev) !== ledger.sourceIdentity.deviceId || String(after.ino) !== ledger.sourceIdentity.inodeId || after.size !== sourceFileBytes) throw new LedgerBranchError("source-changed", "The selected source changed during range reads.");
+    await verifyOpenedLedgerSource(handle, ledger);
   } finally { await handle.close(); }
   let ledgerCursor = 0;
   for (const range of ranges) {

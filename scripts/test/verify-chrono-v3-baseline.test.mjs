@@ -8,7 +8,6 @@ import { test } from "node:test";
 const root = process.cwd();
 const verifier = join(root, "scripts", "verify-chrono-v3-baseline.mjs");
 const packageRoot = join(root, "packages", "pi-chrono-compaction");
-const runtimeBaseline = "eb9742c318a76eeaf753e87a620fae83ca9048d1";
 
 function run(...args) {
   const result = spawnSync(process.execPath, [verifier, ...args], {
@@ -59,12 +58,6 @@ function copiedLivePackage() {
     recursive: true,
     filter: (path) => !["node_modules", "dist-test"].includes(basename(path)),
   });
-  const baselinePackage = execFileSync("git", ["show", `${runtimeBaseline}:packages/pi-chrono-compaction/package.json`], {
-    cwd: root,
-    encoding: null,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  writeFileSync(join(liveRoot, "package.json"), baselinePackage);
   const clone = clonedRepository();
   return { tempRoot, liveRoot, repositoryRoot: clone.repositoryRoot, repositoryTempRoot: clone.tempRoot };
 }
@@ -73,12 +66,12 @@ test("frozen repository baseline passes without requiring live files", () => wit
   const result = run("--repository-root", repositoryRoot, "--allow-missing-live", "--static-only");
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "ok");
-  assert.equal(result.json.schemaVersion, 2);
+  assert.equal(result.json.schemaVersion, 3);
   assert.equal(result.json.repository.sourceFiles, 66);
   assert.equal(result.json.repository.distFiles, 65);
   assert.deepEqual(result.json.repository.deployedManifest, {
     runtimeMismatches: [],
-    metadataExceptions: [{ path: "package.json", code: "test-script-only-metadata-divergence" }],
+    metadataExceptions: [],
   });
 }));
 
@@ -246,10 +239,10 @@ test("existing build script change fails", () => withClonedRepository((repositor
   assert.equal(result.json.code, "chrono-package-metadata-changed");
 }));
 
-test("exact test-script-only divergence passes with a typed exception", () => withClonedRepository((repositoryRoot) => {
+test("exact M01 package metadata passes without an exception", () => withClonedRepository((repositoryRoot) => {
   const result = runStatic(repositoryRoot);
   assert.equal(result.status, 0, JSON.stringify(result.json));
-  assert.deepEqual(result.json.repository.metadataExceptions, [{ path: "package.json", code: "test-script-only-metadata-divergence" }]);
+  assert.deepEqual(result.json.repository.metadataExceptions, []);
   assert.deepEqual(result.json.repository.runtimeMismatches, []);
 }));
 

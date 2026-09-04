@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import extension, { resolveExtensionSettings } from "../src/pi-extension.js";
+import extension, { historySearchIndexCacheStatus, LEGACY_HISTORY_MAX_BYTES, resolveExtensionSettings } from "../src/pi-extension.js";
 import { getActiveBranch, readSessionJsonl } from "../src/jsonl.js";
 import { candidateSegmentStorePath } from "../src/candidate-segment-store.js";
 import { sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
@@ -202,7 +202,7 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
     assert.equal(existsSync(candidateSegmentStorePath(sessionPath)), false, "feature-off must not create a candidate store");
     assert.equal(existsSync(sourceLedgerPath(sessionPath)), false, "feature-off must not create a source ledger");
     assert.deepEqual(readFileSync(sessionPath), sourceSessionBytes, "incremental work must not rewrite the authoritative session");
-    assert.ok(notifications.some((message) => /ChronoCompact 2\.0\.0 candidate/.test(message)));
+    assert.ok(notifications.some((message) => /ChronoCompact 2\.0\.1 candidate/.test(message)));
   } finally {
     for (const name of names) {
       const value = previous.get(name);
@@ -321,7 +321,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "history_retention_hint",
     "request_compaction",
   ]);
-  assert.deepEqual(commandNames, ["chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-worker-status", "chrono-doctor", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
@@ -408,6 +408,8 @@ test("Pi extension hook returns a validated deterministic replay through the nor
   assert.match(retainedTail, /received activeRequests=3/);
   assert.doesNotMatch(result.compaction.summary, /FABRICATED_SUMMARY_SHOULD_NEVER_BE_RECOMPACTED/);
   assert.ok(notifications.some((notification) => /ChronoCompact/.test(notification.message)));
+
+  const workerStatus=commandHandlers.get("chrono-worker-status"),doctor=commandHandlers.get("chrono-doctor");assert.ok(workerStatus&&doctor);await workerStatus("",context);await doctor("",context);const commandOutput=notifications.slice(-2).map(item=>item.message).join("\n");assert.match(commandOutput,/Scheduler artifacts:/);assert.match(commandOutput,/Doctor mode: read-only/);assert.doesNotMatch(commandOutput,/\.jsonl|\/home\//);
 
   let settingsMenuVisits = 0;
   (context.ui as { input?: () => Promise<string | undefined> }).input = async () => undefined;
@@ -762,6 +764,8 @@ test("uniform continuation follows unresolved turns across successful compaction
 });
 
 test("exact history tools reuse an existing ledger but never create one alone",async()=>{const directory=mkdtempSync(join(tmpdir(),"chrono-extension-retrieval-")),sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});const tools=new Map<string,(...args:any[])=>Promise<any>>(),pi={registerTool(tool:{name:string;execute:(...args:any[])=>Promise<any>}){tools.set(tool.name,tool.execute);},registerCommand(){},on(){},appendEntry(){},sendMessage(){}};try{extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath),entries=session.entries,context={hasUI:false,model:undefined,thinkingLevel:"medium",sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>entries,getBranch:()=>entries},getContextUsage:()=>undefined,isIdle:()=>true,abort(){},compact(){},ui:{notify(){}},modelRegistry:{}};const get=tools.get("history_get"),range=tools.get("history_range");assert.ok(get&&range);const first=await get("get-no-ledger",{entryId:"e123"},undefined,undefined,context),firstText=first.content[0].text;assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await range("range-no-ledger",{startEntryId:"e123",endEntryId:"e124"},undefined,undefined,context);assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await updateSourceLedger(sessionPath);const ledgerText=(await get("get-ledger",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(ledgerText,firstText);writeFileSync(`${sourceLedgerPath(sessionPath)}.lock`,"busy",{mode:0o600});const busyText=(await get("get-busy",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(busyText,firstText);}finally{rmSync(directory,{recursive:true,force:true});}});
+
+test("oversized history refuses whole-file tools before reading and search indexes coalesce within a strict budget",async()=>{const directory=mkdtempSync(join(tmpdir(),"chrono-extension-history-guard-")),sessionPath=join(directory,"session.jsonl"),tools=new Map<string,(...args:any[])=>Promise<any>>(),pi={registerTool(tool:{name:string;execute:(...args:any[])=>Promise<any>}){tools.set(tool.name,tool.execute);},registerCommand(){},on(){},appendEntry(){},sendMessage(){}};try{writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath),context={hasUI:false,model:undefined,thinkingLevel:"medium",sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>session.entries,getBranch:()=>session.entries},getContextUsage:()=>undefined,isIdle:()=>true,abort(){},compact(){},ui:{notify(){}},modelRegistry:{}};const search=tools.get("history_search");assert.ok(search);const before=historySearchIndexCacheStatus();await Promise.all([search("search-a",{query:"revision",mode:"ranked"},undefined,undefined,context),search("search-b",{query:"revision",mode:"ranked"},undefined,undefined,context)]);const coalesced=historySearchIndexCacheStatus();assert.equal(coalesced.builds-before.builds,1);assert.ok(coalesced.coalesced-before.coalesced>=1);await search("search-c",{query:"revision",mode:"ranked"},undefined,undefined,context);const hit=historySearchIndexCacheStatus();assert.ok(hit.hits-coalesced.hits>=1);assert.ok(hit.bytes<=hit.byteLimit);truncateSync(sessionPath,205*1024*1024);const [refused,concurrentRefused]=await Promise.all([search("search-large-a",{query:"revision",mode:"ranked"},undefined,undefined,context),search("search-large-b",{query:"revision",mode:"ranked"},undefined,undefined,context)]);assert.equal(refused.details.code,"legacy-history-size-limit");assert.equal(concurrentRefused.details.code,"legacy-history-size-limit");assert.equal(refused.details.maximumBytes,LEGACY_HISTORY_MAX_BYTES);const get=tools.get("history_get");assert.ok(get);const exact=await get("get-large",{entryId:"e123"},undefined,undefined,context);assert.equal(exact.details.code,"verified-source-ledger-required");}finally{rmSync(directory,{recursive:true,force:true});}});
 
 test("shadow-on extension output equals shadow-off output and completes after return", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-extension-shadow-"));

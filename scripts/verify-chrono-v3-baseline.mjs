@@ -30,19 +30,19 @@ const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 // These values are the frozen M00 runtime boundary. A later runtime milestone
 // must deliberately replace this verifier rather than silently moving it.
 const EXPECTED = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
   sourceFiles: 66,
-  sourceTreeHash: "f85564ddbf1f6d726d96b81dc9af65e22612245c83ec6d2a7dc6d444217d5ecc",
+  sourceTreeHash: "cd131fdf1c89d9a5cefd86e57c0b82258061a6a9569a73aef56c53fb69b81fc2",
   distFiles: 65,
-  distTreeHash: "58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31",
-  entrypointHash: "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50",
-  m00PackageHash: "5814ef926fb2f4bf74ccc8138c06a8030950c34b8e6a01ee5ab40cf273ceac5d",
-  m00LockHash: "5410bbdf139f5e89059233c010217c7683e2e36e3265b0c7ba4bdae939676f1d",
-  livePackageHash: "43b270792d5d95a03096f38d57ba2ca479d4999e3cb5c3e514232e040b3cf869",
-  deployedPackageHash: "56c6803348bcdd4b963c996e06e31e39edfb31568bc3672efcd9efe153e3b25d",
+  distTreeHash: "ac067d4a555d9707305fbb319ce85e42e4783d8d45108fb93fb19869a71ae9f0",
+  entrypointHash: "2dc8f0dff8c8204c60e0487067263c92ef010415c877938f2b6e807144699d89",
+  m01PackageHash: "bf56a67fb0a7f449929cec8eac5b44b1e2ca66065648202c5afeea39b61e679d",
+  m01LockHash: "cbccc05104d11e0b082fa419253c517087a52f0bb3bc58f40e60515ecb02f22c",
+  livePackageHash: "bf56a67fb0a7f449929cec8eac5b44b1e2ca66065648202c5afeea39b61e679d",
+  deployedPackageHash: "bf56a67fb0a7f449929cec8eac5b44b1e2ca66065648202c5afeea39b61e679d",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
   canonicalDeployedFiles: 261,
@@ -51,9 +51,29 @@ const EXPECTED = Object.freeze({
 const correctionPaths = new Set([
   "README.md",
   ".github/workflows/verify.yml",
+  "packages/pi-chrono-compaction/DEPLOYED.sha256",
+  "packages/pi-chrono-compaction/README.md",
+  "packages/pi-chrono-compaction/package-lock.json",
   "packages/pi-chrono-compaction/package.json",
+  "packages/pi-chrono-compaction/dist/src/compaction-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/compaction-worker-entry.js",
+  "packages/pi-chrono-compaction/dist/src/compaction-worker-protocol.js",
+  "packages/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
+  "packages/pi-chrono-compaction/dist/src/ledger-branch.js",
+  "packages/pi-chrono-compaction/dist/src/pi-extension.js",
+  "packages/pi-chrono-compaction/dist/src/source-ledger.js",
+  "packages/pi-chrono-compaction/src/compaction-worker-client.ts",
+  "packages/pi-chrono-compaction/src/compaction-worker-entry.ts",
+  "packages/pi-chrono-compaction/src/compaction-worker-protocol.ts",
+  "packages/pi-chrono-compaction/src/host-worker-scheduler.ts",
+  "packages/pi-chrono-compaction/src/ledger-branch.ts",
+  "packages/pi-chrono-compaction/src/pi-extension.ts",
+  "packages/pi-chrono-compaction/src/source-ledger.ts",
   "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
+  "packages/pi-chrono-compaction/test/extension.test.ts",
   "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
+  "packages/pi-chrono-compaction/test/ledger-branch.test.ts",
+  "packages/pi-chrono-compaction/test/source-ledger.test.ts",
   "scripts/verify-chrono-v3-baseline.mjs",
   "scripts/verify-chrono-v3-privacy.mjs",
   "scripts/verify-deployed-baseline.mjs",
@@ -77,9 +97,11 @@ const correctionPaths = new Set([
   "docs/chrono-v3/test-recovery.md",
   "docs/chrono-v3/decision-and-update-protocol.md",
   "docs/chrono-v3/reviews/README.md",
+  "docs/chrono-v3/reviews/M01-safety-report.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
   "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
+  "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
 ]);
 
 class BaselineVerificationError extends Error {
@@ -279,24 +301,9 @@ function verifyNorthStar() {
 
 function verifyPackageCorrection() {
   const currentPath = join(packageRoot, "package.json");
-  const currentBytes = readRegularFile(currentPath);
-  if (bytesHash(currentBytes) !== EXPECTED.m00PackageHash) fail("chrono-package-metadata-changed");
-  const current = readJson(currentPath);
-  const runtimeBaseline = readJsonFromBytes(gitBytesAt(EXPECTED.runtimeBaselineCommit, `${packageRelative}/package.json`));
-  const expectedScripts = {
-    ...runtimeBaseline.scripts,
-    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test --test-concurrency=1 dist-test/test/*.test.js",
-  };
-  const currentWithoutCorrection = { ...current, scripts: { ...current.scripts } };
-  delete currentWithoutCorrection.scripts.test;
-  const baselineWithoutScripts = { ...runtimeBaseline, scripts: { ...runtimeBaseline.scripts } };
-  if (!jsonEqual(currentWithoutCorrection, baselineWithoutScripts)) fail("chrono-package-metadata-changed");
-  if (!jsonEqual(current.scripts, expectedScripts)) fail("chrono-package-test-script-changed");
-  const lockPath = join(packageRoot, "package-lock.json");
-  if (fileHash(lockPath) !== EXPECTED.m00LockHash) fail("chrono-package-lock-changed");
-  const baselineLock = gitBytesAt(EXPECTED.m00Commit, `${packageRelative}/package-lock.json`);
-  if (bytesHash(readRegularFile(lockPath)) !== bytesHash(baselineLock)) fail("chrono-package-lock-changed");
-  return [{ path: "package.json", code: "test-script-only-metadata-divergence" }];
+  if (fileHash(currentPath) !== EXPECTED.m01PackageHash) fail("chrono-package-metadata-changed");
+  if (fileHash(join(packageRoot, "package-lock.json")) !== EXPECTED.m01LockHash) fail("chrono-package-lock-changed");
+  return [];
 }
 
 function readJsonFromBytes(bytes) {
@@ -349,6 +356,7 @@ function verifyRepositoryFiles() {
   if (distTreeHash !== EXPECTED.distTreeHash) fail("dist-baseline-mismatch");
   const entrypointHash = fileHash(join(packageRoot, entrypointRelative));
   if (entrypointHash !== EXPECTED.entrypointHash) fail("entrypoint-baseline-mismatch");
+  const metadataExceptions = verifyPackageCorrection();
   const manifest = parseManifest(join(packageRoot, "DEPLOYED.sha256"));
   const expectedManifestPaths = new Set(["package.json", ...distPaths]);
   if (!jsonEqual([...manifest.keys()].sort(), [...expectedManifestPaths].sort())) fail("deployed-manifest-scope-changed");
@@ -356,10 +364,9 @@ function verifyRepositoryFiles() {
   for (const path of distPaths) {
     if (fileHash(join(packageRoot, path)) !== manifest.get(path)) fail("deployed-runtime-mismatch");
   }
-  if (fileHash(join(packageRoot, "package.json")) === manifest.get("package.json")) fail("metadata-correction-missing");
-  const metadataExceptions = verifyPackageCorrection();
+  if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.0") fail("package-version-changed");
+  if (packageJson.version !== "2.0.1") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");

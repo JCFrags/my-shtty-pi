@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rename, rm, stat, symlink, writeFile, appendFile } from "node:fs/promises";
+import { appendFile, mkdtemp, open, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadSourceLedger, readExactSourceEntry, SOURCE_LEDGER_TAIL_ANCHOR_BYTES, sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
+import { loadSourceLedger, readExactSourceEntry, readSourceEntryRange, SOURCE_LEDGER_TAIL_ANCHOR_BYTES, sourceLedgerMatchesSource, sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
 import { stableStringify } from "../src/utils.js";
 
 const header = { type: "session", version: 3, id: "session-test" };
@@ -15,6 +15,12 @@ async function temporary(t: test.TestContext): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "chrono-source-ledger-"));
   t.after(() => rm(path, { recursive: true, force: true }));
   return path;
+}
+async function afterNextPositionalRead(path: string, position: number, action: () => Promise<void>): Promise<{ restore: () => void; called: () => boolean }> {
+  const probe = await open(path, "r"); const prototype = Object.getPrototypeOf(probe) as { read: (...args: unknown[]) => Promise<unknown> };
+  await probe.close(); const original = prototype.read; let intercepted = false;
+  prototype.read = async function (...args: unknown[]): Promise<unknown> { const result = await original.apply(this, args); if (!intercepted && args[3] === position) { intercepted = true; await action(); } return result; };
+  return { restore: () => { prototype.read = original; }, called: () => intercepted };
 }
 
 for (const ending of ["\n", "\r\n"] as const) test(`builds offsets and retrieves exact entries with ${ending === "\n" ? "LF" : "CRLF"}`, async (t) => {
@@ -127,6 +133,69 @@ test("missing and changed exact entries fail closed", async (t) => {
   await assert.rejects(readExactSourceEntry(session, ledger, "missing"), /Unknown source entry/);
   await writeFile(session, original.replace("alpha", "bravo"));
   await assert.rejects(readExactSourceEntry(session, ledger, "a"), /Stale source ledger entry/);
+});
+
+test("verified ledger snapshots remain readable after a genuine append", async (t) => {
+  const directory = await temporary(t); const session = join(directory, "append-snapshot.jsonl");
+  const originalEntry = line(entry("a", null));
+  await writeFile(session, `${line(header)}\n${originalEntry}\n`);
+  const ledger = await updateSourceLedger(session);
+  await appendFile(session, `${line(entry("b", "a"))}\n`);
+  assert.equal(await sourceLedgerMatchesSource(session, ledger), true);
+  const range = await readSourceEntryRange(session, ledger, 0, 1);
+  assert.deepEqual(range.entries.map((item) => item.text), [originalEntry]);
+  assert.equal((await readExactSourceEntry(session, ledger, "a")).text, originalEntry);
+});
+
+test("a genuine append during range loading does not invalidate the verified snapshot", async (t) => {
+  const directory = await temporary(t); const session = join(directory, "concurrent-append-snapshot.jsonl");
+  const originalEntries = [line(entry("a", null)), line(largeEntry("b", "a", 250_000))];
+  await writeFile(session, `${line(header)}\n${originalEntries.join("\n")}\n`);
+  const ledger = await updateSourceLedger(session);
+  const hook = await afterNextPositionalRead(session, ledger.checkpoint.anchorSourceOffset, () => appendFile(session, `${line(entry("c", "b"))}\n`));
+  try {
+    const range = await readSourceEntryRange(session, ledger, 0, ledger.sourceOrder.length);
+    assert.deepEqual(range.entries.map((item) => item.text), originalEntries);
+    assert.equal(hook.called(), true);
+  } finally { hook.restore(); }
+  assert.equal(await sourceLedgerMatchesSource(session, ledger), true);
+});
+
+test("range snapshots fail closed for replacement, truncation, selected mutation, and checkpoint mutation", async (t) => {
+  const makeSnapshot = async (name: string): Promise<{ session: string; ledger: Awaited<ReturnType<typeof updateSourceLedger>>; original: Buffer }> => {
+    const session = join(directory, `${name}.jsonl`);
+    const original = Buffer.from(`${line(header)}\n${line(entry("a", null, "SELECTED-CONTENT"))}\n${line(largeEntry("tail", "a", 250_000))}\n`);
+    await writeFile(session, original);
+    return { session, ledger: await updateSourceLedger(session), original };
+  };
+  const directory = await temporary(t);
+
+  const replaced = await makeSnapshot("replacement");
+  const replacement = join(directory, "replacement-new.jsonl");
+  await writeFile(replacement, replaced.original); await rename(replacement, replaced.session);
+  assert.equal(await sourceLedgerMatchesSource(replaced.session, replaced.ledger), false);
+  await assert.rejects(readSourceEntryRange(replaced.session, replaced.ledger, 0, 1), /checkpoint failed verification/);
+
+  const truncated = await makeSnapshot("truncation");
+  await writeFile(truncated.session, truncated.original.subarray(0, truncated.ledger.sourceOrder[0]!.nextSourceByteOffset));
+  assert.equal(await sourceLedgerMatchesSource(truncated.session, truncated.ledger), false);
+  await assert.rejects(readSourceEntryRange(truncated.session, truncated.ledger, 0, 1), /checkpoint failed verification/);
+
+  const selectedMutation = await makeSnapshot("selected-mutation");
+  const selected = selectedMutation.ledger.sourceOrder[0]!;
+  const selectedBytes = Buffer.from(selectedMutation.original); const selectedIndex = selected.sourceByteOffset + selected.sourceByteLength - 3;
+  selectedBytes.writeUInt8(selectedBytes.readUInt8(selectedIndex) ^ 1, selectedIndex);
+  await writeFile(selectedMutation.session, selectedBytes);
+  assert.equal(await sourceLedgerMatchesSource(selectedMutation.session, selectedMutation.ledger), true);
+  await assert.rejects(readSourceEntryRange(selectedMutation.session, selectedMutation.ledger, 0, 1), /source bytes failed verification/);
+
+  const checkpointMutation = await makeSnapshot("checkpoint-mutation");
+  const checkpointBytes = Buffer.from(checkpointMutation.original);
+  const checkpointIndex = checkpointMutation.ledger.checkpoint.anchorSourceOffset + 1;
+  checkpointBytes.writeUInt8(checkpointBytes.readUInt8(checkpointIndex) ^ 1, checkpointIndex);
+  await writeFile(checkpointMutation.session, checkpointBytes);
+  assert.equal(await sourceLedgerMatchesSource(checkpointMutation.session, checkpointMutation.ledger), false);
+  await assert.rejects(readSourceEntryRange(checkpointMutation.session, checkpointMutation.ledger, 0, 1), /checkpoint failed verification/);
 });
 
 test("recovers an incomplete sidecar tail from the last checkpoint", async (t) => {
