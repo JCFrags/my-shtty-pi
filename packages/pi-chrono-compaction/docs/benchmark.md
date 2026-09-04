@@ -1,16 +1,38 @@
-# Public benchmark
+# Public benchmark and M02 test harness
 
-`../scripts/benchmark-v2.mjs` is a manual benchmark. It is not part of the npm payload.
-
-## Run
-
-Build the package, then run the synthetic benchmark:
+The M02 test foundation provides two package commands:
 
 ```bash
-npm run benchmark
+npm run test:normal
+npm run test:fixed-heap
 ```
 
-The default input is generated in memory with 250 synthetic tasks. It does not inspect Pi sessions, home directories, environment settings, or the current process. A smaller or larger synthetic run can use an explicit count from 1 through 1,000:
+`test:normal` runs the complete normal package suite and the bounded small/medium workload harness. `test:fixed-heap` compiles once, then runs the scale/fault matrix and the same deterministic workloads in fresh 512 MiB and 1 GiB processes. Any timeout, process crash, output overflow, or out-of-memory termination fails the lane. An optional local 2 GiB lane is available with `npm run test:fixed-heap -- --heaps 2048`; it is not a required CI lane.
+
+Both commands emit versioned machine-readable JSON for their harness stage. Reports separate stable `deterministic` fields from machine-specific `advisory` timing, CPU, RSS, and heap measurements. Workload reports include source and active record counts, bytes read and written, output and generation hashes, repeated-run equality, worker codes, and derived-store growth. They contain no source text, session identifiers, or paths.
+
+`../scripts/synthetic-session.mjs` owns the deterministic `small`, `medium`, `large`, `adversarial`, and `multi-agent` profiles. It supports exact event and tool-result sizes, one giant record, branches, repeated compaction records, malformed/incomplete tails, append/replacement/truncation/prefix-mutation scenarios, and a future shard-rollover plan. Large, adversarial, giant-record, 2 GiB, and long-generation workloads remain explicit bounded local runs.
+
+`../scripts/benchmark-harness.mjs` is the consolidated bounded workload entry point. Direct examples are:
+
+```bash
+node scripts/benchmark-harness.mjs normal --profiles small,medium
+node scripts/benchmark-harness.mjs fixed-heap --profiles small,medium --heaps 512,1024
+```
+
+The deployed-worker soak requires an explicit package root and expected version. It does not discover packages or sessions:
+
+```bash
+node scripts/deployed-worker-soak.mjs --package-root PACKAGE_ROOT --expected-version VERSION --sessions 6 --slots 2 --tasks 40
+```
+
+The soak creates independent owner-only temporary synthetic sessions, verifies host-slot enforcement, safe failure codes, bounded diagnostics, no cross-session source-reference leakage, bounded parent RSS, and zero scheduler residue, then removes all temporary data.
+
+## Legacy V2 benchmark
+
+`../scripts/benchmark-v2.mjs` remains a compatible manual benchmark. Its synthetic-entry export now delegates to the M02 generator so existing benchmark scripts remain stable.
+
+The default input is generated in memory with 250 synthetic tasks. It does not inspect Pi sessions, home directories, environment settings, or the current process. A smaller or larger synthetic run can use an explicit count from 1 through 5,000:
 
 ```bash
 node scripts/benchmark-v2.mjs --synthetic-tasks 100

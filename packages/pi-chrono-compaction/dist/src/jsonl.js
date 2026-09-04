@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readFile } from "node:fs/promises";
 import { stableStringify } from "./utils.js";
 export class SessionFormatError extends Error {
     lineNumber;
@@ -46,6 +47,55 @@ export function parseSessionJsonl(text, sessionPath) {
 }
 export async function readSessionJsonl(sessionPath) {
     return parseSessionJsonl(await readFile(sessionPath, "utf8"), sessionPath);
+}
+function boundedSourceState(value) {
+    if (!value.isFile())
+        throw new Error("history-source-unsafe-type");
+    return { deviceId: String(value.dev), inodeId: String(value.ino), size: Number(value.size), mtimeMs: Number(value.mtimeMs) };
+}
+function sameBoundedSource(left, right) {
+    return left.deviceId === right.deviceId && left.inodeId === right.inodeId && left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+export async function readBoundedSessionJsonl(sessionPath, maximumBytes, hooks = {}) {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1)
+        throw new Error("history-source-limit-invalid");
+    const handle = await open(sessionPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+        const source = boundedSourceState(await handle.stat());
+        if (source.size > maximumBytes)
+            throw new Error("history-source-too-large");
+        await hooks.afterOpened?.(source);
+        const content = Buffer.allocUnsafe(source.size);
+        let bytesRead = 0;
+        while (bytesRead < source.size) {
+            const requestedBytes = Math.min(1024 * 1024, source.size - bytesRead);
+            const result = await handle.read(content, bytesRead, requestedBytes, bytesRead);
+            hooks.onRead?.(requestedBytes, result.bytesRead, bytesRead);
+            if (result.bytesRead <= 0)
+                throw new Error("history-source-changed");
+            bytesRead += result.bytesRead;
+        }
+        const afterHandle = boundedSourceState(await handle.stat());
+        let afterPath;
+        try {
+            const pathHandle = await open(sessionPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+            try {
+                afterPath = boundedSourceState(await pathHandle.stat());
+            }
+            finally {
+                await pathHandle.close();
+            }
+        }
+        catch {
+            throw new Error("history-source-changed");
+        }
+        if (!sameBoundedSource(source, afterHandle) || !sameBoundedSource(source, afterPath))
+            throw new Error("history-source-changed");
+        return { session: parseSessionJsonl(content.toString("utf8"), sessionPath), source, bytesRead };
+    }
+    finally {
+        await handle.close();
+    }
 }
 export function parseBranchEntries(entries, header) {
     const effectiveHeader = header ?? { type: "session", version: 3 };

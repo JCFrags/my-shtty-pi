@@ -5,6 +5,9 @@ import { performance } from "node:perf_hooks";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadTestRuntime } from "./test-runtime-entry.mjs";
+import { syntheticEntries } from "./synthetic-session.mjs";
+
+export { syntheticEntries } from "./synthetic-session.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_FIXTURE_BYTES = 16 * 1024 * 1024;
@@ -17,47 +20,6 @@ async function loadRuntime() {
   return chrono;
 }
 
-export function syntheticEntries(taskCount = 250) {
-  const entries = [{
-    type: "message",
-    id: "syn-root",
-    parentId: null,
-    message: { role: "user", content: "Maintain the year-run service. Never publish private evidence. Keep immutable JSONL. The migration remains unresolved until approval." },
-  }];
-  let parentId = "syn-root";
-  for (let task = 1; task <= taskCount; task += 1) {
-    const userId = `syn-u-${task}`;
-    const callEntryId = `syn-a-${task}`;
-    const resultId = `syn-r-${task}`;
-    const answerId = `syn-f-${task}`;
-    const callId = `syn-call-${task}`;
-    if ((task - 1) % 10 === 0) {
-      entries.push({
-        type: "message", id: userId, parentId,
-        message: { role: "user", content: `Inspect year-run revisions for tasks ${task} through ${Math.min(taskCount, task + 9)} and report state changes.` },
-      });
-      parentId = userId;
-    }
-    entries.push({
-      type: "message", id: callEntryId, parentId,
-      message: { role: "assistant", content: [{ type: "toolCall", id: callId, name: "read", arguments: { path: "/repo/src/year-run.ts", revision: `r${task}`, offset: 1, limit: 80 } }], stopReason: "toolUse" },
-    });
-    const middle = Array.from({ length: 70 }, (_, line) => `export const stable${line} = ${line};`).join("\n");
-    const failure = task === 173 ? "\nERROR migration guard expected=pending received=complete" : "";
-    entries.push({
-      type: "message", id: resultId, parentId: callEntryId,
-      message: { role: "toolResult", toolCallId: callId, toolName: "read", content: [{ type: "text", text: `export const revision = \"r${task}\";\n${middle}${failure}` }], isError: task === 173, details: { exitCode: task === 173 ? 1 : 0 } },
-    });
-    entries.push({
-      type: "message", id: answerId, parentId: resultId,
-      message: { role: "assistant", content: [{ type: "text", text: task === taskCount
-        ? `Revision r${taskCount} is current. Migration remains unresolved. Next action: obtain approval before release.`
-        : `Observed revision r${task}; later work may supersede it.` }], stopReason: "stop" },
-    });
-    parentId = answerId;
-  }
-  return entries;
-}
 
 export function parseArgs(argv) {
   const args = { fixture: undefined, syntheticTasks: undefined };

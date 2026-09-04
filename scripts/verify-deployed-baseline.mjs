@@ -50,6 +50,7 @@ const correctionArtifactPaths = new Set([
   ".gitignore",
   "README.md",
   "packages/pi-chrono-compaction/README.md",
+  "packages/pi-chrono-compaction/docs/benchmark.md",
   "packages/pi-chrono-compaction/DEPLOYED.sha256",
   "packages/pi-chrono-compaction/package-lock.json",
   "packages/pi-chrono-compaction/package.json",
@@ -57,21 +58,36 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/dist/src/compaction-worker-entry.js",
   "packages/pi-chrono-compaction/dist/src/compaction-worker-protocol.js",
   "packages/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
+  "packages/pi-chrono-compaction/dist/src/jsonl.js",
   "packages/pi-chrono-compaction/dist/src/ledger-branch.js",
   "packages/pi-chrono-compaction/dist/src/pi-extension.js",
+  "packages/pi-chrono-compaction/dist/src/search-index.js",
   "packages/pi-chrono-compaction/dist/src/source-ledger.js",
   "packages/pi-chrono-compaction/src/compaction-worker-client.ts",
   "packages/pi-chrono-compaction/src/compaction-worker-entry.ts",
   "packages/pi-chrono-compaction/src/compaction-worker-protocol.ts",
   "packages/pi-chrono-compaction/src/host-worker-scheduler.ts",
+  "packages/pi-chrono-compaction/src/jsonl.ts",
   "packages/pi-chrono-compaction/src/ledger-branch.ts",
   "packages/pi-chrono-compaction/src/pi-extension.ts",
+  "packages/pi-chrono-compaction/src/search-index.ts",
   "packages/pi-chrono-compaction/src/source-ledger.ts",
   "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
   "packages/pi-chrono-compaction/test/extension.test.ts",
   "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
   "packages/pi-chrono-compaction/test/ledger-branch.test.ts",
   "packages/pi-chrono-compaction/test/source-ledger.test.ts",
+  "packages/pi-chrono-compaction/scripts/benchmark-harness.mjs",
+  "packages/pi-chrono-compaction/scripts/benchmark-v2.mjs",
+  "packages/pi-chrono-compaction/scripts/deployed-worker-soak.mjs",
+  "packages/pi-chrono-compaction/scripts/fixed-heap-suite.mjs",
+  "packages/pi-chrono-compaction/scripts/memory-characterization.mjs",
+  "packages/pi-chrono-compaction/scripts/synthetic-session.mjs",
+  "packages/pi-chrono-compaction/test/benchmark-harness.test.ts",
+  "packages/pi-chrono-compaction/test/fault-injection.test.ts",
+  "packages/pi-chrono-compaction/test/legacy-memory-safety.test.ts",
+  "packages/pi-chrono-compaction/test/support/fault-injection.ts",
+  "packages/pi-chrono-compaction/test/synthetic-session.test.ts",
   "scripts/verify-chrono-v3-baseline.mjs",
   "scripts/verify-chrono-v3-privacy.mjs",
   "scripts/verify-deployed-baseline.mjs",
@@ -100,6 +116,7 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
   "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
+  "docs/chrono-v3/reviews/M02-test-foundation-report.md",
 ]);
 
 const expectedSlugs = [
@@ -119,6 +136,8 @@ const expectedSafeScripts = Object.freeze({
     typecheck: "tsc -p tsconfig.json --noEmit",
     build: "rm -rf dist && tsc -p tsconfig.json",
     test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test --test-concurrency=1 dist-test/test/*.test.js",
+    "test:normal": "npm test && node scripts/benchmark-harness.mjs normal",
+    "test:fixed-heap": "rm -rf dist-test && tsc -p tsconfig.test-build.json && node scripts/fixed-heap-suite.mjs",
   },
   "pi-herdr-orchestrator": {
     typecheck: "tsc -p tsconfig.json --noEmit",
@@ -250,7 +269,7 @@ function verifyWorkflowBoundary() {
     throw new Error("verify workflow lacks explicit all-ref fetch");
   }
   const actionPins = workflow.match(/uses:\s+actions\/(?:checkout|setup-node)@[0-9a-f]{40}(?:\s|$)/gu) ?? [];
-  if (actionPins.length !== 2 || /uses:\s+actions\/(?:checkout|setup-node)@v/iu.test(workflow)) throw new Error("verify workflow actions are not pinned");
+  if (actionPins.length !== 14 || /uses:\s+actions\/(?:checkout|setup-node)@v/iu.test(workflow)) throw new Error("verify workflow actions are not pinned");
   for (const required of ["--self-test", "--event-scope", "--event-name", "$GITHUB_EVENT_NAME", "--require-public-review", "--repository", "--ci-event", "$GITHUB_EVENT_PATH"]) {
     if (!workflow.includes(required)) throw new Error(`verify workflow lacks event-scope scan argument ${required}`);
   }
@@ -507,7 +526,7 @@ for (const manifestPath of packageManifestPaths) {
     }
   }
 }
-if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 13) throw new Error("expected exactly 13 retained safe package scripts");
+if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 15) throw new Error("expected exactly 15 retained safe package scripts");
 
 function globRegex(pattern) {
   let out = "^";

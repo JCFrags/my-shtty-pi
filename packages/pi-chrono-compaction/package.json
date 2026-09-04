@@ -1,6 +1,6 @@
 {
   "name": "pi-chrono-compact",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Progressive chronological event compaction for long-running Pi sessions.",
   "type": "module",
   "license": "MIT",
@@ -46,6 +46,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "rm -rf dist && tsc -p tsconfig.json",
-    "test": "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test --test-concurrency=1 dist-test/test/*.test.js"
+    "test": "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test --test-concurrency=1 dist-test/test/*.test.js",
+    "test:normal": "npm test && node scripts/benchmark-harness.mjs normal",
+    "test:fixed-heap": "rm -rf dist-test && tsc -p tsconfig.test-build.json && node scripts/fixed-heap-suite.mjs"
   }
 }
