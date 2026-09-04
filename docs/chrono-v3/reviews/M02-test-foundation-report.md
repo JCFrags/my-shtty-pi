@@ -6,7 +6,7 @@
 - Base and M01 merge commit: `0a1ca2ff16d8b79db3fda88f156ea5b9c6864427`
 - Package candidate: ChronoCompact `2.0.2`
 - Implementation commit: `77cf5dd08486fd9ea6352a474aaac8a5e484f33a`
-- Pull request: pending; target is `rebuild/chrono-memory-v3`
+- Draft pull request: #34 into `rebuild/chrono-memory-v3`
 
 M02 remains unmerged. It does not request or authorize a merge to `main`, and M03 has not started.
 
@@ -35,7 +35,9 @@ The consolidated harness reports wall time, CPU, peak RSS, heap, bytes read and 
 
 The required 512 MiB and 1 GiB fixed-heap lanes passed. The threshold-race characterization admitted and read exactly `67,108,864` bytes, appended two bytes during the read, returned `history-source-changed`, and did not enter parsing.
 
-A bounded soak against the deployed `2.0.1` package used six independent synthetic sessions, two host slots, and forty tasks. All tasks completed, at most two workers held slots, no cross-session leakage occurred, and no scheduler or temporary residue remained. A controlled missing-entrypoint case returned `worker-entrypoint-unavailable`; its diagnostic remained bounded and owner-only. Parent peak RSS was `190,864 KiB`.
+A bounded soak against the then-deployed `2.0.1` package used six independent synthetic sessions, two host slots, and forty tasks. All tasks completed, at most two workers held slots, no cross-session leakage occurred, and no scheduler or temporary residue remained. A controlled missing-entrypoint case returned `worker-entrypoint-unavailable`; its diagnostic remained bounded and owner-only. Parent peak RSS was `190,864 KiB`.
+
+The same six-session, two-slot, forty-task soak passed after `2.0.2` activation. It again reported six `ok` results, `worker-entrypoint-unavailable`, maximum two slots, no leakage, zero ticket/slot residue, safe diagnostics, and parent peak RSS `163,628 KiB`.
 
 ## M01 limitation findings and 2.0.2 correction
 
@@ -66,10 +68,23 @@ The pre-push candidate passed:
 - Schema-3 worktree, index, and all-ref privacy scan: 175 commits, 82,593 path contexts, 1,794 blobs, 666 worktree/index files, zero findings.
 - Complete repository root verification: 17/17 manifests, 261/261 deployed hashes, 15/15 safe scripts, 17/17 package dry runs, and zero unexplained dependency-graph files.
 
-CI is split into publication, typecheck, unit/integration, determinism, 512/1024 MiB fixed-heap, build-consistency, and dependent root-verification jobs. Exact pushed-head CI remains required.
+CI is split into publication, typecheck, unit/integration, determinism, 512/1024 MiB fixed-heap, build-consistency, and dependent root-verification jobs. All seven push lanes passed at source and deployment commit `0c7173ff03ed010747ab9b5d7be6f8f84d423819`. Final evidence-head push and pull-request CI remain required.
 
-The live package remains healthy at `2.0.1`, deployed from source commit `24c6f13f1f6ac9468dfbeba4cad8021b44ecae7f`, with the isolated worker enabled. The verified M01 rollback `m01-20260904T185758Z-24c6f13f` remains ready. No `2.0.2` deployment has occurred yet; activation requires the exact pushed candidate, a fresh owner-only backup, generated-package hash verification, atomic replacement, and fresh Pi core and worker smokes.
+## Guarded 2.0.2 activation
+
+The exact pushed commit `0c7173ff03ed010747ab9b5d7be6f8f84d423819` was cloned into a new clean detached owner-only activation root. The package was dependency-prepared, rebuilt, compared with committed dist, stripped only of generated maps, and verified against `DEPLOYED.sha256`. An isolated offline loader check passed before the stable package alias was replaced atomically. The effective ChronoCompact configuration was byte-preserved.
+
+Fresh backup identity: `m02-20260904T212634Z-0c7173ff`. Its live `2.0.1` package copy and effective configuration match their pre-activation inputs. The rollback script passed its check mode and restores the prior alias target, configuration, and activation pointer atomically. The earlier M01 backup also remains retained.
+
+Live `2.0.2` checks passed:
+
+- Explicit main-process ordinary compaction succeeded and regular fallback remained available.
+- Search and recall over a synthetic source one byte above 64 MiB returned `legacy-history-size-limit` under a 128 MiB heap.
+- `/chrono-doctor` and `/chrono-worker-status` loaded without private paths.
+- Three repeated isolated-worker compactions and verified append during execution succeeded.
+- Controlled failures returned `worker-internal-error`, `worker-crashed`, and `worker-resource-limit`; the parent survived and diagnostics remained mode `0600`, bounded, and text-safe.
+- Persistent `isolatedWorkerEnabled` remained enabled without a configuration rewrite. Fresh production discovery had zero extension errors, and an ordinary compaction used the worker successfully.
 
 ## Current disposition
 
-User input is not required. The candidate has passed all local pre-push gates but is not yet ready for project-lead review. Remaining work is exact-head CI, guarded hotfix activation, deployment evidence, and a draft unmerged M02 pull request.
+User input is not required. M02 is complete locally and deployed; draft PR #34 remains unmerged. The final gate is green push and pull-request CI on the deployment-evidence head, after which the milestone is ready for project-lead review.
