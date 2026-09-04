@@ -10,7 +10,7 @@ function exactKeys(value, allowed) { return Object.keys(value).every((key) => al
 function boundedText(value, max = MAX_WORKER_TEXT_BYTES) { return typeof value === "string" && Buffer.byteLength(value) <= max; }
 function boundedId(value, max) { return boundedText(value, max) && value.length > 0; }
 function integer(value, min, max) { return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max; }
-function validExpectation(value) { return object(value) && exactKeys(value, ["deviceId", "inodeId", "size", "mtimeMs"]) && boundedId(value.deviceId, 64) && boundedId(value.inodeId, 64) && integer(value.size, 0, Number.MAX_SAFE_INTEGER) && typeof value.mtimeMs === "number" && Number.isFinite(value.mtimeMs); }
+function validExpectation(value) { return object(value) && exactKeys(value, ["deviceId", "inodeId", "size", "mtimeMs", "prefixHash", "prefixBytes"]) && boundedId(value.deviceId, 64) && boundedId(value.inodeId, 64) && integer(value.size, 0, Number.MAX_SAFE_INTEGER) && typeof value.mtimeMs === "number" && Number.isFinite(value.mtimeMs) && ((value.prefixHash === undefined && value.prefixBytes === undefined) || (typeof value.prefixHash === "string" && /^[a-f0-9]{64}$/.test(value.prefixHash) && integer(value.prefixBytes, 0, 65_536) && value.prefixBytes <= value.size)); }
 const CONFIG_KEYS = ["targetTokens", "minSummaryTokens", "maxSummaryTokens", "recentExactBiasFraction", "minMarginalUtilityPerToken", "mergeEpisodes", "mergeBeforeFraction", "maxIndividualUnits", "minEpisodeRawTokens", "maxEpisodeTokens", "semanticMaxTokens", "enableSemanticCompression", "includeHeader", "emergencyAllowAbsent", "hotSourceTokens", "warmSourceTokens", "coldCueTokens"];
 function validConfig(value) { if (!object(value) || !exactKeys(value, CONFIG_KEYS))
     return false; for (const key of CONFIG_KEYS) {
@@ -26,7 +26,7 @@ function validConfig(value) { if (!object(value) || !exactKeys(value, CONFIG_KEY
     else if (!integer(item, 0, 1_000_000))
         return false;
 } return true; }
-const FAILURE_CODES = ["worker-disabled", "no-session-file", "branch-not-persisted", "branch-parent-missing", "branch-cycle", "branch-source-order", "invalid-cut", "source-changed", "scheduler-timeout", "worker-timeout", "worker-aborted", "worker-crashed", "worker-protocol-error", "worker-response-too-large", "candidate-store-unavailable", "replay-validation-rejected", ...ROLLUP_SHADOW_FAILURE_CODES];
+const FAILURE_CODES = ["worker-disabled", "no-session-file", "branch-not-persisted", "branch-parent-missing", "branch-cycle", "branch-source-order", "invalid-cut", "source-changed", "scheduler-timeout", "worker-timeout", "worker-aborted", "worker-crashed", "worker-entrypoint-unavailable", "worker-resource-limit", "worker-internal-error", "worker-protocol-error", "worker-response-too-large", "candidate-store-unavailable", "replay-validation-rejected", ...ROLLUP_SHADOW_FAILURE_CODES];
 const FAILURE_CONTEXT_KEYS = ["sourceFileBytes", "sourceLedgerEntries", "branchEntries", "treeLevels", "leafCount", "rollupCount", "reachableNodeBytes", "currentMemoryBytes", "sourceBytesRead", "nodeBytesRead", "nodeBytes", "nodeTypeCode", "responseBytes"];
 function validFailureContext(value) {
     return object(value) && exactKeys(value, FAILURE_CONTEXT_KEYS) && Object.values(value).every(item => integer(item, 0, Number.MAX_SAFE_INTEGER));

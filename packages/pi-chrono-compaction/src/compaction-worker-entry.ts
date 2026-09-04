@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { chmod, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { setPriority } from "node:os";
 import { createCandidateSegmentStore, loadCandidateRecordsForBranch, loadCandidateSegmentManifest, updateCandidateSegmentStore } from "./candidate-segment-store.js";
@@ -34,12 +35,27 @@ const EMPTY_LOAD_METRICS: ReplayLoadMetrics = { sourceLedgerTransition: "none", 
   sourceByteAvoidanceRate: 0, completeSessionReadAvoided: false, candidateLedgerReused: false };
 function sourceState(value: Awaited<ReturnType<typeof stat>>): SourceState { return { deviceId: String(value.dev), inodeId: String(value.ino), size: Number(value.size), mtimeMs: Number(value.mtimeMs) }; }
 function same(a: SourceState, b: SourceState): boolean { return a.deviceId === b.deviceId && a.inodeId === b.inodeId && a.size === b.size && a.mtimeMs === b.mtimeMs; }
+async function hashSourcePrefixAnchor(path: string, sourceSize: number, bytes: number): Promise<string> {
+  const hash = createHash("sha256");
+  if (bytes === 0) return hash.digest("hex");
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(path, { start: sourceSize - bytes, end: sourceSize - 1 });
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+  return hash.digest("hex");
+}
 async function expectedState(request: CompactionWorkerRequest): Promise<SourceState> {
   let current: SourceState;
   try { current = sourceState(await stat(request.sessionPath)); } catch { throw Object.assign(new Error(), { code: "no-session-file" }); }
   const expected: SourceState = { deviceId: request.expectedSource.deviceId, inodeId: request.expectedSource.inodeId, size: request.expectedSource.size, mtimeMs: request.expectedSource.mtimeMs };
-  if (!same(current, expected)) throw Object.assign(new Error(), { code: "source-changed" });
-  return current;
+  if (request.expectedSource.prefixHash === undefined) {
+    if (!same(current, expected)) throw Object.assign(new Error(), { code: "source-changed" });
+  } else if (current.deviceId !== expected.deviceId || current.inodeId !== expected.inodeId || current.size < expected.size || await hashSourcePrefixAnchor(request.sessionPath, expected.size, request.expectedSource.prefixBytes ?? 0) !== request.expectedSource.prefixHash) {
+    throw Object.assign(new Error(), { code: "source-changed" });
+  }
+  return expected;
 }
 function cachePath(sessionPath: string): string { return `${sessionPath}.chrono-worker-replay-v1.json`; }
 async function readReplayCache(path: string, key: string): Promise<CompressionResult | undefined> {
@@ -65,7 +81,7 @@ function failureCode(error: unknown): WorkerFailureCode {
   const allowed: WorkerFailureCode[] = ["no-session-file", "branch-not-persisted", "branch-parent-missing", "branch-cycle",
     "branch-source-order", "invalid-cut", "source-changed", "candidate-store-unavailable", "replay-validation-rejected",
     "worker-timeout", "worker-aborted"];
-  return typeof code === "string" && allowed.includes(code as WorkerFailureCode) ? code as WorkerFailureCode : "unknown-worker-failure";
+  return typeof code === "string" && allowed.includes(code as WorkerFailureCode) ? code as WorkerFailureCode : "worker-internal-error";
 }
 function loadMetrics(transition: string, ledgerLoadMs: number, resolveMs: number, read: LedgerBranchReadMetrics, candidateLedgerReused: boolean): ReplayLoadMetrics {
   return { sourceLedgerTransition: transition, ledgerColdLoadMs: ledgerLoadMs, branchResolveMs: resolveMs,
@@ -74,13 +90,13 @@ function loadMetrics(transition: string, ledgerLoadMs: number, resolveMs: number
     sourceByteAvoidanceRate: read.sourceByteAvoidanceRate, completeSessionReadAvoided: true, candidateLedgerReused };
 }
 async function replay(request: Extract<CompactionWorkerRequest, { jobType: "replay-compaction" }>, signal?: AbortSignal): Promise<{ result: CompressionResult; rebase?: string; compactionMs: number; cacheState: WorkerRuntimeMetrics["cacheState"]; sourceCount: number; load: ReplayLoadMetrics }> {
-  const boundState = await expectedState(request);
+  await expectedState(request);
   const ledgerAt = performance.now();
   const ledger = await updateSourceLedger(request.sessionPath);
   const ledgerLoadMs = performance.now() - ledgerAt;
-  if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+  await expectedState(request);
   const loaded = await loadSourceLedgerBranch(request.sessionPath, ledger, request.branchLeafId);
-  if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+  await expectedState(request);
   const split = splitLedgerBranchAtEntry(loaded.ledgerEntries, request.firstKeptEntryId);
   const source = loaded.entries.slice(0, split.cutIndex);
   const future = loaded.entries.slice(split.cutIndex);
@@ -131,7 +147,7 @@ async function replay(request: Extract<CompactionWorkerRequest, { jobType: "repl
     compactionMs = performance.now() - at;
     if (request.cacheEnabled) { try { await writeReplayCache(cachePath(request.sessionPath), key, result); } catch { cacheState = "write-failed"; } }
   }
-  if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+  await expectedState(request);
   return { result, rebase, compactionMs, cacheState, sourceCount: source.length,
     load: loadMetrics(ledger.metrics.transition, ledgerLoadMs, loaded.resolveMs, loaded.metrics, candidateLedgerReused) };
 }
@@ -159,7 +175,7 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
     if (Date.now() > request.deadlineMs) throw Object.assign(new Error(), { code: "worker-timeout" });
     if (request.jobType === "rollup-shadow") {
       reportShadowStage("source-bind", { sourceFileBytes: request.expectedSource.size, currentMemoryBytes: process.memoryUsage().rss });
-      const boundState = await expectedState(request);
+      await expectedState(request);
       const shadow = await runRollupShadowEvaluation({
         sessionPath: request.sessionPath,
         branchLeafId: request.branchLeafId,
@@ -173,9 +189,7 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
         persist: false,
         onStage: reportShadowStage,
       });
-      if (!same(boundState, sourceState(await stat(request.sessionPath)))) {
-        throw Object.assign(new Error(), { code: "source-changed" });
-      }
+      await expectedState(request);
       if (shadow.safeStatus === "validation-failed") {
         reportShadowStage("rollup-validation", shadowContext);
         throw Object.assign(new Error("history-rollup-validation-failed"), { code: "history-rollup-validation-failed" });
@@ -195,10 +209,10 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
       };
     }
     if (request.jobType === "candidate-store-update") {
-      const boundState = await expectedState(request);
+      await expectedState(request);
       const store = createCandidateSegmentStore(request.sessionPath);
       const metrics = await updateCandidateSegmentStore(store, resolveCompactorConfig(request.config), { ...(request.storeSettings ?? {}), signal });
-      if (!same(boundState, sourceState(await stat(request.sessionPath)))) throw Object.assign(new Error(), { code: "source-changed" });
+      await expectedState(request);
       return { schemaVersion: 1, jobId: request.jobId, status: "ok", jobType: request.jobType, candidateUpdate: metrics,
         metrics: baseMetrics(started, 0, priorityApplied, "disabled") };
     }

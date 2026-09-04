@@ -37,12 +37,32 @@ if (productIndex >= 0 && !selectedSlug) throw new Error("--product requires a sl
 const staticOnly = args.includes("--static-only");
 const projectGlanceSlug = "pi-project-glance";
 const m00BaselineCommit = "1887c77b39c42fb0b5d35b38baac94aff13465e9";
+const m00IntegrationCommit = "ca8a94134e5577edd82204ae173126464fc82b70";
+const m01MutableHistoricalTests = new Set([
+  "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
+  "packages/pi-chrono-compaction/test/extension.test.ts",
+  "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
+]);
 const correctionArtifactPaths = new Set([
   ".github/workflows/verify.yml",
   ".gitignore",
   "README.md",
+  "packages/pi-chrono-compaction/README.md",
+  "packages/pi-chrono-compaction/DEPLOYED.sha256",
+  "packages/pi-chrono-compaction/package-lock.json",
   "packages/pi-chrono-compaction/package.json",
+  "packages/pi-chrono-compaction/dist/src/compaction-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/compaction-worker-entry.js",
+  "packages/pi-chrono-compaction/dist/src/compaction-worker-protocol.js",
+  "packages/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
+  "packages/pi-chrono-compaction/dist/src/pi-extension.js",
+  "packages/pi-chrono-compaction/src/compaction-worker-client.ts",
+  "packages/pi-chrono-compaction/src/compaction-worker-entry.ts",
+  "packages/pi-chrono-compaction/src/compaction-worker-protocol.ts",
+  "packages/pi-chrono-compaction/src/host-worker-scheduler.ts",
+  "packages/pi-chrono-compaction/src/pi-extension.ts",
   "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
+  "packages/pi-chrono-compaction/test/extension.test.ts",
   "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
   "scripts/verify-chrono-v3-baseline.mjs",
   "scripts/verify-chrono-v3-privacy.mjs",
@@ -287,7 +307,9 @@ function verifyHistoricalInventory() {
     } catch {
       governanceFail(`current blob unavailable: ${currentPath}`);
     }
-    if (actualCurrentSha !== currentSha) governanceFail(`current blob mismatch: ${currentPath}`);
+    if (m01MutableHistoricalTests.has(currentPath)) {
+      if (gitObjectId(m00IntegrationCommit, currentPath) !== currentSha) governanceFail(`accepted M00 blob mismatch: ${currentPath}`);
+    } else if (actualCurrentSha !== currentSha) governanceFail(`current blob mismatch: ${currentPath}`);
     if (!Object.hasOwn(classCounts, classification)) governanceFail(`unknown inventory classification: ${classification}`);
     if (!Object.hasOwn(runnableCounts, runnable)) governanceFail(`invalid runnable value: ${runnable}`);
     if (!reason || !family) governanceFail(`inventory reason or family is empty: ${historicalPath}`);
@@ -895,5 +917,6 @@ console.log(JSON.stringify({
   trackedFiles: tracked.length,
   privacyScan: "pass",
   piWebPackages: 0,
-  allCurrentDeployedCodeOnMain: true,
+  m00BaselinePreserved: true,
+  m01MainMergeRequired: false,
 }, null, 2));

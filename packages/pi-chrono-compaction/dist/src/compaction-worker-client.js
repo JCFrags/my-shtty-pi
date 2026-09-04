@@ -1,14 +1,18 @@
 import { fork } from "node:child_process";
-import { closeSync, openSync, writeSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, constants as fsConstants, fchmodSync, fstatSync, ftruncateSync, openSync, readFileSync, statSync, writeSync } from "node:fs";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireHostWorkerSlot } from "./host-worker-scheduler.js";
 import { MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_STDERR_BYTES, validateWorkerRequest, validateWorkerResponse } from "./compaction-worker-protocol.js";
-import { ROLLUP_SHADOW_FAILURE_STAGES, safeFailureContext } from "./rollup-shadow-failure.js";
+import { ROLLUP_SHADOW_FAILURE_CODES, ROLLUP_SHADOW_FAILURE_STAGES, safeFailureContext } from "./rollup-shadow-failure.js";
+const MAX_WORKER_DIAGNOSTIC_BYTES = 1024 * 1024;
+export function replayWorkerDiagnosticPath(sessionPath) { return `${sessionPath}.chrono-worker-diagnostics-v1.jsonl`; }
 function safeFailure(request, code, stage, context) {
-    const shadowCode = code === "worker-response-too-large" ? "shadow-response-too-large"
+    const mappedShadowCode = code === "worker-response-too-large" ? "shadow-response-too-large"
         : code === "worker-protocol-error" ? "shadow-protocol-error"
-            : code === "scheduler-timeout" ? "worker-timeout"
-                : code;
+            : code === "scheduler-timeout" ? "worker-timeout" : code;
+    const shadowCode = ROLLUP_SHADOW_FAILURE_CODES.includes(mappedShadowCode) ? mappedShadowCode : "worker-crashed";
     return { schemaVersion: 1, jobId: request.jobId, status: "failed", jobType: request.jobType,
         failureCode: request.jobType === "rollup-shadow" ? shadowCode : code,
         ...(request.jobType === "rollup-shadow" ? { failureStage: stage ?? "unknown-stage", ...(safeFailureContext(context) ? { failureContext: safeFailureContext(context) } : {}) } : {}),
@@ -27,16 +31,40 @@ function stop(child) { try {
 catch { } if (child.exitCode === null && !child.killed)
     child.kill("SIGKILL"); }
 function emptyMetrics(request, slots, codeResponse) { return { response: codeResponse, clientMetrics: { jobType: request.jobType, schedulerSlotLimit: slots, schedulerQueueWaitMs: 0, schedulerQueuePosition: 0, workerStartMs: 0, workerTotalWallMs: 0, mainProcessMaximumTimerDelayMs: 0, responseBytes: 0, stderrBytes: 0 } }; }
-function writePrivateDiagnostic(path, response, elapsedMs, exitCode, signal) {
-    if (!path || response.status !== "failed" || response.jobType !== "rollup-shadow")
+function diagnosticEntrypointIdentity(path) {
+    const name = basename(path).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 128) || "worker-entrypoint";
+    try {
+        const bytes = statSync(path).size;
+        if (bytes > 1024 * 1024)
+            return { name, bytes };
+        return { name, bytes, sha256: createHash("sha256").update(readFileSync(path)).digest("hex") };
+    }
+    catch {
+        return { name };
+    }
+}
+function safeStderrTail(bytes) {
+    return `sha256:${createHash("sha256").update(bytes).digest("hex")};bytes:${bytes.length}`;
+}
+function writePrivateDiagnostic(path, response, elapsedMs, stage, entry, requestBytes, responseBytes, stderrTail, stderrBytes, exitCode, signal) {
+    if (!path || response.status !== "failed")
         return;
-    const record = { schemaVersion: 1, failureStage: response.failureStage, failureCode: response.failureCode,
-        elapsedMs: Math.max(0, elapsedMs), peakRssKiB: response.metrics.peakRssKiB,
+    const record = { schemaVersion: 1, failureStage: response.failureStage ?? stage.slice(0, 64), failureCode: response.failureCode,
+        elapsedMs: Math.max(0, elapsedMs), peakRssKiB: response.metrics.peakRssKiB, requestBytes, responseBytes, stderrBytes,
+        stderrTail: safeStderrTail(stderrTail), entrypoint: diagnosticEntrypointIdentity(entry),
         ...(exitCode === undefined ? {} : { exitCode }), ...(signal ? { signal } : {}),
         ...(response.failureContext ? { context: response.failureContext } : {}) };
-    const descriptor = openSync(path, "a", 0o600);
+    const line = `${JSON.stringify(record)}\n`;
+    const descriptor = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
     try {
-        writeSync(descriptor, `${JSON.stringify(record)}\n`);
+        const metadata = fstatSync(descriptor);
+        const uid = typeof process.getuid === "function" ? process.getuid() : metadata.uid;
+        if (!metadata.isFile() || metadata.uid !== uid || metadata.nlink !== 1 || (metadata.mode & 0o077) !== 0)
+            throw new Error("unsafe-worker-diagnostic");
+        fchmodSync(descriptor, 0o600);
+        if (metadata.size + Buffer.byteLength(line) > MAX_WORKER_DIAGNOSTIC_BYTES)
+            ftruncateSync(descriptor, 0);
+        writeSync(descriptor, line);
     }
     finally {
         closeSync(descriptor);
@@ -44,23 +72,31 @@ function writePrivateDiagnostic(path, response, elapsedMs, exitCode, signal) {
 }
 export async function runCompactionWorker(requestValue, options = {}) {
     const request = validateWorkerRequest(requestValue);
-    if (Buffer.byteLength(JSON.stringify(request)) > MAX_WORKER_REQUEST_BYTES)
+    const requestBytes = Buffer.byteLength(JSON.stringify(request));
+    if (requestBytes > MAX_WORKER_REQUEST_BYTES)
         throw new Error("worker-protocol-error");
+    const entry = options.entryPath ?? fileURLToPath(new URL("./compaction-worker-entry.js", import.meta.url));
+    const diagnosticPath = options.privateDiagnosticPath ?? replayWorkerDiagnosticPath(request.sessionPath);
     let lease;
     try {
         lease = await acquireHostWorkerSlot({ slots: options.slots, timeoutMs: options.schedulerTimeoutMs, priority: options.priority ?? (request.jobType === "replay-compaction" ? "high" : "low"), jobType: request.jobType, signal: options.signal, directory: options.schedulerDirectory });
     }
     catch (error) {
         const code = options.signal?.aborted || String(error?.message).includes("aborted") ? "worker-aborted" : "scheduler-timeout";
-        return emptyMetrics(request, options.slots ?? 1, safeFailure(request, code, "scheduler-wait"));
+        const result = emptyMetrics(request, options.slots ?? 1, safeFailure(request, code, "scheduler-wait"));
+        try {
+            writePrivateDiagnostic(diagnosticPath, result.response, 0, "scheduler-wait", entry, requestBytes, 0, Buffer.alloc(0), 0);
+        }
+        catch { }
+        return result;
     }
     const wallStart = performance.now();
     let maxDelay = 0;
     let expected = performance.now() + 10;
     const probe = setInterval(() => { const now = performance.now(); maxDelay = Math.max(maxDelay, now - expected); expected = now + 10; }, 10);
-    const entry = options.entryPath ?? fileURLToPath(new URL("./compaction-worker-entry.js", import.meta.url));
     let child;
     let stderrBytes = 0;
+    let stderrTail = Buffer.alloc(0);
     let startedAt = 0;
     try {
         return await new Promise((resolve) => {
@@ -69,6 +105,7 @@ export async function runCompactionWorker(requestValue, options = {}) {
             let termination;
             let terminationTimer;
             let latestStage = "child-start";
+            let diagnosticStage = "child-start";
             let latestContext;
             let childExitCode;
             let childSignal;
@@ -87,7 +124,7 @@ export async function runCompactionWorker(requestValue, options = {}) {
                 const response = responseBytes > MAX_WORKER_RESPONSE_BYTES ? safeFailure(request, "worker-response-too-large", "response-validation", { responseBytes }) : input;
                 const elapsedMs = performance.now() - wallStart;
                 try {
-                    writePrivateDiagnostic(options.privateDiagnosticPath, response, elapsedMs, childExitCode, childSignal);
+                    writePrivateDiagnostic(diagnosticPath, response, elapsedMs, diagnosticStage, entry, requestBytes, responseBytes, stderrTail, stderrBytes, childExitCode, childSignal);
                 }
                 catch { }
                 resolve({ response, clientMetrics: { jobType: request.jobType, schedulerSlotLimit: lease.slots, schedulerQueueWaitMs: lease.queueWaitMs, schedulerQueuePosition: lease.queuePosition, workerStartMs: startedAt, workerTotalWallMs: elapsedMs, mainProcessMaximumTimerDelayMs: maxDelay, responseBytes, stderrBytes } });
@@ -98,15 +135,20 @@ export async function runCompactionWorker(requestValue, options = {}) {
             }
             catch { } terminationTimer = setTimeout(() => finish(response), 1_100); };
             try {
+                if (!statSync(entry).isFile()) {
+                    finish(safeFailure(request, "worker-entrypoint-unavailable", "child-start"));
+                    return;
+                }
                 child = fork(entry, [], { stdio: ["ignore", "ignore", "pipe", "ipc"], env: allowedEnvironment(), serialization: "json", execArgv: [] });
                 startedAt = performance.now() - wallStart;
+                diagnosticStage = "child-running";
             }
             catch {
-                finish(safeFailure(request, "worker-crashed", "child-start"));
+                finish(safeFailure(request, "worker-entrypoint-unavailable", "child-start"));
                 return;
             }
             const running = child;
-            running.stderr?.on("data", (chunk) => { stderrBytes = Math.min(MAX_WORKER_STDERR_BYTES, stderrBytes + chunk.length); });
+            running.stderr?.on("data", (chunk) => { stderrBytes += chunk.length; stderrTail = Buffer.concat([stderrTail, chunk]).subarray(-MAX_WORKER_STDERR_BYTES); });
             timeout = setTimeout(() => terminate(safeFailure(request, "worker-timeout", latestStage, latestContext)), Math.max(1, options.workerTimeoutMs ?? 900_000));
             const abort = () => terminate(safeFailure(request, "worker-aborted", latestStage, latestContext));
             options.signal?.addEventListener("abort", abort, { once: true });
@@ -120,10 +162,12 @@ export async function runCompactionWorker(requestValue, options = {}) {
                         return;
                     }
                     latestStage = stage;
+                    diagnosticStage = latestStage;
                     latestContext = safeFailureContext(value.context);
                     return;
                 }
                 options.signal?.removeEventListener("abort", abort);
+                diagnosticStage = "response-validation";
                 try {
                     finish(validateWorkerResponse(value, request.jobId));
                 }
@@ -132,8 +176,8 @@ export async function runCompactionWorker(requestValue, options = {}) {
                 }
             });
             running.on("error", () => finish(termination ?? safeFailure(request, "worker-crashed", latestStage, latestContext)));
-            running.on("exit", (code, signal) => { childExitCode = code; childSignal = signal; if (!settled)
-                finish(termination ?? safeFailure(request, "worker-crashed", latestStage, latestContext)); });
+            running.on("exit", (code, signal) => { childExitCode = code; childSignal = signal; diagnosticStage = "child-exit"; if (!settled)
+                finish(termination ?? safeFailure(request, signal === "SIGKILL" ? "worker-resource-limit" : "worker-crashed", latestStage, latestContext)); });
             running.send(request, (error) => { if (error)
                 finish(safeFailure(request, "worker-crashed", "child-start")); });
         });

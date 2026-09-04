@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMPACTION_WORKER_PROTOCOL_VERSION } from "./compaction-worker-protocol.js";
@@ -27,24 +27,74 @@ function ownerAlive(owner) {
 export function defaultSchedulerDirectory() { const uid = typeof process.getuid === "function" ? String(process.getuid()) : "unknown"; const identity = createHash("sha256").update(uid).digest("hex").slice(0, 16); return join(tmpdir(), `chrono-compact-worker-v${COMPACTION_WORKER_PROTOCOL_VERSION}-${identity}`); }
 async function ensureDirectory(path) { await mkdir(path, { recursive: true, mode: 0o700 }); await chmod(path, 0o700); }
 async function readOwner(path) { try {
+    const metadata = await lstat(path);
+    const uid = typeof process.getuid === "function" ? process.getuid() : metadata.uid;
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== uid || (metadata.mode & 0o777) !== 0o600 || metadata.size < 2 || metadata.size > 1_000)
+        return undefined;
     const value = JSON.parse(await readFile(path, "utf8"));
-    return value && value.schemaVersion === 1 && typeof value.pid === "number" && typeof value.nonce === "string" ? value : undefined;
+    const keys = Object.keys(value).sort().join(",");
+    return value && keys === "createdAtMs,jobType,nonce,pid,priority,processStartIdentity,schemaVersion" && value.schemaVersion === 1 && Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.processStartIdentity === "string" && value.processStartIdentity.length > 0 && value.processStartIdentity.length <= 64 && /^[a-f0-9]{32}$/.test(value.nonce) && Number.isSafeInteger(value.createdAtMs) && value.createdAtMs > 0 && (value.priority === "high" || value.priority === "low") && (value.jobType === "replay-compaction" || value.jobType === "candidate-store-update" || value.jobType === "rollup-shadow") ? value : undefined;
 }
 catch {
     return undefined;
 } }
-async function removeDead(path) { const owner = await readOwner(path); if (!owner)
-    return false; const alive = ownerAlive(owner); if (alive === false) {
+const malformedArtifacts = new Map();
+async function removeDead(path, malformedStableMs) { const owner = await readOwner(path); if (!owner) {
+    try {
+        const value = await lstat(path);
+        const fingerprint = `${String(value.dev)}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+        const prior = malformedArtifacts.get(path);
+        if (!prior || prior.fingerprint !== fingerprint) {
+            malformedArtifacts.set(path, { fingerprint, firstSeenMs: Date.now() });
+            return false;
+        }
+        if (Date.now() - prior.firstSeenMs < malformedStableMs)
+            return false;
+        const again = await lstat(path);
+        const current = `${String(again.dev)}:${String(again.ino)}:${again.size}:${again.mtimeMs}`;
+        if (current !== fingerprint || await readOwner(path))
+            return false;
+        await rm(path, { force: true });
+        malformedArtifacts.delete(path);
+        return true;
+    }
+    catch {
+        malformedArtifacts.delete(path);
+        return false;
+    }
+} malformedArtifacts.delete(path); const alive = ownerAlive(owner); if (alive === false) {
     const again = await readOwner(path);
     if (again?.nonce === owner.nonce) {
         await rm(path, { force: true });
         return true;
     }
 } return false; }
-async function cleanup(directory) { for (const name of await readdir(directory)) {
-    if (!name.startsWith("ticket-") && !name.startsWith("slot-"))
+async function cleanup(directory, malformedStableMs) { for (const name of await readdir(directory)) {
+    if (!name.startsWith("ticket-") && !name.startsWith("slot-") && !/^\.(?:ticket|slot)-.+\.tmp$/.test(name))
         continue;
-    await removeDead(join(directory, name));
+    await removeDead(join(directory, name), malformedStableMs);
+} }
+async function publishOwner(directory, name, owner) { const finalPath = join(directory, name); const temporary = join(directory, `.${name}-${owner.nonce}.tmp`); try {
+    const handle = await open(temporary, "wx", 0o600);
+    try {
+        await handle.writeFile(JSON.stringify(owner));
+        await handle.sync();
+    }
+    finally {
+        await handle.close();
+    }
+    try {
+        await link(temporary, finalPath);
+        return true;
+    }
+    catch (error) {
+        if (error.code === "EEXIST")
+            return false;
+        throw error;
+    }
+}
+finally {
+    await rm(temporary, { force: true });
 } }
 function wait(ms, signal) { return new Promise((resolve, reject) => { if (signal?.aborted)
     return reject(new Error("worker-aborted")); const timer = setTimeout(resolve, ms); signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("worker-aborted")); }, { once: true }); }); }
@@ -55,15 +105,17 @@ export async function acquireHostWorkerSlot(options) {
         throw new Error("host worker slots must be from 1 through 4");
     const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? 900_000));
     const pollMs = Math.min(1000, Math.max(20, Math.floor(options.pollMs ?? 75)));
+    const malformedStableMs = Math.max(50, Math.floor(options.malformedStableMs ?? 5_000));
     const directory = options.directory ?? defaultSchedulerDirectory();
     await ensureDirectory(directory);
-    await cleanup(directory);
+    await cleanup(directory, malformedStableMs);
     const startIdentity = linuxProcessStartIdentity() ?? "unverified";
     const nonce = randomBytes(16).toString("hex");
     const owner = { schemaVersion: 1, pid: process.pid, processStartIdentity: startIdentity, nonce, createdAtMs: Date.now(), priority: options.priority, jobType: options.jobType };
     const ticketName = `ticket-${nonce}.json`;
     const ticketPath = join(directory, ticketName);
-    await writeFile(ticketPath, JSON.stringify(owner), { mode: 0o600, flag: "wx" });
+    if (!await publishOwner(directory, ticketName, owner))
+        throw new Error("scheduler-ticket-collision");
     const started = Date.now();
     let maximumPosition = 1;
     try {
@@ -72,7 +124,7 @@ export async function acquireHostWorkerSlot(options) {
                 throw new Error("worker-aborted");
             if (Date.now() - started >= timeoutMs)
                 throw new Error("scheduler-timeout");
-            await cleanup(directory);
+            await cleanup(directory, malformedStableMs);
             const names = (await readdir(directory)).filter(x => x.startsWith("ticket-"));
             const tickets = [];
             for (const name of names) {
@@ -86,18 +138,10 @@ export async function acquireHostWorkerSlot(options) {
             let available = -1;
             for (let slot = 0; slot < slots; slot++) {
                 const path = join(directory, `slot-${slot}.json`);
-                await removeDead(path);
-                try {
-                    const handle = await open(path, "wx", 0o600);
-                    await handle.writeFile(JSON.stringify(owner));
-                    await handle.sync();
-                    await handle.close();
+                await removeDead(path, malformedStableMs);
+                if (await publishOwner(directory, `slot-${slot}.json`, owner)) {
                     available = slot;
                     break;
-                }
-                catch (error) {
-                    if (error.code !== "EEXIST")
-                        throw error;
                 }
             }
             if (available >= 0) {
