@@ -4,7 +4,7 @@
 
 - Branch: `work/chrono-v3-m01-safety`
 - Base: `ca8a94134e5577edd82204ae173126464fc82b70`
-- Reviewed head: `1a4d784a30087a9b46705dcfb6de5ecee0fa6079`
+- Runtime source commit: `31b54202bc7ebfc3ce84698102b06276a4cf3efa`
 - Draft pull request: #31 into `rebuild/chrono-memory-v3`
 - Package version: `2.0.1`
 
@@ -16,24 +16,24 @@ M01 refuses legacy whole-file history search and recall above 64 MiB before pars
 
 The isolated worker uses a bounded source anchor that permits verified append while rejecting replacement or prefix mutation. Stable failure codes cover internal errors, unavailable entrypoints, and resource termination without terminating the parent process. Private diagnostics retain bounded operational fields and an stderr digest and byte count, never arbitrary stderr. Diagnostic files are owner-only, no-follow, single-link regular files with a 1 MiB cap.
 
-Scheduler ownership publication is atomic. Malformed artifacts are removed only after a stable delay and fingerprint revalidation. `/chrono-worker-status` and `/chrono-doctor` expose bounded aggregate state without session content or private paths.
+Scheduler ownership publication is atomic. Malformed artifacts are removed only after a stable delay and fingerprint revalidation. Polling waits remove each AbortSignal listener on resolution, rejection, or cancellation, so long waits do not accumulate listeners. Verified ledger snapshots accept same-inode growth beyond their checkpoint only while the checkpoint anchor and every selected entry remain hash-valid; replacement, truncation, and selected or checkpoint mutation fail closed. `/chrono-worker-status` and `/chrono-doctor` expose bounded aggregate state without session content or private paths.
 
 ## Verification
 
-The exact reviewed head passed:
+The runtime source commit passed:
 
-- ChronoCompact package tests: 300/300.
-- Focused M01 safety tests: 30/30.
+- ChronoCompact package tests: 307/307.
+- Focused correction tests: 39/39.
 - Schema-3 baseline-verifier tests: 29/29.
 - Synthetic 205 MiB refusal under a 128 MiB Node heap.
 - Package typecheck and committed build comparison.
 - Complete root verification and publication/privacy scanning.
-- Both GitHub verification checks for PR #31.
+- Both GitHub verification checks for PR #31 are required before activation.
 
 The schema-3 M01 boundary records these exact hashes:
 
-- Source tree: `ce9e04d11e314fa19d8d6409bc238d788ab5c9f0332f59612d9b486f34f56b63`.
-- Dist tree: `baba971b54b84e97f4382f7dd532ddae3ec74ed80b5b9eec48eb1cbcacf7ea0e`.
+- Source tree: `cd131fdf1c89d9a5cefd86e57c0b82258061a6a9569a73aef56c53fb69b81fc2`.
+- Dist tree: `ac067d4a555d9707305fbb319ce85e42e4783d8d45108fb93fb19869a71ae9f0`.
 - Entrypoint: `2dc8f0dff8c8204c60e0487067263c92ef010415c877938f2b6e807144699d89`.
 - Package metadata: `bf56a67fb0a7f449929cec8eac5b44b1e2ca66065648202c5afeea39b61e679d`.
 - Lock metadata: `cbccc05104d11e0b082fa419253c517087a52f0bb3bc58f40e60515ecb02f22c`.
@@ -42,9 +42,7 @@ An early advisory audit identified three blocking defects: a red focused test, u
 
 ## Activation status
 
-Live activation is deferred. The canonical activation checkout contains unrelated in-progress Project Glance work and is not clean on `main`, so changing it would violate the activation runbook and risk unrelated work. No package replacement, `/reload`, live success smoke, or controlled-failure smoke occurred. The persistent isolated-worker setting remains disabled pending activation.
-
-Before activation, restore the required clean canonical `main` state, create and verify an owner-only rollback, run the isolated loader comparison, activate atomically, reload, and run both live smokes. Enable the isolated worker only if both smokes pass; otherwise keep it disabled and roll back.
+Activation will use a clean detached checkout at the exact final pushed head. The unrelated canonical working checkout will not be altered, cleaned, stashed, or switched. Before replacement, activation requires a fresh owner-only verified package backup and an isolated loader check. The persistent isolated-worker setting remains disabled until all success and controlled-failure canaries pass.
 
 ## Project-lead disposition
 
