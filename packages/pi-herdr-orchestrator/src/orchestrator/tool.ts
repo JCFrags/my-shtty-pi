@@ -27,6 +27,7 @@ const MAX_LINES = 40;
 const MAX_ACTIVE_CHILDREN = 6;
 const MAX_LIST_AGENTS = 32;
 const MAX_RECENT_RUNS = 8;
+const MAX_RECONCILE_RUNS_PER_DRAIN = 32;
 const MANAGED_TAB_LABEL = "subagents";
 const CAPABILITIES = {
   visiblePaneCreation: true,
@@ -282,7 +283,9 @@ function publicError(error: unknown): OrchestrationError {
 async function withDomainLock<T>(
   domainId: string,
   action: () => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
+  if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
   const previous = domainLocks.get(domainId) ?? Promise.resolve();
   let release = (): void => undefined;
   const gate = new Promise<void>((resolveGate) => {
@@ -290,12 +293,30 @@ async function withDomainLock<T>(
   });
   const queued = previous.then(() => gate);
   domainLocks.set(domainId, queued);
-  await previous;
+  const cleanup = () => {
+    if (domainLocks.get(domainId) === queued) domainLocks.delete(domainId);
+  };
+  void queued.then(cleanup, cleanup);
+  if (signal) {
+    await Promise.race([
+      previous,
+      new Promise<never>((_resolve, reject) => {
+        const abort = () => reject(signal.reason ?? new Error("Aborted"));
+        signal.addEventListener("abort", abort, { once: true });
+        void previous.finally(() => signal.removeEventListener("abort", abort));
+      }),
+    ]).catch((error) => {
+      // Release only this waiter's gate. Keep the queued chain mapped until the
+      // previous holder has settled, so a later caller cannot bypass it.
+      release();
+      throw error;
+    });
+  } else await previous;
   try {
+    if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
     return await action();
   } finally {
     release();
-    if (domainLocks.get(domainId) === queued) domainLocks.delete(domainId);
   }
 }
 
@@ -460,6 +481,24 @@ function listRecordView(
   };
 }
 
+function runFacts(run: RunRecord): JsonObject {
+  return {
+    runId: run.runId,
+    assignmentGeneration: run.assignmentGeneration,
+    phase: run.phase,
+    assignmentState: run.assignmentState,
+    latestProgress: run.latestProgress,
+    terminal: run.terminal,
+    deliveredSequence: run.deliveredSequence,
+    terminalDelivered: run.terminalDelivered,
+    notifiedSequence: run.notifiedSequence,
+    terminalNotified: run.terminalNotified,
+    cancelRequestedAt: run.cancelRequestedAt,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+  };
+}
+
 function recentRunHistory(agent: AgentRecord): JsonObject[] {
   return agent.runs.slice(-MAX_RECENT_RUNS).reverse().map((run) => ({
     runId: run.runId,
@@ -472,8 +511,19 @@ function recentRunHistory(agent: AgentRecord): JsonObject[] {
 }
 
 function newestAgents(agents: AgentRecord[]): AgentRecord[] {
+  const priority = (agent: AgentRecord) =>
+    agent.processState === "live" && !agent.terminal
+      ? 0
+      : !agent.terminal && agent.processState !== "closed" && agent.processState !== "failed"
+        ? 1
+        : 2;
   return [...agents]
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .sort(
+      (left, right) =>
+        priority(left) - priority(right) ||
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        left.agentId.localeCompare(right.agentId),
+    )
     .slice(0, MAX_LIST_AGENTS);
 }
 
@@ -933,7 +983,7 @@ function assignmentPrompt(
   assignmentGeneration: number,
   task: string,
 ): string {
-  return `[orchestrate assignment]\nrunId: ${runId}\nassignmentGeneration: ${assignmentGeneration}\nEvery subagent_channel call must include this exact runId and assignmentGeneration. Calls from older assignments are rejected. If the parent requests cancellation, stop dependent work and call subagent_channel action acknowledge_cancel with a concise summary.\n\nTask:\n${task}`;
+  return `[orchestrate assignment]\nrunId: ${runId}\nassignmentGeneration: ${assignmentGeneration}\nThe run and assignment generation above are authoritative state metadata. Every subagent_channel call must include these exact values; calls from older assignments are rejected. Report meaningful progress while working. When finished, explicitly call subagent_channel action complete with a useful finalResult. If the parent requests cancellation, stop dependent work and call action acknowledge_cancel with a concise summary.\n\n<task>\n${task}\n</task>`;
 }
 
 async function spawnUnlocked(
@@ -966,6 +1016,7 @@ async function spawnUnlocked(
   const managed = await ensureManagedSubagentTab(current, cwd, environment);
   let paneId: string | undefined;
   let recordAdded = false;
+  let childStarted = false;
   const initialRun: RunRecord = {
     runId,
     assignmentGeneration: 1,
@@ -977,8 +1028,8 @@ async function spawnUnlocked(
     notifiedSequence: 0,
     terminalNotified: false,
     cancelRequestedAt: null,
-    assignmentState: "delivered",
-    pendingTask: null,
+    assignmentState: "pending-prompt",
+    pendingTask: task,
     legacyDeliveredEventIds: [],
     createdAt,
     updatedAt: createdAt,
@@ -1015,6 +1066,7 @@ async function spawnUnlocked(
     await current.cli.agentStart(herdrAgentName, paneId, extensionPath);
     const started = await identity(current.cli, agent);
     if (started.kind !== "present") throw new OrchestrationError("AGENT_START_FAILED");
+    childStarted = true;
     await current.store.updateAgent(agentId, {
       processState: "live",
       runPhase: "running",
@@ -1024,6 +1076,10 @@ async function spawnUnlocked(
       herdrAgentName,
       assignmentPrompt(runId, 1, task),
     );
+    await current.store.updateRun(agentId, runId, {
+      assignmentState: "delivered",
+      pendingTask: null,
+    });
     const prompted = await identity(current.cli, agent);
     if (prompted.kind !== "present")
       throw new OrchestrationError("AGENT_PROMPT_FAILED");
@@ -1042,6 +1098,9 @@ async function spawnUnlocked(
       cwd: live.cwd,
     };
   } catch (error) {
+    // Preserve an exact started child and its durable pending assignment. A
+    // failed prompt call is delivery uncertainty, not proof of non-delivery.
+    if (childStarted) throw publicError(error);
     if (paneId) {
       if (managed.created) {
         await cleanCreatedTab(current, managed.record.tabId, paneId).catch(
@@ -1113,11 +1172,16 @@ function terminalPhase(status: RunResult["status"]): RunRecord["phase"] {
 async function reconcile(
   current: OrchestrationContext,
   runIds?: Set<string>,
+  options: { migrateLegacy?: boolean } = {},
 ): Promise<void> {
   const channel = new ChannelStore(current.store.domainId);
-  for (const original of await current.store.list()) {
+  const originals = runIds
+    ? (await Promise.all([...runIds].map((runId) => current.store.getRun(runId))))
+        .filter((entry): entry is { agent: AgentRecord; run: RunRecord } => !!entry)
+        .map((entry) => ({ ...entry.agent, runs: [entry.run] }))
+    : await current.store.list();
+  for (const original of originals) {
     for (const originalRun of original.runs) {
-      if (runIds && !runIds.has(originalRun.runId)) continue;
       let run = originalRun;
       if (run.legacyDeliveredEventIds.length) {
         await channel.discardLegacy(run.legacyDeliveredEventIds);
@@ -1126,7 +1190,11 @@ async function reconcile(
         });
         run = (await current.store.getRun(run.runId))!.run;
       }
-      const events = await channel.events([run.runId]);
+      const events = await channel.events(
+        [run.runId],
+        new Map([[run.runId, run.deliveredSequence]]),
+        options,
+      );
       const progress = events
         .filter(
           (event) =>
@@ -1196,16 +1264,51 @@ async function drainNotificationsUnlocked(
   context: PiContext,
 ): Promise<void> {
   if (!context.hasUI || !context.ui?.notify) return;
-  await reconcile(current);
+  const selectedAgents = newestAgents(await current.store.list());
+  const candidates = selectedAgents
+    .flatMap((agent) => {
+      // startAssignment appends the authoritative current run; inspect only a
+      // fixed tail window so the periodic path never traverses full history.
+      const currentRun = agent.runs.at(-1)!;
+      const fixedWindow = [currentRun, ...agent.runs.slice(-2)].filter(
+        (run, index, runs) =>
+          runs.findIndex((candidate) => candidate.runId === run.runId) === index,
+      );
+      return fixedWindow.map((run) => ({
+        agent,
+        run,
+        current: run.runId === agent.runId,
+      }));
+    })
+    .filter(
+      ({ run, current }) =>
+        (current && !run.terminal) ||
+        run.notifiedSequence < (run.latestProgress?.eventSequence ?? 0) ||
+        (!!run.terminal && !run.terminalNotified),
+    )
+    .sort(
+      (left, right) =>
+        Number(right.current) - Number(left.current) ||
+        right.run.updatedAt.localeCompare(left.run.updatedAt) ||
+        left.run.runId.localeCompare(right.run.runId),
+    )
+    .slice(0, MAX_RECONCILE_RUNS_PER_DRAIN);
   const channel = new ChannelStore(current.store.domainId);
   let remaining = MAX_NOTIFICATIONS_PER_DRAIN;
 
-  for (const agent of await current.store.list()) {
-    for (const snapshot of agent.runs) {
-      if (remaining <= 0) return;
+  for (const { run: snapshot } of candidates) {
+    if (remaining <= 0) return;
+    try {
+      await reconcile(current, new Set([snapshot.runId]), {
+        migrateLegacy: false,
+      });
       let entry = await current.store.getRun(snapshot.runId);
       if (!entry) continue;
-      const fresh = (await channel.events([snapshot.runId]))
+      const fresh = (await channel.events(
+        [snapshot.runId],
+        new Map([[snapshot.runId, entry.run.deliveredSequence]]),
+        { migrateLegacy: false },
+      ))
         .filter(
           (event) =>
             event.version === 2 &&
@@ -1248,6 +1351,8 @@ async function drainNotificationsUnlocked(
         });
         remaining -= 1;
       }
+    } catch {
+      // One malformed or concurrently removed run must not block other notices.
     }
   }
 }
@@ -1255,6 +1360,7 @@ async function drainNotificationsUnlocked(
 async function waitRuns(
   context: PiContext,
   params: OrchestrateParams,
+  signal?: AbortSignal,
 ): Promise<JsonObject> {
   if (
     !Array.isArray(params.runIds) ||
@@ -1281,7 +1387,10 @@ async function waitRuns(
     const entries = (
       await Promise.all([...wanted].map((id) => current.store.getRun(id)))
     ).filter((x): x is { agent: AgentRecord; run: RunRecord } => !!x);
-    const all = await channel.events([...wanted]);
+    const all = await channel.events(
+      [...wanted],
+      new Map(entries.map((entry) => [entry.run.runId, entry.run.deliveredSequence])),
+    );
     const fresh = all
       .filter((e) => {
         const entry = entries.find((x) => x.run.runId === e.runId);
@@ -1353,6 +1462,7 @@ async function waitRuns(
     await channel.waitForChange(
       [...wanted],
       Math.max(0, deadline - Date.now()),
+      signal,
     );
   }
 }
@@ -1416,9 +1526,14 @@ async function inspect(
     throw new OrchestrationError("AGENT_OR_RUN_ID_REQUIRED");
   let agent = await current.store.getAgent(params.agentId, params.runId);
   if (!agent) throw new OrchestrationError("AGENT_NOT_REGISTERED");
+  if (params.agentId && agent.agentId !== params.agentId)
+    throw new OrchestrationError("AGENT_RUN_OWNERSHIP_MISMATCH");
+  if (params.runId && !agent.runs.some((run) => run.runId === params.runId))
+    throw new OrchestrationError("AGENT_RUN_OWNERSHIP_MISMATCH");
   const selectedRunId = params.runId ?? agent.runId;
   await reconcile(current, new Set([selectedRunId]));
   agent = (await current.store.getAgent(agent.agentId)) ?? agent;
+  const selectedRun = agent.runs.find((run) => run.runId === selectedRunId)!;
   const lines = params.lines === undefined ? MAX_LINES : params.lines;
   if (!Number.isSafeInteger(lines) || lines < 1 || lines > MAX_LINES)
     throw new OrchestrationError("INVALID_LINE_COUNT");
@@ -1462,6 +1577,9 @@ async function inspect(
         domainId: current.store.domainId,
         ...recordView(refreshed, identityState),
         requestedRunId: selectedRunId,
+        selectedRun: runFacts(
+          refreshed.runs.find((run) => run.runId === selectedRunId) ?? selectedRun,
+        ),
         recentRuns: recentRunHistory(refreshed),
         recentRunLimit: MAX_RECENT_RUNS,
         historyTruncated: refreshed.runs.length > MAX_RECENT_RUNS,
@@ -1477,6 +1595,9 @@ async function inspect(
     domainId: current.store.domainId,
     ...recordView(refreshed, identityState),
     requestedRunId: selectedRunId,
+    selectedRun: runFacts(
+      refreshed.runs.find((run) => run.runId === selectedRunId) ?? selectedRun,
+    ),
     recentRuns: recentRunHistory(refreshed),
     recentRunLimit: MAX_RECENT_RUNS,
     historyTruncated: refreshed.runs.length > MAX_RECENT_RUNS,
@@ -1546,6 +1667,34 @@ async function settleCancelled(
   return settled.result;
 }
 
+async function dispatchCancellation(
+  current: OrchestrationContext,
+  _agent: AgentRecord,
+  run: RunRecord,
+): Promise<"dispatched" | "absent" | "terminal"> {
+  // Reconcile immutable completion and revalidate exact identity immediately
+  // before every name-targeted operation. Never act on a stale name binding.
+  await reconcile(current, new Set([run.runId]));
+  let latest = await current.store.getRun(run.runId);
+  if (!latest || latest.run.terminal) return "terminal";
+  let exact = await identity(current.cli, latest.agent);
+  if (exact.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
+  if (exact.kind === "absent") return "absent";
+  await current.cli.agentInterrupt(latest.agent.herdrAgentName);
+
+  await reconcile(current, new Set([run.runId]));
+  latest = await current.store.getRun(run.runId);
+  if (!latest || latest.run.terminal) return "terminal";
+  exact = await identity(current.cli, latest.agent);
+  if (exact.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
+  if (exact.kind === "absent") return "absent";
+  await current.cli.agentPrompt(
+    latest.agent.herdrAgentName,
+    `[orchestrate cancellation request]\nrunId: ${latest.run.runId}\nassignmentGeneration: ${latest.run.assignmentGeneration}\nState metadata is authoritative. Stop dependent work and call subagent_channel action acknowledge_cancel with these exact identifiers and a concise summary. If you already completed, report completion instead.`,
+  );
+  return "dispatched";
+}
+
 function cancellationResponse(
   current: OrchestrationContext,
   agent: AgentRecord,
@@ -1606,12 +1755,23 @@ async function cancel(
     return cancellationResponse(current, entry.agent, entry.run);
   }
 
-  if (newlyRequested) {
-    await current.cli.agentInterrupt(entry.agent.herdrAgentName);
-    await current.cli.agentPrompt(
-      entry.agent.herdrAgentName,
-      `[orchestrate cancellation request]\nrunId: ${entry.run.runId}\nassignmentGeneration: ${entry.run.assignmentGeneration}\nStop dependent work and call subagent_channel action acknowledge_cancel with these exact identifiers and a concise summary. If you already completed, report completion instead.`,
+  await reconcile(current, new Set([entry.run.runId]));
+  entry = (await current.store.getRun(entry.run.runId))!;
+  if (entry.run.terminal)
+    return cancellationResponse(current, entry.agent, entry.run);
+  const dispatch = await dispatchCancellation(current, entry.agent, entry.run);
+  entry = (await current.store.getRun(entry.run.runId))!;
+  if (dispatch === "terminal")
+    return cancellationResponse(current, entry.agent, entry.run);
+  if (dispatch === "absent") {
+    await settleCancelled(
+      current,
+      entry.agent,
+      entry.run,
+      "Cancellation confirmed after exact child termination.",
     );
+    entry = (await current.store.getRun(entry.run.runId))!;
+    return cancellationResponse(current, entry.agent, entry.run);
   }
 
   await new ChannelStore(current.store.domainId).waitForChange(
@@ -1741,10 +1901,36 @@ async function recover(context: PiContext): Promise<JsonObject> {
         ? { runPhase: "unknown" as const }
         : {}),
     });
-    const assignment = updated.runs.find((run) => run.runId === updated.runId)!;
+    let assignment = updated.runs.find((run) => run.runId === updated.runId)!;
+    if (!assignment.terminal && assignment.phase === "cancel_requested") {
+      if (exact.kind === "absent") {
+        await settleCancelled(
+          current,
+          updated,
+          assignment,
+          "Cancellation confirmed during recovery after exact child termination.",
+        );
+        updated = (await current.store.getAgent(updated.agentId))!;
+      } else {
+        const dispatch = await dispatchCancellation(current, updated, assignment);
+        updated = (await current.store.getAgent(updated.agentId))!;
+        assignment = updated.runs.find((run) => run.runId === updated.runId)!;
+        if (dispatch === "absent" && !assignment.terminal) {
+          await settleCancelled(
+            current,
+            updated,
+            assignment,
+            "Cancellation confirmed during recovery after exact child termination.",
+          );
+          updated = (await current.store.getAgent(updated.agentId))!;
+        }
+      }
+      assignment = updated.runs.find((run) => run.runId === updated.runId)!;
+    }
     if (
       exact.kind === "present" &&
       !assignment.terminal &&
+      assignment.phase !== "cancel_requested" &&
       assignment.assignmentState === "pending-prompt" &&
       assignment.pendingTask
     ) {
@@ -1889,6 +2075,7 @@ async function execute(
   context: PiContext,
   params: OrchestrateParams,
   extensionPath?: string,
+  signal?: AbortSignal,
 ): Promise<JsonObject> {
   if (params.action === "health") return health(context);
   const scope = await requireContext(context);
@@ -1908,7 +2095,7 @@ async function execute(
       case "close":
         return close(context, params);
       case "wait":
-        return waitRuns(context, params);
+        return waitRuns(context, params, signal);
       case "collect":
         return collect(context, params);
       case "reuse":
@@ -1919,7 +2106,7 @@ async function execute(
         return recover(context);
     }
     throw new OrchestrationError("INVALID_REQUEST");
-  });
+  }, signal);
 }
 
 export function registerOrchestrate(
@@ -1935,12 +2122,13 @@ export function registerOrchestrate(
       "Run and manage direct Herdr subagents with exact identity and explicit results",
     parameters:
       ORCHESTRATE_SCHEMA as unknown as ToolRegistration["parameters"],
-    async execute(_toolCallId, rawParams, _signal, _onUpdate, context) {
+    async execute(_toolCallId, rawParams, signal, _onUpdate, context) {
       try {
         const result = await execute(
           context,
           parseParams(rawParams),
           extensionPath,
+          signal,
         );
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
