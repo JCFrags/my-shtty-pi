@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ChannelStore, ChannelStoreError } from "./channel-store.js";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { RegistryError, RegistryStore } from "./store.js";
 import {
@@ -13,6 +14,7 @@ import {
   type ManagedTabRecord,
   type OrchestrateV2Params,
   type ParentIdentity,
+  type RunResult,
 } from "./types.js";
 
 const execFile = promisify(execFileCallback);
@@ -30,6 +32,9 @@ const CAPABILITIES = {
   prompt: true,
   inspectRead: true,
   close: true,
+  explicitResults: true,
+  agentMessaging: true,
+  waitCollect: true,
 } as const;
 
 const stringProperty = (maxLength: number) => ({ type: "string", minLength: 1, maxLength });
@@ -52,6 +57,14 @@ const ORCHESTRATE_V2_SCHEMA = {
     {
       type: "object", additionalProperties: false, required: ["action", "agentId"],
       properties: { action: { const: "close" }, agentId: stringProperty(128) },
+    },
+    {
+      type: "object", additionalProperties: false, required: ["action", "runIds"],
+      properties: { action: { const: "wait" }, runIds: { type: "array", minItems: 1, maxItems: 8, uniqueItems: true, items: stringProperty(128) }, timeoutMs: { type: "integer", minimum: 0, maximum: 120000 } },
+    },
+    {
+      type: "object", additionalProperties: false, required: ["action", "runId"],
+      properties: { action: { const: "collect" }, runId: stringProperty(128) },
     },
   ],
 } as const;
@@ -152,7 +165,7 @@ function isNotFound(error: unknown): boolean {
 
 function publicError(error: unknown): CanaryError {
   if (error instanceof CanaryError) return error;
-  if (error instanceof RegistryError) return new CanaryError(error.code);
+  if (error instanceof RegistryError || error instanceof ChannelStoreError) return new CanaryError(error.code);
   if (error instanceof HerdrCliError) return new CanaryError(error.code);
   return new CanaryError("V2_OPERATION_FAILED");
 }
@@ -264,6 +277,8 @@ function recordView(agent: AgentRecord, identityState?: IdentityResult["kind"]):
     processState: agent.processState,
     herdrAttention: agent.herdrAttention,
     delegatedRunPhase: agent.runPhase,
+    latestProgress: agent.latestProgress,
+    explicitTerminal: agent.terminal,
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
     label: agent.label,
@@ -287,7 +302,7 @@ async function refresh(
   }
   const updated = await store.updateAgent(agent.agentId, {
     processState: "missing",
-    runPhase: agent.runPhase === "closed" || agent.runPhase === "failed" ? agent.runPhase : "unknown",
+    runPhase: agent.terminal || agent.runPhase === "closed" || agent.runPhase === "failed" ? agent.runPhase : "unknown",
     herdrAttention: "unknown",
   });
   return { agent: updated, identityState: result.kind };
@@ -326,7 +341,7 @@ async function activeManagedAgents(current: V2Context, tabId: string): Promise<A
     } else {
       await current.store.updateAgent(agent.agentId, {
         processState: "missing",
-        runPhase: "unknown",
+        runPhase: agent.terminal ? agent.runPhase : "unknown",
         herdrAttention: "unknown",
       });
     }
@@ -489,7 +504,7 @@ async function createChildPane(
     target.paneId,
     target.direction,
     cwd,
-    { ...environment, PI_HERDR_PARENT_PANE_ID: target.paneId,
+    { ...environment, PI_HERDR_PARENT_PANE_ID: current.parent.paneId,
       PI_HERDR_SUBAGENT_TAB_ID: managed.record.tabId },
   );
   const paneId = idFrom(pane, "pane_id");
@@ -524,7 +539,7 @@ async function createChildPane(
 function parseParams(value: unknown): OrchestrateV2Params {
   const params = object(value);
   const action = stringValue(params?.action) as OrchestrateV2Params["action"] | undefined;
-  if (!action || !["health", "spawn", "list", "inspect", "send", "close"].includes(action))
+  if (!action || !["health", "spawn", "list", "inspect", "send", "close", "wait", "collect"].includes(action))
     throw new CanaryError("INVALID_REQUEST");
   return {
     action,
@@ -535,6 +550,8 @@ function parseParams(value: unknown): OrchestrateV2Params {
     ...(params?.runId !== undefined ? { runId: text(params.runId, 128, false) } : {}),
     ...(params?.message !== undefined ? { message: text(params.message, MAX_MESSAGE_BYTES) } : {}),
     ...(params?.lines !== undefined ? { lines: params.lines as number } : {}),
+    ...(params?.runIds !== undefined ? { runIds: params.runIds as string[] } : {}),
+    ...(params?.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs as number } : {}),
   };
 }
 
@@ -623,7 +640,7 @@ async function health(context: PiContext): Promise<JsonObject> {
   }
 }
 
-async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params, extensionPath: string): Promise<JsonObject> {
   const task = params.task;
   if (!task) throw new CanaryError("TASK_REQUIRED");
   const current = await requireContext(context);
@@ -661,6 +678,10 @@ async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params): P
     processState: "starting",
     runPhase: "starting",
     herdrAttention: "unknown",
+    latestProgress: null,
+    terminal: null,
+    deliveredEventIds: [],
+    terminalDelivered: false,
     createdAt,
     updatedAt: createdAt,
   };
@@ -670,7 +691,7 @@ async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params): P
     agent.paneId = paneId;
     await current.store.addAgent(agent);
     recordAdded = true;
-    await current.cli.agentStart(herdrAgentName, paneId);
+    await current.cli.agentStart(herdrAgentName, paneId, extensionPath);
     const started = await identity(current.cli, agent);
     if (started.kind !== "present") throw new CanaryError("AGENT_START_FAILED");
     await current.store.updateAgent(agentId, {
@@ -723,12 +744,89 @@ async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params): P
   }
 }
 
-async function spawn(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
-  return spawnUnlocked(context, params);
+async function spawn(context: PiContext, params: OrchestrateV2Params, extensionPath: string): Promise<JsonObject> {
+  return spawnUnlocked(context, params, extensionPath);
+}
+
+function resultValid(result: RunResult, agent: AgentRecord): boolean {
+  return result.version === 1 && result.domainId === agent.domainId && result.agentId === agent.agentId &&
+    result.runId === agent.runId && result.agentGeneration === agent.agentGeneration &&
+    result.assignmentGeneration === agent.assignmentGeneration &&
+    (result.status === "completed" || result.status === "failed") && typeof result.summary === "string" &&
+    typeof result.completedAt === "string";
+}
+
+async function reconcile(current: V2Context, runIds?: Set<string>): Promise<void> {
+  const channel = new ChannelStore(current.store.domainId);
+  const events = await channel.events();
+  for (const original of await current.store.list()) {
+    if (runIds && !runIds.has(original.runId)) continue;
+    let agent = original;
+    const progress = events.filter((event) => event.version === 1 && event.domainId === agent.domainId &&
+      event.agentId === agent.agentId && event.runId === agent.runId && event.agentGeneration === 1 &&
+      event.assignmentGeneration === 1 && event.kind === "progress").sort((a,b) => a.eventId.localeCompare(b.eventId)).at(-1);
+    if (progress && progress.eventId !== agent.latestProgress?.eventId)
+      agent = await current.store.updateAgent(agent.agentId, { latestProgress: { eventId:progress.eventId, summary:progress.summary.slice(0,2048), createdAt:progress.createdAt } });
+    const result = await channel.result(agent.runId);
+    if (result) {
+      if (!resultValid(result, agent)) throw new CanaryError("RESULT_IDENTITY_MISMATCH");
+      if (!agent.terminal) agent = await current.store.updateAgent(agent.agentId, {
+        terminal:{status:result.status,summary:result.summary.slice(0,4096),completedAt:result.completedAt,resultFile:`results/${agent.runId}.json`},
+        runPhase:result.status === "completed" ? "completed" : "failed",
+      });
+      else if (agent.terminal.status !== result.status || agent.terminal.summary !== result.summary || agent.terminal.completedAt !== result.completedAt)
+        throw new CanaryError("COMPLETION_CONFLICT");
+    }
+  }
+}
+
+async function waitRuns(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+  if (!Array.isArray(params.runIds) || params.runIds.length < 1 || params.runIds.length > 8 ||
+      params.runIds.some((id) => typeof id !== "string" || !/^r-[0-9a-f-]{36}$/u.test(id))) throw new CanaryError("INVALID_RUN_IDS");
+  const timeoutMs = params.timeoutMs ?? 30000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 120000) throw new CanaryError("INVALID_TIMEOUT");
+  const current = await requireContext(context), wanted = new Set(params.runIds), channel = new ChannelStore(current.store.domainId);
+  for (const runId of wanted) if (!await current.store.getAgent(undefined, runId)) throw new CanaryError("RUN_NOT_REGISTERED");
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    await reconcile(current, wanted);
+    const agents = (await current.store.list()).filter((a) => wanted.has(a.runId));
+    const all = (await channel.events()).filter((e) => {
+      const agent = agents.find((a) => a.runId === e.runId);
+      return !!agent && e.version === 1 && e.domainId === agent.domainId && e.agentId === agent.agentId &&
+        e.agentGeneration === agent.agentGeneration && e.assignmentGeneration === agent.assignmentGeneration &&
+        (e.kind === "progress" || e.kind === "message") && typeof e.summary === "string" &&
+        typeof e.createdAt === "string" && typeof e.eventId === "string";
+    });
+    const fresh = all.filter((e) => { const a=agents.find((x)=>x.runId===e.runId); return !!a && !a.deliveredEventIds.includes(e.eventId); })
+      .sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.eventId.localeCompare(b.eventId)).slice(0,24);
+    const results = agents.filter((a)=>a.terminal && !a.terminalDelivered).map((a)=>({runId:a.runId,agentId:a.agentId,status:a.terminal!.status,summary:a.terminal!.summary,completedAt:a.terminal!.completedAt,resultAvailable:true}));
+    if (fresh.length || results.length || Date.now() >= deadline) {
+      for (const agent of agents) {
+        const last=fresh.filter((e)=>e.runId===agent.runId).at(-1);
+        const delivered = fresh.filter((e)=>e.runId===agent.runId).map((e)=>e.eventId);
+        if (last || (agent.terminal && !agent.terminalDelivered)) await current.store.updateAgent(agent.agentId, {
+          ...(last ? {deliveredEventIds:[...agent.deliveredEventIds,...delivered]}:{}), ...(agent.terminal && !agent.terminalDelivered ? {terminalDelivered:true}:{}) });
+      }
+      return {ok:true,action:"wait",events:fresh.map((e)=>({eventId:e.eventId,kind:e.kind,runId:e.runId,agentId:e.agentId,target:e.target,summary:e.summary.slice(0,2048),createdAt:e.createdAt})),results,timedOut:!fresh.length&&!results.length};
+    }
+    await channel.waitForChange(Math.max(0, deadline-Date.now()));
+  }
+}
+
+async function collect(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+  if (!params.runId) throw new CanaryError("RUN_ID_REQUIRED");
+  const current=await requireContext(context), agent=await current.store.getAgent(undefined,params.runId);
+  if (!agent) throw new CanaryError("RUN_NOT_REGISTERED");
+  await reconcile(current,new Set([params.runId]));
+  const result=await new ChannelStore(current.store.domainId).result(params.runId);
+  if (!result || !resultValid(result,agent)) throw new CanaryError(result ? "RESULT_IDENTITY_MISMATCH" : "RESULT_NOT_READY");
+  return {ok:true,action:"collect",runId:result.runId,agentId:result.agentId,status:result.status,summary:result.summary,finalResult:result.finalResult,completedAt:result.completedAt};
 }
 
 async function list(context: PiContext): Promise<JsonObject> {
   const current = await requireContext(context);
+  await reconcile(current);
   const rows: JsonObject[] = [];
   for (const agent of await current.store.list()) {
     const refreshed = await refresh(current.store, current.cli, agent);
@@ -740,8 +838,10 @@ async function list(context: PiContext): Promise<JsonObject> {
 async function inspect(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
   const current = await requireContext(context);
   if (!params.agentId && !params.runId) throw new CanaryError("AGENT_OR_RUN_ID_REQUIRED");
-  const agent = await current.store.getAgent(params.agentId, params.runId);
+  let agent = await current.store.getAgent(params.agentId, params.runId);
   if (!agent) throw new CanaryError("AGENT_NOT_REGISTERED");
+  await reconcile(current, new Set([agent.runId]));
+  agent = (await current.store.getAgent(agent.agentId)) ?? agent;
   const lines = params.lines === undefined ? MAX_LINES : params.lines;
   if (!Number.isSafeInteger(lines) || lines < 1 || lines > MAX_LINES)
     throw new CanaryError("INVALID_LINE_COUNT");
@@ -754,7 +854,7 @@ async function inspect(context: PiContext, params: OrchestrateV2Params): Promise
     if (result.kind === "absent") {
       refreshed = await current.store.updateAgent(agent.agentId, {
         processState: "missing",
-        runPhase: agent.runPhase === "failed" ? "failed" : "unknown",
+        runPhase: agent.terminal || agent.runPhase === "failed" ? agent.runPhase : "unknown",
         herdrAttention: "unknown",
       });
     } else {
@@ -806,7 +906,7 @@ async function send(context: PiContext, params: OrchestrateV2Params): Promise<Js
     herdrAttention: afterPrompt.kind === "present" ? afterPrompt.attention : "unknown",
     runPhase: afterPrompt.kind === "present"
       ? (agent.runPhase === "starting" ? "running" : agent.runPhase)
-      : "unknown",
+      : (agent.terminal ? agent.runPhase : "unknown"),
   });
   return { ok: true, action: "send", domainId: current.store.domainId, ...recordView(updated) };
 }
@@ -822,7 +922,7 @@ async function detachIfNoManagedPanes(current: V2Context, tabId: string): Promis
     } else {
       await current.store.updateAgent(agent.agentId, {
         processState: "missing",
-        runPhase: "unknown",
+        runPhase: agent.terminal ? agent.runPhase : "unknown",
         herdrAttention: "unknown",
       });
     }
@@ -859,32 +959,34 @@ async function close(context: PiContext, params: OrchestrateV2Params): Promise<J
     ...recordView(updated, "absent"), alreadyAbsent: result.kind === "absent" };
 }
 
-async function execute(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+async function execute(context: PiContext, params: OrchestrateV2Params, extensionPath: string): Promise<JsonObject> {
   if (params.action === "health") return health(context);
   const scope = await requireContext(context);
   return withDomainLock(scope.store.domainId, async () => {
     switch (params.action) {
       case "health": return health(context);
-      case "spawn": return spawn(context, params);
+      case "spawn": return spawn(context, params, extensionPath);
       case "list": return list(context);
       case "inspect": return inspect(context, params);
       case "send": return send(context, params);
       case "close": return close(context, params);
+      case "wait": return waitRuns(context, params);
+      case "collect": return collect(context, params);
     }
   });
 }
 
-export function registerOrchestrateV2(api: ExtensionAPI): void {
+export function registerOrchestrateV2(api: ExtensionAPI, extensionPath: string): void {
   const tool: ToolRegistration = {
     name: "orchestrate_v2",
     label: "Orchestrate v2 Canary",
     description:
-      "M02 canary: directly control visible Pi agent panes grouped in one managed Herdr subagents tab. This remains independent of legacy orchestrate and never infers delegated completion from Herdr idle/done, Pi settlement, compaction, silence, or terminal state.",
+      "M03 canary: direct visible delegation with explicit child progress, messaging, durable completion, wait, and collect. Herdr/Pi state never implies delegated completion.",
     promptSnippet: "Direct Herdr shared-tab visible-agent canary control",
     parameters: ORCHESTRATE_V2_SCHEMA as unknown as ToolRegistration["parameters"],
     async execute(_toolCallId, rawParams, _signal, _onUpdate, context) {
       try {
-        const result = await execute(context, parseParams(rawParams));
+        const result = await execute(context, parseParams(rawParams), extensionPath);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       } catch (error) {
         throw publicError(error);

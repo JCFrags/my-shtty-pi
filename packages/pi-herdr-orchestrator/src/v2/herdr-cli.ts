@@ -185,10 +185,11 @@ export class HerdrCli {
     return responseObject(await this.json(["agent", "get", target]), "agent");
   }
 
-  async agentStart(name: string, paneId: string): Promise<JsonObject> {
+  async agentStart(name: string, paneId: string, extensionPath: string): Promise<JsonObject> {
     return responseObject(
       await this.json([
         "agent", "start", name, "--kind", "pi", "--pane", paneId, "--timeout", "30000",
+        "--", "--extension", extensionPath,
       ]),
       "agent",
     );
