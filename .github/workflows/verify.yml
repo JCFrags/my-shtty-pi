@@ -55,6 +55,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: "24", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install ChronoCompact dependencies
+        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
       - name: Typecheck ChronoCompact
         run: npm --prefix packages/pi-chrono-compaction run typecheck
 
@@ -67,6 +69,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: "24", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install ChronoCompact dependencies
+        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
       - name: Unit and integration tests
         run: npm --prefix packages/pi-chrono-compaction test
 
@@ -79,6 +83,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: "24", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install ChronoCompact dependencies
+        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
       - name: Deterministic generator and report schema
         working-directory: packages/pi-chrono-compaction
         run: |
@@ -99,6 +105,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: "24", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install ChronoCompact dependencies
+        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
       - name: Fixed-heap scale and fault safety
         run: npm --prefix packages/pi-chrono-compaction run test:fixed-heap -- --heaps ${{ matrix.heap }}
 
@@ -111,6 +119,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: "24", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install ChronoCompact dependencies
+        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
       - name: Generated build consistency
         run: |
           npm --prefix packages/pi-chrono-compaction run build
