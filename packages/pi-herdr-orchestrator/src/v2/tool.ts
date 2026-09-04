@@ -14,6 +14,7 @@ import {
   type ManagedTabRecord,
   type OrchestrateV2Params,
   type ParentIdentity,
+  type RunRecord,
   type RunResult,
 } from "./types.js";
 
@@ -35,6 +36,9 @@ const CAPABILITIES = {
   explicitResults: true,
   agentMessaging: true,
   waitCollect: true,
+  reuse: true,
+  cancel: true,
+  recover: true,
 } as const;
 
 const stringProperty = (maxLength: number) => ({ type: "string", minLength: 1, maxLength });
@@ -66,6 +70,15 @@ const ORCHESTRATE_V2_SCHEMA = {
       type: "object", additionalProperties: false, required: ["action", "runId"],
       properties: { action: { const: "collect" }, runId: stringProperty(128) },
     },
+    {
+      type: "object", additionalProperties: false, required: ["action", "agentId", "task"],
+      properties: { action: { const: "reuse" }, agentId: stringProperty(128), task: stringProperty(MAX_TASK_BYTES) },
+    },
+    {
+      type: "object", additionalProperties: false, required: ["action", "runId"],
+      properties: { action: { const: "cancel" }, runId: stringProperty(128) },
+    },
+    { type: "object", additionalProperties: false, required: ["action"], properties: { action: { const: "recover" } } },
   ],
 } as const;
 
@@ -279,6 +292,8 @@ function recordView(agent: AgentRecord, identityState?: IdentityResult["kind"]):
     delegatedRunPhase: agent.runPhase,
     latestProgress: agent.latestProgress,
     explicitTerminal: agent.terminal,
+    runCount: agent.runs.length,
+    historicalRuns: agent.runs.map((run) => ({ runId:run.runId, assignmentGeneration:run.assignmentGeneration, phase:run.phase, terminal:run.terminal })),
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
     label: agent.label,
@@ -302,7 +317,7 @@ async function refresh(
   }
   const updated = await store.updateAgent(agent.agentId, {
     processState: "missing",
-    runPhase: agent.terminal || agent.runPhase === "closed" || agent.runPhase === "failed" ? agent.runPhase : "unknown",
+    runPhase: agent.terminal || agent.runPhase === "failed" ? agent.runPhase : "unknown",
     herdrAttention: "unknown",
   });
   return { agent: updated, identityState: result.kind };
@@ -539,7 +554,7 @@ async function createChildPane(
 function parseParams(value: unknown): OrchestrateV2Params {
   const params = object(value);
   const action = stringValue(params?.action) as OrchestrateV2Params["action"] | undefined;
-  if (!action || !["health", "spawn", "list", "inspect", "send", "close", "wait", "collect"].includes(action))
+  if (!action || !["health", "spawn", "list", "inspect", "send", "close", "wait", "collect", "reuse", "cancel", "recover"].includes(action))
     throw new CanaryError("INVALID_REQUEST");
   return {
     action,
@@ -640,6 +655,10 @@ async function health(context: PiContext): Promise<JsonObject> {
   }
 }
 
+function assignmentPrompt(runId: string, assignmentGeneration: number, task: string): string {
+  return `[orchestrate_v2 assignment]\nrunId: ${runId}\nassignmentGeneration: ${assignmentGeneration}\nEvery subagent_channel call must include this exact runId and assignmentGeneration. Calls from older assignments are rejected.\n\nTask:\n${task}`;
+}
+
 async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params, extensionPath: string): Promise<JsonObject> {
   const task = params.task;
   if (!task) throw new CanaryError("TASK_REQUIRED");
@@ -662,6 +681,8 @@ async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params, ex
   const managed = await ensureManagedSubagentTab(current, cwd, environment);
   let paneId: string | undefined;
   let recordAdded = false;
+  const initialRun: RunRecord = { runId, assignmentGeneration:1, phase:"starting", latestProgress:null, terminal:null,
+    deliveredSequence:0, terminalDelivered:false, assignmentState:"delivered", pendingTask:null, legacyDeliveredEventIds:[], createdAt, updatedAt:createdAt };
   const agent: AgentRecord = {
     domainId: current.store.domainId,
     agentId,
@@ -680,8 +701,7 @@ async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params, ex
     herdrAttention: "unknown",
     latestProgress: null,
     terminal: null,
-    deliveredEventIds: [],
-    terminalDelivered: false,
+    runs: [initialRun],
     createdAt,
     updatedAt: createdAt,
   };
@@ -699,7 +719,7 @@ async function spawnUnlocked(context: PiContext, params: OrchestrateV2Params, ex
       runPhase: "running",
       herdrAttention: started.attention,
     });
-    await current.cli.agentPrompt(herdrAgentName, task);
+    await current.cli.agentPrompt(herdrAgentName, assignmentPrompt(runId, 1, task));
     const prompted = await identity(current.cli, agent);
     if (prompted.kind !== "present") throw new CanaryError("AGENT_PROMPT_FAILED");
     const live = await current.store.updateAgent(agentId, {
@@ -748,33 +768,42 @@ async function spawn(context: PiContext, params: OrchestrateV2Params, extensionP
   return spawnUnlocked(context, params, extensionPath);
 }
 
-function resultValid(result: RunResult, agent: AgentRecord): boolean {
-  return result.version === 1 && result.domainId === agent.domainId && result.agentId === agent.agentId &&
-    result.runId === agent.runId && result.agentGeneration === agent.agentGeneration &&
-    result.assignmentGeneration === agent.assignmentGeneration &&
-    (result.status === "completed" || result.status === "failed") && typeof result.summary === "string" &&
-    typeof result.completedAt === "string";
+function resultValid(result: RunResult, agent: AgentRecord, run: RunRecord): boolean {
+  return (Number(result.version) === 1 || result.version === 2) && result.domainId === agent.domainId && result.agentId === agent.agentId &&
+    result.runId === run.runId && result.agentGeneration === agent.agentGeneration &&
+    result.assignmentGeneration === run.assignmentGeneration &&
+    (result.status === "completed" || result.status === "cancelled" || result.status === "failed") &&
+    typeof result.summary === "string" && typeof result.completedAt === "string";
+}
+
+function terminalPhase(status: RunResult["status"]): RunRecord["phase"] {
+  return status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed";
 }
 
 async function reconcile(current: V2Context, runIds?: Set<string>): Promise<void> {
   const channel = new ChannelStore(current.store.domainId);
-  const events = await channel.events();
   for (const original of await current.store.list()) {
-    if (runIds && !runIds.has(original.runId)) continue;
-    let agent = original;
-    const progress = events.filter((event) => event.version === 1 && event.domainId === agent.domainId &&
-      event.agentId === agent.agentId && event.runId === agent.runId && event.agentGeneration === 1 &&
-      event.assignmentGeneration === 1 && event.kind === "progress").sort((a,b) => a.eventId.localeCompare(b.eventId)).at(-1);
-    if (progress && progress.eventId !== agent.latestProgress?.eventId)
-      agent = await current.store.updateAgent(agent.agentId, { latestProgress: { eventId:progress.eventId, summary:progress.summary.slice(0,2048), createdAt:progress.createdAt } });
-    const result = await channel.result(agent.runId);
-    if (result) {
-      if (!resultValid(result, agent)) throw new CanaryError("RESULT_IDENTITY_MISMATCH");
-      if (!agent.terminal) agent = await current.store.updateAgent(agent.agentId, {
-        terminal:{status:result.status,summary:result.summary.slice(0,4096),completedAt:result.completedAt,resultFile:`results/${agent.runId}.json`},
-        runPhase:result.status === "completed" ? "completed" : "failed",
+    for (const originalRun of original.runs) {
+      if (runIds && !runIds.has(originalRun.runId)) continue;
+      let run = originalRun;
+      if(run.legacyDeliveredEventIds.length){await channel.discardLegacy(run.legacyDeliveredEventIds);await current.store.updateRun(original.agentId,run.runId,{legacyDeliveredEventIds:[]});run=(await current.store.getRun(run.runId))!.run;}
+      const events = await channel.events([run.runId]);
+      const progress = events.filter((event) => event.version === 2 && event.domainId === original.domainId &&
+        event.agentId === original.agentId && event.runId === run.runId && event.agentGeneration === original.agentGeneration &&
+        event.assignmentGeneration === run.assignmentGeneration && event.kind === "progress" && Number.isSafeInteger(event.sequence))
+        .sort((a,b) => a.sequence-b.sequence).at(-1);
+      if (progress && progress.sequence !== run.latestProgress?.eventSequence) {
+        await current.store.updateRun(original.agentId,run.runId,{latestProgress:{eventSequence:progress.sequence,summary:progress.summary.slice(0,2048),createdAt:progress.createdAt}});
+        run = (await current.store.getRun(run.runId))!.run;
+      }
+      const result = await channel.result(run.runId);
+      if (!result) continue;
+      if (!resultValid(result,original,run)) throw new CanaryError("RESULT_IDENTITY_MISMATCH");
+      if (!run.terminal) await current.store.updateRun(original.agentId,run.runId,{
+        terminal:{status:result.status,summary:result.summary.slice(0,4096),completedAt:result.completedAt,resultFile:`results/${run.runId}.json`},
+        phase:terminalPhase(result.status),
       });
-      else if (agent.terminal.status !== result.status || agent.terminal.summary !== result.summary || agent.terminal.completedAt !== result.completedAt)
+      else if (run.terminal.status !== result.status || run.terminal.summary !== result.summary || run.terminal.completedAt !== result.completedAt)
         throw new CanaryError("COMPLETION_CONFLICT");
     }
   }
@@ -783,45 +812,33 @@ async function reconcile(current: V2Context, runIds?: Set<string>): Promise<void
 async function waitRuns(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
   if (!Array.isArray(params.runIds) || params.runIds.length < 1 || params.runIds.length > 8 ||
       params.runIds.some((id) => typeof id !== "string" || !/^r-[0-9a-f-]{36}$/u.test(id))) throw new CanaryError("INVALID_RUN_IDS");
-  const timeoutMs = params.timeoutMs ?? 30000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 120000) throw new CanaryError("INVALID_TIMEOUT");
-  const current = await requireContext(context), wanted = new Set(params.runIds), channel = new ChannelStore(current.store.domainId);
-  for (const runId of wanted) if (!await current.store.getAgent(undefined, runId)) throw new CanaryError("RUN_NOT_REGISTERED");
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    await reconcile(current, wanted);
-    const agents = (await current.store.list()).filter((a) => wanted.has(a.runId));
-    const all = (await channel.events()).filter((e) => {
-      const agent = agents.find((a) => a.runId === e.runId);
-      return !!agent && e.version === 1 && e.domainId === agent.domainId && e.agentId === agent.agentId &&
-        e.agentGeneration === agent.agentGeneration && e.assignmentGeneration === agent.assignmentGeneration &&
-        (e.kind === "progress" || e.kind === "message") && typeof e.summary === "string" &&
-        typeof e.createdAt === "string" && typeof e.eventId === "string";
-    });
-    const fresh = all.filter((e) => { const a=agents.find((x)=>x.runId===e.runId); return !!a && !a.deliveredEventIds.includes(e.eventId); })
-      .sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.eventId.localeCompare(b.eventId)).slice(0,24);
-    const results = agents.filter((a)=>a.terminal && !a.terminalDelivered).map((a)=>({runId:a.runId,agentId:a.agentId,status:a.terminal!.status,summary:a.terminal!.summary,completedAt:a.terminal!.completedAt,resultAvailable:true}));
-    if (fresh.length || results.length || Date.now() >= deadline) {
-      for (const agent of agents) {
-        const last=fresh.filter((e)=>e.runId===agent.runId).at(-1);
-        const delivered = fresh.filter((e)=>e.runId===agent.runId).map((e)=>e.eventId);
-        if (last || (agent.terminal && !agent.terminalDelivered)) await current.store.updateAgent(agent.agentId, {
-          ...(last ? {deliveredEventIds:[...agent.deliveredEventIds,...delivered]}:{}), ...(agent.terminal && !agent.terminalDelivered ? {terminalDelivered:true}:{}) });
-      }
-      return {ok:true,action:"wait",events:fresh.map((e)=>({eventId:e.eventId,kind:e.kind,runId:e.runId,agentId:e.agentId,target:e.target,summary:e.summary.slice(0,2048),createdAt:e.createdAt})),results,timedOut:!fresh.length&&!results.length};
+  const timeoutMs=params.timeoutMs??30000;
+  if(!Number.isSafeInteger(timeoutMs)||timeoutMs<0||timeoutMs>120000)throw new CanaryError("INVALID_TIMEOUT");
+  const current=await requireContext(context),wanted=new Set(params.runIds),channel=new ChannelStore(current.store.domainId);
+  for(const runId of wanted)if(!await current.store.getRun(runId))throw new CanaryError("RUN_NOT_REGISTERED");
+  const deadline=Date.now()+timeoutMs;
+  while(true){
+    await reconcile(current,wanted);
+    const entries=(await Promise.all([...wanted].map(id=>current.store.getRun(id)))).filter((x):x is {agent:AgentRecord;run:RunRecord}=>!!x);
+    const all=await channel.events([...wanted]);
+    const fresh=all.filter(e=>{const entry=entries.find(x=>x.run.runId===e.runId);return !!entry&&e.version===2&&e.domainId===entry.agent.domainId&&e.agentId===entry.agent.agentId&&e.agentGeneration===entry.agent.agentGeneration&&e.assignmentGeneration===entry.run.assignmentGeneration&&e.sequence>entry.run.deliveredSequence;}).sort((a,b)=>a.runId.localeCompare(b.runId)||a.sequence-b.sequence).slice(0,24);
+    const results=entries.filter(x=>x.run.terminal&&!x.run.terminalDelivered).map(x=>({runId:x.run.runId,agentId:x.agent.agentId,status:x.run.terminal!.status,summary:x.run.terminal!.summary,completedAt:x.run.terminal!.completedAt,resultAvailable:true}));
+    if(fresh.length||results.length||Date.now()>=deadline){
+      for(const entry of entries){const delivered=fresh.filter(e=>e.runId===entry.run.runId);const through=delivered.length?Math.max(...delivered.map(e=>e.sequence)):entry.run.deliveredSequence;const terminalDelivered=entry.run.terminalDelivered||results.some(r=>r.runId===entry.run.runId);if(delivered.length||terminalDelivered!==entry.run.terminalDelivered){await current.store.updateRun(entry.agent.agentId,entry.run.runId,{deliveredSequence:through,terminalDelivered});if(delivered.length){await channel.acknowledge(entry.run.runId,through);await channel.discardLegacy(delivered.flatMap(e=>e.legacyEventId?[e.legacyEventId]:[]));}}}
+      return{ok:true,action:"wait",events:fresh.map(e=>({eventSequence:e.sequence,kind:e.kind,runId:e.runId,agentId:e.agentId,target:e.target,summary:e.summary.slice(0,2048),createdAt:e.createdAt})),results,timedOut:!fresh.length&&!results.length};
     }
-    await channel.waitForChange(Math.max(0, deadline-Date.now()));
+    await channel.waitForChange([...wanted],Math.max(0,deadline-Date.now()));
   }
 }
 
 async function collect(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
-  if (!params.runId) throw new CanaryError("RUN_ID_REQUIRED");
-  const current=await requireContext(context), agent=await current.store.getAgent(undefined,params.runId);
-  if (!agent) throw new CanaryError("RUN_NOT_REGISTERED");
+  if(!params.runId)throw new CanaryError("RUN_ID_REQUIRED");
+  const current=await requireContext(context),entry=await current.store.getRun(params.runId);
+  if(!entry)throw new CanaryError("RUN_NOT_REGISTERED");
   await reconcile(current,new Set([params.runId]));
   const result=await new ChannelStore(current.store.domainId).result(params.runId);
-  if (!result || !resultValid(result,agent)) throw new CanaryError(result ? "RESULT_IDENTITY_MISMATCH" : "RESULT_NOT_READY");
-  return {ok:true,action:"collect",runId:result.runId,agentId:result.agentId,status:result.status,summary:result.summary,finalResult:result.finalResult,completedAt:result.completedAt};
+  if(!result||!resultValid(result,entry.agent,entry.run))throw new CanaryError(result?"RESULT_IDENTITY_MISMATCH":"RESULT_NOT_READY");
+  return{ok:true,action:"collect",runId:result.runId,agentId:result.agentId,assignmentGeneration:result.assignmentGeneration,status:result.status,summary:result.summary,finalResult:result.finalResult,completedAt:result.completedAt};
 }
 
 async function list(context: PiContext): Promise<JsonObject> {
@@ -911,6 +928,64 @@ async function send(context: PiContext, params: OrchestrateV2Params): Promise<Js
   return { ok: true, action: "send", domainId: current.store.domainId, ...recordView(updated) };
 }
 
+async function settleCancelled(current: V2Context, agent: AgentRecord, run: RunRecord): Promise<RunResult> {
+  const settled = await new ChannelStore(current.store.domainId).cancel({
+    version:2, domainId:agent.domainId, agentId:agent.agentId, runId:run.runId,
+    agentGeneration:agent.agentGeneration, assignmentGeneration:run.assignmentGeneration,
+    status:"cancelled", summary:"Cancelled by parent", finalResult:null,
+  });
+  if (!resultValid(settled.result,agent,run)) throw new CanaryError("RESULT_IDENTITY_MISMATCH");
+  await reconcile(current,new Set([run.runId]));
+  return settled.result;
+}
+
+async function cancel(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+  if(!params.runId)throw new CanaryError("RUN_ID_REQUIRED");
+  const current=await requireContext(context);await reconcile(current,new Set([params.runId]));
+  const entry=await current.store.getRun(params.runId);if(!entry)throw new CanaryError("RUN_NOT_REGISTERED");
+  if(entry.agent.runId!==entry.run.runId)throw new CanaryError("RUN_NOT_CURRENT");
+  if(entry.run.terminal)return{ok:true,action:"cancel",domainId:current.store.domainId,runId:entry.run.runId,agentId:entry.agent.agentId,assignmentGeneration:entry.run.assignmentGeneration,status:entry.run.terminal.status,cancelled:false,raceLost:true};
+  const exact=await identity(current.cli,entry.agent);if(exact.kind==="mismatch")throw new CanaryError("IDENTITY_MISMATCH");if(exact.kind==="absent")throw new CanaryError("AGENT_MISSING");
+  await current.cli.agentInterrupt(entry.agent.herdrAgentName);
+  const result=await settleCancelled(current,entry.agent,entry.run);
+  const updated=(await current.store.getAgent(entry.agent.agentId))!;
+  return{ok:true,action:"cancel",domainId:current.store.domainId,runId:result.runId,agentId:result.agentId,assignmentGeneration:result.assignmentGeneration,status:result.status,cancelled:result.status==="cancelled",raceLost:result.status!=="cancelled",...recordView(updated)};
+}
+
+async function reuse(context: PiContext, params: OrchestrateV2Params): Promise<JsonObject> {
+  const current=await requireContext(context),agentId=requireAgentId(params);if(!params.task)throw new CanaryError("TASK_REQUIRED");
+  const found=await current.store.getAgent(agentId);if(!found)throw new CanaryError("AGENT_NOT_REGISTERED");
+  await reconcile(current,new Set([found.runId]));let agent=(await current.store.getAgent(agentId))!;
+  const previous=agent.runs.find(run=>run.runId===agent.runId)!;
+  if(!previous.terminal)throw new CanaryError("RUN_NOT_TERMINAL");
+  if(agent.processState==="closed"||agent.processState==="failed")throw new CanaryError("AGENT_NOT_REUSABLE");
+  const exact=await identity(current.cli,agent);if(exact.kind==="mismatch")throw new CanaryError("IDENTITY_MISMATCH");if(exact.kind==="absent")throw new CanaryError("AGENT_MISSING");
+  const createdAt=now(),run:RunRecord={runId:`r-${randomUUID()}`,assignmentGeneration:agent.assignmentGeneration+1,phase:"running",latestProgress:null,terminal:null,deliveredSequence:0,terminalDelivered:false,assignmentState:"pending-prompt",pendingTask:params.task,legacyDeliveredEventIds:[],createdAt,updatedAt:createdAt};
+  agent=await current.store.startAssignment(agent.agentId,run);
+  await current.cli.agentPrompt(agent.herdrAgentName,assignmentPrompt(run.runId,run.assignmentGeneration,params.task));
+  agent=await current.store.updateRun(agent.agentId,run.runId,{assignmentState:"delivered",pendingTask:null});
+  const after=await identity(current.cli,agent);if(after.kind!=="present")throw new CanaryError(after.kind==="mismatch"?"IDENTITY_MISMATCH":"AGENT_MISSING");
+  agent=await current.store.updateAgent(agent.agentId,{processState:"live",runPhase:"running",herdrAttention:after.attention});
+  return{ok:true,action:"reuse",domainId:current.store.domainId,previousRunId:previous.runId,...recordView(agent)};
+}
+
+async function recover(context: PiContext): Promise<JsonObject> {
+  const current=await requireContext(context);await current.store.load();await reconcile(current);
+  const managed=await current.store.managedTab();let managedTabState:ManagedTabState="absent";
+  if(managed){managedTabState=await verifyTab(current,managed);if(managedTabState==="live")await current.store.setManagedTab({...managed,verifiedAt:now()});else if(managedTabState==="missing")await current.store.markManagedTabAgentsMissing(managed.tabId);}
+  const recovered:JsonObject[]=[];
+  for(const agent of await current.store.list()){
+    if(agent.processState==="closed"){recovered.push(recordView(agent,"absent"));continue;}
+    const exact=await identity(current.cli,agent);
+    if(exact.kind==="mismatch"){recovered.push({...recordView(agent,"mismatch"),recoveryStatus:"identity-mismatch"});continue;}
+    let updated=await current.store.updateAgent(agent.agentId,{processState:exact.kind==="present"?"live":"missing",herdrAttention:exact.kind==="present"?exact.attention:"unknown",...(!agent.terminal&&exact.kind==="absent"?{runPhase:"unknown" as const}:{})});
+    const assignment=updated.runs.find(run=>run.runId===updated.runId)!;
+    if(exact.kind==="present"&&!assignment.terminal&&assignment.assignmentState==="pending-prompt"&&assignment.pendingTask){await current.cli.agentPrompt(updated.herdrAgentName,assignmentPrompt(assignment.runId,assignment.assignmentGeneration,assignment.pendingTask));updated=await current.store.updateRun(updated.agentId,assignment.runId,{assignmentState:"delivered",pendingTask:null});}
+    recovered.push({...recordView(updated,exact.kind),recoveryStatus:exact.kind});
+  }
+  return{ok:true,action:"recover",domainId:current.store.domainId,parent:current.parent,managedTabId:managed?.tabId??null,managedTabState,agents:recovered};
+}
+
 async function detachIfNoManagedPanes(current: V2Context, tabId: string): Promise<void> {
   let active = false;
   for (const agent of await current.store.list()) {
@@ -939,18 +1014,25 @@ async function close(context: PiContext, params: OrchestrateV2Params): Promise<J
   if (agent.processState === "closed")
     return { ok: true, action: "close", domainId: current.store.domainId,
       ...recordView(agent, "absent"), alreadyAbsent: true };
-  const result = await identity(current.cli, agent);
+  await reconcile(current,new Set([agent.runId]));
+  const currentAgent=(await current.store.getAgent(agentId))!;
+  const currentRun=currentAgent.runs.find(run=>run.runId===currentAgent.runId)!;
+  const result = await identity(current.cli, currentAgent);
   if (result.kind === "mismatch") throw new CanaryError("IDENTITY_MISMATCH");
-  if (result.kind !== "absent") {
-    try {
-      await current.cli.paneClose(agent.paneId);
-    } catch (error) {
-      if (!isNotFound(error)) throw error;
-    }
+  if (!currentRun.terminal) {
+    if (result.kind === "present") await current.cli.agentInterrupt(currentAgent.herdrAgentName);
+    await settleCancelled(current,currentAgent,currentRun);
   }
+  if (result.kind !== "absent") {
+    try { await current.cli.paneClose(currentAgent.paneId); }
+    catch (error) { if (!isNotFound(error)) throw error; }
+  }
+  const settled=(await current.store.getAgent(agentId))!;
   const updated = await current.store.updateAgent(agentId, {
     processState: "closed",
-    runPhase: "closed",
+    runPhase: settled.runPhase,
+    latestProgress:settled.latestProgress,
+    terminal:settled.terminal,
     herdrAttention: "unknown",
   });
   if (updated.topology === "managed-subagents-tab-v2")
@@ -972,7 +1054,11 @@ async function execute(context: PiContext, params: OrchestrateV2Params, extensio
       case "close": return close(context, params);
       case "wait": return waitRuns(context, params);
       case "collect": return collect(context, params);
+      case "reuse": return reuse(context, params);
+      case "cancel": return cancel(context, params);
+      case "recover": return recover(context);
     }
+    throw new CanaryError("INVALID_REQUEST");
   });
 }
 
@@ -981,7 +1067,7 @@ export function registerOrchestrateV2(api: ExtensionAPI, extensionPath: string):
     name: "orchestrate_v2",
     label: "Orchestrate v2 Canary",
     description:
-      "M03 canary: direct visible delegation with explicit child progress, messaging, durable completion, wait, and collect. Herdr/Pi state never implies delegated completion.",
+      "M04 canary: reusable direct-Herdr agents with exact-run cancellation, durable historical results, restart recovery, messaging, wait, and collect. Herdr/Pi state never implies delegated completion.",
     promptSnippet: "Direct Herdr shared-tab visible-agent canary control",
     parameters: ORCHESTRATE_V2_SCHEMA as unknown as ToolRegistration["parameters"],
     async execute(_toolCallId, rawParams, _signal, _onUpdate, context) {

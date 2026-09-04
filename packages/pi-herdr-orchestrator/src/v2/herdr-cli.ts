@@ -199,6 +199,10 @@ export class HerdrCli {
     return responseResult(await this.json(["agent", "prompt", target, text]));
   }
 
+  async agentInterrupt(target: string): Promise<JsonObject> {
+    return responseResult(await this.json(["agent", "send-keys", target, "esc"]));
+  }
+
   async agentRead(target: string, lines: number): Promise<string> {
     return this.run(this.binary, [
       "agent", "read", target, "--source", "recent-unwrapped",
