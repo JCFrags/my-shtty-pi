@@ -5,6 +5,7 @@
 - Branch: `work/chrono-v3-m02-test-foundation`
 - Base and M01 merge commit: `0a1ca2ff16d8b79db3fda88f156ea5b9c6864427`
 - Package candidate: ChronoCompact `2.0.2`
+- Implementation commit: `77cf5dd08486fd9ea6352a474aaac8a5e484f33a`
 - Pull request: pending; target is `rebuild/chrono-memory-v3`
 
 M02 remains unmerged. It does not request or authorize a merge to `main`, and M03 has not started.
@@ -55,10 +56,20 @@ Repository source, generated distribution, and deployment manifest currently res
 
 ## Verification and activation status
 
-Focused generator, harness, fault, extension, search, and legacy-memory tests pass. The complete package, build, root, privacy, publication, deployment, and final CI gates remain to be recorded before handoff.
+The pre-push candidate passed:
+
+- Complete serialized package suite: 329/329.
+- `npm run test:normal`, including the complete suite and deterministic small/medium report. Repeated generation and output hashes matched.
+- `npm run test:fixed-heap`: 512 MiB and 1 GiB lanes passed; OOM remained non-passing.
+- Package typecheck, generated-dist comparison, and deployment-manifest verification.
+- Baseline and privacy verifier tests: 69/69.
+- Schema-3 worktree, index, and all-ref privacy scan: 175 commits, 82,593 path contexts, 1,794 blobs, 666 worktree/index files, zero findings.
+- Complete repository root verification: 17/17 manifests, 261/261 deployed hashes, 15/15 safe scripts, 17/17 package dry runs, and zero unexplained dependency-graph files.
+
+CI is split into publication, typecheck, unit/integration, determinism, 512/1024 MiB fixed-heap, build-consistency, and dependent root-verification jobs. Exact pushed-head CI remains required.
 
 The live package remains healthy at `2.0.1`, deployed from source commit `24c6f13f1f6ac9468dfbeba4cad8021b44ecae7f`, with the isolated worker enabled. The verified M01 rollback `m01-20260904T185758Z-24c6f13f` remains ready. No `2.0.2` deployment has occurred yet; activation requires the exact pushed candidate, a fresh owner-only backup, generated-package hash verification, atomic replacement, and fresh Pi core and worker smokes.
 
 ## Current disposition
 
-User input is not required. The candidate is not yet ready for project-lead review. Remaining work is the complete validation matrix, exact-head CI, guarded hotfix activation, deployment evidence, and a draft unmerged M02 pull request.
+User input is not required. The candidate has passed all local pre-push gates but is not yet ready for project-lead review. Remaining work is exact-head CI, guarded hotfix activation, deployment evidence, and a draft unmerged M02 pull request.
