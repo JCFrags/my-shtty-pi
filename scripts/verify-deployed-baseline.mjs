@@ -99,6 +99,7 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
   "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
   "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
+  "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
 ]);
 
 const expectedSlugs = [
