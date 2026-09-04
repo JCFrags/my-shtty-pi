@@ -36,6 +36,41 @@ const selectedSlug = productIndex >= 0 ? args[productIndex + 1] : undefined;
 if (productIndex >= 0 && !selectedSlug) throw new Error("--product requires a slug");
 const staticOnly = args.includes("--static-only");
 const projectGlanceSlug = "pi-project-glance";
+const m00BaselineCommit = "1887c77b39c42fb0b5d35b38baac94aff13465e9";
+const correctionArtifactPaths = new Set([
+  ".github/workflows/verify.yml",
+  ".gitignore",
+  "README.md",
+  "packages/pi-chrono-compaction/package.json",
+  "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
+  "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
+  "scripts/verify-chrono-v3-baseline.mjs",
+  "scripts/verify-chrono-v3-privacy.mjs",
+  "scripts/verify-deployed-baseline.mjs",
+  "scripts/test/verify-chrono-v3-baseline.test.mjs",
+  "scripts/test/verify-chrono-v3-privacy.test.mjs",
+  "docs/chrono-v3/README.md",
+  "docs/chrono-v3/amendments/A-0001-private-repository-containment.md",
+  "docs/chrono-v3/amendments/A-0002-m00-baseline-provenance.md",
+  "docs/chrono-v3/amendments/A-0003-m00-r1-corrections.md",
+  "docs/chrono-v3/baseline.md",
+  "docs/chrono-v3/baseline-evidence.json",
+  "docs/chrono-v3/containment-timeline.md",
+  "docs/chrono-v3/decisions.md",
+  "docs/chrono-v3/evidence.md",
+  "docs/chrono-v3/historical-test-inventory.md",
+  "docs/chrono-v3/independent-review.md",
+  "docs/chrono-v3/known-incidents.md",
+  "docs/chrono-v3/milestone-ledger.md",
+  "docs/chrono-v3/privacy-policy.md",
+  "docs/chrono-v3/rollback.md",
+  "docs/chrono-v3/test-recovery.md",
+  "docs/chrono-v3/decision-and-update-protocol.md",
+  "docs/chrono-v3/reviews/README.md",
+  "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
+  "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
+  "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
+]);
 
 const expectedSlugs = [
   "codex-usage-footer", "files-ui", "grounded-tools", "herdr-agent-state",
@@ -53,6 +88,7 @@ const expectedSafeScripts = Object.freeze({
   "pi-chrono-compaction": {
     typecheck: "tsc -p tsconfig.json --noEmit",
     build: "rm -rf dist && tsc -p tsconfig.json",
+    test: "rm -rf dist-test && tsc -p tsconfig.test-build.json && node --test --test-concurrency=1 dist-test/test/*.test.js",
   },
   "pi-herdr-orchestrator": {
     typecheck: "tsc -p tsconfig.json --noEmit",
@@ -113,6 +149,30 @@ function gitBytesAt(commit, rel) {
 function jsonEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
+function gitNameList(args) {
+  try {
+    return execFileSync("git", args, { cwd: root, encoding: null, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+      .toString("utf8").split("\0").filter(Boolean);
+  } catch {
+    throw new Error("git boundary query failed");
+  }
+}
+function verifyCorrectionScope() {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", m00BaselineCommit, "HEAD"], { cwd: root, stdio: "ignore" });
+  } catch {
+    throw new Error("M00 baseline is not an ancestor");
+  }
+  const changed = new Set([
+    ...gitNameList(["diff", "--name-only", "-z", `${m00BaselineCommit}..HEAD`, "--"]),
+    ...gitNameList(["diff", "--name-only", "-z", "HEAD", "--"]),
+    ...gitNameList(["diff", "--cached", "--name-only", "-z", "--"]),
+    ...gitNameList(["ls-files", "--others", "--exclude-standard", "-z"]),
+  ]);
+  for (const path of changed) {
+    if (!correctionArtifactPaths.has(path)) throw new Error(`unexpected correction artifact: ${path}`);
+  }
+}
 function trackedWorkingFiles() {
   return execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], { cwd: root })
     .toString("utf8").split("\0").filter(Boolean)
@@ -137,18 +197,173 @@ if (!jsonEqual(inactive.map((product) => product.slug), ["pi-review-ui", "pi-too
 if (products.find((product) => product.slug === "temporary-orchestrator-cancel-isolation")?.status !== "active-temporary") throw new Error("temporary shim status changed");
 if (!existsSync(join(root, "packages/temporary-orchestrator-cancel-isolation"))) throw new Error("temporary cancellation isolation must remain separate");
 if (existsSync(join(root, "packages/pi-herdr-orchestrator/extensions/temporary-orchestrator-cancel-isolation.ts"))) throw new Error("temporary cancellation isolation was folded into the orchestrator");
-const rootEntries = readdirSync(root).filter((name) => name !== ".git").sort();
-const allowedRootEntries = [".github", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "packages", "scripts"].sort();
+const rootEntries = readdirSync(root).filter((name) => ![".git", ".chrono-v3-private"].includes(name)).sort();
+const allowedRootEntries = [".github", ".gitignore", "LICENSE", "README.md", "docs", "package-lock.json", "package.json", "packages", "scripts"].sort();
 if (!jsonEqual(rootEntries, allowedRootEntries)) throw new Error(`unexpected root entries: ${rootEntries.join(",")}`);
+const northStarPath = join(root, "docs/chrono-v3/master-goal-and-work-plan.md");
+if (!existsSync(northStarPath) || sha256(northStarPath) !== "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f") throw new Error("ChronoCompact north-star charter is not byte-preserved");
 const workflows = walk(join(root, ".github/workflows")).map((path) => relative(join(root, ".github/workflows"), path));
 if (!jsonEqual(workflows, ["verify.yml"])) throw new Error("exactly one verify workflow is required");
 const workflow = readFileSync(join(root, ".github/workflows/verify.yml"), "utf8");
-for (const required of ["pull_request:", "- main", "push:", "workflow_dispatch:"]) {
-  if (!workflow.includes(required)) throw new Error(`verify workflow lacks ${required}`);
+function verifyWorkflowBoundary() {
+  if (!workflow.includes("pull_request:") || !workflow.includes("push:") || !workflow.includes("schedule:") || !workflow.includes("workflow_dispatch:")) {
+    throw new Error("verify workflow trigger set is incomplete");
+  }
+  const allBranchTriggers = (workflow.match(/branches:\s*\n\s*-\s*"\*\*"/gu) ?? []).length;
+  if (allBranchTriggers !== 2 || workflow.includes("- main")) throw new Error("verify workflow must cover all push and pull-request branches");
+  if (!workflow.includes('cron: "17 3 * * 1"')) throw new Error("verify workflow schedule is not weekly");
+  if (!workflow.includes("fetch-depth: 0") || !workflow.includes("fetch-tags: true") || !workflow.includes("ref: ${{ github.sha }}")) {
+    throw new Error("verify workflow lacks explicit full-ref checkout");
+  }
+  if (!workflow.includes("persist-credentials: false")) throw new Error("verify workflow must not persist checkout credentials");
+  if (!workflow.includes("git fetch --force --prune --tags origin") || !workflow.includes("refs/pull/*/head")) {
+    throw new Error("verify workflow lacks explicit all-ref fetch");
+  }
+  const actionPins = workflow.match(/uses:\s+actions\/(?:checkout|setup-node)@[0-9a-f]{40}(?:\s|$)/gu) ?? [];
+  if (actionPins.length !== 2 || /uses:\s+actions\/(?:checkout|setup-node)@v/iu.test(workflow)) throw new Error("verify workflow actions are not pinned");
+  for (const required of ["--self-test", "--event-scope", "--event-name", "$GITHUB_EVENT_NAME", "--require-public-review", "--repository", "--ci-event", "$GITHUB_EVENT_PATH"]) {
+    if (!workflow.includes(required)) throw new Error(`verify workflow lacks event-scope scan argument ${required}`);
+  }
+  if (!workflow.includes('--repository "JCFrags/my-shtty-pi"') || workflow.includes('--repository "$GITHUB_REPOSITORY"')) {
+    throw new Error("verify workflow must bind public review to the canonical repository identity");
+  }
+  if (!workflow.includes("Verify public repository content boundary")) throw new Error("verify workflow uses a noncanonical boundary label");
+  if (!workflow.includes("Verify complete repository root and ignored dependency-tree fixture") || !workflow.includes("npm run verify")) throw new Error("verify workflow lacks the complete root verifier");
+  if (!workflow.includes("permissions:\n  contents: read")) throw new Error("verify workflow permissions are not read-only");
+  if (!workflow.includes("timeout-minutes: 25") || !workflow.includes("cancel-in-progress: true") || !workflow.includes("group: verify-")) {
+    throw new Error("verify workflow lacks bounded cancellation and timeout");
+  }
+  if (workflow.includes("--allow-dirty")) throw new Error("verify workflow must not use allow-dirty diagnostics");
+  if (!workflow.includes("--allow-missing-live") || !workflow.includes("--static-only")) throw new Error("verify workflow lacks static baseline mode");
+  if (workflow.includes("consolidation/clean-monorepo-20260901")) throw new Error("verify workflow retains the deleted consolidation trigger");
 }
-if (workflow.includes("consolidation/clean-monorepo-20260901")) throw new Error("verify workflow retains the deleted consolidation trigger");
-const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path));
-if (!jsonEqual(scriptFiles, ["verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifier is allowed under scripts/");
+const historicalTestCommit = "9a4d25a46f329bd91828a22a925e5de81c71eee4";
+const requiredGovernanceFiles = [
+  "docs/chrono-v3/decision-and-update-protocol.md",
+  "docs/chrono-v3/reviews/README.md",
+  "docs/chrono-v3/reviews/M00-project-lead-review-1.md",
+  "docs/chrono-v3/reviews/M00-project-lead-review-2.md",
+  "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
+];
+function governanceFail(message) {
+  throw new Error(`governance boundary: ${message}`);
+}
+function gitObjectId(commit, path) {
+  try {
+    return execFileSync("git", ["rev-parse", `${commit}:${path}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    governanceFail(`historical object unavailable for ${path}`);
+  }
+}
+function inventoryCount(text, label) {
+  const match = new RegExp(`^- ${label}: \\*\\*(\\d+)\\*\\*$`, "mu").exec(text);
+  if (!match) governanceFail(`inventory count missing: ${label}`);
+  return Number(match[1]);
+}
+function verifyHistoricalInventory() {
+  const inventoryPath = join(root, "docs/chrono-v3/historical-test-inventory.md");
+  const text = readFileSync(inventoryPath, "utf8");
+  const historicalPaths = gitNameList(["ls-tree", "-r", "--name-only", "-z", historicalTestCommit, "--", "packages/chrono-compact/test"]).sort();
+  const rows = text.split("\n").filter((line) => line.startsWith("| `packages/chrono-compact/test/"));
+  if (rows.length !== historicalPaths.length) governanceFail(`inventory row count ${rows.length}; expected ${historicalPaths.length}`);
+  const seen = new Set();
+  const classCounts = { "exact restoration": 0, "path/import adapted": 0, "harness adapted": 0, "retained but excluded": 0, missing: 0 };
+  const runnableCounts = { yes: 0, no: 0 };
+  for (const line of rows) {
+    const cells = line.slice(1, -1).split("|").map((cell) => cell.trim().replace(/^`|`$/gu, ""));
+    if (cells.length !== 8) governanceFail("inventory row shape is invalid");
+    const [historicalPath, historicalSha, currentPath, currentSha, classification, runnable, reason, family] = cells;
+    if (!historicalPaths.includes(historicalPath) || seen.has(historicalPath)) governanceFail(`inventory path is missing or duplicated: ${historicalPath}`);
+    seen.add(historicalPath);
+    if (!/^[0-9a-f]{40}$/u.test(historicalSha) || !/^[0-9a-f]{40}$/u.test(currentSha)) governanceFail(`inventory blob ID is invalid: ${historicalPath}`);
+    if (gitObjectId(historicalTestCommit, historicalPath) !== historicalSha) governanceFail(`historical blob mismatch: ${historicalPath}`);
+    const expectedCurrent = `packages/pi-chrono-compaction/test/${historicalPath.slice("packages/chrono-compact/test/".length)}`;
+    if (currentPath !== expectedCurrent) governanceFail(`current path mismatch: ${historicalPath}`);
+    const currentAbsolute = resolve(root, currentPath);
+    if (!isWithin(root, currentAbsolute) || !existsSync(currentAbsolute) || !statSync(currentAbsolute).isFile()) governanceFail(`current file missing: ${currentPath}`);
+    let actualCurrentSha;
+    try {
+      actualCurrentSha = execFileSync("git", ["hash-object", currentAbsolute], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      governanceFail(`current blob unavailable: ${currentPath}`);
+    }
+    if (actualCurrentSha !== currentSha) governanceFail(`current blob mismatch: ${currentPath}`);
+    if (!Object.hasOwn(classCounts, classification)) governanceFail(`unknown inventory classification: ${classification}`);
+    if (!Object.hasOwn(runnableCounts, runnable)) governanceFail(`invalid runnable value: ${runnable}`);
+    if (!reason || !family) governanceFail(`inventory reason or family is empty: ${historicalPath}`);
+    if (classification === "exact restoration" && historicalSha !== currentSha) governanceFail(`exact restoration is not byte-identical: ${historicalPath}`);
+    if (classification === "harness adapted" && historicalSha === currentSha) governanceFail(`harness adaptation has no blob change: ${historicalPath}`);
+    if (classification === "retained but excluded" && runnable !== "no") governanceFail(`excluded file is runnable: ${historicalPath}`);
+    classCounts[classification] += 1;
+    runnableCounts[runnable] += 1;
+  }
+  if (!jsonEqual([...seen].sort(), historicalPaths)) governanceFail("inventory does not reconcile with historical Git listing");
+  if (inventoryCount(text, "Historical files") !== historicalPaths.length || inventoryCount(text, "Exact restorations") !== classCounts["exact restoration"] || inventoryCount(text, "Harness adapted") !== classCounts["harness adapted"] || inventoryCount(text, "Retained but excluded") !== classCounts["retained but excluded"] || inventoryCount(text, "Missing") !== classCounts.missing || inventoryCount(text, "Runnable") !== runnableCounts.yes) governanceFail("inventory totals do not reconcile");
+  if (!text.includes("incremental-context.test.ts") || !text.includes("retained but excluded") || !text.includes("packages/pi-chrono-compaction/test/support/index.ts") || !text.includes("--test-concurrency=1")) governanceFail("inventory lacks exclusion, support, or serialization records");
+  return { historicalFiles: historicalPaths.length, runnableFiles: runnableCounts.yes, excludedFiles: runnableCounts.no, classCounts };
+}
+function verifyBaselineEvidence() {
+  const path = join(root, "docs/chrono-v3/baseline-evidence.json");
+  const evidence = readJson(path);
+  const required = ["schemaVersion", "milestone", "status", "capturedDate", "lastCorrectedDate", "reviewState", "repository", "northStar", "runtime", "configuration", "scheduler", "affectedSession", "workerIncident", "tests", "privacyAudit", "rollback", "deployment", "review"];
+  for (const field of required) if (!Object.hasOwn(evidence, field)) governanceFail(`evidence field missing: ${field}`);
+  if (evidence.schemaVersion < 2 || evidence.milestone !== "M00-R2") governanceFail("evidence schema or milestone is invalid");
+  const repository = evidence.repository;
+  if (repository.name !== "JCFrags/my-shtty-pi" || repository.visibility !== "PUBLIC" || repository.isFork !== false || repository.defaultBranch !== "main" || repository.integrationBranch !== "rebuild/chrono-memory-v3" || repository.milestoneBranch !== "work/chrono-v3-m00-baseline") governanceFail("repository identity projection is invalid");
+  if (!jsonEqual(repository.pullRequest, { number: 30, base: "rebuild/chrono-memory-v3", head: "work/chrono-v3-m00-baseline", draft: true, merged: false })) governanceFail("pull-request projection is invalid");
+  if (repository.baselineSha !== "eb9742c318a76eeaf753e87a620fae83ca9048d1" || repository.originalM00Sha !== m00BaselineCommit || repository.r1ReviewTargetSha !== "370cbf1522c8ec7acfe49907a969e633e829b6bb" || repository.acceptedReviewedHeadSha !== "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2") governanceFail("repository baseline projection is invalid");
+  if (!jsonEqual(evidence.northStar, { path: "docs/chrono-v3/master-goal-and-work-plan.md", sha256: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f", gitBlobSha1: "dab84641d6f27c61cbaa6db8c2e2d6bebe84bb26", bytePreserved: true })) governanceFail("north-star projection is invalid");
+  const runtime = evidence.runtime;
+  if (runtime.packageVersion !== "2.0.0" || runtime.sourceFileCount !== 66 || runtime.distFileCount !== 65 || runtime.sourceMatch !== true || runtime.distMatch !== true || runtime.entrypointMatch !== true || runtime.packageLockStatus !== "match") governanceFail("runtime projection is invalid");
+  if (!/^[0-9a-f]{64}$/u.test(runtime.sourceTreeSha256) || !/^[0-9a-f]{64}$/u.test(runtime.distTreeSha256) || !/^[0-9a-f]{64}$/u.test(runtime.entrypointSha256)) governanceFail("runtime hashes are invalid");
+  if (!jsonEqual(runtime.runtimeMismatches, []) || !jsonEqual(runtime.metadataExceptions, [{ path: "package.json", code: "test-script-only-metadata-divergence" }])) governanceFail("runtime exception projection is invalid");
+  const configurationFields = ["isolatedWorker", "incrementalPrecompute", "rollupShadow", "valueWorker", "rankedSearch", "editableMemory", "hybridSummary", "cache", "hostWorkerSlots", "workerTimeoutSeconds", "workerNiceLevel"];
+  for (const field of configurationFields) if (!Object.hasOwn(evidence.configuration, field)) governanceFail(`configuration field missing: ${field}`);
+  for (const field of ["directoryPermissions", "slotArtifactCount", "ticketArtifactCount", "mutationPerformed", "captureLimitation"]) if (!Object.hasOwn(evidence.scheduler, field)) governanceFail(`scheduler field missing: ${field}`);
+  for (const field of ["aliasOnly", "bytes", "lineRecords", "maximumLineBytes", "finalLineComplete", "readerChunkBound", "contentEmitted", "sourceChangedDuringMeasurement"]) if (!Object.hasOwn(evidence.affectedSession, field)) governanceFail(`affected-session field missing: ${field}`);
+  if (evidence.workerIncident.incidentId !== "I-0002" || evidence.workerIncident.actualSafeFailureCode !== "unresolved" || evidence.workerIncident.carryForwardMilestone !== "M01") governanceFail("worker incident projection is invalid");
+  if (evidence.tests.historicalFiles !== 55 || evidence.tests.runnableFiles !== 54 || evidence.tests.excludedFiles !== 1 || evidence.tests.chronoCompact.passed !== 294 || evidence.tests.chronoCompact.failed !== 0 || evidence.tests.chronoCompact.skipped !== 0 || evidence.tests.publicationVerifier.passed < 31 || evidence.tests.baselineVerifier.passed < 16) governanceFail("test evidence projection is incomplete");
+  if (!Object.hasOwn(evidence.tests.rootVerification, "status") || !["pending", "pass"].includes(evidence.tests.rootVerification.status)) governanceFail("root verification status is invalid");
+  const privacy = evidence.privacyAudit;
+  if (privacy.classification !== "P1-limited-metadata" || privacy.p2Found !== false || privacy.p3Found !== false || privacy.findings !== 0 || !Number.isInteger(privacy.branchesScanned) || !Number.isInteger(privacy.tagsScanned) || !Number.isInteger(privacy.pullRequestHeadsScanned) || !Number.isInteger(privacy.blobCount) || !Number.isInteger(privacy.pathContextCount)) governanceFail("privacy evidence projection is invalid");
+  if (!jsonEqual(evidence.rollback, { created: true, verified: true, used: false, exactPathOmitted: true })) governanceFail("rollback projection is invalid");
+  if (evidence.deployment.runtimeSourceChanged !== false || evidence.deployment.runtimeDistChanged !== false || evidence.deployment.liveFilesChanged !== false || evidence.deployment.settingsChanged !== false || evidence.deployment.schedulerChanged !== false || evidence.deployment.sessionsChanged !== false || evidence.deployment.piReloaded !== false || evidence.deployment.fixesLocallyUsable !== false || evidence.deployment.firstPlannedDeploymentMilestone !== "M01") governanceFail("deployment boundary is invalid");
+  if (evidence.review.projectLeadReview1.result !== "changes-requested" || evidence.review.projectLeadReview2.result !== "changes-requested" || !jsonEqual(evidence.review.projectLeadAcceptance, { result: "accepted", reviewedHead: "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2", record: "reviews/M00-project-lead-acceptance.md" }) || evidence.review.m00Accepted !== true || evidence.review.m01Authorized !== true || evidence.review.currentState !== "M00 accepted; M01 authorized") governanceFail("review state is invalid");
+  const serialized = readFileSync(path, "utf8");
+  if (/\/home\/|\.chrono-v3-private|-----BEGIN|github_pat_|gh[opsu]_/u.test(serialized)) governanceFail("evidence contains a private path or secret-like value");
+  return { schemaVersion: evidence.schemaVersion, status: evidence.status, rootVerification: evidence.tests.rootVerification.status };
+}
+function verifyGovernanceArtifacts() {
+  for (const rel of requiredGovernanceFiles) {
+    const path = join(root, rel);
+    if (!existsSync(path) || !statSync(path).isFile()) governanceFail(`required governance file is missing: ${rel}`);
+  }
+  const docs = ["README.md", ...walk(join(root, "docs/chrono-v3")).filter((path) => !path.endsWith("master-goal-and-work-plan.md"))].map((path) => readFileSync(path, "utf8"));
+  const prohibited = [
+    /independent(?: read-only)? project-lead review(?: completed| passed| found no blocking defect)/iu,
+  ];
+  for (const text of docs) for (const pattern of prohibited) if (pattern.test(text)) governanceFail("a document claims project-lead acceptance or M01 authorization");
+  const requiredTerms = ["local secondary review", "directing-assistant project-lead review", "M00-R2 corrections complete; ready for directing-assistant project-lead re-review"];
+  const joined = docs.join("\n");
+  for (const term of requiredTerms) if (!joined.includes(term)) governanceFail(`required provenance term is missing: ${term}`);
+  const evidence = verifyBaselineEvidence();
+  const inventory = verifyHistoricalInventory();
+  return { evidence, inventory };
+}
+function verifyPublicationScanner() {
+  try {
+    execFileSync(process.execPath, [join(root, "scripts/verify-chrono-v3-privacy.mjs"), "--self-test", "--worktree", "--index", "--all-refs"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  } catch {
+    throw new Error("publication scanner failed");
+  }
+  return "pass";
+}
+verifyWorkflowBoundary();
+verifyCorrectionScope();
+const governance = verifyGovernanceArtifacts();
+const publicationScan = verifyPublicationScanner();
+const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path)).sort();
+if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/verify-chrono-v3-privacy.test.mjs", "verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers and their tests are allowed under scripts/");
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
@@ -260,7 +475,7 @@ for (const manifestPath of packageManifestPaths) {
     }
   }
 }
-if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 12) throw new Error("expected exactly 12 retained safe package scripts");
+if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 13) throw new Error("expected exactly 13 retained safe package scripts");
 
 function globRegex(pattern) {
   let out = "^";
@@ -378,7 +593,7 @@ const missingRuntimeCode = [...deployedRuntimeCode].filter((path) => !activeRunt
 if (missingRuntimeCode.length > 0) throw new Error(`deployed runtime code is unreachable: ${missingRuntimeCode.map((path) => relative(root, path)).join(",")}`);
 for (const product of products.filter((candidate) => candidate.compiledCount !== undefined)) {
   const packageRoot = join(root, "packages", product.slug);
-  const sourceFiles = walk(packageRoot).filter((path) => !path.includes(`${sep}dist${sep}`) && (path.endsWith(".ts") || path.endsWith(".d.ts")));
+  const sourceFiles = walk(packageRoot).filter((path) => !path.includes(`${sep}dist${sep}`) && !path.includes(`${sep}test${sep}`) && (path.endsWith(".ts") || path.endsWith(".d.ts")));
   const unexplained = sourceFiles.filter((path) => !sourceBuildGraph.has(path));
   if (unexplained.length > 0) throw new Error(`${product.slug}: source cannot reproduce deployed closure: ${unexplained.map((path) => relative(packageRoot, path)).join(",")}`);
 }
@@ -393,7 +608,7 @@ for (const product of inactive) {
 const tracked = trackedWorkingFiles();
 const trackedDependencyFiles = tracked.filter((rel) => rel.split("/").includes("node_modules"));
 if (trackedDependencyFiles.length > 0) throw new Error(`tracked dependency-tree files are forbidden: ${trackedDependencyFiles.join(",")}`);
-const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, rootVerification: 0, unexplained: 0 };
+const categories = { deployedRuntime: 0, sourceBuildInputs: 0, inactiveSource: 0, metadata: 0, docs: 0, tests: 0, testSupport: 0, rootVerification: 0, unexplained: 0 };
 const unexplainedPaths = [];
 for (const rel of tracked) {
   // Project Glance is verified in its own additive phase below; it must not
@@ -404,9 +619,11 @@ for (const rel of tracked) {
   if (deployedPaths.has(rel)) category = "deployedRuntime";
   else if (sourceBuildGraph.has(path)) category = "sourceBuildInputs";
   else if (inactiveGraph.has(path) || (rel.startsWith("packages/pi-review-ui/") || rel.startsWith("packages/pi-tool-controls/")) && path.endsWith(".d.ts")) category = "inactiveSource";
+  else if (rel.startsWith("packages/pi-chrono-compaction/test/")) category = "tests";
+  else if (rel.startsWith("packages/pi-chrono-compaction/docs/") || rel.startsWith("packages/pi-chrono-compaction/scripts/")) category = "testSupport";
   else if (/^packages\/[^/]+\/(?:DEPLOYED\.sha256|LICENSE|package(?:-lock)?\.json|tsconfig(?:\.[^.]+)?\.json)$/u.test(rel) || /^packages\/grounded-tools\/[^/]+\/package\.json$/u.test(rel)) category = "metadata";
-  else if (/^packages\/[^/]+\/README\.md$/u.test(rel)) category = "docs";
-  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
+  else if (/^packages\/[^/]+\/README\.md$/u.test(rel) || rel.startsWith("docs/")) category = "docs";
+  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/test/verify-chrono-v3-baseline.test.mjs", "scripts/test/verify-chrono-v3-privacy.test.mjs", "scripts/verify-chrono-v3-baseline.mjs", "scripts/verify-chrono-v3-privacy.mjs", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
   else {
     category = "unexplained";
     unexplainedPaths.push(rel);
@@ -444,7 +661,7 @@ function packDryRun(product, source) {
   chmodSync(temp, 0o700);
   const work = join(temp, "package");
   try {
-    cpSync(source, work, { recursive: true, filter: (path) => basename(path) !== "node_modules" });
+    cpSync(source, work, { recursive: true, filter: (path) => !["node_modules", "dist-test"].includes(basename(path)) });
     const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
     const result = JSON.parse(output);
     if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error(`${product.slug}: invalid npm pack result`);
@@ -637,7 +854,9 @@ if (!staticOnly) {
     if (result.buildResult !== undefined) buildResults[plan.slug] = result.buildResult;
   }
 }
-const expectedScriptTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length : 12;
+const expectedScriptTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug
+  ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length
+  : Object.values(expectedSafeScripts).reduce((total, scripts) => total + Object.keys(scripts).length, 0);
 const expectedPackTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? 1 : 17;
 if (!staticOnly && safeScriptsPassed !== expectedScriptTotal) throw new Error(`safe scripts passed ${safeScriptsPassed}/${expectedScriptTotal}`);
 if (!staticOnly && packPassed !== expectedPackTotal) throw new Error(`pack dry runs passed ${packPassed}/${expectedPackTotal}`);

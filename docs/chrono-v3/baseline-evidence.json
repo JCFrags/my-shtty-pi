@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 2,
+  "milestone": "M00-R2",
+  "status": "M00 accepted at reviewed head 9a2dbe1; M01 authorized",
+  "capturedDate": "2026-09-03",
+  "lastCorrectedDate": "2026-09-03",
+  "reviewState": "accepted-directing-assistant-project-lead",
+  "repository": {
+    "name": "JCFrags/my-shtty-pi",
+    "visibility": "PUBLIC",
+    "isFork": false,
+    "defaultBranch": "main",
+    "integrationBranch": "rebuild/chrono-memory-v3",
+    "milestoneBranch": "work/chrono-v3-m00-baseline",
+    "pullRequest": {
+      "number": 30,
+      "base": "rebuild/chrono-memory-v3",
+      "head": "work/chrono-v3-m00-baseline",
+      "draft": true,
+      "merged": false
+    },
+    "baselineSha": "eb9742c318a76eeaf753e87a620fae83ca9048d1",
+    "originalM00Sha": "1887c77b39c42fb0b5d35b38baac94aff13465e9",
+    "r1ReviewTargetSha": "370cbf1522c8ec7acfe49907a969e633e829b6bb",
+    "r2ValidationTargetSha": "fd596f60cdb2b27fc522aef48dc8e798e2129712",
+    "acceptedReviewedHeadSha": "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2"
+  },
+  "northStar": {
+    "path": "docs/chrono-v3/master-goal-and-work-plan.md",
+    "sha256": "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
+    "gitBlobSha1": "dab84641d6f27c61cbaa6db8c2e2d6bebe84bb26",
+    "bytePreserved": true
+  },
+  "runtime": {
+    "packageVersion": "2.0.0",
+    "sourceFileCount": 66,
+    "sourceTreeSha256": "f85564ddbf1f6d726d96b81dc9af65e22612245c83ec6d2a7dc6d444217d5ecc",
+    "distFileCount": 65,
+    "distTreeSha256": "58cad759fb0bac9f80f2642a3524adee4f7e6780b3626886fcc71a6698370c31",
+    "entrypointSha256": "282d5aab3846ad1e6b0d13baea8d357bd8908ab90dacff88ee8bc2bdfaf6fc50",
+    "sourceMatch": true,
+    "distMatch": true,
+    "entrypointMatch": true,
+    "runtimeMismatches": [],
+    "metadataExceptions": [
+      {
+        "path": "package.json",
+        "code": "test-script-only-metadata-divergence"
+      }
+    ],
+    "packageLockStatus": "match"
+  },
+  "configuration": {
+    "isolatedWorker": false,
+    "incrementalPrecompute": false,
+    "rollupShadow": false,
+    "valueWorker": false,
+    "rankedSearch": true,
+    "editableMemory": true,
+    "hybridSummary": true,
+    "cache": true,
+    "hostWorkerSlots": 1,
+    "workerTimeoutSeconds": 900,
+    "workerNiceLevel": 10
+  },
+  "scheduler": {
+    "directoryPermissions": "0700",
+    "slotArtifactCount": 0,
+    "ticketArtifactCount": 0,
+    "mutationPerformed": false,
+    "captureLimitation": "owner-only aggregate inspection; no scheduler repair or live failure was induced"
+  },
+  "affectedSession": {
+    "aliasOnly": true,
+    "bytes": 205035658,
+    "lineRecords": 23017,
+    "maximumLineBytes": 1658763,
+    "finalLineComplete": true,
+    "readerChunkBound": 1048576,
+    "contentEmitted": false,
+    "sourceChangedDuringMeasurement": false
+  },
+  "workerIncident": {
+    "incidentId": "I-0002",
+    "observedSymptom": "fallback path observed during a worker failure",
+    "actualSafeFailureCode": "unresolved",
+    "reproduced": false,
+    "syntheticCoverage": [
+      "worker-disabled",
+      "worker-timeout",
+      "worker-aborted",
+      "worker-crashed",
+      "branch-not-persisted",
+      "invalid-cut",
+      "source-changed"
+    ],
+    "schedulerCausality": "unresolved",
+    "carryForwardMilestone": "M01"
+  },
+  "tests": {
+    "historicalFiles": 55,
+    "runnableFiles": 54,
+    "excludedFiles": 1,
+    "chronoCompact": {
+      "passed": 294,
+      "failed": 0,
+      "skipped": 0,
+      "command": "npm run test"
+    },
+    "publicationVerifier": {
+      "passed": 40,
+      "failed": 0,
+      "skipped": 0
+    },
+    "baselineVerifier": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 0
+    },
+    "rootVerification": {
+      "status": "pass"
+    },
+    "latestCiRun": {
+      "validationTargetCommit": "fd596f60cdb2b27fc522aef48dc8e798e2129712",
+      "push": 33817442403,
+      "pullRequest": 33817446062,
+      "conclusion": "success"
+    },
+    "ciConclusion": "success"
+  },
+  "privacyAudit": {
+    "classification": "P1-limited-metadata",
+    "p2Found": false,
+    "p3Found": false,
+    "branchesScanned": 13,
+    "tagsScanned": 3,
+    "pullRequestHeadsScanned": 27,
+    "scanTargetCommit": "fd596f60cdb2b27fc522aef48dc8e798e2129712",
+    "blobCount": 1706,
+    "pathContextCount": 72096,
+    "worktreeFileCount": 652,
+    "indexFileCount": 652,
+    "findings": 0,
+    "residualPriorCopyRisk": "historical public copies may persist; retraction is not attested",
+    "knownUnavailableSurfaces": [
+      "deleted or unreachable GitHub-object retention was not independently verified",
+      "secret-alert endpoint was unavailable",
+      "external public-cache inventory was not independently verified"
+    ]
+  },
+  "rollback": {
+    "created": true,
+    "verified": true,
+    "used": false,
+    "exactPathOmitted": true
+  },
+  "deployment": {
+    "runtimeSourceChanged": false,
+    "runtimeDistChanged": false,
+    "liveFilesChanged": false,
+    "settingsChanged": false,
+    "schedulerChanged": false,
+    "sessionsChanged": false,
+    "piReloaded": false,
+    "fixesLocallyUsable": false,
+    "firstPlannedDeploymentMilestone": "M01"
+  },
+  "review": {
+    "projectLeadReview1": {
+      "result": "changes-requested",
+      "record": "reviews/M00-project-lead-review-1.md"
+    },
+    "projectLeadReview2": {
+      "result": "changes-requested",
+      "record": "reviews/M00-project-lead-review-2.md"
+    },
+    "projectLeadAcceptance": {
+      "result": "accepted",
+      "reviewedHead": "9a2dbe13a15e9d4418d8a843ffa28ceb272cbff2",
+      "record": "reviews/M00-project-lead-acceptance.md"
+    },
+    "currentState": "M00 accepted; M01 authorized",
+    "m00Accepted": true,
+    "m01Authorized": true
+  }
+}
