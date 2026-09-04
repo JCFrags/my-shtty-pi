@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { chmod, link, mkdir, readFile, readdir, rm, stat, unlink, watch, writeFile, } from "node:fs/promises";
+import { chmod, link, mkdir, open, readFile, readdir, rename, rm, rmdir, stat, unlink, watch, writeFile, } from "node:fs/promises";
 import { join } from "node:path";
 import { domainDirectoryFor } from "./store.js";
-const MAX_FILE_BYTES = 24 * 1024, MAX_PENDING_PER_RUN = 256;
+const MAX_FILE_BYTES = 24 * 1024, MAX_PENDING_PER_RUN = 256, ALLOCATOR_ATTEMPTS = 40, ALLOCATOR_RETRY_MS = 25, STALE_LOCK_MS = 30_000;
 export class ChannelStoreError extends Error {
     code;
     constructor(code) {
@@ -27,6 +27,15 @@ async function readJson(path) {
 }
 function validRunId(id) {
     return /^r-[0-9a-f-]{36}$/u.test(id);
+}
+async function processStart(pid) {
+    try {
+        const value = await readFile(`/proc/${pid}/stat`, "utf8");
+        return value.slice(value.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+    }
+    catch {
+        return null;
+    }
 }
 export class ChannelStore {
     domainId;
@@ -53,6 +62,31 @@ export class ChannelStore {
         await chmod(d, 0o700).catch(() => undefined);
         return d;
     }
+    async atomicReplace(path, value) {
+        await this.ensure();
+        const tmp = join(this.directory, `.${process.pid}.${randomUUID()}.tmp`);
+        const file = await open(tmp, "wx", 0o600);
+        try {
+            await file.writeFile(`${JSON.stringify(value)}\n`);
+            await file.sync();
+        }
+        finally {
+            await file.close();
+        }
+        try {
+            await rename(tmp, path);
+            const directory = await open(join(path, ".."));
+            try {
+                await directory.sync();
+            }
+            finally {
+                await directory.close();
+            }
+        }
+        finally {
+            await unlink(tmp).catch(() => undefined);
+        }
+    }
     async immutable(path, value) {
         await this.ensure();
         const tmp = join(this.directory, `.${process.pid}.${randomUUID()}.tmp`);
@@ -71,21 +105,126 @@ export class ChannelStore {
             await unlink(tmp).catch(() => undefined);
         }
     }
+    async acquireAllocator(runDirectory) {
+        const lockPath = join(runDirectory, ".sequence.lock");
+        for (let attempt = 0; attempt < ALLOCATOR_ATTEMPTS; attempt++) {
+            const token = randomUUID();
+            try {
+                await mkdir(lockPath, { mode: 0o700 });
+                const owner = {
+                    pid: process.pid,
+                    processStart: await processStart(process.pid),
+                    token,
+                    createdAt: Date.now(),
+                };
+                await writeFile(join(lockPath, `${token}.json`), `${JSON.stringify(owner)}\n`, {
+                    mode: 0o600,
+                });
+                return { path: lockPath, token };
+            }
+            catch (error) {
+                const code = error.code;
+                if (code === "ENOENT") {
+                    await mkdir(runDirectory, { recursive: true, mode: 0o700 });
+                    continue;
+                }
+                if (code !== "EEXIST") {
+                    await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+                    throw error;
+                }
+                let stale = false;
+                try {
+                    const age = Date.now() - (await stat(lockPath)).mtimeMs;
+                    if (age > STALE_LOCK_MS) {
+                        const ownerName = (await readdir(lockPath)).find((name) => /^[0-9a-f-]{36}\.json$/u.test(name));
+                        if (!ownerName)
+                            throw new Error("allocator owner missing");
+                        const owner = JSON.parse(await readFile(join(lockPath, ownerName), "utf8"));
+                        if (Number.isSafeInteger(owner.pid)) {
+                            const currentStart = await processStart(Number(owner.pid));
+                            stale =
+                                currentStart === null ||
+                                    (typeof owner.processStart === "string" &&
+                                        owner.processStart !== currentStart);
+                        }
+                        else
+                            stale = true;
+                    }
+                }
+                catch (inspectError) {
+                    if (inspectError.code === "ENOENT")
+                        continue;
+                    const age = Date.now() - (await stat(lockPath)).mtimeMs;
+                    stale = age > STALE_LOCK_MS;
+                }
+                if (stale) {
+                    const tombstone = join(runDirectory, `.sequence.stale.${process.pid}.${randomUUID()}`);
+                    try {
+                        await rename(lockPath, tombstone);
+                        await rm(tombstone, { recursive: true, force: true });
+                        continue;
+                    }
+                    catch (reclaimError) {
+                        if (reclaimError.code === "ENOENT")
+                            continue;
+                    }
+                }
+                await new Promise((resolve) => setTimeout(resolve, ALLOCATOR_RETRY_MS));
+            }
+        }
+        throw new ChannelStoreError("CHANNEL_ALLOCATOR_BUSY");
+    }
+    async releaseAllocator(lock) {
+        try {
+            await unlink(join(lock.path, `${lock.token}.json`));
+            // Non-recursive removal is essential: if stale reclamation installed a
+            // successor, its different token file makes this fail rather than delete it.
+            await rmdir(lock.path);
+        }
+        catch (error) {
+            if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(String(error.code)))
+                throw error;
+        }
+    }
     async appendEvent(base, deliveredSequence) {
         const d = await this.runDirectory(base.runId);
-        for (let attempt = 0; attempt < 8; attempt++) {
+        const lock = await this.acquireAllocator(d);
+        try {
+            await this.migrateLegacyLocked(base.runId, d, deliveredSequence);
             const names = (await readdir(d))
                 .filter((n) => /^\d{12}\.json$/u.test(n))
                 .sort();
             if (names.length >= MAX_PENDING_PER_RUN)
                 throw new ChannelStoreError("RUN_EVENT_CAPACITY_REACHED");
-            const maximum = names.length ? Number(names.at(-1).slice(0, 12)) : 0;
-            const sequence = Math.max(deliveredSequence, maximum) + 1;
+            let highWater = 0;
+            try {
+                const stored = await readJson(join(d, ".sequence.json"));
+                if (Number.isSafeInteger(stored.sequence) && stored.sequence >= 0)
+                    highWater = stored.sequence;
+                else
+                    throw new ChannelStoreError("CHANNEL_RECORD_MALFORMED");
+            }
+            catch (error) {
+                if (!(error instanceof ChannelStoreError) || error.code !== "RESULT_NOT_READY")
+                    throw error;
+            }
+            const visibleMaximum = names.length
+                ? Number(names.at(-1).slice(0, 12))
+                : 0;
+            const sequence = Math.max(highWater, deliveredSequence, visibleMaximum) + 1;
+            if (!Number.isSafeInteger(sequence) || sequence > 999_999_999_999)
+                throw new ChannelStoreError("CHANNEL_SEQUENCE_EXHAUSTED");
+            // The durable high-water is published first. A crash can create a gap,
+            // but acknowledgement can never make a sequence reusable.
+            await this.atomicReplace(join(d, ".sequence.json"), { sequence });
             const event = { ...base, sequence };
-            if (await this.immutable(join(d, `${String(sequence).padStart(12, "0")}.json`), event))
-                return event;
+            if (!(await this.immutable(join(d, `${String(sequence).padStart(12, "0")}.json`), event)))
+                throw new ChannelStoreError("CHANNEL_EVENT_CONFLICT");
+            return event;
         }
-        throw new ChannelStoreError("CHANNEL_EVENT_CONFLICT");
+        finally {
+            await this.releaseAllocator(lock).catch(() => undefined);
+        }
     }
     resultPath(runId) {
         if (!validRunId(runId))
@@ -132,41 +271,101 @@ export class ChannelStore {
             throw e;
         }
     }
-    async events(runIds) {
-        const events = [];
-        for (const runId of runIds) {
-            const d = await this.runDirectory(runId);
-            const names = (await readdir(d))
-                .filter((n) => /^\d{12}\.json$/u.test(n))
-                .sort();
-            for (const name of names)
-                events.push(await readJson(join(d, name)));
+    async migrateLegacyLocked(runId, d, deliveredFloor) {
+        let nativeNames = (await readdir(d))
+            .filter((name) => /^\d{12}\.json$/u.test(name))
+            .sort();
+        const migrated = new Set();
+        for (const name of nativeNames) {
+            const event = await readJson(join(d, name));
+            if (event.legacyEventId)
+                migrated.add(event.legacyEventId);
         }
-        const wanted = new Set(runIds), legacyNames = (await readdir(this.eventsDirectory))
-            .filter((n) => /^[0-9]{13}-[0-9a-f-]{36}\.json$/u.test(n))
-            .sort(), perRun = new Map();
-        for (const name of legacyNames) {
+        const legacy = [];
+        for (const name of (await readdir(this.eventsDirectory))
+            .filter((candidate) => /^[0-9]{13}-[0-9a-f-]{36}\.json$/u.test(candidate))
+            .sort()) {
             const old = await readJson(join(this.eventsDirectory, name));
-            if (old.version !== 1 ||
-                typeof old.runId !== "string" ||
-                !wanted.has(old.runId))
+            if (old.version === 1 && old.runId === runId)
+                legacy.push({ name, old });
+        }
+        let highWater = 0;
+        try {
+            const stored = await readJson(join(d, ".sequence.json"));
+            if (!Number.isSafeInteger(stored.sequence) || stored.sequence < 0)
+                throw new ChannelStoreError("CHANNEL_RECORD_MALFORMED");
+            highWater = stored.sequence;
+        }
+        catch (error) {
+            if (!(error instanceof ChannelStoreError) || error.code !== "RESULT_NOT_READY")
+                throw error;
+        }
+        highWater = Math.max(highWater, deliveredFloor, nativeNames.length ? Number(nativeNames.at(-1).slice(0, 12)) : 0);
+        for (const { name, old } of legacy) {
+            const legacyEventId = name.slice(0, -5);
+            if (migrated.has(legacyEventId)) {
+                await unlink(join(this.eventsDirectory, name)).catch((error) => {
+                    if (error.code !== "ENOENT")
+                        throw error;
+                });
                 continue;
-            const sequence = (perRun.get(old.runId) ?? 0) + 1;
-            perRun.set(old.runId, sequence);
-            events.push({
+            }
+            if (nativeNames.length >= MAX_PENDING_PER_RUN)
+                break;
+            const sequence = highWater + 1;
+            if (!Number.isSafeInteger(sequence) || sequence > 999_999_999_999)
+                throw new ChannelStoreError("CHANNEL_SEQUENCE_EXHAUSTED");
+            await this.atomicReplace(join(d, ".sequence.json"), { sequence });
+            const event = {
                 version: 2,
                 sequence,
                 kind: old.kind === "progress" ? "progress" : "message",
                 domainId: String(old.domainId),
                 agentId: String(old.agentId),
-                runId: old.runId,
+                runId,
                 agentGeneration: Number(old.agentGeneration),
                 assignmentGeneration: Number(old.assignmentGeneration),
                 target: String(old.target),
                 summary: String(old.summary),
                 createdAt: String(old.createdAt),
-                legacyEventId: name.slice(0, -5),
+                legacyEventId,
+            };
+            const nativeName = `${String(sequence).padStart(12, "0")}.json`;
+            if (!(await this.immutable(join(d, nativeName), event)))
+                throw new ChannelStoreError("CHANNEL_EVENT_CONFLICT");
+            // Publication is immutable and precedes removal. A crash in between is
+            // recovered by legacyEventId de-duplication on the next migration.
+            await unlink(join(this.eventsDirectory, name)).catch((error) => {
+                if (error.code !== "ENOENT")
+                    throw error;
             });
+            nativeNames.push(nativeName);
+            migrated.add(legacyEventId);
+            highWater = sequence;
+        }
+    }
+    async migrateLegacy(runId, deliveredFloor) {
+        const d = await this.runDirectory(runId);
+        const lock = await this.acquireAllocator(d);
+        try {
+            await this.migrateLegacyLocked(runId, d, deliveredFloor);
+        }
+        finally {
+            await this.releaseAllocator(lock).catch(() => undefined);
+        }
+    }
+    async events(runIds, deliveredFloors = new Map(), options = {}) {
+        const events = [];
+        for (const runId of runIds) {
+            if (options.migrateLegacy !== false)
+                await this.migrateLegacy(runId, deliveredFloors.get(runId) ?? 0);
+            const d = await this.runDirectory(runId);
+            const names = (await readdir(d))
+                .filter((name) => /^\d{12}\.json$/u.test(name))
+                .sort()
+                .slice(0, MAX_PENDING_PER_RUN);
+            for (const name of names)
+                events.push(await readJson(join(d, name)));
         }
         return events;
     }
@@ -189,7 +388,9 @@ export class ChannelStore {
         }
         await rm(d, { recursive: false }).catch(() => undefined);
     }
-    async waitForChange(runIds, timeoutMs) {
+    async waitForChange(runIds, timeoutMs, signal) {
+        if (signal?.aborted)
+            throw signal.reason ?? new Error("Aborted");
         if (timeoutMs <= 0)
             return;
         const directories = await Promise.all(runIds.map((id) => this.runDirectory(id)));
@@ -197,17 +398,25 @@ export class ChannelStore {
         const controllers = directories
             .map(() => new AbortController())
             .concat(new AbortController());
-        await new Promise((resolve) => {
+        await new Promise((resolve, reject) => {
             let settled = false;
-            const finish = () => {
+            const finish = (aborted = false) => {
                 if (settled)
                     return;
                 settled = true;
                 controllers.forEach((c) => c.abort());
                 clearTimeout(timer);
-                resolve();
+                signal?.removeEventListener("abort", abort);
+                if (aborted)
+                    reject(signal?.reason ?? new Error("Aborted"));
+                else
+                    resolve();
             };
-            const timer = setTimeout(finish, timeoutMs);
+            const abort = () => finish(true);
+            const timer = setTimeout(() => finish(), timeoutMs);
+            signal?.addEventListener("abort", abort, { once: true });
+            if (signal?.aborted)
+                return abort();
             const consume = async (d, signal) => {
                 try {
                     for await (const _ of watch(d, { signal })) {

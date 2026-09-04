@@ -56,6 +56,7 @@ const expectedSafeScripts = Object.freeze({
   "pi-herdr-orchestrator": {
     typecheck: "tsc -p tsconfig.json --noEmit",
     build: "rm -rf dist && tsc -p tsconfig.json",
+    "check:m10": "node checks/m10-reliability.mjs",
   },
   "pi-pixel-cua": {
     syntax: "python3 -m py_compile helper/ei_sender.py helper/portal_backend.py helper/server.py && node --experimental-strip-types --check src/helper-client.ts && node --experimental-strip-types --check src/index.ts",
@@ -254,7 +255,7 @@ for (const manifestPath of packageManifestPaths) {
     }
   }
 }
-if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 12) throw new Error("expected exactly 12 retained safe package scripts");
+if (scriptPlans.reduce((sum, plan) => sum + Object.keys(plan.scripts).length, 0) !== 13) throw new Error("expected exactly 13 retained safe package scripts");
 
 function globRegex(pattern) {
   let out = "^";
@@ -397,7 +398,7 @@ for (const rel of tracked) {
   else if (inactiveGraph.has(path) || (rel.startsWith("packages/pi-review-ui/") || rel.startsWith("packages/pi-tool-controls/")) && path.endsWith(".d.ts")) category = "inactiveSource";
   else if (/^packages\/[^/]+\/(?:DEPLOYED\.sha256|LICENSE|package(?:-lock)?\.json|tsconfig(?:\.[^.]+)?\.json)$/u.test(rel) || /^packages\/grounded-tools\/[^/]+\/package\.json$/u.test(rel)) category = "metadata";
   else if (/^packages\/[^/]+\/README\.md$/u.test(rel)) category = "docs";
-  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/verify-deployed-baseline.mjs"].includes(rel)) category = "rootVerification";
+  else if ([".github/workflows/verify.yml", ".gitignore", "LICENSE", "README.md", "package-lock.json", "package.json", "scripts/verify-deployed-baseline.mjs"].includes(rel) || rel === "packages/pi-herdr-orchestrator/checks/m10-reliability.mjs") category = "rootVerification";
   else {
     category = "unexplained";
     unexplainedPaths.push(rel);
@@ -507,7 +508,7 @@ if (!staticOnly) {
     if (result.buildResult !== undefined) buildResults[plan.slug] = result.buildResult;
   }
 }
-const expectedScriptTotal = selectedSlug ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length : 12;
+const expectedScriptTotal = selectedSlug ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length : 13;
 const expectedPackTotal = selectedSlug ? 1 : 16;
 if (!staticOnly && safeScriptsPassed !== expectedScriptTotal) throw new Error(`safe scripts passed ${safeScriptsPassed}/${expectedScriptTotal}`);
 if (!staticOnly && packPassed !== expectedPackTotal) throw new Error(`pack dry runs passed ${packPassed}/${expectedPackTotal}`);
