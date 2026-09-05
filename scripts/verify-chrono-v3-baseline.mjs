@@ -27,29 +27,30 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values are the deliberately advanced M02 / 2.0.2 runtime boundary.
+// These values are the deliberately advanced M03 / 2.0.3 memory-admission boundary.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
   schemaVersion: 3,
   m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
-  sourceFiles: 66,
-  sourceTreeHash: "a3f5047d1358394e2e44807dc331f5ca28392a76c2ee1334cbd24448e6835a18",
-  distFiles: 65,
-  distTreeHash: "47e8d6b54d1e8e0cf2b0f6d493d6ce99e8fdfcf097636d4f2e2e25d8c993830a",
-  entrypointHash: "256f9003455b66d40c0445dbf0e7d4a5584785e295513354542927295c7181f2",
-  m01PackageHash: "85c2c4f6134be5ff671987c41c3aec8c69540293e7faf48d4b4aefe5ce49cf36",
-  m01LockHash: "314fac7de5ea1e8facc56fcc3a549c6d57f95a98a8b3dd23b92a8b62d71600f6",
-  livePackageHash: "85c2c4f6134be5ff671987c41c3aec8c69540293e7faf48d4b4aefe5ce49cf36",
-  deployedPackageHash: "85c2c4f6134be5ff671987c41c3aec8c69540293e7faf48d4b4aefe5ce49cf36",
+  sourceFiles: 67,
+  sourceTreeHash: "7614d90623745360f9afb30246ef074542fc617a56f71b2ee5fc3f500c28b67f",
+  distFiles: 66,
+  distTreeHash: "a9f2881623af9e2726759e3aed51463913a452104e2569941113208cde2ea751",
+  entrypointHash: "fcd0209d5b76beab91ca42585319f15968861fa81ff15a4a7e15bb1ae858f15e",
+  m01PackageHash: "b5367bea62b54492669157e7ee7fb74c99f450cf3c7478ad713425e80c236a7a",
+  m01LockHash: "3edda0714e750097ae37d9185fddb6fd1c87e48beeffd3b951f0760575949e73",
+  livePackageHash: "b5367bea62b54492669157e7ee7fb74c99f450cf3c7478ad713425e80c236a7a",
+  deployedPackageHash: "b5367bea62b54492669157e7ee7fb74c99f450cf3c7478ad713425e80c236a7a",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
-  canonicalDeployedFiles: 261,
+  canonicalDeployedFiles: 262,
 });
 
 const correctionPaths = new Set([
   "README.md",
+  "package.json",
   ".github/workflows/verify.yml",
   "packages/pi-chrono-compaction/DEPLOYED.sha256",
   "packages/pi-chrono-compaction/README.md",
@@ -62,6 +63,7 @@ const correctionPaths = new Set([
   "packages/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
   "packages/pi-chrono-compaction/dist/src/jsonl.js",
   "packages/pi-chrono-compaction/dist/src/ledger-branch.js",
+  "packages/pi-chrono-compaction/dist/src/memory-admission.js",
   "packages/pi-chrono-compaction/dist/src/pi-extension.js",
   "packages/pi-chrono-compaction/dist/src/search-index.js",
   "packages/pi-chrono-compaction/dist/src/source-ledger.js",
@@ -71,6 +73,7 @@ const correctionPaths = new Set([
   "packages/pi-chrono-compaction/src/host-worker-scheduler.ts",
   "packages/pi-chrono-compaction/src/jsonl.ts",
   "packages/pi-chrono-compaction/src/ledger-branch.ts",
+  "packages/pi-chrono-compaction/src/memory-admission.ts",
   "packages/pi-chrono-compaction/src/pi-extension.ts",
   "packages/pi-chrono-compaction/src/search-index.ts",
   "packages/pi-chrono-compaction/src/source-ledger.ts",
@@ -88,6 +91,7 @@ const correctionPaths = new Set([
   "packages/pi-chrono-compaction/test/benchmark-harness.test.ts",
   "packages/pi-chrono-compaction/test/fault-injection.test.ts",
   "packages/pi-chrono-compaction/test/legacy-memory-safety.test.ts",
+  "packages/pi-chrono-compaction/test/memory-admission.test.ts",
   "packages/pi-chrono-compaction/test/support/fault-injection.ts",
   "packages/pi-chrono-compaction/test/synthetic-session.test.ts",
   "scripts/verify-chrono-v3-baseline.mjs",
@@ -119,6 +123,7 @@ const correctionPaths = new Set([
   "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M02-test-foundation-report.md",
+  "docs/chrono-v3/reviews/M03-runtime-report.md",
 ]);
 
 class BaselineVerificationError extends Error {
@@ -383,7 +388,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.2") fail("package-version-changed");
+  if (packageJson.version !== "2.0.3") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");

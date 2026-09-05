@@ -9,7 +9,7 @@
   "piConsolidation": {
     "stage1Commit": "19110f9cf34ab29b2059e3bff460e856c7157bce",
     "stage1RuntimeRecords": 272,
-    "canonicalDeployedFiles": 261,
+    "canonicalDeployedFiles": 262,
     "products": [
       {
         "slug": "codex-usage-footer",
@@ -76,7 +76,7 @@
         "entrypoints": [
           "dist/src/pi-extension.js"
         ],
-        "compiledCount": 65,
+        "compiledCount": 66,
         "buildConfig": "tsconfig.json",
         "sourceEntrypoints": [
           "src/pi-extension.ts"

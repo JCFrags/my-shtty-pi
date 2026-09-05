@@ -202,7 +202,7 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
     assert.equal(existsSync(candidateSegmentStorePath(sessionPath)), false, "feature-off must not create a candidate store");
     assert.equal(existsSync(sourceLedgerPath(sessionPath)), false, "feature-off must not create a source ledger");
     assert.deepEqual(readFileSync(sessionPath), sourceSessionBytes, "incremental work must not rewrite the authoritative session");
-    assert.ok(notifications.some((message) => /ChronoCompact 2\.0\.2 candidate/.test(message)));
+    assert.ok(notifications.some((message) => /ChronoCompact 2\.0\.3 candidate/.test(message)));
   } finally {
     for (const name of names) {
       const value = previous.get(name);
