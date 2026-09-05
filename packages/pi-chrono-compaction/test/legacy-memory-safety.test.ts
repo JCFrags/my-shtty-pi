@@ -91,6 +91,40 @@ test("ranked search and recall refuse a valid source above conservative index ad
   assert.equal(after.pendingBytes, 0);
 });
 
+test("indexed search admission accounts for builds, live indexes, query results, and retained references", async (t) => {
+  const directory = await temporary(t);
+  const path = join(directory, "session.jsonl");
+  await writeFile(path, sessionText("accounted term ".repeat(8_000)), { mode: 0o600 });
+  const tools = new Map<string, (...args: any[]) => Promise<any>>();
+  const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
+  extension(pi as unknown as ExtensionAPI);
+  const context = { hasUI: false, model: undefined, thinkingLevel: "medium", sessionManager: { getSessionFile: () => path, getEntries: () => [], getBranch: () => [] }, getContextUsage: () => undefined, isIdle: () => true, abort() {}, compact() {}, ui: { notify() {} }, modelRegistry: {} };
+  const search = tools.get("history_search");
+  assert.ok(search);
+  const before = historySearchIndexCacheStatus();
+  const result = await search("accounted-search", { query: "term", mode: "ranked" }, undefined, undefined, context);
+  assert.equal(result.details.code, undefined);
+  const after = historySearchIndexCacheStatus();
+  assert.equal(after.builds, before.builds + 1);
+  assert.equal(after.pendingEntries, 0);
+  assert.equal(after.pendingBytes, 0);
+  assert.ok(after.admission.components.liveIndex > 0);
+  assert.ok(after.admission.components.queryResults > 0);
+  assert.ok(after.admission.components.retainedReferences > 0);
+  assert.equal(after.admission.components.pendingLoad, 0);
+  assert.equal(after.admission.components.pendingBuild, 0);
+  assert.equal(after.admission.totalBytes, Object.values(after.admission.components).reduce((sum, value) => sum + value, 0));
+  assert.ok(after.admission.totalBytes <= after.admission.byteLimit);
+  assert.ok(after.bytes <= after.byteLimit);
+
+  await writeFile(path, sessionText("replacement generation term ".repeat(8_000)), { mode: 0o600 });
+  await search("replacement-search", { query: "term", mode: "ranked" }, undefined, undefined, context);
+  const replaced = historySearchIndexCacheStatus();
+  assert.equal(replaced.entries, after.entries, "one current index per session must replace the prior generation");
+  assert.equal(replaced.builds, after.builds + 1);
+  assert.ok(replaced.bytes <= replaced.byteLimit);
+});
+
 test("per-index query results use a bounded LRU cache", () => {
   const entries = [{ type: "message", id: "u1", parentId: null, message: { role: "user", content: "alpha beta gamma" } }];
   const index = buildLocalSearchIndex(parseBranchEntries(entries));

@@ -53,8 +53,36 @@ function indexAccounting() {
   const index = buildLocalSearchIndex(session);
   const afterIndex = collect();
   const estimate = legacyEstimate(index);
+  const sourceBytes = Buffer.byteLength(serialized);
   const retainedDelta = Math.max(0, afterIndex.heapUsed - before.heapUsed);
-  return { deterministic: { sourceBytes: Buffer.byteLength(serialized), documents: index.documents.length, legacyEstimatedBytes: estimate, conservativeAdmissionBytes: Math.max(1024 * 1024, Buffer.byteLength(serialized) * 8), legacyAccountingKnownOmissionClasses: 7 }, advisory: { buildMs: performance.now() - started, heapUsedBefore: before.heapUsed, heapUsedAfterParse: afterParse.heapUsed, heapUsedAfterIndex: afterIndex.heapUsed, retainedHeapDelta: retainedDelta, retainedToLegacyEstimateRatio: estimate === 0 ? 0 : retainedDelta / estimate, observedMaterialUnderstatement: retainedDelta > estimate * 2, peakRssKiB: process.resourceUsage().maxRSS } };
+  const conservativeAdmissionBytes = Math.max(8 * 1024 * 1024, sourceBytes * 32);
+  return {
+    deterministic: {
+      sourceBytes,
+      documents: index.documents.length,
+      legacyEstimatedBytes: estimate,
+      conservativeAdmissionBytes,
+      admissionMultiplier: 32,
+      admissionComponents: {
+        liveIndexBytes: Math.floor(conservativeAdmissionBytes * 10 / 32),
+        retainedReferenceBytes: Math.floor(conservativeAdmissionBytes * 18 / 32),
+        queryResultBytes: conservativeAdmissionBytes - Math.floor(conservativeAdmissionBytes * 10 / 32) - Math.floor(conservativeAdmissionBytes * 18 / 32),
+      },
+      legacyAccountingKnownOmissionClasses: 7,
+    },
+    advisory: {
+      buildMs: performance.now() - started,
+      heapUsedBefore: before.heapUsed,
+      heapUsedAfterParse: afterParse.heapUsed,
+      heapUsedAfterIndex: afterIndex.heapUsed,
+      retainedHeapDelta: retainedDelta,
+      retainedToLegacyEstimateRatio: estimate === 0 ? 0 : retainedDelta / estimate,
+      observedMaterialUnderstatement: retainedDelta > estimate * 2,
+      admissionCoveredObservedRetained: conservativeAdmissionBytes >= retainedDelta,
+      admissionHeadroomRatio: retainedDelta === 0 ? null : conservativeAdmissionBytes / retainedDelta,
+      peakRssKiB: process.resourceUsage().maxRSS,
+    },
+  };
 }
 
 export async function runMemoryCharacterization() {
@@ -62,7 +90,9 @@ export async function runMemoryCharacterization() {
   try {
     const threshold = await thresholdRace(directory);
     const index = indexAccounting();
-    const status = threshold.deterministic.refusalCode === "history-source-changed" && threshold.deterministic.requestedBytes === LEGACY_LIMIT && threshold.deterministic.bytesRead === LEGACY_LIMIT ? "passed" : "failed";
+    const thresholdPassed = threshold.deterministic.refusalCode === "history-source-changed" && threshold.deterministic.requestedBytes === LEGACY_LIMIT && threshold.deterministic.bytesRead === LEGACY_LIMIT;
+    const accountingPassed = index.advisory.observedMaterialUnderstatement === true && index.advisory.admissionCoveredObservedRetained === true;
+    const status = thresholdPassed && accountingPassed ? "passed" : "failed";
     return { schemaVersion: SCHEMA_VERSION, kind: "chrono-m02-memory-characterization", status, deterministic: { threshold: threshold.deterministic, index: index.deterministic }, advisory: { threshold: threshold.advisory, index: index.advisory } };
   } finally { await rm(directory, { recursive: true, force: true }); }
 }

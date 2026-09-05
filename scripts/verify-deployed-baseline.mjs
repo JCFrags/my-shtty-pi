@@ -49,6 +49,7 @@ const correctionArtifactPaths = new Set([
   ".github/workflows/verify.yml",
   ".gitignore",
   "README.md",
+  "package.json",
   "packages/pi-chrono-compaction/README.md",
   "packages/pi-chrono-compaction/docs/benchmark.md",
   "packages/pi-chrono-compaction/DEPLOYED.sha256",
@@ -60,6 +61,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
   "packages/pi-chrono-compaction/dist/src/jsonl.js",
   "packages/pi-chrono-compaction/dist/src/ledger-branch.js",
+  "packages/pi-chrono-compaction/dist/src/memory-admission.js",
   "packages/pi-chrono-compaction/dist/src/pi-extension.js",
   "packages/pi-chrono-compaction/dist/src/search-index.js",
   "packages/pi-chrono-compaction/dist/src/source-ledger.js",
@@ -69,6 +71,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/src/host-worker-scheduler.ts",
   "packages/pi-chrono-compaction/src/jsonl.ts",
   "packages/pi-chrono-compaction/src/ledger-branch.ts",
+  "packages/pi-chrono-compaction/src/memory-admission.ts",
   "packages/pi-chrono-compaction/src/pi-extension.ts",
   "packages/pi-chrono-compaction/src/search-index.ts",
   "packages/pi-chrono-compaction/src/source-ledger.ts",
@@ -86,6 +89,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/test/benchmark-harness.test.ts",
   "packages/pi-chrono-compaction/test/fault-injection.test.ts",
   "packages/pi-chrono-compaction/test/legacy-memory-safety.test.ts",
+  "packages/pi-chrono-compaction/test/memory-admission.test.ts",
   "packages/pi-chrono-compaction/test/support/fault-injection.ts",
   "packages/pi-chrono-compaction/test/synthetic-session.test.ts",
   "scripts/verify-chrono-v3-baseline.mjs",
@@ -117,6 +121,7 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M02-test-foundation-report.md",
+  "docs/chrono-v3/reviews/M03-runtime-report.md",
 ]);
 
 const expectedSlugs = [
@@ -418,7 +423,7 @@ if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/ve
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
-if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 261) throw new Error("Stage 1 record or canonical deployed-file count changed");
+if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 262) throw new Error("Stage 1 record or canonical deployed-file count changed");
 if (consolidation.deployedBaselineCommit !== "049b6390fba7a7908d01908a7953dd2f50fa15df") throw new Error("unexpected deployed baseline commit");
 let hashCount = 0;
 let historicalMetadataHashes = 0;
@@ -457,7 +462,7 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-if (hashCount !== 261) throw new Error(`canonical deployed hash count ${hashCount}; expected 261`);
+if (hashCount !== 262) throw new Error(`canonical deployed hash count ${hashCount}; expected 262`);
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -929,7 +934,7 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: "261/261",
+  deployedHashesVerified: "262/262",
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),
