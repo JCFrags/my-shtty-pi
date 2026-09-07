@@ -38,7 +38,11 @@ const staticOnly = args.includes("--static-only");
 const projectGlanceSlug = "pi-project-glance";
 const m00BaselineCommit = "1887c77b39c42fb0b5d35b38baac94aff13465e9";
 const m00IntegrationCommit = "ca8a94134e5577edd82204ae173126464fc82b70";
+// Historical byte identity is relaxed only for named, behavior-preserving milestone migrations.
 const m01MutableHistoricalTests = new Set([
+  "packages/pi-chrono-compaction/test/benchmark-compaction-worker.test.ts",
+  "packages/pi-chrono-compaction/test/v2-extension-integration.test.ts",
+  "packages/pi-chrono-compaction/test/v2-render-recovery.test.ts",
   "packages/pi-chrono-compaction/test/compaction-worker.test.ts",
   "packages/pi-chrono-compaction/test/extension.test.ts",
   "packages/pi-chrono-compaction/test/host-worker-scheduler.test.ts",
@@ -46,9 +50,60 @@ const m01MutableHistoricalTests = new Set([
   "packages/pi-chrono-compaction/test/source-ledger.test.ts",
 ]);
 const correctionArtifactPaths = new Set([
+  "packages/pi-chrono-compaction/test/worker-runtime-waiter-bounds.test.ts",
+  "packages/pi-chrono-compaction/test/host-worker-admission-atomic.test.ts",
+  "packages/pi-chrono-compaction/dist/src/history-runtime-transport.js",
+  "packages/pi-chrono-compaction/dist/src/history-worker-bounded-read.js",
+  "packages/pi-chrono-compaction/dist/src/history-worker-contract.js",
+  "packages/pi-chrono-compaction/dist/src/history-worker-dispatch.js",
+  "packages/pi-chrono-compaction/dist/src/history-worker-entry.js",
+  "packages/pi-chrono-compaction/dist/src/history-worker-handler.js",
+  "packages/pi-chrono-compaction/dist/src/memory-store.js",
+  "packages/pi-chrono-compaction/dist/src/user-config.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-bootstrap.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-bridge.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-legacy-gate.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-limits.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-mutex.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-namespace.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-read-budget.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-rendezvous.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-status.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-systemd.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime.js",
+  "packages/pi-chrono-compaction/src/history-runtime-transport.ts",
+  "packages/pi-chrono-compaction/src/history-worker-bounded-read.ts",
+  "packages/pi-chrono-compaction/src/history-worker-contract.ts",
+  "packages/pi-chrono-compaction/src/history-worker-dispatch.ts",
+  "packages/pi-chrono-compaction/src/history-worker-entry.ts",
+  "packages/pi-chrono-compaction/src/history-worker-handler.ts",
+  "packages/pi-chrono-compaction/src/memory-store.ts",
+  "packages/pi-chrono-compaction/src/user-config.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-bootstrap.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-bridge.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-legacy-gate.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-limits.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-mutex.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-namespace.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-read-budget.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-rendezvous.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-status.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-systemd.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime.ts",
+  "packages/pi-chrono-compaction/test/benchmark-compaction-worker.test.ts",
+  "packages/pi-chrono-compaction/test/fixtures/legacy-host-worker-scheduler.ts",
+  "packages/pi-chrono-compaction/test/history-worker-isolation.test.ts",
+  "packages/pi-chrono-compaction/test/history-worker-promotion-receipts.test.ts",
+  "packages/pi-chrono-compaction/test/history-worker-recovery.test.ts",
+  "packages/pi-chrono-compaction/test/synthetic-history-adapter.ts",
+  "packages/pi-chrono-compaction/test/v2-extension-integration.test.ts",
+  "packages/pi-chrono-compaction/test/v2-render-recovery.test.ts",
+  "packages/pi-chrono-compaction/test/worker-runtime-legacy-gate.test.ts",
+  "packages/pi-chrono-compaction/test/worker-runtime.test.ts",
   ".github/workflows/verify.yml",
   ".gitignore",
   "README.md",
+  "package.json",
   "packages/pi-chrono-compaction/README.md",
   "packages/pi-chrono-compaction/docs/benchmark.md",
   "packages/pi-chrono-compaction/DEPLOYED.sha256",
@@ -60,6 +115,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
   "packages/pi-chrono-compaction/dist/src/jsonl.js",
   "packages/pi-chrono-compaction/dist/src/ledger-branch.js",
+  "packages/pi-chrono-compaction/dist/src/memory-admission.js",
   "packages/pi-chrono-compaction/dist/src/pi-extension.js",
   "packages/pi-chrono-compaction/dist/src/search-index.js",
   "packages/pi-chrono-compaction/dist/src/source-ledger.js",
@@ -69,6 +125,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/src/host-worker-scheduler.ts",
   "packages/pi-chrono-compaction/src/jsonl.ts",
   "packages/pi-chrono-compaction/src/ledger-branch.ts",
+  "packages/pi-chrono-compaction/src/memory-admission.ts",
   "packages/pi-chrono-compaction/src/pi-extension.ts",
   "packages/pi-chrono-compaction/src/search-index.ts",
   "packages/pi-chrono-compaction/src/source-ledger.ts",
@@ -80,12 +137,14 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/scripts/benchmark-harness.mjs",
   "packages/pi-chrono-compaction/scripts/benchmark-v2.mjs",
   "packages/pi-chrono-compaction/scripts/deployed-worker-soak.mjs",
+  "packages/pi-chrono-compaction/scripts/independent-client-soak.mjs",
   "packages/pi-chrono-compaction/scripts/fixed-heap-suite.mjs",
   "packages/pi-chrono-compaction/scripts/memory-characterization.mjs",
   "packages/pi-chrono-compaction/scripts/synthetic-session.mjs",
   "packages/pi-chrono-compaction/test/benchmark-harness.test.ts",
   "packages/pi-chrono-compaction/test/fault-injection.test.ts",
   "packages/pi-chrono-compaction/test/legacy-memory-safety.test.ts",
+  "packages/pi-chrono-compaction/test/memory-admission.test.ts",
   "packages/pi-chrono-compaction/test/support/fault-injection.ts",
   "packages/pi-chrono-compaction/test/synthetic-session.test.ts",
   "scripts/verify-chrono-v3-baseline.mjs",
@@ -117,6 +176,7 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/reviews/M00-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M02-test-foundation-report.md",
+  "docs/chrono-v3/reviews/M03-runtime-report.md",
 ]);
 
 const expectedSlugs = [
@@ -418,7 +478,7 @@ if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/ve
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
-if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 261) throw new Error("Stage 1 record or canonical deployed-file count changed");
+if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 279) throw new Error("Stage 1 record or canonical deployed-file count changed");
 if (consolidation.deployedBaselineCommit !== "049b6390fba7a7908d01908a7953dd2f50fa15df") throw new Error("unexpected deployed baseline commit");
 let hashCount = 0;
 let historicalMetadataHashes = 0;
@@ -457,7 +517,7 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-if (hashCount !== 261) throw new Error(`canonical deployed hash count ${hashCount}; expected 261`);
+if (hashCount !== 279) throw new Error(`canonical deployed hash count ${hashCount}; expected 279`);
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -929,7 +989,7 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: "261/261",
+  deployedHashesVerified: "279/279",
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),

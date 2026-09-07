@@ -1,3 +1,4 @@
+import { syntheticInProcessHistoryAdapter } from "./synthetic-history-adapter.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -90,7 +91,7 @@ test("extension search feedback, recall promotion, and replay-only summary fallb
       appendEntry(_type: string, data: unknown) { appended.push(data); },
       sendMessage() {},
     };
-    extension(pi as unknown as ExtensionAPI);
+    extension(pi as unknown as ExtensionAPI, { historyTransport: syntheticInProcessHistoryAdapter() });
 
     const context = {
       hasUI: true,

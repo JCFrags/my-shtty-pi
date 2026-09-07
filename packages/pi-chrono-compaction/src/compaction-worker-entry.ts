@@ -80,7 +80,7 @@ function failureCode(error: unknown): WorkerFailureCode {
   const code = (error as { code?: unknown })?.code;
   const allowed: WorkerFailureCode[] = ["no-session-file", "branch-not-persisted", "branch-parent-missing", "branch-cycle",
     "branch-source-order", "invalid-cut", "source-changed", "candidate-store-unavailable", "replay-validation-rejected",
-    "worker-timeout", "worker-aborted"];
+    "worker-timeout", "worker-aborted", "worker-source-limit"];
   return typeof code === "string" && allowed.includes(code as WorkerFailureCode) ? code as WorkerFailureCode : "worker-internal-error";
 }
 function loadMetrics(transition: string, ledgerLoadMs: number, resolveMs: number, read: LedgerBranchReadMetrics, candidateLedgerReused: boolean): ReplayLoadMetrics {
@@ -171,6 +171,7 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
     if (process.connected && process.send) process.send({ kind: "shadow-stage", stage, ...(shadowContext ? { context: shadowContext } : {}) });
   };
   try {
+    if (process.connected && process.send) process.send({ kind: "worker-stage", schemaVersion: 1, jobId: request.jobId, jobType: request.jobType, stage: "source-bind" });
     try { setPriority(0, request.niceLevel); priorityApplied = true; } catch {}
     if (Date.now() > request.deadlineMs) throw Object.assign(new Error(), { code: "worker-timeout" });
     if (request.jobType === "rollup-shadow") {
@@ -210,12 +211,14 @@ async function run(requestValue: unknown, signal?: AbortSignal): Promise<Compact
     }
     if (request.jobType === "candidate-store-update") {
       await expectedState(request);
+      if (process.connected && process.send) process.send({ kind: "worker-stage", schemaVersion: 1, jobId: request.jobId, jobType: request.jobType, stage: "candidate-update" });
       const store = createCandidateSegmentStore(request.sessionPath);
       const metrics = await updateCandidateSegmentStore(store, resolveCompactorConfig(request.config), { ...(request.storeSettings ?? {}), signal });
       await expectedState(request);
       return { schemaVersion: 1, jobId: request.jobId, status: "ok", jobType: request.jobType, candidateUpdate: metrics,
         metrics: baseMetrics(started, 0, priorityApplied, "disabled") };
     }
+    if (process.connected && process.send) process.send({ kind: "worker-stage", schemaVersion: 1, jobId: request.jobId, jobType: request.jobType, stage: "replay" });
     const value = await replay(request, signal);
     return { schemaVersion: 1, jobId: request.jobId, status: "ok", jobType: request.jobType,
       replay: { summary: value.result.summary, ...(value.rebase === undefined ? {} : { deterministicRebaseText: value.rebase }),

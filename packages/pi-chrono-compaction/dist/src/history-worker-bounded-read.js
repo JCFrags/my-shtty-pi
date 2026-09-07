@@ -1,0 +1,49 @@
+import { constants } from "node:fs";
+import { lstat, open } from "node:fs/promises";
+function same(a, b) { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
+/** Optional strict sidecar read used by contained recall promotion. The caller
+ * retains its existing lock/transaction. This helper never grows its allocation. */
+export async function readBoundedHistorySidecar(path, maxBytes, hooks = {}) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1)
+        throw new Error("history-promotion-limit-invalid");
+    const expected = await lstat(path);
+    if (!expected.isFile() || expected.nlink !== 1 || (expected.mode & 0o077) !== 0)
+        throw new Error("history-promotion-source-unsafe");
+    if (expected.size > maxBytes)
+        throw new Error("history-promotion-source-too-large");
+    let handle;
+    try {
+        handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const before = await handle.stat();
+        if (!before.isFile() || !same(before, expected))
+            throw new Error("history-promotion-source-changed");
+        if (before.size > maxBytes)
+            throw new Error("history-promotion-source-too-large");
+        await hooks.afterOpened?.();
+        // Detect changes after open and before allocation/read as well as afterward.
+        if (!same(before, await handle.stat()) || !same(before, await lstat(path)))
+            throw new Error("history-promotion-source-changed");
+        const buffer = Buffer.allocUnsafe(before.size);
+        let offset = 0;
+        while (offset < buffer.length) {
+            const requested = Math.min(64 * 1024, buffer.length - offset);
+            const { bytesRead } = await handle.read(buffer, offset, requested, offset);
+            hooks.onRead?.(requested, bytesRead);
+            if (bytesRead === 0)
+                throw new Error("history-promotion-source-changed");
+            offset += bytesRead;
+        }
+        if (!same(before, await handle.stat()) || !same(before, await lstat(path)))
+            throw new Error("history-promotion-source-changed");
+        return buffer.toString("utf8");
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            throw new Error("history-promotion-source-changed");
+        throw error;
+    }
+    finally {
+        await handle?.close();
+    }
+}
+//# sourceMappingURL=history-worker-bounded-read.js.map

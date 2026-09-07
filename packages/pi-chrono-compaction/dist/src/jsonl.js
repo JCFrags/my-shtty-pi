@@ -62,6 +62,8 @@ export async function readBoundedSessionJsonl(sessionPath, maximumBytes, hooks =
     const handle = await open(sessionPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
         const source = boundedSourceState(await handle.stat());
+        if (hooks.expectedSource && !sameBoundedSource(hooks.expectedSource, source))
+            throw new Error("history-source-changed");
         if (source.size > maximumBytes)
             throw new Error("history-source-too-large");
         await hooks.afterOpened?.(source);

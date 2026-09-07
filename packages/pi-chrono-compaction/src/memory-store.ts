@@ -1,3 +1,4 @@
+import { readBoundedHistorySidecar } from "./history-worker-bounded-read.js";
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { link, lstat, mkdir, open, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
@@ -483,9 +484,15 @@ export function listMemories(
     && (!options.authorities || options.authorities.includes(memory.authority)));
 }
 
-export async function readMemoryEvents(path: string): Promise<MemoryMaterialization> {
+export interface MemoryReadOptions {
+  readonly maxReadBytes?: number;
+  /** Optional caller output guard, run inside the lock before any write. */
+  readonly validateAppendEvent?: (event: MemoryEvent) => void;
+}
+
+export async function readMemoryEvents(path: string, options: MemoryReadOptions = {}): Promise<MemoryMaterialization> {
   try {
-    const text = await readFile(path, "utf8");
+    const text = options.maxReadBytes === undefined ? await readFile(path, "utf8") : await readBoundedHistorySidecar(path, options.maxReadBytes);
     const events = text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as MemoryEvent);
     return materializeMemoryEvents(events);
   } catch (error) {
@@ -731,18 +738,22 @@ async function appendMemoryEventInternal(
   path: string,
   input: MemoryEventInput,
   authoritativeSource?: VerifiedAuthoritativeMemorySource,
+  options: MemoryReadOptions = {},
 ): Promise<MemoryMaterialization> {
   const release = await acquireMemoryLock(path);
   let temporary: string | undefined;
   try {
-    const current = await readMemoryEvents(path);
+    const current = await readMemoryEvents(path, options);
     if (current.status !== "ready") throw new Error(`Refused memory write because the sidecar is corrupt: ${current.error ?? "unknown error"}`);
     const event = authoritativeSource
       ? createMemoryEventInternal(current.events, input, authoritativeSource)
       : createMemoryEvent(current.events, input);
+    options.validateAppendEvent?.(event);
     const nextEvents = [...current.events, event];
     temporary = `${path}.tmp-${process.pid}-${event.eventId}`;
-    await writeFile(temporary, `${nextEvents.map((item) => stableStringify(item)).join("\n")}\n`, { mode: 0o600 });
+    const serialized = `${nextEvents.map((item) => stableStringify(item)).join("\n")}\n`;
+    if (options.maxReadBytes !== undefined && Buffer.byteLength(serialized) > options.maxReadBytes) throw new Error("history-promotion-source-too-large");
+    await writeFile(temporary, serialized, { mode: 0o600 });
     const temporaryHandle = await open(temporary, "r");
     try { await temporaryHandle.sync(); } finally { await temporaryHandle.close(); }
     await rename(temporary, path);
@@ -760,8 +771,8 @@ async function appendMemoryEventInternal(
   }
 }
 
-export async function appendMemoryEvent(path: string, input: MemoryEventInput): Promise<MemoryMaterialization> {
-  return appendMemoryEventInternal(path, input);
+export async function appendMemoryEvent(path: string, input: MemoryEventInput, options: MemoryReadOptions = {}): Promise<MemoryMaterialization> {
+  return appendMemoryEventInternal(path, input, undefined, options);
 }
 
 export async function appendConfiguredAuthoritativeMemoryEvent(

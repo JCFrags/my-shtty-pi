@@ -66,6 +66,7 @@ export interface BoundedSessionSourceState {
 }
 
 export interface BoundedSessionReadHooks {
+  readonly expectedSource?: BoundedSessionSourceState;
   readonly afterOpened?: (state: BoundedSessionSourceState) => void | Promise<void>;
   readonly onRead?: (requestedBytes: number, bytesRead: number, position: number) => void;
 }
@@ -94,6 +95,7 @@ export async function readBoundedSessionJsonl(
   const handle = await open(sessionPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const source = boundedSourceState(await handle.stat());
+    if (hooks.expectedSource && !sameBoundedSource(hooks.expectedSource, source)) throw new Error("history-source-changed");
     if (source.size > maximumBytes) throw new Error("history-source-too-large");
     await hooks.afterOpened?.(source);
     const content = Buffer.allocUnsafe(source.size);

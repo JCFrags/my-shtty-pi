@@ -26,7 +26,15 @@ The deployed-worker soak requires an explicit package root and expected version.
 node scripts/deployed-worker-soak.mjs --package-root PACKAGE_ROOT --expected-version VERSION --sessions 6 --slots 2 --tasks 40
 ```
 
-The soak creates independent owner-only temporary synthetic sessions, verifies host-slot enforcement, safe failure codes, bounded diagnostics, no cross-session source-reference leakage, bounded parent RSS, and zero scheduler residue, then removes all temporary data.
+The M02 soak creates owner-only temporary synthetic sessions but launches them from one client process. It checks observed slot occupancy, safe failure codes, bounded diagnostics, source-reference isolation, parent RSS, and scheduler residue. It is not proof of independent-client coordination or kernel-held capacity.
+
+The M03 replay equality soak uses six independent client processes, three repeated jobs per client, and separate one-slot and two-slot cases:
+
+```bash
+node scripts/independent-client-soak.mjs --package-root PACKAGE_ROOT --expected-version VERSION
+```
+
+It reports 36 job outcomes, repeated replay equality, source-reference isolation, each client's 512 MiB RSS ceiling, and scheduler residue. Client processes have a 512 MiB V8 heap limit. It uses only generated temporary sources, aborts timed-out clients, waits for client exit before cleanup, and emits bounded aggregate JSON. Slot-file samples are advisory: the separate runtime fault tests must prove actual kernel capacity, descendant memory limits, cancellation, death recovery, and mixed-version admission. Run this soak again against the exact final runtime; a pass against an earlier build is only harness validation.
 
 ## Legacy V2 benchmark
 
