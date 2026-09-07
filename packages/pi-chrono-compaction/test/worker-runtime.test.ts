@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { runBoundedWorker, canonicalWorkerJson, runtimeHostStatus, type BoundedWorkerOptions } from "../src/worker-runtime.js";
 import { runtimeUnitName, runtimeUnitState } from "../src/worker-runtime-systemd.js";
+import { withVerifiedLegacyAdmission } from "../src/worker-runtime-legacy-gate.js";
 import { rendezvousDirectory } from "../src/worker-runtime-rendezvous.js";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -137,13 +138,15 @@ test("abrupt client death leaves kernel occupancy until the old tree stops; next
   } finally { await f.cleanup(); }
 });
 
-test("stdio entries share the bounded transport; malformed canonical identities and default mixed-version admission refuse", async () => {
+test("stdio entries share the bounded transport; malformed canonical identities and ungated mixed-version admission refuse", async () => {
   const f = await fixture();
   try {
     const entryPath = join(f.directory, "stdio.mjs");
     await writeFile(entryPath, `import {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);process.stdout.write(JSON.stringify({id:q.id,pid:process.pid,group:'stdio',started:1,ended:2})+'\\n');});`);
     const result = await runBoundedWorker({ ...f.options("stdio"), entryPath, entryTransport: "stdio" }); assert.equal(result.value.id, "stdio");
-    await assert.rejects(runBoundedWorker({ ...f.options(), schedulerDirectory: undefined }), /worker-legacy-transition-required/);
+    // Never route this fixture through the real production namespace: its gate
+    // may validly be installed on a deployed workstation.
+    await assert.rejects(withVerifiedLegacyAdmission(f.schedulerDirectory, async () => { throw new Error("unexpected-start"); }, join(f.directory, "ungated-legacy")), /worker-legacy-transition-required/);
     assert.throws(() => canonicalWorkerJson({ n: Infinity }), /worker-protocol-error/);
     const cycle: Record<string, unknown> = {}; cycle.self = cycle; assert.throws(() => canonicalWorkerJson(cycle), /worker-protocol-error/);
     const mismatch = f.options("mismatch"); await assert.rejects(runBoundedWorker({ ...mismatch, slots: 2 }), /scheduler-policy-mismatch/);
