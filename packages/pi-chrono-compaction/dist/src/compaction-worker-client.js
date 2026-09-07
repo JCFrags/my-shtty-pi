@@ -1,10 +1,16 @@
-import { fork } from "node:child_process";
+import { prepareRuntimeNamespace } from "./worker-runtime-namespace.js";
+import { verifyLegacyAdmissionGate, withVerifiedLegacyAdmission } from "./worker-runtime-legacy-gate.js";
+import { publishRuntimeStage, runtimeCategory } from "./worker-runtime-status.js";
+import { coalesceHostJob } from "./worker-runtime-rendezvous.js";
+import { startContainedWorker } from "./worker-runtime-systemd.js";
+import { WORKER_LIMITS } from "./worker-runtime-limits.js";
+import { canonicalWorkerJson } from "./worker-runtime.js";
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsConstants, fchmodSync, fstatSync, ftruncateSync, openSync, readFileSync, statSync, writeSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireHostWorkerSlot } from "./host-worker-scheduler.js";
-import { MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_STDERR_BYTES, validateWorkerRequest, validateWorkerResponse } from "./compaction-worker-protocol.js";
+import { acquireHostWorkerSlot, defaultSchedulerDirectory } from "./host-worker-scheduler.js";
+import { MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_STDERR_BYTES, validateWorkerRequest, validateWorkerResponse, validateWorkerProgress } from "./compaction-worker-protocol.js";
 import { ROLLUP_SHADOW_FAILURE_CODES, ROLLUP_SHADOW_FAILURE_STAGES, safeFailureContext } from "./rollup-shadow-failure.js";
 const MAX_WORKER_DIAGNOSTIC_BYTES = 1024 * 1024;
 export function replayWorkerDiagnosticPath(sessionPath) { return `${sessionPath}.chrono-worker-diagnostics-v1.jsonl`; }
@@ -20,16 +26,6 @@ function safeFailure(request, code, stage, context) {
             branchEntryCount: 0, branchSourceBytes: 0, sourceRangeCount: 0, sourceBytesRead: 0, sourceByteAvoidanceRate: 0,
             completeSessionReadAvoided: false, candidateLedgerReused: false } };
 }
-function allowedEnvironment() { const output = {}; for (const name of ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ"]) {
-    const value = process.env[name];
-    if (value !== undefined)
-        output[name] = value;
-} return output; }
-function stop(child) { try {
-    child.disconnect();
-}
-catch { } if (child.exitCode === null && !child.killed)
-    child.kill("SIGKILL"); }
 function emptyMetrics(request, slots, codeResponse) { return { response: codeResponse, clientMetrics: { jobType: request.jobType, schedulerSlotLimit: slots, schedulerQueueWaitMs: 0, schedulerQueuePosition: 0, workerStartMs: 0, workerTotalWallMs: 0, mainProcessMaximumTimerDelayMs: 0, responseBytes: 0, stderrBytes: 0 } }; }
 function diagnosticEntrypointIdentity(path) {
     const name = basename(path).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 128) || "worker-entrypoint";
@@ -70,123 +66,181 @@ function writePrivateDiagnostic(path, response, elapsedMs, stage, entry, request
         closeSync(descriptor);
     }
 }
-export async function runCompactionWorker(requestValue, options = {}) {
-    const request = validateWorkerRequest(requestValue);
+async function runSingle(request, options, progress = () => { }) {
     const requestBytes = Buffer.byteLength(JSON.stringify(request));
-    if (requestBytes > MAX_WORKER_REQUEST_BYTES)
-        throw new Error("worker-protocol-error");
     const entry = options.entryPath ?? fileURLToPath(new URL("./compaction-worker-entry.js", import.meta.url));
     const diagnosticPath = options.privateDiagnosticPath ?? replayWorkerDiagnosticPath(request.sessionPath);
-    let lease;
-    try {
-        lease = await acquireHostWorkerSlot({ slots: options.slots, timeoutMs: options.schedulerTimeoutMs, priority: options.priority ?? (request.jobType === "replay-compaction" ? "high" : "low"), jobType: request.jobType, signal: options.signal, directory: options.schedulerDirectory });
-    }
-    catch (error) {
-        const code = options.signal?.aborted || String(error?.message).includes("aborted") ? "worker-aborted" : "scheduler-timeout";
+    const started = performance.now();
+    const directory = await prepareRuntimeNamespace(options.schedulerDirectory ?? defaultSchedulerDirectory());
+    const failure = (code) => {
         const result = emptyMetrics(request, options.slots ?? 1, safeFailure(request, code, "scheduler-wait"));
         try {
-            writePrivateDiagnostic(diagnosticPath, result.response, 0, "scheduler-wait", entry, requestBytes, 0, Buffer.alloc(0), 0);
+            writePrivateDiagnostic(diagnosticPath, result.response, performance.now() - started, "scheduler-wait", entry, requestBytes, 0, Buffer.alloc(0), 0);
         }
         catch { }
         return result;
-    }
-    const wallStart = performance.now();
-    let maxDelay = 0;
-    let expected = performance.now() + 10;
-    const probe = setInterval(() => { const now = performance.now(); maxDelay = Math.max(maxDelay, now - expected); expected = now + 10; }, 10);
+    };
+    if (request.expectedSource.size > WORKER_LIMITS.sourceBytes)
+        return failure("worker-source-limit");
+    let lease;
     let child;
-    let stderrBytes = 0;
-    let stderrTail = Buffer.alloc(0);
-    let startedAt = 0;
+    let stageWrites = Promise.resolve();
+    const stage = (label) => { if (!lease)
+        return; const slot = lease.slot; stageWrites = stageWrites.then(() => publishRuntimeStage(directory, slot, runtimeCategory(request.jobType), label)).catch(() => { }); progress(label); };
     try {
-        return await new Promise((resolve) => {
-            let settled = false;
-            let timeout;
-            let termination;
-            let terminationTimer;
-            let latestStage = "child-start";
-            let diagnosticStage = "child-start";
-            let latestContext;
-            let childExitCode;
-            let childSignal;
-            const finish = (input) => {
-                if (settled)
-                    return;
-                settled = true;
-                if (timeout)
-                    clearTimeout(timeout);
-                if (terminationTimer)
-                    clearTimeout(terminationTimer);
-                clearInterval(probe);
-                if (child)
-                    stop(child);
-                const responseBytes = Buffer.byteLength(JSON.stringify(input));
-                const response = responseBytes > MAX_WORKER_RESPONSE_BYTES ? safeFailure(request, "worker-response-too-large", "response-validation", { responseBytes }) : input;
-                const elapsedMs = performance.now() - wallStart;
-                try {
-                    writePrivateDiagnostic(diagnosticPath, response, elapsedMs, diagnosticStage, entry, requestBytes, responseBytes, stderrTail, stderrBytes, childExitCode, childSignal);
-                }
-                catch { }
-                resolve({ response, clientMetrics: { jobType: request.jobType, schedulerSlotLimit: lease.slots, schedulerQueueWaitMs: lease.queueWaitMs, schedulerQueuePosition: lease.queuePosition, workerStartMs: startedAt, workerTotalWallMs: elapsedMs, mainProcessMaximumTimerDelayMs: maxDelay, responseBytes, stderrBytes } });
-            };
-            const terminate = (response) => { if (settled || termination)
-                return; termination = response; try {
-                child?.kill("SIGTERM");
-            }
-            catch { } terminationTimer = setTimeout(() => finish(response), 1_100); };
+        lease = await acquireHostWorkerSlot({ slots: options.slots, timeoutMs: Math.min(options.schedulerTimeoutMs ?? 900_000, request.deadlineMs - Date.now()), priority: options.priority ?? (request.jobType === "replay-compaction" ? "high" : "low"), jobType: request.jobType, signal: options.signal, directory, sessionKey: createHash("sha256").update(request.sessionPath).digest("hex"), enforcePolicy: true });
+        if (!statSync(entry).isFile())
+            return failure("worker-entrypoint-unavailable");
+        for (;;) {
+            if (options.signal?.aborted)
+                return failure("worker-aborted");
+            const remaining = Math.min(options.workerTimeoutMs ?? 900_000, request.deadlineMs - Date.now());
+            if (remaining <= 0)
+                return failure("worker-timeout");
             try {
-                if (!statSync(entry).isFile()) {
-                    finish(safeFailure(request, "worker-entrypoint-unavailable", "child-start"));
-                    return;
-                }
-                child = fork(entry, [], { stdio: ["ignore", "ignore", "pipe", "ipc"], env: allowedEnvironment(), serialization: "json", execArgv: [] });
-                startedAt = performance.now() - wallStart;
-                diagnosticStage = "child-running";
+                const start = () => startContainedWorker(directory, lease.slot, lease.slots, remaining, undefined, MAX_WORKER_RESPONSE_BYTES, undefined, options.signal);
+                child = options.schedulerDirectory === undefined ? await withVerifiedLegacyAdmission(directory, start) : await start();
+                break;
             }
-            catch {
-                finish(safeFailure(request, "worker-entrypoint-unavailable", "child-start"));
-                return;
+            catch (error) {
+                if (error.message !== "runtime-slot-busy")
+                    throw error;
+                await new Promise(resolve => setTimeout(resolve, 50));
             }
-            const running = child;
-            running.stderr?.on("data", (chunk) => { stderrBytes += chunk.length; stderrTail = Buffer.concat([stderrTail, chunk]).subarray(-MAX_WORKER_STDERR_BYTES); });
-            timeout = setTimeout(() => terminate(safeFailure(request, "worker-timeout", latestStage, latestContext)), Math.max(1, options.workerTimeoutMs ?? 900_000));
-            const abort = () => terminate(safeFailure(request, "worker-aborted", latestStage, latestContext));
-            options.signal?.addEventListener("abort", abort, { once: true });
-            running.on("message", (value) => {
-                if (termination)
-                    return;
-                if (request.jobType === "rollup-shadow" && value && typeof value === "object" && value.kind === "shadow-stage") {
-                    const stage = value.stage;
-                    if (!ROLLUP_SHADOW_FAILURE_STAGES.includes(stage)) {
-                        finish(safeFailure(request, "worker-protocol-error", "response-validation"));
+        }
+        const running = child;
+        stage("child-running");
+        const wallStart = performance.now();
+        let maxDelay = 0, expected = performance.now() + 10, stderrBytes = 0;
+        let stderrTail = Buffer.alloc(0);
+        let latestStage = "child-start";
+        let latestContext;
+        let childExitCode, childSignal;
+        const probe = setInterval(() => { const now = performance.now(); maxDelay = Math.max(maxDelay, now - expected); expected = now + 10; }, 10);
+        let abort = () => { };
+        let timer;
+        try {
+            const response = await new Promise(resolve => {
+                let settled = false;
+                const finish = (value) => { if (!settled) {
+                    settled = true;
+                    resolve(value);
+                } };
+                abort = () => finish(safeFailure(request, "worker-aborted", latestStage, latestContext));
+                options.signal?.addEventListener("abort", abort, { once: true });
+                timer = setTimeout(() => finish(safeFailure(request, "worker-timeout", latestStage, latestContext)), Math.max(1, Math.min(options.workerTimeoutMs ?? 900_000, request.deadlineMs - Date.now())));
+                running.stderr.on("data", (bytes) => {
+                    stderrBytes += bytes.length;
+                    stderrTail = Buffer.concat([stderrTail, bytes]).subarray(-MAX_WORKER_STDERR_BYTES);
+                    if (stderrBytes > MAX_WORKER_STDERR_BYTES)
+                        finish(safeFailure(request, "worker-response-too-large", latestStage));
+                });
+                running.on("limit", (code) => finish(safeFailure(request, code, "response-validation")));
+                running.on("message", value => {
+                    if (value && typeof value === "object" && value.kind === "worker-stage") {
+                        try {
+                            stage(validateWorkerProgress(value, request));
+                        }
+                        catch {
+                            finish(safeFailure(request, "worker-protocol-error", "response-validation"));
+                        }
                         return;
                     }
-                    latestStage = stage;
-                    diagnosticStage = latestStage;
-                    latestContext = safeFailureContext(value.context);
-                    return;
-                }
-                options.signal?.removeEventListener("abort", abort);
-                diagnosticStage = "response-validation";
-                try {
-                    finish(validateWorkerResponse(value, request.jobId));
-                }
-                catch (error) {
-                    finish(safeFailure(request, String(error.message).includes("response-too-large") ? "worker-response-too-large" : "worker-protocol-error", "response-validation"));
-                }
+                    if (value && typeof value === "object" && value.kind === "shadow-stage") {
+                        if (Object.keys(value).some(key => !["kind", "stage", "context"].includes(key)) || !ROLLUP_SHADOW_FAILURE_STAGES.includes(value.stage)) {
+                            finish(safeFailure(request, "worker-protocol-error", "response-validation"));
+                            return;
+                        }
+                        latestStage = value.stage;
+                        latestContext = safeFailureContext(value.context);
+                        stage(value.stage);
+                        return;
+                    }
+                    try {
+                        const response = validateWorkerResponse(value, request.jobId);
+                        if (response.jobType !== request.jobType)
+                            throw new Error();
+                        finish(response);
+                    }
+                    catch {
+                        finish(safeFailure(request, "worker-protocol-error", "response-validation"));
+                    }
+                });
+                running.on("worker-exit", (code, signal) => {
+                    childExitCode = code;
+                    childSignal = signal;
+                    // SIGKILL alone is not evidence of OOM. Inspect the controller result
+                    // only when systemd-run closes after the whole cgroup has stopped.
+                });
+                running.on("exit", () => {
+                    void running.result().then(result => finish(safeFailure(request, result === "oom-kill" ? "worker-resource-limit" : result === "timeout" ? "worker-timeout" : "worker-crashed", latestStage, latestContext)));
+                });
+                if (options.signal?.aborted)
+                    abort();
+                else
+                    running.send(request, entry, error => { if (error)
+                        finish(safeFailure(request, "worker-crashed", "child-start")); });
             });
-            running.on("error", () => finish(termination ?? safeFailure(request, "worker-crashed", latestStage, latestContext)));
-            running.on("exit", (code, signal) => { childExitCode = code; childSignal = signal; diagnosticStage = "child-exit"; if (!settled)
-                finish(termination ?? safeFailure(request, signal === "SIGKILL" ? "worker-resource-limit" : "worker-crashed", latestStage, latestContext)); });
-            running.send(request, (error) => { if (error)
-                finish(safeFailure(request, "worker-crashed", "child-start")); });
-        });
+            // A successful response does not grant permission to reuse capacity yet.
+            await running.stop();
+            const responseBytes = Buffer.byteLength(JSON.stringify(response));
+            const elapsedMs = performance.now() - wallStart;
+            try {
+                writePrivateDiagnostic(diagnosticPath, response, elapsedMs, latestStage, entry, requestBytes, responseBytes, stderrTail, stderrBytes, childExitCode, childSignal);
+            }
+            catch { }
+            return { response, clientMetrics: { jobType: request.jobType, schedulerSlotLimit: lease.slots, schedulerQueueWaitMs: lease.queueWaitMs, schedulerQueuePosition: lease.queuePosition, workerStartMs: wallStart - started, workerTotalWallMs: elapsedMs, mainProcessMaximumTimerDelayMs: maxDelay, responseBytes, stderrBytes } };
+        }
+        finally {
+            clearInterval(probe);
+            if (timer)
+                clearTimeout(timer);
+            options.signal?.removeEventListener("abort", abort);
+        }
+    }
+    catch (error) {
+        const message = error.message;
+        return failure(options.signal?.aborted ? "worker-aborted" : message === "scheduler-timeout" ? "scheduler-timeout" : message === "scheduler-queue-full" ? "scheduler-queue-full" : message === "scheduler-policy-mismatch" ? "scheduler-policy-mismatch" : error.code === "ENOENT" ? "worker-entrypoint-unavailable" : "worker-containment-unavailable");
     }
     finally {
-        clearInterval(probe);
+        // If stop cannot be confirmed, leave the advisory lease in place. The fixed
+        // service identity remains the authoritative capacity boundary after death.
         if (child)
-            stop(child);
-        await lease.release();
+            await child.stop();
+        await stageWrites;
+        await lease?.release();
+    }
+}
+/** Full bounded identity, not a session-only cache. No completed payloads persist. */
+export function workerJobIdentity(request, options = {}) {
+    const { jobId: _jobId, deadlineMs: _deadline, ...body } = request;
+    const { signal: _signal, workerTimeoutMs: _workerTimeout, schedulerTimeoutMs: _schedulerTimeout, onProgress: _onProgress, privateDiagnosticPath: _diagnostic, ...settings } = options;
+    const entry = options.entryPath ?? fileURLToPath(new URL("./compaction-worker-entry.js", import.meta.url));
+    const entryIdentity = diagnosticEntrypointIdentity(entry);
+    return createHash("sha256").update(canonicalWorkerJson({ body, settings, entry, entryIdentity })).digest("hex");
+}
+export async function runCompactionWorker(requestValue, options = {}) {
+    const request = validateWorkerRequest(JSON.parse(canonicalWorkerJson(validateWorkerRequest(requestValue))));
+    if (Buffer.byteLength(JSON.stringify(request)) > MAX_WORKER_REQUEST_BYTES)
+        throw new Error("worker-protocol-error");
+    const fail = (code) => emptyMetrics(request, options.slots ?? 1, safeFailure(request, code, "scheduler-wait"));
+    if (options.signal?.aborted)
+        return fail("worker-aborted");
+    if (!options.schedulerDirectory && !await verifyLegacyAdmissionGate())
+        return fail("worker-legacy-transition-required");
+    const directory = await prepareRuntimeNamespace(options.schedulerDirectory ?? defaultSchedulerDirectory());
+    const key = workerJobIdentity(request, options);
+    try {
+        const deadlineMs = Math.min(request.deadlineMs, Date.now() + (options.workerTimeoutMs ?? 900_000));
+        const result = await coalesceHostJob(directory, key, options.signal, (signal, progress) => {
+            const hardMs = WORKER_LIMITS.timeoutSeconds.max * 1000;
+            return runSingle({ ...request, deadlineMs: Date.now() + hardMs }, { ...options, signal, workerTimeoutMs: hardMs, schedulerTimeoutMs: hardMs }, progress);
+        }, MAX_WORKER_RESPONSE_BYTES + 4096, { deadlineMs, onProgress: options.onProgress });
+        return { ...result, response: validateWorkerResponse({ ...result.response, jobId: request.jobId }, request.jobId) };
+    }
+    catch (error) {
+        const message = error.message;
+        return fail(message === "worker-aborted" ? "worker-aborted" : message === "worker-timeout" ? "worker-timeout" : message === "scheduler-queue-full" ? "scheduler-queue-full" : message === "worker-response-too-large" ? "worker-response-too-large" : "worker-containment-unavailable");
     }
 }
 //# sourceMappingURL=compaction-worker-client.js.map

@@ -55,6 +55,26 @@ The independent-client harness passed 36 replay jobs: six forked client processe
 
 The worktree/index-only privacy scan passed with zero findings. The complete all-ref publication gate remains blocked by an unrelated historical privacy finding. No bypass, history rewrite, further push, or deployment is authorized by a local-only pass. Live version remains 2.0.2; no M03 fix is yet usable through the live package.
 
-## Remaining M03 runtime work
+## Integrated runtime (local only)
 
-The remaining milestone must replace descriptive scheduler ownership with kernel-held capacity, implement bounded fair host queues and complete job identity/coalescing, enforce limits in worker descendants, unify protocol and configuration validation, add host-wide status and progress, and pass the independent-client stress matrix. The M03 pull request must remain draft and unmerged, and M04 remains outside this milestone boundary.
+Runtime source `565bd0a079697205192149e9c340458f05f1bf34` was integrated as `253fe84`. Integration correction `d9702df` accepts validated history JSON-string progress frames, preserves allowlisted runtime refusal codes, and routes synthetic extension jobs through an explicit isolated namespace. Production still requires a verified legacy admission gate.
+
+Fixed systemd service identities hold host slots through whole-process-tree termination. Queue metadata is advisory; `flock` serializes queue changes. The fixed host memory budget is 2 GiB, with no swap, at most 64 tasks per job, and a per-job controller memory cap. A namespace pins its first slot policy; conflicting settings refuse rather than create another pool. Bounded queues use replay priority, five-second aging, and session turns. Unix sockets coalesce equivalent jobs across processes without result-payload files; waiter deadlines and cancellation remain independent.
+
+Memory, hard deadline, task count, and process cleanup are controller-enforced for descendants. Logical source-read admission covers trusted Node filesystem APIs, including asynchronous file handles; it is not a sandbox against native code or descendants deliberately bypassing those wrappers. The production replay/history workers do not spawn source readers. Only controller-confirmed OOM is classified as `worker-resource-limit`; unexplained SIGKILL remains `worker-crashed`.
+
+The single integrated package run passed 369/370 tests. Its sole failure was a shadow extension fixture still using the production admission gate. Routing that fixture to its synthetic namespace corrected it; the focused rerun passed. A contained history-search smoke also passed with zero retained dispatch admission. Typecheck and build passed; the candidate distribution contains 83 JavaScript files. No full-suite rerun or additional test matrix was added after the test-only correction.
+
+The integrated run includes six independent clients, two repeated jobs, and slot configurations one, two, and four, measured through actual cgroup identities and execution intervals. Duplicate replay identity, independent waiter cancellation/deadlines, allocation pressure, unexplained SIGKILL, detached descendants, controlling-client death/restart, source-read admission, heap limits, fairness, PID reuse, and frozen 2.0.2 transition fixtures passed. This is local synthetic evidence, not deployed-canary evidence. No real reboot or user-manager restart was performed.
+
+CPU/RAM checks accompanied these runs. Test launchers exited; no confirmed task-owned leftovers required termination. Raw process data is not committed. Code review is reserved strictly to the user; no further agent review is planned.
+
+## Activation and rollback procedure
+
+`installLegacyAdmissionGate` must first reserve all four old slots without stealing live ownership, then receive positive proof that old worker process trees are stopped. Empty slot files alone are insufficient. Boot-bound PID1 inhibitors prevent future 2.0.2 admissions; they are compatibility guards, not the new semaphore. Do not start the new live pool without the completed gate.
+
+`removeLegacyAdmissionGate` serializes against new starts, disables new admission, stops all new units, and only then removes exact-owned inhibitors. Replaced or malformed gate state fails closed. Reboot recovery and pinned-policy reconfiguration require explicit drain/recovery, not silent pool recreation. No live gate has been installed. A fresh verified 2.0.2 backup and exact green-CI detached build remain mandatory before activation.
+
+## Remaining gates
+
+All-ref privacy and dependent root/CI/publication gates remain blocked. A bounded root-verifier attempt reached its all-ref scan and timed out; its tracked process tree exited. This is not a passing result and did not bypass the scanner. Final fixed-heap/build-manifest gates, exact-head CI, guarded activation, and fresh-process live canaries remain outstanding. The M03 pull request stays draft and unmerged; M04 is not authorized.
