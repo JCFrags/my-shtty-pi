@@ -83,6 +83,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/scripts/benchmark-harness.mjs",
   "packages/pi-chrono-compaction/scripts/benchmark-v2.mjs",
   "packages/pi-chrono-compaction/scripts/deployed-worker-soak.mjs",
+  "packages/pi-chrono-compaction/scripts/independent-client-soak.mjs",
   "packages/pi-chrono-compaction/scripts/fixed-heap-suite.mjs",
   "packages/pi-chrono-compaction/scripts/memory-characterization.mjs",
   "packages/pi-chrono-compaction/scripts/synthetic-session.mjs",
