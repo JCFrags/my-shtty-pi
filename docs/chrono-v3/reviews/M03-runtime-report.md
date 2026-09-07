@@ -7,9 +7,20 @@
 - Pull request: #35, draft into `rebuild/chrono-memory-v3`
 - Current corrective release candidate: ChronoCompact `2.0.4`
 
-**M03 is not accepted: project-lead review requested changes at `b5452ffdd0f330209491ff368db4fa85d154bc25`.** F001 requires failure-atomic scheduler admission; F002 requires locally bounded waiter timeout and cancellation when a coordinator is unresponsive. Corrections and corrective deployment are complete and are submitted for project-lead re-review, not acceptance. Earlier sections are chronological evidence, not proof that these findings are resolved. No merge is authorized. M04 also requires separate directing-assistant proposal review and explicit authorization, even after M03 acceptance.
+**M03 is accepted by the directing assistant at `afec7d3ac48ef369b27c6609347666af2f8c289b`.** The 2026-09-07 M03 closeout/M04 brief records project-lead acceptance and closes F001/F002. This local record transcribes that decision; it is not self-acceptance. M04 implementation is authorized after integration closeout; M05 and production catalog activation are not authorized.
 
-## Changes-requested correction pass
+## Accepted closeout
+
+- Accepted review head: `afec7d3ac48ef369b27c6609347666af2f8c289b`. F001 failure-atomic admission and F002 locally bounded waiters are closed by project-lead review.
+- Exact accepted-head CI: push **34143221402**, attempt **2**, and PR **34143224021**, both successful. The first push attempt hit the existing 2000 ms incremental-lifecycle readiness timeout; the unchanged failed-job retry passed. Carry this timing issue into ordinary M04 test maintenance, not reopened M03 acceptance.
+- Validation: 412/412 normal tests, both fixed-heap lanes, replay equality, 54-job deployed recovery soak, typecheck/build/manifests, privacy and post-activation root verification passed as recorded below.
+- Deployment is a separate identity: installed **2.0.4** from clean detached `ad23f0b71ee473d33aff26d367459e76d208c631`. Closeout rechecked that identity and a fresh synthetic offline Pi process loaded 2.0.4 with doctor/status and the worker enabled. This does not establish every existing process's loaded version.
+- Verified **2.0.3** rollback remains ready; 2.0.4, its configuration, scheduler policy, and older backups are unchanged. The accepted merge includes metadata-only closeout above the accepted head and targets only `rebuild/chrono-memory-v3`, never `main`.
+- Remaining limits: trusted-Node logical source-read accounting does not cover native SQLite I/O; controller ownership remains authoritative for process-tree capacity; boot/policy recovery remains explicit; local waiter settlement cannot confirm cleanup of an unresponsive coordinator; the queued election helper can remain until its existing lock timeout; the abrupt promotion commit-to-IPC window remains; no real-machine reboot fault campaign was performed.
+
+All later sections retain chronological pre-acceptance evidence. Their earlier pending, unmerged, deployment, or authorization statements describe those historical checkpoints, not current authority.
+
+## Historical changes-requested correction pass
 
 The project lead reproduced an abandoned live-owner slot after fairness-state publication failed (`EISDIR` or one-shot `ENOSPC`). The project lead also reproduced a follower pending beyond its deadline while its coordinator was stopped with `SIGSTOP`. Both findings must be corrected without weakening process-tree containment or compaction/history semantics.
 
@@ -103,7 +114,7 @@ CPU/RAM checks accompanied these runs. Test launchers exited; no confirmed task-
 
 `removeLegacyAdmissionGate` serializes against new starts, disables new admission, stops all new units, and only then removes exact-owned inhibitors. Replaced or malformed gate state fails closed. Reboot recovery and pinned-policy reconfiguration require explicit drain/recovery, not silent pool recreation. No live gate has been installed. A fresh verified 2.0.2 backup and exact green-CI detached build remain mandatory before activation.
 
-## Remaining gates
+## Historical remaining gates
 
 All-ref privacy and dependent root/CI/publication gates remain blocked. A bounded root-verifier attempt reached its all-ref scan and timed out; its tracked process tree exited. This is not a passing result and did not bypass the scanner. Final fixed-heap/build-manifest gates, exact-head CI, guarded activation, and fresh-process live canaries remain outstanding. The M03 pull request stays draft and unmerged; M04 is not authorized.
 
@@ -134,7 +145,7 @@ of global erasure. The scan process exited, with no tracked child left running.
 Remaining root, CI, and deployment gates still require completion.
 
 
-## Final deployment and acceptance evidence
+## Historical 2.0.3 deployment evidence
 
 - Deployed source: `7449c03240dd6b69426fd678cb453c89621d9e4d`, version **2.0.3**.
 - Exact-head push CI `34088763954` and PR CI `34088767240`: **success**. All 370 package tests, both 512/1024 MiB fixed-heap lanes, determinism, typecheck, generated build consistency, publication scanning, frozen-baseline verifier tests, and complete root verification passed.
