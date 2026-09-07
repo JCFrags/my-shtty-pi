@@ -63,13 +63,21 @@ export interface ProjectGlanceFeedItem {
   createdAt: string;
 }
 
+export interface ProjectGlanceUiState {
+  dismissedIds: string[];
+  readIds: string[];
+}
+
 export interface ProjectGlanceSnapshot {
   protocolVersion: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
   sessionKey: string;
   revision: number;
   generatedAt: string;
+  branchId?: string;
   current: ProjectGlanceCurrent;
   feed: ProjectGlanceFeedItem[];
+  uiState?: ProjectGlanceUiState;
+  focusSerial?: number;
 }
 
 export interface ProjectGlanceHelloRequest {
@@ -92,11 +100,19 @@ export interface ProjectGlanceSnapshotRequest {
   type: "snapshot_request";
   requestId: string;
 }
+export interface ProjectGlanceActionRequest {
+  version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
+  type: "action";
+  requestId: string;
+  actionId: string;
+  sessionKey: string;
+  generation: string;
+  branchId: string;
+  baseRevision: number;
+  action: { type: "mark_read" | "dismiss" | "focus"; itemId?: string };
+}
 
-export type ProjectGlanceClientFrame =
-  | ProjectGlanceHelloRequest
-  | ProjectGlancePingRequest
-  | ProjectGlanceSnapshotRequest;
+export type ProjectGlanceClientFrame = ProjectGlanceHelloRequest | ProjectGlancePingRequest | ProjectGlanceSnapshotRequest | ProjectGlanceActionRequest;
 
 export interface ProjectGlanceHelloResponse {
   version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
@@ -125,13 +141,24 @@ export interface ProjectGlanceSnapshotChangedFrame {
   type: "snapshot_changed";
   revision: number;
 }
+export interface ProjectGlanceActionResponse {
+  version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
+  type: "action_result";
+  requestId: string;
+  actionId: string;
+  accepted: true;
+  revision: number;
+}
 
 export type ProjectGlanceErrorCode =
   | "invalid_frame"
   | "authentication_required"
   | "authentication_failed"
   | "unsupported_request"
-  | "server_unavailable";
+  | "server_unavailable"
+  | "stale_action"
+  | "replayed_action"
+  | "invalid_action";
 
 export interface ProjectGlanceErrorFrame {
   version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
@@ -146,6 +173,7 @@ export type ProjectGlanceServerFrame =
   | ProjectGlanceSnapshotFrame
   | ProjectGlancePongResponse
   | ProjectGlanceSnapshotChangedFrame
+  | ProjectGlanceActionResponse
   | ProjectGlanceErrorFrame;
 
 export type ProjectGlanceFrame =

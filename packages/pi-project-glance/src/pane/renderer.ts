@@ -1,7 +1,4 @@
-import {
-  PROJECT_GLANCE_SECTION,
-  PROJECT_GLANCE_TITLE,
-} from "../protocol/model.js";
+import { PROJECT_GLANCE_SECTION } from "../protocol/model.js";
 import type { ProjectGlanceConnectionState } from "../protocol/client.js";
 import type {
   ProjectGlanceCurrent,
@@ -41,6 +38,7 @@ function renderLabeled(label: string, value: string, width: number): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
   const prefix = `${label}: `;
   const prefixWidth = visibleWidth(prefix);
+  if (prefixWidth >= safeWidth) return wrapText(`${prefix}${value}`, safeWidth);
   const firstWidth = Math.max(1, safeWidth - prefixWidth);
   const wrapped = wrapText(value, safeWidth);
   const firstParts = hardWrap(wrapped[0] ?? "", firstWidth);
@@ -74,12 +72,81 @@ function feedItemLabel(type: ProjectGlanceFeedItem["type"]): string {
   return "Plan completed";
 }
 
-function renderItem(item: ProjectGlanceFeedItem, width: number): string[] {
+function renderItemContent(
+  item: ProjectGlanceFeedItem,
+  width: number,
+  expanded = true,
+  selected = false,
+  unread = false,
+): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
-  const label = truncateToWidth(`• ${feedItemLabel(item.type)}`, safeWidth);
+  const link = (action: string, text: string) =>
+    `\u001b]8;;project-glance://${action}/${encodeURIComponent(item.id)}\u0007${text}\u001b]8;;\u0007`;
+  const date = new Date(item.createdAt);
+  const time = Number.isFinite(date.getTime())
+    ? `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`
+    : "--:--";
+  const compact = [
+    `${selected ? ">" : " "}${link("read", unread ? "●" : "•")}`,
+    time,
+    link("toggle", feedItemLabel(item.type)),
+    link("dismiss", "×"),
+  ].join(" ");
+  const label = truncateToWidth(compact, safeWidth);
   const indent = safeWidth > 2 ? "  " : " ".repeat(Math.max(0, safeWidth - 1));
   const textWidth = Math.max(1, safeWidth - visibleWidth(indent));
-  return [label, ...wrapText(item.text, textWidth).map((line) => `${indent}${line}`)];
+  if (expanded) {
+    return [
+      label,
+      ...wrapText(item.text, textWidth).map((line) => `${indent}${line}`),
+    ];
+  }
+  const summary = item.text.replace(/\s+/gu, " ");
+  return [label, truncateToWidth(`${indent}${summary}`, safeWidth)];
+}
+
+const FEED_CARD_STYLE = "\u001b[48;5;236m\u001b[38;5;255m";
+const CURRENT_CARD_STYLE = "\u001b[48;5;24m\u001b[38;5;255m";
+const CARD_RESET = "\u001b[0m";
+
+function cardLine(text: string, width: number, style: string): string {
+  const clipped = truncateToWidth(text, width, "");
+  const styleSafe = clipped.replaceAll(CARD_RESET, `${CARD_RESET}${style}`);
+  return `${style}${styleSafe}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}${CARD_RESET}`;
+}
+
+function renderBox(content: string[], width: number, style: string): string[] {
+  const safeWidth = Math.max(1, Math.floor(width));
+  if (safeWidth < 4) return content.map((line) => cardLine(line, safeWidth, style));
+  const innerWidth = safeWidth - 2;
+  return [
+    cardLine(`┌${"─".repeat(innerWidth)}┐`, safeWidth, style),
+    ...content.map((line) => {
+      const clipped = truncateToWidth(line, innerWidth, "");
+      return cardLine(
+        `│${clipped}${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))}│`,
+        safeWidth,
+        style,
+      );
+    }),
+    cardLine(`└${"─".repeat(innerWidth)}┘`, safeWidth, style),
+  ];
+}
+
+function renderItem(
+  item: ProjectGlanceFeedItem,
+  width: number,
+  expanded = true,
+  selected = false,
+  unread = false,
+): string[] {
+  const safeWidth = Math.max(1, Math.floor(width));
+  const contentWidth = safeWidth < 4 ? safeWidth : safeWidth - 2;
+  return renderBox(
+    renderItemContent(item, contentWidth, expanded, selected, unread),
+    safeWidth,
+    FEED_CARD_STYLE,
+  );
 }
 
 function connectionBanner(state: ProjectGlanceConnectionState): string | undefined {
@@ -96,11 +163,15 @@ export function renderProjectGlancePinned(
   width: number,
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
-  const lines: string[] = [PROJECT_GLANCE_TITLE];
+  const lines: string[] = [];
   const banner = connectionBanner(state);
-  if (banner) lines.push(banner);
-  lines.push("CURRENT");
-  if (snapshot) lines.push(...renderCurrent(snapshot.current, safeWidth));
+  if (banner) lines.push(truncateToWidth(banner, safeWidth, ""));
+  const contentWidth = safeWidth < 4 ? safeWidth : safeWidth - 2;
+  lines.push(...renderBox(
+    ["CURRENT", ...(snapshot ? renderCurrent(snapshot.current, contentWidth) : [])],
+    safeWidth,
+    CURRENT_CARD_STYLE,
+  ));
   lines.push("");
   return lines;
 }
@@ -109,18 +180,32 @@ export function renderProjectGlancePinned(
 export function renderProjectGlanceFeed(
   snapshot: ProjectGlanceSnapshot | undefined,
   width: number,
+  options: { selectedId?: string; expandedIds?: ReadonlySet<string> } = {},
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
-  const lines: string[] = [PROJECT_GLANCE_SECTION.toUpperCase()];
+  const dismissed = new Set(snapshot?.uiState?.dismissedIds ?? []);
+  const read = new Set(snapshot?.uiState?.readIds ?? []);
+  const visible = snapshot?.feed.filter((item) => !dismissed.has(item.id)) ?? [];
+  const unread = visible.filter((item) => !read.has(item.id)).length;
+  const lines: string[] = [
+    truncateToWidth(PROJECT_GLANCE_SECTION.toUpperCase(), safeWidth, ""),
+    truncateToWidth(`${unread} unread`, safeWidth, ""),
+  ];
   if (!snapshot) {
-    lines.push("Waiting for the local relay.");
+    lines.push(truncateToWidth("Waiting for the local relay.", safeWidth, ""));
     return lines;
   }
-  for (const item of snapshot.feed) {
-    lines.push(...renderItem(item, safeWidth));
+  for (const item of visible) {
+    lines.push(...renderItem(
+      item,
+      safeWidth,
+      options.expandedIds?.has(item.id) ?? true,
+      options.selectedId === item.id,
+      !read.has(item.id),
+    ));
     lines.push("");
   }
-  if (snapshot.feed.length === 0) lines.push("No progress items.");
+  if (visible.length === 0) lines.push(truncateToWidth("No progress items.", safeWidth, ""));
   return lines;
 }
 

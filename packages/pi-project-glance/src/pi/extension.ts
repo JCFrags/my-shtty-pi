@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   PROJECT_GLANCE_COMMAND,
+  PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX,
 } from "../protocol/model.js";
 import { projectGlanceDiagnostic, projectGlanceError } from "./errors.js";
 import { handleProjectGlanceCommand } from "./open-pane.js";
@@ -33,7 +34,13 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
     }
   }
 
-  const runtime = new ProjectGlanceRelayRuntime(process.env, pi.events);
+  let activeContext: { ui: { setStatus(key: string, value: string | undefined): void } } | undefined;
+  const runtime = new ProjectGlanceRelayRuntime(
+    process.env,
+    pi.events,
+    (data) => pi.appendEntry(`${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`, data),
+    (count) => activeContext?.ui.setStatus("project-glance", count > 0 ? `● Glance ${count}` : undefined),
+  );
   let disposed = false;
   const dispose = async (): Promise<void> => {
     if (disposed) return;
@@ -53,6 +60,7 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    activeContext = ctx;
     try {
       await runtime.ensureForContext(ctx);
     } catch (error) {
@@ -69,7 +77,9 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   pi.on("message_end", (event, ctx) => {
     runtime.onMessageEnd(ctx);
   });
-  pi.on("session_shutdown", async (_event, _ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    ctx.ui.setStatus("project-glance", undefined);
+    activeContext = undefined;
     await runtime.stop();
   });
 }

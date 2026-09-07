@@ -3,7 +3,10 @@ import {
   ScrollView,
   TuiAltScreen,
   VStack,
+  getOsc8LinkAtColumn,
   type Component,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import {
   PROJECT_GLANCE_DESCRIPTOR_ENV,
@@ -18,6 +21,10 @@ import {
   renderProjectGlanceFeed,
   renderProjectGlancePinned,
 } from "./renderer.js";
+
+function stripOsc8Links(line: string): string {
+  return line.replace(/\u001b\]8;;[^\u0007\u001b]*(?:\u0007|\u001b\\)/gu, "");
+}
 
 export class ProjectGlancePinnedRegion implements Component {
   readonly #model: ProjectGlancePaneModel;
@@ -41,17 +48,70 @@ export class ProjectGlancePinnedRegion implements Component {
 
 export class ProjectGlanceFeedRegion implements Component {
   readonly #model: ProjectGlancePaneModel;
+  readonly #activateUrl: ((url: string) => void) | undefined;
+  #hitTargets = new Map<string, string>();
+  #renderWidth = 0;
+  #selectedRow: number | undefined;
 
-  constructor(model: ProjectGlancePaneModel) {
+  constructor(
+    model: ProjectGlancePaneModel,
+    activateUrl?: (url: string) => void,
+  ) {
     this.#model = model;
+    this.#activateUrl = activateUrl;
   }
 
   invalidate(): void {
     // The region is derived directly from the model on every render.
   }
 
+  get selectedRow(): number | undefined {
+    return this.#selectedRow;
+  }
+
   render(width: number): string[] {
-    return renderProjectGlanceFeed(this.#model.snapshot, width);
+    const expandedIds = new Set(
+      this.#model.visibleFeed
+        .filter((item) => this.#model.isExpanded(item.id))
+        .map((item) => item.id),
+    );
+    const selectedId = this.#model.selectedId;
+    const linkedLines = renderProjectGlanceFeed(this.#model.snapshot, width, {
+      ...(selectedId ? { selectedId } : {}),
+      expandedIds,
+    });
+    const hitTargets = new Map<string, string>();
+    let selectedRow: number | undefined;
+    const selectedSuffix = selectedId ? `/${encodeURIComponent(selectedId)}` : undefined;
+    for (let y = 0; y < linkedLines.length; y += 1) {
+      const line = linkedLines[y] ?? "";
+      for (let x = 0; x < width; x += 1) {
+        const url = getOsc8LinkAtColumn(line, x);
+        if (url) {
+          hitTargets.set(`${y}:${x}`, url);
+          if (selectedSuffix && url.endsWith(selectedSuffix)) selectedRow ??= y;
+        }
+      }
+    }
+    this.#hitTargets = hitTargets;
+    this.#renderWidth = width;
+    this.#selectedRow = selectedRow;
+    return linkedLines.map(stripOsc8Links);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (
+      event.type !== "click" ||
+      event.button !== "left" ||
+      !this.#activateUrl
+    ) {
+      return undefined;
+    }
+    if (this.#renderWidth !== event.width) this.render(event.width);
+    const url = this.#hitTargets.get(`${event.y}:${event.x}`);
+    if (!url) return undefined;
+    this.#activateUrl(url);
+    return { handled: true, render: true };
   }
 }
 
@@ -65,9 +125,9 @@ export class ProjectGlancePaneView implements Component {
   readonly scrollView: ScrollView;
   readonly root: VStack;
 
-  constructor(model: ProjectGlancePaneModel) {
+  constructor(model: ProjectGlancePaneModel, activateUrl?: (url: string) => void) {
     this.pinned = new ProjectGlancePinnedRegion(model);
-    this.feed = new ProjectGlanceFeedRegion(model);
+    this.feed = new ProjectGlanceFeedRegion(model, activateUrl);
     this.scrollView = new ScrollView(this.feed, {
       follow: "none",
       primary: true,
@@ -86,6 +146,14 @@ export class ProjectGlancePaneView implements Component {
 
   render(width: number): string[] {
     return this.root.render(width);
+  }
+
+  scrollToSelected(width: number): void {
+    this.feed.render(this.scrollView.getContentWidth(width));
+    const selectedRow = this.feed.selectedRow;
+    if (selectedRow !== undefined) {
+      this.scrollView.scrollTo(selectedRow, { disableFollow: true });
+    }
   }
 }
 
@@ -112,9 +180,33 @@ export async function main(): Promise<void> {
   }
 
   const model = new ProjectGlancePaneModel();
-  const view = new ProjectGlancePaneView(model);
   const terminal = new ProcessTerminal();
-  const tui = new TuiAltScreen(terminal, false, undefined, {
+  let client: ProjectGlanceClient;
+  let tui: TuiAltScreen;
+  const activate = (url: string): void => {
+    try {
+      const target = new URL(url);
+      if (target.protocol !== "project-glance:") return;
+      const action = target.hostname;
+      const itemId = decodeURIComponent(target.pathname.slice(1));
+      const snapshot = model.snapshot;
+      if (!snapshot?.branchId || !snapshot.feed.some((item) => item.id === itemId)) return;
+
+      if (action === "toggle") {
+        model.toggleExpanded(itemId);
+      } else if (action === "read" || action === "dismiss") {
+        client?.sendAction(snapshot.branchId, snapshot.revision, {
+          type: action === "read" ? "mark_read" : "dismiss",
+          itemId,
+        });
+      }
+      tui.requestRender();
+    } catch {
+      // Ignore malformed terminal links.
+    }
+  };
+  const view = new ProjectGlancePaneView(model, activate);
+  tui = new TuiAltScreen(terminal, false, undefined, {
     mouse: true,
     wheelScrollLines: 3,
   });
@@ -130,15 +222,35 @@ export async function main(): Promise<void> {
   process.once("SIGTERM", onSignal);
   process.once("SIGHUP", onSignal);
   const removeInput = tui.addInputListener((data) => {
-    if (!isQuitInput(data)) return undefined;
-    finish();
+    if (isQuitInput(data)) {
+      finish();
+      return { consume: true };
+    }
+    if (data === "j" || data === "\u001b[B") model.selectRelative(1);
+    else if (data === "k" || data === "\u001b[A") model.selectRelative(-1);
+    else if (data === "u") model.focusOldestUnread();
+    else if ((data === "\r" || data === " ") && model.selectedId) {
+      model.toggleExpanded(model.selectedId);
+    } else if ((data === "r" || data === "d") && model.selectedId) {
+      const snapshot = model.snapshot;
+      if (snapshot?.branchId) {
+        client?.sendAction(snapshot.branchId, snapshot.revision, {
+          type: data === "r" ? "mark_read" : "dismiss",
+          itemId: model.selectedId,
+        });
+      }
+    } else {
+      return undefined;
+    }
+    view.invalidate();
+    tui.requestRender();
     return { consume: true };
   });
   const requestRender = (): void => {
     view.invalidate();
     tui.requestRender();
   };
-  const client = new ProjectGlanceClient({
+  client = new ProjectGlanceClient({
     descriptorPath,
     onState: (state) => {
       model.setConnectionState(state as ProjectGlancePaneState);
@@ -155,6 +267,13 @@ export async function main(): Promise<void> {
     onSnapshot: (snapshot, identity) => {
       try {
         model.applySnapshot(snapshot, identity);
+        if (model.consumeFocusRequest() && snapshot.branchId) {
+          model.focusOldestUnread();
+          requestRender();
+          setImmediate(() => view.scrollToSelected(terminal.columns));
+          client.sendAction(snapshot.branchId, snapshot.revision, { type: "focus" });
+          return;
+        }
       } catch {
         model.setConnectionState("reconnecting");
       }

@@ -285,6 +285,28 @@ test("validation separates display text from filesystem paths and enforces the w
   assert.throws(() => validateSnapshot(makeNearLimit(4096)), /INVALID_FRAME/);
 });
 
+test("action frames require explicit relay identity and stale correlation fields", () => {
+  const frame = {
+    version: 1,
+    type: "action",
+    requestId: "request",
+    actionId: "action",
+    sessionKey: STATIC_FIXTURE_SESSION_KEY,
+    generation: "a".repeat(32),
+    branchId: "branch",
+    baseRevision: 2,
+    action: { type: "dismiss", itemId: "item" },
+  };
+  assert.deepEqual(validateClientFrame(frame), frame);
+  assert.throws(() => validateClientFrame(({ ...frame, generation: undefined })), /INVALID_FRAME/);
+  assert.throws(() => validateClientFrame(({ ...frame, baseRevision: 0 })), /INVALID_FRAME/);
+  assert.deepEqual(validateClientFrame({ ...frame, action: { type: "focus" } }).action, { type: "focus" });
+  assert.throws(
+    () => validateClientFrame({ ...frame, action: { type: "focus", itemId: "ignored" } }),
+    /INVALID_FRAME/,
+  );
+});
+
 test("fixture relay is deterministic, private, authenticated, and exposes only the static snapshot", async () => {
   await withTemporaryRuntime(async ({ relay }) => {
     const descriptor = await readConnectionDescriptor(relay.paths.descriptorPath);
@@ -342,7 +364,7 @@ test("pane model and renderer keep CURRENT and PROGRESS FEED read-only", () => {
   assert.equal(model.applySnapshot(snapshot), "stale");
   assert.throws(() => model.applySnapshot({ ...snapshot, sessionKey: deriveSessionKey("other") }), /PROJECT_GLANCE_SESSION_MISMATCH/);
   const lines = renderProjectGlance(model.snapshot, "connected", 80);
-  assert.ok(lines.includes("CURRENT"));
+  assert.ok(lines.some((line) => line.includes("CURRENT")));
   assert.ok(lines.includes("PROGRESS FEED"));
   assert.ok(lines.some((line) => line.includes("Validate the Project Glance foundation")));
   assert.ok(renderProjectGlanceAtHeight(model.snapshot, "connected", 34, 3).length <= 3);
@@ -680,7 +702,11 @@ test("pane layout pins CURRENT and scrolls only the feed", () => {
   assert.ok(view.scrollView.scrollTop > 0);
   assert.deepEqual(view.pinned.render(32), pinnedBefore);
   const narrow = renderProjectGlance(model.snapshot, "connected", 32);
+  const fixtureDate = new Date(FIXTURE_NOW);
+  const localTime = `${String(fixtureDate.getHours()).padStart(2, "0")}:${String(fixtureDate.getMinutes()).padStart(2, "0")}`;
   assert.ok(narrow.every((line) => visibleWidth(line) <= 32));
+  assert.ok(narrow.some((line) => line.includes(localTime)), "cards show a compact local timestamp");
+  assert.ok(narrow.some((line) => line.includes("×")), "cards show a visible dismissal control");
   assert.ok(!narrow.some((line) => /^Connection:/u.test(line)));
   assert.ok(renderProjectGlancePinned(model.snapshot, "disconnected", 32).some((line) => line.startsWith("DISCONNECTED:")));
   assert.ok(renderProjectGlanceFeed(model.snapshot, 32).includes("PROGRESS FEED"));

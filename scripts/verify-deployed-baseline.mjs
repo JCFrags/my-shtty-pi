@@ -341,6 +341,12 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   const projectionText = source("src/protocol/projection-text.ts");
   const extension = source("src/pi/extension.ts");
   const openPane = source("src/pi/open-pane.ts");
+  const paneMain = source("src/pane/main.ts");
+  const paneModel = source("src/pane/model.ts");
+  const paneRenderer = source("src/pane/renderer.ts");
+  const protocolModel = source("src/protocol/model.ts");
+  const protocolServer = source("src/protocol/server.ts");
+  const protocolValidation = source("src/protocol/validation.ts");
   const errors = source("src/pi/errors.ts");
   const doctor = source("scripts/dev-doctor.mjs");
   const smoke = indexed.includes(`packages/${projectGlanceSlug}/scripts/dev-smoke.mjs`)
@@ -374,16 +380,20 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
   if (!todoSource.includes("TODO_SUMMARY_CHANGED_EVENT") || !todoSource.includes("snapshot: summary()")) {
     throw new Error("pi-project-glance: Todo provider changed envelope is not represented");
   }
-  if (!feed.includes("parseTextSignature") || !feed.includes("TextSignatureV1") ||
+  if (!feed.includes("parseTextSignature") ||
       !feed.includes("extractAssistantEntryItems") || !feed.includes("extractWorkplanEntryItem") ||
       !feed.includes("rebuildProgressFeed") || !feed.includes("boundRecentFeed") ||
-      !feed.includes("ASSISTANT_STOP_REASONS") || !feed.includes("toolCall") ||
-      !feed.includes("PROJECT GLANCE FEED CHECKPOINT:") || !feed.includes("PROJECT GLANCE LIVE UPDATE:")) {
+      !feed.includes("MAX_SCAN_ENTRIES") || !feed.includes("ASSISTANT_STOP_REASONS") ||
+      !feed.includes("toolCall") || !feed.includes("safeIdentifier(sourceId)")) {
     throw new Error("pi-project-glance: bounded feed extraction contract is missing");
   }
-  if (!feedTest.includes("thinking") || !feedTest.includes("final_answer") || !feedTest.includes("active getBranch") ||
-      !feedTest.includes("PROJECT GLANCE FEED CHECKPOINT") || !feedTest.includes("PROJECT GLANCE LIVE UPDATE") ||
-      !feedTest.includes("plan_completed") || !feedTest.includes("homedir")) {
+  if (feed.includes("PROJECT GLANCE FEED CHECKPOINT:") || feed.includes("PROJECT GLANCE LIVE UPDATE:")) {
+    throw new Error("pi-project-glance: validation-marker extraction exceptions are forbidden");
+  }
+  if (!feedTest.includes("thinking") || !feedTest.includes("final_answer") ||
+      !feedTest.includes("active branch order") || !feedTest.includes("malformed structured phase") ||
+      !feedTest.includes("paragraph") || !feedTest.includes("credentials") ||
+      !feedTest.includes("Workplan checkpoints") || !feedTest.includes("homedir")) {
     throw new Error("pi-project-glance: feed privacy and active-branch tests are missing");
   }
   if (!workplanSource.includes("buildWorkplanActivity") || !workplanSource.includes("validateWorkplanActivity") ||
@@ -399,8 +409,8 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
     throw new Error("pi-project-glance: session-tree branch transition bypasses lifecycle serialization");
   }
   const ensure = sourceSection(lifecycle, "  async ensureForContext(ctx", "  async start(");
-  if (!ensure.includes("this.#branchId !== branchId") || !ensure.includes("#transitionBranch(branchId)")) {
-    throw new Error("pi-project-glance: same-session branch reconciliation is missing");
+  if (!ensure.includes("this.#sessionKey === sessionKey") || ensure.includes("#transitionBranch(branchId)")) {
+    throw new Error("pi-project-glance: ordinary command refocus must not become tree navigation");
   }
   const restart = sourceSection(lifecycle, "  async restart(", "  async stop(");
   if (!restart.includes("const branchId = this.#branchId") || !restart.includes("#startNow(sessionKey, now, nextGenerationIndex, branchId)")) {
@@ -467,8 +477,16 @@ function verifyProjectGlanceRepairStatic(packageRoot, indexed) {
     throw new Error("pi-project-glance: isolated real-pane smoke coverage is missing");
   }
   if (extension.includes("runtime.refreshCurrent()") || !extension.includes("await runtime.onSessionTree(ctx)") ||
-      !extension.includes('pi.on("message_end"')) {
-    throw new Error("pi-project-glance: extension lifecycle/command ordering is unsafe");
+      !extension.includes('pi.on("message_end"') || !extension.includes("appendEntry") ||
+      !extension.includes("● Glance ${count}") || !openPane.includes("runtime.notifyPaneFocused()")) {
+    throw new Error("pi-project-glance: extension lifecycle, explicit focus, or unread status is unsafe");
+  }
+  if (!protocolModel.includes('type: "action"') || !protocolModel.includes("baseRevision") ||
+      !protocolValidation.includes('type === "action"') || !protocolServer.includes("#seenActions") ||
+      !protocolServer.includes("replayed_action") || !protocolServer.includes("stale_action") ||
+      !paneModel.includes("focusOldestUnread") || !paneModel.includes("toggleExpanded") ||
+      !paneMain.includes('project-glance:') || !paneRenderer.includes('link("dismiss", "×")')) {
+    throw new Error("pi-project-glance: interaction or authenticated action contract is missing");
   }
   if (!workplanTest.includes("plan completion activity requires") || !workplanTest.includes("plan_completed") ||
       !workplanTest.includes("validateWorkplanActivity")) {

@@ -21,7 +21,7 @@ import {
   type ProjectGlanceSnapshot,
 } from "./model.js";
 import { assertSnapshotFrameBudget } from "./framing.js";
-import { validateProjectionText } from "./projection-text.js";
+import { projectFeedText, validateProjectionText } from "./projection-text.js";
 
 export class ProjectGlanceValidationError extends Error {
   constructor(code = "INVALID_FRAME") {
@@ -155,21 +155,19 @@ function validateItem(value: unknown): ProjectGlanceFeedItem {
   return {
     id,
     type: type as ProjectGlanceFeedItem["type"],
-    text: displayText(source.text, MAX_ITEM_TEXT_BYTES),
+    text: (() => {
+      if (typeof source.text !== "string" || Buffer.byteLength(source.text, "utf8") > MAX_ITEM_TEXT_BYTES) throw new ProjectGlanceValidationError();
+      const text = projectFeedText(source.text, MAX_ITEM_TEXT_BYTES);
+      if (!text) throw new ProjectGlanceValidationError();
+      return text;
+    })(),
     createdAt: validateTimestamp(source.createdAt),
   };
 }
 
 export function validateSnapshot(value: unknown): ProjectGlanceSnapshot {
   const source = sourceRecord(value);
-  exactKeys(source, [
-    "protocolVersion",
-    "sessionKey",
-    "revision",
-    "generatedAt",
-    "current",
-    "feed",
-  ]);
+  exactKeys(source, ["protocolVersion", "sessionKey", "revision", "generatedAt", "current", "feed"], ["branchId", "uiState", "focusSerial"]);
   if (source.protocolVersion !== PROJECT_GLANCE_PROTOCOL_VERSION) {
     throw new ProjectGlanceValidationError();
   }
@@ -178,13 +176,18 @@ export function validateSnapshot(value: unknown): ProjectGlanceSnapshot {
     throw new ProjectGlanceValidationError();
   }
   const feed = feedValue.map(validateItem);
+  const branchId = source.branchId === undefined ? undefined : boundedText(source.branchId, MAX_ITEM_ID_BYTES);
+  let uiState: ProjectGlanceSnapshot["uiState"];
+  if (source.uiState !== undefined) {
+    const state = sourceRecord(source.uiState);
+    exactKeys(state, ["dismissedIds", "readIds"]);
+    if (!Array.isArray(state.dismissedIds) || !Array.isArray(state.readIds) || state.dismissedIds.length > MAX_FEED_ITEMS || state.readIds.length > MAX_FEED_ITEMS) throw new ProjectGlanceValidationError();
+    uiState = { dismissedIds: state.dismissedIds.map((id) => boundedText(id, MAX_ITEM_ID_BYTES)), readIds: state.readIds.map((id) => boundedText(id, MAX_ITEM_ID_BYTES)) };
+  }
   const snapshot: ProjectGlanceSnapshot = {
-    protocolVersion: PROJECT_GLANCE_PROTOCOL_VERSION,
-    sessionKey: validateSessionKey(source.sessionKey),
-    revision: boundedInteger(source.revision, Number.MAX_SAFE_INTEGER),
-    generatedAt: validateTimestamp(source.generatedAt),
-    current: validateCurrent(source.current),
-    feed,
+    protocolVersion: PROJECT_GLANCE_PROTOCOL_VERSION, sessionKey: validateSessionKey(source.sessionKey), revision: boundedInteger(source.revision, Number.MAX_SAFE_INTEGER), generatedAt: validateTimestamp(source.generatedAt),
+    ...(branchId ? { branchId } : {}), current: validateCurrent(source.current), feed, ...(uiState ? { uiState } : {}),
+    ...(source.focusSerial === undefined ? {} : { focusSerial: boundedInteger(source.focusSerial, Number.MAX_SAFE_INTEGER) }),
   };
   const payloadBytes = Buffer.byteLength(JSON.stringify(snapshot), "utf8");
   if (payloadBytes > MAX_SNAPSHOT_BYTES) {
@@ -256,6 +259,50 @@ export function validateClientFrame(value: unknown): ProjectGlanceClientFrame {
       requestId: validateRequestId(source.requestId),
     };
   }
+  if (type === "action") {
+    exactKeys(source, [
+      "version",
+      "type",
+      "requestId",
+      "actionId",
+      "sessionKey",
+      "generation",
+      "branchId",
+      "baseRevision",
+      "action",
+    ]);
+    const action = sourceRecord(source.action);
+    exactKeys(action, ["type"], ["itemId"]);
+    if (
+      action.type !== "mark_read" &&
+      action.type !== "dismiss" &&
+      action.type !== "focus"
+    ) {
+      throw new ProjectGlanceValidationError();
+    }
+    if (
+      (action.type === "focus" && action.itemId !== undefined) ||
+      (action.type !== "focus" && action.itemId === undefined)
+    ) {
+      throw new ProjectGlanceValidationError();
+    }
+    return {
+      version: PROJECT_GLANCE_PROTOCOL_VERSION,
+      type,
+      requestId: validateRequestId(source.requestId),
+      actionId: validateRequestId(source.actionId),
+      sessionKey: validateSessionKey(source.sessionKey),
+      generation: validateGeneration(source.generation),
+      branchId: boundedText(source.branchId, MAX_ITEM_ID_BYTES),
+      baseRevision: boundedInteger(source.baseRevision, Number.MAX_SAFE_INTEGER),
+      action: {
+        type: action.type,
+        ...(action.itemId === undefined
+          ? {}
+          : { itemId: boundedText(action.itemId, MAX_ITEM_ID_BYTES) }),
+      },
+    };
+  }
   throw new ProjectGlanceValidationError();
 }
 
@@ -268,6 +315,9 @@ function validateErrorCode(value: unknown): ProjectGlanceErrorCode {
       "authentication_failed",
       "unsupported_request",
       "server_unavailable",
+      "stale_action",
+      "replayed_action",
+      "invalid_action",
     ].includes(code)
   ) {
     throw new ProjectGlanceValidationError();
@@ -318,6 +368,25 @@ export function validateServerFrame(value: unknown): ProjectGlanceServerFrame {
       version: PROJECT_GLANCE_PROTOCOL_VERSION,
       type,
       requestId: validateRequestId(source.requestId),
+    };
+  }
+  if (type === "action_result") {
+    exactKeys(source, [
+      "version",
+      "type",
+      "requestId",
+      "actionId",
+      "accepted",
+      "revision",
+    ]);
+    if (source.accepted !== true) throw new ProjectGlanceValidationError();
+    return {
+      version: PROJECT_GLANCE_PROTOCOL_VERSION,
+      type,
+      requestId: validateRequestId(source.requestId),
+      actionId: validateRequestId(source.actionId),
+      accepted: true,
+      revision: boundedInteger(source.revision, Number.MAX_SAFE_INTEGER),
     };
   }
   if (type === "snapshot_changed") {

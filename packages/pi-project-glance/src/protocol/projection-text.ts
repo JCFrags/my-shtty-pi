@@ -79,6 +79,24 @@ export function projectDisplayText(value: unknown, maximumBytes: number): string
  * Validate an already composed wire value without changing meaningful layout,
  * including the two-space current-state ID separator.
  */
+export function projectFeedText(value: unknown, maximumBytes: number): string | undefined {
+  if (typeof value !== "string" || hasUnpairedSurrogate(value)) return undefined;
+  const withoutAnsi = value.replace(/\x1b(?:\[[0-?]*[ -\/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu, "");
+  const normalized = withoutAnsi
+    .normalize("NFC")
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[\t\f\v]+/gu, " ")
+    .replace(/ *\n */gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+  if (!normalized || /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u.test(normalized)) return undefined;
+  const projected = replaceHomeOccurrences(normalized);
+  if (containsUnsafeAbsoluteLocalPath(projected)) return undefined;
+  const credential = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:api[_-]?key|access[_-]?token|authorization|password)\s*[:=]\s*[^\s]{8,}|\b(?:sk|gh[opusa]|xox[baprs])-[-A-Za-z0-9_]{12,})/iu;
+  if (credential.test(projected)) return undefined;
+  return clipUtf8(projected, maximumBytes);
+}
+
 export function validateProjectionText(value: unknown, maximumBytes: number): string | undefined {
   if (typeof value !== "string" || !value || hasUnpairedSurrogate(value)) return undefined;
   if (Buffer.byteLength(value, "utf8") > maximumBytes || /\p{Cc}/u.test(value)) return undefined;

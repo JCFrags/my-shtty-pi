@@ -420,26 +420,26 @@ test("runtime reconciles authoritative branches through navigation, restart, ens
     assert.equal(runtime.current.step, "B-T1  B task");
     assert.equal(state.rejected, 0);
 
-    state.activeBranch = "C";
+    // Command refocus and ordinary leaf advancement must not masquerade as
+    // tree navigation, even when the context's current leaf has advanced.
+    state.activeBranch = "B";
     await runtime.ensureForContext(sessionC);
-    assert.equal(runtime.branchId, "C");
-    assert.deepEqual(runtime.current, {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(runtime.current, {});
+    assert.equal(runtime.branchId, "B");
+    assert.equal(runtime.current.step, "B-T1  B task");
     snapshot = await probeProjectGlanceRelay(runtime.descriptorPath);
-    assert.deepEqual(snapshot.current, {});
+    assert.equal(snapshot.current.step, "B-T1  B task");
     assert.deepEqual(snapshot.feed, []);
 
     state.activeBranch = "A";
-    await runtime.ensureForContext(sessionA);
+    await runtime.onSessionTree(sessionA);
     assert.equal(runtime.branchId, "A");
     await waitFor(() => runtime.current.step === "A-T1  A task");
     snapshot = await probeProjectGlanceRelay(runtime.descriptorPath);
     assert.equal(snapshot.current.step, "A-T1  A task");
     assert.deepEqual(snapshot.feed, []);
     assert.ok(state.requests.some(({ request }) => request.branchId === "B"));
-    assert.ok(state.requests.some(({ request }) => request.branchId === "C"));
     assert.ok(state.requests.some(({ request }) => request.branchId === "A"));
+    assert.equal(state.requests.some(({ request }) => request.branchId === "C"), false);
   } finally {
     await runtime.stop();
     await rm(root, { recursive: true, force: true });

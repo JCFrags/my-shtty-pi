@@ -35,6 +35,9 @@ const ERROR_MESSAGES: Record<ProjectGlanceErrorCode, string> = {
   authentication_failed: "Authentication failed.",
   unsupported_request: "The relay does not support that request.",
   server_unavailable: "The relay is unavailable.",
+  stale_action: "The pane state is stale.",
+  replayed_action: "The action was already handled.",
+  invalid_action: "The action is invalid.",
 };
 
 type SocketProbe = "absent" | "stale" | "live" | "unknown";
@@ -45,6 +48,7 @@ export interface ProjectGlanceServerOptions {
   token: string;
   generation: string;
   snapshot: ProjectGlanceSnapshot;
+  onAction?(frame: Extract<ProjectGlanceClientFrame, { type: "action" }>): Promise<number | undefined> | number | undefined;
 }
 
 interface ClientState {
@@ -168,6 +172,8 @@ export class ProjectGlanceServer {
   #server: Server | undefined;
   #clients = new Set<ClientState>();
   #started = false;
+  readonly #onAction: NonNullable<ProjectGlanceServerOptions["onAction"]>;
+  readonly #seenActions = new Set<string>();
 
   constructor(options: ProjectGlanceServerOptions) {
     this.#paths = options.paths;
@@ -175,6 +181,7 @@ export class ProjectGlanceServer {
     this.#token = validateToken(options.token);
     this.#generation = validateGeneration(options.generation);
     this.#snapshot = validateSnapshot(options.snapshot);
+    this.#onAction = options.onAction ?? (() => undefined);
     if (this.#snapshot.sessionKey !== this.#sessionKey) {
       throw new ProjectGlanceValidationError();
     }
@@ -335,6 +342,52 @@ export class ProjectGlanceServer {
         type: "pong",
         requestId: frame.requestId,
       });
+      return;
+    }
+    if (frame.type === "action") {
+      if (
+        frame.sessionKey !== this.#sessionKey ||
+        frame.generation !== this.#generation
+      ) {
+        sendError(client, "authentication_failed", frame.requestId);
+        return;
+      }
+      if (this.#seenActions.has(frame.actionId)) {
+        sendError(client, "replayed_action", frame.requestId);
+        return;
+      }
+      if (
+        frame.baseRevision !== this.#snapshot.revision ||
+        frame.branchId !== this.#snapshot.branchId
+      ) {
+        sendError(client, "stale_action", frame.requestId);
+        return;
+      }
+      if (this.#seenActions.size >= 256) {
+        this.#seenActions.delete(this.#seenActions.values().next().value!);
+      }
+      this.#seenActions.add(frame.actionId);
+      void Promise.resolve(this.#onAction(frame))
+        .then((revision) => {
+          if (client.closed) return;
+          if (revision === undefined) {
+            sendError(client, "invalid_action", frame.requestId);
+            return;
+          }
+          sendFrame(client, {
+            version: PROJECT_GLANCE_PROTOCOL_VERSION,
+            type: "action_result",
+            requestId: frame.requestId,
+            actionId: frame.actionId,
+            accepted: true,
+            revision,
+          });
+        })
+        .catch(() => {
+          if (!client.closed) {
+            sendError(client, "server_unavailable", frame.requestId);
+          }
+        });
       return;
     }
     if (frame.type === "snapshot_request") {

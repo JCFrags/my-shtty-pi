@@ -15,6 +15,8 @@ import {
   type ProjectGlanceCurrent,
   type ProjectGlanceFeedItem,
   type ProjectGlanceSnapshot,
+  type ProjectGlanceUiState,
+  PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX,
 } from "../protocol/model.js";
 import { validateSnapshot } from "../protocol/validation.js";
 import {
@@ -48,6 +50,40 @@ export function createLiveSnapshot(
 }
 
 type ProjectGlanceSessionContext = Pick<ExtensionContext, "sessionManager">;
+const UI_STATE_TYPE = `${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`;
+function uiStateFromBranch(
+  branch: readonly unknown[],
+  feed: readonly ProjectGlanceFeedItem[],
+): ProjectGlanceUiState {
+  const visibleIds = new Set(feed.map((item) => item.id));
+  const dismissedIds = new Set<string>();
+  const readIds = new Set<string>();
+
+  for (const value of branch) {
+    const entry = value && typeof value === "object"
+      ? value as Record<string, unknown>
+      : undefined;
+    const data = entry?.data && typeof entry.data === "object"
+      ? entry.data as Record<string, unknown>
+      : undefined;
+    if (
+      entry?.type !== "custom" ||
+      entry.customType !== UI_STATE_TYPE ||
+      data?.version !== 1 ||
+      typeof data.itemId !== "string" ||
+      !visibleIds.has(data.itemId)
+    ) {
+      continue;
+    }
+    if (data.action === "dismiss") dismissedIds.add(data.itemId);
+    if (data.action === "mark_read") readIds.add(data.itemId);
+  }
+
+  return {
+    dismissedIds: [...dismissedIds],
+    readIds: [...readIds],
+  };
+}
 
 function boundedSnapshot(
   sessionKey: string,
@@ -55,6 +91,9 @@ function boundedSnapshot(
   generatedAt: string,
   current: ProjectGlanceCurrent,
   feed: readonly ProjectGlanceFeedItem[],
+  branchId: string,
+  uiState: ProjectGlanceUiState,
+  focusSerial: number,
 ): ProjectGlanceSnapshot | undefined {
   const candidates = boundRecentFeed(feed);
   for (let removed = 0; removed <= candidates.length; removed += 1) {
@@ -64,8 +103,11 @@ function boundedSnapshot(
         sessionKey,
         revision,
         generatedAt,
+        branchId,
         current: { ...current },
         feed: candidates.slice(removed).map((item) => ({ ...item })),
+        uiState,
+        ...(focusSerial > 0 ? { focusSerial } : {}),
       });
     } catch {
       // Remove the oldest useful item until the correlated wire budget fits.
@@ -83,6 +125,7 @@ export class ProjectGlanceRelayRuntime {
   #revision = 1;
   #current: ProjectGlanceCurrent = {};
   #feed: ProjectGlanceFeedItem[] = [];
+  #uiState: ProjectGlanceUiState = { dismissedIds: [], readIds: [] };
   #branchId = "root";
   #environment: NodeJS.ProcessEnv;
   #eventBus: ProjectGlanceEventBus | undefined;
@@ -90,13 +133,16 @@ export class ProjectGlanceRelayRuntime {
   #lifecycleEpoch = 0;
   #feedSyncTimers = new Set<ReturnType<typeof setImmediate>>();
   #context: ProjectGlanceSessionContext | undefined;
+  readonly #appendUiEntry: ((data: unknown) => void) | undefined;
+  readonly #onUnreadChange: ((count: number) => void) | undefined;
+  #focusSerial = 0;
+  #publishedFocusSerial = 0;
 
-  constructor(
-    environment: NodeJS.ProcessEnv = process.env,
-    eventBus?: ProjectGlanceEventBus,
-  ) {
+  constructor(environment: NodeJS.ProcessEnv = process.env, eventBus?: ProjectGlanceEventBus, appendUiEntry?: (data: unknown) => void, onUnreadChange?: (count: number) => void) {
     this.#environment = environment;
     this.#eventBus = eventBus;
+    this.#appendUiEntry = appendUiEntry;
+    this.#onUnreadChange = onUnreadChange;
   }
 
   get sessionKey(): string | undefined {
@@ -130,7 +176,8 @@ export class ProjectGlanceRelayRuntime {
     return this.#enqueue(async () => {
       this.#context = ctx;
       if (this.#sessionKey === sessionKey && this.#server?.started) {
-        if (this.#branchId !== branchId) await this.#transitionBranch(branchId);
+        // Leaf IDs advance on every ordinary append. Only session_tree is a
+        // branch transition; command reconciliation must not reset state.
         await this.#syncFeedFromContext(ctx);
         return;
       }
@@ -160,7 +207,38 @@ export class ProjectGlanceRelayRuntime {
       sessionKey: descriptor.sessionKey,
       token: descriptor.token,
       generation: descriptor.generation,
-      snapshot: createLiveSnapshot(descriptor.sessionKey, now),
+      snapshot: { ...createLiveSnapshot(descriptor.sessionKey, now), branchId },
+      onAction: async (frame) => {
+        if (!this.#context || frame.branchId !== this.#branchId || frame.baseRevision !== this.#revision) return undefined;
+        if (frame.action.type === "focus") {
+          if (!this.#appendUiEntry) return undefined;
+          for (const item of this.#feed) {
+            this.#appendUiEntry({
+              version: 1,
+              actionId: frame.actionId,
+              action: "mark_read",
+              itemId: item.id,
+            });
+          }
+          await this.#syncFeedFromContext(this.#context);
+          return this.#revision;
+        }
+        if (
+          !this.#appendUiEntry ||
+          !frame.action.itemId ||
+          !this.#feed.some((item) => item.id === frame.action.itemId)
+        ) {
+          return undefined;
+        }
+        this.#appendUiEntry({
+          version: 1,
+          actionId: frame.actionId,
+          action: frame.action.type,
+          itemId: frame.action.itemId,
+        });
+        await this.#syncFeedFromContext(this.#context);
+        return this.#revision;
+      },
     });
     try {
       await server.start();
@@ -181,6 +259,9 @@ export class ProjectGlanceRelayRuntime {
     this.#revision = 1;
     this.#current = {};
     this.#feed = [];
+    this.#uiState = { dismissedIds: [], readIds: [] };
+    this.#focusSerial = 0;
+    this.#publishedFocusSerial = 0;
     this.#branchId = branchId;
     if (this.#eventBus) {
       this.#controller = new ProjectGlanceCurrentController({
@@ -213,6 +294,11 @@ export class ProjectGlanceRelayRuntime {
 
   refreshCurrent(): void {
     this.#controller?.refresh();
+  }
+
+  notifyPaneFocused(): void {
+    this.#focusSerial += 1;
+    this.#publishCurrent(this.#current, this.#feed);
   }
 
   /** Rebuild the bounded feed from the supplied active session branch. */
@@ -262,12 +348,11 @@ export class ProjectGlanceRelayRuntime {
     if (this.#branchId === branchId) return;
     this.#lifecycleEpoch += 1;
     this.#branchId = branchId;
-    this.#feed = [];
-    if (this.#controller) {
-      this.#controller.onSessionTree(branchId);
-    } else {
-      this.#publishCurrent({}, []);
-    }
+    this.#controller?.onSessionTree(branchId);
+    // Publish the empty destination before rebuilding it. Do not mutate the
+    // accepted feed first: publication comparison must still see the old
+    // branch so an empty destination cannot leave old cards on the relay.
+    this.#publishCurrent({}, []);
   }
 
   async #syncFeedFromContext(ctx: ProjectGlanceSessionContext): Promise<void> {
@@ -284,7 +369,20 @@ export class ProjectGlanceRelayRuntime {
   #publishCurrent(current: ProjectGlanceCurrent, feed: readonly ProjectGlanceFeedItem[] = this.#feed): boolean {
     const server = this.#server;
     if (!server?.started || !this.#sessionKey) return false;
-    if (JSON.stringify(current) === JSON.stringify(this.#current) && compareFeedItems(feed, this.#feed)) return true;
+    let nextUiState: ProjectGlanceUiState;
+    try {
+      nextUiState = this.#context
+        ? uiStateFromBranch(this.#context.sessionManager.getBranch(), feed)
+        : { dismissedIds: [], readIds: [] };
+    } catch {
+      nextUiState = { dismissedIds: [], readIds: [] };
+    }
+    const unchanged =
+      JSON.stringify(current) === JSON.stringify(this.#current) &&
+      compareFeedItems(feed, this.#feed) &&
+      JSON.stringify(nextUiState) === JSON.stringify(this.#uiState) &&
+      this.#focusSerial === this.#publishedFocusSerial;
+    if (unchanged) return true;
     const nextRevision = this.#revision + 1;
     const next = boundedSnapshot(
       this.#sessionKey,
@@ -292,6 +390,9 @@ export class ProjectGlanceRelayRuntime {
       new Date().toISOString(),
       current,
       feed,
+      this.#branchId,
+      nextUiState,
+      this.#focusSerial,
     );
     if (!next) return false;
     try {
@@ -302,6 +403,14 @@ export class ProjectGlanceRelayRuntime {
     this.#revision = nextRevision;
     this.#current = { ...current };
     this.#feed = next.feed.map((item) => ({ ...item }));
+    this.#uiState = {
+      dismissedIds: [...(next.uiState?.dismissedIds ?? [])],
+      readIds: [...(next.uiState?.readIds ?? [])],
+    };
+    this.#publishedFocusSerial = this.#focusSerial;
+    const dismissed = new Set(this.#uiState.dismissedIds);
+    const read = new Set(this.#uiState.readIds);
+    this.#onUnreadChange?.(this.#feed.filter((item) => !dismissed.has(item.id) && !read.has(item.id)).length);
     return true;
   }
 
@@ -322,6 +431,9 @@ export class ProjectGlanceRelayRuntime {
     this.#revision = 1;
     this.#current = {};
     this.#feed = [];
+    this.#uiState = { dismissedIds: [], readIds: [] };
+    this.#focusSerial = 0;
+    this.#publishedFocusSerial = 0;
     this.#branchId = "root";
     if (!preserveContext) this.#context = undefined;
   }

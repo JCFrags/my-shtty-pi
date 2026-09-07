@@ -25,6 +25,10 @@ export class ProjectGlancePaneModel {
   #state: ProjectGlancePaneState = "connecting";
   #revision = 0;
   #awaitingGenerationSnapshot = false;
+  #collapsed = new Set<string>();
+  #selectedId: string | undefined;
+  #focusSerial = 0;
+  #focusRequested = false;
 
   constructor(expectedSessionKey?: string, expectedGeneration?: string) {
     this.#expectedSessionKey =
@@ -59,6 +63,50 @@ export class ProjectGlancePaneModel {
     };
   }
 
+  get visibleFeed(): ProjectGlanceSnapshot["feed"] {
+    if (!this.#snapshot) return [];
+    const dismissed = new Set(this.#snapshot.uiState?.dismissedIds ?? []);
+    return this.#snapshot.feed.filter((item) => !dismissed.has(item.id));
+  }
+
+  get unreadCount(): number {
+    const read = new Set(this.#snapshot?.uiState?.readIds ?? []);
+    return this.visibleFeed.filter((item) => !read.has(item.id)).length;
+  }
+
+  get selectedId(): string | undefined {
+    return this.#selectedId;
+  }
+
+  isExpanded(id: string): boolean {
+    return !this.#collapsed.has(id);
+  }
+
+  toggleExpanded(id: string): void {
+    if (this.#collapsed.has(id)) this.#collapsed.delete(id);
+    else this.#collapsed.add(id);
+  }
+
+  consumeFocusRequest(): boolean {
+    const value = this.#focusRequested;
+    this.#focusRequested = false;
+    return value;
+  }
+
+  focusOldestUnread(): string | undefined {
+    const read = new Set(this.#snapshot?.uiState?.readIds ?? []);
+    this.#selectedId = this.visibleFeed.find((item) => !read.has(item.id))?.id;
+    return this.#selectedId;
+  }
+
+  selectRelative(delta: number): void {
+    const feed = this.visibleFeed;
+    if (feed.length === 0) return;
+    const selectedIndex = Math.max(0, feed.findIndex((item) => item.id === this.#selectedId));
+    const nextIndex = Math.max(0, Math.min(feed.length - 1, selectedIndex + delta));
+    this.#selectedId = feed[nextIndex]?.id;
+  }
+
   setExpectedSessionKey(sessionKey: string): void {
     const nextSessionKey = validateSessionKey(sessionKey);
     if (this.#expectedSessionKey === nextSessionKey) return;
@@ -79,6 +127,8 @@ export class ProjectGlancePaneModel {
     this.#expectedSessionKey = nextSessionKey;
     this.#expectedGeneration = nextGeneration;
     this.#revision = 0;
+    this.#focusSerial = 0;
+    this.#focusRequested = false;
     this.#awaitingGenerationSnapshot = true;
     if (sessionChanged) {
       this.#snapshot = undefined;
@@ -123,8 +173,13 @@ export class ProjectGlancePaneModel {
     if (next.revision === this.#revision) return "duplicate";
     this.#snapshot = next;
     this.#revision = next.revision;
+    if ((next.focusSerial ?? 0) > this.#focusSerial) {
+      this.#focusRequested = true;
+      this.#focusSerial = next.focusSerial ?? 0;
+    }
     this.#awaitingGenerationSnapshot = false;
     this.#state = "connected";
+    if (!this.#selectedId || !this.visibleFeed.some((item) => item.id === this.#selectedId)) this.focusOldestUnread();
     return "applied";
   }
 }

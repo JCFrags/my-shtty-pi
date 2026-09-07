@@ -62,6 +62,7 @@ export class ProjectGlanceClient {
   #initialSnapshotPending = false;
   #pendingSnapshotRequestId: string | undefined;
   #snapshotNotificationPending = false;
+  #pendingActions = new Map<string, string>();
 
   constructor(options: ProjectGlanceClientOptions) {
     this.#descriptorPath = options.descriptorPath;
@@ -82,6 +83,36 @@ export class ProjectGlanceClient {
     this.#running = true;
     this.#setState("connecting");
     void this.#connect();
+  }
+
+  sendAction(
+    branchId: string,
+    baseRevision: number,
+    action: { type: "mark_read" | "dismiss" | "focus"; itemId?: string },
+  ): boolean {
+    const socket = this.#socket;
+    const descriptor = this.#descriptor;
+    if (!socket?.writable || !this.#authenticated || !descriptor) return false;
+    const requestId = this.#nextRequestId();
+    const actionId = `action-${randomUUID()}`;
+    this.#pendingActions.set(requestId, actionId);
+    try {
+      socket.write(encodeFrame({
+        version: PROJECT_GLANCE_PROTOCOL_VERSION,
+        type: "action",
+        requestId,
+        actionId,
+        sessionKey: descriptor.sessionKey,
+        generation: descriptor.generation,
+        branchId,
+        baseRevision,
+        action,
+      }));
+      return true;
+    } catch {
+      this.#pendingActions.delete(requestId);
+      return false;
+    }
   }
 
   stop(): void {
@@ -197,6 +228,11 @@ export class ProjectGlanceClient {
   ): void {
     if (!this.#isCurrent(socket, connectionId)) return;
     if (frame.type === "error") {
+      if (frame.requestId && this.#pendingActions.has(frame.requestId)) {
+        this.#pendingActions.delete(frame.requestId);
+        this.#sendSnapshotRequest(socket, connectionId, fail);
+        return;
+      }
       fail("server");
       return;
     }
@@ -267,7 +303,16 @@ export class ProjectGlanceClient {
       this.#sendSnapshotRequest(socket, connectionId, fail);
       return;
     }
-    // The client does not send ping in V1, so no uncorrelated pong is valid.
+    if (frame.type === "action_result") {
+      const actionId = this.#pendingActions.get(frame.requestId);
+      if (!actionId || actionId !== frame.actionId) {
+        fail("frame");
+        return;
+      }
+      this.#pendingActions.delete(frame.requestId);
+      this.#sendSnapshotRequest(socket, connectionId, fail);
+      return;
+    }
     fail("frame");
   }
 
@@ -307,6 +352,7 @@ export class ProjectGlanceClient {
     this.#initialSnapshotPending = false;
     this.#pendingSnapshotRequestId = undefined;
     this.#snapshotNotificationPending = false;
+    this.#pendingActions.clear();
   }
 
   #dropConnection(socket: Socket, connectionId: number): void {

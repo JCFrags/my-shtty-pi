@@ -372,6 +372,7 @@ export async function handleProjectGlanceCommand(
   try {
     const preparation = await prepareProjectGlanceCommand(ctx, runtime);
     const result = await openOrFocusProjectGlancePane(preparation);
+    runtime.notifyPaneFocused();
     ctx.ui.notify(
       result.action === "opened"
         ? "Project Glance opened."
