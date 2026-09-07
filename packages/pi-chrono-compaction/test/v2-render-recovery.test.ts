@@ -1,3 +1,4 @@
+import { syntheticInProcessHistoryAdapter } from "./synthetic-history-adapter.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -213,7 +214,7 @@ test("extension responses page, repeat deterministically, and recover exact over
       appendEntry() {},
       sendMessage() {},
     };
-    extension(pi as unknown as ExtensionAPI);
+    extension(pi as unknown as ExtensionAPI, { historyTransport: syntheticInProcessHistoryAdapter() });
     const context = {
       hasUI: false,
       model: undefined,

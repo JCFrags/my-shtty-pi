@@ -1,3 +1,4 @@
+import { installSyntheticHistoryExtension } from "./synthetic-history-adapter.js";
 import { appendFile, mkdtemp, rename, rm, truncate, writeFile } from "node:fs/promises";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import extension, { historySearchIndexCacheStatus, SEARCH_INDEX_SOURCE_MAX_BYTES } from "../src/pi-extension.js";
+import { historySearchIndexCacheStatus, SEARCH_INDEX_SOURCE_MAX_BYTES } from "../src/pi-extension.js";
 import { parseBranchEntries, readBoundedSessionJsonl } from "../src/jsonl.js";
 import { buildLocalSearchIndex, MAX_SEARCH_RESULT_CACHE_ENTRIES, searchLocalHistory, searchResultCacheStatus } from "../src/search-index.js";
 
@@ -77,7 +78,8 @@ test("ranked search and recall refuse a valid source above conservative index ad
   await writeFile(path, sessionText(payload), { mode: 0o600 });
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
-  extension(pi as unknown as ExtensionAPI);
+  const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory);
+  t.after(shutdown);
   const context = { hasUI: false, model: undefined, thinkingLevel: "medium", sessionManager: { getSessionFile: () => path, getEntries: () => [], getBranch: () => [] }, getContextUsage: () => undefined, isIdle: () => true, abort() {}, compact() {}, ui: { notify() {} }, modelRegistry: {} };
   const search = tools.get("history_search"), recall = tools.get("history_recall");
   assert.ok(search && recall);
@@ -93,13 +95,21 @@ test("ranked search and recall refuse a valid source above conservative index ad
   assert.equal(after.pendingBytes, 0);
 });
 
-test("indexed search admission accounts for builds, live indexes, query results, and retained references", async (t) => {
+test("isolated search admission accounts for child work, query results, and retained feedback without Pi indexes", async (t) => {
   const directory = await temporary(t);
   const path = join(directory, "session.jsonl");
   await writeFile(path, sessionText("accounted term ".repeat(8_000)), { mode: 0o600 });
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
-  extension(pi as unknown as ExtensionAPI);
+  let during: ReturnType<typeof historySearchIndexCacheStatus> | undefined;
+  const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory, () => {
+    during = historySearchIndexCacheStatus();
+    assert.ok(during.admission.components.pendingLoad > 0, "child load/build/query envelope reserved before handler");
+    assert.ok(during.admission.components.queryResults > 0, "parent IPC/result envelope reserved before handler");
+    assert.ok(during.admission.components.retainedReferences > 0, "feedback envelope reserved before handler");
+    assert.ok(during.admission.totalBytes <= during.admission.byteLimit);
+  });
+  t.after(shutdown);
   const context = { hasUI: false, model: undefined, thinkingLevel: "medium", sessionManager: { getSessionFile: () => path, getEntries: () => [], getBranch: () => [] }, getContextUsage: () => undefined, isIdle: () => true, abort() {}, compact() {}, ui: { notify() {} }, modelRegistry: {} };
   const search = tools.get("history_search");
   assert.ok(search);
@@ -110,8 +120,11 @@ test("indexed search admission accounts for builds, live indexes, query results,
   assert.equal(after.builds, before.builds + 1);
   assert.equal(after.pendingEntries, 0);
   assert.equal(after.pendingBytes, 0);
-  assert.ok(after.admission.components.liveIndex > 0);
-  assert.ok(after.admission.components.queryResults > 0);
+  assert.ok(during);
+  assert.equal(after.entries, 0);
+  assert.equal(after.bytes, 0);
+  assert.equal(after.admission.components.liveIndex, 0);
+  assert.equal(after.admission.components.queryResults, 0);
   assert.ok(after.admission.components.retainedReferences > 0);
   assert.equal(after.admission.components.pendingLoad, 0);
   assert.equal(after.admission.components.pendingBuild, 0);
@@ -122,16 +135,18 @@ test("indexed search admission accounts for builds, live indexes, query results,
   await writeFile(path, sessionText("replacement generation term ".repeat(8_000)), { mode: 0o600 });
   await search("replacement-search", { query: "term", mode: "ranked" }, undefined, undefined, context);
   const replaced = historySearchIndexCacheStatus();
-  assert.equal(replaced.entries, after.entries, "one current index per session must replace the prior generation");
+  assert.equal(replaced.entries, 0, "neither old nor replacement indexes may remain in Pi");
+  assert.equal(replaced.bytes, 0);
   assert.equal(replaced.builds, after.builds + 1);
   assert.ok(replaced.bytes <= replaced.byteLimit);
 });
 
-test("independent concurrent builds preserve the aggregate retained-index ceiling", async (t) => {
+test("independent concurrent history jobs preserve aggregate admission with no Pi index retention", async (t) => {
   const directory = await temporary(t);
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
-  extension(pi as unknown as ExtensionAPI);
+  const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory);
+  t.after(shutdown);
   const paths = Array.from({ length: 24 }, (_, i) => join(directory, `synthetic-${i}.jsonl`));
   await Promise.all(paths.map((path) => writeFile(path, sessionText("concurrent term"), { mode: 0o600 })));
   const search = tools.get("history_search");
@@ -140,11 +155,14 @@ test("independent concurrent builds preserve the aggregate retained-index ceilin
     hasUI: false, sessionManager: { getSessionFile: () => path },
   })));
   assert.ok(results.some((result) => result.details.code === undefined));
-  for (const result of results) assert.ok(result.details.code === undefined || result.details.code === "history-index-memory-limit");
+  assert.ok(results.some((result) => result.details.code === "history-load-memory-limit"), "concurrent jobs must refuse when the aggregate child envelope is full");
+  for (const result of results) assert.ok(result.details.code === undefined || result.details.code === "history-load-memory-limit");
   const status = historySearchIndexCacheStatus();
   assert.equal(status.pendingEntries, 0);
   assert.equal(status.pendingBytes, 0);
-  assert.ok(status.bytes <= status.byteLimit, `retained ${status.bytes} exceeds ${status.byteLimit}`);
+  assert.equal(status.entries, 0);
+  assert.equal(status.bytes, 0);
+  assert.equal(status.admission.components.liveIndex, 0);
   assert.ok(status.admission.totalBytes <= status.admission.byteLimit);
 });
 
@@ -153,17 +171,16 @@ test("history callers reject growth and replacement after admission without read
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const previousRanked = process.env.PI_CHRONO_RANKED_SEARCH;
   process.env.PI_CHRONO_RANKED_SEARCH = "false";
-  extension({ registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} } as unknown as ExtensionAPI);
-  const originalStat = fs.stat;
+  const admissions: ReturnType<typeof historySearchIndexCacheStatus>[] = [];
+  const shutdown = installSyntheticHistoryExtension({ registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} } as unknown as ExtensionAPI, directory, () => { admissions.push(historySearchIndexCacheStatus()); });
+  t.after(shutdown);
   const originalOpen = fs.open;
-  let target = "", armed = false, reads = 0, statsUntilMutation = 0;
+  let target = "", armed = false, reads = 0;
   let mutate: () => Promise<void> = async () => {};
-  fs.stat = (async (...args: Parameters<typeof fs.stat>) => {
-    const result = await originalStat(...args);
-    if (args[0] === target && armed && --statsUntilMutation === 0) { armed = false; await mutate(); }
-    return result;
-  }) as typeof fs.stat;
   fs.open = async (...args: Parameters<typeof fs.open>) => {
+    // Parent source identity has already been reserved and sent. Mutate at the
+    // actual child open boundary, not an obsolete parent fs.stat call count.
+    if (args[0] === target && armed) { armed = false; await mutate(); }
     const handle = await originalOpen(...args);
     if (args[0] === target) {
       const read = handle.read.bind(handle);
@@ -185,8 +202,7 @@ test("history callers reject growth and replacement after admission without read
             await rename(replacement, target);
           }
         };
-        reads = 0; armed = true; statsUntilMutation = mode === "ranked" ? 3 : 2;
-        const before = historySearchIndexCacheStatus();
+        reads = 0; armed = true; admissions.length = 0;
         const result = await tools.get("history_search")!("race", { query: "term", ...(mode === "ranked" ? { mode } : {}) }, undefined, undefined, {
           sessionManager: { getSessionFile: () => target },
         });
@@ -195,12 +211,18 @@ test("history callers reject growth and replacement after admission without read
         const after = historySearchIndexCacheStatus();
         assert.equal(after.pendingEntries, 0);
         assert.equal(after.pendingBytes, 0);
-        assert.ok(after.admission.totalBytes <= before.admission.totalBytes, "failed work must release admission; cache eviction may reduce it");
-        assert.ok(after.admission.reservations <= before.admission.reservations);
+        assert.equal(admissions.length, 1);
+        const admitted = admissions[0];
+        assert.ok(admitted);
+        assert.ok(admitted.admission.components.pendingLoad > 0);
+        assert.ok(admitted.admission.components.queryResults > 0);
+        assert.equal(after.entries, 0);
+        assert.equal(after.admission.totalBytes, admitted.admission.components.retainedReferences, "failed work releases all child/result space; only pre-reserved bounded feedback remains");
+        assert.equal(after.admission.reservations, admitted.admission.reservations - 1);
       }
     }
   } finally {
-    fs.stat = originalStat; fs.open = originalOpen; syncBuiltinESMExports();
+    fs.open = originalOpen; syncBuiltinESMExports();
     if (previousRanked === undefined) delete process.env.PI_CHRONO_RANKED_SEARCH;
     else process.env.PI_CHRONO_RANKED_SEARCH = previousRanked;
   }

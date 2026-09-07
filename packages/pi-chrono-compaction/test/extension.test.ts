@@ -1,3 +1,4 @@
+import { installSyntheticHistoryExtension } from "./synthetic-history-adapter.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -763,9 +764,98 @@ test("uniform continuation follows unresolved turns across successful compaction
   rmSync(configPath, { force: true });
 });
 
-test("exact history tools reuse an existing ledger but never create one alone",async()=>{const directory=mkdtempSync(join(tmpdir(),"chrono-extension-retrieval-")),sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});const tools=new Map<string,(...args:any[])=>Promise<any>>(),pi={registerTool(tool:{name:string;execute:(...args:any[])=>Promise<any>}){tools.set(tool.name,tool.execute);},registerCommand(){},on(){},appendEntry(){},sendMessage(){}};try{extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath),entries=session.entries,context={hasUI:false,model:undefined,thinkingLevel:"medium",sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>entries,getBranch:()=>entries},getContextUsage:()=>undefined,isIdle:()=>true,abort(){},compact(){},ui:{notify(){}},modelRegistry:{}};const get=tools.get("history_get"),range=tools.get("history_range");assert.ok(get&&range);const first=await get("get-no-ledger",{entryId:"e123"},undefined,undefined,context),firstText=first.content[0].text;assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await range("range-no-ledger",{startEntryId:"e123",endEntryId:"e124"},undefined,undefined,context);assert.equal(existsSync(sourceLedgerPath(sessionPath)),false);await updateSourceLedger(sessionPath);const ledgerText=(await get("get-ledger",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(ledgerText,firstText);writeFileSync(`${sourceLedgerPath(sessionPath)}.lock`,"busy",{mode:0o600});const busyText=(await get("get-busy",{entryId:"e123"},undefined,undefined,context)).content[0].text;assert.equal(busyText,firstText);}finally{rmSync(directory,{recursive:true,force:true});}});
+test("exact history tools reuse an existing ledger but never create one alone", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-extension-retrieval-"));
+  const sessionPath = join(directory, "session.jsonl");
+  writeFileSync(sessionPath, readFileSync(resolve("test/fixtures/session.jsonl")), { mode: 0o600 });
+  const tools = new Map<string, (...args: any[]) => Promise<any>>();
+  const pi = { registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
+  const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory);
+  try {
+    const session = await readSessionJsonl(sessionPath), entries = session.entries;
+    const context = { hasUI: false, model: undefined, thinkingLevel: "medium", sessionManager: { getSessionFile: () => sessionPath, getEntries: () => entries, getBranch: () => entries }, getContextUsage: () => undefined, isIdle: () => true, abort() {}, compact() {}, ui: { notify() {} }, modelRegistry: {} };
+    const get = tools.get("history_get"), range = tools.get("history_range");
+    assert.ok(get && range);
+    const first = await get("get-no-ledger", { entryId: "e123" }, undefined, undefined, context);
+    assert.equal(first.details.code, undefined);
+    const firstText = first.content[0].text;
+    assert.match(firstText, /Exact JSONL record:/);
+    assert.equal(existsSync(sourceLedgerPath(sessionPath)), false);
+    const firstRange = await range("range-no-ledger", { startEntryId: "e123", endEntryId: "e124" }, undefined, undefined, context);
+    assert.equal(firstRange.details.code, undefined);
+    assert.equal(existsSync(sourceLedgerPath(sessionPath)), false);
+    await updateSourceLedger(sessionPath);
+    const ledgerText = (await get("get-ledger", { entryId: "e123" }, undefined, undefined, context)).content[0].text;
+    assert.equal(ledgerText, firstText);
+    const ledgerRange = await range("range-ledger", { startEntryId: "e123", endEntryId: "e124" }, undefined, undefined, context);
+    assert.equal(ledgerRange.content[0].text, firstRange.content[0].text);
+    writeFileSync(`${sourceLedgerPath(sessionPath)}.lock`, "busy", { mode: 0o600 });
+    const busyText = (await get("get-busy", { entryId: "e123" }, undefined, undefined, context)).content[0].text;
+    assert.equal(busyText, firstText);
+  } finally { shutdown(); rmSync(directory, { recursive: true, force: true }); }
+});
 
-test("oversized history refuses whole-file tools before reading and search indexes coalesce within a strict budget",async()=>{const directory=mkdtempSync(join(tmpdir(),"chrono-extension-history-guard-")),sessionPath=join(directory,"session.jsonl"),tools=new Map<string,(...args:any[])=>Promise<any>>(),pi={registerTool(tool:{name:string;execute:(...args:any[])=>Promise<any>}){tools.set(tool.name,tool.execute);},registerCommand(){},on(){},appendEntry(){},sendMessage(){}};try{writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath),context={hasUI:false,model:undefined,thinkingLevel:"medium",sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>session.entries,getBranch:()=>session.entries},getContextUsage:()=>undefined,isIdle:()=>true,abort(){},compact(){},ui:{notify(){}},modelRegistry:{}};const search=tools.get("history_search");assert.ok(search);const before=historySearchIndexCacheStatus();await Promise.all([search("search-a",{query:"revision",mode:"ranked"},undefined,undefined,context),search("search-b",{query:"revision",mode:"ranked"},undefined,undefined,context)]);const coalesced=historySearchIndexCacheStatus();assert.equal(coalesced.builds-before.builds,1);assert.ok(coalesced.coalesced-before.coalesced>=1);await search("search-c",{query:"revision",mode:"ranked"},undefined,undefined,context);const hit=historySearchIndexCacheStatus();assert.ok(hit.hits-coalesced.hits>=1);assert.ok(hit.bytes<=hit.byteLimit);truncateSync(sessionPath,205*1024*1024);const [refused,concurrentRefused]=await Promise.all([search("search-large-a",{query:"revision",mode:"ranked"},undefined,undefined,context),search("search-large-b",{query:"revision",mode:"ranked"},undefined,undefined,context)]);assert.equal(refused.details.code,"legacy-history-size-limit");assert.equal(concurrentRefused.details.code,"legacy-history-size-limit");assert.equal(refused.details.maximumBytes,LEGACY_HISTORY_MAX_BYTES);const get=tools.get("history_get");assert.ok(get);const exact=await get("get-large",{entryId:"e123"},undefined,undefined,context);assert.equal(exact.details.code,"verified-source-ledger-required");}finally{rmSync(directory,{recursive:true,force:true});}});
+test("oversized history refuses before dispatch and concurrent search retains no Pi indexes within admission", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-extension-history-guard-"));
+  const sessionPath = join(directory, "session.jsonl");
+  const tools = new Map<string, (...args: any[]) => Promise<any>>();
+  const pi = { registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
+  let dispatches = 0;
+  const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory, () => {
+    dispatches++;
+    const status = historySearchIndexCacheStatus();
+    assert.ok(status.admission.components.pendingLoad > 0);
+    assert.ok(status.admission.components.queryResults > 0);
+    assert.ok(status.admission.totalBytes <= status.admission.byteLimit);
+    assert.equal(status.entries, 0);
+    assert.equal(status.bytes, 0);
+  });
+  try {
+    writeFileSync(sessionPath, readFileSync(resolve("test/fixtures/session.jsonl")), { mode: 0o600 });
+    const session = await readSessionJsonl(sessionPath);
+    const context = { hasUI: false, model: undefined, thinkingLevel: "medium", sessionManager: { getSessionFile: () => sessionPath, getEntries: () => session.entries, getBranch: () => session.entries }, getContextUsage: () => undefined, isIdle: () => true, abort() {}, compact() {}, ui: { notify() {} }, modelRegistry: {} };
+    const search = tools.get("history_search");
+    assert.ok(search);
+    const before = historySearchIndexCacheStatus();
+    const [first, concurrent] = await Promise.all([
+      search("search-a", { query: "revision", mode: "ranked" }, undefined, undefined, context),
+      search("search-b", { query: "revision", mode: "ranked" }, undefined, undefined, context),
+    ]);
+    assert.equal(first.details.code, undefined);
+    assert.equal(concurrent.details.code, undefined);
+    assert.equal(first.content[0].text, concurrent.content[0].text);
+    const completed = historySearchIndexCacheStatus();
+    assert.equal(completed.builds - before.builds, 2, "synthetic adapter runs each child independently; runtime coalescing is tested separately");
+    assert.equal(completed.entries, 0);
+    assert.equal(completed.bytes, 0);
+    assert.equal(completed.pendingBytes, 0);
+    const repeated = await search("search-c", { query: "revision", mode: "ranked" }, undefined, undefined, context);
+    assert.equal(repeated.details.code, undefined);
+    assert.equal(repeated.content[0].text, first.content[0].text);
+    const after = historySearchIndexCacheStatus();
+    assert.equal(after.builds - completed.builds, 1);
+    assert.equal(after.entries, 0);
+    assert.equal(after.bytes, 0);
+    assert.equal(after.admission.components.liveIndex, 0);
+    assert.equal(after.pendingEntries, 0);
+    assert.equal(after.pendingBytes, 0);
+    assert.ok(after.admission.totalBytes <= after.admission.byteLimit);
+    const beforeRefusal = dispatches;
+    truncateSync(sessionPath, 205 * 1024 * 1024);
+    const [refused, concurrentRefused] = await Promise.all([
+      search("search-large-a", { query: "revision", mode: "ranked" }, undefined, undefined, context),
+      search("search-large-b", { query: "revision", mode: "ranked" }, undefined, undefined, context),
+    ]);
+    assert.equal(refused.details.code, "legacy-history-size-limit");
+    assert.equal(concurrentRefused.details.code, "legacy-history-size-limit");
+    assert.equal(refused.details.maximumBytes, LEGACY_HISTORY_MAX_BYTES);
+    const get = tools.get("history_get");
+    assert.ok(get);
+    const exact = await get("get-large", { entryId: "e123" }, undefined, undefined, context);
+    assert.equal(exact.details.code, "verified-source-ledger-required");
+    assert.equal(dispatches, beforeRefusal, "oversize calls must not dispatch or read source content");
+  } finally { shutdown(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("shadow-on extension output equals shadow-off output and completes after return", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-extension-shadow-"));
