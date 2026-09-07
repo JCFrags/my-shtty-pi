@@ -10,6 +10,6 @@ Historical references to “independent review” in earlier records mean local 
 
 ## Current state
 
-M00, M01, and M02 have project-lead acceptance records in [`reviews/`](./reviews/). M03 is authorized and in progress; see [`M03-runtime-report.md`](./reviews/M03-runtime-report.md) for bounded review findings and validation scope. Live ChronoCompact is the M03 version 2.0.3. M03 has been deployed but not accepted; its draft PR remains unmerged, and M04 is not authorized.
+M00, M01, and M02 have project-lead acceptance records in [`reviews/`](./reviews/). M03 is authorized and in progress; see [`M03-runtime-report.md`](./reviews/M03-runtime-report.md) for bounded review findings and validation scope. Live ChronoCompact is the corrective M03 version 2.0.4 at `ad23f0b71ee473d33aff26d367459e76d208c631`. F001/F002 corrections are submitted for project-lead re-review; M03 remains not accepted and its draft PR remains unmerged. M04 additionally requires separate directing-assistant proposal review and explicit authorization.
 
 Historical review results above remain historical evidence, not the current milestone state.
