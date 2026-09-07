@@ -24,3 +24,31 @@ test("lease release never removes a replacement owner",async()=>{const path=awai
 test("slot publication is atomic and stable malformed artifacts recover conservatively",async()=>{const path=await directory();try{const malformed=join(path,"slot-0.json");await writeFile(malformed,"",{mode:0o600});const recovered=await acquireHostWorkerSlot({...options(path,1),malformedStableMs:0});const recoveredOwner=await readFile(malformed,"utf8");assert.doesNotThrow(()=>JSON.parse(recoveredOwner));await recovered.release();let observing=true;const errors:string[]=[];const observer=(async()=>{while(observing){for(const name of await readdir(path)){if(!name.startsWith("slot-"))continue;try{const value=JSON.parse(await readFile(join(path,name),"utf8"));if(value.schemaVersion!==1||typeof value.nonce!=="string")errors.push("invalid-owner");}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")errors.push("partial-slot");}}await new Promise(resolve=>setTimeout(resolve,0));}})();for(let index=0;index<25;index++){const lease=await acquireHostWorkerSlot({...options(path,1),malformedStableMs:0});await lease.release();}observing=false;await observer;assert.deepEqual(errors,[]);}finally{await rm(path,{recursive:true,force:true});}});
 
 test("scheduler artifacts contain only bounded ownership data and no source paths",async()=>{const path=await directory();try{const lease=await acquireHostWorkerSlot(options(path,1));for(const name of await readdir(path)){const text=await readFile(join(path,name),"utf8");assert.doesNotMatch(text,/session|project|source|\.jsonl|\/home\//i);assert.ok(text.length<1_000);}await lease.release();}finally{await rm(path,{recursive:true,force:true});}});
+
+test("session turns prevent one session from monopolizing equal priority; aged background work beats new replay",async()=>{
+ const path=await directory();const a="a".repeat(64),b="b".repeat(64);
+ try{
+  const held=await acquireHostWorkerSlot({...options(path,1),sessionKey:a});const order:string[]=[];
+  const one=acquireHostWorkerSlot({...options(path,1),sessionKey:a,timeoutMs:15_000}).then(async lease=>{order.push("a");await lease.release();});
+  await waitForTicketCount(path,1);
+  const two=acquireHostWorkerSlot({...options(path,1),sessionKey:b,timeoutMs:15_000}).then(async lease=>{order.push("b");await lease.release();});
+  await waitForTicketCount(path,2);await held.release();await Promise.all([one,two]);assert.deepEqual(order,["b","a"]);
+  const again=await acquireHostWorkerSlot(options(path,1));order.length=0;
+  const aged=acquireHostWorkerSlot({...options(path,1,"low"),timeoutMs:15_000}).then(async lease=>{order.push("aged");await lease.release();});
+  await waitForTicketCount(path,1);await new Promise(resolve=>setTimeout(resolve,5100));
+  const replay=acquireHostWorkerSlot({...options(path,1,"high"),timeoutMs:15_000}).then(async lease=>{order.push("replay");await lease.release();});
+  await waitForTicketCount(path,2);await again.release();await Promise.all([aged,replay]);assert.deepEqual(order,["aged","replay"]);
+ }finally{await rm(path,{recursive:true,force:true});}
+});
+
+test("bounded per-session queue and reused live PID identity refuse or recover without stale occupancy",async()=>{
+ const path=await directory();const controller=new AbortController();const waiting:Promise<unknown>[]=[];
+ try{
+  const held=await acquireHostWorkerSlot(options(path,1));
+  for(let n=0;n<8;n++){const pending=acquireHostWorkerSlot({...options(path,1,"high",controller.signal),timeoutMs:30_000});waiting.push(pending.catch(error=>error));await waitForTicketCount(path,n+1,15_000);}
+  await assert.rejects(acquireHostWorkerSlot(options(path,1)),/scheduler-queue-full/);
+  controller.abort();await Promise.all(waiting);await held.release();
+  await writeFile(join(path,"slot-0.json"),JSON.stringify({schemaVersion:1,pid:process.pid,processStartIdentity:"0",nonce:"d".repeat(32),createdAtMs:Date.now(),priority:"low",jobType:"candidate-store-update"}),{mode:0o600});
+  const recovered=await acquireHostWorkerSlot(options(path,1));await recovered.release();assert.deepEqual(await schedulerArtifactCounts(path),{tickets:0,slots:0});
+ }finally{controller.abort();await Promise.all(waiting);await rm(path,{recursive:true,force:true});}
+});
