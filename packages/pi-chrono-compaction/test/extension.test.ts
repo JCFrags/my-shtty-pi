@@ -14,9 +14,9 @@ import { rollupShadowSidecarPath } from "../src/history-rollup-shadow.js";
 type Hook = (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, context: Record<string, unknown>) => unknown | Promise<unknown>;
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
+  while (!await predicate()) {
     if (Date.now() >= deadline) throw new Error(`Timed out after ${timeoutMs} ms.`);
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
   }
@@ -174,7 +174,14 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
       compaction?: { details?: { incrementalPrecompute?: { state?: string; reason?: string; cachedCandidates?: number; background?: { state?: string } } } };
     }>;
 
-    const warm = await compact(branch as Array<Record<string, unknown>>);
+    // Manifest publication precedes background completion. Wait for the actual
+    // completion state rather than treating file existence as synchronization.
+    let warm = await compact(branch as Array<Record<string, unknown>>);
+    await waitFor(async () => {
+      if (warm.compaction?.details?.incrementalPrecompute?.background?.state === "ready") return true;
+      warm = await compact(branch as Array<Record<string, unknown>>);
+      return warm.compaction?.details?.incrementalPrecompute?.background?.state === "ready";
+    });
     assert.ok(warm.compaction, notifications.join("\n"));
     assert.equal(warm.compaction.details?.incrementalPrecompute?.state, "validated-hit", JSON.stringify(warm.compaction.details?.incrementalPrecompute));
     assert.ok((warm.compaction.details?.incrementalPrecompute?.cachedCandidates ?? 0) > 0);
