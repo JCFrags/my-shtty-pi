@@ -2,7 +2,7 @@ import { lstat } from "node:fs/promises";
 import { MemoryAdmissionController, type MemoryReservation } from "./memory-admission.js";
 import {
   boundedHistoryValue, HISTORY_FEEDBACK_LIMIT, HISTORY_PARENT_RESERVATION_BYTES, HISTORY_WORKER_CAPS, HISTORY_WORKER_STAGES,
-  LEGACY_HISTORY_MAX_BYTES, SEARCH_INDEX_SOURCE_MAX_BYTES, historyRefusal, historySourceAdmission,
+  LEGACY_HISTORY_MAX_BYTES, SEARCH_INDEX_SOURCE_MAX_BYTES, historyRefusal, historySourceAdmission, validHistoryPromotionEvent,
   type HistoryOperation, type HistoryWorkerRequest, type HistoryWorkerResponse, type HistoryWorkerTransport,
 } from "./history-worker-contract.js";
 
@@ -27,13 +27,13 @@ function parseResponse(wire: string): HistoryWorkerResponse {
   let value: unknown;
   try { value = JSON.parse(wire); } catch { return historyRefusal("history-response-invalid"); }
   if (!plain(value)) return historyRefusal("history-response-invalid");
-  if (value.status === "refused" && Object.keys(value).length === 2 && typeof value.code === "string" && /^history-[a-z-]{1,64}$|^legacy-history-size-limit$/.test(value.code)) return value as HistoryWorkerResponse;
+  if (value.promotionEvents !== undefined && (!Array.isArray(value.promotionEvents) || value.promotionEvents.length > 3 || !value.promotionEvents.every(validHistoryPromotionEvent))) return historyRefusal("history-response-invalid");
+  if (value.status === "refused" && Object.keys(value).every((key) => ["status", "code", "promotionEvents"].includes(key)) && typeof value.code === "string" && /^history-[a-z-]{1,64}$|^legacy-history-size-limit$/.test(value.code)) return value as HistoryWorkerResponse;
   if (value.status !== "ok" || Object.keys(value).some((key) => !["status", "text", "details", "feedback", "promotionEvents"].includes(key)) || typeof value.text !== "string" || Buffer.byteLength(value.text) > 50 * 1024 || !plain(value.details)) return historyRefusal("history-response-invalid");
   const allowedDetails = ["entryId", "blockIndex", "startEntryId", "endEntryId", "query", "mode", "generationHash", "hits", "tokenBudget", "returnedTokens", "level", "items", "renderedTokens", "promotedMemories"];
   if (Object.entries(value.details).some(([key, item]) => !allowedDetails.includes(key) || !(typeof item === "string" && item.length <= 4096 || finite(item) || typeof item === "boolean"))) return historyRefusal("history-response-invalid");
   const f = value.feedback;
   if (f !== undefined && (!plain(f) || Object.keys(f).some((key) => !["generationHash", "query", "resultCount", "retrievedTokens", "expandedItems", "resourceKeys", "blockIds"].includes(key)) || typeof f.generationHash !== "string" || f.generationHash.length > 128 || typeof f.query !== "string" || f.query.length > 4096 || !finite(f.resultCount) || !finite(f.retrievedTokens) || f.expandedItems !== undefined && !finite(f.expandedItems) || !boundedStrings(f.resourceKeys) || !boundedStrings(f.blockIds))) return historyRefusal("history-response-invalid");
-  if (value.promotionEvents !== undefined && (!Array.isArray(value.promotionEvents) || value.promotionEvents.length > 3 || value.promotionEvents.some((event: unknown) => !boundedHistoryValue(event) || !plain(event) || event.schemaVersion !== 2 || !["promote", "touch"].includes(event.action) || event.authority !== "ordinary" || typeof event.eventHash !== "string" || !/^[a-f0-9]{20}$/.test(event.eventHash)))) return historyRefusal("history-response-invalid");
   return value as HistoryWorkerResponse;
 }
 
@@ -72,8 +72,9 @@ export function historyWorkerToolResult(response: HistoryWorkerResponse, exact =
     details: { status: "unavailable", code: "verified-source-ledger-required" } as Record<string, unknown>,
   };
   if (response.status === "ok") return { content: [{ type: "text" as const, text: response.text }], details: response.details as Record<string, unknown> };
-  return { content: [{ type: "text" as const, text: `History unavailable: ${response.code}. No unbounded fallback was run.` }], details: {
+  return { content: [{ type: "text" as const, text: `History unavailable: ${response.code}. No unbounded fallback was run.${response.promotionEvents?.length ? ` Mirrored ${response.promotionEvents.length} already committed promotion event(s).` : ""}` }], details: {
     status: "refused", code: response.code,
+    ...(response.promotionEvents?.length ? { promotedMemories: response.promotionEvents.length } : {}),
     ...(response.code === "legacy-history-size-limit" ? { maximumBytes: LEGACY_HISTORY_MAX_BYTES } : {}),
     ...(response.code === "history-index-memory-limit" ? { maximumBytes: SEARCH_INDEX_SOURCE_MAX_BYTES } : {}),
   } as Record<string, unknown> };

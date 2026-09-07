@@ -8,7 +8,7 @@ import { buildCausalMemory } from "./causal-memory.js";
 import { recallHistory, renderRecall } from "./recall.js";
 import {
   boundedHistoryValue, HISTORY_FEEDBACK_LIMIT, HISTORY_WORKER_CAPS, LEGACY_HISTORY_MAX_BYTES,
-  SEARCH_INDEX_SOURCE_MAX_BYTES, historyRefusal, historySourceAdmission,
+  SEARCH_INDEX_SOURCE_MAX_BYTES, historyRefusal, historySourceAdmission, validHistoryPromotionEvent,
   type HistoryWorkerRequest, type HistoryWorkerResponse, type HistoryWorkerSuccess, type HistoryWorkerStage,
 } from "./history-worker-contract.js";
 
@@ -24,16 +24,25 @@ function boundedIds(values: Iterable<string>): string[] {
 }
 
 function encode(response: HistoryWorkerResponse): string {
+  const outputRefusal = () => JSON.stringify({ ...historyRefusal("history-output-limit"),
+    ...(response.promotionEvents?.length ? { promotionEvents: response.promotionEvents } : {}),
+  });
   // Exact retrieval is never silently truncated. Oversize output is a refusal.
-  if (response.status === "ok" && Buffer.byteLength(response.text) > 50 * 1024) return JSON.stringify(historyRefusal("history-output-limit"));
+  if (response.status === "ok" && Buffer.byteLength(response.text) > 50 * 1024) return outputRefusal();
   const wire = JSON.stringify(response);
-  return Buffer.byteLength(wire) <= HISTORY_WORKER_CAPS.responseBytes ? wire : JSON.stringify(historyRefusal("history-output-limit"));
+  return Buffer.byteLength(wire) <= HISTORY_WORKER_CAPS.responseBytes ? wire : outputRefusal();
 }
 
 /** Pure request/response handler for an already OS-bounded, one-shot child.
- * No cache, source mutation, full-index response, or fallback execution. */
+ * No cache, session-source mutation, full-index response, or fallback execution. */
 export async function handleHistoryWorkerRequest(wire: string, progress: (stage: HistoryWorkerStage) => void = () => {}): Promise<string> {
-  const finish = (response: HistoryWorkerResponse) => { progress("respond"); return encode(response); };
+  const promotionEvents: MemoryEvent[] = [];
+  const finish = (response: HistoryWorkerResponse) => {
+    progress("respond");
+    // A later append can refuse after an earlier append committed. Never discard
+    // those receipts: Pi mirrors them even though recall itself is unavailable.
+    return encode(response.status === "refused" && promotionEvents.length > 0 ? { ...response, promotionEvents } : response);
+  };
   try {
     progress("validate");
     if (typeof wire !== "string" || wire.length > HISTORY_WORKER_CAPS.requestBytes || Buffer.byteLength(wire) > HISTORY_WORKER_CAPS.requestBytes) return finish(historyRefusal("history-request-limit"));
@@ -110,18 +119,21 @@ export async function handleHistoryWorkerRequest(wire: string, progress: (stage:
       const turn = getActiveBranch(session, op.promotion.leafId === undefined ? session.inferredLeafId : op.promotion.leafId).length;
       const candidates = searchMemories(memory, op.query, { includeDemoted: true, limit: 3 })
         .filter((candidate) => !candidate.protected && candidate.state !== "superseded");
-      const promotionEvents: MemoryEvent[] = [];
       for (const candidate of candidates) {
         const input = { action: candidate.state === "demoted" ? "promote" as const : "touch" as const,
           memoryId: candidate.memoryId, timestamp: new Date().toISOString(), turn,
           sourceRef: `history-recall:${op.promotion.toolCallId}`, reason: `history_recall matched query ${op.query}` };
         // Ensure each returned event is small before writing. Existing append uses
         // its own cross-process lock; all reread/expansion stays in this child.
-        if (!boundedHistoryValue(createMemoryEvent(memory.events, input))) return finish(historyRefusal("history-promotion-unavailable"));
+        if (!validHistoryPromotionEvent(createMemoryEvent(memory.events, input))) return finish(historyRefusal("history-promotion-unavailable"));
         await checkSidecar();
-        const updated = await appendMemoryEvent(path, input, { maxReadBytes: 256 * 1024 });
+        const updated = await appendMemoryEvent(path, input, {
+          maxReadBytes: 256 * 1024,
+          validateAppendEvent(event) {
+            if (!validHistoryPromotionEvent(event)) throw new Error("history-promotion-unavailable");
+          },
+        });
         const event = updated.events[updated.events.length - 1]!;
-        if (!boundedHistoryValue(event)) return finish(historyRefusal("history-promotion-unavailable"));
         promotionEvents.push(event);
       }
       response = { ...response, details: { ...response.details, promotedMemories: promotionEvents.length }, promotionEvents };
@@ -132,6 +144,6 @@ export async function handleHistoryWorkerRequest(wire: string, progress: (stage:
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     // Do not expose source text, parser excerpts, paths, or child stack traces.
-    return finish(historyRefusal(["history-source-changed", "history-source-too-large", "history-source-unsafe-type", "history-promotion-unavailable"].includes(code) ? code : "history-worker-failed"));
+    return finish(historyRefusal(["history-source-changed", "history-source-too-large", "history-source-unsafe-type", "history-promotion-unavailable", "history-promotion-source-too-large"].includes(code) ? code : "history-worker-failed"));
   }
 }

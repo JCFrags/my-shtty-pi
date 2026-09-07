@@ -696,10 +696,10 @@ function registerHistoryTools(
         kind: "recall", query: params.query, options: { level: params.level, limit: params.limit, tokenBudget: params.tokenBudget },
         ...(path && settings().editableMemoryEnabled ? { promotion: { toolCallId, leafId: ctx.sessionManager.getLeafId?.() } } : {}),
       }, transport, _signal);
-      if (response.status === "ok") {
-        if (response.feedback) updateRetrievalFeedback(retrievalFeedback, ctx, response.feedback);
-        for (const event of response.promotionEvents ?? []) pi.appendEntry("chrono-memory-v2-event", event);
-      }
+      // A refusal can include bounded receipts for earlier committed promotions.
+      // Mirror those once without retrying the failed recall or sidecar append.
+      for (const event of response.promotionEvents ?? []) pi.appendEntry("chrono-memory-v2-event", event);
+      if (response.status === "ok" && response.feedback) updateRetrievalFeedback(retrievalFeedback, ctx, response.feedback);
       return historyWorkerToolResult(response);
     },
   });

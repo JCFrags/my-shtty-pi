@@ -484,7 +484,11 @@ export function listMemories(
     && (!options.authorities || options.authorities.includes(memory.authority)));
 }
 
-export interface MemoryReadOptions { readonly maxReadBytes?: number }
+export interface MemoryReadOptions {
+  readonly maxReadBytes?: number;
+  /** Optional caller output guard, run inside the lock before any write. */
+  readonly validateAppendEvent?: (event: MemoryEvent) => void;
+}
 
 export async function readMemoryEvents(path: string, options: MemoryReadOptions = {}): Promise<MemoryMaterialization> {
   try {
@@ -744,6 +748,7 @@ async function appendMemoryEventInternal(
     const event = authoritativeSource
       ? createMemoryEventInternal(current.events, input, authoritativeSource)
       : createMemoryEvent(current.events, input);
+    options.validateAppendEvent?.(event);
     const nextEvents = [...current.events, event];
     temporary = `${path}.tmp-${process.pid}-${event.eventId}`;
     const serialized = `${nextEvents.map((item) => stableStringify(item)).join("\n")}\n`;

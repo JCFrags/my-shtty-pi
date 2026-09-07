@@ -38,7 +38,7 @@ export interface HistoryWorkerSuccess {
   feedback?: RetrievalObservation;
   promotionEvents?: readonly MemoryEvent[];
 }
-export interface HistoryWorkerRefusal { status: "refused"; code: string }
+export interface HistoryWorkerRefusal { status: "refused"; code: string; promotionEvents?: readonly MemoryEvent[] }
 export type HistoryWorkerResponse = HistoryWorkerSuccess | HistoryWorkerRefusal;
 
 /** Trusted adapter boundary. The runtime MUST enforce a per-child OS memory limit
@@ -93,4 +93,21 @@ export function validateHistoryWorkerRequestWire(wire: unknown): void {
   let value: any;
   try { value = JSON.parse(wire); } catch { throw new Error("history-request-invalid"); }
   if (!boundedHistoryValue(value) || !value || value.version !== 1 || typeof value.path !== "string" || !value.path.startsWith("/") || !value.source || !value.operation || !["get", "range", "legacy-search", "search", "recall"].includes(value.operation.kind) || typeof value.source.deviceId !== "string" || typeof value.source.inodeId !== "string" || !Number.isFinite(value.source.mtimeMs) || !Number.isSafeInteger(value.source.size) || value.source.size < 0) throw new Error("history-request-invalid");
+}
+
+
+/** Commit receipts must fit independently of the recall result so an unavailable
+ * response can still mirror every completed append. Only ordinary touch/promote
+ * records created by the memory store are allowed across this boundary. */
+export function validHistoryPromotionEvent(value: unknown): value is MemoryEvent {
+  if (!boundedHistoryValue(value) || value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  const keys = ["schemaVersion", "eventId", "memoryId", "action", "timestamp", "turn", "previousEventHash", "eventHash", "sourceRef", "scope", "authority", "confidence", "text", "reason", "supersedesMemoryId"];
+  if (Object.keys(event).some((key) => !keys.includes(key)) || event.schemaVersion !== 2 || !["touch", "promote"].includes(event.action as string) || event.authority !== "ordinary") return false;
+  for (const key of ["eventId", "memoryId", "timestamp", "previousEventHash", "eventHash", "sourceRef", "scope"]) if (typeof event[key] !== "string") return false;
+  for (const key of ["text", "reason", "supersedesMemoryId"]) if (event[key] !== undefined && typeof event[key] !== "string") return false;
+  return typeof event.eventHash === "string" && /^[a-f0-9]{20}$/.test(event.eventHash)
+    && Number.isSafeInteger(event.turn) && (event.turn as number) >= 0
+    && typeof event.confidence === "number" && event.confidence >= 0 && event.confidence <= 1
+    && Buffer.byteLength(JSON.stringify(event)) <= 16 * 1024;
 }
