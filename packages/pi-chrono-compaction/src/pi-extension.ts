@@ -614,7 +614,7 @@ async function loadSession(ctx: ExtensionContext, maximumBytes = LEGACY_HISTORY_
     if (before.size > maximumBytes) throw new Error("history-source-too-large");
     const reservation = reserveHistoryLoad(legacyLoadCharge(before.size));
     try {
-      const loaded = await readBoundedSessionJsonl(path, maximumBytes);
+      const loaded = await readBoundedSessionJsonl(path, maximumBytes, { expectedSource: before });
       if (!sameHistorySource(before, loaded.source)) throw new Error("history-source-changed");
       return { session: loaded.session, sessionKey: path, generationKey: `${before.deviceId}:${before.inodeId}:${before.size}:${before.mtimeMs}`, sourceBytes: loaded.source.size, reservation };
     } catch (error) {
@@ -668,6 +668,17 @@ interface SearchIndexCacheEntry {
 const searchIndexes = new Map<string, SearchIndexCacheEntry>();
 const pendingSearchIndexes = new Map<string, Promise<SearchIndexCacheEntry>>();
 let searchIndexCacheBytes = 0;
+// Includes pending builds and evicted entries still pinned by active callers.
+let searchIndexReservedBytes = 0;
+const searchIndexReservations = new Map<MemoryReservation, number>();
+
+function releaseSearchIndexReservation(reservation: MemoryReservation): void {
+  const bytes = searchIndexReservations.get(reservation);
+  if (bytes === undefined) return;
+  searchIndexReservations.delete(reservation);
+  searchIndexReservedBytes -= bytes;
+  reservation.release();
+}
 let searchIndexBuildCount = 0;
 let searchIndexHitCount = 0;
 let searchIndexCoalescedCount = 0;
@@ -707,7 +718,7 @@ function evictSearchIndex(sessionKey: string): void {
   const previous = searchIndexes.get(sessionKey);
   if (!previous) return;
   previous.evicted = true;
-  if (previous.pins === 0) previous.reservation.release();
+  if (previous.pins === 0) releaseSearchIndexReservation(previous.reservation);
   searchIndexCacheBytes -= previous.bytes;
   searchIndexes.delete(sessionKey);
 }
@@ -725,21 +736,23 @@ function acquireSearchIndex(entry: SearchIndexCacheEntry): IndexedHistorySession
       if (released) return;
       released = true;
       entry.pins--;
-      if (entry.evicted && entry.pins === 0) entry.reservation.release();
+      if (entry.evicted && entry.pins === 0) releaseSearchIndexReservation(entry.reservation);
     },
   };
 }
 
 function reserveSearchIndex(sessionKey: string, charge: number): MemoryReservation {
   evictSearchIndex(sessionKey);
-  while (searchIndexCacheBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT && searchIndexes.size > 0) evictSearchIndex(searchIndexes.keys().next().value!);
-  if (searchIndexCacheBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT) throw new Error("history-index-memory-limit");
+  while (searchIndexReservedBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT && searchIndexes.size > 0) evictSearchIndex(searchIndexes.keys().next().value!);
+  if (searchIndexReservedBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT) throw new Error("history-index-memory-limit");
   let reservation = historyMemoryAdmission.reserve({ pendingLoad: charge });
   while (!reservation && searchIndexes.size > 0) {
     evictSearchIndex(searchIndexes.keys().next().value!);
     reservation = historyMemoryAdmission.reserve({ pendingLoad: charge });
   }
   if (!reservation) throw new Error("history-index-memory-limit");
+  searchIndexReservedBytes += charge;
+  searchIndexReservations.set(reservation, charge);
   return reservation;
 }
 
@@ -780,7 +793,7 @@ async function indexedSession(ctx: ExtensionContext): Promise<IndexedHistorySess
     try {
       let session: ParsedSession;
       if (path && before) {
-        const loaded = await readBoundedSessionJsonl(path, SEARCH_INDEX_SOURCE_MAX_BYTES);
+        const loaded = await readBoundedSessionJsonl(path, SEARCH_INDEX_SOURCE_MAX_BYTES, { expectedSource: before });
         if (!sameHistorySource(before, loaded.source)) throw new Error("history-source-changed");
         session = loaded.session;
       } else {
@@ -796,7 +809,7 @@ async function indexedSession(ctx: ExtensionContext): Promise<IndexedHistorySess
       searchIndexCacheBytes += components.total;
       return entry;
     } catch (error) {
-      reservation.release();
+      releaseSearchIndexReservation(reservation);
       throw error;
     }
   })();

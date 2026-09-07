@@ -4,7 +4,7 @@
 
 - Branch: `work/chrono-v3-m03-runtime`
 - Base and M02 merge commit: `ea977dbb09ccea5265a435ce831303282622f97a`
-- Pull request: pending draft into `rebuild/chrono-memory-v3`
+- Pull request: #35, draft into `rebuild/chrono-memory-v3`
 - Current release candidate: ChronoCompact `2.0.3`
 
 M03 is in progress. This report records each independently gated runtime slice; it does not claim milestone acceptance, authorize a merge to `main`, or start M04.
@@ -17,9 +17,15 @@ The local admission ceiling is 512 MiB. Legacy sources retain the 64 MiB source 
 
 The fixed-heap characterization now has a meaningful pass condition. It first reproduces the old omission, then requires the declared envelope to cover measured retained heap. In both the 512 MiB and 1 GiB lanes, the synthetic workload used `1,093,409` source bytes, retained approximately `24,734,000` bytes, reported the old estimate as `6,626,032` bytes, and reserved `34,989,088` bytes. The observed admission headroom was approximately `1.414`.
 
+## Concurrent admission correction
+
+A pre-activation regression used 24 independent synthetic session sources with simultaneous index builds. It reproduced `201,326,592` retained charge bytes against the `134,217,728` cache ceiling: pending builds were admitted before completed-cache accounting advanced. The correction reserves the aggregate index budget before loading and keeps the reservation through pending work, publication, and eviction while an active caller still holds references. Successful completion or a controlled `history-index-memory-limit` refusal is required. The regression now passes, as do the full normal and fixed-heap suites. No candidate was deployed before this correction.
+
+A fresh read-only review also reproduced growth between the caller's admission stat and the reader's open. Both legacy and indexed callers now pass the admitted identity, size, and modification time to the bounded reader, which compares the opened handle before allocating or reading. A caller-level regression covers growth and same-size replacement in both paths and requires zero content reads and complete pending-reservation cleanup. The full normal and 512/1024 MiB fixed-heap suites passed after correction.
+
 ## Validation before push
 
-- Complete serialized package suite: 333/333.
+- Complete serialized package suite: 335/335.
 - Unified normal suite and deterministic small/medium report: passed.
 - Fixed-heap 512 MiB and 1 GiB lanes: passed; OOM remains non-passing.
 - Package typecheck, generated distribution, and deployment manifest: passed.
@@ -27,9 +33,9 @@ The fixed-heap characterization now has a meaningful pass condition. It first re
 
 Candidate repository identities before the source commit is created:
 
-- Source tree: `7614d90623745360f9afb30246ef074542fc617a56f71b2ee5fc3f500c28b67f` (67 files).
-- Dist tree: `a9f2881623af9e2726759e3aed51463913a452104e2569941113208cde2ea751` (66 files).
-- Entrypoint: `fcd0209d5b76beab91ca42585319f15968861fa81ff15a4a7e15bb1ae858f15e`.
+- Source tree: `1f2a2fed0269e9f5ab85975d3dfd9cdb53a01ad3dc58c210bed3664d01899295` (67 files).
+- Dist tree: `cc41a9cf5686a82cf5675e7d11829d27930615c14256072adcdc642322aeb108` (66 files).
+- Entrypoint: `01ab9e4c562ff84f3dacce0fa513b5be85ca1c51b6b38b604118d7336bf43986`.
 - Package metadata: `b5367bea62b54492669157e7ee7fb74c99f450cf3c7478ad713425e80c236a7a`.
 - Lock metadata: `3edda0714e750097ae37d9185fddb6fd1c87e48beeffd3b951f0760575949e73`.
 

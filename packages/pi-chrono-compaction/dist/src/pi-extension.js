@@ -524,7 +524,7 @@ async function loadSession(ctx, maximumBytes = LEGACY_HISTORY_MAX_BYTES) {
             throw new Error("history-source-too-large");
         const reservation = reserveHistoryLoad(legacyLoadCharge(before.size));
         try {
-            const loaded = await readBoundedSessionJsonl(path, maximumBytes);
+            const loaded = await readBoundedSessionJsonl(path, maximumBytes, { expectedSource: before });
             if (!sameHistorySource(before, loaded.source))
                 throw new Error("history-source-changed");
             return { session: loaded.session, sessionKey: path, generationKey: `${before.deviceId}:${before.inodeId}:${before.size}:${before.mtimeMs}`, sourceBytes: loaded.source.size, reservation };
@@ -570,6 +570,17 @@ function toolText(text, details = {}) {
 const searchIndexes = new Map();
 const pendingSearchIndexes = new Map();
 let searchIndexCacheBytes = 0;
+// Includes pending builds and evicted entries still pinned by active callers.
+let searchIndexReservedBytes = 0;
+const searchIndexReservations = new Map();
+function releaseSearchIndexReservation(reservation) {
+    const bytes = searchIndexReservations.get(reservation);
+    if (bytes === undefined)
+        return;
+    searchIndexReservations.delete(reservation);
+    searchIndexReservedBytes -= bytes;
+    reservation.release();
+}
 let searchIndexBuildCount = 0;
 let searchIndexHitCount = 0;
 let searchIndexCoalescedCount = 0;
@@ -605,7 +616,7 @@ function evictSearchIndex(sessionKey) {
         return;
     previous.evicted = true;
     if (previous.pins === 0)
-        previous.reservation.release();
+        releaseSearchIndexReservation(previous.reservation);
     searchIndexCacheBytes -= previous.bytes;
     searchIndexes.delete(sessionKey);
 }
@@ -624,15 +635,15 @@ function acquireSearchIndex(entry) {
             released = true;
             entry.pins--;
             if (entry.evicted && entry.pins === 0)
-                entry.reservation.release();
+                releaseSearchIndexReservation(entry.reservation);
         },
     };
 }
 function reserveSearchIndex(sessionKey, charge) {
     evictSearchIndex(sessionKey);
-    while (searchIndexCacheBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT && searchIndexes.size > 0)
+    while (searchIndexReservedBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT && searchIndexes.size > 0)
         evictSearchIndex(searchIndexes.keys().next().value);
-    if (searchIndexCacheBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT)
+    if (searchIndexReservedBytes + charge > SEARCH_INDEX_CACHE_BYTE_LIMIT)
         throw new Error("history-index-memory-limit");
     let reservation = historyMemoryAdmission.reserve({ pendingLoad: charge });
     while (!reservation && searchIndexes.size > 0) {
@@ -641,6 +652,8 @@ function reserveSearchIndex(sessionKey, charge) {
     }
     if (!reservation)
         throw new Error("history-index-memory-limit");
+    searchIndexReservedBytes += charge;
+    searchIndexReservations.set(reservation, charge);
     return reservation;
 }
 async function indexedSession(ctx) {
@@ -685,7 +698,7 @@ async function indexedSession(ctx) {
         try {
             let session;
             if (path && before) {
-                const loaded = await readBoundedSessionJsonl(path, SEARCH_INDEX_SOURCE_MAX_BYTES);
+                const loaded = await readBoundedSessionJsonl(path, SEARCH_INDEX_SOURCE_MAX_BYTES, { expectedSource: before });
                 if (!sameHistorySource(before, loaded.source))
                     throw new Error("history-source-changed");
                 session = loaded.session;
@@ -706,7 +719,7 @@ async function indexedSession(ctx) {
             return entry;
         }
         catch (error) {
-            reservation.release();
+            releaseSearchIndexReservation(reservation);
             throw error;
         }
     })();

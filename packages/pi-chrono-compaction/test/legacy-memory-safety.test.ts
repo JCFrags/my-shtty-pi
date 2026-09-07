@@ -1,4 +1,6 @@
 import { appendFile, mkdtemp, rename, rm, truncate, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -123,6 +125,85 @@ test("indexed search admission accounts for builds, live indexes, query results,
   assert.equal(replaced.entries, after.entries, "one current index per session must replace the prior generation");
   assert.equal(replaced.builds, after.builds + 1);
   assert.ok(replaced.bytes <= replaced.byteLimit);
+});
+
+test("independent concurrent builds preserve the aggregate retained-index ceiling", async (t) => {
+  const directory = await temporary(t);
+  const tools = new Map<string, (...args: any[]) => Promise<any>>();
+  const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
+  extension(pi as unknown as ExtensionAPI);
+  const paths = Array.from({ length: 24 }, (_, i) => join(directory, `synthetic-${i}.jsonl`));
+  await Promise.all(paths.map((path) => writeFile(path, sessionText("concurrent term"), { mode: 0o600 })));
+  const search = tools.get("history_search");
+  assert.ok(search);
+  const results = await Promise.all(paths.map((path) => search("concurrent", { query: "term", mode: "ranked" }, undefined, undefined, {
+    hasUI: false, sessionManager: { getSessionFile: () => path },
+  })));
+  assert.ok(results.some((result) => result.details.code === undefined));
+  for (const result of results) assert.ok(result.details.code === undefined || result.details.code === "history-index-memory-limit");
+  const status = historySearchIndexCacheStatus();
+  assert.equal(status.pendingEntries, 0);
+  assert.equal(status.pendingBytes, 0);
+  assert.ok(status.bytes <= status.byteLimit, `retained ${status.bytes} exceeds ${status.byteLimit}`);
+  assert.ok(status.admission.totalBytes <= status.admission.byteLimit);
+});
+
+test("history callers reject growth and replacement after admission without reading content", async (t) => {
+  const directory = await temporary(t);
+  const tools = new Map<string, (...args: any[]) => Promise<any>>();
+  const previousRanked = process.env.PI_CHRONO_RANKED_SEARCH;
+  process.env.PI_CHRONO_RANKED_SEARCH = "false";
+  extension({ registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} } as unknown as ExtensionAPI);
+  const originalStat = fs.stat;
+  const originalOpen = fs.open;
+  let target = "", armed = false, reads = 0, statsUntilMutation = 0;
+  let mutate: () => Promise<void> = async () => {};
+  fs.stat = (async (...args: Parameters<typeof fs.stat>) => {
+    const result = await originalStat(...args);
+    if (args[0] === target && armed && --statsUntilMutation === 0) { armed = false; await mutate(); }
+    return result;
+  }) as typeof fs.stat;
+  fs.open = async (...args: Parameters<typeof fs.open>) => {
+    const handle = await originalOpen(...args);
+    if (args[0] === target) {
+      const read = handle.read.bind(handle);
+      handle.read = ((...params: any[]) => { reads++; return (read as any)(...params); }) as typeof handle.read;
+    }
+    return handle;
+  };
+  syncBuiltinESMExports();
+  try {
+    for (const mode of ["legacy", "ranked"] as const) {
+      for (const mutation of ["growth", "replacement"] as const) {
+        target = join(directory, `${mode}-${mutation}.jsonl`);
+        await writeFile(target, sessionText("small term"));
+        mutate = async () => {
+          if (mutation === "growth") await writeFile(target, sessionText("x".repeat(3 * 1024 * 1024)));
+          else {
+            const replacement = target + ".replacement";
+            await writeFile(replacement, sessionText("small term"));
+            await rename(replacement, target);
+          }
+        };
+        reads = 0; armed = true; statsUntilMutation = mode === "ranked" ? 3 : 2;
+        const before = historySearchIndexCacheStatus();
+        const result = await tools.get("history_search")!("race", { query: "term", ...(mode === "ranked" ? { mode } : {}) }, undefined, undefined, {
+          sessionManager: { getSessionFile: () => target },
+        });
+        assert.equal(reads, 0, `${mode}/${mutation} must reject before reading`);
+        assert.equal(result.details.code, "history-source-changed");
+        const after = historySearchIndexCacheStatus();
+        assert.equal(after.pendingEntries, 0);
+        assert.equal(after.pendingBytes, 0);
+        assert.ok(after.admission.totalBytes <= before.admission.totalBytes, "failed work must release admission; cache eviction may reduce it");
+        assert.ok(after.admission.reservations <= before.admission.reservations);
+      }
+    }
+  } finally {
+    fs.stat = originalStat; fs.open = originalOpen; syncBuiltinESMExports();
+    if (previousRanked === undefined) delete process.env.PI_CHRONO_RANKED_SEARCH;
+    else process.env.PI_CHRONO_RANKED_SEARCH = previousRanked;
+  }
 });
 
 test("per-index query results use a bounded LRU cache", () => {
