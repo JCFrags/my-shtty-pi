@@ -23,7 +23,9 @@ A pre-activation regression used 24 independent synthetic session sources with s
 
 A fresh read-only review also reproduced growth between the caller's admission stat and the reader's open. Both legacy and indexed callers now pass the admitted identity, size, and modification time to the bounded reader, which compares the opened handle before allocating or reading. A caller-level regression covers growth and same-size replacement in both paths and requires zero content reads and complete pending-reservation cleanup. The full normal and 512/1024 MiB fixed-heap suites passed after correction.
 
-## Validation before push
+## Historical memory-slice validation (before later integration)
+
+The results and hashes below describe the memory slice at `8a052cb44323b312ee0d4f4032ed19080c042f2b`, not the subsequent history/runtime integration. They must not be used as deployment evidence for a later head.
 
 - Complete serialized package suite: 335/335.
 - Unified normal suite and deterministic small/medium report: passed.
@@ -40,6 +42,18 @@ Candidate repository identities before the source commit is created:
 - Lock metadata: `3edda0714e750097ae37d9185fddb6fd1c87e48beeffd3b951f0760575949e73`.
 
 The exact pushed source commit, CI runs, backup identity, deployed hashes, activation method, and fresh-process canaries will be added only after those gates complete. Live ChronoCompact remains `2.0.2` from `0c7173ff03ed010747ab9b5d7be6f8f84d423819` until then. The verified M02 rollback remains ready.
+
+## Local history integration (not deployed)
+
+Local integration head `18714b50c8c8eddb5d2d51ea61627db3fd5b8113` removes whole-session history parsing and complete indexes from Pi. Persisted history operations dispatch bounded scalar requests to a child; verified source-ledger exact reads retain their direct bounded path. Unpersisted sources refuse with `history-source-unpersisted` before graph access or serialization.
+
+The history contract declares a 128 MiB child memory limit, 80 MiB heap, 64 KiB request, 256 KiB response, 50 KiB returned text, and 30-second waiter deadline. These are contract limits awaiting integrated OS-runtime verification, not a completed containment claim. Pi reserves the child and result envelopes before dispatch and retains only bounded feedback. Existing persisted semantic tests use an explicitly named in-process synthetic adapter; they prove behavior, not OS isolation.
+
+Independent read-only review found a handled partial-promotion failure: the first sidecar update committed, then a later size refusal omitted its receipt. Correction `5484459946969c28477a52d75695c6e9c3335b85` (integrated as `18714b5`) returns up to three strictly validated commit receipts on handled refusal. Pi mirrors them once without retry. A pre-write guard under the existing lock prevents an unreturnable receipt from committing. The exact 261,494-byte sidecar regression and two validation regressions passed (3/3); focused independent confirmation reproduced no remaining blocker. The earlier commit-to-IPC crash window remains a documented limitation; this correction does not add an M04 transaction framework.
+
+The independent-client harness passed 36 replay jobs: six forked client processes, three repetitions, and slot configurations one and two. This run used the earlier pre-kernel distribution and validates the harness only. Integrated kernel-runtime stress, equality, complete package tests, fixed-heap tests, build identities, and deployment canaries remain required.
+
+The worktree/index-only privacy scan passed with zero findings. The complete all-ref publication gate remains blocked by an unrelated historical privacy finding. No bypass, history rewrite, further push, or deployment is authorized by a local-only pass. Live version remains 2.0.2; no M03 fix is yet usable through the live package.
 
 ## Remaining M03 runtime work
 
