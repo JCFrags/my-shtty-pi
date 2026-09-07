@@ -181,7 +181,7 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
       if (warm.compaction?.details?.incrementalPrecompute?.background?.state === "ready") return true;
       warm = await compact(branch as Array<Record<string, unknown>>);
       return warm.compaction?.details?.incrementalPrecompute?.background?.state === "ready";
-    });
+    }, 10_000); // CI contention can exceed 2s; keep the readiness assertion and a finite test-only bound.
     assert.ok(warm.compaction, notifications.join("\n"));
     assert.equal(warm.compaction.details?.incrementalPrecompute?.state, "validated-hit", JSON.stringify(warm.compaction.details?.incrementalPrecompute));
     assert.ok((warm.compaction.details?.incrementalPrecompute?.cachedCandidates ?? 0) > 0);
