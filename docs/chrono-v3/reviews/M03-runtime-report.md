@@ -7,7 +7,7 @@
 - Pull request: #35, draft into `rebuild/chrono-memory-v3`
 - Current release candidate: ChronoCompact `2.0.3`
 
-M03 is in progress. This report records each independently gated runtime slice; it does not claim milestone acceptance, authorize a merge to `main`, or start M04.
+M03 implementation and guarded deployment are delivered for user review. Final evidence CI is tracked separately. The earlier sections are chronological evidence, not current deployment state. This report does not claim user acceptance, authorize a merge, or start M04.
 
 ## 2.0.3 memory-admission slice
 
@@ -104,3 +104,26 @@ visibility, live package, or private session was changed by the remediation.
 GitHub caches and existing clones may retain the old commit; this is not a claim
 of global erasure. The scan process exited, with no tracked child left running.
 Remaining root, CI, and deployment gates still require completion.
+
+
+## Final deployment and acceptance evidence
+
+- Deployed source: `7449c03240dd6b69426fd678cb453c89621d9e4d`, version **2.0.3**.
+- Exact-head push CI `34088763954` and PR CI `34088767240`: **success**. All 370 package tests, both 512/1024 MiB fixed-heap lanes, determinism, typecheck, generated build consistency, publication scanning, frozen-baseline verifier tests, and complete root verification passed.
+- The CI corrections changed only test synchronization and inventory expectations: wait for background completion rather than manifest existence; assert the queue lease bound rather than assuming job coalescing; advance exact source/dist inventory hashes and counts. No runtime limit was relaxed.
+- Source tree: `1c56108207ff15c37a7e995350959db8185364a193d4b42bc72697ab0ed42ef8` (84 files).
+- Dist tree: `c4deb398d4ff5e3201b3bc66490d28a433cf583f35fc880ed44484b30d3c957b` (83 files).
+- New entrypoint: `e6dab767e69f670daf90a215dbad64f07de7849f9f2f32d25f5183237f5746aa`.
+- Previous 2.0.2 entrypoint: `256f9003455b66d40c0445dbf0e7d4a5584785e295513354542927295c7181f2`.
+- Backup identity: `m03-20260907T054318Z-48019e4`. Its name reflects preparation time, not deployed source. Full prior 2.0.2 package/config copies matched; checked rollback remains ready. The candidate checkout is clean and detached at the deployed commit.
+- Four legacy inhibitors were installed without stealing ownership. Two bounded process scans after reservation confirmed no old replay workers before enabling the new pool. Production gate verification passed. Only the ChronoCompact alias and activation pointer changed; persistent configuration and unrelated checkout/package order remained unchanged.
+- Fresh offline Pi loader, doctor/status, and production discovery passed with no private paths or extension errors. Ordinary synthetic compaction used the isolated worker and returned a nonempty summary. Regular fallback remains available.
+- Synthetic source above 64 MiB refused search and recall with `legacy-history-size-limit`; parent survived. Default production contained history search passed and released all dispatch admission.
+- Worker canaries passed three repeated successes, verified append, controlled `worker-internal-error`, child crash, and unexplained SIGKILL as `worker-crashed`. Owner-only diagnostics remained bounded without private text. Controller-confirmed OOM is separately covered by the passing runtime fault suite.
+- Deployed-package soak passed **36 jobs**: six independent clients, three repeats, slot configurations one and two. Replay source-plan hashes were equal, no cross-session leakage occurred, client RSS remained below 512 MiB, and synthetic scheduler residue was zero. Actual cgroup slot and descendant containment evidence comes from the passing runtime suite, not advisory soak samples.
+- Post-canary production status reported zero active workers and queued jobs. Process checks found no remaining Node/test launchers. CPU/RAM checks continued throughout; no unrelated process was stopped.
+- Isolated worker remains **enabled**. I-0001 remains contained by bounded history admission and verified-ledger exact retrieval. I-0002 now produces stable bounded failures while Pi survives.
+
+The direct-Node history smoke initially lacked local peer dependencies; the existing locked dependency tree was prepared in the detached candidate, then the smoke passed. The Pi loader itself had already passed. A smoke assertion initially misread the status flag for blocked legacy admission; the corrected assertion checks the actual gate and passed. Neither issue required a product-code change or scanner bypass.
+
+Remaining limitations are the trusted-Node logical-read boundary, conservative boot/policy recovery, preexisting abrupt commit-to-IPC promotion window, and no real-machine reboot test. Already-running 2.0.2 clients safely lose old worker admission until reloaded; fresh Pi processes use 2.0.3. No preserved private session was inspected or compacted. Code review and milestone acceptance belong to the user. PR #35 remains draft and unmerged; M04 has not started.
