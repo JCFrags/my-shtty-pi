@@ -28,7 +28,7 @@ export function installSyntheticHistoryExtension(pi: ExtensionAPI, directory: st
     (pi.on as any)(name, callback);
   }) as ExtensionAPI["on"];
   process.env.PI_CHRONO_CONFIG_PATH = join(directory, "synthetic-history-config.json");
-  try { extension(wrapped, { historyTransport: syntheticInProcessHistoryAdapter(beforeRun) }); }
+  try { extension(wrapped, { historyTransport: syntheticInProcessHistoryAdapter(beforeRun), schedulerDirectory: join(directory, "runtime") }); }
   finally {
     if (previous === undefined) delete process.env.PI_CHRONO_CONFIG_PATH;
     else process.env.PI_CHRONO_CONFIG_PATH = previous;

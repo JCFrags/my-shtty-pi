@@ -881,7 +881,11 @@ function registerRetentionHintTool(pi: ExtensionAPI): void {
   });
 }
 
-export interface HistoryRuntimeAdapters { readonly historyTransport?: HistoryWorkerTransport }
+export interface HistoryRuntimeAdapters {
+  readonly historyTransport?: HistoryWorkerTransport;
+  /** Explicit isolated namespace for synthetic integration callers only. */
+  readonly schedulerDirectory?: string;
+}
 export default function chronoCompactExtension(pi: ExtensionAPI, adapters: HistoryRuntimeAdapters = {}): void {
   const userConfigPath = defaultUserConfigPath();
   const loadedUserConfig = loadUserConfig(userConfigPath);
@@ -930,7 +934,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       return historyLedger = { sessionPath, ledger };
     } catch { return undefined; }
   };
-  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots }), feedbackAdmission.reserve);
+  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve);
   registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
   registerRetentionHintTool(pi);
 
@@ -1000,7 +1004,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
             const request: CandidateUpdateWorkerRequest = { schemaVersion: 1, jobId: randomUUID(), jobType: "candidate-store-update", sessionPath,
               expectedSource: await workerSourceExpectation(sessionPath), deadlineMs: Date.now() + settings.workerTimeoutSeconds * 1_000,
               niceLevel: settings.workerNiceLevel, config };
-            const worker = await runCompactionWorker(request, { slots: settings.hostWorkerSlots, workerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
+            const worker = await runCompactionWorker(request, { schedulerDirectory: adapters.schedulerDirectory, slots: settings.hostWorkerSlots, workerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
               schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000, signal: controller.signal, priority: "low" });
             if (controller.signal.aborted || generation !== incrementalGeneration) return;
             if (worker.response.status !== "ok" || !worker.response.candidateUpdate) {
@@ -1073,6 +1077,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
             retentionHints: input.retentionHints,
           };
           const execution = await runCompactionWorker(request, {
+            schedulerDirectory: adapters.schedulerDirectory,
             slots: input.settings.hostWorkerSlots,
             workerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
             schedulerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
@@ -1548,7 +1553,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
           candidateStoreEnabled: settings.incrementalPrecomputeEnabled, cacheEnabled: settings.cacheEnabled,
           valueWorkerMode: settings.valueWorker.mode, valueWorkerConfigurationHash: valueWorkerConfigurationHash(settings.valueWorker) };
         replayWorkerStatus = { state: "running", jobId: request.jobId, startedAt: new Date().toISOString() };
-        workerExecution = await runCompactionWorker(request, { slots: settings.hostWorkerSlots,
+        workerExecution = await runCompactionWorker(request, { schedulerDirectory: adapters.schedulerDirectory, slots: settings.hostWorkerSlots,
           workerTimeoutMs: settings.workerTimeoutSeconds * 1_000, schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
           signal: event.signal, priority: "high" });
         replayWorkerStatus = { state: workerExecution.response.status, jobId: request.jobId,
@@ -1691,8 +1696,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
       const settings = resolveExtensionSettings(userConfig);
-      const artifacts = await schedulerArtifactCounts(defaultSchedulerDirectory());
-      const host = await runtimeHostStatus();
+      const artifacts = await schedulerArtifactCounts(adapters.schedulerDirectory ?? defaultSchedulerDirectory());
+      const host = await runtimeHostStatus({ schedulerDirectory: adapters.schedulerDirectory });
       const memory = historySearchIndexCacheStatus();
       ctx.ui.notify([
         `Isolated replay worker: ${settings.isolatedWorkerEnabled ? "enabled" : "disabled"}`,
@@ -1720,8 +1725,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       const sessionPath = ctx.sessionManager.getSessionFile();
       const source = sessionPath ? await historySourceState(sessionPath).then((value) => ({ state: "ready", bytes: value.size, legacyHistory: value.size <= LEGACY_HISTORY_MAX_BYTES ? "allowed" : "refused" })).catch(() => ({ state: "unavailable", bytes: 0, legacyHistory: "refused" })) : { state: "ephemeral", bytes: 0, legacyHistory: "refused; unpersisted source" };
       const ledger = await availableHistoryLedger(ctx);
-      const artifacts = await schedulerArtifactCounts(defaultSchedulerDirectory());
-      const host = await runtimeHostStatus();
+      const artifacts = await schedulerArtifactCounts(adapters.schedulerDirectory ?? defaultSchedulerDirectory());
+      const host = await runtimeHostStatus({ schedulerDirectory: adapters.schedulerDirectory });
       const diagnosticBytes = sessionPath ? await stat(replayWorkerDiagnosticPath(sessionPath)).then((value) => value.size).catch(() => 0) : 0;
       const memory = historySearchIndexCacheStatus();
       ctx.ui.notify([

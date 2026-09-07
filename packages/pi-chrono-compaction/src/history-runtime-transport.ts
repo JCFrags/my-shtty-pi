@@ -8,7 +8,7 @@ const SIDECAR_READ_BUDGET = 4 * 256 * 1024;
 const RUNTIME_REFUSALS = new Set([
   "worker-aborted", "worker-timeout", "worker-resource-limit", "worker-crashed", "worker-internal-error",
   "worker-response-too-large", "worker-protocol-error", "worker-entrypoint-unavailable",
-  "worker-source-limit", "worker-capability-unavailable", "worker-legacy-transition-required",
+  "worker-source-limit", "worker-capability-unavailable", "worker-containment-unavailable", "worker-legacy-transition-required",
   "scheduler-timeout", "scheduler-queue-full", "scheduler-policy-mismatch",
 ]);
 
@@ -48,8 +48,9 @@ export function createHistoryRuntimeTransport(options: { slots?: number | (() =>
         });
         return value;
       } catch (error) {
-        const code = error instanceof WorkerRuntimeError && RUNTIME_REFUSALS.has(error.code)
-          ? `history-${error.code}` : signal?.aborted ? "history-worker-aborted" : "history-worker-failed";
+        const runtimeCode = error instanceof WorkerRuntimeError ? error.code : error instanceof Error ? error.message : undefined;
+        const code = runtimeCode && RUNTIME_REFUSALS.has(runtimeCode)
+          ? `history-${runtimeCode}` : signal?.aborted ? "history-worker-aborted" : "history-worker-failed";
         return JSON.stringify({ status: "refused", code });
       }
     },

@@ -31,6 +31,10 @@ async function boundedJson(path: string, maxBytes = 4096): Promise<unknown> {
 export function runtimeCategory(kind: string): RuntimeCategory { return CATEGORIES.includes(kind as RuntimeCategory) ? kind as RuntimeCategory : "other"; }
 /** Paths/requests/errors are never accepted as stage text. */
 export function runtimeStage(value: unknown): string | undefined {
+  // History sends validated JSON-string frames over IPC, unlike replay objects.
+  if (typeof value === "string" && value.startsWith("{") && Buffer.byteLength(value) <= 4096) {
+    try { value = JSON.parse(value); } catch { return undefined; }
+  }
   const stage = typeof value === "string" ? value : value && typeof value === "object" ? (value as { stage?: unknown }).stage : undefined;
   return typeof stage === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(stage) ? stage : undefined;
 }

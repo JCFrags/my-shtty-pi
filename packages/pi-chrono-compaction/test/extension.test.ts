@@ -278,7 +278,9 @@ test("request-local projection integrates with the context hook and fails closed
   }
 });
 
-test("Pi extension hook returns a validated deterministic replay through the normal test suite", async () => {
+test("Pi extension hook returns a validated deterministic replay through the normal test suite", async (t) => {
+  const runtimeDirectory = mkdtempSync(join(tmpdir(), "chrono-extension-runtime-"));
+  t.after(() => rmSync(runtimeDirectory, { recursive: true, force: true }));
   const hooks = new Map<string, Hook>();
   const toolNames: string[] = [];
   const commandNames: string[] = [];
@@ -303,7 +305,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
       sentMessages.push({ ...message, triggerTurn: options?.triggerTurn });
     },
   };
-  extension(pi as unknown as ExtensionAPI);
+  extension(pi as unknown as ExtensionAPI, { schedulerDirectory: runtimeDirectory });
   if (previousConfigPath === undefined) delete process.env.PI_CHRONO_CONFIG_PATH;
   else process.env.PI_CHRONO_CONFIG_PATH = previousConfigPath;
 
@@ -870,7 +872,7 @@ test("shadow-on extension output equals shadow-off output and completes after re
     process.env.PI_CHRONO_PI_SUMMARY = "false";
     const hooks = new Map<string, Hook>();
     const pi = { registerTool() {}, registerCommand() {}, on(name: string, handler: Hook) { setUniqueHook(hooks, name, handler); }, appendEntry() {}, sendMessage() {} };
-    extension(pi as unknown as ExtensionAPI);
+    extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime") });
     const session = await readSessionJsonl(sessionPath);
     const branch = getActiveBranch(session);
     const hook = hooks.get("session_before_compact");
@@ -903,5 +905,5 @@ test("shadow-on extension output equals shadow-off output and completes after re
 test("isolated worker extension path uses persisted source and returns exact bounded replay", async () => {
   const directory=mkdtempSync(join(tmpdir(),"chrono-extension-worker-"));const sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});
   const names=["PI_CHRONO_CONFIG_PATH","PI_CHRONO_ISOLATED_WORKER","PI_CHRONO_CACHE"];const previous=new Map(names.map(name=>[name,process.env[name]]));process.env.PI_CHRONO_CONFIG_PATH=join(directory,"config.json");process.env.PI_CHRONO_ISOLATED_WORKER="true";process.env.PI_CHRONO_CACHE="false";
-  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI);const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result?.compaction, notifications.join("\n"));assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
+  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime") });const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result?.compaction, notifications.join("\n"));assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
 });
