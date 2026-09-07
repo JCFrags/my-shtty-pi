@@ -50,6 +50,8 @@ const m01MutableHistoricalTests = new Set([
   "packages/pi-chrono-compaction/test/source-ledger.test.ts",
 ]);
 const correctionArtifactPaths = new Set([
+  "packages/pi-chrono-compaction/test/worker-runtime-waiter-bounds.test.ts",
+  "packages/pi-chrono-compaction/test/host-worker-admission-atomic.test.ts",
   "packages/pi-chrono-compaction/dist/src/history-runtime-transport.js",
   "packages/pi-chrono-compaction/dist/src/history-worker-bounded-read.js",
   "packages/pi-chrono-compaction/dist/src/history-worker-contract.js",

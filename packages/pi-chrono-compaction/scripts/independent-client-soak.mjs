@@ -3,7 +3,7 @@
 // Synthetic-only M03 replay equality soak. Fault/pressure coverage is separate.
 import { fork } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -73,14 +73,24 @@ function startClient(input) {
 export async function runIndependentClientSoak(packageRoot, expectedVersion) {
   const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   if (manifest.version !== expectedVersion) throw new Error("soak-version-mismatch");
-  const { schedulerArtifactCounts } = await import(pathToFileURL(join(packageRoot, "dist/src/host-worker-scheduler.js")));
+  const { acquireHostWorkerSlot, schedulerArtifactCounts } = await import(pathToFileURL(join(packageRoot, "dist/src/host-worker-scheduler.js")));
   const directory = await mkdtemp(join(tmpdir(), "chrono-independent-soak-"));
   const cases = [];
   const active = [];
   let monitor;
   try {
-    for (const slots of [1, 2]) {
+    for (const slots of [1, 2, 4]) {
       const schedulerDirectory = join(directory, `scheduler-${slots}`);
+      // Reproduce F001 before independent clients reuse this exact namespace.
+      const fault = join(schedulerDirectory, "turns.json");
+      await mkdir(fault, { recursive: true, mode: 0o700 });
+      let refused = false;
+      try { await acquireHostWorkerSlot({ directory: schedulerDirectory, slots, priority: "high", jobType: "replay-compaction", timeoutMs: 2000 }); }
+      catch (error) { refused = error.code === "EISDIR"; }
+      const afterFault = await schedulerArtifactCounts(schedulerDirectory);
+      await rm(fault, { recursive: true }); // Remove only the injected directory.
+      const admissionRecovered = refused && afterFault.slots === 0 && afterFault.tickets === 0;
+      if (!admissionRecovered) throw new Error("soak-admission-recovery-failed");
       let maximumSlots = 0;
       let sampleFailed = false;
       let sampling = Promise.resolve();
@@ -101,7 +111,7 @@ export async function runIndependentClientSoak(packageRoot, expectedVersion) {
       const equality = successful && results.every((item) => new Set(item.rows.map((row) => row.hash)).size === 1);
       const leakage = rows.some((row) => row.leakage);
       const memoryBounded = results.every((item) => Number.isFinite(item.peakRssKiB) && item.peakRssKiB <= MAX_RSS_KIB);
-      cases.push({ slots, clients: CLIENTS, repeats: REPEATS, jobs: rows.length, successful, equality, leakage, memoryBounded,
+      cases.push({ slots, admissionRecovered, clients: CLIENTS, repeats: REPEATS, jobs: rows.length, successful, equality, leakage, memoryBounded,
         maximumObservedSlots: maximumSlots, sampleFailed, residue,
         codes: rows.map((row) => row.code),
         status: successful && equality && !leakage && memoryBounded && !sampleFailed && maximumSlots > 0 && maximumSlots <= slots && residue.slots === 0 && residue.tickets === 0 ? "passed" : "failed" });

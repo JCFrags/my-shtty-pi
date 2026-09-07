@@ -27,7 +27,7 @@ export interface WorkerClientOptions {
 }
 export function replayWorkerDiagnosticPath(sessionPath: string): string { return `${sessionPath}.chrono-worker-diagnostics-v1.jsonl`; }
 export interface WorkerClientMetrics { readonly jobType: string; readonly schedulerSlotLimit: number; readonly schedulerQueueWaitMs: number; readonly schedulerQueuePosition: number; readonly workerStartMs: number; readonly workerTotalWallMs: number; readonly mainProcessMaximumTimerDelayMs: number; readonly responseBytes: number; readonly stderrBytes: number; }
-export interface WorkerClientResult { readonly response: CompactionWorkerResponse; readonly clientMetrics: WorkerClientMetrics; }
+export interface WorkerClientResult { readonly response: CompactionWorkerResponse; readonly clientMetrics: WorkerClientMetrics; /** Local waiter outcome, not permission to reuse controller capacity. */ readonly cancellationStatus?: "confirmed" | "detached" | "unconfirmed"; }
 function safeFailure(
   request: CompactionWorkerRequest,
   code: WorkerFailureCode,
@@ -181,6 +181,8 @@ export async function runCompactionWorker(requestValue: unknown, options: Worker
     return { ...result, response: validateWorkerResponse({ ...result.response, jobId: request.jobId }, request.jobId) };
   } catch (error) {
     const message = (error as Error).message;
-    return fail(message === "worker-aborted" ? "worker-aborted" : message === "worker-timeout" ? "worker-timeout" : message === "scheduler-queue-full" ? "scheduler-queue-full" : message === "worker-response-too-large" ? "worker-response-too-large" : "worker-containment-unavailable");
+    const result = fail(message === "worker-aborted" ? "worker-aborted" : message === "worker-timeout" ? "worker-timeout" : message === "scheduler-queue-full" ? "scheduler-queue-full" : message === "worker-response-too-large" ? "worker-response-too-large" : "worker-containment-unavailable");
+    const status = (error as { cancellationStatus?: unknown }).cancellationStatus;
+    return status === "confirmed" || status === "detached" || status === "unconfirmed" ? { ...result, cancellationStatus: status } : result;
   }
 }

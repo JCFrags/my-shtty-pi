@@ -27,7 +27,7 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values are the deliberately advanced M03 / 2.0.3 memory-admission boundary.
+// These values are the deliberately advanced M03 / 2.0.4 corrective-runtime boundary.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
   schemaVersion: 3,
@@ -35,9 +35,9 @@ const EXPECTED = Object.freeze({
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
   sourceFiles: 84,
-  sourceTreeHash: "1c56108207ff15c37a7e995350959db8185364a193d4b42bc72697ab0ed42ef8",
+  sourceTreeHash: "784bf80938419f4eda415a53b044bb82dc4db6f4f9b3daf85c39d1b78475ffef",
   distFiles: 83,
-  distTreeHash: "c4deb398d4ff5e3201b3bc66490d28a433cf583f35fc880ed44484b30d3c957b",
+  distTreeHash: "7575f6f1b1de773d706b3c824a5fa70a72de047937fcb8502088183de940f340",
   entrypointHash: "e6dab767e69f670daf90a215dbad64f07de7849f9f2f32d25f5183237f5746aa",
   m01PackageHash: "b5367bea62b54492669157e7ee7fb74c99f450cf3c7478ad713425e80c236a7a",
   m01LockHash: "3edda0714e750097ae37d9185fddb6fd1c87e48beeffd3b951f0760575949e73",
@@ -49,6 +49,8 @@ const EXPECTED = Object.freeze({
 });
 
 const correctionPaths = new Set([
+  "packages/pi-chrono-compaction/test/worker-runtime-waiter-bounds.test.ts",
+  "packages/pi-chrono-compaction/test/host-worker-admission-atomic.test.ts",
   ".gitignore",
   "packages/pi-chrono-compaction/dist/src/history-runtime-transport.js",
   "packages/pi-chrono-compaction/dist/src/history-worker-bounded-read.js",
@@ -438,7 +440,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.3") fail("package-version-changed");
+  if (packageJson.version !== "2.0.4") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");

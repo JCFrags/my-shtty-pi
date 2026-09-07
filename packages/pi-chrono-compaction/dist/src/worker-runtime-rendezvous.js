@@ -17,10 +17,27 @@ export async function rendezvousDirectory(namespace) {
     await privateDirectory(directory);
     return directory;
 }
-async function connect(path) {
+/** Local callers allow at most 250ms for a cancellation acknowledgement.
+ * `confirmed` means the last waiter's execute promise completed its cleanup
+ * contract (resolved or rejected with worker-aborted/worker-timeout) after abort;
+ * `detached` means other waiters survive (or this caller never joined);
+ * `unconfirmed` makes no claim about remote cleanup. Capacity is never evicted. */
+export const WAITER_CANCELLATION_ALLOWANCE_MS = 250;
+export class WaiterCancellationError extends Error {
+    cancellationStatus;
+    constructor(code, cancellationStatus) {
+        super(code);
+        this.cancellationStatus = cancellationStatus;
+    }
+}
+async function connect(path, local) {
     return new Promise((resolve, reject) => {
+        local.check();
         const socket = createConnection(path);
-        socket.once("connect", () => { socket.removeAllListeners("error"); resolve(socket); });
+        local.sockets.add(socket);
+        socket.on("close", () => { local.sockets.delete(socket); resolve(undefined); });
+        socket.on("error", () => { });
+        socket.once("connect", () => { resolve(socket); });
         socket.once("error", (error) => { socket.destroy(); if (error.code === "ENOENT" || error.code === "ECONNREFUSED")
             resolve(undefined);
         else
@@ -31,18 +48,59 @@ async function connect(path) {
  * shared storage. A dead leader has no cached result; followers retry admission,
  * while its still-running cgroup continues to own its fixed host slot. */
 export async function coalesceHostJob(namespace, identity, signal, execute, maxResultBytes, waiter = {}) {
+    const deadlineMs = waiter.deadlineMs ?? Date.now() + WORKER_LIMITS.timeoutSeconds.max * 1000;
+    let reason;
+    let allowance;
+    let rejectBound;
+    const local = { sockets: new Set(), joined: false, check: () => {
+            if (reason)
+                throw new WaiterCancellationError(reason, local.joined ? "unconfirmed" : "detached");
+        } };
+    const bound = new Promise((_, reject) => { rejectBound = reject; });
+    const cancel = (code) => {
+        if (reason)
+            return;
+        reason = code;
+        allowance = setTimeout(() => rejectBound(new WaiterCancellationError(code, local.joined ? "unconfirmed" : "detached")), WAITER_CANCELLATION_ALLOWANCE_MS);
+    };
+    const abort = () => cancel("worker-aborted");
+    const deadline = setTimeout(() => cancel("worker-timeout"), Math.max(0, deadlineMs - Date.now()));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted)
+        abort();
+    if (Date.now() >= deadlineMs)
+        cancel("worker-timeout");
+    try {
+        return await Promise.race([bound, coalesceHostJobInner(namespace, identity, signal, execute, maxResultBytes, { ...waiter, deadlineMs }, local)]);
+    }
+    finally {
+        clearTimeout(deadline);
+        if (allowance)
+            clearTimeout(allowance);
+        signal?.removeEventListener("abort", abort);
+        // Fence queued election callbacks even after a non-cancellation failure.
+        reason ??= "worker-aborted";
+        for (const socket of local.sockets)
+            socket.destroy();
+    }
+}
+async function coalesceHostJobInner(namespace, identity, signal, execute, maxResultBytes, waiter, local) {
     if (!/^[a-f0-9]{64}$/.test(identity))
         throw new Error("worker-protocol-error");
     const deadlineMs = waiter.deadlineMs ?? Date.now() + WORKER_LIMITS.timeoutSeconds.max * 1000;
+    local.check();
     const directory = await rendezvousDirectory(namespace);
+    local.check();
     const path = join(directory, identity.slice(0, 48));
     for (;;) {
+        local.check();
         if (signal?.aborted)
-            throw new Error("worker-aborted");
+            throw new WaiterCancellationError("worker-aborted", "detached");
         if (Date.now() >= deadlineMs)
-            throw new Error("worker-timeout");
+            throw new WaiterCancellationError("worker-timeout", "detached");
         const socket = await withRuntimeMutex(join(directory, "lock"), async () => {
-            const existing = await connect(path);
+            const existing = await connect(path, local);
+            local.check();
             if (existing)
                 return existing;
             // ECONNREFUSED under the election lock proves no listener. Never use a
@@ -64,7 +122,8 @@ export async function coalesceHostJob(namespace, identity, signal, execute, maxR
                 const metadata = await lstat(candidate).catch(() => undefined);
                 if (!metadata?.isSocket() || metadata.uid !== process.getuid?.())
                     continue;
-                const live = await connect(candidate);
+                const live = await connect(candidate, local);
+                local.check();
                 if (live)
                     live.destroy();
                 else
@@ -72,6 +131,7 @@ export async function coalesceHostJob(namespace, identity, signal, execute, maxR
             }
             if ((await readdir(directory)).filter(name => /^[a-f0-9]{48}$/.test(name)).length >= WORKER_LIMITS.coalescedJobs)
                 throw new Error("scheduler-queue-full");
+            local.check();
             const controller = new AbortController();
             const peers = new Set();
             let task;
@@ -91,9 +151,13 @@ export async function coalesceHostJob(namespace, identity, signal, execute, maxR
                     cancelled = true;
                     leave();
                     joined = false;
-                    const acknowledge = () => peer.end(JSON.stringify({ kind: "error", code }) + "\n");
+                    const cancellationStatus = peers.size === 0 && task ? "confirmed" : "detached";
+                    const acknowledge = (status = cancellationStatus) => peer.end(JSON.stringify({ kind: "error", code, cancellationStatus: status }) + "\n");
                     if (peers.size === 0 && task)
-                        void task.then(acknowledge, acknowledge);
+                        void task.then(() => acknowledge(), error => {
+                            // A cleanup/containment failure must not become a confirmed stop.
+                            acknowledge(["worker-aborted", "worker-timeout"].includes(error?.message) ? "confirmed" : "unconfirmed");
+                        });
                     else
                         acknowledge();
                 };
@@ -196,12 +260,16 @@ export async function coalesceHostJob(namespace, identity, signal, execute, maxR
             const idle = setTimeout(() => { if (!task)
                 void shutdown(); }, 10_000);
             idle.unref();
-            const local = await connect(path);
-            if (!local) {
-                server.close();
-                throw new Error("worker-rendezvous-unavailable");
+            try {
+                const socket = await connect(path, local);
+                if (!socket)
+                    throw new Error("worker-rendezvous-unavailable");
+                return socket;
             }
-            return local;
+            catch (error) {
+                void shutdown();
+                throw error;
+            }
         });
         const result = await new Promise((resolve, reject) => {
             let bytes = 0, buffer = Buffer.alloc(0), settled = false;
@@ -245,12 +313,12 @@ export async function coalesceHostJob(namespace, identity, signal, execute, maxR
                             catch { }
                             continue;
                         }
-                        if (signal?.aborted) {
-                            finish(new Error("worker-aborted"));
-                            return;
-                        }
-                        if (Date.now() >= deadlineMs) {
-                            finish(new Error("worker-timeout"));
+                        if (signal?.aborted || Date.now() >= deadlineMs) {
+                            const code = signal?.aborted ? "worker-aborted" : "worker-timeout";
+                            if (value.kind === "error" && value.code === code && ["confirmed", "detached", "unconfirmed"].includes(value.cancellationStatus))
+                                finish(new WaiterCancellationError(code, value.cancellationStatus));
+                            // A result/retry is not a cancellation acknowledgement. Keep the
+                            // local bound active rather than claiming process-tree cleanup.
                             return;
                         }
                         if (value.kind === "retry")
@@ -270,6 +338,8 @@ export async function coalesceHostJob(namespace, identity, signal, execute, maxR
             });
             socket.on("error", () => finish(undefined, undefined, true));
             socket.on("close", () => finish(undefined, undefined, true));
+            local.check();
+            local.joined = true;
             socket.write(JSON.stringify({ schemaVersion: 1, identity, deadlineMs }) + "\n");
             expiration = setTimeout(() => socket.write('{"cancel":true,"reason":"worker-timeout"}\n'), Math.max(1, deadlineMs - Date.now()));
             signal?.addEventListener("abort", abort, { once: true });

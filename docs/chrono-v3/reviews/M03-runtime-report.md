@@ -5,9 +5,23 @@
 - Branch: `work/chrono-v3-m03-runtime`
 - Base and M02 merge commit: `ea977dbb09ccea5265a435ce831303282622f97a`
 - Pull request: #35, draft into `rebuild/chrono-memory-v3`
-- Current release candidate: ChronoCompact `2.0.3`
+- Current corrective release candidate: ChronoCompact `2.0.4`
 
-M03 implementation and guarded deployment are delivered for user review. Final evidence CI is tracked separately. The earlier sections are chronological evidence, not current deployment state. This report does not claim user acceptance, authorize a merge, or start M04.
+**M03 is not accepted: project-lead review requested changes at `b5452ffdd0f330209491ff368db4fa85d154bc25`.** F001 requires failure-atomic scheduler admission; F002 requires locally bounded waiter timeout and cancellation when a coordinator is unresponsive. Corrections and new release gates are in progress. Earlier sections are chronological evidence, not proof that these findings are resolved. No merge is authorized. M04 also requires separate directing-assistant proposal review and explicit authorization, even after M03 acceptance.
+
+## Changes-requested correction pass
+
+The project lead reproduced an abandoned live-owner slot after fairness-state publication failed (`EISDIR` or one-shot `ENOSPC`). The project lead also reproduced a follower pending beyond its deadline while its coordinator was stopped with `SIGSTOP`. Both findings must be corrected without weakening process-tree containment or compaction/history semantics.
+
+Initial read-only inspection confirmed that the installed package remains 2.0.3 at `7449c03240dd6b69426fd678cb453c89621d9e4d` and its verified 2.0.2 rollback remains ready. After the host restart, both production scheduler namespaces were absent and the boot-bound gate was invalid. No stranded production admission was present; no scheduler file, inhibitor, or unrelated process was removed. Production worker admission must remain refused until verified gate installation during corrective activation. Installed identity does not establish what every existing Pi process has loaded.
+
+### Corrective implementation
+
+- F001: `89a35e1` integrates the admission correction. Fairness publication and own-ticket removal precede slot publication. Policy initialization publishes only a fully written and synced private file. Cleanup and lease release compare inode identity and owner nonce. A persistent cleanup I/O outage keeps the transaction pending rather than rejecting with abandoned live ownership; when the fault clears, cleanup resumes. Abandoned temporary aliases can be reclaimed under the queue lock without releasing their linked slot.
+- F002: `c759507` integrates the waiter correction. Local timeout and abort cover election, connection, retry, and response waits with at most 250 ms for acknowledgement, subject to caller event-loop scheduling. Socket closure detaches the caller; it does not free controller capacity. Cancellation status is `confirmed`, `detached`, or `unconfirmed`; the replay client preserves that status separately from the failure response. Ordinary history refusal codes do not claim confirmed remote cleanup.
+- A queued election-lock helper can remain until lock release or its existing 15-second lock timeout after local waiter settlement. Its callback is fenced from starting work. An unresponsive coordinator cannot confirm cleanup; its shared work remains controller-owned until stopped. Responsive last-waiter cancellation retains the existing process-tree cleanup contract.
+- Focused implementation gates passed 43 scheduler tests and 21 rendezvous/runtime/gate tests. The new separate-process cases cover stopped coordinators, 900 ms deadlines, abort, surviving waiters, recovery/death, and cleanup status. Admission cases cover EISDIR, ENOSPC, partial writes, sync/link/rename/unlink failures, replacement ownership, and recovery by a separate client before the still-running original client.
+- The corrected-distribution soak passed 54 jobs (six clients, three repeats, slots 1/2/4). Each slot case first injected and removed its own EISDIR fault in the same synthetic namespace; subsequent independent-client replay results were equal, bounded, leak-free, and left zero scheduler residue. Complete release gates and corrective deployment remain pending.
 
 ## 2.0.3 memory-admission slice
 

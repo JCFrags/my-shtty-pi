@@ -240,7 +240,9 @@ export async function runCompactionWorker(requestValue, options = {}) {
     }
     catch (error) {
         const message = error.message;
-        return fail(message === "worker-aborted" ? "worker-aborted" : message === "worker-timeout" ? "worker-timeout" : message === "scheduler-queue-full" ? "scheduler-queue-full" : message === "worker-response-too-large" ? "worker-response-too-large" : "worker-containment-unavailable");
+        const result = fail(message === "worker-aborted" ? "worker-aborted" : message === "worker-timeout" ? "worker-timeout" : message === "scheduler-queue-full" ? "scheduler-queue-full" : message === "worker-response-too-large" ? "worker-response-too-large" : "worker-containment-unavailable");
+        const status = error.cancellationStatus;
+        return status === "confirmed" || status === "detached" || status === "unconfirmed" ? { ...result, cancellationStatus: status } : result;
     }
 }
 //# sourceMappingURL=compaction-worker-client.js.map
