@@ -78,3 +78,29 @@ CPU/RAM checks accompanied these runs. Test launchers exited; no confirmed task-
 ## Remaining gates
 
 All-ref privacy and dependent root/CI/publication gates remain blocked. A bounded root-verifier attempt reached its all-ref scan and timed out; its tracked process tree exited. This is not a passing result and did not bypass the scanner. Final fixed-heap/build-manifest gates, exact-head CI, guarded activation, and fresh-process live canaries remain outstanding. The M03 pull request stays draft and unmerged; M04 is not authorized.
+
+
+## Approved privacy remediation
+
+The all-ref gate found one private absolute checkout path in line 14 of
+`M00-BASELINE-CHECKPOINT.md` at the tip of the unrelated
+`work/grounded-ssh-r1-m00-baseline` branch. A follow-up commit would not remove
+that finding from scanned history. The user explicitly approved replacing this
+one tip commit using an exact `force-with-lease` guard.
+
+An owner-only recovery bundle was created and verified outside the repository.
+The path was replaced with `<repository-checkout>`; every other file and the
+parent commit were preserved. The remote update succeeded only against the
+approved old tip:
+
+- Old tip: `ef5c91c0d3090c473fd5b43a80e9af5034c4ddfe`
+- Redacted tip: `35bbbb2fc747ec46bc8a8e79e4dff30badb352c8`
+
+The replacement commit scan passed. The subsequent complete local scan passed
+with zero findings across 211 commits, 104,598 path contexts, 2,016 unique blobs,
+and the index/worktree. This supersedes the privacy blocker described above.
+The scanner was not changed or bypassed. No M03 history, other branch, repository
+visibility, live package, or private session was changed by the remediation.
+GitHub caches and existing clones may retain the old commit; this is not a claim
+of global erasure. The scan process exited, with no tracked child left running.
+Remaining root, CI, and deployment gates still require completion.
