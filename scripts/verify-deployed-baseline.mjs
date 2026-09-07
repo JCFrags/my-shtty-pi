@@ -156,6 +156,7 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/amendments/A-0001-private-repository-containment.md",
   "docs/chrono-v3/amendments/A-0002-m00-baseline-provenance.md",
   "docs/chrono-v3/amendments/A-0003-m00-r1-corrections.md",
+  "docs/chrono-v3/amendments/A-0004-v3-timeline-and-catalog-scope.md",
   "docs/chrono-v3/baseline.md",
   "docs/chrono-v3/baseline-evidence.json",
   "docs/chrono-v3/containment-timeline.md",

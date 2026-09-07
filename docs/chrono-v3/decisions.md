@@ -1,4 +1,6 @@
-# M00 decisions
+# ChronoCompact decisions
+
+Current V3 scope is governed by [A-0004](./amendments/A-0004-v3-timeline-and-catalog-scope.md) and the milestone ledger. Earlier M00 status wording below is historical.
 
 ## D-0001 — Keep the repository private
 
@@ -47,3 +49,9 @@ The canonical review records distinguish local secondary review from directing-a
 **Status:** applied 2026-09-03; unchanged by R2
 
 The publication scanner must independently validate canonical public repository identity and scan content. A passing content scan does not establish visibility, and public visibility does not permit private evidence. Both gates must pass before a push or public review update.
+
+## D-0009 — Accepted M03 closeout and approved V3 scope
+
+**Status:** approved by directing assistant 2026-09-07
+
+M03 is accepted at `afec7d3ac48ef369b27c6609347666af2f8c289b`, with F001/F002 closed. Metadata-only closeout merged PR #35 into integration as `afb5f81b9eb6931cbf6f08d90413b3766829f192`. [A-0004](./amendments/A-0004-v3-timeline-and-catalog-scope.md) records the completed proposal review, timeline-first scope, dispositions A–G, and later acceptance boundaries. M04 catalog implementation is authorized; production activation and M05 are not. Storage selection is recorded separately in ADR-002 after compatibility validation. The master charter remains byte-frozen.

@@ -1,12 +1,12 @@
-# M00 decision and update protocol
+# ChronoCompact decision and update protocol
 
-This protocol applies to the ChronoCompact V3 M00 evidence and containment work. The byte-preserved north-star charter remains authoritative.
+This protocol governs milestone authority and evidence. The byte-preserved north-star charter remains authoritative, with approved amendments. [A-0004](./amendments/A-0004-v3-timeline-and-catalog-scope.md) records current V3 scope and M04 authority; the ledger records current status. M00/R2-specific examples below are historical, not current deployment or authorization claims.
 
 ## Delegation and authority
 
 The repository owner delegated routine architecture and milestone direction to the directing assistant under the north-star. Within that delegation, the directing assistant may request corrections, accept or reject milestones, authorize reversible implementation work, and authorize a reversible, tested live deployment when the relevant milestone deployment gate and rollback requirements are satisfied.
 
-Local Pi agents may implement, test, inspect, and report within their assigned scope. They may not self-accept a milestone, authorize M01, authorize a release, or represent an advisory review as project-lead acceptance.
+Local Pi agents may implement, test, inspect, and report within their assigned scope. They may not self-accept a milestone, authorize a later milestone, authorize a release, or represent an advisory review as project-lead acceptance.
 
 A **local secondary review** is advisory evidence from a local worker or reviewer. A **directing-assistant project-lead review** is the governing review after the directing assistant inspects the pushed repository state and required evidence. Review provenance is recorded in [`reviews/`](./reviews/).
 
@@ -43,7 +43,7 @@ Every milestone report must state:
 - current live deployment;
 - locally usable fixes;
 - rollback state;
-- whether M00 acceptance has been recorded and whether M01 authorization has been recorded.
+- whether the current milestone has project-lead acceptance and whether the next milestone or activation is authorized.
 
 For M00-R2, the normal final status is: `M00-R2 corrections complete; ready for directing-assistant project-lead re-review`. It is not an acceptance claim.
 
