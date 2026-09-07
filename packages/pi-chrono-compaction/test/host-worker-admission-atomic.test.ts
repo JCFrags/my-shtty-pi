@@ -192,3 +192,17 @@ test("abandoned temp aliases recover without releasing a live slot",async()=>{
   await held.release();await clean(directory);await reacquire(directory);
  }finally{await held?.release();await original.rm(directory,{recursive:true,force:true});}
 });
+
+test('corrective policy refuses old namespace without migration; new namespace pins revision 2', async()=>{
+ const directory=await fs.mkdtemp(join(tmpdir(),'chrono-policy-correction-'));
+ try{
+  const path=join(directory,'policy.json');
+  const old=JSON.stringify({schemaVersion:1,slots:1,memoryBytes:2*1024*1024*1024});
+  await fs.writeFile(path,old,{mode:0o600});
+  await assert.rejects(acquireHostWorkerSlot(options(directory)),/scheduler-policy-mismatch/);
+  assert.equal(await fs.readFile(path,'utf8'),old);await clean(directory);
+  await fs.rm(path); // Only this test's own fixture, not production migration.
+  await reacquire(directory);
+  assert.equal(JSON.parse(await fs.readFile(path,'utf8')).schemaVersion,2);
+ }finally{await fs.rm(directory,{recursive:true,force:true});}
+});

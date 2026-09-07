@@ -210,7 +210,9 @@ export async function acquireHostWorkerSlot(options) {
         await transaction(async () => {
             await cleanup(directory, malformedStableMs);
             if (options.enforcePolicy) {
-                const policy = JSON.stringify({ schemaVersion: 1, slots, memoryBytes: WORKER_LIMITS.hostMemoryBytes });
+                // Revision 2 excludes already-loaded 2.0.3 clients with non-atomic admission.
+                // Activation must drain and verify an old namespace; never migrate it here.
+                const policy = JSON.stringify({ schemaVersion: 2, slots, memoryBytes: WORKER_LIMITS.hostMemoryBytes });
                 const path = join(directory, "policy.json");
                 if (!await publishFile(directory, "policy.json", nonce, policy)) {
                     const metadata = await lstat(path);
