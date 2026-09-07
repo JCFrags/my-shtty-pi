@@ -2,7 +2,7 @@
 export const CATALOG_PROTOCOL_VERSION = 1;
 export const CATALOG_LIMITS = Object.freeze({ wireBytes: 256 * 1024, page: 16, ancestry: 64, sourceDelta: 7 * 1024 * 1024, records: 512, statements: 8192, checkpointBytes: 1536 * 1024, jobMs: 1000 });
 export interface CatalogRef { shardKey: string; eventId: string }
-export interface CatalogView { sessionKey: string; generation: number; eventCut: number; branchKey: string; segments: { segment: number; cut: number }[] }
+export interface CatalogView { storeKey: string; sessionKey: string; generation: number; eventCut: number; branchKey: string; segments: { segment: number; cut: number }[] }
 interface Base { v: 1; catalogDirectory: string; sessionKey: string }
 export type CatalogRequest = Base & (
   | { op: "ingestStep"; generation?: number; shardKey: string; sourcePath: string; branchKey: string; shardOrdinal: number; parent?: CatalogRef }
@@ -21,7 +21,7 @@ const integer = (x: unknown): x is number => Number.isSafeInteger(x) && Number(x
 const key = (x: unknown): x is string => typeof x === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(x);
 const path = (x: unknown): x is string => typeof x === "string" && x.startsWith("/") && x.length <= 4096 && !x.includes("\0");
 const ref = (x: any): boolean => !!x && key(x.shardKey) && typeof x.eventId === "string" && x.eventId.length <= 1024;
-const view = (x: any): boolean => !!x && key(x.sessionKey) && integer(x.generation) && x.generation > 0 && integer(x.eventCut) && key(x.branchKey) && Array.isArray(x.segments) && x.segments.length > 0 && x.segments.length <= 64 && x.segments.every((s: any) => integer(s.segment) && integer(s.cut) && s.cut <= x.eventCut);
+const view = (x: any): boolean => !!x && key(x.storeKey) && key(x.sessionKey) && integer(x.generation) && x.generation > 0 && integer(x.eventCut) && key(x.branchKey) && Array.isArray(x.segments) && x.segments.length > 0 && x.segments.length <= 64 && x.segments.every((s: any) => integer(s.segment) && integer(s.cut) && s.cut <= x.eventCut);
 export function isCatalogRequest(value: unknown): value is CatalogRequest {
   try {
     if (JSON.stringify(value).length > CATALOG_LIMITS.wireBytes / 4) return false;
