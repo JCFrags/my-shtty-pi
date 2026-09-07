@@ -5,6 +5,8 @@ import { env } from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { createHistoryRuntimeTransport } from "./history-runtime-transport.js";
+import { runtimeHostStatus } from "./worker-runtime.js";
 import {
   cachePathForSession,
   hashCompactionConfig,
@@ -928,7 +930,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       return historyLedger = { sessionPath, ledger };
     } catch { return undefined; }
   };
-  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport, feedbackAdmission.reserve);
+  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots }), feedbackAdmission.reserve);
   registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
   registerRetentionHintTool(pi);
 
@@ -1690,12 +1692,18 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       if (!ctx.hasUI) return;
       const settings = resolveExtensionSettings(userConfig);
       const artifacts = await schedulerArtifactCounts(defaultSchedulerDirectory());
+      const host = await runtimeHostStatus();
       const memory = historySearchIndexCacheStatus();
       ctx.ui.notify([
         `Isolated replay worker: ${settings.isolatedWorkerEnabled ? "enabled" : "disabled"}`,
         `Last replay state: ${String(replayWorkerStatus.state ?? "idle")}`,
         `Last safe failure code: ${String(replayWorkerStatus.failureCode ?? "none")}`,
-        `Host slots: ${settings.hostWorkerSlots}`,
+        `Host slots: ${settings.hostWorkerSlots}; admitted policy ${host.configuredSlots ?? "not initialized"}`,
+        `Kernel containment: ${host.containmentAvailable ? "available" : "unavailable; unsafe jobs refused"}`,
+        `Legacy admission inhibitor: ${host.legacyAdmissionBlocked ? "verified" : "not verified; transition required"}`,
+        `Host jobs: ${host.active} active, ${host.queued} queued; malformed artifacts ${host.malformedArtifacts}`,
+        `Host memory limit: ${host.limits.hostMemoryBytes} bytes; source-read ceiling ${host.limits.sourceBytes} bytes`,
+        `Host progress: ${host.jobs.map((job) => `${job.category}:${job.stage}`).join(", ") || "idle"}`,
         `Scheduler artifacts: ${artifacts.slots} slot(s), ${artifacts.tickets} ticket(s)`,
         `Worker timeout: ${settings.workerTimeoutSeconds}s`,
         `History memory admission: ${memory.admission.totalBytes}/${memory.admission.byteLimit} bytes; ${memory.admission.reservations} reservation(s)`,
@@ -1710,9 +1718,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       if (!ctx.hasUI) return;
       const settings = resolveExtensionSettings(userConfig);
       const sessionPath = ctx.sessionManager.getSessionFile();
-      const source = sessionPath ? await historySourceState(sessionPath).then((value) => ({ state: "ready", bytes: value.size, legacyHistory: value.size <= LEGACY_HISTORY_MAX_BYTES ? "allowed" : "refused" })).catch(() => ({ state: "unavailable", bytes: 0, legacyHistory: "refused" })) : { state: "ephemeral", bytes: 0, legacyHistory: "in-memory" };
+      const source = sessionPath ? await historySourceState(sessionPath).then((value) => ({ state: "ready", bytes: value.size, legacyHistory: value.size <= LEGACY_HISTORY_MAX_BYTES ? "allowed" : "refused" })).catch(() => ({ state: "unavailable", bytes: 0, legacyHistory: "refused" })) : { state: "ephemeral", bytes: 0, legacyHistory: "refused; unpersisted source" };
       const ledger = await availableHistoryLedger(ctx);
       const artifacts = await schedulerArtifactCounts(defaultSchedulerDirectory());
+      const host = await runtimeHostStatus();
       const diagnosticBytes = sessionPath ? await stat(replayWorkerDiagnosticPath(sessionPath)).then((value) => value.size).catch(() => 0) : 0;
       const memory = historySearchIndexCacheStatus();
       ctx.ui.notify([
@@ -1722,6 +1731,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         `Replay worker diagnostics: ${diagnosticBytes > 0 ? "owner-only records present" : "none"}`,
         `Scheduler artifacts: ${artifacts.slots} slot(s), ${artifacts.tickets} ticket(s)`,
         `Isolated worker configured: ${settings.isolatedWorkerEnabled ? "yes" : "no"}`,
+        `Kernel containment: ${host.containmentAvailable ? "available" : "unavailable; unsafe jobs refused"}`,
+        `Legacy admission inhibitor: ${host.legacyAdmissionBlocked ? "verified" : "not verified; transition required"}`,
+        `Host jobs: ${host.active} active, ${host.queued} queued; memory ceiling ${host.limits.hostMemoryBytes} bytes`,
+        "History indexes: child-only; no full index retained by Pi.",
         `History memory admission: ${memory.admission.totalBytes}/${memory.admission.byteLimit} bytes`,
         `History retained accounting: index ${memory.admission.components.liveIndex}, query ${memory.admission.components.queryResults}, references ${memory.admission.components.retainedReferences}`,
         "Doctor mode: read-only; no session content or private path emitted.",
