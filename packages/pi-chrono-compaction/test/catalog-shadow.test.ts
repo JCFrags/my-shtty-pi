@@ -46,6 +46,22 @@ test("catalog shadow follows bounded continuation but does not retry a safe erro
     await pause(130); assert.equal(calls, 2);
   } finally { scheduler.dispose(); }
 });
+test("catalog incomplete tail waits for an append signal without a polling loop", async () => {
+  let calls = 0;
+  const scheduler = new CatalogShadowScheduler(async () => {
+    calls++;
+    return calls === 1 ? { ...done, complete: false, waitingForAppend: true } : done;
+  });
+  try {
+    scheduler.schedule(target, true); await pause(180); await scheduler.drain();
+    assert.equal(calls, 1); assert.equal(scheduler.status().state, "lagging");
+    scheduler.schedule(target, true); await pause(); await scheduler.drain();
+    assert.equal(calls, 2); assert.equal(scheduler.status().state, "ready");
+    scheduler.disable(); assert.equal(scheduler.status().state, "disabled");
+    scheduler.schedule(target, true); await pause(); await scheduler.drain();
+    assert.equal(calls, 3, "disable is reversible, unlike disposal");
+  } finally { scheduler.dispose(); }
+});
 test("catalog shadow disposal suppresses late result and continuation", async () => {
   let resolve!: (value: CatalogShadowProgress) => void;
   const scheduler = new CatalogShadowScheduler(async () => new Promise(settle => { resolve = settle; }));

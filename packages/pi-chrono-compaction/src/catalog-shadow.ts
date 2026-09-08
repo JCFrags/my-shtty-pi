@@ -4,7 +4,7 @@ export interface CatalogShadowTarget {
   readonly shardKey: string;
   readonly sourcePath: string;
 }
-export interface CatalogShadowProgress { readonly complete: boolean; readonly sourceBytesRead: number; readonly events: number }
+export interface CatalogShadowProgress { readonly complete: boolean; readonly sourceBytesRead: number; readonly events: number; readonly waitingForAppend?: boolean }
 export interface CatalogShadowStatus {
   readonly state: "disabled" | "idle" | "scheduled" | "running" | "cancelling" | "lagging" | "ready" | "error";
   readonly sourceBytesRead?: number;
@@ -37,7 +37,7 @@ export class CatalogShadowScheduler {
   status(): CatalogShadowStatus { return { ...this.current }; }
   schedule(target: CatalogShadowTarget, enabled: boolean): void {
     if (this.closed) return;
-    if (!enabled) { this.enabled = false; this.cancel(); this.current = { state: "disabled" }; return; }
+    if (!enabled) { this.disable(); return; }
     const checked = checkedTarget(target);
     this.enabled = true;
     if (this.active && !sameTarget(this.active.target, checked)) this.cancel();
@@ -52,7 +52,8 @@ export class CatalogShadowScheduler {
     this.active?.controller.abort();
     this.current = { state: this.active ? "cancelling" : this.enabled ? "idle" : "disabled" };
   }
-  dispose(): void { this.closed = true; this.enabled = false; this.cancel(); this.current = { state: "disabled" }; }
+  disable(): void { this.enabled = false; this.cancel(); this.current = { state: "disabled" }; }
+  dispose(): void { this.closed = true; this.disable(); }
   /** For synthetic checks or an explicit shutdown wait, not interactive hooks. */
   async drain(): Promise<void> { await this.active?.settled; }
   private arm(delay: number): void {
@@ -72,9 +73,9 @@ export class CatalogShadowScheduler {
     this.active = active;
     active.settled = Promise.resolve().then(() => this.run(target, controller.signal)).then(progress => {
       if (this.closed || generation !== this.generation) return;
-      if (!progress || typeof progress.complete !== "boolean" || !Number.isSafeInteger(progress.sourceBytesRead) || progress.sourceBytesRead < 0 || !Number.isSafeInteger(progress.events) || progress.events < 0) throw new Error("catalog-shadow-response-invalid");
+      if (!progress || typeof progress.complete !== "boolean" || (progress.waitingForAppend !== undefined && typeof progress.waitingForAppend !== "boolean") || !Number.isSafeInteger(progress.sourceBytesRead) || progress.sourceBytesRead < 0 || !Number.isSafeInteger(progress.events) || progress.events < 0) throw new Error("catalog-shadow-response-invalid");
       this.current = { state: progress.complete ? "ready" : "lagging", sourceBytesRead: progress.sourceBytesRead, events: progress.events };
-      if (!progress.complete && !this.pending) this.pending = target;
+      if (!progress.complete && !progress.waitingForAppend && !this.pending) this.pending = target;
     }).catch((error: unknown) => {
       if (this.closed || generation !== this.generation) return;
       const candidate = (error as { code?: unknown })?.code;

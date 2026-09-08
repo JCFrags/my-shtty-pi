@@ -1,0 +1,87 @@
+# M04 source catalog — implementation report
+
+Status: work in progress, not accepted. Draft-review target: `rebuild/chrono-memory-v3`. No production activation or M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
+
+## Delivered boundary
+
+The new catalog is a disposable SQLite/WAL index of explicitly supplied synthetic/session JSONL sources. It stores structural metadata, byte ranges, raw-span hashes, decoded body hash descriptors, branch links, and resumable parser checkpoints. It does not become model memory, replace history tools, or change compaction, first tool-result consumption, the required Pi summary, retrieval authority, or source files.
+
+`catalogShadowEnabled` defaults to false. `PI_CHRONO_CATALOG_SHADOW` and the `catalog-shadow` configuration command are explicit opt-ins. Session start and agent settlement only schedule work; they do not read the catalog or source on the scheduling stack. Switch/fork/shutdown cancel or disable scheduling. Incomplete tails wait for another append signal; errors do not cause an automatic retry or rebuild. `/chrono-catalog-status` reports bounded in-memory state without scanning a database or archive. No production opt-in was performed.
+
+The client uses the existing M03 scheduler, cancellation, containment and settlement boundaries. Each job has a 30-second deadline, 256 MiB OS memory limit, 128 MiB V8 heap, 64 KiB request, and 256 KiB response. Global host limits are unchanged. Source reads have a separate 8 MiB cap, with a 7 MiB ingestion delta and bounded anchor overhead. The JavaScript filesystem wrapper allowance also covers trusted startup reads; it does **not** measure native SQLite I/O.
+
+## Storage and exact access
+
+See [catalog contract](../catalog-contract.md), [physical publication](../catalog-store-publication.md), and [ADR-002](../adr/ADR-002-sqlite-catalog.md).
+
+- LF alone commits a complete record. Giant records resume from serialized parser state; incomplete and malformed tails are not skipped.
+- Record/block/hash/checkpoint updates are transactional. Scope-qualified IDs preserve lone surrogates. Ordinal references support id-less roots without invented source IDs.
+- Pinned views bind session, physical store, generation, event cut, branch and bounded ancestry segments. Chronological pages use keyset cursors; no lifetime event map is built in RAM.
+- Raw access verifies each complete selected hashed source span before returning a bounded subrange. Prefix/tail anchors are samples, not proof that every historical byte is unchanged. An explicit resumable integrity scan is available.
+- Physical recovery creates a new store, ingests in bounded steps, and publishes through an owner-only, synced pointer with a kernel-mutex compare-and-swap. Old healthy pinned stores remain addressable. The old database, WAL, SHM and references are not deleted or individually renamed.
+- Directories are 0700; database and pointer artifacts are 0600 with observed owner/type/link/identity checks. Same-UID replacement races are not eliminated by a native pathname API.
+
+## Native foundation
+
+Exact published `better-sqlite3@12.9.0`, SQLite 3.53.0, MIT. The proposed 12.9.1 returned npm 404; it was not used. The stock prebuild has `DEFAULT_MEMSTATUS=0`: an 80 MiB native allocation succeeded despite a reported 64 MiB hard heap limit. The adapter rejects that build.
+
+The controlled project-local build verifies locked source and exact headers and changes only MEMSTATUS to 1. There is no compiler-step prebuild or header-network fallback. Actual allocation-refusal probes and seven focused binding tests passed on Node 20.0.0, 22.0.0 and 24.18.0. Node 24 native SHA-256: `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`. ADR-002 records all runtime, source, header and toolchain identities. Ubuntu CI uses an explicit local-build provenance record, not a claim of identical Fedora compiler output.
+
+## Measured synthetic evidence
+
+Parent reruns, after dependency integration:
+
+| Check | Result |
+| --- | --- |
+| Parser + initial source/shadow tests | 22 passed; includes 67,158,156-byte escaped-Unicode input under a 32 MiB V8 heap |
+| Native binding | 7 passed; exact Node 24 binary hash and actual allocation refusal |
+| Engine + updated shadow/config/extension checks | 39 passed, including 18 engine cases |
+| Physical publication | 28 passed; real process kill, concurrent initialization, corruption recovery, old pins, stale-owner refusal, EIO/ENOSPC seams |
+| Default-off and opt-in lifecycle | 2 passed; synthetic source, disposable scheduler namespace, no whole-session/branch read |
+| Package typecheck/build/native probe/test compilation | Passed before integration tests |
+| Complete package suite | 491 passed, zero failures/skips; preserves the 412-test baseline |
+
+The medium harness uses the M02 deterministic metadata/fork fixture and emits one synthetic body at a time. It retains no archive-sized body array. It ran 173 contained jobs, including ingestion, pinned paging, no-op and append checks:
+
+| Measurement | Result |
+| --- | ---: |
+| Source size | 289,678,089 bytes (276.3 MiB) |
+| Source records / selected chronological events | 1,025 / 1,016 |
+| Initial ingestion jobs | 40 |
+| Initial source reads, including anchors | 292,266,761 bytes |
+| Maximum source reads in one job | 7,405,568 bytes |
+| No-op source reads | 32,768 bytes |
+| Append source reads | 65,685 bytes |
+| Maximum response | 6,049 bytes |
+| Maximum reported process peak RSS | 93,310,976 bytes |
+| Maximum observed cgroup memory peak | 63,315,968 bytes |
+| Observed per-job cgroup memory limit | 268,435,456 bytes |
+| Worker process read/write characters | 347,346,298 / 10,988,766 |
+| Worker storage read/write bytes | 0 / 0 (cached/tmpfs workload) |
+| Wall time, including generation and verification | 83,953 ms |
+
+Process I/O totals include native SQLite, JavaScript, startup and measurement reads; they are not SQLite-only attribution. Kernel storage counters exclude cache hits. Independent source-hash verification is outside the catalog source-read budget. RSS and cgroup accounting are different measurements. An independent source hash was unchanged before the intentional append. The old pinned chronological digest remained identical after append.
+
+Reproduce after the controlled native preparation and distribution build:
+
+```sh
+node --max-old-space-size=128 scripts/catalog-benchmark.mjs --small
+node --max-old-space-size=128 scripts/catalog-benchmark.mjs
+```
+
+## Disclosed failed runs and corrections
+
+- The stock native prebuild failed effective heap enforcement; replaced by the explicitly verified source build, not a larger global memory limit.
+- A focused test invocation used repository-root rather than package working directory and could not find synthetic fixtures. The retry used package cwd. Two added expectations also needed correction: the new status command belongs in the command list; existing configuration syntax accepts explicit boolean strings. The corrected 39-test run passed.
+- The first medium fixture generator exhausted its 512 MiB heap while retaining all bodies. It was changed to materialize one body at a time, without increasing that heap or catalog limits. The medium retry passed.
+- The publication worker attempted its native probe before distribution existed; the successful post-build probe supersedes that failed attempt.
+
+## Explicit limits and remaining gates
+
+The engine supports at most 64 ancestry segments and 1,024 ordered declared shards. Earlier shards cannot append after a later shard is declared. The parser's general checkpoint bound is 5 MiB; the engine deliberately refuses checkpoints above 1.5 MiB rather than truncating metadata. The worst escaped-metadata fixture reaches 4,941,048 bytes and can therefore be outside the engine-supported subset. A 67 MiB giant body needed only 7,347 checkpoint bytes.
+
+The decoded hash checkpoint can retain at most 2,046 decoded carry bytes, privately and only until the string completes. This is not searchable text or whole-body retention, but it remains a storage/privacy review point. Raw-span SHA-256 and the versioned decoded UTF-16 hash chain are distinct contracts.
+
+Process-kill tests are not device power-loss testing. Corrupt pointer metadata refuses rather than reconstructing by scanning directories. Old-store cleanup is outside this change. Literal Node 21, future majors, other native platforms, and full store execution on the early runtime lanes remain unverified. The workstation Pi version is outside the unchanged locked peer range; disposable Pi compatibility evidence is still required.
+
+Frozen-baseline/replay/fixed-heap/root/privacy/exact-head CI, fresh disposable Pi canaries, final verifier metadata and final draft PR remain pending. Project lead owns code/storage review and acceptance; implementation agents performed no independent code review. Production remains on accepted 2.0.4 with its alias, settings, policy, gate, inhibitors and rollback intact.

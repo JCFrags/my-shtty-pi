@@ -34,6 +34,7 @@ test("experimental high-impact features default off and environment overrides ha
     projection: process.env.PI_CHRONO_TOOL_RESULT_PROJECTION,
     worker: process.env.PI_CHRONO_ISOLATED_WORKER,
     shadow: process.env.PI_CHRONO_ROLLUP_SHADOW,
+    catalog: process.env.PI_CHRONO_CATALOG_SHADOW,
   };
   try {
     delete process.env.PI_CHRONO_HISTORY_EDITOR;
@@ -41,6 +42,11 @@ test("experimental high-impact features default off and environment overrides ha
     delete process.env.PI_CHRONO_TOOL_RESULT_PROJECTION;
     delete process.env.PI_CHRONO_ISOLATED_WORKER;
     delete process.env.PI_CHRONO_ROLLUP_SHADOW;
+    delete process.env.PI_CHRONO_CATALOG_SHADOW;
+    assert.equal(resolveExtensionSettings().catalogShadowEnabled, false);
+    assert.equal(resolveExtensionSettings({ catalogShadowEnabled: true }).catalogShadowEnabled, true);
+    process.env.PI_CHRONO_CATALOG_SHADOW = "false";
+    assert.equal(resolveExtensionSettings({ catalogShadowEnabled: true }).catalogShadowEnabled, false);
     assert.equal(resolveExtensionSettings().historyEditorEnabled, false);
     assert.equal(resolveExtensionSettings().incrementalPrecomputeEnabled, false);
     assert.equal(resolveExtensionSettings().toolResultProjectionMode, "off");
@@ -70,6 +76,8 @@ test("experimental high-impact features default off and environment overrides ha
     process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = "aggressive";
     assert.equal(resolveExtensionSettings({ toolResultProjectionMode: "off" }).toolResultProjectionMode, "aggressive");
   } finally {
+    if (previous.catalog === undefined) delete process.env.PI_CHRONO_CATALOG_SHADOW;
+    else process.env.PI_CHRONO_CATALOG_SHADOW = previous.catalog;
     if (previous.editor === undefined) delete process.env.PI_CHRONO_HISTORY_EDITOR;
     else process.env.PI_CHRONO_HISTORY_EDITOR = previous.editor;
     if (previous.incremental === undefined) delete process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE;
@@ -331,7 +339,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "history_retention_hint",
     "request_compaction",
   ]);
-  assert.deepEqual(commandNames, ["chrono-worker-status", "chrono-doctor", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-worker-status", "chrono-doctor", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
