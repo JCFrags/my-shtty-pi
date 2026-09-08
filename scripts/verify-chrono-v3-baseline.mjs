@@ -27,7 +27,7 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values pin the 2.0.5 guarded M05 deployment candidate.
+// These values pin the private 2.0.5 M05 draft repository candidate, not a deployment.
 // This verifies repository and optional live byte identity; it does not assert activation.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
