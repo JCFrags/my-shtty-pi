@@ -616,7 +616,7 @@ for (const manifestPath of packageManifestPaths) {
   const slug = relative(join(root, "packages"), packageRoot).split(sep)[0];
   const expectedScripts = expectedSafeScripts[slug] ?? {};
   if (packageRoot === join(root, "packages", slug)) {
-    const validatedScripts = slug === "pi-chrono-compaction" ? { ...expectedScripts, ...catalogNativeScripts } : expectedScripts;
+    const validatedScripts = slug === "pi-chrono-compaction" ? { ...catalogNativeScripts, ...expectedScripts } : expectedScripts;
     if (!jsonEqual(manifest.scripts ?? {}, validatedScripts)) throw new Error(`${rel}: unexpected safe script set`);
     if (Object.keys(expectedScripts).length > 0) scriptPlans.push({ slug, packageRoot, scripts: expectedScripts });
   } else if (manifest.scripts !== undefined) {
