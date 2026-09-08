@@ -1,6 +1,6 @@
 # M04 source catalog — implementation report
 
-Status: project-lead changes requested; corrections in progress, not accepted. Draft-review target: `rebuild/chrono-memory-v3`. No production activation or M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
+Status: project-lead R1 corrections implemented for re-review, not accepted. Draft-review target: `rebuild/chrono-memory-v3`. No production activation or M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
 
 ## Project-lead review R1
 
@@ -26,7 +26,7 @@ The focused corrections are `b830977` (F001), `ef09cf1` (F002), `0e0908c` (F003)
 - **F001:** At most 32 KiB of first/tail evidence advances only with parser-consumed buffers. Candidate verification and prior-anchor recheck occur inside the transaction before checkpoint publication; total verification overhead is at most 96 KiB. Six deterministic native-engine mutation tests prove complete ingestion-state rollback, including capture races, overlapping windows and giant continuations. All six fail against the original implementation because it accepts the mutation. Pure append remains valid; the helper reaches the exact 7 MiB + 96 KiB bound without exceeding the unchanged 8 MiB source budget. Sampled evidence still cannot certify unsampled bytes or writes after the final relevant read.
 - **F002:** Exact registered retrieval names and the `history_read` alias are generated-copy provenance. Twelve tests cover registry drift, mixed prose, explicit/indexed results, parser and process restart, sibling/session isolation, immutable pins and exact UTF-8 raw bytes. `history_retention_hint` is explicitly non-retrieval. Existing indexed provenance requires an explicit derived rebuild; it is not silently rewritten.
 - **F003:** Explicit creation is separate from existing lookup. UUID-bound initial/recovery intents prevent identity adoption on restart. Missing/empty referenced stores refuse without bootstrap, and ambiguous missing/zero reservations require a fresh recovery key. Twenty-two new tests cover actual native and physical routes, valid committed WAL recovery, refusal, restart/publication and healthy old pins. **Native limitation:** nonempty read-only identity/schema validation can create an empty WAL and a 32,768-byte SHM or rebuild transient SHM bookkeeping. Main DB and existing committed WAL bytes remain unchanged with no checkpoint/delete/schema writes. Missing/empty lookup preserves all orphan artifacts without native open. This is not an all-artifact preservation guarantee for nonempty preflight.
-- Parent build, typecheck, strict native allocation-refusal probe, **138/138 focused catalog/extension/configuration tests**, and **535/535 complete package tests** passed. Normal deterministic replay matched the retained small/medium output and generation hashes. Locked Pi 0.84.2 and global 0.85.1 disposable off/on canaries passed: unchanged 79,563-byte summaries/source prefixes, zero extension errors and external provider calls. The global lane does not expand the peer range.
+- Parent build, typecheck, strict native allocation-refusal probe, **138/138 focused catalog/extension/configuration tests**, and **535/535 complete package tests** passed. Normal deterministic replay and both 512/1,024 MiB fixed-heap lanes passed with the retained small/medium output and generation hashes. No package-suite or lifecycle-readiness retry was required in these corrected parent runs. Locked Pi 0.84.2 and global 0.85.1 disposable off/on canaries passed: unchanged 79,563-byte summaries/source prefixes, zero extension errors and external provider calls. The global lane does not expand the peer range.
 
 ### R1 fixed-memory high-cardinality campaign
 
@@ -55,6 +55,7 @@ The retained large-body campaign also passed after updating its accounting asser
 - F002's first run passed 11/12; registration drift exposed the advisory `history_retention_hint` tool. Its actual non-retrieval contract was added explicitly rather than using a broad name-prefix rule.
 - F003's earlier broader run passed 68/69: an existing cross-session fixture used status to bootstrap. The parent now explicitly ingests the other session and asserts missing-status refusal; integrated tests pass.
 - The many-record development harness initially omitted bounded discarded read-ahead in its accounting expectation, then tried to change slots policy on an existing namespace. Corrected the proof and used separate disposable namespaces per policy. Both failed namespaces were retained after confirming settlement; no runtime limits changed.
+- The first read-only production check assumed the activation root itself was the Git checkout. Its path assertion refused; a diagnostic Git call confirmed the path error. Using the actual `checkout/` child passed: clean accepted `ad23f0b`/2.0.4 alias and verified 2.0.3 rollback readiness. No production mutation occurred; the local activation reference now records that route.
 - The verifier worker's first frozen check refused 95 untracked build-generated source maps. The exact task-generated maps were moved into ignored private build output; frozen verification then passed without weakening clean-worktree enforcement.
 - The first integrated large-body rerun failed its old 64 KiB anchor-overhead expectation after F001 added a prior-anchor recheck. Both campaign assertions now account for at most 64 KiB discarded read-ahead plus 96 KiB verification, and at most 96 KiB verification for a small append. This changes measurement expectations, not the enforced 8 MiB source cap. The failed disposable namespace was retained; the corrected large-body rerun passed.
 
@@ -83,7 +84,7 @@ Exact published `better-sqlite3@12.9.0`, SQLite 3.53.0, MIT. The proposed 12.9.1
 
 The controlled project-local build verifies locked source and exact headers and changes only MEMSTATUS to 1. There is no compiler-step prebuild or header-network fallback. Actual allocation-refusal probes and seven focused binding tests passed on Node 20.0.0, 22.0.0 and 24.18.0. Node 24 native SHA-256: `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`. ADR-002 records all runtime, source, header and toolchain identities. Ubuntu CI uses an explicit local-build provenance record, not a claim of identical Fedora compiler output.
 
-## Measured synthetic evidence
+## Original draft measured synthetic evidence
 
 Parent reruns, after dependency integration:
 
@@ -138,7 +139,7 @@ node scripts/catalog-pi-canary.mjs "$PWD"
 
 The harness creates only synthetic sessions and private temporary agent/config/scheduler directories. It loads the candidate through a wrapper that supplies the disposable scheduler namespace. A synthetic provider throws on any model call, and network fetch is disabled. No credentials are inherited and no production settings are read or changed. Both states produced the same 79,563-byte compaction summary, preserved the original source prefix, and reported no extension errors. The harness retains its synthetic directories rather than deleting possibly unconfirmed worker admissions. Pi 0.85.1 is an extra observed compatibility lane, not an expansion of the declared peer range.
 
-## Repository verification
+## Original draft repository verification
 
 Full root `npm run verify` passed on the verifier integration branch at `1408de1577d4dd6f291c0c322147d12f24e4ddcf`: 15 baseline scripts, 17 pack dry-runs, exact isolated builds, two 491-test runs, normal replay and both fixed-heap lanes. The controlled native build ran after the last isolated reinstall and reproduced the recorded Fedora binary; the post-build probe refused the real oversized allocation. Runtime was 14 minutes 37.90 seconds, with peak RSS 864,164 KiB. The later canary-path allowance changes no runtime behavior. Frozen baseline and privacy self-tests passed 69/69 at `08bd8f6ad59df38f2df441629377bab70f9d2cf8` before parent integration. Final integrated and public CI results are recorded in the draft PR.
 
@@ -160,4 +161,4 @@ The decoded hash checkpoint can retain at most 2,046 decoded carry bytes, privat
 
 Process-kill tests are not device power-loss testing. Corrupt pointer metadata refuses rather than reconstructing by scanning directories. Old-store cleanup is outside this change. Literal Node 21, future majors, other native platforms, and full store execution on the early runtime lanes remain unverified. The workstation Pi 0.85.1 remains outside the unchanged locked peer range, although its disposable off/on canaries passed.
 
-Final integrated static/frozen/privacy and exact-head CI are the remaining publication gates. The draft PR records their final status. Project lead owns code/storage review and acceptance; implementation agents performed no independent code review. Production remains on accepted 2.0.4 with its alias, settings, policy, gate, inhibitors and rollback intact.
+R1 frozen metadata pins 96 source files at `fdb6df74fc937e46ed46f680affdf3e5426c01724e04f16cab88a0576c1225cc` and 95 distribution files at `d8f5892cfe89c89b2e7edb8e3ae99e96768f5d068f88d29a9cf64a1c50f780c0`. Entry, package, lock and charter hashes remain unchanged. Only the three new test paths and one many-record script were added to the finite correction lists. Full root, final integrated static/frozen/privacy and exact-head push/PR CI remain required delivery gates; draft PR #36 records their exact final results and attempts. Project lead owns code/storage review and acceptance; implementation agents performed no independent code review. Production remains on accepted 2.0.4 with its alias, settings, policy, gate, inhibitors and rollback intact.
