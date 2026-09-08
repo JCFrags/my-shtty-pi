@@ -306,7 +306,13 @@ function closeContainer(s) {
         s.record.blocks[f.block].rawEnd = s.byteOffset + 1;
     completeValue(s);
 }
-const retrieval = new Set(["history_search", "history_recall", "history_read"]);
+/** Exact registered retrieval names from pi-extension.ts, plus the explicit
+ * history_read compatibility alias retained for archived sessions. Do not infer
+ * provenance from payload text or a history_* prefix. Even exact retrieval is
+ * a generated copy, not another independent original source. Its raw call and
+ * result remain archived in chronology; assistant prose is classified separately.
+ */
+const retrieval = new Set(["history_get", "history_search", "history_recall", "history_range", "history_read"]);
 function classify(r) {
     const generated = r.type === "compaction" || r.type === "branch_summary"
         || ((r.type === "custom" || r.type === "custom_message") && /^chrono(?:[-_:]|$)/.test(r.customType ?? ""))

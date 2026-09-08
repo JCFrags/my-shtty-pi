@@ -107,20 +107,35 @@ class Engine {
             throw domainError ?? error;
         }
     }
-    initialize() {
+    validate(bootstrap = false, expectedStoreKey) {
+        const exists = this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'");
+        if (!exists) {
+            if (bootstrap && !this.get("SELECT name FROM sqlite_master LIMIT 1"))
+                return;
+            fail("catalog-version-mismatch");
+        }
+        const m = this.get("SELECT * FROM meta WHERE singleton=1");
+        if (!m || n(m, "version") !== 1 || text(m, "session") !== this.request.sessionKey)
+            fail("catalog-version-mismatch");
+        if (expectedStoreKey !== undefined && text(m, "store") !== expectedStoreKey)
+            fail("catalog-store-mismatch");
+        if (n(this.get("SELECT COUNT(*) AS count FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"), "count") !== schema.length)
+            fail("catalog-version-mismatch");
+        for (const sql of schema) {
+            const name = sql.split(" ")[2];
+            if (this.get("SELECT sql FROM sqlite_master WHERE name=?", name)?.sql !== sql)
+                fail("catalog-version-mismatch");
+        }
+    }
+    initialize(bootstrap, expectedStoreKey) {
         this.transaction(() => {
-            const exists = this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'");
-            if (!exists) {
-                if (this.get("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1"))
-                    fail("catalog-version-mismatch");
+            this.validate(bootstrap, expectedStoreKey);
+            if (!this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'")) {
                 for (const sql of schema)
                     this.run(sql);
-                this.run("INSERT INTO meta VALUES(1,1,?,1,?)", this.request.sessionKey, randomUUID());
+                this.run("INSERT INTO meta VALUES(1,1,?,1,?)", this.request.sessionKey, expectedStoreKey ?? randomUUID());
                 this.run("INSERT INTO generations VALUES(1,'initial','active')");
             }
-            const m = this.get("SELECT * FROM meta WHERE singleton=1");
-            if (n(m, "version") !== 1 || text(m, "session") !== this.request.sessionKey)
-                fail("catalog-version-mismatch");
         });
     }
     generation(requested) {
@@ -284,8 +299,11 @@ class Engine {
                         if (result.error || !result.consumedBytes)
                             break;
                     }
-                    if (consumed)
-                        this.run("INSERT INTO spans VALUES(?,?,?,?,?)", g, r.shardKey, start, consumed, hash(bytes.subarray(0, consumed)));
+                    if (consumed) {
+                        const accepted = bytes.subarray(0, consumed);
+                        source.accept(start, accepted);
+                        this.run("INSERT INTO spans VALUES(?,?,?,?,?)", g, r.shardKey, start, consumed, hash(accepted));
+                    }
                     // Charge all bytes read, including a bounded unread suffix discarded at a job cut.
                     delta += bytes.length;
                     if (state.error || !consumed)
@@ -294,7 +312,8 @@ class Engine {
                 const saved = JSON.stringify(state);
                 if (Buffer.byteLength(saved) > L.checkpointBytes)
                     fail("catalog-checkpoint-limit");
-                source.assertCurrent();
+                // Bounded transactional handoff: snapshot checks consumed-byte evidence
+                // and rechecks the previous anchors before any checkpoint is published.
                 const snapshot = source.snapshot(state.byteOffset);
                 const parseError = state.error;
                 const caught = state.byteOffset === source.size && !parseError && state.recordStart === state.byteOffset;
@@ -450,8 +469,7 @@ class Engine {
         });
     }
 }
-/** Must only run inside M03 worker containment. Errors never include source paths/content. */
-export function executeCatalogRequest(request) {
+export function executeCatalogRequest(request, options) {
     if (!isCatalogRequest(request))
         return { v: 1, ok: false, code: "catalog-request-invalid", sourceBytes: 0 };
     let db, engine;
@@ -460,11 +478,15 @@ export function executeCatalogRequest(request) {
             if (Buffer.from(path, "utf8").toString("utf8") !== path)
                 fail("catalog-identity-unsafe");
         }
-        if (request.op === "ingestStep" || (request.op === "rebuildStep" && request.action === "start"))
+        const create = options?.create ?? (request.op === "ingestStep" || (request.op === "rebuildStep" && request.action === "start"));
+        const expectedStoreKey = options?.expectedStoreKey ?? ("view" in request ? request.view.storeKey : undefined);
+        if (create)
             prepareDirectory(request.catalogDirectory);
-        db = CatalogSqlite.open(join(request.catalogDirectory, `catalog-${hash(request.sessionKey)}.sqlite`));
+        const path = join(request.catalogDirectory, `catalog-${hash(request.sessionKey)}.sqlite`);
+        const validate = (connection) => new Engine(connection, request).validate(create, expectedStoreKey);
+        db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
         engine = new Engine(db, request);
-        engine.initialize();
+        engine.initialize(create, expectedStoreKey);
         const result = engine.execute();
         const response = { v: 1, ok: true, result, sourceBytes: engine.bytes };
         if (Buffer.byteLength(JSON.stringify(response)) > L.wireBytes)

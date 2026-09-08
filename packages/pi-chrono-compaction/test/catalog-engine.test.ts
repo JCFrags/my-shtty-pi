@@ -98,6 +98,8 @@ test("duplicate IDs scoped to shard/session; ambiguous same-shard reference refu
   assert.equal(f.ok({ op: "pin", branchKey: "main", leaf: { shardKey: "s2", eventId: "a" } }).view.eventCut, 2);
   appendFileSync(other, line("a", null)); f.ingest({ shardKey: "s2", shardOrdinal: 1, sourcePath: other });
   assert.equal(f.request({ op: "pin", branchKey: "main", leaf: { shardKey: "s2", eventId: "a" } }).ok, false);
+  assert.equal(f.request({ op: "status", sessionKey: "other-session" }).ok, false, "status cannot bootstrap a missing session DB");
+  f.ok({ op: "ingestStep", sessionKey: "other-session", shardKey: "s1", branchKey: "main", shardOrdinal: 0, sourcePath: f.source });
   assert.equal(f.ok({ op: "status", sessionKey: "other-session" }).generation, 1);
   assert.equal(f.request({ op: "page", sessionKey: "other-session", view: f.pin("a") }).ok, false);
 }));

@@ -101,7 +101,7 @@ async function campaign(small) {
     report.phases.initial = m;
     let caught = false;
     for (let jobs = 0; jobs < count; jobs++) { const r = await call(ingest); if (r.result.caughtUp) { caught = true; break; } assert.equal(r.result.incompleteTail, false); }
-    assert.ok(caught); assert.ok(m.sourceBytes <= report.generated.bytes + m.jobs * 131072, "delta plus <=64KiB discarded read-ahead and <=64KiB anchors per job");
+    assert.ok(caught); assert.ok(m.sourceBytes <= report.generated.bytes + m.jobs * 163840, "delta plus <=64KiB discarded read-ahead and <=96KiB handoff verification per job");
     const status = await call({ op: "status", shardKey: "one" }); assert.equal(status.result.records, count); assert.equal(status.result.committed, report.generated.bytes);
     assert.equal(await hashFile(sourcePath), report.generated.hash, "initial source unchanged before fixture appends");
     m = metrics(); call = await caller(base, schedulerDirectory, 1, m);
@@ -117,7 +117,7 @@ async function campaign(small) {
     for (let round = 1; round <= 3; round++) {
       for (let noop = 0; noop < 2; noop++) assert.ok((await call(ingest)).sourceBytes <= 32768);
       const n = count + round; const bytes = line(n); appendFileSync(sourcePath, bytes);
-      const r = await call(ingest); assert.equal(r.result.caughtUp, true); assert.ok(r.sourceBytes <= Buffer.byteLength(bytes) + 65536);
+      const r = await call(ingest); assert.equal(r.result.caughtUp, true); assert.ok(r.sourceBytes <= Buffer.byteLength(bytes) + 98304);
       await window(call, view, count - 20, count, 3);
     }
     // Two branches fork from an earlier main event. They are physically interleaved in the same shard.

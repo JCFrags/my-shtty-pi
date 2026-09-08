@@ -14,7 +14,8 @@ logical-root/                         0700
   publication.lock                   0600, kernel flock
   active.json                        0600, current session/store UUID
   refs/<store-UUID>.json              0600, immutable session/folder mapping
-  stages/recovery-<SHA256>.json        0600, immutable recovery intent
+  stages/initial-<SHA256>.json         0600, immutable initial intent/UUID
+  stages/recovery-<SHA256>.json        0600, immutable recovery intent/UUID
   stores/initial-<SHA256>/            0700, deterministic initial DB directory
   stores/recovery-<SHA256>/           0700, deterministic recovery DB directory
     catalog-<session-hash>.sqlite     engine-owned DB, WAL and SHM together
@@ -22,8 +23,9 @@ logical-root/                         0700
 
 The initial folder is derived from the logical session key. A recovery folder is
 derived from the session key and rebuild token with an unambiguous separator.
-Folder names do not depend on source content or paths. The engine assigns the
-physical store UUID. Immutable refs bind that UUID to one folder and session.
+Folder names do not depend on source content or paths. The wrapper assigns the
+physical store UUID in immutable intent before bootstrap; the engine stores that
+expected UUID. Immutable refs bind that UUID to one folder and session.
 There are no lifetime in-memory maps and no directory scans.
 
 Ordinary ingestion and status resolve `active.json`. `targetStoreKey` explicitly
@@ -37,8 +39,8 @@ pinned views remain readable when a new physical store becomes active.
 ## Initial creation and recovery
 
 Only ingestion and explicit `recoverStart` create a logical root. Initial ingestion
-prepares one deterministic physical directory, commits an engine-created blank
-store, then commits its immutable ref and active pointer. Source ingestion follows
+commits a UUID-bound initial intent, prepares one deterministic physical directory,
+explicitly creates a blank store, then commits its immutable ref and active pointer. Source ingestion follows
 publication. An interruption may therefore leave a valid active blank store; the
 next ingestion resumes it. Competing initializers cannot overwrite another active
 pointer. Native writer contention may produce a controlled refusal; retry the
@@ -48,7 +50,7 @@ Recovery is explicit and does not open the active DB:
 
 1. Send `recoverStart` with a bounded `rebuildKey`.
 2. The wrapper commits immutable recovery intent with the observed active UUID
-   (or `null`) before starting a rebuild generation in a new physical DB.
+   (or `null`) and a new physical UUID before starting a rebuild generation in a new physical DB.
 3. The response includes `targetStoreKey`, `generation`, `expectedActiveStoreKey`,
    and `rebuildKey`. Save those values. Repeating the same token reuses its intent
    and physical folder; it does not adopt a newer active owner.
@@ -62,6 +64,22 @@ Recovery is explicit and does not open the active DB:
    On a match, atomically replace the active pointer. If the target is already
    active, the request is an idempotent success. Any other owner produces
    `catalog-publication-conflict`; the replacement and all its state stay intact.
+
+Known refs and pinned views always route with creation disabled and the expected
+physical UUID. Missing, empty, mismatched or wrong-schema stores refuse; status
+cannot bootstrap a missing database. An intent-only interruption or a valid
+initialized DB/WAL can resume. An existing folder with a missing DB, or an existing
+zero-byte reservation, is ambiguous and refuses even when its ref is missing:
+use a fresh explicit recovery key after a pre-bootstrap crash. UUID-less legacy
+intents and existing folders without intent also refuse. Healthy legacy active/ref
+lookups do not require an intent and remain readable. No scans or automatic
+reconstruction are introduced.
+
+Missing/empty DB lookup preserves orphan sidecars without native open. For nonempty
+DB identity/schema preflight, native read-only SQLite can create an empty WAL and
+32,768-byte SHM or rebuild transient SHM; main DB and existing committed WAL bytes
+are preserved without checkpoint/delete/schema writes. This is not a guarantee of
+zero artifact changes. See [ADR-002](adr/ADR-002-sqlite-catalog.md).
 
 A source append after the engine's observed complete cut is honest catalog lag.
 Publication does not claim that future writes cannot occur. Ordinary incremental
