@@ -1,6 +1,6 @@
 # M04 source catalog — implementation report
 
-Status: work in progress, not accepted. Draft-review target: `rebuild/chrono-memory-v3`. No production activation or M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
+Status: implemented for draft review, not accepted. Draft-review target: `rebuild/chrono-memory-v3`. No production activation or M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
 
 ## Delivered boundary
 
@@ -82,12 +82,19 @@ node scripts/catalog-pi-canary.mjs "$PWD"
 
 The harness creates only synthetic sessions and private temporary agent/config/scheduler directories. It loads the candidate through a wrapper that supplies the disposable scheduler namespace. A synthetic provider throws on any model call, and network fetch is disabled. No credentials are inherited and no production settings are read or changed. Both states produced the same 79,563-byte compaction summary, preserved the original source prefix, and reported no extension errors. The harness retains its synthetic directories rather than deleting possibly unconfirmed worker admissions. Pi 0.85.1 is an extra observed compatibility lane, not an expansion of the declared peer range.
 
+## Repository verification
+
+Full root `npm run verify` passed on the verifier integration branch at `1408de1577d4dd6f291c0c322147d12f24e4ddcf`: 15 baseline scripts, 17 pack dry-runs, exact isolated builds, two 491-test runs, normal replay and both fixed-heap lanes. The controlled native build ran after the last isolated reinstall and reproduced the recorded Fedora binary; the post-build probe refused the real oversized allocation. Runtime was 14 minutes 37.90 seconds, with peak RSS 864,164 KiB. The later canary-path allowance changes no runtime behavior. Frozen baseline and privacy self-tests passed 69/69 at `08bd8f6ad59df38f2df441629377bab70f9d2cf8` before parent integration. Final integrated and public CI results are recorded in the draft PR.
+
 ## Disclosed failed runs and corrections
 
 - The stock native prebuild failed effective heap enforcement; replaced by the explicitly verified source build, not a larger global memory limit.
 - A focused test invocation used repository-root rather than package working directory and could not find synthetic fixtures. The retry used package cwd. Two added expectations also needed correction: the new status command belongs in the command list; existing configuration syntax accepts explicit boolean strings. The corrected 39-test run passed.
 - The first medium fixture generator exhausted its 512 MiB heap while retaining all bodies. It was changed to materialize one body at a time, without increasing that heap or catalog limits. The medium retry passed.
 - The publication worker attempted its native probe before distribution existed; the successful post-build probe supersedes that failed attempt.
+- Root verification initially rejected the changed user-config test against the retained M00 snapshot. Only that exact test path was added to the existing historical-snapshot exception; historical rows and totals remain unchanged.
+- Strict script-map comparison exposed a declaration-order mismatch. The expected native commands were placed in the frozen package order without relaxing command validation.
+- All-ref privacy scanning flagged a noncredential dummy in the synthetic canary. The user authorized amendment of only unpublished commit `bfac2ad` to shorten that literal, yielding `1909351`. No real credential was present, no earlier history was rewritten, and the privacy scanner was not changed.
 
 ## Explicit limits and remaining gates
 
@@ -97,4 +104,4 @@ The decoded hash checkpoint can retain at most 2,046 decoded carry bytes, privat
 
 Process-kill tests are not device power-loss testing. Corrupt pointer metadata refuses rather than reconstructing by scanning directories. Old-store cleanup is outside this change. Literal Node 21, future majors, other native platforms, and full store execution on the early runtime lanes remain unverified. The workstation Pi 0.85.1 remains outside the unchanged locked peer range, although its disposable off/on canaries passed.
 
-Final integrated frozen-baseline/root/privacy/exact-head CI, verifier metadata and the draft PR remain pending. Project lead owns code/storage review and acceptance; implementation agents performed no independent code review. Production remains on accepted 2.0.4 with its alias, settings, policy, gate, inhibitors and rollback intact.
+Final integrated static/frozen/privacy and exact-head CI are the remaining publication gates. The draft PR records their final status. Project lead owns code/storage review and acceptance; implementation agents performed no independent code review. Production remains on accepted 2.0.4 with its alias, settings, policy, gate, inhibitors and rollback intact.
