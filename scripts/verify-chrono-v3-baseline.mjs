@@ -27,25 +27,26 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values are the deliberately advanced M03 / 2.0.4 corrective-runtime boundary.
+// These values are the deliberately advanced M04 draft / unreleased 2.0.4 candidate boundary.
+// This does not assert production deployment or M04 acceptance.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
   schemaVersion: 3,
   m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
-  sourceFiles: 84,
-  sourceTreeHash: "0d0eaca5b0c103b51d5fe9fb373f7c39bc93e4d7229d2c7d2bb91f7b1ee04b02",
-  distFiles: 83,
-  distTreeHash: "04d1bf07b228c9ae6238672794c6adb43a5213c9d91f1690cd32f699ce989747",
-  entrypointHash: "e6dab767e69f670daf90a215dbad64f07de7849f9f2f32d25f5183237f5746aa",
-  m01PackageHash: "21ad16a4f192bd7ab831a1f73ca04f3e8d2fd6f099538882f4687a9c02adbd5a",
-  m01LockHash: "00edb712bdddb3818f54c447da14b38e852b4a4fae1bf0ea23f940de1dae183a",
-  livePackageHash: "21ad16a4f192bd7ab831a1f73ca04f3e8d2fd6f099538882f4687a9c02adbd5a",
-  deployedPackageHash: "21ad16a4f192bd7ab831a1f73ca04f3e8d2fd6f099538882f4687a9c02adbd5a",
+  sourceFiles: 96,
+  sourceTreeHash: "4f2f5716f0df5244448df3e498c017bec45bd7e2501644db4c3821fb2d72a446",
+  distFiles: 95,
+  distTreeHash: "f6c3c1dee39d977ec0776b34f10fc91bcfaf0058583e8e87a27eaa44ed0ee9cc",
+  entrypointHash: "ab28b018a42137c030dc94dfe88c44e977dce8e9cf76ed9526da55b20258ace4",
+  m01PackageHash: "d35720bba151a820a1569355a9b78846a4341bcb03f7f7feecd05fa79bdbee4e",
+  m01LockHash: "c02fb0133b915387981448d1af1321bd0ccb2bb7c50c0e8c7ab1e1f200bceb8f",
+  livePackageHash: "d35720bba151a820a1569355a9b78846a4341bcb03f7f7feecd05fa79bdbee4e",
+  deployedPackageHash: "d35720bba151a820a1569355a9b78846a4341bcb03f7f7feecd05fa79bdbee4e",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
-  canonicalDeployedFiles: 279,
+  canonicalDeployedFiles: 291,
 });
 
 const correctionPaths = new Set([
@@ -177,6 +178,44 @@ const correctionPaths = new Set([
   "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M02-test-foundation-report.md",
   "docs/chrono-v3/reviews/M03-runtime-report.md",
+  "docs/chrono-v3/adr/ADR-002-sqlite-catalog.md",
+  "docs/chrono-v3/catalog-contract.md",
+  "docs/chrono-v3/catalog-store-publication.md",
+  "docs/chrono-v3/reviews/M04-catalog-report.md",
+  "packages/pi-chrono-compaction/dist/src/catalog-contract.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-engine.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-parser-hash.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-parser.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-shadow.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-source.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-sqlite.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-store-contract.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-store.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-entry.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-observation.js",
+  "packages/pi-chrono-compaction/scripts/catalog-benchmark.mjs",
+  "packages/pi-chrono-compaction/scripts/catalog-sqlite-probe.mjs",
+  "packages/pi-chrono-compaction/src/catalog-contract.ts",
+  "packages/pi-chrono-compaction/src/catalog-engine.ts",
+  "packages/pi-chrono-compaction/src/catalog-parser-hash.ts",
+  "packages/pi-chrono-compaction/src/catalog-parser.ts",
+  "packages/pi-chrono-compaction/src/catalog-shadow.ts",
+  "packages/pi-chrono-compaction/src/catalog-source.ts",
+  "packages/pi-chrono-compaction/src/catalog-sqlite.ts",
+  "packages/pi-chrono-compaction/src/catalog-store-contract.ts",
+  "packages/pi-chrono-compaction/src/catalog-store.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-client.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-entry.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-observation.ts",
+  "packages/pi-chrono-compaction/test/catalog-engine.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-lifecycle.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-parser.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-shadow.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-source.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-sqlite.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-store.test.ts",
+  "packages/pi-chrono-compaction/test/user-config.test.ts",
 ]);
 
 class BaselineVerificationError extends Error {

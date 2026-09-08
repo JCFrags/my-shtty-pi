@@ -67,8 +67,8 @@ test("frozen repository baseline passes without requiring live files", () => wit
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "ok");
   assert.equal(result.json.schemaVersion, 3);
-  assert.equal(result.json.repository.sourceFiles, 84);
-  assert.equal(result.json.repository.distFiles, 83);
+  assert.equal(result.json.repository.sourceFiles, 96);
+  assert.equal(result.json.repository.distFiles, 95);
   assert.deepEqual(result.json.repository.deployedManifest, {
     runtimeMismatches: [],
     metadataExceptions: [],
@@ -239,7 +239,7 @@ test("existing build script change fails", () => withClonedRepository((repositor
   assert.equal(result.json.code, "chrono-package-metadata-changed");
 }));
 
-test("exact M01 package metadata passes without an exception", () => withClonedRepository((repositoryRoot) => {
+test("exact candidate package metadata passes without an exception", () => withClonedRepository((repositoryRoot) => {
   const result = runStatic(repositoryRoot);
   assert.equal(result.status, 0, JSON.stringify(result.json));
   assert.deepEqual(result.json.repository.metadataExceptions, []);

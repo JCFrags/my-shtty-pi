@@ -40,6 +40,7 @@ const m00BaselineCommit = "1887c77b39c42fb0b5d35b38baac94aff13465e9";
 const m00IntegrationCommit = "ca8a94134e5577edd82204ae173126464fc82b70";
 // Historical byte identity is relaxed only for named, behavior-preserving milestone migrations.
 const m01MutableHistoricalTests = new Set([
+  "packages/pi-chrono-compaction/test/user-config.test.ts",
   "packages/pi-chrono-compaction/test/benchmark-compaction-worker.test.ts",
   "packages/pi-chrono-compaction/test/v2-extension-integration.test.ts",
   "packages/pi-chrono-compaction/test/v2-render-recovery.test.ts",
@@ -178,6 +179,44 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M02-test-foundation-report.md",
   "docs/chrono-v3/reviews/M03-runtime-report.md",
+  "docs/chrono-v3/adr/ADR-002-sqlite-catalog.md",
+  "docs/chrono-v3/catalog-contract.md",
+  "docs/chrono-v3/catalog-store-publication.md",
+  "docs/chrono-v3/reviews/M04-catalog-report.md",
+  "packages/pi-chrono-compaction/dist/src/catalog-contract.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-engine.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-parser-hash.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-parser.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-shadow.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-source.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-sqlite.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-store-contract.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-store.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-entry.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-observation.js",
+  "packages/pi-chrono-compaction/scripts/catalog-benchmark.mjs",
+  "packages/pi-chrono-compaction/scripts/catalog-sqlite-probe.mjs",
+  "packages/pi-chrono-compaction/src/catalog-contract.ts",
+  "packages/pi-chrono-compaction/src/catalog-engine.ts",
+  "packages/pi-chrono-compaction/src/catalog-parser-hash.ts",
+  "packages/pi-chrono-compaction/src/catalog-parser.ts",
+  "packages/pi-chrono-compaction/src/catalog-shadow.ts",
+  "packages/pi-chrono-compaction/src/catalog-source.ts",
+  "packages/pi-chrono-compaction/src/catalog-sqlite.ts",
+  "packages/pi-chrono-compaction/src/catalog-store-contract.ts",
+  "packages/pi-chrono-compaction/src/catalog-store.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-client.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-entry.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-observation.ts",
+  "packages/pi-chrono-compaction/test/catalog-engine.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-lifecycle.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-parser.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-shadow.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-source.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-sqlite.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-store.test.ts",
+  "packages/pi-chrono-compaction/test/user-config.test.ts",
 ]);
 
 const expectedSlugs = [
@@ -487,7 +526,7 @@ if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/ve
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
-if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 279) throw new Error("Stage 1 record or canonical deployed-file count changed");
+if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 291) throw new Error("Stage 1 record or canonical deployed-file count changed");
 if (consolidation.deployedBaselineCommit !== "049b6390fba7a7908d01908a7953dd2f50fa15df") throw new Error("unexpected deployed baseline commit");
 let hashCount = 0;
 let historicalMetadataHashes = 0;
@@ -526,7 +565,7 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-if (hashCount !== 279) throw new Error(`canonical deployed hash count ${hashCount}; expected 279`);
+if (hashCount !== 291) throw new Error(`canonical deployed hash count ${hashCount}; expected 291`);
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -1007,7 +1046,7 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: "279/279",
+  deployedHashesVerified: "291/291",
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),
