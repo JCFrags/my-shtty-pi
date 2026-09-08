@@ -159,7 +159,10 @@ export type SourceBlockKind =
   | "tool-result" | "bash-execution" | "branch-summary" | "custom-message"
   | "model-change" | "thinking-level-change" | "historical-compaction" | "metadata" | "unknown";
 
+export type SourceStructuralField = "role" | "toolName" | "toolCallId" | "exitCode" | "isError" | "cancelled" | "originallyTruncated";
 export interface SourceStructuralFacts {
+  /** Each present value requires a caller-verified raw-record reference. */
+  readonly sources?: Readonly<Partial<Record<SourceStructuralField, ScopedRawSourceRef>>>;
   readonly role?: string;
   readonly toolName?: string;
   readonly toolCallId?: string;
@@ -465,6 +468,10 @@ export function isScopedSourceRef(value: unknown): value is ScopedSourceRef {
   return value.coordinateKind === "raw-json" && value.rawHashAlgorithm === SEGMENT_CONTENT_HASH && hash(value.rawHash);
 }
 
+export function isScopedRawSourceRef(value: unknown): value is ScopedRawSourceRef {
+  return isScopedSourceRef(value) && value.coordinateKind === "raw-json";
+}
+
 export function isScopedBodySourceRef(value: unknown): value is ScopedBodySourceRef {
   return isScopedSourceRef(value) && value.coordinateKind === "decoded-body";
 }
@@ -557,6 +564,13 @@ export function isSourceBlockReducerInput(value: unknown): value is SourceBlockR
   if (value.window.completeBody !== (value.window.omittedBeforeUnits === 0 && value.window.omittedAfterUnits === 0)) return false;
   if (value.window.completeBody && value.source.decodedUtf16.end - value.source.decodedUtf16.start > CAPSULE_LIMITS.reducerInputUnits) return false;
   const s = value.structural;
+  const fields = ["role", "toolName", "toolCallId", "exitCode", "isError", "cancelled", "originallyTruncated"];
+  if (Object.keys(s).some(key => key !== "sources" && !fields.includes(key))) return false;
+  if (s.sources !== undefined && (!object(s.sources) || Object.keys(s.sources).some(key => !fields.includes(key) || s[key] === undefined))) return false;
+  for (const field of fields) {
+    if (s[field] === undefined) continue;
+    if (!object(s.sources) || !isScopedRawSourceRef(s.sources[field]) || !sameEventScope(s.sources[field], value.source)) return false;
+  }
   return (s.role === undefined || boundedText(s.role, 64)) && (s.toolName === undefined || boundedText(s.toolName, 128))
     && (s.toolCallId === undefined || boundedText(s.toolCallId, 1024)) && (s.exitCode === undefined || Number.isSafeInteger(s.exitCode))
     && (s.isError === undefined || typeof s.isError === "boolean") && (s.cancelled === undefined || typeof s.cancelled === "boolean")
@@ -571,7 +585,7 @@ function isFact(value: unknown, capsuleSource: ScopedBodySourceRef): value is Ca
   if (!object(value) || !enumValue(["structural", "extractive"] as const, value.kind) || typeof value.name !== "string" || value.name.length < 1 || value.name.length > 64
     || (!["string", "number", "boolean"].includes(typeof value.value) && value.value !== null)
     || !isScopedSourceRef(value.source) || !sameEventScope(value.source, capsuleSource)) return false;
-  if (value.kind === "structural") return value.decodedUtf16 === undefined;
+  if (value.kind === "structural") return isScopedRawSourceRef(value.source) && value.decodedUtf16 === undefined;
   return isScopedBodySourceRef(value.source) && range(value.decodedUtf16) && sourceRangeWithin(value.decodedUtf16, value.source);
 }
 function isCue(value: unknown, source: ScopedBodySourceRef): value is ProtectedCue {
@@ -634,7 +648,8 @@ export function isReducerEnvelope(value: unknown): value is ReducerEnvelope {
     } else if (item.outcome.status === "supported") {
       if (!enumValue(["success", "failure", "cancelled", "pending-approval"] as const, item.outcome.value)
         || !Array.isArray(item.outcome.facts) || item.outcome.facts.length < 1
-        || !(item.outcome.facts as unknown[]).every((factIndex) => typeof factIndex === "number" && integer(factIndex) && factIndex < facts.length)) return false;
+        || !(item.outcome.facts as unknown[]).every((factIndex) => typeof factIndex === "number" && integer(factIndex) && factIndex < facts.length
+          && object(facts[factIndex]) && facts[factIndex].kind === "structural")) return false;
     } else return false;
   }
   return byteSizeWithin(value, CAPSULE_LIMITS.responseBytes);

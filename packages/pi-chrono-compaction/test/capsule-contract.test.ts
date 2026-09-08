@@ -152,6 +152,10 @@ test("bounded reducer inputs never admit a giant body as one reducer string", ()
     window: { decodedUtf16: { start: 0, end: 12 }, text: "a".repeat(12), completeBody: true, omittedBeforeUnits: 0, omittedAfterUnits: 0 },
   };
   assert.equal(isSourceBlockReducerInput(input), true);
+  assert.equal(isSourceBlockReducerInput({ ...input, structural: { exitCode: 0 } }), false);
+  assert.equal(isSourceBlockReducerInput({ ...input, structural: { exitCode: 0, sources: { exitCode: body } } }), false);
+  assert.equal(isSourceBlockReducerInput({ ...input, structural: { exitCode: 0, sources: { exitCode: raw } } }), true);
+  assert.equal(isSourceBlockReducerInput({ ...input, structural: { exitCode: 0, sources: { exitCode: { ...raw, eventSeq: raw.eventSeq + 1 } } } }), false);
 
   const giantSource = { ...body, decodedUtf16: { start: 0, end: CAPSULE_LIMITS.reducerInputUnits + 1 } };
   assert.equal(isSourceBlockReducerInput({
@@ -204,6 +208,13 @@ test("capsules are source-local, explicitly lossy, source-linked alternatives wi
   assert.ok(ADAPTER_ONLY_DECISIONS.includes("current-state"));
   assert.equal(isReducerEnvelope({ ...valid, family: "file-read" }), false);
 
+  const bodyMetadata = clone(valid);
+  bodyMetadata.alternatives[0]!.facts[0]!.source = body;
+  assert.equal(isReducerEnvelope(bodyMetadata), false);
+  const quotedOutcome = clone(valid);
+  quotedOutcome.alternatives[0]!.facts[0] = { kind: "extractive", name: "pendingApproval", value: "pending", source: body, decodedUtf16: { start: 0, end: 7 } };
+  quotedOutcome.alternatives[0]!.outcome.value = "pending-approval";
+  assert.equal(isReducerEnvelope(quotedOutcome), false);
   const inventedOutcome = clone(valid);
   inventedOutcome.alternatives[0]!.outcome = { status: "supported", value: "success", facts: [] };
   assert.equal(isReducerEnvelope(inventedOutcome), false);
