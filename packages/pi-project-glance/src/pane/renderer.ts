@@ -75,22 +75,20 @@ function feedItemLabel(type: ProjectGlanceFeedItem["type"]): string {
 function renderItemContent(
   item: ProjectGlanceFeedItem,
   width: number,
-  expanded = true,
+  expanded = false,
   selected = false,
   unread = false,
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
-  const link = (action: string, text: string) =>
-    `\u001b]8;;project-glance://${action}/${encodeURIComponent(item.id)}\u0007${text}\u001b]8;;\u0007`;
   const date = new Date(item.createdAt);
   const time = Number.isFinite(date.getTime())
     ? `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`
     : "--:--";
   const compact = [
-    `${selected ? ">" : " "}${link("read", unread ? "●" : "•")}`,
+    `${selected ? ">" : " "}${unread ? "●" : "•"}`,
+    expanded ? "▾" : "▸",
     time,
-    link("toggle", feedItemLabel(item.type)),
-    link("dismiss", "×"),
+    feedItemLabel(item.type),
   ].join(" ");
   const label = truncateToWidth(compact, safeWidth);
   const indent = safeWidth > 2 ? "  " : " ".repeat(Math.max(0, safeWidth - 1));
@@ -101,8 +99,12 @@ function renderItemContent(
       ...wrapText(item.text, textWidth).map((line) => `${indent}${line}`),
     ];
   }
-  const summary = item.text.replace(/\s+/gu, " ");
-  return [label, truncateToWidth(`${indent}${summary}`, safeWidth)];
+  const wrapped = wrapText(item.text, textWidth);
+  const preview = wrapped.slice(0, 2);
+  if (wrapped.length > 2) {
+    preview[1] = `${sliceByColumn(preview[1] ?? "", 0, Math.max(0, textWidth - 1), true).trimEnd()}…`;
+  }
+  return [label, ...preview.map((line) => `${indent}${line}`)];
 }
 
 const FEED_CARD_STYLE = "\u001b[48;5;236m\u001b[38;5;255m";
@@ -136,17 +138,34 @@ function renderBox(content: string[], width: number, style: string): string[] {
 function renderItem(
   item: ProjectGlanceFeedItem,
   width: number,
-  expanded = true,
+  expanded = false,
   selected = false,
   unread = false,
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
   const contentWidth = safeWidth < 4 ? safeWidth : safeWidth - 2;
-  return renderBox(
-    renderItemContent(item, contentWidth, expanded, selected, unread),
-    safeWidth,
-    FEED_CARD_STYLE,
-  );
+  const link = (action: string, text: string) =>
+    `\u001b]8;;project-glance://${action}/${encodeURIComponent(item.id)}\u0007${text}\u001b]8;;\u0007`;
+  const bordered = safeWidth >= 4;
+  const closeLabel = contentWidth >= 3 ? "[×]" : "×";
+  const rightPadding = contentWidth >= 5 ? 1 : 0;
+  const closeStart = safeWidth - (bordered ? 1 : 0) - rightPadding - visibleWidth(closeLabel);
+  const content = renderItemContent(item, contentWidth, expanded, selected, unread);
+  content[0] = truncateToWidth(content[0] ?? "", Math.max(0, contentWidth - visibleWidth(closeLabel) - rightPadding - 1), "");
+  const rows = renderBox(content, safeWidth, FEED_CARD_STYLE);
+  // The close button sits inside the header, not on the border. Its complete
+  // bracketed area dismisses; every other card cell remains a toggle target.
+  // These links are hit-map metadata; the feed strips them before display.
+  return rows.map((row, index) => {
+    if (index !== (bordered ? 1 : 0)) return link("toggle", row);
+    return cardLine(
+      link("toggle", sliceByColumn(row, 0, closeStart, true)) +
+        link("dismiss", `\u001b[1m${closeLabel}\u001b[22m`) +
+        link("toggle", `${" ".repeat(rightPadding)}${bordered ? "│" : ""}`),
+      safeWidth,
+      FEED_CARD_STYLE,
+    );
+  });
 }
 
 function connectionBanner(state: ProjectGlanceConnectionState): string | undefined {
@@ -199,7 +218,7 @@ export function renderProjectGlanceFeed(
     lines.push(...renderItem(
       item,
       safeWidth,
-      options.expandedIds?.has(item.id) ?? true,
+      options.expandedIds?.has(item.id) ?? false,
       options.selectedId === item.id,
       !read.has(item.id),
     ));

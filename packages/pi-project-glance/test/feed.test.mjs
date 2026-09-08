@@ -105,3 +105,23 @@ test("Workplan checkpoints include focus and next actions with privacy checks", 
   const item = extractWorkplanEntryItem(entry("work", { role: "toolResult", toolName: "workplan", details: { activity } }));
   assert.equal(item.text, "Checkpoint: Saved — Focus — Verify");
 });
+
+test("generic provider preambles do not require phase markers or an absent signature property", () => {
+  for (const metadata of [{}, { textSignature: undefined }, { textSignature: "opaque-provider-signature" }, { textSignature: JSON.stringify({ v: 1, id: "unsigned-phase" }) }]) {
+    const blocks = [{ type: "text", text: "Checking the implementation.", ...metadata }, { type: "toolCall", id: "call", name: "read", arguments: {} }];
+    assert.equal(extractAssistantFeedItems(assistant(blocks, "toolUse"), "generic", AT)[0]?.text, "Checking the implementation.");
+    for (const reason of ["error", "aborted", "length", "pending"]) assert.deepEqual(extractAssistantFeedItems(assistant(blocks, reason), "generic", AT), []);
+  }
+});
+
+test("thousands of UI entries cannot evict source history; dismissals backfill before the cap", () => {
+  const messages = Array.from({ length: 80 }, (_, i) => entry(`entry-${i}`, assistant([{ type: "text", text: `Update ${i}`, textSignature: signature(`s-${i}`, "commentary") }])));
+  const ui = (action, itemId) => ({ type: "custom", customType: "pi-project-glance/ui-state-v1", data: { version: 1, action, itemId } });
+  const bookkeeping = Array.from({ length: 5000 }, (_, i) => ui("mark_read", `entry-${i % 80}`));
+  const branch = [...messages, ...bookkeeping, ...Array.from({ length: 30 }, (_, i) => ui("dismiss", `entry-${50 + i}`))];
+  const feed = rebuildProgressFeed(branch);
+  assert.equal(feed.length, 50);
+  assert.equal(feed[0].id, "entry-0");
+  assert.equal(feed.at(-1).id, "entry-49");
+  assert.deepEqual(rebuildProgressFeed([...messages, ...bookkeeping]).map((i) => i.id), rebuildProgressFeed(messages).map((i) => i.id));
+});

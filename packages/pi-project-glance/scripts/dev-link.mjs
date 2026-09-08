@@ -28,8 +28,9 @@ async function loadSettingsInfo() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
   try {
     return { agentDir, settings: JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) };
-  } catch {
-    return { agentDir, settings: {} };
+  } catch (error) {
+    if (error.code === "ENOENT") return { agentDir, settings: {} };
+    throw new Error("PI_SETTINGS_INVALID");
   }
 }
 function configuredLocalPath(source, agentDir) {
@@ -68,7 +69,9 @@ async function listHerdr() {
 }
 async function herdrLinkState() {
   const plugins = await listHerdr();
-  const plugin = plugins.find((item) => item?.plugin_id === pluginId);
+  const matches = plugins.filter((item) => item?.plugin_id === pluginId);
+  if (matches.length > 1) throw new Error("PROJECT_GLANCE_PLUGIN_CONFLICT");
+  const plugin = matches[0];
   if (!plugin) return { plugin: undefined, rootMatches: false };
   let rootMatches = false;
   if (typeof plugin.plugin_root === "string") {
@@ -103,15 +106,15 @@ async function run() {
     }
   }
   if (existingByName.length > 0) throw new Error("PROJECT_GLANCE_LINK_CONFLICT");
+  const beforeHerdr = await herdrLinkState();
+  if (beforeHerdr.plugin && !beforeHerdr.rootMatches) throw new Error("PROJECT_GLANCE_PLUGIN_CONFLICT");
+  if (piBefore.matches.length > 1) throw new Error("PROJECT_GLANCE_LINK_CONFLICT");
   const piAdded = piBefore.matches.length === 0;
-  if (piAdded) {
-    const installed = await runCommand("pi", ["install", packageRoot], { env: env() });
-    if (!installed.ok) throw new Error("PI_LINK_FAILED");
-  }
-
   try {
-    const beforeHerdr = await herdrLinkState();
-    if (beforeHerdr.plugin && !beforeHerdr.rootMatches) throw new Error("PROJECT_GLANCE_PLUGIN_CONFLICT");
+    if (piAdded) {
+      const installed = await runCommand("pi", ["install", packageRoot], { env: env() });
+      if (!installed.ok) throw new Error("PI_LINK_FAILED");
+    }
     if (!beforeHerdr.plugin) {
       const linked = await runCommand("herdr", ["plugin", "link", packageRoot, "--enabled"], { env: env() });
       if (!linked.ok) throw new Error("HERDR_LINK_FAILED");
@@ -119,16 +122,29 @@ async function run() {
       const enabled = await runCommand("herdr", ["plugin", "enable", pluginId], { env: env() });
       if (!enabled.ok) throw new Error("HERDR_ENABLE_FAILED");
     }
+    const afterPi = await packageEntries();
+    const afterHerdr = await herdrLinkState();
+    if (afterPi.matches.length !== 1 || !afterHerdr.rootMatches || afterHerdr.plugin?.enabled !== true) {
+      throw new Error("LINK_VERIFICATION_FAILED");
+    }
   } catch (error) {
-    if (piAdded) await runCommand("pi", ["remove", packageRoot], { env: env() });
+    let rollbackOk = true;
+    try {
+      const current = await herdrLinkState();
+      if (current.plugin && current.rootMatches) {
+        if (!beforeHerdr.plugin) rollbackOk = (await runCommand("herdr", ["plugin", "unlink", pluginId], { env: env() })).ok;
+        else if (beforeHerdr.plugin.enabled !== true && current.plugin.enabled === true) {
+          rollbackOk = (await runCommand("herdr", ["plugin", "disable", pluginId], { env: env() })).ok;
+        }
+      } else if (current.plugin) rollbackOk = false;
+    } catch {
+      rollbackOk = false;
+    }
+    if (piAdded) rollbackOk = (await runCommand("pi", ["remove", packageRoot], { env: env() })).ok && rollbackOk;
+    if (!rollbackOk) throw new Error("LINK_ROLLBACK_FAILED");
     throw error;
   }
 
-  const afterPi = await packageEntries();
-  const afterHerdr = await herdrLinkState();
-  if (afterPi.matches.length !== 1 || !afterHerdr.rootMatches || afterHerdr.plugin?.enabled !== true) {
-    throw new Error("LINK_VERIFICATION_FAILED");
-  }
   process.stdout.write("BUILD + LINK COMPLETE\n");
   process.stdout.write("Project Glance links are healthy.\n");
   process.stdout.write("PROJECT_GLANCE_RELOAD_REQUIRED: run /reload in each already-running Pi session, then /project-glance.\n");

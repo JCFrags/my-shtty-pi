@@ -250,7 +250,10 @@ async function groundedToolsLinkState() {
       if (!definition) continue;
       const state = states.get(definition.key);
       state.present = true;
-      const expectedRoot = resolve(packageRoot, "../../packages/grounded-tools", definition.directory);
+      // A retained Glance activation may coexist with independently linked providers.
+      // The explicit repository root still requires an exact realpath match.
+      const providerRoot = process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT ?? resolve(packageRoot, "../..");
+      const expectedRoot = resolve(providerRoot, "packages/grounded-tools", definition.directory);
       let expectedReal;
       try {
         expectedReal = await realpath(expectedRoot);
@@ -258,7 +261,8 @@ async function groundedToolsLinkState() {
         // The isolated verifier copy has no sibling repository tree.
       }
       const suffix = expectedGroundedSuffix(definition);
-      const rootMatches = expectedReal ? candidateReal === expectedReal : candidateReal.endsWith(suffix);
+      const rootMatches = expectedReal ? candidateReal === expectedReal
+        : !process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT && candidateReal.endsWith(suffix);
       if (rootMatches || !state.root) state.root = candidateReal;
       state.rootMatches ||= rootMatches;
       state.entrypointPresent ||= await regularEntrypoint(join(candidateReal, "index.ts"));

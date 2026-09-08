@@ -5,7 +5,7 @@ import {
   type Component,
   type SettingItem,
   type SettingsListTheme,
-} from "@pi-herdr-deck/tui";
+} from "@earendil-works/pi-tui";
 import {
   SHIPPED_TASK_PROFILES,
   THINKING_LEVELS,

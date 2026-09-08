@@ -1,33 +1,57 @@
-# Pi extension monorepo
+# My Pi extensions
 
-This repository has two distinct layers: a captured deployed baseline and a separate additive development product. They are verified independently so development work does not change the historical deployment record.
+This repository owns the supported Pi extensions and their reproducible inputs.
+`package.json` lists active, temporary, and inactive products. It is not an
+inventory frozen to an old deployment.
 
-## Captured deployed baseline
+## Supported architecture
 
-The September 1, 2026 baseline contains 17 original products: 15 active families, 21 active entrypoints, 272 runtime records, and 261 deployed hashes. The existing baseline-verification phase preserves that inventory and its product table below. Review UI and Tool Controls remain inactive.
+- **Project Glance** (`packages/pi-project-glance`) presents Todo, Workplan, and
+  progress updates. `/project-glance` opens its Herdr pane. It does not import
+  orchestration, Files, or provider implementation code in its runtime.
+- **Orchestration** (`packages/pi-herdr-orchestrator`) uses the direct Herdr agent
+  path and retained broker infrastructure. `/agent-settings` owns agent settings;
+  the retired presentation surfaces and compatibility commands are not supported.
+- **Grounded tools** own Todo and Workplan state and their public event contracts.
+  Files remains a separate product. Signal Board is removed.
+- Other registered products keep their existing entrypoints. The temporary
+  cancellation-isolation product remains separate until explicitly retired.
 
-| Product | Status |
-|---|---|
-| `codex-usage-footer` | active |
-| `files-ui` | active |
-| `grounded-tools` | active; seven entrypoints with one shared core |
-| `herdr-agent-state` | active |
-| `herdr-blocked-bridge` | active |
-| `herdr-status` | active |
-| `pi-agent-context` | active |
-| `pi-chrono-compaction` | active; compiled runtime retained |
-| `pi-herdr-orchestrator` | active; compiled runtime retained |
-| `pi-native-ssh` | active |
-| `pi-pixel-cua` | active |
-| `pi-progressive-tools` | active |
-| `pi-review-ui` | inactive |
-| `pi-signal-board` | active; compiled runtime retained |
-| `pi-tool-controls` | inactive |
-| `temporary-orchestrator-cancel-isolation` | active temporary; separate from the orchestrator |
-| `titlebar-spinner` | active |
+## Verification
 
-## Additive development product
+Use Node.js 24, npm, Git, and Python 3. Stage intended changes first: verification
+copies **Git index blobs** into a private disposable directory. Unstaged edits,
+untracked files, ignored dependencies, and local build output are not inputs.
 
-`packages/pi-project-glance` is a separate additive development product. It is not part of the captured deployed-hash inventory and contains both the Pi extension and the Herdr `glance` pane. Its private local IPC and read-only relay project bounded Step, Toward, and Focus values from public Todo and Workplan event contracts, and derive bounded Progress Feed cards from the active persisted session branch. Assistant commentary and persisted Workplan activity are privacy-filtered, deduplicated, chronological, capped, and wire-budgeted. Unread state, dismissal, expansion, paging, compact status, and deferred questions remain intentionally out of scope.
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm test
+npm run verify:static
+npm run verify
+npm run verify -- --product pi-project-glance
+```
 
-The supported local activation sequence is `npm run dev:link`, `npm run dev:doctor`, and `npm run dev:smoke` from a Herdr-managed pane. Linking and isolated smoke validation do not activate an already-running Pi process: run `/reload` in that active session, then `/project-glance`, and visually confirm the pane before treating the interactive runtime as usable. `dev:doctor` reports this boundary as `reload-required` and `activeRuntime: unverified` rather than claiming activation. `npm run verify` validates the captured baseline and the isolated Project Glance development product. `pi-web` is external and excluded from this repository.
+Static checks cover the registry, locks, local imports, package boundaries,
+retired commands/dependencies, and privacy. Full verification installs package
+locks with lifecycle scripts disabled, runs supported typecheck/syntax/build/test
+scripts, runs Workplan tests, creates package archives, and checks their contents.
+Glance provider tests use the same disposable source tree. Existing tracked
+compiled products must reproduce their checked-in output; Glance and
+orchestration may generate untracked build output from supported source.
+`--product` narrows execution, not repository-wide static checks. These checks do
+not activate packages or replace live Herdr interaction checks.
+
+## Historical evidence
+
+`deployed-baseline-2026-09-01` preserves the captured deployment. To check its
+hash manifests against **historical Git objects only**:
+
+```sh
+npm run verify:history
+# Optional explicit historical tag or commit:
+npm run verify:history -- deployed-baseline-2026-09-01
+```
+
+Historical counts and `DEPLOYED.sha256` files describe that capture. They do not
+constrain current product files, build counts, or the supported product registry.
+Deployment and local activation are separate from repository verification.

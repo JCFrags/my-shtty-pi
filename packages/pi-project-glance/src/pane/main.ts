@@ -52,6 +52,7 @@ export class ProjectGlanceFeedRegion implements Component {
   #hitTargets = new Map<string, string>();
   #renderWidth = 0;
   #selectedRow: number | undefined;
+  #itemRows = new Map<string, number>();
 
   constructor(
     model: ProjectGlancePaneModel,
@@ -69,7 +70,19 @@ export class ProjectGlanceFeedRegion implements Component {
     return this.#selectedRow;
   }
 
+  rowForItem(id: string): number | undefined { return this.#itemRows.get(id); }
+
+  anchorAt(row: number): { id: string; offset: number } | undefined {
+    let anchor: { id: string; offset: number } | undefined;
+    for (const [id, start] of this.#itemRows) {
+      if (start > row) break;
+      anchor = { id, offset: row - start };
+    }
+    return anchor;
+  }
+
   render(width: number): string[] {
+    this.#itemRows.clear();
     const expandedIds = new Set(
       this.#model.visibleFeed
         .filter((item) => this.#model.isExpanded(item.id))
@@ -89,6 +102,8 @@ export class ProjectGlanceFeedRegion implements Component {
         const url = getOsc8LinkAtColumn(line, x);
         if (url) {
           hitTargets.set(`${y}:${x}`, url);
+          const id = decodeURIComponent(new URL(url).pathname.slice(1));
+          if (!this.#itemRows.has(id)) this.#itemRows.set(id, y);
           if (selectedSuffix && url.endsWith(selectedSuffix)) selectedRow ??= y;
         }
       }
@@ -119,21 +134,38 @@ export class ProjectGlanceFeedRegion implements Component {
  * The pinned region is outside the ScrollView. Only the feed region is a
  * scrollable layout child, so viewport input cannot move CURRENT or the title.
  */
+class PositionedScrollView extends ScrollView {
+  afterLayout: (() => void) | undefined;
+  override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
+    super.updateLayout(contentHeight, viewportHeight, requestRender);
+    this.afterLayout?.();
+  }
+}
+
 export class ProjectGlancePaneView implements Component {
   readonly pinned: ProjectGlancePinnedRegion;
   readonly feed: ProjectGlanceFeedRegion;
-  readonly scrollView: ScrollView;
+  readonly scrollView: PositionedScrollView;
+  #position: { id: string; offset: number } | "selected" | undefined;
   readonly root: VStack;
 
   constructor(model: ProjectGlancePaneModel, activateUrl?: (url: string) => void) {
     this.pinned = new ProjectGlancePinnedRegion(model);
     this.feed = new ProjectGlanceFeedRegion(model, activateUrl);
-    this.scrollView = new ScrollView(this.feed, {
+    this.scrollView = new PositionedScrollView(this.feed, {
       follow: "none",
       primary: true,
       overscroll: "contain",
       scrollbar: "auto",
     });
+    this.scrollView.afterLayout = () => {
+      const position = this.#position;
+      this.#position = undefined;
+      if (!position) return;
+      const anchoredRow = position === "selected" ? undefined : this.feed.rowForItem(position.id);
+      const row = anchoredRow ?? this.feed.selectedRow;
+      if (row !== undefined) this.scrollView.scrollTo(row + (anchoredRow === undefined || position === "selected" ? 0 : position.offset), { disableFollow: true });
+    };
     this.root = new VStack([
       { component: this.pinned, shrink: 0 },
       { component: this.scrollView, grow: 1, shrink: 1, minSize: 0 },
@@ -147,6 +179,12 @@ export class ProjectGlancePaneView implements Component {
   render(width: number): string[] {
     return this.root.render(width);
   }
+
+  preserveReadingPosition(): void {
+    this.#position ??= this.feed.anchorAt(this.scrollView.scrollTop);
+  }
+
+  requestSelectedPosition(): void { this.#position = "selected"; }
 
   scrollToSelected(width: number): void {
     this.feed.render(this.scrollView.getContentWidth(width));
@@ -242,6 +280,7 @@ export async function main(): Promise<void> {
     } else {
       return undefined;
     }
+    view.requestSelectedPosition();
     view.invalidate();
     tui.requestRender();
     return { consume: true };
@@ -266,11 +305,17 @@ export async function main(): Promise<void> {
     },
     onSnapshot: (snapshot, identity) => {
       try {
-        model.applySnapshot(snapshot, identity);
+        const previous = model.snapshot;
+        view.preserveReadingPosition();
+        const applied = model.applySnapshot(snapshot, identity);
+        if (applied !== "applied") { requestRender(); return; }
+        if (!previous || previous.branchId !== snapshot.branchId) view.requestSelectedPosition();
         if (model.consumeFocusRequest() && snapshot.branchId) {
-          model.focusOldestUnread();
+          if (model.unreadCount > 0) {
+            model.focusOldestUnread();
+            view.requestSelectedPosition();
+          }
           requestRender();
-          setImmediate(() => view.scrollToSelected(terminal.columns));
           client.sendAction(snapshot.branchId, snapshot.revision, { type: "focus" });
           return;
         }

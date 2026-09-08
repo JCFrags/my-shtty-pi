@@ -27,8 +27,9 @@ function settingsInfo() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
   try {
     return { agentDir, settings: JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")) };
-  } catch {
-    return { agentDir, settings: {} };
+  } catch (error) {
+    if (error.code === "ENOENT") return { agentDir, settings: {} };
+    throw new Error("PI_SETTINGS_INVALID");
   }
 }
 function localPath(source, agentDir) {
@@ -46,8 +47,14 @@ async function piMatches() {
     const path = localPath(source, agentDir);
     if (!path) continue;
     try {
-      if ((await realpath(path)) === root) matches.push(source);
-    } catch {
+      const candidateRoot = await realpath(path);
+      if (candidateRoot === root) matches.push(source);
+      else {
+        const metadata = JSON.parse(readFileSync(join(candidateRoot, "package.json"), "utf8"));
+        if (metadata.name === packageName) throw new Error("PROJECT_GLANCE_LINK_CONFLICT");
+      }
+    } catch (error) {
+      if (error.message === "PROJECT_GLANCE_LINK_CONFLICT") throw error;
       // Ignore missing paths.
     }
   }
@@ -63,7 +70,9 @@ async function herdrPlugin() {
     throw new Error("HERDR_LIST_FAILED");
   }
   if (!Array.isArray(plugins)) throw new Error("HERDR_LIST_FAILED");
-  const plugin = plugins.find((item) => item?.plugin_id === pluginId);
+  const matches = plugins.filter((item) => item?.plugin_id === pluginId);
+  if (matches.length > 1) throw new Error("PROJECT_GLANCE_PLUGIN_CONFLICT");
+  const plugin = matches[0];
   if (!plugin) return undefined;
   let rootMatches = false;
   try {
@@ -77,22 +86,37 @@ async function herdrPlugin() {
 async function run() {
   if (process.platform !== "linux") throw new Error("LINUX_REQUIRED");
   if (process.env.HERDR_ENV !== "1") throw new Error("HERDR_CONTEXT_REQUIRED");
+  // Preflight both owners before changing either registration.
   const matches = await piMatches();
-  if (matches.length > 0) {
-    const removed = await execFileAsync("pi", ["remove", packageRoot], { env: env() });
-    if (!removed.ok) throw new Error("PI_UNLINK_FAILED");
-  }
   const plugin = await herdrPlugin();
-  if (plugin) {
-    const removed = await execFileAsync("herdr", ["plugin", "unlink", pluginId], { env: env() });
-    if (!removed.ok) throw new Error("HERDR_UNLINK_FAILED");
+  try {
+    if (plugin) {
+      const removed = await execFileAsync("herdr", ["plugin", "unlink", pluginId], { env: env() });
+      if (!removed.ok) throw new Error("HERDR_UNLINK_FAILED");
+    }
+    // Remove the pane link first. If Pi refuses removal, restore exactly the
+    // prior Herdr enabled state; Pi package filters have not been discarded.
+    if (matches.length > 0) {
+      const removed = await execFileAsync("pi", ["remove", packageRoot], { env: env() });
+      if (!removed.ok) throw new Error("PI_UNLINK_FAILED");
+    }
+    if ((await piMatches()).length > 0 || (await herdrPlugin()) !== undefined) throw new Error("UNLINK_VERIFICATION_FAILED");
+  } catch (error) {
+    if (plugin) {
+      // Recheck ownership before rollback; never overwrite a new owner's link.
+      const current = await herdrPlugin();
+      if (!current) {
+        const restored = await execFileAsync("herdr", ["plugin", "link", packageRoot, ...(plugin.enabled === true ? ["--enabled"] : [])], { env: env() });
+        if (!restored.ok) throw new Error("UNLINK_ROLLBACK_FAILED");
+      }
+    }
+    throw error;
   }
-  if ((await piMatches()).length > 0 || (await herdrPlugin()) !== undefined) throw new Error("UNLINK_VERIFICATION_FAILED");
   process.stdout.write("Project Glance links are absent.\n");
-  void packageName;
 }
 try {
   await run();
 } catch (error) {
-  fail(error instanceof Error && error.message === "HERDR_CONTEXT_REQUIRED" ? "Run Project Glance unlinking from a Herdr-managed pane." : "Project Glance unlink failed safely.");
+  const reason = error instanceof Error && /^[A-Z0-9_]+$/u.test(error.message) ? error.message : "UNKNOWN";
+  fail(reason === "HERDR_CONTEXT_REQUIRED" ? "Run Project Glance unlinking from a Herdr-managed pane." : `Project Glance unlink failed: ${reason}. Check both registrations before retrying.`);
 }

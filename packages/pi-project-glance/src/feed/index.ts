@@ -1,4 +1,5 @@
 import {
+  PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX,
   MAX_FEED_ITEMS,
   MAX_ITEM_ID_BYTES,
   MAX_ITEM_TEXT_BYTES,
@@ -65,9 +66,11 @@ export function parseTextSignature(value: unknown): TextSignature | undefined {
 }
 
 function malformedTextSignature(block: Record<string, unknown>): boolean {
-  return Object.hasOwn(block, "textSignature") &&
-    block.textSignature !== undefined &&
-    !parseTextSignature(block.textSignature);
+  const signature = block.textSignature;
+  // Other providers use opaque signatures. Only structured phase metadata
+  // claims this contract; malformed structured metadata still fails closed.
+  return signature !== undefined &&
+    (typeof signature !== "string" || (signature.trimStart().startsWith("{") && !parseTextSignature(signature)));
 }
 
 /** Extract at most one card from a finalized assistant message. */
@@ -95,11 +98,12 @@ export function extractAssistantFeedItems(
 
   let selected: typeof textBlocks;
   if (phased.length > 0) {
+    if (textBlocks.some(({ block }) => block?.textSignature !== undefined && !parseTextSignature(block.textSignature))) return [];
     selected = textBlocks.filter(({ block }) => parseTextSignature(block?.textSignature)?.phase === "commentary");
   } else {
     const firstTool = content.findIndex((value) => record(value)?.type === "toolCall");
     if (assistant.stopReason !== "toolUse" || firstTool < 0) return [];
-    selected = textBlocks.filter(({ block, index }) => index < firstTool && !Object.hasOwn(block!, "textSignature"));
+    selected = textBlocks.filter(({ index }) => index < firstTool);
   }
 
   const paragraphs = selected
@@ -176,16 +180,26 @@ export function boundRecentFeed(items: readonly ProjectGlanceFeedItem[], maximum
   return result.slice(-Math.max(0, Math.min(MAX_FEED_ITEMS, Math.floor(maximum))));
 }
 
-/** Scan only a bounded recent tail, backfilling until the feed is full. */
+/** UI bookkeeping does not consume the bounded source-history budget. */
 export function rebuildProgressFeed(branch: readonly unknown[]): ProjectGlanceFeedItem[] {
   const reverse: ProjectGlanceFeedItem[] = [];
-  const start = Math.max(0, branch.length - MAX_SCAN_ENTRIES);
-  for (let index = branch.length - 1; index >= start; index -= 1) {
-    const workplan = extractWorkplanEntryItem(branch[index]);
+  const dismissed = new Set<string>();
+  let scanned = 0;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = record(branch[index]);
+    if (entry?.type === "custom" && entry.customType === `${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`) {
+      const data = record(entry.data);
+      if (data?.version === 1 && data.action === "dismiss" && typeof data.itemId === "string") dismissed.add(data.itemId);
+      continue;
+    }
+    if (scanned >= MAX_SCAN_ENTRIES) break;
+    scanned += 1;
+    const workplan = extractWorkplanEntryItem(entry);
     if (workplan) reverse.push(workplan);
-    else reverse.push(...extractAssistantEntryItems(branch[index]));
+    else reverse.push(...extractAssistantEntryItems(entry));
   }
-  return boundRecentFeed(reverse.reverse());
+  // Filter before the card cap so dismissal reveals older useful entries.
+  return boundRecentFeed(reverse.reverse().filter((item) => !dismissed.has(item.id)));
 }
 
 export function compareFeedItems(left: readonly ProjectGlanceFeedItem[], right: readonly ProjectGlanceFeedItem[]): boolean {

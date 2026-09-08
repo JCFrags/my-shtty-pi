@@ -53,9 +53,9 @@ type ProjectGlanceSessionContext = Pick<ExtensionContext, "sessionManager">;
 const UI_STATE_TYPE = `${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`;
 function uiStateFromBranch(
   branch: readonly unknown[],
-  feed: readonly ProjectGlanceFeedItem[],
+  feed?: readonly ProjectGlanceFeedItem[],
 ): ProjectGlanceUiState {
-  const visibleIds = new Set(feed.map((item) => item.id));
+  const visibleIds = feed ? new Set(feed.map((item) => item.id)) : undefined;
   const dismissedIds = new Set<string>();
   const readIds = new Set<string>();
 
@@ -71,7 +71,7 @@ function uiStateFromBranch(
       entry.customType !== UI_STATE_TYPE ||
       data?.version !== 1 ||
       typeof data.itemId !== "string" ||
-      !visibleIds.has(data.itemId)
+      (visibleIds !== undefined && !visibleIds.has(data.itemId))
     ) {
       continue;
     }
@@ -208,36 +208,29 @@ export class ProjectGlanceRelayRuntime {
       token: descriptor.token,
       generation: descriptor.generation,
       snapshot: { ...createLiveSnapshot(descriptor.sessionKey, now), branchId },
-      onAction: async (frame) => {
-        if (!this.#context || frame.branchId !== this.#branchId || frame.baseRevision !== this.#revision) return undefined;
-        if (frame.action.type === "focus") {
-          if (!this.#appendUiEntry) return undefined;
-          for (const item of this.#feed) {
-            this.#appendUiEntry({
-              version: 1,
-              actionId: frame.actionId,
-              action: "mark_read",
-              itemId: item.id,
-            });
+      onAction: (frame) => {
+        const epoch = this.#lifecycleEpoch;
+        return this.#enqueue(async () => {
+          if (epoch !== this.#lifecycleEpoch || this.#server !== server || !this.#context ||
+              frame.branchId !== this.#branchId || frame.baseRevision !== this.#revision || !this.#appendUiEntry) return undefined;
+          const state = uiStateFromBranch(this.#context.sessionManager.getBranch());
+          const read = new Set(state.readIds);
+          const dismissed = new Set(state.dismissedIds);
+          const targets = frame.action.type === "focus"
+            ? this.#feed.filter((item) => !read.has(item.id) && !dismissed.has(item.id))
+            : this.#feed.filter((item) => item.id === frame.action.itemId);
+          // A repeated dismissal can target an item now outside the projection.
+          if (frame.action.type !== "focus" && targets.length === 0) {
+            return frame.action.type === "dismiss" && dismissed.has(frame.action.itemId!) ? this.#revision : undefined;
+          }
+          for (const item of targets) {
+            const action = frame.action.type === "focus" ? "mark_read" : frame.action.type;
+            if ((action === "mark_read" ? read : dismissed).has(item.id)) continue;
+            this.#appendUiEntry({ version: 1, actionId: frame.actionId, action, itemId: item.id });
           }
           await this.#syncFeedFromContext(this.#context);
           return this.#revision;
-        }
-        if (
-          !this.#appendUiEntry ||
-          !frame.action.itemId ||
-          !this.#feed.some((item) => item.id === frame.action.itemId)
-        ) {
-          return undefined;
-        }
-        this.#appendUiEntry({
-          version: 1,
-          actionId: frame.actionId,
-          action: frame.action.type,
-          itemId: frame.action.itemId,
         });
-        await this.#syncFeedFromContext(this.#context);
-        return this.#revision;
       },
     });
     try {
@@ -289,6 +282,7 @@ export class ProjectGlanceRelayRuntime {
   }
 
   async stop(): Promise<void> {
+    this.#lifecycleEpoch += 1;
     return this.#enqueue(() => this.#stopNow());
   }
 
@@ -296,9 +290,26 @@ export class ProjectGlanceRelayRuntime {
     this.#controller?.refresh();
   }
 
-  notifyPaneFocused(): void {
-    this.#focusSerial += 1;
-    this.#publishCurrent(this.#current, this.#feed);
+  capturePaneFocus(): () => Promise<void> {
+    const epoch = this.#lifecycleEpoch;
+    const server = this.#server;
+    return async () => {
+      // A new pane must receive its passive baseline first. Never leave a focus
+      // request behind for a later unattended reconnect to consume.
+      const deadline = Date.now() + 2_000;
+      while (server?.started && server.connectedClients === 0 && epoch === this.#lifecycleEpoch && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await this.#enqueue(async () => {
+        if (epoch !== this.#lifecycleEpoch || server !== this.#server || !server?.connectedClients) return;
+        this.#focusSerial += 1;
+        this.#publishCurrent(this.#current, this.#feed);
+      });
+    };
+  }
+
+  async notifyPaneFocused(): Promise<void> {
+    await this.capturePaneFocus()();
   }
 
   /** Rebuild the bounded feed from the supplied active session branch. */
@@ -310,9 +321,9 @@ export class ProjectGlanceRelayRuntime {
   }
 
   /**
-   * Schedule a rebuild after Pi's message_end handler returns. AgentSession
-   * persists the finalized message immediately after extension handlers and
-   * listeners, so the next turn sees the stable SessionManager entry ID.
+   * Best-effort early rebuild. Later asynchronous message_end handlers can
+   * delay persistence beyond this timer. Ordered tool/turn/agent boundaries
+   * perform the reliable post-persistence rebuild with stable entry IDs.
    */
   onMessageEnd(ctx: ProjectGlanceSessionContext): void {
     const sessionKey = (() => {
@@ -336,6 +347,7 @@ export class ProjectGlanceRelayRuntime {
   }
 
   async onSessionTree(ctx: ExtensionContext): Promise<void> {
+    this.#lifecycleEpoch += 1;
     const branchId = branchIdForContext(ctx);
     return this.#enqueue(async () => {
       this.#context = ctx;
@@ -348,6 +360,8 @@ export class ProjectGlanceRelayRuntime {
     if (this.#branchId === branchId) return;
     this.#lifecycleEpoch += 1;
     this.#branchId = branchId;
+    this.#focusSerial = 0;
+    this.#publishedFocusSerial = -1;
     this.#controller?.onSessionTree(branchId);
     // Publish the empty destination before rebuilding it. Do not mutate the
     // accepted feed first: publication comparison must still see the old
@@ -416,6 +430,7 @@ export class ProjectGlanceRelayRuntime {
 
   async #stopNow(preserveContext = false): Promise<void> {
     this.#lifecycleEpoch += 1;
+    this.#onUnreadChange?.(0);
     for (const timer of this.#feedSyncTimers) clearImmediate(timer);
     this.#feedSyncTimers.clear();
     const controller = this.#controller;
@@ -438,9 +453,9 @@ export class ProjectGlanceRelayRuntime {
     if (!preserveContext) this.#context = undefined;
   }
 
-  #enqueue(operation: () => Promise<void>): Promise<void> {
+  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.#operation.then(operation, operation);
-    this.#operation = next.catch(() => undefined);
+    this.#operation = next.then(() => undefined, () => undefined);
     return next;
   }
 }

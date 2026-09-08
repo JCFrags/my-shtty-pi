@@ -63,6 +63,10 @@ export class ProjectGlanceClient {
   #pendingSnapshotRequestId: string | undefined;
   #snapshotNotificationPending = false;
   #pendingActions = new Map<string, string>();
+  #actionQueue: Array<{ branchId: string; baseRevision: number; action: { type: "mark_read" | "dismiss" | "focus"; itemId?: string } }> = [];
+  #latestSnapshot: ProjectGlanceSnapshot | undefined;
+  #actionNeedsSnapshot = false;
+  #sentBaseRevision = 0;
 
   constructor(options: ProjectGlanceClientOptions) {
     this.#descriptorPath = options.descriptorPath;
@@ -93,25 +97,38 @@ export class ProjectGlanceClient {
     const socket = this.#socket;
     const descriptor = this.#descriptor;
     if (!socket?.writable || !this.#authenticated || !descriptor) return false;
-    const requestId = this.#nextRequestId();
-    const actionId = `action-${randomUUID()}`;
-    this.#pendingActions.set(requestId, actionId);
-    try {
-      socket.write(encodeFrame({
-        version: PROJECT_GLANCE_PROTOCOL_VERSION,
-        type: "action",
-        requestId,
-        actionId,
-        sessionKey: descriptor.sessionKey,
-        generation: descriptor.generation,
-        branchId,
-        baseRevision,
-        action,
-      }));
-      return true;
-    } catch {
-      this.#pendingActions.delete(requestId);
-      return false;
+    if (this.#actionQueue.length >= 100) return false;
+    this.#actionQueue.push({ branchId, baseRevision, action: { ...action } });
+    this.#drainActions();
+    return true;
+  }
+
+  #drainActions(): void {
+    const socket = this.#socket;
+    const descriptor = this.#descriptor;
+    const snapshot = this.#latestSnapshot;
+    if (!socket?.writable || !this.#authenticated || !descriptor || !snapshot ||
+        this.#pendingActions.size > 0 || this.#actionNeedsSnapshot) return;
+    while (this.#actionQueue.length > 0) {
+      const queued = this.#actionQueue.shift()!;
+      if (queued.branchId !== snapshot.branchId) continue;
+      // Never broaden a focus acknowledgement to arrivals the user did not see.
+      if (queued.baseRevision !== snapshot.revision) continue;
+      if (queued.action.type !== "focus" && !snapshot.feed.some((item) => item.id === queued.action.itemId)) continue;
+      const requestId = this.#nextRequestId();
+      const actionId = `action-${randomUUID()}`;
+      this.#pendingActions.set(requestId, actionId);
+      this.#sentBaseRevision = snapshot.revision;
+      try {
+        socket.write(encodeFrame({
+          version: PROJECT_GLANCE_PROTOCOL_VERSION, type: "action", requestId, actionId,
+          sessionKey: descriptor.sessionKey, generation: descriptor.generation,
+          branchId: queued.branchId, baseRevision: snapshot.revision, action: queued.action,
+        }));
+      } catch {
+        this.#pendingActions.delete(requestId);
+      }
+      return;
     }
   }
 
@@ -230,6 +247,7 @@ export class ProjectGlanceClient {
     if (frame.type === "error") {
       if (frame.requestId && this.#pendingActions.has(frame.requestId)) {
         this.#pendingActions.delete(frame.requestId);
+        this.#actionNeedsSnapshot = true;
         this.#sendSnapshotRequest(socket, connectionId, fail);
         return;
       }
@@ -285,6 +303,9 @@ export class ProjectGlanceClient {
         requestAgain = this.#snapshotNotificationPending;
         this.#snapshotNotificationPending = false;
       }
+      if (this.#latestSnapshot?.branchId !== frame.snapshot.branchId) this.#actionQueue = [];
+      this.#latestSnapshot = frame.snapshot;
+      if (frame.requestId !== undefined) this.#actionNeedsSnapshot = false;
       try {
         this.#onSnapshot(frame.snapshot, {
           sessionKey: descriptor.sessionKey,
@@ -294,6 +315,7 @@ export class ProjectGlanceClient {
         fail("frame");
         return;
       }
+      this.#drainActions();
       if (requestAgain && this.#isCurrent(socket, connectionId)) {
         this.#sendSnapshotRequest(socket, connectionId, fail);
       }
@@ -310,6 +332,12 @@ export class ProjectGlanceClient {
         return;
       }
       this.#pendingActions.delete(frame.requestId);
+      // Rebase only across our own accepted mutation, never an unrelated
+      // append, branch round trip, or provider publication. Focus is never rebased.
+      for (const queued of this.#actionQueue) {
+        if (queued.action.type !== "focus" && queued.baseRevision === this.#sentBaseRevision) queued.baseRevision = frame.revision;
+      }
+      this.#actionNeedsSnapshot = true;
       this.#sendSnapshotRequest(socket, connectionId, fail);
       return;
     }
@@ -353,6 +381,9 @@ export class ProjectGlanceClient {
     this.#pendingSnapshotRequestId = undefined;
     this.#snapshotNotificationPending = false;
     this.#pendingActions.clear();
+    this.#actionQueue = [];
+    this.#latestSnapshot = undefined;
+    this.#actionNeedsSnapshot = false;
   }
 
   #dropConnection(socket: Socket, connectionId: number): void {

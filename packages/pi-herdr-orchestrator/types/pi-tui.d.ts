@@ -130,7 +130,3 @@ declare module "@earendil-works/pi-tui" {
   export function visibleWidth(text: string): number;
   export function truncateToWidth(text: string, width: number): string;
 }
-
-declare module "@pi-herdr-deck/tui" {
-  export * from "@earendil-works/pi-tui";
-}

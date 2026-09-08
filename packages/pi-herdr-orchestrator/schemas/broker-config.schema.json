@@ -1,0 +1,483 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jcfrags.local/pi-herdr-orchestrator/schemas/broker-config-v1.json",
+  "title": "Pi Herd Orchestrator Broker Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxActiveAgents": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 4
+        },
+        "maxActivePerParent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 4
+        },
+        "maxQueuedTasks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 32
+        },
+        "maxTasksPerDelegate": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 8
+        },
+        "maxDelegationDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 2
+        },
+        "maxProvisioning": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 2
+        },
+        "endpoints": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 64,
+          "propertyNames": {
+            "allOf": [
+              { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+              { "not": { "pattern": "^derived-v1-" } }
+            ]
+          },
+          "additionalProperties": { "$ref": "#/$defs/endpointLimit" }
+        }
+      }
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agentStartMs": {
+          "type": "integer",
+          "minimum": 3001,
+          "maximum": 300000,
+          "default": 30000
+        },
+        "adapterRegisterMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000,
+          "default": 15000
+        },
+        "assignmentAcceptMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000,
+          "default": 10000
+        },
+        "defaultTaskMs": {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 86400000,
+          "default": 1800000
+        },
+        "questionMs": {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 86400000,
+          "default": 1800000
+        },
+        "resultRecoveryMs": {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 600000,
+          "default": 120000
+        },
+        "stopGraceMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000,
+          "default": 30000
+        },
+        "externalCommandMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000,
+          "default": 10000
+        }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "eventsDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "default": 30
+        },
+        "artifactsDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "default": 14
+        },
+        "logsDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
+          "default": 7
+        },
+        "cleanWorktreesDays": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3650,
+          "default": 7
+        },
+        "retainFinalResults": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowProjectProfiles": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowProjectProfileOverrides": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowSharedWrites": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowCoarseHerdrControlFallback": {
+          "type": "boolean",
+          "default": false
+        },
+        "maxProtocolLineBytes": {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 1048576,
+          "default": 1048576
+        },
+        "artifactMaxBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 67108864,
+          "default": 16777216
+        }
+      }
+    },
+    "modelPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "global": { "$ref": "#/$defs/modelSelection" },
+            "roles": {
+              "type": "object",
+              "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+              "additionalProperties": { "$ref": "#/$defs/modelSelection" }
+            },
+            "projects": {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^/[^\\u0000-\\u001F\\u007F]{0,4095}$"
+              },
+              "additionalProperties": { "$ref": "#/$defs/modelSelection" }
+            }
+          }
+        },
+        "profiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "manager": { "$ref": "#/$defs/modelSelection" },
+            "subagent": { "$ref": "#/$defs/modelSelection" }
+          }
+        },
+        "allowlist": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/modelSelection" }
+        },
+        "compatibility": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "enum": ["manager", "subagent"] }
+          }
+        }
+      }
+    },
+    "modelIntelligence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "mappings"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "routingMode": {
+          "enum": [
+            "current_default",
+            "advisory",
+            "rated_auto",
+            "explicit_required"
+          ],
+          "default": "current_default"
+        },
+        "mappings": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/endpointMapping" }
+        },
+        "profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "additionalProperties": { "$ref": "#/$defs/modelRankingProfile" }
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "artificialAnalysis": {
+              "$ref": "#/$defs/artificialAnalysisSource"
+            }
+          }
+        }
+      }
+    },
+    "lifecyclePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autoCloseCompletedTemporary": { "type": "boolean", "default": false }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metadataTokens": {
+          "type": "boolean",
+          "default": true
+        },
+        "notificationLevel": {
+          "enum": ["critical", "normal", "all", "none"],
+          "default": "normal"
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": ["error", "warn", "info", "debug", "trace"],
+          "default": "info"
+        },
+        "maxFileBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 104857600,
+          "default": 10485760
+        },
+        "maxFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 5
+        }
+      }
+    }
+  },
+  "$defs": {
+    "endpointLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxConcurrentAgents"],
+      "properties": {
+        "maxConcurrentAgents": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "resourceClass": {
+          "enum": ["local_compute", "remote_service"]
+        }
+      }
+    },
+    "artificialAnalysisSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "refreshHours",
+        "maxRequestsPerRefresh",
+        "profileMetrics",
+        "models"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "refreshHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8760
+        },
+        "maxRequestsPerRefresh": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "profileMetrics": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "additionalProperties": {
+            "enum": ["coding", "intelligence", "agentic"]
+          }
+        },
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["canonicalModelId", "slug"],
+            "properties": {
+              "canonicalModelId": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._/-]{0,255}$"
+              },
+              "slug": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,127}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "modelRankingProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weightsPpm", "uncertaintyPenaltyPpm", "tieBandPpm"],
+      "properties": {
+        "weightsPpm": {
+          "description": "All five integer weights are required. The configuration validator requires their sum to equal 1000000 PPM.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "taskCapability",
+            "protocolReliability",
+            "speed",
+            "effectiveCost",
+            "humanPreference"
+          ],
+          "properties": {
+            "taskCapability": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "protocolReliability": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "speed": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+            "effectiveCost": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "humanPreference": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        },
+        "uncertaintyPenaltyPpm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "tieBandPpm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    },
+    "endpointMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "endpointId"],
+      "dependentRequired": {
+        "canonicalModelId": ["modelId"],
+        "quantization": ["modelId"]
+      },
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "modelId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "canonicalModelId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,255}$"
+        },
+        "quantization": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "endpointId": {
+          "type": "string",
+          "allOf": [
+            { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+            { "not": { "pattern": "^derived-v1-" } }
+          ]
+        }
+      }
+    },
+    "modelSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "modelId", "thinkingLevel"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "modelId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "thinkingLevel": {
+          "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      }
+    }
+  }
+}

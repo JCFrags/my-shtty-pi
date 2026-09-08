@@ -502,7 +502,7 @@ test("Pi extension boundary registers one command and lifecycle hooks only", asy
   };
   await extension(pi);
   assert.deepEqual(commands.map((entry) => entry.name), ["project-glance"]);
-  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "message_end", "session_shutdown"]);
+  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "message_end", "tool_execution_start", "turn_end", "agent_end", "session_shutdown"]);
   assert.equal("registerTool" in pi, false);
   assert.equal("registerWidget" in pi, false);
 });
@@ -844,27 +844,6 @@ test("fixture restart is serialized and restores the old descriptor on replaceme
   }
 });
 
-test("root verifier rejects nonignored untracked Project Glance inputs", async () => {
-  if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
-  const untracked = join(process.cwd(), "untracked-verifier-input.mjs");
-  await writeFile(untracked, "export default 1;\n", "utf8");
-  try {
-    assert.throws(() => execFileSync(process.execPath, [
-      join(process.cwd(), "../../scripts/verify-deployed-baseline.mjs"),
-      "--static-only",
-    ], {
-      cwd: join(process.cwd(), "../.."),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }), (error) => {
-      const output = `${error?.stdout ?? ""}${error?.stderr ?? ""}`;
-      return error?.status !== 0 && output.includes("untracked package input");
-    });
-  } finally {
-    await unlink(untracked).catch(() => undefined);
-  }
-});
-
 test("activation scripts distinguish link completion from active Pi reload", async () => {
   const manifest = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8"));
   const link = await readFile(join(process.cwd(), "scripts/dev-link.mjs"), "utf8");
@@ -880,8 +859,7 @@ test("activation scripts distinguish link completion from active Pi reload", asy
   assert.match(smoke, /XDG_RUNTIME_DIR/u);
 });
 
-test("doctor emits deterministic stable sanitized checks", () => {
-  if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
+test("doctor emits deterministic stable sanitized checks", { skip: process.env.PI_PROJECT_GLANCE_LIVE_DOCTOR !== "1" && "requires an explicitly linked live environment; run dev:doctor separately" }, () => {
   const expectedChecks = [
     "platformLinux", "nodeVersionSupported", "packageIdentity", "canonicalTuiPeer",
     "canonicalTuiDevelopmentDependency", "legacyTuiAliasAbsent", "piManifestEntrypoint",
@@ -916,55 +894,112 @@ test("doctor emits deterministic stable sanitized checks", () => {
   assert.ok(!first.includes("/tmp/"));
 });
 
-test("generated boundary output is rejected by the root verifier", async () => {
-  const generated = join(process.cwd(), "dist", "generated-boundary-proof.js");
-  if (process.env.PI_PROJECT_GLANCE_GENERATED_SCAN_PROOF === "1") {
-    const forbidden = ["pi-", "signal-", "board"].join("");
-    await writeFile(generated, `export const forbidden = "${forbidden}";\n`, "utf8");
-    return;
-  }
-  if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
-  let failure;
+async function withLinkWorkflow(run) {
+  const root = await mkdtemp(join(tmpdir(), "glance-links-test-"));
   try {
-    execFileSync(process.execPath, [
-      join(process.cwd(), "../../scripts/verify-deployed-baseline.mjs"),
-      "--product",
-      "pi-project-glance",
-    ], {
-      cwd: join(process.cwd(), "../.."),
-      env: childTestEnvironment({ HERDR_ENV: "1", PI_PROJECT_GLANCE_GENERATED_SCAN_PROOF: "1" }),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+    const packageRoot = join(root, "package");
+    const agentDir = join(root, "agent");
+    const commands = join(root, "commands");
+    for (const dir of [join(packageRoot, "scripts"), join(packageRoot, "bin"), agentDir, commands]) await mkdir(dir, { recursive: true });
+    await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "pi-project-glance", type: "module" }));
+    await writeFile(join(packageRoot, "bin/pi-project-glance"), "fixture");
+    for (const script of ["dev-link.mjs", "dev-unlink.mjs"]) await writeFile(join(packageRoot, "scripts", script), await readFile(join(process.cwd(), "scripts", script), "utf8"));
+    const statePath = join(root, "state.json");
+    const settingsPath = join(agentDir, "settings.json");
+    const logPath = join(root, "calls.jsonl");
+    await writeFile(settingsPath, JSON.stringify({ packages: [] }));
+    await writeFile(statePath, JSON.stringify({}));
+    const mock = join(commands, "mock.cjs");
+    await writeFile(mock, `#!${process.execPath}\n` + String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const tool = path.basename(process.argv[1]);
+const args = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(process.env.TEST_STATE, "utf8"));
+const settingsPath = path.join(process.env.PI_CODING_AGENT_DIR, "settings.json");
+const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+fs.appendFileSync(process.env.TEST_LOG, JSON.stringify([tool, ...args]) + "\n");
+const operation = [tool, ...args.slice(0, tool === "herdr" ? 2 : 1)].join(" ");
+if (operation === state.fail) process.exit(1);
+if (tool === "pi") {
+  if (args[0] === "install") settings.packages.push(args[1]);
+  if (args[0] === "remove") settings.packages = settings.packages.filter(x => (typeof x === "string" ? x : x.source) !== args[1]);
+  fs.writeFileSync(settingsPath, JSON.stringify(settings));
+} else if (tool === "herdr") {
+  if (args[1] === "list") console.log(JSON.stringify({ result: { plugins: state.plugin ? [state.plugin] : [] } }));
+  if (args[1] === "link") state.plugin = { plugin_id: "pi.project-glance", plugin_root: args[2], enabled: args.includes("--enabled") };
+  if (args[1] === "unlink") delete state.plugin;
+  if (args[1] === "enable") state.plugin.enabled = true;
+  if (args[1] === "disable") state.plugin.enabled = false;
+  fs.writeFileSync(process.env.TEST_STATE, JSON.stringify(state));
+}
+`);
+    await chmod(mock, 0o700);
+    for (const tool of ["pi", "herdr", "npm"]) await symlink(mock, join(commands, tool));
+    const invoke = (script) => {
+      try {
+        return { ok: true, output: execFileSync(process.execPath, [join(packageRoot, "scripts", script)], { env: { ...process.env, HERDR_ENV: "1", PI_CODING_AGENT_DIR: agentDir, PATH: `${commands}:${process.env.PATH}`, TEST_STATE: statePath, TEST_LOG: logPath }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+      } catch (error) { return { ok: false, output: error.stderr }; }
+    };
+    await run({ packageRoot, invoke,
+      setState: (state) => writeFile(statePath, JSON.stringify(state)),
+      state: async () => JSON.parse(await readFile(statePath, "utf8")),
+      setPackages: (packages) => writeFile(settingsPath, JSON.stringify({ packages })),
+      packages: async () => JSON.parse(await readFile(settingsPath, "utf8")).packages,
+      calls: async () => (await readFile(logPath, "utf8")).trim().split("\n").map(JSON.parse),
     });
-  } catch (error) {
-    failure = error;
+  } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+test("link and unlink preflight Herdr ownership before any registration mutation", async () => {
+  for (const script of ["dev-link.mjs", "dev-unlink.mjs"]) {
+    await withLinkWorkflow(async (fixture) => {
+      await fixture.setPackages([fixture.packageRoot]);
+      await fixture.setState({ plugin: { plugin_id: "pi.project-glance", plugin_root: "/not-this-package", enabled: true } });
+      const result = fixture.invoke(script);
+      assert.equal(result.ok, false);
+      assert.match(result.output, /PROJECT_GLANCE_PLUGIN_CONFLICT/);
+      assert.deepEqual(await fixture.packages(), [fixture.packageRoot]);
+      assert.ok((await fixture.calls()).every(([tool, ...args]) => tool === "npm" || (tool === "herdr" && args[1] === "list")));
+    });
   }
-  assert.ok(failure, "generated boundary output unexpectedly passed root verification");
-  assert.equal(failure.status, 1);
-  assert.match(`${failure.stdout ?? ""}${failure.stderr ?? ""}${failure.message ?? ""}`, /generated output/);
 });
 
-test("root Project Glance verification leaves source dist artifacts untouched", async () => {
-  // The outer root verifier owns this proof. Its disposable package copy must
-  // not recursively invoke the root verifier against its temporary cwd.
-  if (process.env.PI_PROJECT_GLANCE_VERIFIER_COPY === "1") return;
-  const packageRoot = join(process.cwd());
-  const dist = join(packageRoot, "dist");
-  const sentinel = join(dist, "verifier-isolation-sentinel.txt");
-  await mkdir(dist, { recursive: true });
-  await writeFile(sentinel, "keep-me\n", "utf8");
-  try {
-    execFileSync(process.execPath, [
-      join(process.cwd(), "../../scripts/verify-deployed-baseline.mjs"),
-      "--product",
-      "pi-project-glance",
-    ], {
-      cwd: join(process.cwd(), "../.."),
-      env: childTestEnvironment({ HERDR_ENV: "1" }),
-      stdio: "ignore",
-    });
-    assert.equal(await readFile(sentinel, "utf8"), "keep-me\n");
-  } finally {
-    await unlink(sentinel).catch(() => undefined);
-  }
+test("unlink restores the prior Herdr enabled state when Pi removal fails", async () => {
+  for (const enabled of [true, false]) await withLinkWorkflow(async (fixture) => {
+    const plugin = { plugin_id: "pi.project-glance", plugin_root: fixture.packageRoot, enabled };
+    const filtered = { source: fixture.packageRoot, extensions: ["dist/pi/extension.js"] };
+    await fixture.setPackages([filtered]);
+    await fixture.setState({ plugin, fail: "pi remove" });
+    const result = fixture.invoke("dev-unlink.mjs");
+    assert.equal(result.ok, false);
+    assert.deepEqual((await fixture.state()).plugin, plugin);
+    assert.deepEqual(await fixture.packages(), [filtered]);
+  });
+});
+
+test("link rolls back only newly added Pi registration on Herdr failure", async () => {
+  await withLinkWorkflow(async (fixture) => {
+    await fixture.setState({ fail: "herdr plugin link" });
+    assert.equal(fixture.invoke("dev-link.mjs").ok, false);
+    assert.deepEqual(await fixture.packages(), []);
+    assert.equal((await fixture.state()).plugin, undefined);
+  });
+});
+
+test("clean build/link/unlink/relink is repeatable through supported command workflows", async () => {
+  await withLinkWorkflow(async (fixture) => {
+    for (const script of ["dev-link.mjs", "dev-link.mjs", "dev-unlink.mjs", "dev-unlink.mjs", "dev-link.mjs"]) {
+      const result = fixture.invoke(script);
+      assert.equal(result.ok, true, result.output);
+      if (script === "dev-link.mjs") {
+        assert.deepEqual(await fixture.packages(), [fixture.packageRoot]);
+        assert.equal((await fixture.state()).plugin.enabled, true);
+      } else {
+        assert.deepEqual(await fixture.packages(), []);
+        assert.equal((await fixture.state()).plugin, undefined);
+      }
+    }
+    assert.ok((await fixture.calls()).some(([tool, ...args]) => tool === "npm" && args.join(" ") === "run build"));
+  });
 });

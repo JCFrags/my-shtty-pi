@@ -25,10 +25,11 @@ export class ProjectGlancePaneModel {
   #state: ProjectGlancePaneState = "connecting";
   #revision = 0;
   #awaitingGenerationSnapshot = false;
-  #collapsed = new Set<string>();
+  #expanded = new Set<string>();
   #selectedId: string | undefined;
   #focusSerial = 0;
   #focusRequested = false;
+  #focusBaseline = true;
 
   constructor(expectedSessionKey?: string, expectedGeneration?: string) {
     this.#expectedSessionKey =
@@ -79,12 +80,12 @@ export class ProjectGlancePaneModel {
   }
 
   isExpanded(id: string): boolean {
-    return !this.#collapsed.has(id);
+    return this.#expanded.has(id);
   }
 
   toggleExpanded(id: string): void {
-    if (this.#collapsed.has(id)) this.#collapsed.delete(id);
-    else this.#collapsed.add(id);
+    if (this.#expanded.has(id)) this.#expanded.delete(id);
+    else this.#expanded.add(id);
   }
 
   consumeFocusRequest(): boolean {
@@ -95,7 +96,9 @@ export class ProjectGlancePaneModel {
 
   focusOldestUnread(): string | undefined {
     const read = new Set(this.#snapshot?.uiState?.readIds ?? []);
-    this.#selectedId = this.visibleFeed.find((item) => !read.has(item.id))?.id;
+    const feed = this.visibleFeed;
+    this.#selectedId = feed.find((item) => !read.has(item.id))?.id ??
+      (feed.some((item) => item.id === this.#selectedId) ? this.#selectedId : feed[0]?.id);
     return this.#selectedId;
   }
 
@@ -111,6 +114,10 @@ export class ProjectGlancePaneModel {
     const nextSessionKey = validateSessionKey(sessionKey);
     if (this.#expectedSessionKey === nextSessionKey) return;
     this.#expectedSessionKey = nextSessionKey;
+    this.#focusBaseline = true;
+    this.#focusRequested = false;
+    this.#selectedId = undefined;
+    this.#expanded.clear();
     this.#snapshot = undefined;
     this.#revision = 0;
     this.#awaitingGenerationSnapshot = this.#expectedGeneration !== undefined;
@@ -118,6 +125,8 @@ export class ProjectGlancePaneModel {
   }
 
   setExpectedRelay(identity: ProjectGlanceRelayIdentity): void {
+    this.#focusBaseline = true;
+    this.#focusRequested = false;
     const nextSessionKey = validateSessionKey(identity.sessionKey);
     const nextGeneration = validateGeneration(identity.generation);
     const sessionChanged = this.#expectedSessionKey !== nextSessionKey;
@@ -131,6 +140,8 @@ export class ProjectGlancePaneModel {
     this.#focusRequested = false;
     this.#awaitingGenerationSnapshot = true;
     if (sessionChanged) {
+      this.#selectedId = undefined;
+      this.#expanded.clear();
       this.#snapshot = undefined;
       this.#state = "connecting";
     } else {
@@ -170,13 +181,28 @@ export class ProjectGlancePaneModel {
       throw new Error("PROJECT_GLANCE_GENERATION_MISMATCH");
     }
     if (next.revision < this.#revision) return "stale";
-    if (next.revision === this.#revision) return "duplicate";
-    this.#snapshot = next;
-    this.#revision = next.revision;
-    if ((next.focusSerial ?? 0) > this.#focusSerial) {
-      this.#focusRequested = true;
-      this.#focusSerial = next.focusSerial ?? 0;
+    if (next.revision === this.#revision) {
+      if (this.#focusBaseline) {
+        this.#focusSerial = next.focusSerial ?? 0;
+        this.#focusBaseline = false;
+      }
+      return "duplicate";
     }
+    const branchChanged = this.#snapshot !== undefined && this.#snapshot.branchId !== next.branchId;
+    if (branchChanged) {
+      this.#selectedId = undefined;
+      this.#expanded.clear();
+      this.#focusRequested = false;
+    }
+    this.#snapshot = next;
+    const retained = new Set(next.feed.map((item) => item.id));
+    for (const id of this.#expanded) if (!retained.has(id)) this.#expanded.delete(id);
+    this.#revision = next.revision;
+    if (!this.#focusBaseline && !branchChanged && (next.focusSerial ?? 0) > this.#focusSerial) {
+      this.#focusRequested = true;
+    }
+    this.#focusSerial = next.focusSerial ?? 0;
+    this.#focusBaseline = false;
     this.#awaitingGenerationSnapshot = false;
     this.#state = "connected";
     if (!this.#selectedId || !this.visibleFeed.some((item) => item.id === this.#selectedId)) this.focusOldestUnread();

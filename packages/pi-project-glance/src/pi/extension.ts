@@ -39,12 +39,14 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
     process.env,
     pi.events,
     (data) => pi.appendEntry(`${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`, data),
-    (count) => activeContext?.ui.setStatus("project-glance", count > 0 ? `● Glance ${count}` : undefined),
+    (count) => activeContext?.ui.setStatus(PROJECT_GLANCE_COMMAND, count > 0 ? `● Glance ${count}` : undefined),
   );
   let disposed = false;
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
+    activeContext?.ui.setStatus(PROJECT_GLANCE_COMMAND, undefined);
+    activeContext = undefined;
     await runtime.stop();
     if (globalRuntime()[RUNTIME_SLOT]?.runtime === runtime) {
       delete globalRuntime()[RUNTIME_SLOT];
@@ -74,11 +76,22 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   pi.on("session_tree", async (_event, ctx) => {
     await runtime.onSessionTree(ctx);
   });
-  pi.on("message_end", (event, ctx) => {
+  pi.on("message_end", (_event, ctx) => {
     runtime.onMessageEnd(ctx);
   });
+  // message_end runs before persistence and later handlers can await work.
+  // These ordered boundaries run after preceding messages have been saved.
+  pi.on("tool_execution_start", async (_event, ctx) => {
+    await runtime.syncFeed(ctx);
+  });
+  pi.on("turn_end", async (_event, ctx) => {
+    await runtime.syncFeed(ctx);
+  });
+  pi.on("agent_end", async (_event, ctx) => {
+    await runtime.syncFeed(ctx);
+  });
   pi.on("session_shutdown", async (_event, ctx) => {
-    ctx.ui.setStatus("project-glance", undefined);
+    ctx.ui.setStatus(PROJECT_GLANCE_COMMAND, undefined);
     activeContext = undefined;
     await runtime.stop();
   });

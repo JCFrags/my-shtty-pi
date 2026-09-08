@@ -9,7 +9,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ProjectGlanceFeedRegion, ProjectGlancePaneView } from "../dist/pane/main.js";
 import { ProjectGlancePaneModel } from "../dist/pane/model.js";
 import { ProjectGlanceRelayRuntime } from "../dist/pi/lifecycle.js";
-import { probeProjectGlanceRelay } from "../dist/protocol/client.js";
+import { ProjectGlanceClient, probeProjectGlanceRelay } from "../dist/protocol/client.js";
 import { encodeFrame, ProjectGlanceFrameDecoder } from "../dist/protocol/framing.js";
 import { PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX, PROJECT_GLANCE_PROTOCOL_VERSION } from "../dist/protocol/model.js";
 import { readConnectionDescriptor } from "../dist/runtime/connection-file.js";
@@ -118,6 +118,7 @@ test("progress items render as width-bounded background cards with paragraph wra
       text: "First paragraph has enough words to wrap safely.\n\nSecond paragraph stays separate and bounded.",
     }],
   }));
+  model.toggleExpanded("card");
   const width = 24;
   const lines = new ProjectGlanceFeedRegion(model).render(width);
   assert.ok(lines.every((line) => visibleWidth(line) <= width));
@@ -193,7 +194,7 @@ test("oldest-unread focus scroll uses component row metadata after links are str
   assert.equal(model.focusOldestUnread(), "opaque-id-0");
   view.scrollToSelected(width);
   assert.ok(view.scrollView.scrollTop < oldScrollTop, "selected oldest unread must be brought back into view");
-  assert.equal(view.feed.selectedRow, 3);
+  assert.equal(view.feed.selectedRow, 2, "focus includes the clickable top border");
 });
 
 test("pane interaction state calculates unread, hides dismissed, and preserves selection and expansion", () => {
@@ -205,20 +206,21 @@ test("pane interaction state calculates unread, hides dismissed, and preserves s
   assert.deepEqual(model.visibleFeed.map(({ id }) => id), ["one", "three"]);
   assert.equal(model.unreadCount, 1);
   assert.equal(model.selectedId, "three");
-  assert.equal(model.isExpanded("three"), true);
+  assert.equal(model.isExpanded("three"), false);
   model.toggleExpanded("three");
   model.selectRelative(-1);
   assert.equal(model.selectedId, "one");
-  assert.equal(model.isExpanded("three"), false);
+  assert.equal(model.isExpanded("three"), true);
 
   assert.equal(model.applySnapshot(snapshot(sessionKey, 2, {
     feed: [item("one"), item("three"), item("four")],
     uiState: { dismissedIds: [], readIds: ["one"] },
   })), "applied");
   assert.equal(model.selectedId, "one");
-  assert.equal(model.isExpanded("three"), false);
-  model.toggleExpanded("three");
   assert.equal(model.isExpanded("three"), true);
+  assert.equal(model.isExpanded("four"), false);
+  model.toggleExpanded("three");
+  assert.equal(model.isExpanded("three"), false);
 
   assert.equal(model.applySnapshot(snapshot(sessionKey, 3, {
     feed: [item("three"), item("four")], uiState: { dismissedIds: [], readIds: [] },
@@ -226,11 +228,11 @@ test("pane interaction state calculates unread, hides dismissed, and preserves s
   assert.equal(model.selectedId, "three", "removed selection falls back to oldest unread");
 });
 
-test("focusSerial requests oldest unread exactly once per increase", () => {
+test("focusSerial uses a passive connection baseline and requests focus only for live increases", () => {
   const sessionKey = deriveSessionKey("pane-focus");
   const model = new ProjectGlancePaneModel(sessionKey);
   model.applySnapshot(snapshot(sessionKey, 1, { focusSerial: 1, uiState: { dismissedIds: [], readIds: ["one"] } }));
-  assert.equal(model.consumeFocusRequest(), true);
+  assert.equal(model.consumeFocusRequest(), false);
   assert.equal(model.focusOldestUnread(), "two");
   assert.equal(model.consumeFocusRequest(), false);
   model.applySnapshot(snapshot(sessionKey, 2, { focusSerial: 1, uiState: { dismissedIds: [], readIds: ["one"] } }));
@@ -246,8 +248,8 @@ test("focusSerial requests oldest unread exactly once per increase", () => {
   });
   assert.equal(
     model.consumeFocusRequest(),
-    true,
-    "a new relay generation must establish its own focus serial epoch",
+    false,
+    "a new relay generation must not replay old focus",
   );
 });
 
@@ -292,13 +294,14 @@ test("action server requires authentication and rejects stale identity, revision
       peer.socket.write(encodeFrame(action(descriptor, current.revision, "dismiss", { type: "dismiss", itemId: "two" })));
       await nextFrame(peer, (f) => f.type === "action_result" && f.actionId === "dismiss");
       current = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.deepEqual(current.uiState.dismissedIds, ["two"]);
+      assert.deepEqual(current.feed.map((item) => item.id), ["one"]);
+      assert.equal(state.branches.A.at(-1).data.action, "dismiss");
       assert.equal(unreadCounts.at(-1), 0);
 
       peer.socket.write(encodeFrame(action(descriptor, current.revision, "focus", { type: "focus" })));
       await nextFrame(peer, (f) => f.type === "action_result" && f.actionId === "focus");
       current = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.deepEqual(current.uiState.readIds, ["one", "two"]);
+      assert.deepEqual(current.uiState.readIds, ["one"]);
 
       peer.socket.write(encodeFrame(action(descriptor, current.revision, "focus", { type: "focus" })));
       assert.equal((await nextFrame(peer, (f) => f.requestId === "request-focus")).code, "replayed_action");
@@ -351,4 +354,308 @@ test("custom entries persist across branch ancestry and runtime close-reopen; pa
       assert.deepEqual((await probeProjectGlanceRelay(runtime.descriptorPath)).uiState.readIds, ["one"]);
     } finally { await runtime.stop(); }
   });
+});
+
+test("repeated focus/read/dismiss are idempotent and dismissal backfills across restart", async () => {
+  await withRuntime(async ({ environment }) => {
+    const state = { leaf: "A", branches: { A: Array.from({ length: 70 }, (_, i) => message(`m${i}`)) } };
+    const appended = [];
+    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => { appended.push(data); state.branches.A.push(custom(data)); });
+    try {
+      await runtime.ensureForContext(context(state));
+      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
+      const peer = connectFrames(descriptor);
+      peer.socket.write(encodeFrame(hello(descriptor)));
+      await nextFrame(peer, (f) => f.type === "snapshot");
+      let sequence = 0;
+      const send = async (value) => {
+        const current = await probeProjectGlanceRelay(runtime.descriptorPath);
+        const id = `idempotent-${sequence++}`;
+        peer.socket.write(encodeFrame(action(descriptor, current.revision, id, value)));
+        return nextFrame(peer, (f) => f.actionId === id || f.requestId === `request-${id}`);
+      };
+      assert.equal((await send({ type: "focus" })).accepted, true);
+      assert.equal(appended.length, 50);
+      for (let i = 0; i < 20; i++) assert.equal((await send({ type: "focus" })).accepted, true);
+      await send({ type: "mark_read", itemId: "m69" });
+      assert.equal(appended.length, 50);
+      await send({ type: "dismiss", itemId: "m69" });
+      await send({ type: "dismiss", itemId: "m69" });
+      assert.equal(appended.length, 51);
+      assert.equal(runtime.feed.length, 50);
+      assert.equal(runtime.feed[0].id, "m19");
+      assert.equal(runtime.feed.at(-1).id, "m68");
+      peer.socket.destroy();
+      await runtime.restart();
+      assert.equal(runtime.feed[0].id, "m19");
+      const restored = await probeProjectGlanceRelay(runtime.descriptorPath);
+      assert.equal(restored.uiState.readIds.length, 49);
+      assert.equal(appended.length, 51);
+    } finally { await runtime.stop(); }
+  });
+});
+
+test("rapid client actions serialize and never broaden stale focus to unseen arrivals", async () => {
+  await withRuntime(async ({ environment }) => {
+    const state = { leaf: "A", branches: { A: [message("one"), message("two"), message("three")] } };
+    const appended = [];
+    const counts = [];
+    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => { appended.push(data); state.branches[state.leaf].push(custom(data)); }, (n) => counts.push(n));
+    let latest;
+    let client;
+    try {
+      await runtime.ensureForContext(context(state));
+      client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (s) => { latest = s; } });
+      client.start();
+      await waitFor(() => latest !== undefined);
+      const original = latest;
+      client.sendAction("A", original.revision, { type: "mark_read", itemId: "one" });
+      client.sendAction("A", original.revision, { type: "dismiss", itemId: "two" });
+      client.sendAction("A", original.revision, { type: "mark_read", itemId: "three" });
+      client.sendAction("A", original.revision, { type: "focus" });
+      await waitFor(() => appended.length === 3);
+      await waitFor(() => latest.uiState.readIds.includes("three"));
+      assert.deepEqual(appended.map((x) => [x.action, x.itemId]), [["mark_read", "one"], ["dismiss", "two"], ["mark_read", "three"]]);
+      state.branches.A.push(message("arrival"));
+      await runtime.syncFeed(context(state));
+      client.sendAction("A", original.revision, { type: "focus" });
+      await waitFor(() => latest.feed.some((i) => i.id === "arrival"));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(appended.length, 3);
+      assert.equal(counts.at(-1), 1);
+    } finally { client?.stop(); await runtime.stop(); }
+    assert.equal(counts.at(-1), 0, "runtime disposal clears compact attention status");
+  });
+});
+
+test("reconnect and branch snapshots never replay focus or discard a retained reading anchor", () => {
+  const sessionKey = deriveSessionKey("reading-anchor");
+  const identity = { sessionKey, generation: "a".repeat(32) };
+  const model = new ProjectGlancePaneModel();
+  model.setExpectedRelay(identity);
+  const feed = Array.from({ length: 50 }, (_, i) => item(`m${i}`));
+  model.applySnapshot(snapshot(sessionKey, 1, { feed, focusSerial: 8 }), identity);
+  assert.equal(model.consumeFocusRequest(), false);
+  const view = new ProjectGlancePaneView(model);
+  const width = 40;
+  const layout = () => view.scrollView.updateLayout(view.feed.render(width).length, 8, () => {});
+  layout();
+  view.scrollView.scrollTo(view.feed.rowForItem("m20") + 2);
+  const anchor = view.feed.anchorAt(view.scrollView.scrollTop);
+  view.preserveReadingPosition();
+  model.setExpectedRelay(identity);
+  model.applySnapshot(snapshot(sessionKey, 2, { feed: [...feed.slice(1), item("m50")], focusSerial: 9 }), identity);
+  layout();
+  assert.equal(model.consumeFocusRequest(), false, "missed focus while disconnected is not a live action");
+  assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchor);
+  model.applySnapshot(snapshot(sessionKey, 3, { feed, focusSerial: 10 }), identity);
+  assert.equal(model.consumeFocusRequest(), true);
+  model.applySnapshot(snapshot(sessionKey, 4, { branchId: "B", feed: [item("other")], focusSerial: 10 }), identity);
+  assert.equal(model.consumeFocusRequest(), false);
+  assert.equal(model.selectedId, "other");
+});
+
+test("an explicit open focus waits for the passive baseline and cannot survive a branch transition", async () => {
+  await withRuntime(async ({ environment }) => {
+    const state = { leaf: "A", branches: { A: [message("one")], B: [] } };
+    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => state.branches[state.leaf].push(custom(data)));
+    const model = new ProjectGlancePaneModel();
+    let client;
+    let liveFocus = 0;
+    try {
+      await runtime.ensureForContext(context(state));
+      const focused = runtime.capturePaneFocus();
+      const pending = focused();
+      client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath,
+        onDescriptor: (d) => model.setExpectedRelay(d),
+        onSnapshot: (s, identity) => { model.applySnapshot(s, identity); if (model.consumeFocusRequest()) liveFocus++; },
+      });
+      client.start();
+      await pending;
+      await waitFor(() => liveFocus === 1);
+      const staleFocus = runtime.capturePaneFocus();
+      state.leaf = "B";
+      await runtime.onSessionTree(context(state));
+      await staleFocus();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(liveFocus, 1);
+      assert.equal(state.branches.A.length, 1, "focus delivery alone is not a read acknowledgement");
+      assert.equal(state.branches.B.length, 0);
+    } finally { client?.stop(); await runtime.stop(); }
+  });
+});
+
+test("synthetic persisted Pi session restores UI state without replay or extra records", async () => {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  await withRuntime(async ({ root, environment }) => {
+    const sm = SessionManager.create(root, join(root, "sessions"));
+    sm.appendMessage({ role: "user", content: "Synthetic fixture", timestamp: Date.parse(AT) });
+    const id = sm.appendMessage(message("synthetic").message);
+    const ctx = { sessionManager: sm };
+    let runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => sm.appendCustomEntry(UI_TYPE, data));
+    try {
+      await runtime.ensureForContext(ctx);
+      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
+      const peer = connectFrames(descriptor);
+      peer.socket.write(encodeFrame(hello(descriptor)));
+      const initial = (await nextFrame(peer, (f) => f.type === "snapshot")).snapshot;
+      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "disk-read", { type: "mark_read", itemId: id }, { branchId: runtime.branchId })));
+      await nextFrame(peer, (f) => f.type === "action_result");
+      peer.socket.destroy();
+      await runtime.stop();
+      const restored = SessionManager.open(sm.getSessionFile());
+      const before = restored.getEntries().length;
+      runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => restored.appendCustomEntry(UI_TYPE, data));
+      await runtime.ensureForContext({ sessionManager: restored });
+      const current = await probeProjectGlanceRelay(runtime.descriptorPath);
+      assert.deepEqual(current.uiState.readIds, [id]);
+      await runtime.ensureForContext({ sessionManager: restored });
+      assert.equal(restored.getEntries().length, before);
+    } finally { await runtime.stop(); }
+  });
+});
+
+test("old branch actions and delayed open completion cannot write into a destination or restarted runtime", async () => {
+  await withRuntime(async ({ environment }) => {
+    const state = { leaf: "A", branches: { A: [message("one")], B: [message("destination")] } };
+    const appended = [];
+    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => { appended.push(data); state.branches[state.leaf].push(custom(data)); });
+    try {
+      await runtime.ensureForContext(context(state));
+      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
+      const peer = connectFrames(descriptor);
+      peer.socket.write(encodeFrame(hello(descriptor)));
+      const initial = (await nextFrame(peer, (f) => f.type === "snapshot")).snapshot;
+      const delayed = runtime.capturePaneFocus();
+      state.leaf = "B";
+      const transition = runtime.onSessionTree(context(state));
+      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "old-branch", { type: "focus" })));
+      await transition;
+      const rejected = await nextFrame(peer, (f) => f.requestId === "request-old-branch");
+      assert.equal(rejected.type, "error");
+      assert.equal(appended.length, 0);
+      await runtime.restart();
+      await delayed();
+      const restarted = await probeProjectGlanceRelay(runtime.descriptorPath);
+      assert.equal(restarted.focusSerial, undefined);
+      assert.deepEqual(restarted.uiState.readIds, []);
+      assert.deepEqual(restarted.feed.map((i) => i.id), ["destination"]);
+      peer.socket.destroy();
+    } finally { await runtime.stop(); }
+  });
+});
+
+test("UI restoration scans long ancestry without resurrecting old dismissals or unread state", async () => {
+  await withRuntime(async ({ environment }) => {
+    const branch = Array.from({ length: 70 }, (_, i) => message(`m${i}`));
+    branch.push(custom({ version: 1, action: "mark_read", itemId: "m20" }));
+    branch.push(custom({ version: 1, action: "dismiss", itemId: "m69" }));
+    branch.push(...Array.from({ length: 1500 }, (_, i) => custom({ version: 1, action: "mark_read", itemId: `irrelevant-${i}` })));
+    const state = { leaf: "A", branches: { A: branch } };
+    const runtime = new ProjectGlanceRelayRuntime(environment);
+    try {
+      await runtime.ensureForContext(context(state));
+      for (let i = 0; i < 2; i++) {
+        const s = await probeProjectGlanceRelay(runtime.descriptorPath);
+        assert.equal(s.feed.length, 50);
+        assert.equal(s.feed[0].id, "m19");
+        assert.equal(s.feed.some((x) => x.id === "m69"), false);
+        assert.deepEqual(s.uiState.readIds, ["m20"]);
+        await runtime.restart();
+      }
+    } finally { await runtime.stop(); }
+  });
+});
+
+test("cards start with two preview lines and visible mouse expand/collapse controls", () => {
+  const key = deriveSessionKey("two-line-preview");
+  const model = new ProjectGlancePaneModel(key);
+  model.applySnapshot(snapshot(key, 1, { feed: [{ ...item("preview"), text: "First preview line\nSecond preview line\nThird expanded line" }] }));
+  const feed = new ProjectGlanceFeedRegion(model, (url) => {
+    const target = new URL(url);
+    if (target.hostname === "toggle") model.toggleExpanded(decodeURIComponent(target.pathname.slice(1)));
+  });
+  const width = 40;
+  const plain = () => feed.render(width).map(stripTerminalSequences);
+  const click = (label) => {
+    const rows = plain(); const y = rows.findIndex((line) => line.includes(label));
+    assert(y >= 0); const x = rows[y].indexOf(label);
+    assert.equal(feed.handleMouse({ type: "click", button: "left", x, y, screenX: x, screenY: y, width, height: rows.length, shift: false, alt: false, ctrl: false, clickCount: 1 }).handled, true);
+  };
+  assert.equal(model.isExpanded("preview"), false);
+  const initial = plain();
+  assert(initial.some((line) => line.includes("First preview line")));
+  assert(initial.some((line) => line.includes("Second preview line")));
+  assert(!initial.some((line) => line.includes("Third expanded line")));
+  assert.equal(initial.findIndex((line) => line.startsWith("└")) - initial.findIndex((line) => line.startsWith("┌")), 4);
+  click("▸"); assert.equal(model.isExpanded("preview"), true);
+  assert(plain().some((line) => line.includes("Third expanded line")));
+  click("▾"); assert.equal(model.isExpanded("preview"), false);
+  assert(!plain().some((line) => line.includes("Third expanded line")));
+  for (const narrow of [20, 24, 28]) {
+    const rows = feed.render(narrow);
+    assert(rows.every((line) => visibleWidth(line) <= narrow));
+    assert(rows.some((line) => line.includes("×")));
+    assert(rows.some((line) => line.includes("▸")));
+  }
+});
+
+test("collapsed previews mark only hidden content with a width-bounded ellipsis", () => {
+  const key = deriveSessionKey("preview-ellipsis");
+  for (const text of ["One line", "One line\nTwo lines", "One line\nTwo lines\nHidden third line", "界".repeat(90)]) {
+    const model = new ProjectGlancePaneModel(key);
+    model.applySnapshot(snapshot(key, 1, { feed: [{ ...item("preview"), text }] }));
+    const feed = new ProjectGlanceFeedRegion(model);
+    for (const width of [8, 20, 40]) {
+      const collapsed = feed.render(width).map(stripTerminalSequences);
+      const body = collapsed.filter((line) => line.startsWith("│  "));
+      assert(body.length <= 2);
+      assert(collapsed.every((line) => visibleWidth(line) <= width));
+      model.toggleExpanded("preview");
+      const expanded = feed.render(width).map(stripTerminalSequences);
+      const fullBody = expanded.filter((line) => line.startsWith("│  "));
+      assert.equal(body.some((line) => line.includes("…")), fullBody.length > 2);
+      assert(fullBody.every((line) => !line.includes("…")));
+      model.toggleExpanded("preview");
+    }
+  }
+});
+
+test("every card cell toggles except the top-right dismissal; gaps stay inert", () => {
+  const key = deriveSessionKey("whole-card-click");
+  const model = new ProjectGlancePaneModel(key);
+  model.applySnapshot(snapshot(key, 1, { feed: [{ ...item("card"), text: "First line\nSecond line\nMore text" }] }));
+  const activated = [];
+  const feed = new ProjectGlanceFeedRegion(model, (url) => activated.push(url));
+  for (const width of [1, 2, 3, 4, 20, 40]) {
+    for (const expanded of [false, true]) {
+      if (model.isExpanded("card") !== expanded) model.toggleExpanded("card");
+      const rows = feed.render(width).map(stripTerminalSequences);
+      const top = 2;
+      const bottom = rows.length - 2;
+      const dismissY = top + (width >= 4 ? 1 : 0);
+      const closeLabel = width >= 5 || width === 3 ? "[×]" : "×";
+      const dismissX = rows[dismissY].indexOf(closeLabel);
+      assert(dismissX >= 0);
+      if (width >= 4) assert.equal(rows[top], `┌${"─".repeat(width - 2)}┐`);
+      if (width >= 20) {
+        assert(rows[dismissY].endsWith("[×] │"));
+        assert(rows[dismissY].includes(expanded ? "▾" : "▸"));
+        assert(!/Expand|Collapse/u.test(rows[dismissY]));
+      }
+      assert(rows.every((row) => visibleWidth(row) <= width));
+      for (let y = top; y <= bottom + 1; y++) {
+        for (let x = 0; x < width; x++) {
+          const before = activated.length;
+          feed.handleMouse({ type: "click", button: "left", x, y, screenX: x, screenY: y,
+            width, height: rows.length, shift: false, alt: false, ctrl: false, clickCount: 1 });
+          if (y > bottom) assert.equal(activated.length, before, "inter-card gap is inert");
+          else {
+            assert.equal(activated.length, before + 1);
+            assert.equal(activated.at(-1), `project-glance://${y === dismissY && x >= dismissX && x < dismissX + closeLabel.length ? "dismiss" : "toggle"}/card`);
+          }
+        }
+      }
+    }
+  }
 });
