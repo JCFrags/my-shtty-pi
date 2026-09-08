@@ -1,8 +1,16 @@
 # M04 source catalog — implementation report
 
-Status: code/storage review passed at `9e82228eb2389b5fef47c4995de0d008711d2f5a`; guarded 2.0.5 deployment and installed synthetic verification passed at `dcd91924dbcfc0c02489e04c3e163b33e2b08e86`. M04 final acceptance is still pending. Draft-review target: `rebuild/chrono-memory-v3`. Global catalog shadow remains off; no M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
+Status: code/storage review passed at `9e82228eb2389b5fef47c4995de0d008711d2f5a`; guarded 2.0.5 deployment and installed synthetic verification passed at `dcd91924dbcfc0c02489e04c3e163b33e2b08e86`. M04 was accepted by the directing assistant at `a13669b4a8a5afdf758cdfd357d01d9a68b5e5e7`. Acceptance closeout targets `rebuild/chrono-memory-v3` only. Global catalog shadow remains off; M05 implementation is authorized only after the M04 integration merge. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
 
-## Guarded shadow deployment decision
+## Final directing-assistant acceptance
+
+The directing assistant accepted M04 at `a13669b4a8a5afdf758cdfd357d01d9a68b5e5e7`: F001–F003 remain closed and the recorded guarded deployment evidence satisfies the operational gate. Acceptance edits are metadata-only. PR #36 may be marked ready and merged only into `rebuild/chrono-memory-v3` after applicable exact-head CI. Do not redeploy this acceptance metadata. Installed runtime remains private 2.0.5 at `dcd91924dbcfc0c02489e04c3e163b33e2b08e86`; the reconciled Chrono-only 2.0.4 rollback is verified, not exercised. Historical failures, measurement limits and installed-versus-loaded distinctions below remain evidence, not erased by acceptance.
+
+M05 implementation is authorized after that integration merge, in a dedicated `work/chrono-v3-m05-capsules` worktree. M05 must return as a draft, unmerged PR for project-lead code/storage review; no deployment, activation, M06 or self-acceptance is authorized. Production registration/settings/policy remain untouched and catalog shadow remains globally off.
+
+A later reboot is a separate operational condition, not a revision of the accepted pre-reboot evidence. The post-boot read-only check verified the exact installed package/configuration but found both boot-bound admission namespaces absent, gate verification false and all four fixed units inactive. The retained fresh-only recovery helper returned `recoverableFresh: true` without writes. No recovery or worker job was performed under that read-only request; current-boot worker execution is not claimed. The directing assistant's M05 brief preserves the no-policy-change boundary. Universal session adoption is not a development prerequisite; record any own-session reload outcome only after direct verification.
+
+## Historical guarded shadow deployment decision
 
 The project lead approved code/storage at `9e82228eb2389b5fef47c4995de0d008711d2f5a`, closed F001/F002/F003, and accepted the lifecycle synchronization and many-record corrections. This is code approval, not final M04 acceptance or broad live activation. PR #36 remains draft/unmerged. M05, main merge and new model functionality remain unauthorized.
 
