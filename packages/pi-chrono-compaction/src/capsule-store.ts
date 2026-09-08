@@ -5,6 +5,7 @@ import { open } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
   CAPSULE_LIMITS,
+  CAPSULE_REDUCER_PIPELINE_VERSION,
   CAPSULE_SCHEMA_VERSION,
   CHUNK_SCHEMA_VERSION,
   DERIVED_SCHEMA_VERSION,
@@ -530,7 +531,12 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
 export async function executeCapsuleRequest(value: unknown, options: CapsuleExecutionOptions = {}): Promise<CapsuleWorkerResponse> {
   if (!isCapsuleWorkerRequest(value)) return { v: 1, ok: false, code: "capsule-request-invalid", sourceBytes: 0,
     sqliteNativeLimitBytes: CAPSULE_LIMITS.nativeSqliteBytes, resumable: false };
-  const request = value, create = request.op === "derivePage";
+  const request = value;
+  if (request.op === "derivePage" && request.identity.reducerSetVersion !== CAPSULE_REDUCER_PIPELINE_VERSION) {
+    return { v: 1, ok: false, code: "capsule-request-invalid", sourceBytes: 0,
+      sqliteNativeLimitBytes: CAPSULE_LIMITS.nativeSqliteBytes, resumable: false };
+  }
+  const create = request.op === "derivePage";
   let db: CatalogSqlite | undefined;
   const budget = { bytes: 0 };
   try {

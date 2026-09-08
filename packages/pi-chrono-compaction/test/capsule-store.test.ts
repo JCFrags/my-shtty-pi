@@ -35,14 +35,15 @@ async function deriveToEnd(f: ReturnType<typeof setupCapsuleFixture>, view: any,
 const immutableChunkBytes = (directory: string): Array<[string, Buffer]> =>
   readdirSync(join(directory, "segments/chunks")).sort().map(name => [name, readFileSync(join(directory, "segments/chunks", name))]);
 
-function snapshotTree(root: string): Array<[string, Buffer]> {
-  const output: Array<[string, Buffer]> = [];
+function snapshotTree(root: string): Array<[string, string]> {
+  const output: Array<[string, string]> = [];
   const visit = (directory: string, relative = "") => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
       const child = join(directory, entry.name);
       if (entry.isDirectory()) visit(child, childRelative);
-      else output.push([childRelative, readFileSync(child)]);
+      else if (!entry.name.endsWith("-shm") && !entry.name.endsWith("-wal"))
+        output.push([childRelative, createHash("sha256").update(readFileSync(child)).digest("hex")]);
     }
   };
   visit(root); return output;

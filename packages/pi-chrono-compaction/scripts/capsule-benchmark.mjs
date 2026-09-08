@@ -108,8 +108,9 @@ async function campaign(options) {
     const initialStat = statSync(sourcePath);
     const { runCatalogWorker, CATALOG_WORKER_CAPS } = await import("../dist/src/catalog-worker-client.js");
     const { runCapsuleWorker, CAPSULE_WORKER_CAPS } = await import("../dist/src/capsule-worker-client.js");
-    const { CAPSULE_LIMITS, DERIVED_SCHEMA_VERSION, CAPSULE_SCHEMA_VERSION, CHUNK_SCHEMA_VERSION } = await import("../dist/src/capsule-contract.js");
+    const { CAPSULE_LIMITS, CAPSULE_REDUCER_PIPELINE_VERSION, DERIVED_SCHEMA_VERSION, CAPSULE_SCHEMA_VERSION, CHUNK_SCHEMA_VERSION } = await import("../dist/src/capsule-contract.js");
     report.derivedSchemaVersion = DERIVED_SCHEMA_VERSION;
+    report.reducerPipelineVersion = CAPSULE_REDUCER_PIPELINE_VERSION;
     const { schedulerArtifactCounts } = await import("../dist/src/host-worker-scheduler.js");
     const { runtimeUnitName, runtimeUnitState } = await import("../dist/src/worker-runtime-systemd.js");
     report.configured = { catalog: { v8HeapBytes: CATALOG_WORKER_CAPS.heapMiB * MiB, workerMemoryBytes: CATALOG_WORKER_CAPS.memoryBytes, deadlineMs: CATALOG_WORKER_CAPS.timeoutMs },
@@ -129,7 +130,7 @@ async function campaign(options) {
     assert.equal(await hashFile(sourcePath), report.generated.sourceSha256, "source immutable after catalog ingestion");
     const oldView = (await catalogCall({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: id(options.records) } })).view;
     const identity = { storeKey: randomUUID(), sessionKey: oldView.sessionKey, catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation,
-      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION, reducerSetVersion: "benchmark-v1", configHash: createHash("sha256").update("capsule-benchmark-v1").digest("hex") };
+      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION, reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: createHash("sha256").update("capsule-benchmark-v1").digest("hex") };
     const capsuleBase = { v: 1, catalogDirectory, derivedDirectory, identity };
     const capsuleCall = async request => { const started = performance.now(); const response = await runCapsuleWorker({ ...capsuleBase, ...request }, { schedulerDirectory, slots: 1, signal: abort.signal });
       assert.equal(response.ok, true, `${request.op}:${response.code}`); assert.equal(response.sqliteNativeLimitBytes, 64 * MiB); observe(report.phases[phase], "capsule", response, performance.now() - started); return response.result; };
@@ -146,7 +147,14 @@ async function campaign(options) {
     const latePage = await capsuleCall({ op: "capsulePage", view: oldView, afterEventSeq: options.records - 1, limit: 2 });
     const firstCapsule = firstPage.capsules[0], giantCapsule = latePage.capsules.find(item => item.source.eventSeq === options.records);
     assert.ok(firstCapsule && giantCapsule, "bounded capsule samples");
-    report.samples.capsules = [{ eventSeq: firstCapsule.source.eventSeq, bodyHash: firstCapsule.source.bodyHash }, { eventSeq: giantCapsule.source.eventSeq, bodyHash: giantCapsule.source.bodyHash }];
+    const firstPrimary = firstCapsule.alternatives[0], giantPrimary = giantCapsule.alternatives[0];
+    assert.equal(firstPrimary?.text, smallBody(1), "first small capsule retains its exact meaningful body");
+    assert.equal(firstPrimary?.outcome.status, "unknown", "pending text does not infer a pending outcome");
+    assert.ok(giantPrimary?.text.endsWith(suffix), "giant capsule primary retains exact terminal Unicode, CRLF, and lone-surrogate suffix");
+    report.samples.capsules = [
+      { eventSeq: firstCapsule.source.eventSeq, bodyHash: firstCapsule.source.bodyHash, primaryTextSha256: createHash("sha256").update(firstPrimary.text).digest("hex"), exactSmallBody: true },
+      { eventSeq: giantCapsule.source.eventSeq, bodyHash: giantCapsule.source.bodyHash, primaryTextSha256: createHash("sha256").update(giantPrimary.text).digest("hex"), exactTerminalSuffix: true },
+    ];
     phase = "exactChunks"; report.phases[phase] = newMetrics();
     const headLength = Math.min(32_768, giantCapsule.source.decodedUtf16.end);
     const head = await capsuleCall({ op: "chunkRange", view: oldView, source: giantCapsule.source, decodedStart: 0, decodedLength: headLength, limit: 2 });
