@@ -16,6 +16,7 @@ import {
   type SourceBlockReducerBaseInput,
   type SourceBlockReducerInput,
   type SourceReducerFamily,
+  type SourceStructuralField,
 } from "./capsule-contract.js";
 import { reduceAssistantProse } from "./reducers/assistant.js";
 import { reduceDiff } from "./reducers/diff.js";
@@ -87,8 +88,10 @@ export function extractProtectedCues(
 
 function capsuleFacts(base: SourceBlockReducerBaseInput, cues: readonly ProtectedCue[]): CapsuleFact[] {
   const facts: CapsuleFact[] = [];
-  const add = (name: string, value: string | number | boolean): void => {
-    facts.push({ kind: "structural", name, value, source: base.source });
+  const add = (name: SourceStructuralField, value: string | number | boolean): void => {
+    const source = base.structural.sources?.[name];
+    if (source === undefined) throw new Error("capsule-reducer-missing-structural-source");
+    facts.push({ kind: "structural", name, value, source });
   };
   if (base.structural.role !== undefined) add("role", base.structural.role);
   if (base.structural.toolName !== undefined) add("toolName", base.structural.toolName);
@@ -117,8 +120,8 @@ function outcome(facts: readonly CapsuleFact[]): CapsuleAlternative["outcome"] {
   if (failedExit !== undefined) return { status: "supported", value: "failure", facts: [failedExit] };
   const successExit = index("exitCode", (value) => value === 0);
   if (successExit !== undefined) return { status: "supported", value: "success", facts: [successExit] };
-  const pending = facts.findIndex((fact) => fact.kind === "extractive" && fact.name === "pendingApproval");
-  if (pending >= 0) return { status: "supported", value: "pending-approval", facts: [pending] };
+  // Extractive pending-approval text can be negated, quoted, or superseded later.
+  // Keep it recoverable as a cue/fact, but do not promote it to an outcome.
   return { status: "unknown" };
 }
 
@@ -200,6 +203,23 @@ function capText(text: string, maximum: number): string {
   return `${text.slice(0, Math.ceil(available * 0.7))}${marker}${text.slice(-Math.floor(available * 0.3))}`;
 }
 
+function postReducerCapOmission(
+  uncappedText: string,
+  limit: number,
+  source: ScopedBodySourceRef,
+  affectedDecodedUtf16: { readonly start: number; readonly end: number },
+): CapsuleOmission[] {
+  if (uncappedText.length <= limit) return [];
+  return [{
+    kind: "transformation-loss",
+    reason: "budget",
+    affectedSource: source,
+    affectedDecodedUtf16,
+    omittedUnits: "unknown",
+    description: "Post-reducer capsule text exceeded the fixed output budget; exact transformed omission count is unknown.",
+  }];
+}
+
 function canonicalInputHash(base: SourceBlockReducerBaseInput, options: CapsuleReducerOptions): string {
   const identity = {
     capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION,
@@ -249,12 +269,19 @@ export function buildReducerEnvelope(
   }
   const result = runFamily(base, selected.text, options);
   const facts = capsuleFacts(base, selected.protectedCues);
+  const structuralSourceRefs = Object.values(base.structural.sources ?? {});
+  const sourceRefs = [
+    ...(options.pair === undefined ? [] : [options.pair.call]),
+    base.source,
+    ...structuralSourceRefs,
+  ];
   const omissions = [...selected.omissions, ...transformationOmissions(result.omissions, base.source, selected.decodedUtf16)];
   const cueText = selected.protectedCues.length === 0 ? "" : `\n\nProtected exact cues:\n${selected.protectedCues.map((cue) => cue.exactText).join("\n")}`;
   // Leave fixed wire headroom for JSON escaping, source references, cues, facts,
   // omissions, and a second representation.
   const textLimit = Math.min(options.budget.maxUtf16Units, CAPSULE_LIMITS.reducerOutputUnits, 8 * 1024);
-  const primaryText = capText(`${result.text}${cueText}`, textLimit);
+  const uncappedPrimary = `${result.text}${cueText}`;
+  const primaryText = capText(uncappedPrimary, textLimit);
   const alternatives: CapsuleAlternative[] = [{
     alternative: 0,
     family: options.family,
@@ -264,17 +291,22 @@ export function buildReducerEnvelope(
     lossy: true,
     facts,
     protectedCues: selected.protectedCues,
-    omissions,
+    omissions: [...omissions, ...postReducerCapOmission(uncappedPrimary, textLimit, base.source, selected.decodedUtf16)],
     outcome: outcome(facts),
-    sourceRefs: options.pair === undefined ? [base.source] : [options.pair.call, base.source],
+    sourceRefs,
   }];
   const normalized = normalizeTerminalText(selected.text);
   if (options.budget.maxAlternatives > 1 && normalized.text !== result.text) {
+    const uncappedNormalized = `${normalized.text}${cueText}`;
     alternatives.push({
       ...alternatives[0]!,
       alternative: 1,
-      text: capText(`${normalized.text}${cueText}`, textLimit),
-      omissions: [...selected.omissions, ...transformationOmissions(normalized.omissions, base.source, selected.decodedUtf16)],
+      text: capText(uncappedNormalized, textLimit),
+      omissions: [
+        ...selected.omissions,
+        ...transformationOmissions(normalized.omissions, base.source, selected.decodedUtf16),
+        ...postReducerCapOmission(uncappedNormalized, textLimit, base.source, selected.decodedUtf16),
+      ],
     });
   }
   if (selected.completeBody && alternatives.length < options.budget.maxAlternatives && selected.text.length > 1_024) {

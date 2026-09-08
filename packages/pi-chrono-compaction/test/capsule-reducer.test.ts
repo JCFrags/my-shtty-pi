@@ -6,8 +6,10 @@ import {
   isReducerEnvelope,
   type CatalogProvenance,
   type DerivedStoreIdentity,
+  type ScopedRawSourceRef,
   type SourceBlockReducerInput,
   type SourceStructuralFacts,
+  type SourceStructuralField,
 } from "../src/capsule-contract.js";
 import {
   CAPSULE_REDUCER_FAMILY_VERSIONS,
@@ -25,6 +27,7 @@ function fixture(
   provenance: CatalogProvenance = "original",
   descriptor = 0,
   entryId: string | undefined = "entry-1",
+  addStructuralSources = true,
 ): SourceBlockReducerInput {
   const identity: DerivedStoreIdentity = {
     storeKey: UUID_A,
@@ -37,6 +40,32 @@ function fixture(
     reducerSetVersion: "capsule-pure-v1",
     configHash: "c".repeat(64),
   };
+  const structuralFields: readonly SourceStructuralField[] = [
+    "role", "toolName", "toolCallId", "exitCode", "isError", "cancelled", "originallyTruncated",
+  ];
+  const sources: Partial<Record<SourceStructuralField, ScopedRawSourceRef>> = { ...structural.sources };
+  if (addStructuralSources) {
+    for (const field of structuralFields) {
+      if (structural[field] === undefined || sources[field] !== undefined) continue;
+      sources[field] = {
+        catalogStoreKey: UUID_B,
+        sessionKey: "session-1",
+        catalogGeneration: 3,
+        shardKey: "shard-1",
+        segment: 1,
+        eventSeq: 7,
+        ordinal: 1,
+        descriptor,
+        field: `metadata.${field}`,
+        raw: { start: 10, end: 11 },
+        ...(entryId === undefined ? {} : { entryId }),
+        coordinateKind: "raw-json",
+        rawHashAlgorithm: "sha256-bytes-v1",
+        rawHash: hex(`metadata.${field}`),
+      };
+    }
+  }
+  const verifiedStructural: SourceStructuralFacts = Object.keys(sources).length === 0 ? structural : { ...structural, sources };
   return {
     v: 1,
     identity,
@@ -67,7 +96,7 @@ function fixture(
     },
     kind: "tool-result",
     provenance,
-    structural,
+    structural: verifiedStructural,
     window: {
       decodedUtf16: { start: 0, end: text.length },
       text,
@@ -98,14 +127,42 @@ test("protected conditions, exceptions, negation, failures, unknowns, cancellati
     assert.ok(cue, `missing ${kind}`);
     assert.equal(text.slice(cue.decodedUtf16.start, cue.decodedUtf16.end), cue.exactText);
   }
-  assert.deepEqual(envelope.alternatives[0]!.outcome, { status: "supported", value: "pending-approval", facts: [0] });
+  assert.equal(envelope.alternatives[0]!.facts.some((fact) => fact.name === "pendingApproval"), true);
+  assert.deepEqual(envelope.alternatives[0]!.outcome, { status: "unknown" });
 });
 
-test("outcomes require actual structural evidence and never infer success from quiet text or isError false", () => {
+test("negated, quoted, and later-granted approval text never becomes a supported pending outcome", () => {
+  for (const text of [
+    "This is not pending approval.",
+    "Historical quote: ‘pending approval’.",
+    "It was pending approval, but approval was later granted.",
+  ]) {
+    const alternative = reduceSourceBlock(fixture(text), options("assistant-extractive")).alternatives[0]!;
+    assert.ok(alternative.protectedCues.some((cue) => cue.kind === "pending-approval"));
+    assert.ok(alternative.facts.some((fact) => fact.name === "pendingApproval"));
+    assert.deepEqual(alternative.outcome, { status: "unknown" });
+  }
+});
+
+test("outcomes require actual raw-referenced structural evidence and never infer success from quiet text or isError false", () => {
   assert.deepEqual(reduceSourceBlock(fixture("Work proposed; no error was printed.", { isError: false }), options()).alternatives[0]!.outcome, { status: "unknown" });
-  assert.equal(reduceSourceBlock(fixture("ordinary", { exitCode: 0 }), options()).alternatives[0]!.outcome.status, "supported");
+  const success = reduceSourceBlock(fixture("ordinary", { exitCode: 0 }), options()).alternatives[0]!;
+  assert.equal(success.outcome.status, "supported");
+  assert.equal(success.facts[0]!.source.coordinateKind, "raw-json");
+  assert.match(success.facts[0]!.source.field, /metadata\.exitCode/);
   assert.deepEqual(reduceSourceBlock(fixture("ordinary", { exitCode: 2 }), options()).alternatives[0]!.outcome, { status: "supported", value: "failure", facts: [0] });
   assert.deepEqual(reduceSourceBlock(fixture("ordinary", { cancelled: true }), options()).alternatives[0]!.outcome, { status: "supported", value: "cancelled", facts: [0] });
+});
+
+test("missing or body-backed structural metadata references are refused rather than fabricated", () => {
+  const missing = fixture("ordinary", { exitCode: 0 }, "original", 0, "entry-1", false);
+  assert.throws(() => reduceSourceBlock(missing, options()), /complete-input-required/);
+  const valid = fixture("ordinary", { exitCode: 0 });
+  const bodyBacked = {
+    ...valid,
+    structural: { ...valid.structural, sources: { exitCode: valid.source } },
+  } as unknown as SourceBlockReducerInput;
+  assert.throws(() => reduceSourceBlock(bodyBacked, options()), /complete-input-required/);
 });
 
 test("source-local identity ignores later cut growth but distinguishes idless duplicate descriptors and bodies", () => {
@@ -146,7 +203,8 @@ test("caller-supplied earlier pair is copied without looking up or inventing too
   const envelope = reduceSourceBlock(input, { ...options("terminal"), pair });
   assert.deepEqual(envelope.pair, pair);
   assert.equal(envelope.provenance, "generated");
-  assert.deepEqual(envelope.alternatives[0]!.sourceRefs, [pair.call, input.source]);
+  assert.deepEqual(envelope.alternatives[0]!.sourceRefs.slice(0, 2), [pair.call, input.source]);
+  assert.ok(envelope.alternatives[0]!.sourceRefs.slice(2).every((source) => source.coordinateKind === "raw-json"));
   assert.equal(envelope.alternatives[0]!.facts.some((fact) => fact.name === "command"), false);
 });
 
@@ -176,6 +234,17 @@ test("reduced, normalized and marker representation choices remain distinct", ()
   assert.equal(envelope.alternatives.length, 3);
   assert.equal(new Set(envelope.alternatives.map((alternative) => alternative.text)).size, 3);
   assert.ok(envelope.alternatives[2]!.omissions.some((item) => item.kind === "exact-range" && item.reason === "middle"));
+});
+
+test("every post-reducer text cap records honest unknown transformation loss", () => {
+  const input = fixture("x".repeat(9_000));
+  const capped = reduceSourceBlock(input, {
+    ...options("lossless-normalizer"),
+    budget: { maxTokens: 4_096, maxUtf16Units: 16_384, maxAlternatives: 1 },
+  });
+  assert.equal(capped.alternatives[0]!.text.length, 8 * 1024);
+  assert.ok(capped.alternatives[0]!.omissions.some((item) => item.kind === "transformation-loss"
+    && item.reason === "budget" && item.omittedUnits === "unknown" && /Post-reducer/.test(item.description)));
 });
 
 test("cue and escaped-text budgets keep the wire bounded with explicit overflow", () => {

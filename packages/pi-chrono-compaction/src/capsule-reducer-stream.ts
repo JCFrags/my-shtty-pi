@@ -101,8 +101,13 @@ export function feedCapsuleReduction(
   const tail = tailText.length === 0 ? [] : [span(tailStart, tailText)];
 
   const scanned = state.scanCarry + feed.text;
+  const feedCompletesBody = feed.decodedUtf16.end === state.base.source.decodedUtf16.end;
   const candidates = extractProtectedCues(scanned, state.scanCarryStart, state.base.source)
     .filter((cue) => cue.decodedUtf16.end > state.nextDecodedOffset)
+    // A word/identifier ending exactly at a non-final feed boundary may only be
+    // a prefix. Keep it in the bounded overlap and accept it after a delimiter
+    // or the exact body end settles the match.
+    .filter((cue) => feedCompletesBody || cue.decodedUtf16.end < feed.decodedUtf16.end)
     .filter((cue) => !state.protectedCues.some((old) => sameCue(old, cue)));
   const protectedCues = [...state.protectedCues];
   let cueUnits = state.protectedCueUnits;

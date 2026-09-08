@@ -93,6 +93,17 @@ test("feed partition and serialized restart produce identical envelope bytes", (
   for (const cue of cues) assert.equal(text.slice(cue.decodedUtf16.start, cue.decodedUtf16.end), cue.exactText);
 });
 
+test("identifier prefixes at a feed boundary are deferred until the match is settled", () => {
+  const text = "head https://example.com/alpha/beta tail";
+  const one = reducePartitioned(text, [text.length]);
+  const split = reducePartitioned(text, [20, text.length - 20]);
+  const restarted = reducePartitioned(text, [20, text.length - 20], 1);
+  assert.equal(JSON.stringify(split), JSON.stringify(one));
+  assert.equal(JSON.stringify(restarted), JSON.stringify(one));
+  const identifiers = one.alternatives[0]!.protectedCues.filter((cue) => cue.kind === "identifier");
+  assert.deepEqual(identifiers.map((cue) => cue.exactText), ["https://example.com/alpha/beta"]);
+});
+
 test("giant streamed input retains bounded serializable state and output", () => {
   const unit = "0123456789 routine line without cues\n";
   const text = unit.repeat(Math.ceil((3 * 1024 * 1024) / unit.length)).slice(0, 3 * 1024 * 1024);
