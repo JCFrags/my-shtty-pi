@@ -2,12 +2,13 @@
 export const CATALOG_PROTOCOL_VERSION = 1;
 export const CATALOG_LIMITS = Object.freeze({ wireBytes: 256 * 1024, page: 16, ancestry: 64, sourceDelta: 7 * 1024 * 1024, records: 512, statements: 8192, checkpointBytes: 1536 * 1024, jobMs: 1000 });
 export interface CatalogRef { shardKey: string; eventId: string }
+export type CatalogLeaf = CatalogRef | { shardKey: string; ordinal: number };
 export interface CatalogView { storeKey: string; sessionKey: string; generation: number; eventCut: number; branchKey: string; segments: { segment: number; cut: number }[] }
 interface Base { v: 1; catalogDirectory: string; sessionKey: string }
 export type CatalogRequest = Base & (
   | { op: "ingestStep"; generation?: number; shardKey: string; sourcePath: string; branchKey: string; shardOrdinal: number; parent?: CatalogRef }
   | { op: "status"; generation?: number; shardKey?: string }
-  | { op: "pin"; generation?: number; branchKey: string; leaf: CatalogRef }
+  | { op: "pin"; generation?: number; branchKey: string; leaf: CatalogLeaf }
   | { op: "page"; view: CatalogView; after?: number; limit?: number }
   | { op: "blocks"; view: CatalogView; eventSeq: number; after?: number; limit?: number }
   | { op: "raw"; view: CatalogView; eventSeq: number; offset: number; length: number }
@@ -32,7 +33,7 @@ export function isCatalogRequest(value: unknown): value is CatalogRequest {
     switch (x.op) {
       case "status": return x.shardKey === undefined || key(x.shardKey);
       case "ingestStep": return key(x.shardKey) && path(x.sourcePath) && key(x.branchKey) && integer(x.shardOrdinal) && (x.parent === undefined || ref(x.parent));
-      case "pin": return key(x.branchKey) && ref(x.leaf);
+      case "pin": return key(x.branchKey) && !!x.leaf && (ref(x.leaf) ? x.leaf.ordinal === undefined : key(x.leaf.shardKey) && x.leaf.eventId === undefined && integer(x.leaf.ordinal) && x.leaf.ordinal > 0);
       case "page": return view(x.view);
       case "blocks": return view(x.view) && integer(x.eventSeq);
       case "raw": return view(x.view) && integer(x.eventSeq) && integer(x.offset) && integer(x.length) && x.length <= 65536;
