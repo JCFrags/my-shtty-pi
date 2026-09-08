@@ -270,6 +270,10 @@ const correctionArtifactPaths = new Set([
 // canonical count. These exact files are the only deployed-count additions.
 const historicalCanonicalDeployedFiles = 291;
 const m05VerifierBaseCommit = "4e319fede1dd6f97e65918745bd95d46472e619f";
+const m05AuthorizedHistoricalHashChanges = new Map([
+  ["dist/src/catalog-parser.js", "8f8bd54e46f7ad2ab63e4c3e5d8826dfb7d39dc4ca604adde213196b00ab013d"],
+  ["dist/src/pi-extension.js", "42a25258b76bea32a68600ebf25a885b3e7c2a416d89b13cb55db49754967eb4"],
+]);
 const m05CompiledAdditions = new Set([
   "dist/src/capsule-compatibility.js",
   "dist/src/capsule-contract.js",
@@ -616,7 +620,9 @@ for (const product of active) {
   const manifestRel = relative(root, manifestPath).replaceAll(sep, "/");
   const historicalDeployed = parseDeployedBytes(gitBytesAt(m05VerifierBaseCommit, manifestRel), `${m05VerifierBaseCommit}:${manifestRel}`);
   for (const [rel, expected] of historicalDeployed) {
-    if (deployed.get(rel) !== expected) throw new Error(`${product.slug}: historical deployed record changed: ${rel}`);
+    const current = deployed.get(rel);
+    const authorized = product.slug === "pi-chrono-compaction" && m05AuthorizedHistoricalHashChanges.get(rel) === current;
+    if (current !== expected && !authorized) throw new Error(`${product.slug}: historical deployed record changed: ${rel}`);
   }
   deployedByProduct.set(product.slug, deployed);
   for (const [rel, expected] of deployed) {

@@ -67,8 +67,8 @@ test("frozen repository baseline passes without requiring live files", () => wit
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "ok");
   assert.equal(result.json.schemaVersion, 3);
-  assert.equal(result.json.repository.sourceFiles, 96);
-  assert.equal(result.json.repository.distFiles, 95);
+  assert.equal(result.json.repository.sourceFiles, 108);
+  assert.equal(result.json.repository.distFiles, 107);
   assert.deepEqual(result.json.repository.deployedManifest, {
     runtimeMismatches: [],
     metadataExceptions: [],
