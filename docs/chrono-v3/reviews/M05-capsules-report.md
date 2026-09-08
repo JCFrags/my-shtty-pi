@@ -1,6 +1,6 @@
 # M05 — Capsules and decoded chunks
 
-**Status: implementation complete; final draft-review gates in progress. Not accepted or deployed.**
+**Status: draft review candidate. Not accepted or deployed.**
 
 ## Entry boundary
 
@@ -241,16 +241,36 @@ All 66 capsule tests then passed separately at both 512 and 1,024 MiB V8 limits.
 No tests were skipped. These additions change tests only; the 107 compiled runtime
 files and candidate manifest remain byte-identical to the clean build.
 
-## Remaining evidence
+## Root verification and retained gate corrections
 
-Final integrated root/privacy checks and exact push/PR CI remain pending. The
-ad-hoc all-ref privacy preflight exceeded its 180-second caller limit and produced
-no completed result; it is not a privacy pass. The unchanged scanner reads every
-historical path context through Git, even when content findings are cached. No
-scanner checks, original root/CI deadlines, or privacy limits were weakened.
+The full root gate passed at `79e9e26` within its unchanged 25-minute deadline:
+303 current hashes, historical 291 plus 12 exact additions, 107 reproducible
+compiled files, all five safe scripts, pack verification, all-ref privacy, frozen
+M00 preservation, and zero unexplained artifacts. It performed a clean temporary
+build, native checks, normal tests/replay, and the original fixed-heap lanes.
+Prepared compatibility integration is recorded separately from the production
+entrypoint graph. This is repository evidence, not installed-byte verification.
 
-The root verifier must distinguish the historical 291-file inventory from the
-12 exact M05 additions and verify the current reproducible hashes. Its initial
-adaptation incorrectly required unchanged hashes for the two existing Chrono
-modules that M05 modifies; that correction is pending. No draft PR, acceptance,
-merge, or deployment is claimed by these local results.
+Independent review reproduced one defect in the new historical-manifest guard:
+a missing unmapped path compared equal to an undefined authorization. Replacing
+the historical package metadata row with an existing README row kept the same
+counts and incorrectly passed the synthetic verifier. `78d47b0` requires explicit
+map membership before exact hash equality. All 71 verifier tests passed after
+integration, including valid authorization and same-count substitution rejection.
+Only isolated test copies bypass the expensive publication scan; the real scanner
+and publication gates remain unchanged. This correction changes no runtime bytes.
+
+The earlier adaptation also incorrectly froze the two legitimately changed old
+Chrono module hashes; exact named hashes now authorize only those two changes.
+An initial clean-tree check refused untracked generated maps; all 107 maps were
+preserved outside the worktree, not deleted. A caller then omitted the static-only
+flag and obtained the expected draft-versus-installed identity mismatch. The
+correct repository-only check passed cleanly without a dirty-tree exception or
+production action. These invocation failures are retained, not counted as passes.
+
+The ad-hoc all-ref privacy preflight exceeded its 180-second caller limit and
+produced no completed result. The later planned standard root gate completed its
+unchanged privacy scan successfully. No scanner policy, original root/CI deadline,
+or safety assertion was weakened. Final static/publication checks and both
+exact-head CI receipts belong with the draft PR handoff. Local results do not
+accept M05 or authorize merge, deployment, boot recovery, or M06.
