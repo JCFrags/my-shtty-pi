@@ -24,6 +24,10 @@ This repository consolidates extension source and the September 1, 2026 deployed
 
 Run `npm run verify` to validate deployed hashes, entrypoints, manifests, product boundaries, privacy, and isolated compiled reproducibility. `pi-web` is external and excluded from this repository.
 
-## ChronoCompact M00
+## ChronoCompact candidate boundary
 
-The M00 baseline, privacy policy, evidence boundary, amendments, rollback record, restored-test inventory, review records, and decision/update protocol are documented in [`docs/chrono-v3/`](docs/chrono-v3/). M00-R2 corrections are ready for directing-assistant project-lead re-review; M00 remains unaccepted. M00 is containment and verification only: it does not deploy, reload, or change ChronoCompact runtime behavior. `ChronoCompact V3 runtime fixes deployed: none`; live extension behavior is unchanged; the first expected usable fix milestone is M01.
+M00 through M03 are accepted; M04 is an unaccepted draft. The candidate remains version `2.0.4` (unreleased). Its retained inventory is 96 source files, 95 compiled JavaScript files, and 96 ChronoCompact manifest entries. Across the 15 active families, the current repository has 291 manifest entries; the historical Stage 1 record count remains 272. Production remains on accepted M03, not this candidate.
+
+The frozen verifier checks this exact candidate. Use `node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only` for the committed repository gate, and synthetic copied packages for candidate live-fixture tests. Do not change production to make a candidate comparison pass. The root verifier rebuilds native SQLite after its isolated reinstall using exact local Node 24.18.0 headers, then probes real allocation refusal after the distribution build. See [ADR-002](docs/chrono-v3/adr/ADR-002-sqlite-catalog.md) for explicit header preparation and the controlled build. Generated source maps belong to isolated build verification, not the tracked frozen distribution.
+
+The [project records](docs/chrono-v3/) own milestone state, privacy, rollback, and acceptance. No M04 acceptance, production activation, or package publication is implied.

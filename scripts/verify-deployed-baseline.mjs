@@ -11,7 +11,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -40,6 +40,7 @@ const m00BaselineCommit = "1887c77b39c42fb0b5d35b38baac94aff13465e9";
 const m00IntegrationCommit = "ca8a94134e5577edd82204ae173126464fc82b70";
 // Historical byte identity is relaxed only for named, behavior-preserving milestone migrations.
 const m01MutableHistoricalTests = new Set([
+  "packages/pi-chrono-compaction/test/user-config.test.ts",
   "packages/pi-chrono-compaction/test/benchmark-compaction-worker.test.ts",
   "packages/pi-chrono-compaction/test/v2-extension-integration.test.ts",
   "packages/pi-chrono-compaction/test/v2-render-recovery.test.ts",
@@ -156,6 +157,7 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/amendments/A-0001-private-repository-containment.md",
   "docs/chrono-v3/amendments/A-0002-m00-baseline-provenance.md",
   "docs/chrono-v3/amendments/A-0003-m00-r1-corrections.md",
+  "docs/chrono-v3/amendments/A-0004-v3-timeline-and-catalog-scope.md",
   "docs/chrono-v3/baseline.md",
   "docs/chrono-v3/baseline-evidence.json",
   "docs/chrono-v3/containment-timeline.md",
@@ -177,6 +179,50 @@ const correctionArtifactPaths = new Set([
   "docs/chrono-v3/reviews/M01-project-lead-acceptance.md",
   "docs/chrono-v3/reviews/M02-test-foundation-report.md",
   "docs/chrono-v3/reviews/M03-runtime-report.md",
+  "docs/chrono-v3/adr/ADR-002-sqlite-catalog.md",
+  "docs/chrono-v3/catalog-contract.md",
+  "docs/chrono-v3/catalog-store-publication.md",
+  "docs/chrono-v3/reviews/M04-catalog-report.md",
+  "packages/pi-chrono-compaction/dist/src/catalog-contract.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-engine.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-parser-hash.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-parser.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-shadow.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-source.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-sqlite.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-store-contract.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-store.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-entry.js",
+  "packages/pi-chrono-compaction/dist/src/catalog-worker-observation.js",
+  "packages/pi-chrono-compaction/scripts/catalog-benchmark.mjs",
+  "packages/pi-chrono-compaction/scripts/catalog-sqlite-probe.mjs",
+  "packages/pi-chrono-compaction/src/catalog-contract.ts",
+  "packages/pi-chrono-compaction/src/catalog-engine.ts",
+  "packages/pi-chrono-compaction/src/catalog-parser-hash.ts",
+  "packages/pi-chrono-compaction/src/catalog-parser.ts",
+  "packages/pi-chrono-compaction/src/catalog-shadow.ts",
+  "packages/pi-chrono-compaction/src/catalog-source.ts",
+  "packages/pi-chrono-compaction/src/catalog-sqlite.ts",
+  "packages/pi-chrono-compaction/src/catalog-store-contract.ts",
+  "packages/pi-chrono-compaction/src/catalog-store.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-client.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-entry.ts",
+  "packages/pi-chrono-compaction/src/catalog-worker-observation.ts",
+  "packages/pi-chrono-compaction/test/catalog-engine.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-lifecycle.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-parser.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-shadow.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-source.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-sqlite.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-store.test.ts",
+  "packages/pi-chrono-compaction/test/user-config.test.ts",
+  "packages/pi-chrono-compaction/scripts/catalog-pi-canary.mjs",
+  "packages/pi-chrono-compaction/test/catalog-source-handoff.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-history-provenance.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-existing-store.test.ts",
+  "packages/pi-chrono-compaction/scripts/catalog-many-records.mjs",
+  "packages/pi-chrono-compaction/scripts/catalog-deployment-canary.mjs",
 ]);
 
 const expectedSlugs = [
@@ -186,6 +232,14 @@ const expectedSlugs = [
   "pi-pixel-cua", "pi-progressive-tools", "pi-review-ui", "pi-signal-board",
   "pi-tool-controls", "temporary-orchestrator-cancel-isolation", "titlebar-spinner",
 ];
+// Explicit native preparation alternatives; validate all four exact commands.
+// The full verifier runs the controlled record-build/probe route after reinstall.
+const catalogNativeScripts = Object.freeze({
+  "catalog:sqlite:build": "node scripts/catalog-sqlite-probe.mjs --build-native",
+  "catalog:sqlite:probe": "node scripts/catalog-sqlite-probe.mjs --probe",
+  "catalog:sqlite:build-record": "node scripts/catalog-sqlite-probe.mjs --build-native-record",
+  "catalog:sqlite:probe-record": "node scripts/catalog-sqlite-probe.mjs --probe-record",
+});
 const expectedSafeScripts = Object.freeze({
   "files-ui": { typecheck: "tsc -p tsconfig.json --noEmit" },
   "herdr-status": { typecheck: "tsc -p tsconfig.json --noEmit" },
@@ -478,7 +532,7 @@ if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/ve
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
-if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 279) throw new Error("Stage 1 record or canonical deployed-file count changed");
+if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 291) throw new Error("Stage 1 record or canonical deployed-file count changed");
 if (consolidation.deployedBaselineCommit !== "049b6390fba7a7908d01908a7953dd2f50fa15df") throw new Error("unexpected deployed baseline commit");
 let hashCount = 0;
 let historicalMetadataHashes = 0;
@@ -517,7 +571,7 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-if (hashCount !== 279) throw new Error(`canonical deployed hash count ${hashCount}; expected 279`);
+if (hashCount !== 291) throw new Error(`canonical deployed hash count ${hashCount}; expected 291`);
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -568,7 +622,8 @@ for (const manifestPath of packageManifestPaths) {
   const slug = relative(join(root, "packages"), packageRoot).split(sep)[0];
   const expectedScripts = expectedSafeScripts[slug] ?? {};
   if (packageRoot === join(root, "packages", slug)) {
-    if (!jsonEqual(manifest.scripts ?? {}, expectedScripts)) throw new Error(`${rel}: unexpected safe script set`);
+    const validatedScripts = slug === "pi-chrono-compaction" ? { ...catalogNativeScripts, ...expectedScripts } : expectedScripts;
+    if (!jsonEqual(manifest.scripts ?? {}, validatedScripts)) throw new Error(`${rel}: unexpected safe script set`);
     if (Object.keys(expectedScripts).length > 0) scriptPlans.push({ slug, packageRoot, scripts: expectedScripts });
   } else if (manifest.scripts !== undefined) {
     throw new Error(`${rel}: nested runtime manifests must not retain scripts`);
@@ -816,12 +871,20 @@ function executeScripts(plan) {
     if (Object.values(plan.scripts).some((command) => /\btsc\b/u.test(command))) {
       execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
     }
+    if (plan.slug === "pi-chrono-compaction") {
+      // Header preparation is an explicit prerequisite, never a hidden network fallback.
+      const headers = process.env.CHRONO_CATALOG_NODE_HEADERS ?? join(homedir(), ".cache", "node-gyp", "24.18.0");
+      execFileSync("npm", ["run", "catalog:sqlite:build-record", "--", "node_modules/node-gyp/bin/node-gyp.js", headers, "24.18.0"], { cwd: work, stdio: "inherit" });
+    }
     let passed = 0;
     let buildResult;
     for (const script of Object.keys(plan.scripts)) {
       execFileSync("npm", ["run", script], { cwd: work, stdio: "inherit" });
       passed += 1;
-      if (script === "build") buildResult = verifyBuiltOutput(product, plan.packageRoot, work);
+      if (script === "build") {
+        buildResult = verifyBuiltOutput(product, plan.packageRoot, work);
+        if (plan.slug === "pi-chrono-compaction") execFileSync("npm", ["run", "catalog:sqlite:probe-record"], { cwd: work, stdio: "inherit" });
+      }
     }
     return { passed, buildResult };
   } finally {
@@ -989,7 +1052,7 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: "279/279",
+  deployedHashesVerified: "291/291",
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),

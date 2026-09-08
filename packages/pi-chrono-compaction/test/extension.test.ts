@@ -1,5 +1,7 @@
 import { installSyntheticHistoryExtension } from "./synthetic-history-adapter.js";
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,10 +16,10 @@ import { rollupShadowSidecarPath } from "../src/history-rollup-shadow.js";
 type Hook = (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, context: Record<string, unknown>) => unknown | Promise<unknown>;
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000, diagnostics: () => string = () => ""): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!await predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeoutMs} ms.`);
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeoutMs} ms. ${diagnostics()}`);
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
   }
 }
@@ -34,6 +36,7 @@ test("experimental high-impact features default off and environment overrides ha
     projection: process.env.PI_CHRONO_TOOL_RESULT_PROJECTION,
     worker: process.env.PI_CHRONO_ISOLATED_WORKER,
     shadow: process.env.PI_CHRONO_ROLLUP_SHADOW,
+    catalog: process.env.PI_CHRONO_CATALOG_SHADOW,
   };
   try {
     delete process.env.PI_CHRONO_HISTORY_EDITOR;
@@ -41,6 +44,11 @@ test("experimental high-impact features default off and environment overrides ha
     delete process.env.PI_CHRONO_TOOL_RESULT_PROJECTION;
     delete process.env.PI_CHRONO_ISOLATED_WORKER;
     delete process.env.PI_CHRONO_ROLLUP_SHADOW;
+    delete process.env.PI_CHRONO_CATALOG_SHADOW;
+    assert.equal(resolveExtensionSettings().catalogShadowEnabled, false);
+    assert.equal(resolveExtensionSettings({ catalogShadowEnabled: true }).catalogShadowEnabled, true);
+    process.env.PI_CHRONO_CATALOG_SHADOW = "false";
+    assert.equal(resolveExtensionSettings({ catalogShadowEnabled: true }).catalogShadowEnabled, false);
     assert.equal(resolveExtensionSettings().historyEditorEnabled, false);
     assert.equal(resolveExtensionSettings().incrementalPrecomputeEnabled, false);
     assert.equal(resolveExtensionSettings().toolResultProjectionMode, "off");
@@ -70,6 +78,8 @@ test("experimental high-impact features default off and environment overrides ha
     process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = "aggressive";
     assert.equal(resolveExtensionSettings({ toolResultProjectionMode: "off" }).toolResultProjectionMode, "aggressive");
   } finally {
+    if (previous.catalog === undefined) delete process.env.PI_CHRONO_CATALOG_SHADOW;
+    else process.env.PI_CHRONO_CATALOG_SHADOW = previous.catalog;
     if (previous.editor === undefined) delete process.env.PI_CHRONO_HISTORY_EDITOR;
     else process.env.PI_CHRONO_HISTORY_EDITOR = previous.editor;
     if (previous.incremental === undefined) delete process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE;
@@ -93,6 +103,9 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
     "PI_CHRONO_CACHE",
     "PI_CHRONO_RAW_TAIL",
     "PI_CHRONO_TRIGGER_TOKENS",
+    "PI_CHRONO_ISOLATED_WORKER",
+    "PI_CHRONO_CATALOG_SHADOW",
+    "PI_CHRONO_VALUE_WORKER_MODE",
   ] as const;
   const previous = new Map(names.map((name) => [name, process.env[name]]));
   const directory = mkdtempSync(join(tmpdir(), "chrono-incremental-extension-"));
@@ -110,11 +123,34 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
   process.env.PI_CHRONO_CACHE = "false";
   delete process.env.PI_CHRONO_RAW_TAIL;
   process.env.PI_CHRONO_TRIGGER_TOKENS = "10000";
+  process.env.PI_CHRONO_ISOLATED_WORKER = "false";
+  process.env.PI_CHRONO_CATALOG_SHADOW = "false";
+  process.env.PI_CHRONO_VALUE_WORKER_MODE = "off";
+
+  // Hold the first real writer release after manifest publication. File existence
+  // is deliberately not completion, even on a fast machine.
+  const originalRm = fsPromises.rm;
+  let releaseObserved = false;
+  let releaseCompleted = false;
+  let releaseWriter!: () => void;
+  const writerGate = new Promise<void>((resolvePromise) => { releaseWriter = resolvePromise; });
+  fsPromises.rm = async (...args) => {
+    if (String(args[0]) === join(candidateSegmentStorePath(sessionPath), ".writer.lock") && !releaseObserved) {
+      releaseObserved = true;
+      await writerGate;
+      await originalRm(...args);
+      releaseCompleted = true;
+      return;
+    }
+    return originalRm(...args);
+  };
+  syncBuiltinESMExports();
 
   try {
     const hooks = new Map<string, Hook[]>();
+    const commands = new Map<string, CommandHandler>();
     const pi = {
-      registerTool() {}, registerCommand() {}, appendEntry() {}, sendMessage() {},
+      registerTool() {}, registerCommand(name: string, command: { handler: CommandHandler }) { commands.set(name, command.handler); }, appendEntry() {}, sendMessage() {},
       on(name: string, handler: Hook) {
         const handlers = hooks.get(name) ?? [];
         handlers.push(handler);
@@ -156,7 +192,8 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
     assert.ok((hooks.get("session_shutdown")?.length ?? 0) > 0);
 
     await invokeHooks("agent_settled", {}, context);
-    await waitFor(() => existsSync(incrementalPath));
+    await waitFor(() => releaseObserved, 2_000, () => `manifest=${existsSync(incrementalPath)}; notifications=${JSON.stringify(notifications)}`);
+    assert.equal(existsSync(incrementalPath), true);
     const checkpoint = JSON.parse(readFileSync(incrementalPath, "utf8")) as { segments: unknown[] };
     assert.ok(checkpoint);
     assert.ok(checkpoint.segments.length > 0);
@@ -174,14 +211,28 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
       compaction?: { details?: { incrementalPrecompute?: { state?: string; reason?: string; cachedCandidates?: number; background?: { state?: string } } } };
     }>;
 
-    // Manifest publication precedes background completion. Wait for the actual
-    // completion state rather than treating file existence as synchronization.
-    let warm = await compact(branch as Array<Record<string, unknown>>);
-    await waitFor(async () => {
-      if (warm.compaction?.details?.incrementalPrecompute?.background?.state === "ready") return true;
-      warm = await compact(branch as Array<Record<string, unknown>>);
-      return warm.compaction?.details?.incrementalPrecompute?.background?.state === "ready";
-    });
+    const statusCommand = commands.get("chrono-value-worker-status");
+    assert.ok(statusCommand);
+    let lastStatus = "";
+    const readCompletionStatus = async () => {
+      const before = notifications.length;
+      await statusCommand("", context);
+      lastStatus = notifications.slice(before).join("\n");
+      return lastStatus.split("\n").includes("Candidate store: ready");
+    };
+    assert.equal(await readCompletionStatus(), false, "published manifest still has an unsettled writer");
+    // Reproduce the old polling defect deterministically: compaction cancels the
+    // still-running generation. Repeated compaction cannot make it become ready.
+    const interrupted = await compact(branch as Array<Record<string, unknown>>);
+    assert.equal(interrupted.compaction?.details?.incrementalPrecompute?.background?.state, "scheduled");
+    releaseWriter();
+    await waitFor(() => releaseCompleted);
+    assert.equal(await readCompletionStatus(), false, "cancelled generation must not publish ready");
+    await invokeHooks("agent_settled", {}, context);
+    // The existing status command observes actual completed work without
+    // cancelling it. Keep the original finite deadline; include useful state.
+    await waitFor(readCompletionStatus, 10_000, () => `releaseCompleted=${releaseCompleted}; status=${lastStatus}; notifications=${JSON.stringify(notifications.slice(-3))}`);
+    const warm = await compact(branch as Array<Record<string, unknown>>);
     assert.ok(warm.compaction, notifications.join("\n"));
     assert.equal(warm.compaction.details?.incrementalPrecompute?.state, "validated-hit", JSON.stringify(warm.compaction.details?.incrementalPrecompute));
     assert.ok((warm.compaction.details?.incrementalPrecompute?.cachedCandidates ?? 0) > 0);
@@ -212,6 +263,9 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
     assert.deepEqual(readFileSync(sessionPath), sourceSessionBytes, "incremental work must not rewrite the authoritative session");
     assert.ok(notifications.some((message) => /ChronoCompact 2\.0\.3 candidate/.test(message)));
   } finally {
+    releaseWriter();
+    fsPromises.rm = originalRm;
+    syncBuiltinESMExports();
     for (const name of names) {
       const value = previous.get(name);
       if (value === undefined) delete process.env[name];
@@ -331,7 +385,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "history_retention_hint",
     "request_compaction",
   ]);
-  assert.deepEqual(commandNames, ["chrono-worker-status", "chrono-doctor", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-worker-status", "chrono-doctor", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));

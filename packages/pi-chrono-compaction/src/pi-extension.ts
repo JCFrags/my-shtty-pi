@@ -4,7 +4,9 @@ import { Type } from "typebox";
 import { env } from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { CatalogShadowScheduler } from "./catalog-shadow.js";
+import { runCatalogWorker } from "./catalog-worker-client.js";
 import { createHistoryRuntimeTransport } from "./history-runtime-transport.js";
 import { runtimeHostStatus } from "./worker-runtime.js";
 import {
@@ -125,6 +127,7 @@ export interface RuntimeSettings {
   readonly incrementalPrecomputeEnabled: boolean;
   readonly isolatedWorkerEnabled: boolean;
   readonly rollupShadowEnabled: boolean;
+  readonly catalogShadowEnabled: boolean;
   readonly hostWorkerSlots: number;
   readonly workerTimeoutSeconds: number;
   readonly workerNiceLevel: number;
@@ -226,6 +229,7 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
     incrementalPrecomputeEnabled: booleanSetting("PI_CHRONO_INCREMENTAL_PRECOMPUTE", false, overrides.incrementalPrecomputeEnabled),
     isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
     rollupShadowEnabled: booleanSetting("PI_CHRONO_ROLLUP_SHADOW", false, overrides.rollupShadowEnabled),
+    catalogShadowEnabled: booleanSetting("PI_CHRONO_CATALOG_SHADOW", false, overrides.catalogShadowEnabled),
     hostWorkerSlots: numberSetting("PI_CHRONO_HOST_WORKER_SLOTS", 1, 1, 4, overrides.hostWorkerSlots),
     workerTimeoutSeconds: numberSetting("PI_CHRONO_WORKER_TIMEOUT_SECONDS", 900, 30, 3_600, overrides.workerTimeoutSeconds),
     workerNiceLevel: numberSetting("PI_CHRONO_WORKER_NICE", 10, 0, 19, overrides.workerNiceLevel),
@@ -891,6 +895,25 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   const loadedUserConfig = loadUserConfig(userConfigPath);
   let userConfig = loadedUserConfig.config;
   let userConfigWarning = loadedUserConfig.warning;
+  const catalogShadow = new CatalogShadowScheduler(async (target, signal) => {
+    const response = await runCatalogWorker({ v: 1, op: "ingestStep", ...target, branchKey: "pi-session", shardOrdinal: 0 }, {
+      signal, slots: resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory,
+    });
+    if (!response.ok) throw Object.assign(new Error(response.code), { code: response.code });
+    if (typeof response.result.error === "string") throw Object.assign(new Error("catalog-ingest-refused"), { code: response.result.error });
+    if (typeof response.result.caughtUp !== "boolean" || !Number.isSafeInteger(response.result.records)) throw new Error("catalog-response-invalid");
+    return { complete: response.result.caughtUp, events: response.result.records as number, sourceBytesRead: response.sourceBytes, waitingForAppend: response.result.incompleteTail === true };
+  });
+  const scheduleCatalogShadow = (ctx: ExtensionContext): void => {
+    const settings = resolveExtensionSettings(userConfig);
+    if (!settings.catalogShadowEnabled) { catalogShadow.disable(); return; }
+    const sourcePath = ctx.sessionManager.getSessionFile();
+    if (!sourcePath) { catalogShadow.cancel(); return; }
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionKey = createHash("sha256").update("pi-session-v1\0").update(sessionId).digest("hex");
+    const shardKey = createHash("sha256").update("pi-jsonl-v1\0").update(sourcePath).digest("hex");
+    catalogShadow.schedule({ sourcePath, sessionKey, shardKey, catalogDirectory: join(dirname(sourcePath), ".chrono-catalog", sessionKey) }, true);
+  };
   const retrievalFeedback = new Map<string, RetrievalFeedback>();
   const feedbackAdmission = createHistoryFeedbackAdmission();
   let triggerPending = false;
@@ -1177,6 +1200,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_start", (_event, ctx) => {
+    catalogShadow.cancel();
+    scheduleCatalogShadow(ctx);
     cancelIncrementalWork(true);
     cancelShadowWork();
     cancelValueWorker();
@@ -1190,6 +1215,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_switch", () => {
+    catalogShadow.cancel();
     cancelIncrementalWork(true);
     cancelShadowWork();
     cancelValueWorker();
@@ -1198,6 +1224,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_fork", () => {
+    catalogShadow.cancel();
     cancelIncrementalWork(true);
     cancelShadowWork();
     cancelValueWorker();
@@ -1206,6 +1233,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_shutdown", () => {
+    catalogShadow.dispose();
     retrievalFeedback.clear();
     feedbackAdmission.release();
     cancelIncrementalWork(true);
@@ -1243,6 +1271,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    scheduleCatalogShadow(ctx);
     scheduleIncrementalWork(ctx);
     const usage = ctx.getContextUsage();
     if (forcedCompactionReason) {
@@ -1747,6 +1776,16 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
+  pi.registerCommand("chrono-catalog-status", {
+    description: "Show local M04 catalog shadow state; no database or archive scan",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) return;
+      const enabled = resolveExtensionSettings(userConfig).catalogShadowEnabled;
+      const status = catalogShadow.status();
+      ctx.ui.notify(`Source catalog shadow: ${enabled ? status.state : "disabled"}. Ingestion only; model context and history tools unchanged.${status.errorCode ? ` Safe refusal: ${status.errorCode}.` : ""}`, "info");
+    },
+  });
+
   pi.registerCommand("chrono-rollup-shadow-status", {
     description: "Show aggregate hierarchical rollup shadow metrics",
     handler: async (_args, ctx) => {
@@ -1817,6 +1856,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       try {
         saveUserConfig(selected, userConfigPath);
         userConfig = selected;
+        scheduleCatalogShadow(ctx);
         userConfigWarning = undefined;
         lastTriggerAttemptTokens = undefined;
         cancelIncrementalWork(true);
@@ -1838,6 +1878,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
             `Background value worker: ${settings.valueWorker.mode}; model ${settings.valueWorker.model}; thinking ${settings.valueWorker.thinking}`,
             ...(settings.legacyHistoryEditorEnabled ? ["Warning: the old history classifier setting is retired and cannot start a model call. Use the value-worker controls."] : []),
             `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
+            `Source catalog shadow: ${settings.catalogShadowEnabled ? catalogShadow.status().state : "disabled"}; ingestion only, pending storage review`,
             `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
             `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,
             `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,

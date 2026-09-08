@@ -62,6 +62,8 @@ This inventory compares Git blobs, not timestamps. The source set is the complet
 | `packages/chrono-compact/test/value-worker-equivalence.test.ts` | `b318956a8cd912997f5a809a1632bb3e59dcfa30` | `packages/pi-chrono-compaction/test/value-worker-equivalence.test.ts` | `b318956a8cd912997f5a809a1632bb3e59dcfa30` | exact restoration | yes | Byte-identical relocation from the historical test root. | value-worker equivalence |
 | `packages/chrono-compact/test/value-worker.test.ts` | `232b9181a52c81e730126cb64fb4eb1b8ee1bb12` | `packages/pi-chrono-compaction/test/value-worker.test.ts` | `232b9181a52c81e730126cb64fb4eb1b8ee1bb12` | exact restoration | yes | Byte-identical relocation from the historical test root. | value worker |
 
+The rows and totals below retain the accepted M00 restoration snapshot. The verifier checks explicitly changed milestone tests against that accepted snapshot rather than relabeling historical restoration. M04 adds `packages/pi-chrono-compaction/test/user-config.test.ts` to that exact-path set for catalog-shadow configuration tests; its current bytes are still subject to the repository correction scope.
+
 ## Reconciled totals
 
 - Historical files: **55**

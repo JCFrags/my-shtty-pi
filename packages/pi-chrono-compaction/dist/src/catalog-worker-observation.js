@@ -1,0 +1,49 @@
+import { openSync, readSync, closeSync } from "node:fs";
+import { join } from "node:path";
+function kernelText(path) {
+    let fd;
+    try {
+        fd = openSync(path, "r");
+        const buffer = Buffer.alloc(4097);
+        const length = readSync(fd, buffer, 0, buffer.length, 0);
+        return length <= 4096 ? buffer.subarray(0, length).toString("utf8") : undefined;
+    }
+    catch {
+        return undefined;
+    }
+    finally {
+        if (fd !== undefined)
+            closeSync(fd);
+    }
+}
+function counter(text) {
+    if (!text || !/^\d+\s*$/.test(text))
+        return undefined;
+    const value = Number(text.trim());
+    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+/** Worker-only, bounded kernel reads. Process I/O includes native SQLite, JS,
+ * trusted startup, and these measurement reads; it is NOT SQLite-only I/O.
+ * Storage counters exclude cache hits. Source bytes remain a separate counter.
+ */
+export function observeCatalogWorker() {
+    const usage = process.resourceUsage();
+    const result = { processPeakRssBytes: usage.maxRSS * 1024, userCpuMicros: usage.userCPUTime, systemCpuMicros: usage.systemCPUTime };
+    if (process.platform !== "linux")
+        return result;
+    const io = kernelText("/proc/self/io");
+    const values = ["rchar", "wchar", "read_bytes", "write_bytes"].map(key => counter(io?.match(new RegExp(`^${key}: (\\d+)$`, "m"))?.[1]));
+    if (values.every(value => value !== undefined))
+        result.processIo = { readChars: values[0], writtenChars: values[1], storageReadBytes: values[2], storageWrittenBytes: values[3] };
+    const path = kernelText("/proc/self/cgroup")?.split("\n").find(line => line.startsWith("0::/"))?.slice(3);
+    if (path && !path.includes("\0") && !path.split("/").some(part => part === "." || part === "..")) {
+        const peak = counter(kernelText(join("/sys/fs/cgroup", path, "memory.peak")));
+        const limit = counter(kernelText(join("/sys/fs/cgroup", path, "memory.max")));
+        if (peak !== undefined)
+            result.cgroupMemoryPeakBytes = peak;
+        if (limit !== undefined)
+            result.cgroupMemoryLimitBytes = limit;
+    }
+    return result;
+}
+//# sourceMappingURL=catalog-worker-observation.js.map
