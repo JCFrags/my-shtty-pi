@@ -27,8 +27,8 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values are the deliberately advanced M04 draft / unreleased 2.0.4 candidate boundary.
-// This does not assert production deployment or M04 acceptance.
+// These values pin the 2.0.5 guarded deployment candidate metadata.
+// Runtime bytes remain the approved 9e82228 boundary; this does not assert live activation.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
   schemaVersion: 3,
@@ -40,10 +40,10 @@ const EXPECTED = Object.freeze({
   distFiles: 95,
   distTreeHash: "d8f5892cfe89c89b2e7edb8e3ae99e96768f5d068f88d29a9cf64a1c50f780c0",
   entrypointHash: "ab28b018a42137c030dc94dfe88c44e977dce8e9cf76ed9526da55b20258ace4",
-  m01PackageHash: "d35720bba151a820a1569355a9b78846a4341bcb03f7f7feecd05fa79bdbee4e",
-  m01LockHash: "c02fb0133b915387981448d1af1321bd0ccb2bb7c50c0e8c7ab1e1f200bceb8f",
-  livePackageHash: "d35720bba151a820a1569355a9b78846a4341bcb03f7f7feecd05fa79bdbee4e",
-  deployedPackageHash: "d35720bba151a820a1569355a9b78846a4341bcb03f7f7feecd05fa79bdbee4e",
+  m01PackageHash: "6082b36dac835779ce35ea29a6ebc05e40bf9fcb5bcec3d4f49e68be7d150260",
+  m01LockHash: "9f0d9218009cae48b2116edce63b99363defa90ed2aa064e91da0a0f22c56571",
+  livePackageHash: "6082b36dac835779ce35ea29a6ebc05e40bf9fcb5bcec3d4f49e68be7d150260",
+  deployedPackageHash: "6082b36dac835779ce35ea29a6ebc05e40bf9fcb5bcec3d4f49e68be7d150260",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
   canonicalDeployedFiles: 291,
@@ -221,6 +221,7 @@ const correctionPaths = new Set([
   "packages/pi-chrono-compaction/test/catalog-history-provenance.test.ts",
   "packages/pi-chrono-compaction/test/catalog-existing-store.test.ts",
   "packages/pi-chrono-compaction/scripts/catalog-many-records.mjs",
+  "packages/pi-chrono-compaction/scripts/catalog-deployment-canary.mjs",
 ]);
 
 class BaselineVerificationError extends Error {
@@ -485,7 +486,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.4") fail("package-version-changed");
+  if (packageJson.version !== "2.0.5") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");
