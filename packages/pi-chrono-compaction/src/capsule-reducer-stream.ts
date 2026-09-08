@@ -28,6 +28,8 @@ export interface CapsuleReducerStreamState extends Omit<CapsuleReductionState, "
   /** Private persisted mechanics. All fields remain JSON serializable and bounded. */
   readonly scanCarry: string;
   readonly scanCarryStart: number;
+  /** Highest code-unit boundary whose lexical matches are settled. */
+  readonly scanSettledOffset: number;
   readonly protectedCueUnits: number;
   readonly protectedCueOverflow: number;
 }
@@ -71,6 +73,7 @@ export function beginCapsuleReduction(
     complete: base.source.decodedUtf16.start === base.source.decodedUtf16.end,
     scanCarry: "",
     scanCarryStart: base.source.decodedUtf16.start,
+    scanSettledOffset: base.source.decodedUtf16.start,
     protectedCueUnits: 0,
     protectedCueOverflow: 0,
   };
@@ -103,7 +106,7 @@ export function feedCapsuleReduction(
   const scanned = state.scanCarry + feed.text;
   const feedCompletesBody = feed.decodedUtf16.end === state.base.source.decodedUtf16.end;
   const candidates = extractProtectedCues(scanned, state.scanCarryStart, state.base.source)
-    .filter((cue) => cue.decodedUtf16.end > state.nextDecodedOffset)
+    .filter((cue) => cue.decodedUtf16.end > state.scanSettledOffset)
     // A word/identifier ending exactly at a non-final feed boundary may only be
     // a prefix. Keep it in the bounded overlap and accept it after a delimiter
     // or the exact body end settles the match.
@@ -134,6 +137,7 @@ export function feedCapsuleReduction(
     complete: next === state.base.source.decodedUtf16.end,
     scanCarry: carry,
     scanCarryStart: next - carry.length,
+    scanSettledOffset: feedCompletesBody ? next : Math.max(state.scanSettledOffset, next - 1),
     protectedCueUnits: cueUnits,
     protectedCueOverflow: overflow,
   };
@@ -179,12 +183,23 @@ function complementOmissions(state: CapsuleReducerStreamState, selected: readonl
     });
   }
   if (omissions.length > MAX_COMPLEMENT_RANGES) throw new Error("capsule-stream-complement-bound");
-  if (state.protectedCueOverflow > 0 && omissions.length > 0) {
-    const last = omissions.at(-1)!;
-    omissions[omissions.length - 1] = {
-      ...last,
-      description: `${last.description} ${state.protectedCueOverflow} additional protected-cue match(es) exceeded the fixed cue budget.`,
-    };
+  if (state.protectedCueOverflow > 0) {
+    if (omissions.length > 0) {
+      const last = omissions.at(-1)!;
+      omissions[omissions.length - 1] = {
+        ...last,
+        description: `${last.description} ${state.protectedCueOverflow} additional protected-cue match(es) exceeded the fixed cue budget.`,
+      };
+    } else {
+      omissions.push({
+        kind: "transformation-loss",
+        reason: "budget",
+        affectedSource: state.base.source,
+        affectedDecodedUtf16: state.base.source.decodedUtf16,
+        omittedUnits: "unknown",
+        description: `${state.protectedCueOverflow} additional protected-cue match(es) exceeded the fixed cue budget.`,
+      });
+    }
   }
   return omissions;
 }

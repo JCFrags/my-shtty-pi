@@ -104,6 +104,39 @@ test("identifier prefixes at a feed boundary are deferred until the match is set
   assert.deepEqual(identifiers.map((cue) => cue.exactText), ["https://example.com/alpha/beta"]);
 });
 
+test("exact cue-end feed boundary is reconsidered when the following delimiter settles it", () => {
+  const text = "pending approval tail";
+  const whole = reducePartitioned(text, [text.length]);
+  const split = reducePartitioned(text, [16, text.length - 16]);
+  const restarted = reducePartitioned(text, [16, text.length - 16], 1);
+  assert.equal(JSON.stringify(split), JSON.stringify(whole));
+  assert.equal(JSON.stringify(restarted), JSON.stringify(whole));
+  assert.deepEqual(whole.alternatives[0]!.protectedCues.map((cue) => cue.exactText), ["pending approval"]);
+});
+
+test("every split position and one-unit feeds preserve phrase, URL, negation and condition matches", () => {
+  const text = "if pending approval, do not continue unless cleared; inspect https://example.com/alpha/beta tail";
+  const whole = reducePartitioned(text, [text.length]);
+  for (let split = 1; split < text.length; split += 1) {
+    const partitioned = reducePartitioned(text, [split, text.length - split]);
+    const restarted = reducePartitioned(text, [split, text.length - split], 1);
+    assert.equal(JSON.stringify(partitioned), JSON.stringify(whole), `split ${split}`);
+    assert.equal(JSON.stringify(restarted), JSON.stringify(whole), `restart split ${split}`);
+  }
+  assert.equal(JSON.stringify(reducePartitioned(text, [1], 1)), JSON.stringify(whole));
+  const kinds = new Set(whole.alternatives[0]!.protectedCues.map((cue) => cue.kind));
+  for (const kind of ["condition", "pending-approval", "negation", "restriction", "identifier"] as const) assert.ok(kinds.has(kind));
+});
+
+test("settled scan cursor keeps overflow count and selected-cue priority partition-stable", () => {
+  const text = `${"must not continue; ".repeat(40)}https://example.com/final`;
+  const whole = reducePartitioned(text, [32_768]);
+  for (const sizes of [[1], [17], [31, 7, 2], [256]] as const) {
+    assert.equal(JSON.stringify(reducePartitioned(text, sizes, 1)), JSON.stringify(whole));
+  }
+  assert.ok(whole.alternatives[0]!.omissions.some((item) => /additional protected-cue match/.test(item.description)));
+});
+
 test("giant streamed input retains bounded serializable state and output", () => {
   const unit = "0123456789 routine line without cues\n";
   const text = unit.repeat(Math.ceil((3 * 1024 * 1024) / unit.length)).slice(0, 3 * 1024 * 1024);
