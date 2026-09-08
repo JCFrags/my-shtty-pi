@@ -34,7 +34,7 @@ function fixture(
     sessionKey: "session-1",
     catalogStoreKey: UUID_B,
     catalogGeneration: 3,
-    derivedSchemaVersion: 1,
+    derivedSchemaVersion: 2,
     capsuleSchemaVersion: 1,
     chunkSchemaVersion: 1,
     reducerSetVersion: "capsule-pure-v1",

@@ -34,7 +34,7 @@ const identity: DerivedStoreIdentity = {
   sessionKey: "session-1",
   catalogStoreKey: catalogStore,
   catalogGeneration: 4,
-  derivedSchemaVersion: 1,
+  derivedSchemaVersion: 2,
   capsuleSchemaVersion: 1,
   chunkSchemaVersion: 1,
   reducerSetVersion: "reducers-1",

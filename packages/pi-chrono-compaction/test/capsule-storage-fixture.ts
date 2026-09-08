@@ -27,7 +27,7 @@ export function setupCapsuleFixture(initial = line("a", null)) {
     await ingest();
     const view = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "s1", eventId: leaf } })).view as CapsuleCatalogView;
     identity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation,
-      derivedSchemaVersion: 1, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "synthetic-v1",
+      derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "synthetic-v1",
       configHash: createHash("sha256").update("synthetic-config").digest("hex") };
     return view;
   };

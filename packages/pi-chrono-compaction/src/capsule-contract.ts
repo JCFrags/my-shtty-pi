@@ -4,7 +4,7 @@
  */
 export const CAPSULE_PROTOCOL_VERSION = 1 as const;
 export const CAPSULE_SCHEMA_VERSION = 1 as const;
-export const DERIVED_SCHEMA_VERSION = 1 as const;
+export const DERIVED_SCHEMA_VERSION = 2 as const;
 export const CHUNK_SCHEMA_VERSION = 1 as const;
 export const MANIFEST_SCHEMA_VERSION = 1 as const;
 export const CAPSULE_TEXT_HASH = "chrono-utf16le-chain-sha256-v1" as const;

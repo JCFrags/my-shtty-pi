@@ -7,7 +7,7 @@ const target: CapsuleShadowTarget = {
   v: 1, op: "derivePage", catalogDirectory: "/synthetic/catalog", derivedDirectory: "/synthetic/derived",
   identity: { storeKey: "22222222-2222-4222-8222-222222222222", sessionKey: "synthetic",
     catalogStoreKey: "11111111-1111-4111-8111-111111111111", catalogGeneration: 1,
-    derivedSchemaVersion: 1, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "v1", configHash: "a".repeat(64) },
+    derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "v1", configHash: "a".repeat(64) },
   view: { storeKey: "11111111-1111-4111-8111-111111111111", sessionKey: "synthetic", generation: 1,
     branchKey: "branch", eventCut: 2, segments: [{ segment: 1, cut: 2 }] },
 };

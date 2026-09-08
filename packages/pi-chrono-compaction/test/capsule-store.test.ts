@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chmodSync, existsSync, linkSync, lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -178,6 +178,27 @@ test("read-only requests never recreate a missing publication lock and the valid
   } finally { f.cleanup(); }
 });
 
+test("derived schema v1 requests and stores refuse without mutation while a fresh v2 store works", async () => {
+  const f = setupCapsuleFixture();
+  try {
+    const view = await f.initialize(); await deriveToEnd(f, view);
+    const dbPath = join(f.derivedDirectory, "derived.sqlite");
+    const valid = await f.request(view, { op: "status" }); assert.equal(valid.ok, true, JSON.stringify(valid));
+
+    let before = readFileSync(dbPath);
+    let response = await executeCapsuleRequest({ v: 1, derivedDirectory: f.derivedDirectory, catalogDirectory: f.catalogDirectory,
+      identity: { ...f.identity, derivedSchemaVersion: 1 }, op: "status", view });
+    assert.equal(response.ok, false); if (!response.ok) assert.equal(response.code, "capsule-request-invalid");
+    assert.deepEqual(readFileSync(dbPath), before, "an explicit v1 request must not touch the v2 store");
+
+    const db = CatalogSqlite.open(dbPath); db.prepare("UPDATE meta SET version=1").run(); db.close();
+    before = readFileSync(dbPath);
+    response = await f.request(view, { op: "status" });
+    assert.equal(response.ok, false); if (!response.ok) assert.equal(response.code, "capsule-store-mismatch");
+    assert.deepEqual(readFileSync(dbPath), before, "a v1 physical store must be refused without mutation");
+  } finally { f.cleanup(); }
+});
+
 test("physical identity, route, schema and unsafe database bytes refuse without recreating", async () => {
   const f = setupCapsuleFixture();
   try {
@@ -190,7 +211,7 @@ test("physical identity, route, schema and unsafe database bytes refuse without 
     assert.equal(response.ok, false);
     let db = CatalogSqlite.open(dbPath); db.prepare("UPDATE meta SET version=99").run(); db.close();
     response = await f.request(view, { op: "status" }); assert.equal(response.ok, false); assert.equal(lstatSync(dbPath).size, before);
-    db = CatalogSqlite.open(dbPath); db.prepare("UPDATE meta SET version=1").run(); db.close(); chmodSync(dbPath, 0o644);
+    db = CatalogSqlite.open(dbPath); db.prepare("UPDATE meta SET version=2").run(); db.close(); chmodSync(dbPath, 0o644);
     response = await f.request(view, { op: "status" }); assert.equal(response.ok, false);
   } finally { f.cleanup(); }
 });

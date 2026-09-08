@@ -20,7 +20,7 @@ function base(text: string): SourceBlockReducerBaseInput {
       sessionKey: "session-stream",
       catalogStoreKey: "22222222-2222-4222-8222-222222222222",
       catalogGeneration: 5,
-      derivedSchemaVersion: 1,
+      derivedSchemaVersion: 2,
       capsuleSchemaVersion: 1,
       chunkSchemaVersion: 1,
       reducerSetVersion: "capsule-pure-v1",

@@ -9,7 +9,7 @@ import { canonicalJson, decodeCapsuleSegment, decodeChunkPayload, encodeCapsuleS
 
 const hash = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const identity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey: "synthetic", catalogStoreKey: randomUUID(), catalogGeneration: 1,
-  derivedSchemaVersion: 1, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "r1", configHash: hash("config") };
+  derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "r1", configHash: hash("config") };
 const source: ScopedBodySourceRef = { catalogStoreKey: identity.catalogStoreKey, sessionKey: identity.sessionKey, catalogGeneration: 1,
   shardKey: "s1", segment: 1, eventSeq: 1, ordinal: 1, descriptor: 1, field: "text", raw: { start: 10, end: 14 },
   coordinateKind: "decoded-body", decodedUtf16: { start: 0, end: 1 }, bodyHashAlgorithm: CAPSULE_TEXT_HASH, bodyHash: hash("body") };

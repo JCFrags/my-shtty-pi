@@ -87,7 +87,7 @@ function setup() {
   const capsuleView: CapsuleCatalogView = { ...view, segments: view.segments.map(item => ({ ...item })) };
   const identity: DerivedStoreIdentity = {
     storeKey: randomUUID(), sessionKey: view.sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation,
-    derivedSchemaVersion: 1, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "synthetic-v1", configHash: "a".repeat(64),
+    derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "synthetic-v1", configHash: "a".repeat(64),
   };
   const envelope = (text: string, family: ReducerEnvelope["family"] = "generic-text", familyVersion = "1.0.0", omissionDescription = "Synthetic omitted tail unit"): ReducerEnvelope => {
     const alternative: CapsuleAlternative = {
