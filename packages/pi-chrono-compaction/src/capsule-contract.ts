@@ -244,7 +244,7 @@ export type CapsuleOmission =
   | {
       /** Transformation loss is real but does not claim a fake exact removed range/count. */
       readonly kind: "transformation-loss";
-      readonly reason: "repeated" | "normalization";
+      readonly reason: "repeated" | "normalization" | "routine" | "middle" | "budget";
       readonly affectedSource: ScopedBodySourceRef;
       readonly affectedDecodedUtf16: CoordinateRange;
       readonly omittedUnits: "unknown";
@@ -303,6 +303,7 @@ export interface ReducerEnvelope {
   readonly identity: DerivedStoreIdentity;
   /** Stable source-local identity. Pins, cuts and batch boundaries are absent. */
   readonly source: ScopedBodySourceRef;
+  readonly provenance: CatalogProvenance;
   readonly family: SourceReducerFamily;
   readonly familyVersion: string;
   readonly reducerSetVersion: string;
@@ -587,7 +588,7 @@ function isOmission(value: unknown, source: ScopedBodySourceRef): value is Capsu
       && sourceRangeWithin(value.decodedUtf16, source) && positive(value.omittedUnits)
       && value.omittedUnits === value.decodedUtf16.end - value.decodedUtf16.start;
   }
-  return value.kind === "transformation-loss" && enumValue(["repeated", "normalization"] as const, value.reason)
+  return value.kind === "transformation-loss" && enumValue(["repeated", "normalization", "routine", "middle", "budget"] as const, value.reason)
     && isScopedBodySourceRef(value.affectedSource) && sameSource(value.affectedSource, source)
     && range(value.affectedDecodedUtf16) && sourceRangeWithin(value.affectedDecodedUtf16, source)
     && value.omittedUnits === "unknown";
@@ -596,6 +597,7 @@ function isOmission(value: unknown, source: ScopedBodySourceRef): value is Capsu
 export function isReducerEnvelope(value: unknown): value is ReducerEnvelope {
   if (!object(value) || value.v !== 1 || value.capsuleSchemaVersion !== CAPSULE_SCHEMA_VERSION
     || !isDerivedStoreIdentity(value.identity) || !isScopedBodySourceRef(value.source)
+    || !enumValue(["original", "generated", "mixed"] as const, value.provenance)
     || value.source.catalogStoreKey !== value.identity.catalogStoreKey || value.source.sessionKey !== value.identity.sessionKey
     || value.source.catalogGeneration !== value.identity.catalogGeneration || !enumValue(SOURCE_REDUCER_FAMILIES, value.family)
     || !version(value.familyVersion) || value.reducerSetVersion !== value.identity.reducerSetVersion || value.configHash !== value.identity.configHash

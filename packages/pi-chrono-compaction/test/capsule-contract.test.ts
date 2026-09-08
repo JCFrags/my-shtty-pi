@@ -170,6 +170,7 @@ function envelope(): any {
     capsuleSchemaVersion: 1,
     identity,
     source: body,
+    provenance: "original",
     family: "terminal",
     familyVersion: "2.0.0",
     reducerSetVersion: "reducers-1",
@@ -212,6 +213,15 @@ test("capsules are source-local, explicitly lossy, source-linked alternatives wi
     affectedDecodedUtf16: { start: 0, end: 12 }, omittedUnits: "unknown", description: "terminal control transformation",
   }];
   assert.equal(isReducerEnvelope(transformed), true);
+  for (const reason of ["routine", "middle", "budget"]) {
+    transformed.alternatives[0]!.omissions[0]!.reason = reason;
+    assert.equal(isReducerEnvelope(transformed), true);
+  }
+  for (const provenance of ["original", "generated", "mixed"]) {
+    assert.equal(isReducerEnvelope({ ...valid, provenance }), true);
+  }
+  assert.equal(isReducerEnvelope({ ...valid, provenance: undefined }), false);
+  assert.equal(isReducerEnvelope({ ...valid, provenance: "independent-copy" }), false);
   transformed.alternatives[0]!.omissions[0]!.omittedUnits = 2;
   assert.equal(isReducerEnvelope(transformed), false);
   const notLossy = clone(valid);
