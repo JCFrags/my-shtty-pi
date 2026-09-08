@@ -57,7 +57,7 @@ const CUE_PATTERNS: readonly { readonly kind: ProtectedCueKind; readonly regex: 
   { kind: "condition", regex: /\b(?:if|unless|when|whenever|provided that|only if)\b/giu },
   { kind: "exception", regex: /\b(?:except|exception|however|but not|other than)\b/giu },
   { kind: "negation", regex: /\b(?:not|never|no|cannot|can't|must not|do not|don't|without)\b/giu },
-  { kind: "failure", regex: /\b(?:failed|failure|error|fatal|panic|exception|timed out|timeout|exit code\s*[1-9][0-9]*)\b/giu },
+  { kind: "failure", regex: /\b(?:failed|failure|error|fatal|panic|exception|timed out|timeout|exit code\s*[1-9][0-9]*(?![\p{L}\p{N}_]))\b/giu },
   { kind: "unknown", regex: /\b(?:unknown|unresolved|uncertain|not yet|still pending|open question)\b/giu },
   { kind: "restriction", regex: /\b(?:must|must not|only|required|prohibited|forbidden|do not|don't|never)\b/giu },
   { kind: "identifier", regex: /(?:https?:\/\/[^\s)\]}>"']{1,240}(?![^\s)\]}>"'])|(?:\.{0,2}\/|~\/)[A-Za-z0-9_.@+\-/]{2,240}(?![A-Za-z0-9_.@+\-/])|\b[0-9a-f]{8}-[0-9a-f-]{27,56}\b|\b[A-Fa-f0-9]{12,64}\b)/gu },

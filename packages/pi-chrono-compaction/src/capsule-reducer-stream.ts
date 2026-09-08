@@ -128,6 +128,14 @@ function scanFailureGrammar(
         if (state.digits === MAX_FAILURE_DIGITS) { overflow += 1; state = idleFailure(true); return; }
         state = { ...state, digits: state.digits + 1, text: state.text + character }; return;
       }
+      if (word(character)) {
+        // A letter, number, or underscore continues the same lexical word, so
+        // the apparent numeric code is invalid. Consume it without settling a
+        // cue and retain its word-boundary effect for the following unit.
+        state = idleFailure(true);
+        consume(character, absolute, false);
+        return;
+      }
       settle();
       consume(character, absolute, false);
       return;
