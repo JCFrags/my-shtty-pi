@@ -108,7 +108,8 @@ async function campaign(options) {
     const initialStat = statSync(sourcePath);
     const { runCatalogWorker, CATALOG_WORKER_CAPS } = await import("../dist/src/catalog-worker-client.js");
     const { runCapsuleWorker, CAPSULE_WORKER_CAPS } = await import("../dist/src/capsule-worker-client.js");
-    const { CAPSULE_LIMITS } = await import("../dist/src/capsule-contract.js");
+    const { CAPSULE_LIMITS, DERIVED_SCHEMA_VERSION, CAPSULE_SCHEMA_VERSION, CHUNK_SCHEMA_VERSION } = await import("../dist/src/capsule-contract.js");
+    report.derivedSchemaVersion = DERIVED_SCHEMA_VERSION;
     const { schedulerArtifactCounts } = await import("../dist/src/host-worker-scheduler.js");
     const { runtimeUnitName, runtimeUnitState } = await import("../dist/src/worker-runtime-systemd.js");
     report.configured = { catalog: { v8HeapBytes: CATALOG_WORKER_CAPS.heapMiB * MiB, workerMemoryBytes: CATALOG_WORKER_CAPS.memoryBytes, deadlineMs: CATALOG_WORKER_CAPS.timeoutMs },
@@ -128,7 +129,7 @@ async function campaign(options) {
     assert.equal(await hashFile(sourcePath), report.generated.sourceSha256, "source immutable after catalog ingestion");
     const oldView = (await catalogCall({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: id(options.records) } })).view;
     const identity = { storeKey: randomUUID(), sessionKey: oldView.sessionKey, catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation,
-      derivedSchemaVersion: 1, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: "benchmark-v1", configHash: createHash("sha256").update("capsule-benchmark-v1").digest("hex") };
+      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION, reducerSetVersion: "benchmark-v1", configHash: createHash("sha256").update("capsule-benchmark-v1").digest("hex") };
     const capsuleBase = { v: 1, catalogDirectory, derivedDirectory, identity };
     const capsuleCall = async request => { const started = performance.now(); const response = await runCapsuleWorker({ ...capsuleBase, ...request }, { schedulerDirectory, slots: 1, signal: abort.signal });
       assert.equal(response.ok, true, `${request.op}:${response.code}`); assert.equal(response.sqliteNativeLimitBytes, 64 * MiB); observe(report.phases[phase], "capsule", response, performance.now() - started); return response.result; };

@@ -141,8 +141,10 @@ Python 3 standard library and libc capability described in ADR-003; it has no
 ordinary-rename, copy, or hard-link fallback. Independent re-review passed all
 three corrections and 15 focused compiled tests. It also reproduced a versioning
 regression: the new ancestry table still used the predecessor's declared derived
-schema 1. A separate physical-schema version correction is required; existing
-stores must not be migrated, relabeled, or deleted.
+schema 1. The separate correction sets only the derived physical schema to 2.
+A regression verifies fresh version 2 operation and refusal of version 1 requests
+and stores without changing database bytes. No migration, relabeling, or deletion
+is implemented.
 
 Independent adapter review found that a `NaN` aggregate budget bypassed numeric
 comparisons. The corrected public binding factory rejects any supplied budget
@@ -158,8 +160,63 @@ and the worker unit became inactive. An initial campaign assertion confused the
 capsule `(eventSeq, descriptor)` cursor with the catalog's event-only cursor;
 the corrected request explicitly excludes all descriptors at the previous event.
 The failed assertion is retained. This small run did not contain its parent in
-an OS memory unit. Larger frozen-code campaigns and final schema verification
-remain pending. No deployment or self-acceptance is claimed.
+an OS memory unit. No deployment or self-acceptance is claimed.
+
+## Bounded synthetic scale campaigns
+
+Two campaigns passed on frozen `4e319fe` runtime/script behavior, before the
+derived-schema discriminator changed from 1 to 2. They retain the original
+30-minute campaign limit and 30-second per-worker limit.
+
+| Input | Calls | Wall time | Parent cgroup peak / limit | Largest worker cgroup peak / limit |
+| --- | ---: | ---: | ---: | ---: |
+| 2 records, 136 MiB body | 2,221 | 1,174.837 s | 212,119,552 / 268,435,456 B | 64,311,296 / 268,435,456 B |
+| 2,048 records, 1 MiB body | 2,122 | 1,194.954 s | 50,659,328 / 268,435,456 B | 62,275,584 / 268,435,456 B |
+
+Each parent and its streaming generator ran in an external 256 MiB systemd unit
+with swap disabled; each sequential worker had a separate 256 MiB unit. Both
+parent V8 heaps were 128 MiB. These are separate enforced limits, not a measured
+single combined cgroup. The report correctly says the script does not contain
+itself; the external launcher supplies parent containment.
+
+The giant body contains 142,606,336 UTF-16 units in a 142,606,743-byte source.
+Initial derivation took 2,182 jobs, reading at most 163,840 source bytes per job.
+The 2,048-record run took 2,068 initial derive jobs with the same maximum. Both
+verified first and late exact UTF-16LE chunk samples, including Unicode, lone
+surrogates, and CRLF, and unchanged source hashes except one explicit append.
+Exact chunk retrieval read zero authoritative source bytes. Fork capsule pages
+matched M04 ancestry, and old-pin capsule hashes remained stable after sibling
+publication. Tickets and slots reached zero, units became inactive, and each
+owned synthetic namespace was removed after settlement.
+
+Source counters are not total I/O: initial derive process-read counters were
+5,104,020,271 and 5,019,194,338 characters respectively, including native SQLite,
+startup, and measurement reads. Native allocation has a configured 64 MiB cap;
+it was not separately measured. The combined append/noop/fork phase took 15 calls
+for the giant case and 46 for the 2,048-record case, including bounded resumable
+fork-prefix reuse. This is not a 50,000-record M05 claim or proof that complete
+fork reconstruction takes constant total work. Capsule readiness remains honestly
+unsupported where M04 emits bodyless descriptors; eligible text chunks are ready.
+
+After the schema correction, a fresh version 2 smoke campaign passed 43 calls in
+21.629 seconds with an externally enforced 256 MiB parent limit. Its first attempt
+refused because the campaign script still supplied literal schema 1. The script
+now imports schema constants and reports the derived version explicitly; the
+original failure and its synthetic diagnostics are retained. The large campaigns
+were not rerun under schema 2 and are not represented as final-head scale runs.
+
+## Clean build and normal-suite evidence
+
+A separate clean worktree at `fc0a08a` installed the pinned dependencies with
+lifecycle scripts disabled, then performed the controlled native build. The
+native probe verified SQLite 3.53.0, WAL/FULL, zero mmap, the 64 MiB hard heap cap,
+and allocation refusal. Build and typecheck passed. Its 107 JavaScript outputs
+byte-matched the integrated development build. The candidate manifest has 108
+rows; it does not change the installed package or historical deployed inventory.
+
+The clean normal suite passed 603/603 tests in 205.124 seconds, followed by the
+unchanged small/medium deterministic replay harness. This includes the original
+535-test baseline and added regressions, without skipped tests.
 
 ## Remaining evidence
 
