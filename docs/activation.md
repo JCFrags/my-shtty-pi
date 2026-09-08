@@ -23,7 +23,7 @@ Do not upgrade global software as part of linking. Check `pi --version`, the ins
 
 ## Build and registration checks
 
-From an isolated candidate checkout, prepare dependencies from committed locks with `npm ci --ignore-scripts --no-audit --no-fund` in each package that needs them. Grounded Tools is a workspace: prepare its root, not separate ad hoc copies of its subpackages.
+From an isolated candidate checkout, prepare dependencies from committed locks with `npm ci --ignore-scripts --no-audit --no-fund` in each package that needs them. Grounded Tools uses the repository-root workspace lock: run `npm ci --ignore-scripts --no-audit --no-fund` at the repository root, not under `packages/grounded-tools` or its subpackages.
 
 Run root `npm run verify` against indexed candidate inputs. This checks the supported architecture and disposable builds; historical checks are separate. New source and manifests must be indexed before this check. Never copy private settings, logs, credentials, session files, sockets or dependency trees into the index.
 
@@ -99,6 +99,22 @@ Pi persists a message only after all `message_end` handlers complete. A one-shot
 After a pane-renderer change, close the existing Glance side pane in Herdr and reopen it with `/project-glance`; `/reload` replaces the Pi extension but does not replace the already-running pane process.
 
 Herdr owns the pane title and border. Project Glance intentionally starts with one blue CURRENT card, followed by separate dark update cards collapsed to two preview lines by default. Its mouse controls use component-owned row/column targets in Pi/TUI 0.85.1, not live OSC 8 links. CURRENT remains outside the feed scroll region.
+
+## V1.1 deferred questions
+
+The existing Grounded Dialog facade owns the only `ask_user` tool. Its normal blocking provider remains unchanged. Glance provides deferred questions through the public `pi-ask-user:deferred-request-v1` and `pi-ask-user:deferred-response-v1` events; it imports no Grounded implementation and registers no question tools.
+
+Require `askUserV1: true` in the existing Pi agent directory's `grounded-dialog.json`. Preserve other settings. With this flag enabled, Dialog registers `ask_user` instead of the legacy `ask_user_question`. Prepare the Grounded workspace dependencies with `npm ci --ignore-scripts --no-audit --no-fund` at the retained repository root, which owns `package-lock.json`. Replace only the Dialog package-list source with `$ACTIVATION/packages/grounded-tools/dialog`, preserving its position. Leave Todo, Workplan, shared core and other provider links unchanged. Do not edit the canonical checkout to activate the facade.
+
+Use `node scripts/local-activation-check.mjs --candidate "$ACTIVATION" --expect-v1-1`, then the same command without `--candidate` after linking. This checks explicit enablement, exactly one facade, blocking and deferred schema variants, restricted classes/timing, and the candidate Dialog owner. Build orchestration as well before a candidate-wide registration check: a missing compiled entry can produce no registration without a loader error. The V1.1 check does not prove activation in an existing session.
+
+Deferred questions support preference, information and reversible decisions, never authorization. Explicit `deliveryMode` supports only `nextTurn`; omission has the same safe-idle behavior. `escalationPolicy` supports only `never`. Existing broader public wire values are rejected, not silently reinterpreted. Recommendations and temporary defaults are display information, not selected answers or permission to act.
+
+The provider saves branch-aware question, answer, cancellation, expiry and delivery records as Pi custom entries. It allows four unresolved outbox slots, an 8 KiB normalized question and a 4 KiB answer. A queued UI cancellation notice retains a slot until delivery. Records are acknowledged only after their exact current-session file bytes can be read. The bounded receipt scan permits a 64 MiB session file and a 2 MiB JSONL line; an unreadable, malformed, unflushed or oversized file fails visibly. It never writes raw session bytes or creates a second history.
+
+Answers submitted while Pi is busy remain saved. At safe idle, the provider uses `pi.sendMessage(..., { triggerTurn: false })` to insert the answer into session history without starting a turn. The answer is available to the next naturally initiated model request. It does **not** use Pi's memory-only native `nextTurn`, steering or follow-up queues. Those queues have no per-message durable receipt or branch-bound cancellation in Pi 0.85.1. A historical message marker prevents duplicate insertion after reload or an interrupted acknowledgement. This is not a power-loss `fsync` guarantee or a promise of exactly-once model processing.
+
+After mechanical checks, request `/reload` and close/reopen Glance. Check harmless option and text answers, continued independent work, pending restoration without duplicate answers, and the unchanged blocking modal. Preserve the accepted V1 feed controls. Do not commit or push until the user accepts the complete deferred workflow.
 
 ## Rollback
 

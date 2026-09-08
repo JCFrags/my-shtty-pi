@@ -1,3 +1,5 @@
+import type { ProjectGlanceQuestion, ProjectGlanceQuestionAction } from "../questions/model.js";
+
 export const PROJECT_GLANCE_PRODUCT = "Pi Project Glance" as const;
 export const PROJECT_GLANCE_PACKAGE = "pi-project-glance" as const;
 export const PROJECT_GLANCE_COMMAND = "project-glance" as const;
@@ -78,6 +80,7 @@ export interface ProjectGlanceSnapshot {
   feed: ProjectGlanceFeedItem[];
   uiState?: ProjectGlanceUiState;
   focusSerial?: number;
+  questions?: ProjectGlanceQuestion[];
 }
 
 export interface ProjectGlanceHelloRequest {
@@ -100,6 +103,8 @@ export interface ProjectGlanceSnapshotRequest {
   type: "snapshot_request";
   requestId: string;
 }
+export type ProjectGlanceAction = { type: "mark_read" | "dismiss" | "focus"; itemId?: string } | ProjectGlanceQuestionAction;
+
 export interface ProjectGlanceActionRequest {
   version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
   type: "action";
@@ -109,7 +114,7 @@ export interface ProjectGlanceActionRequest {
   generation: string;
   branchId: string;
   baseRevision: number;
-  action: { type: "mark_read" | "dismiss" | "focus"; itemId?: string };
+  action: ProjectGlanceAction;
 }
 
 export type ProjectGlanceClientFrame = ProjectGlanceHelloRequest | ProjectGlancePingRequest | ProjectGlanceSnapshotRequest | ProjectGlanceActionRequest;

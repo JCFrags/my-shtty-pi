@@ -261,10 +261,12 @@ export function executeProducts(root, files, state, selected) {
   }
   // These tests execute real providers from this same disposable indexed tree.
   if (!selected || selected === 'grounded-tools' || selected === 'pi-project-glance') {
-    const dir = join(root, 'packages/grounded-tools/workplan');
-    const tests = walk(join(dir, 'test')).filter(path => path.endsWith('.test.mjs'));
-    if (!tests.length) throw new Error('Workplan tests missing');
-    run(process.execPath, ['--experimental-transform-types', '--test', ...tests], dir, { env });
+    for (const provider of ['workplan', 'dialog']) {
+      const dir = join(root, `packages/grounded-tools/${provider}`);
+      const tests = walk(join(dir, 'test')).filter(path => path.endsWith('.test.mjs'));
+      if (!tests.length) throw new Error(`${provider} tests missing`);
+      run(process.execPath, ['--experimental-transform-types', '--test', ...tests], dir, { env });
+    }
   }
 }
 

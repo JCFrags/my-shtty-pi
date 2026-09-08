@@ -22,6 +22,7 @@ test("registered persisted boundaries recover updates delayed by another message
   let slot;
   try {
     await extension({
+      events: { on() { return () => {}; }, emit() {} },
       registerCommand() {},
       appendEntry() { assert.fail("Passive boundary must not persist UI state"); },
       on(name, handler) { handlers.set(name, [handler]); },

@@ -1,4 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ProjectGlanceQuestionService } from "../questions/service.js";
+import { QUESTION_ENTRY_TYPE } from "../questions/model.js";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   PROJECT_GLANCE_COMMAND,
   PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX,
@@ -34,17 +36,26 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
     }
   }
 
-  let activeContext: { ui: { setStatus(key: string, value: string | undefined): void } } | undefined;
+  let activeContext: ExtensionContext | undefined;
+  const questions = new ProjectGlanceQuestionService({
+    events: pi.events,
+    getContext: () => activeContext && typeof activeContext.isIdle === "function" && typeof activeContext.sessionManager.getEntries === "function" && typeof activeContext.sessionManager.getSessionFile === "function" ? activeContext : undefined,
+    appendEntry: (data) => pi.appendEntry(QUESTION_ENTRY_TYPE, data),
+    sendMessage: (message) => pi.sendMessage(message, { triggerTurn: false }),
+    onChange: () => { void runtime.refreshQuestions().catch(() => undefined); },
+  });
   const runtime = new ProjectGlanceRelayRuntime(
     process.env,
     pi.events,
     (data) => pi.appendEntry(`${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`, data),
-    (count) => activeContext?.ui.setStatus(PROJECT_GLANCE_COMMAND, count > 0 ? `● Glance ${count}` : undefined),
+    (count, pending) => activeContext?.ui.setStatus(PROJECT_GLANCE_COMMAND, count + pending > 0 ? `● Glance ${count}${pending ? ` · ${pending} question${pending === 1 ? "" : "s"}` : ""}` : undefined),
+    { questions: () => questions.questions, applyAction: (action, actionId) => questions.applyAction(action, actionId) },
   );
   let disposed = false;
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
+    questions.stop();
     activeContext?.ui.setStatus(PROJECT_GLANCE_COMMAND, undefined);
     activeContext = undefined;
     await runtime.stop();
@@ -53,16 +64,21 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
     }
   };
   globalRuntime()[RUNTIME_SLOT] = { runtime, dispose };
+  questions.start();
 
   pi.registerCommand(PROJECT_GLANCE_COMMAND, {
     description: "Open the Project Glance side pane.",
     handler: async (_args, ctx) => {
+      activeContext = ctx;
+      questions.sync();
       await handleProjectGlanceCommand(pi, ctx, runtime);
     },
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    questions.start();
     activeContext = ctx;
+    questions.sync();
     try {
       await runtime.ensureForContext(ctx);
     } catch (error) {
@@ -74,6 +90,8 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
     }
   });
   pi.on("session_tree", async (_event, ctx) => {
+    activeContext = ctx;
+    questions.sync();
     await runtime.onSessionTree(ctx);
   });
   pi.on("message_end", (_event, ctx) => {
@@ -82,6 +100,8 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   // message_end runs before persistence and later handlers can await work.
   // These ordered boundaries run after preceding messages have been saved.
   pi.on("tool_execution_start", async (_event, ctx) => {
+    activeContext = ctx;
+    questions.sync();
     await runtime.syncFeed(ctx);
   });
   pi.on("turn_end", async (_event, ctx) => {
@@ -90,7 +110,13 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   pi.on("agent_end", async (_event, ctx) => {
     await runtime.syncFeed(ctx);
   });
+  pi.on("agent_settled", async (_event, ctx) => {
+    activeContext = ctx;
+    questions.sync();
+    await runtime.syncFeed(ctx);
+  });
   pi.on("session_shutdown", async (_event, ctx) => {
+    questions.stop();
     ctx.ui.setStatus(PROJECT_GLANCE_COMMAND, undefined);
     activeContext = undefined;
     await runtime.stop();

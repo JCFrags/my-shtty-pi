@@ -488,11 +488,13 @@ test("actual concurrent opens share one pane and focus the registered result", a
   });
 });
 
-test("Pi extension boundary registers one command and lifecycle hooks only", async () => {
+test("Pi extension boundary registers one command, public provider and lifecycle hooks only", async () => {
   const { default: extension } = await import("../dist/pi/extension.js");
   const commands = [];
   const events = [];
+  const publicEvents = [];
   const pi = {
+    events: { on(name) { publicEvents.push(name); return () => {}; }, emit() {} },
     registerCommand(name, options) {
       commands.push({ name, options });
     },
@@ -502,7 +504,8 @@ test("Pi extension boundary registers one command and lifecycle hooks only", asy
   };
   await extension(pi);
   assert.deepEqual(commands.map((entry) => entry.name), ["project-glance"]);
-  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "message_end", "tool_execution_start", "turn_end", "agent_end", "session_shutdown"]);
+  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "message_end", "tool_execution_start", "turn_end", "agent_end", "agent_settled", "session_shutdown"]);
+  assert.deepEqual(publicEvents, ["pi-ask-user:deferred-request-v1"]);
   assert.equal("registerTool" in pi, false);
   assert.equal("registerWidget" in pi, false);
 });

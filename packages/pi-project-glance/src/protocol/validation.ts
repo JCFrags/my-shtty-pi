@@ -20,6 +20,7 @@ import {
   type ProjectGlanceServerFrame,
   type ProjectGlanceSnapshot,
 } from "./model.js";
+import { validateQuestionAction, validateQuestions } from "./question-validation.js";
 import { assertSnapshotFrameBudget } from "./framing.js";
 import { projectFeedText, validateProjectionText } from "./projection-text.js";
 
@@ -167,7 +168,7 @@ function validateItem(value: unknown): ProjectGlanceFeedItem {
 
 export function validateSnapshot(value: unknown): ProjectGlanceSnapshot {
   const source = sourceRecord(value);
-  exactKeys(source, ["protocolVersion", "sessionKey", "revision", "generatedAt", "current", "feed"], ["branchId", "uiState", "focusSerial"]);
+  exactKeys(source, ["protocolVersion", "sessionKey", "revision", "generatedAt", "current", "feed"], ["branchId", "uiState", "focusSerial", "questions"]);
   if (source.protocolVersion !== PROJECT_GLANCE_PROTOCOL_VERSION) {
     throw new ProjectGlanceValidationError();
   }
@@ -188,6 +189,7 @@ export function validateSnapshot(value: unknown): ProjectGlanceSnapshot {
     protocolVersion: PROJECT_GLANCE_PROTOCOL_VERSION, sessionKey: validateSessionKey(source.sessionKey), revision: boundedInteger(source.revision, Number.MAX_SAFE_INTEGER), generatedAt: validateTimestamp(source.generatedAt),
     ...(branchId ? { branchId } : {}), current: validateCurrent(source.current), feed, ...(uiState ? { uiState } : {}),
     ...(source.focusSerial === undefined ? {} : { focusSerial: boundedInteger(source.focusSerial, Number.MAX_SAFE_INTEGER) }),
+    ...(source.questions === undefined ? {} : { questions: validateQuestions(source.questions) }),
   };
   const payloadBytes = Buffer.byteLength(JSON.stringify(snapshot), "utf8");
   if (payloadBytes > MAX_SNAPSHOT_BYTES) {
@@ -272,6 +274,16 @@ export function validateClientFrame(value: unknown): ProjectGlanceClientFrame {
       "action",
     ]);
     const action = sourceRecord(source.action);
+    if (typeof action.type === "string" && action.type.startsWith("question_")) {
+      return {
+        version: PROJECT_GLANCE_PROTOCOL_VERSION, type,
+        requestId: validateRequestId(source.requestId), actionId: validateRequestId(source.actionId),
+        sessionKey: validateSessionKey(source.sessionKey), generation: validateGeneration(source.generation),
+        branchId: boundedText(source.branchId, MAX_ITEM_ID_BYTES),
+        baseRevision: boundedInteger(source.baseRevision, Number.MAX_SAFE_INTEGER),
+        action: validateQuestionAction(action),
+      };
+    }
     exactKeys(action, ["type"], ["itemId"]);
     if (
       action.type !== "mark_read" &&

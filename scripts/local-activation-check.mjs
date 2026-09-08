@@ -10,7 +10,8 @@ import { pathToFileURL } from "node:url";
 const args = process.argv.slice(2);
 const value = (flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
 const candidate = value("--candidate");
-const expectV1 = args.includes("--expect-v1");
+const expectV11 = args.includes("--expect-v1-1");
+const expectV1 = args.includes("--expect-v1") || expectV11;
 const agentDir = resolve(value("--agent-dir") ?? join(homedir(), ".pi", "agent"));
 const sdkRoot = value("--sdk-root") ?? join(execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(), "@earendil-works/pi-coding-agent");
 const sandbox = await mkdtemp(join(tmpdir(), "pi-registration-check-"));
@@ -34,7 +35,9 @@ try {
     const manifest = await metadata(source);
     if (candidate && manifest?.name === "pi-signal-board") continue;
     const target = candidate && ["pi-project-glance", "pi-herdr-orchestrator"].includes(manifest?.name)
-      ? join(resolve(candidate), "packages", manifest.name) : source;
+      ? join(resolve(candidate), "packages", manifest.name)
+      : candidate && expectV11 && manifest?.name === "@grounded/pi-dialog"
+        ? join(resolve(candidate), "packages/grounded-tools/dialog") : source;
     packages.push(typeof item === "string" ? target : { ...item, source: target });
   }
   const extensions = (original.extensions ?? []).map((item) => {
@@ -76,9 +79,28 @@ try {
     assert.equal(glance[0].tools.size, 0);
     assert.equal(glance[0].shortcuts.size, 0);
   }
+  if (expectV11) {
+    const enabled = JSON.parse(await readFile(join(agentDir, "grounded-dialog.json"), "utf8"));
+    assert.equal(enabled.askUserV1, true, "Deferred facade must be explicitly enabled");
+    assert.equal(tools.filter((name) => name === "ask_user").length, 1);
+    assert(!tools.includes("ask_user_question"), "Legacy question tool must not accompany enabled facade");
+    const owner = loaded.extensions.find((extension) => extension.tools.has("ask_user"));
+    const definition = owner.tools.get("ask_user").definition;
+    const variants = definition.parameters.oneOf;
+    const literals = (schema) => schema.const !== undefined ? [schema.const] : schema.enum ?? (schema.anyOf ?? schema.oneOf ?? []).flatMap(literals);
+    const deferred = variants.find((item) => literals(item.properties.mode).includes("deferred") && literals(item.properties.operation).includes("ask"));
+    assert(variants.some((item) => literals(item.properties.mode).includes("blocking")));
+    assert(deferred, "Deferred schema missing");
+    assert.deepEqual(literals(deferred.properties.class).sort(), ["information", "preference", "reversible"]);
+    assert.deepEqual(literals(deferred.properties.deliveryMode), ["nextTurn"]);
+    assert.deepEqual(literals(deferred.properties.escalationPolicy), ["never"]);
+    assert(!/Signals|signal.board/iu.test(definition.description));
+    if (candidate) assert.equal(resolve(owner.resolvedPath), join(resolve(candidate), "packages/grounded-tools/dialog/index.ts"));
+  }
   console.log(JSON.stringify({
     status: "pass", scope: candidate ? "candidate registrations" : "linked registrations",
     activatedInExistingSession: false, modelPromptSent: false,
+    ...(expectV11 ? { deferredFacadeVerified: true, delivery: "safe-idle-next-natural-turn" } : {}),
     extensions: registry.length, commands: [...commands].sort(), tools: [...tools].sort(),
   }, null, 2));
 } finally {

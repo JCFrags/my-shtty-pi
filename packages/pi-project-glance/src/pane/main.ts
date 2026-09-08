@@ -1,9 +1,13 @@
 import {
+  CURSOR_MARKER,
   ProcessTerminal,
   ScrollView,
   TuiAltScreen,
   VStack,
-  getOsc8LinkAtColumn,
+  HStack,
+  truncateToWidth,
+  visibleWidth,
+  matchesKey,
   type Component,
   type TuiMouseEvent,
   type TuiMouseEventResult,
@@ -13,6 +17,8 @@ import {
   PROJECT_GLANCE_TITLE,
 } from "../protocol/model.js";
 import { ProjectGlanceClient } from "../protocol/client.js";
+import type { ProjectGlanceQuestionAction } from "../questions/model.js";
+import { ProjectGlanceQuestionsRegion } from "./questions.js";
 import {
   ProjectGlancePaneModel,
   type ProjectGlancePaneState,
@@ -49,8 +55,8 @@ export class ProjectGlancePinnedRegion implements Component {
 export class ProjectGlanceFeedRegion implements Component {
   readonly #model: ProjectGlancePaneModel;
   readonly #activateUrl: ((url: string) => void) | undefined;
-  #hitTargets = new Map<string, string>();
-  #renderWidth = 0;
+  #hitTargets = new Map<number, { start: number; end: number; url: string }[]>();
+  #cache: { key: string; lines: string[] } | undefined;
   #selectedRow: number | undefined;
   #itemRows = new Map<string, number>();
 
@@ -62,9 +68,7 @@ export class ProjectGlanceFeedRegion implements Component {
     this.#activateUrl = activateUrl;
   }
 
-  invalidate(): void {
-    // The region is derived directly from the model on every render.
-  }
+  invalidate(): void { this.#cache = undefined; }
 
   get selectedRow(): number | undefined {
     return this.#selectedRow;
@@ -82,36 +86,52 @@ export class ProjectGlanceFeedRegion implements Component {
   }
 
   render(width: number): string[] {
-    this.#itemRows.clear();
     const expandedIds = new Set(
       this.#model.visibleFeed
         .filter((item) => this.#model.isExpanded(item.id))
         .map((item) => item.id),
     );
     const selectedId = this.#model.selectedId;
-    const linkedLines = renderProjectGlanceFeed(this.#model.snapshot, width, {
+    const snapshot = this.#model.snapshot;
+    // snapshot getters return copies. Key actual renderer inputs, not object
+    // identity or revision alone (relay/branch changes can reuse revisions).
+    const key = JSON.stringify([width, snapshot !== undefined, snapshot?.feed, snapshot?.uiState, selectedId, [...expandedIds]]);
+    if (this.#cache?.key === key) return this.#cache.lines;
+    this.#itemRows.clear();
+    const linkedLines = renderProjectGlanceFeed(snapshot, width, {
       ...(selectedId ? { selectedId } : {}),
       expandedIds,
     });
-    const hitTargets = new Map<string, string>();
+    const hitTargets = new Map<number, { start: number; end: number; url: string }[]>();
     let selectedRow: number | undefined;
     const selectedSuffix = selectedId ? `/${encodeURIComponent(selectedId)}` : undefined;
     for (let y = 0; y < linkedLines.length; y += 1) {
       const line = linkedLines[y] ?? "";
-      for (let x = 0; x < width; x += 1) {
-        const url = getOsc8LinkAtColumn(line, x);
-        if (url) {
-          hitTargets.set(`${y}:${x}`, url);
+      // The renderer emits non-nested OSC8 spans. Measure each span once,
+      // rather than reparsing the full ANSI line and URL for every cell.
+      let column = 0;
+      let offset = 0;
+      let url = "";
+      const targets: { start: number; end: number; url: string }[] = [];
+      for (const match of line.matchAll(/\u001b\]8;;([^\u0007\u001b]*)(?:\u0007|\u001b\\)/gu)) {
+        const end = Math.min(width, column + visibleWidth(line.slice(offset, match.index)));
+        if (url && end > column) {
+          targets.push({ start: column, end, url });
           const id = decodeURIComponent(new URL(url).pathname.slice(1));
           if (!this.#itemRows.has(id)) this.#itemRows.set(id, y);
           if (selectedSuffix && url.endsWith(selectedSuffix)) selectedRow ??= y;
         }
+        column = end;
+        offset = match.index + match[0].length;
+        url = match[1] ?? "";
       }
+      if (targets.length) hitTargets.set(y, targets);
     }
     this.#hitTargets = hitTargets;
-    this.#renderWidth = width;
     this.#selectedRow = selectedRow;
-    return linkedLines.map(stripOsc8Links);
+    const lines = linkedLines.map(stripOsc8Links);
+    this.#cache = { key, lines };
+    return lines;
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -122,18 +142,17 @@ export class ProjectGlanceFeedRegion implements Component {
     ) {
       return undefined;
     }
-    if (this.#renderWidth !== event.width) this.render(event.width);
-    const url = this.#hitTargets.get(`${event.y}:${event.x}`);
+    // Selection/expansion may change without invalidate(), including mouse
+    // actions. The render-input key keeps both pixels and hit spans current.
+    this.render(event.width);
+    const url = this.#hitTargets.get(event.y)?.find((target) => event.x >= target.start && event.x < target.end)?.url;
     if (!url) return undefined;
     this.#activateUrl(url);
     return { handled: true, render: true };
   }
 }
 
-/**
- * The pinned region is outside the ScrollView. Only the feed region is a
- * scrollable layout child, so viewport input cannot move CURRENT or the title.
- */
+/** CURRENT stays outside both independent scrolling regions. */
 class PositionedScrollView extends ScrollView {
   afterLayout: (() => void) | undefined;
   override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
@@ -142,16 +161,136 @@ class PositionedScrollView extends ScrollView {
   }
 }
 
+/** Consume wheels here even at the boundary: pi-tui's fallback can otherwise
+ * scroll the primary feed after an exhausted secondary ScrollView.
+ */
+class QuestionScrollView extends PositionedScrollView {
+  override handleMouse(event: TuiMouseEvent): ReturnType<ScrollView["handleMouse"]> {
+    if (event.type !== "wheel") return undefined;
+    this.scrollBy(event.wheelDelta ?? 0);
+    return {
+      handled: true, render: true,
+      target: { component: this, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height },
+    };
+  }
+}
+
+export interface ProjectGlancePaneQuestionOptions {
+  onQuestionAction?: (action: ProjectGlanceQuestionAction) => Promise<void> | void;
+  requestRender?: () => void;
+  onQuestionFocusExit?: () => void;
+  onQuestionFocusEnter?: () => void;
+}
+
+/** Fixed edges surround the question viewport, not its scrolling document.
+ * These are real layout children, so clipping and pointer origins stay with
+ * pi-tui's normal stack/scroll layout on every resize.
+ */
+class QuestionFrame extends VStack {
+  constructor(private readonly scroll: ScrollView) {
+    const style = (text: string) => `\u001b[36m${text}\u001b[0m`;
+    const edge = (top: boolean): Component => ({
+      invalidate() {},
+      render(width) {
+        const inner = Math.max(0, width - 2);
+        const label = top ? truncateToWidth(" QUESTIONS ", inner, "") : "";
+        return [style(`${top ? "┌" : "└"}${label}${"─".repeat(Math.max(0, inner - visibleWidth(label)))}${top ? "┐" : "┘"}`)];
+      },
+    });
+    const rail = (): Component => ({ invalidate() {}, render: () => Array.from({ length: 12 }, () => style("│")) });
+    super([
+      { component: edge(true), basis: 1, shrink: 0 },
+      { component: new HStack([
+        { component: rail(), basis: 1, shrink: 0 },
+        { component: scroll, basis: 0, grow: 1, minSize: 0 },
+        { component: rail(), basis: 1, shrink: 0 },
+      ]), basis: 0, grow: 1, minSize: 0 },
+      { component: edge(false), basis: 1, shrink: 0 },
+    ]);
+  }
+
+  override handleMouse(event: TuiMouseEvent): ReturnType<VStack["handleMouse"]> {
+    if (event.type !== "wheel") return undefined;
+    this.scroll.scrollBy(event.wheelDelta ?? 0);
+    return {
+      handled: true, render: true,
+      target: { component: this, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height },
+    };
+  }
+}
+
+/** Public stack metadata keeps CURRENT pinned and reserves at least half the
+ * remaining viewport for the feed. With no questions, the original two-child
+ * layout is unchanged. The visibility callback also runs on terminal resize.
+ */
+class QuestionsPaneStack extends VStack {
+  constructor(pinned: Component, questions: Component, feed: ScrollView, sync: (width: number, height: number) => boolean) {
+    super([
+      { component: pinned, shrink: 0 },
+      { component: questions, basis: 14, maxSize: 14, shrink: 0, minSize: 0 },
+      { component: feed, grow: 1, shrink: 1, minSize: 0 },
+    ]);
+    // Keep Container.children's existing no-question contract as well as the
+    // rendered layout. The hidden metadata entry remains available for arrivals.
+    if (!sync(80, 14)) this.children.splice(1, 1);
+    const entry = this.entries[1]!;
+    entry.visible = ({ width, height }) => {
+      const remaining = Math.max(0, height - pinned.render(width).length);
+      entry.basis = Math.min(14, Math.floor(remaining / 2));
+      // Hide the whole frame when it cannot hold two edges and one content
+      // row. Never leave invisible question controls owning keyboard input.
+      const shown = sync(width - 2, width >= 3 && entry.basis >= 3 ? entry.basis - 2 : 0) && width >= 3 && entry.basis >= 3;
+      const index = this.children.indexOf(questions);
+      if (shown && index < 0) this.children.splice(1, 0, questions);
+      else if (!shown && index >= 0) this.children.splice(index, 1);
+      return shown;
+    };
+  }
+}
+
 export class ProjectGlancePaneView implements Component {
   readonly pinned: ProjectGlancePinnedRegion;
   readonly feed: ProjectGlanceFeedRegion;
   readonly scrollView: PositionedScrollView;
+  readonly questions: ProjectGlanceQuestionsRegion;
+  readonly questionScrollView: PositionedScrollView;
+  #questionWidth = 0;
+  #questionViewportAvailable = true;
+  #revealQuestionFocus = false;
+  #questionIdentity = "";
+  #model: ProjectGlancePaneModel;
+  #questionOptions: ProjectGlancePaneQuestionOptions;
   #position: { id: string; offset: number } | "selected" | undefined;
   readonly root: VStack;
 
-  constructor(model: ProjectGlancePaneModel, activateUrl?: (url: string) => void) {
+  constructor(model: ProjectGlancePaneModel, activateUrl?: (url: string) => void, questionOptions: ProjectGlancePaneQuestionOptions = {}) {
+    this.#model = model;
+    this.#questionOptions = questionOptions;
     this.pinned = new ProjectGlancePinnedRegion(model);
-    this.feed = new ProjectGlanceFeedRegion(model, activateUrl);
+    this.questions = new ProjectGlanceQuestionsRegion(
+      (action) => {
+        if (model.state !== "connected" || !questionOptions.onQuestionAction) throw new Error("QUESTION_UNAVAILABLE");
+        return questionOptions.onQuestionAction(action);
+      },
+      () => questionOptions.requestRender?.(),
+    );
+    this.questionScrollView = new QuestionScrollView(this.questions, {
+      follow: "none", primary: false, overscroll: "contain", scrollbar: "auto",
+    });
+    this.questionScrollView.afterLayout = () => {
+      if (!this.#revealQuestionFocus) return;
+      this.#revealQuestionFocus = false;
+      const lines = this.questions.render(this.questionScrollView.getContentWidth(this.#questionWidth));
+      const row = lines.findIndex((line) => line.includes(CURSOR_MARKER) || line.startsWith(">["));
+      if (row < 0) return;
+      const scroll = this.questionScrollView;
+      if (row < scroll.scrollTop) scroll.scrollTo(row);
+      else if (row >= scroll.scrollTop + scroll.viewportHeight) scroll.scrollTo(row - scroll.viewportHeight + 1);
+    };
+    this.feed = new ProjectGlanceFeedRegion(model, activateUrl ? (url) => {
+      this.releaseQuestionFocus();
+      activateUrl(url);
+    } : undefined);
     this.scrollView = new PositionedScrollView(this.feed, {
       follow: "none",
       primary: true,
@@ -166,17 +305,69 @@ export class ProjectGlancePaneView implements Component {
       const row = anchoredRow ?? this.feed.selectedRow;
       if (row !== undefined) this.scrollView.scrollTo(row + (anchoredRow === undefined || position === "selected" ? 0 : position.offset), { disableFollow: true });
     };
-    this.root = new VStack([
-      { component: this.pinned, shrink: 0 },
-      { component: this.scrollView, grow: 1, shrink: 1, minSize: 0 },
+    this.root = new QuestionsPaneStack(this.pinned, new QuestionFrame(this.questionScrollView), this.scrollView, (width, height) => {
+      this.#questionWidth = width;
+      this.#questionViewportAvailable = height > 0;
+      const shown = this.syncQuestions();
+      if (!this.#questionViewportAvailable && this.questions.focused) this.releaseQuestionFocus();
+      return shown;
+    });
+  }
+
+  /** Identity intentionally excludes the changing snapshot revision. */
+  syncQuestions(): boolean {
+    const snapshot = this.#model.snapshot;
+    const connected = this.#model.state === "connected";
+    const identity = JSON.stringify([
+      snapshot?.sessionKey ?? this.#model.expectedSessionKey,
+      this.#model.expectedGeneration,
+      snapshot?.branchId,
+      connected,
     ]);
+    const questions = connected ? snapshot?.questions ?? [] : [];
+    this.questions.update(questions, identity);
+    if (identity !== this.#questionIdentity) {
+      this.#questionIdentity = identity;
+      this.questionScrollView.scrollToStart();
+    }
+    if (!questions.length && this.questions.focused) this.releaseQuestionFocus();
+    return questions.length > 0;
+  }
+
+  releaseQuestionFocus(): void {
+    this.questions.focused = false;
+    this.#questionOptions.onQuestionFocusExit?.();
+    this.#questionOptions.requestRender?.();
+  }
+
+  /** Called BEFORE quit and feed shortcuts. Escape leaves text, then the region. */
+  handleQuestionInput(data: string): boolean {
+    const available = this.syncQuestions();
+    if (!this.#questionViewportAvailable) return false;
+    if (!this.questions.ownsKeyboard) {
+      if (!available || !matchesKey(data, "tab")) return false;
+      this.questions.focused = true;
+      this.#questionOptions.onQuestionFocusEnter?.();
+      this.#revealQuestionFocus = true;
+      this.#questionOptions.requestRender?.();
+      return true;
+    }
+    if (matchesKey(data, "escape") && !this.questions.isEditing) this.releaseQuestionFocus();
+    else {
+      this.questions.handleInput(data);
+      this.#revealQuestionFocus = true;
+      this.#questionOptions.requestRender?.();
+    }
+    return true;
   }
 
   invalidate(): void {
+    this.syncQuestions();
     this.root.invalidate();
   }
 
   render(width: number): string[] {
+    this.#questionWidth = width;
     return this.root.render(width);
   }
 
@@ -243,7 +434,16 @@ export async function main(): Promise<void> {
       // Ignore malformed terminal links.
     }
   };
-  const view = new ProjectGlancePaneView(model, activate);
+  const view = new ProjectGlancePaneView(model, activate, {
+    onQuestionAction: (action) => {
+      const snapshot = model.snapshot;
+      if (model.state !== "connected" || !snapshot?.branchId || !client) return Promise.reject(new Error("QUESTION_UNAVAILABLE"));
+      return client.sendQuestionAction(snapshot.branchId, snapshot.revision, action);
+    },
+    requestRender: () => tui?.requestRender(),
+    onQuestionFocusExit: () => tui?.setFocus(null),
+    onQuestionFocusEnter: () => tui?.setFocus(view.questions),
+  });
   tui = new TuiAltScreen(terminal, false, undefined, {
     mouse: true,
     wheelScrollLines: 3,
@@ -260,6 +460,7 @@ export async function main(): Promise<void> {
   process.once("SIGTERM", onSignal);
   process.once("SIGHUP", onSignal);
   const removeInput = tui.addInputListener((data) => {
+    if (view.handleQuestionInput(data)) return { consume: true };
     if (isQuitInput(data)) {
       finish();
       return { consume: true };

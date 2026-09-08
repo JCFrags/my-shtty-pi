@@ -1,3 +1,4 @@
+import type { ProjectGlanceQuestion, ProjectGlanceQuestionAction } from "../questions/model.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   createRuntimeDescriptor,
@@ -94,6 +95,7 @@ function boundedSnapshot(
   branchId: string,
   uiState: ProjectGlanceUiState,
   focusSerial: number,
+  questions: readonly ProjectGlanceQuestion[] = [],
 ): ProjectGlanceSnapshot | undefined {
   const candidates = boundRecentFeed(feed);
   for (let removed = 0; removed <= candidates.length; removed += 1) {
@@ -108,12 +110,18 @@ function boundedSnapshot(
         feed: candidates.slice(removed).map((item) => ({ ...item })),
         uiState,
         ...(focusSerial > 0 ? { focusSerial } : {}),
+        ...(questions.length ? { questions } : {}),
       });
     } catch {
       // Remove the oldest useful item until the correlated wire budget fits.
     }
   }
   return undefined;
+}
+
+export interface ProjectGlanceQuestionProvider {
+  questions(): ProjectGlanceQuestion[];
+  applyAction(action: ProjectGlanceQuestionAction, actionId: string): boolean | Promise<boolean>;
 }
 
 export class ProjectGlanceRelayRuntime {
@@ -134,15 +142,18 @@ export class ProjectGlanceRelayRuntime {
   #feedSyncTimers = new Set<ReturnType<typeof setImmediate>>();
   #context: ProjectGlanceSessionContext | undefined;
   readonly #appendUiEntry: ((data: unknown) => void) | undefined;
-  readonly #onUnreadChange: ((count: number) => void) | undefined;
+  readonly #onUnreadChange: ((count: number, questions: number) => void) | undefined;
+  readonly #questionProvider: ProjectGlanceQuestionProvider | undefined;
+  #questions: ProjectGlanceQuestion[] = [];
   #focusSerial = 0;
   #publishedFocusSerial = 0;
 
-  constructor(environment: NodeJS.ProcessEnv = process.env, eventBus?: ProjectGlanceEventBus, appendUiEntry?: (data: unknown) => void, onUnreadChange?: (count: number) => void) {
+  constructor(environment: NodeJS.ProcessEnv = process.env, eventBus?: ProjectGlanceEventBus, appendUiEntry?: (data: unknown) => void, onUnreadChange?: (count: number, questions: number) => void, questionProvider?: ProjectGlanceQuestionProvider) {
     this.#environment = environment;
     this.#eventBus = eventBus;
     this.#appendUiEntry = appendUiEntry;
     this.#onUnreadChange = onUnreadChange;
+    this.#questionProvider = questionProvider;
   }
 
   get sessionKey(): string | undefined {
@@ -212,13 +223,20 @@ export class ProjectGlanceRelayRuntime {
         const epoch = this.#lifecycleEpoch;
         return this.#enqueue(async () => {
           if (epoch !== this.#lifecycleEpoch || this.#server !== server || !this.#context ||
-              frame.branchId !== this.#branchId || frame.baseRevision !== this.#revision || !this.#appendUiEntry) return undefined;
+              frame.branchId !== this.#branchId || frame.baseRevision !== this.#revision) return undefined;
+          if ("questionId" in frame.action) {
+            if (!await this.#questionProvider?.applyAction(frame.action, frame.actionId)) return undefined;
+            await this.#syncFeedFromContext(this.#context);
+            return this.#revision;
+          }
+          if (!this.#appendUiEntry) return undefined;
+          const action = frame.action;
           const state = uiStateFromBranch(this.#context.sessionManager.getBranch());
           const read = new Set(state.readIds);
           const dismissed = new Set(state.dismissedIds);
           const targets = frame.action.type === "focus"
             ? this.#feed.filter((item) => !read.has(item.id) && !dismissed.has(item.id))
-            : this.#feed.filter((item) => item.id === frame.action.itemId);
+            : this.#feed.filter((item) => item.id === action.itemId);
           // A repeated dismissal can target an item now outside the projection.
           if (frame.action.type !== "focus" && targets.length === 0) {
             return frame.action.type === "dismiss" && dismissed.has(frame.action.itemId!) ? this.#revision : undefined;
@@ -284,6 +302,10 @@ export class ProjectGlanceRelayRuntime {
   async stop(): Promise<void> {
     this.#lifecycleEpoch += 1;
     return this.#enqueue(() => this.#stopNow());
+  }
+
+  async refreshQuestions(): Promise<void> {
+    return this.#enqueue(async () => { this.#publishCurrent(this.#current); });
   }
 
   refreshCurrent(): void {
@@ -391,7 +413,9 @@ export class ProjectGlanceRelayRuntime {
     } catch {
       nextUiState = { dismissedIds: [], readIds: [] };
     }
+    const questions = this.#questionProvider?.questions() ?? [];
     const unchanged =
+      JSON.stringify(questions) === JSON.stringify(this.#questions) &&
       JSON.stringify(current) === JSON.stringify(this.#current) &&
       compareFeedItems(feed, this.#feed) &&
       JSON.stringify(nextUiState) === JSON.stringify(this.#uiState) &&
@@ -407,6 +431,7 @@ export class ProjectGlanceRelayRuntime {
       this.#branchId,
       nextUiState,
       this.#focusSerial,
+      questions,
     );
     if (!next) return false;
     try {
@@ -414,6 +439,7 @@ export class ProjectGlanceRelayRuntime {
     } catch {
       return false;
     }
+    this.#questions = structuredClone(next.questions ?? []);
     this.#revision = nextRevision;
     this.#current = { ...current };
     this.#feed = next.feed.map((item) => ({ ...item }));
@@ -424,13 +450,14 @@ export class ProjectGlanceRelayRuntime {
     this.#publishedFocusSerial = this.#focusSerial;
     const dismissed = new Set(this.#uiState.dismissedIds);
     const read = new Set(this.#uiState.readIds);
-    this.#onUnreadChange?.(this.#feed.filter((item) => !dismissed.has(item.id) && !read.has(item.id)).length);
+    this.#onUnreadChange?.(this.#feed.filter((item) => !dismissed.has(item.id) && !read.has(item.id)).length, this.#questions.length);
     return true;
   }
 
   async #stopNow(preserveContext = false): Promise<void> {
     this.#lifecycleEpoch += 1;
-    this.#onUnreadChange?.(0);
+    this.#onUnreadChange?.(0, 0);
+    this.#questions = [];
     for (const timer of this.#feedSyncTimers) clearImmediate(timer);
     this.#feedSyncTimers.clear();
     const controller = this.#controller;

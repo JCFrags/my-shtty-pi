@@ -1,3 +1,5 @@
+import type { ProjectGlanceQuestionAction } from "../questions/model.js";
+import { validateQuestionAction } from "./question-validation.js";
 import { randomUUID } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import {
@@ -63,6 +65,7 @@ export class ProjectGlanceClient {
   #pendingSnapshotRequestId: string | undefined;
   #snapshotNotificationPending = false;
   #pendingActions = new Map<string, string>();
+  #questionReceipts = new Map<string, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   #actionQueue: Array<{ branchId: string; baseRevision: number; action: { type: "mark_read" | "dismiss" | "focus"; itemId?: string } }> = [];
   #latestSnapshot: ProjectGlanceSnapshot | undefined;
   #actionNeedsSnapshot = false;
@@ -101,6 +104,45 @@ export class ProjectGlanceClient {
     this.#actionQueue.push({ branchId, baseRevision, action: { ...action } });
     this.#drainActions();
     return true;
+  }
+
+  /** Resolves only after a correlated persisted action receipt, never queue admission. */
+  sendQuestionAction(branchId: string, baseRevision: number, action: ProjectGlanceQuestionAction): Promise<void> {
+    const socket = this.#socket;
+    const descriptor = this.#descriptor;
+    const snapshot = this.#latestSnapshot;
+    if (!socket?.writable || !this.#authenticated || !descriptor || !snapshot) return Promise.reject(new Error("Disconnected. Reconnect before submitting."));
+    if (this.#pendingActions.size || this.#actionNeedsSnapshot) return Promise.reject(new Error("An update is in progress. Retry after it completes."));
+    if (branchId !== snapshot.branchId || baseRevision !== snapshot.revision || !snapshot.questions?.some((question) => question.id === action.questionId && question.revision === action.expectedRevision)) return Promise.reject(new Error("Question changed. Review the current question and retry."));
+    let checked: ProjectGlanceQuestionAction;
+    try { checked = validateQuestionAction(action); } catch { return Promise.reject(new Error("Invalid or oversized answer.")); }
+    const requestId = this.#nextRequestId();
+    const actionId = `action-${randomUUID()}`;
+    this.#pendingActions.set(requestId, actionId);
+    this.#sentBaseRevision = snapshot.revision;
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // An uncertain receipt must not be replayed automatically. Reconcile via
+        // a fresh connection/snapshot before the user can retry.
+        this.#dropConnection(socket, this.#activeConnectionId);
+      }, 10_000);
+      timer.unref?.();
+      this.#questionReceipts.set(requestId, { resolve, reject, timer });
+      try {
+        socket.write(encodeFrame({ version: PROJECT_GLANCE_PROTOCOL_VERSION, type: "action", requestId, actionId, sessionKey: descriptor.sessionKey, generation: descriptor.generation, branchId, baseRevision, action: checked }));
+      } catch {
+        this.#pendingActions.delete(requestId);
+        this.#finishQuestion(requestId, new Error("Submission failed. Reconnect and review its state."));
+      }
+    });
+  }
+
+  #finishQuestion(requestId: string, error?: Error): void {
+    const receipt = this.#questionReceipts.get(requestId);
+    if (!receipt) return;
+    this.#questionReceipts.delete(requestId);
+    clearTimeout(receipt.timer);
+    if (error) receipt.reject(error); else receipt.resolve();
   }
 
   #drainActions(): void {
@@ -247,6 +289,7 @@ export class ProjectGlanceClient {
     if (frame.type === "error") {
       if (frame.requestId && this.#pendingActions.has(frame.requestId)) {
         this.#pendingActions.delete(frame.requestId);
+        this.#finishQuestion(frame.requestId, new Error(frame.code === "stale_action" ? "Question changed. Review it and retry." : "Submission was not accepted. Review the question and retry."));
         this.#actionNeedsSnapshot = true;
         this.#sendSnapshotRequest(socket, connectionId, fail);
         return;
@@ -332,6 +375,7 @@ export class ProjectGlanceClient {
         return;
       }
       this.#pendingActions.delete(frame.requestId);
+      this.#finishQuestion(frame.requestId);
       // Rebase only across our own accepted mutation, never an unrelated
       // append, branch round trip, or provider publication. Focus is never rebased.
       for (const queued of this.#actionQueue) {
@@ -380,6 +424,7 @@ export class ProjectGlanceClient {
     this.#initialSnapshotPending = false;
     this.#pendingSnapshotRequestId = undefined;
     this.#snapshotNotificationPending = false;
+    for (const requestId of this.#questionReceipts.keys()) this.#finishQuestion(requestId, new Error("Connection changed. Review the restored question before retrying."));
     this.#pendingActions.clear();
     this.#actionQueue = [];
     this.#latestSnapshot = undefined;

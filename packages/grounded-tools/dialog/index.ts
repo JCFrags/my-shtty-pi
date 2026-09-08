@@ -209,7 +209,10 @@ export function registerGroundedDialog(
   options: GroundedDialogRegistrationOptions = {},
 ): void {
   registerBlockingProviderV1(pi);
-  if (options.askUserV1Enabled === true) registerAskUserFacadeV1(pi);
+  if (options.askUserV1Enabled === true) {
+    registerAskUserFacadeV1(pi);
+    return;
+  }
 
   pi.on("session_start", (_event, ctx) => {
     if (!ctx.hasUI) pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "ask_user_question"));
