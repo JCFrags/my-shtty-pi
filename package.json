@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "verify": "node scripts/verify-deployed-baseline.mjs"
+    "verify": "node scripts/verify-supported.mjs",
+    "verify:static": "node scripts/verify-supported.mjs --static-only",
+    "verify:history": "node scripts/verify-deployed-baseline.mjs",
+    "test": "node --test scripts/verify-supported.test.mjs"
   },
   "piConsolidation": {
-    "stage1Commit": "19110f9cf34ab29b2059e3bff460e856c7157bce",
-    "stage1RuntimeRecords": 272,
-    "canonicalDeployedFiles": 238,
     "products": [
       {
         "slug": "codex-usage-footer",
@@ -76,7 +76,6 @@
         "entrypoints": [
           "dist/src/pi-extension.js"
         ],
-        "compiledCount": 65,
         "buildConfig": "tsconfig.json",
         "sourceEntrypoints": [
           "src/pi-extension.ts"
@@ -88,7 +87,6 @@
         "entrypoints": [
           "dist/extensions/pi-herdr-orchestrator.js"
         ],
-        "compiledCount": 8,
         "buildConfig": "tsconfig.json",
         "sourceEntrypoints": [
           "extensions/pi-herdr-orchestrator.ts"
@@ -128,22 +126,21 @@
         ]
       },
       {
+        "slug": "pi-project-glance",
+        "status": "active",
+        "entrypoints": [
+          "dist/pi/extension.js"
+        ],
+        "sourceEntrypoints": [
+          "src/pi/extension.ts"
+        ],
+        "buildConfig": "tsconfig.build.json"
+      },
+      {
         "slug": "pi-review-ui",
         "status": "inactive",
         "entrypoints": [
           "extensions/review-ui.ts"
-        ]
-      },
-      {
-        "slug": "pi-signal-board",
-        "status": "active",
-        "entrypoints": [
-          "dist/index.js"
-        ],
-        "compiledCount": 57,
-        "buildConfig": "tsconfig.build.json",
-        "sourceEntrypoints": [
-          "src/index.ts"
         ]
       },
       {
@@ -160,7 +157,22 @@
           "extensions/titlebar-spinner.ts"
         ]
       }
-    ],
-    "deployedBaselineCommit": "049b6390fba7a7908d01908a7953dd2f50fa15df"
+    ]
+  },
+  "workspaces": [
+    "packages/grounded-tools/core",
+    "packages/grounded-tools/dialog",
+    "packages/grounded-tools/files",
+    "packages/grounded-tools/lsp",
+    "packages/grounded-tools/notes",
+    "packages/grounded-tools/process",
+    "packages/grounded-tools/tasks",
+    "packages/grounded-tools/workplan"
+  ],
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "typebox": "1.3.7"
   }
 }

@@ -1,24 +1,57 @@
-# Pi extension monorepo
+# My Pi extensions
 
-This repository contains the canonical Pi extension deployment. The 14 active families reproduce 20 active entrypoints. Review UI and Tool Controls remain inactive.
+This repository owns the supported Pi extensions and their reproducible inputs.
+`package.json` lists active, temporary, and inactive products. It is not an
+inventory frozen to an old deployment.
 
-| Product | Status |
-|---|---|
-| `codex-usage-footer` | active |
-| `files-ui` | active |
-| `grounded-tools` | active; seven entrypoints with one shared core |
-| `herdr-agent-state` | active |
-| `herdr-blocked-bridge` | active |
-| `herdr-status` | active |
-| `pi-agent-context` | active |
-| `pi-chrono-compaction` | active; compiled runtime retained |
-| `pi-herdr-orchestrator` | active; canonical direct-Herdr runtime retained |
-| `pi-native-ssh` | active |
-| `pi-pixel-cua` | active |
-| `pi-progressive-tools` | active |
-| `pi-review-ui` | inactive |
-| `pi-signal-board` | active; compiled runtime retained |
-| `pi-tool-controls` | inactive |
-| `titlebar-spinner` | active |
+## Supported architecture
 
-Run `npm run verify` to validate deployed hashes, entrypoints, manifests, product boundaries, privacy, and isolated compiled reproducibility. `pi-web` is external and excluded from this repository.
+- **Project Glance** (`packages/pi-project-glance`) presents Todo, Workplan, and
+  progress updates and deferred questions. `/project-glance` opens its Herdr pane. It does not import
+  orchestration, Files, or provider implementation code in its runtime.
+- **Orchestration** (`packages/pi-herdr-orchestrator`) uses the direct Herdr agent
+  path and retained broker infrastructure. `/agent-settings` owns agent settings;
+  the retired presentation surfaces and compatibility commands are not supported.
+- **Grounded tools** own Todo and Workplan state and their public event contracts.
+  Files remains a separate product. Signal Board is removed.
+- Other registered products keep their existing entrypoints. Main’s completed
+  removal of the temporary cancellation-isolation product is preserved.
+
+## Verification
+
+Use Node.js 24, npm, Git, and Python 3. Stage intended changes first: verification
+copies **Git index blobs** into a private disposable directory. Unstaged edits,
+untracked files, ignored dependencies, and local build output are not inputs.
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm test
+npm run verify:static
+npm run verify
+npm run verify -- --product pi-project-glance
+```
+
+Static checks cover the registry, locks, local imports, package boundaries,
+retired commands/dependencies, and privacy. Full verification installs package
+locks with lifecycle scripts disabled, runs supported typecheck/syntax/build/test
+scripts, runs Dialog and Workplan tests, creates package archives, and checks their contents.
+Glance provider tests use the same disposable source tree. Existing tracked
+compiled products must reproduce their checked-in output; Glance and
+orchestration may generate untracked build output from supported source.
+`--product` narrows execution, not repository-wide static checks. These checks do
+not activate packages or replace live Herdr interaction checks.
+
+## Historical evidence
+
+`deployed-baseline-2026-09-01` preserves the captured deployment. To check its
+hash manifests against **historical Git objects only**:
+
+```sh
+npm run verify:history
+# Optional explicit historical tag or commit:
+npm run verify:history -- deployed-baseline-2026-09-01
+```
+
+Historical counts and `DEPLOYED.sha256` files describe that capture. They do not
+constrain current product files, build counts, or the supported product registry.
+Deployment and local activation are separate from repository verification.

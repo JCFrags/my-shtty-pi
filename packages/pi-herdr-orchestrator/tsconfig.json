@@ -23,7 +23,8 @@
     ]
   },
   "include": [
-    "extensions/pi-herdr-orchestrator.ts",
+    "extensions/**/*.ts",
+    "src/**/*.ts",
     "types/**/*.d.ts"
   ]
 }

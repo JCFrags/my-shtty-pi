@@ -1,24 +1,27 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { env } from "node:process";
-import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { createHistoryRuntimeTransport } from "./history-runtime-transport.js";
+import { runtimeHostStatus } from "./worker-runtime.js";
 import { cachePathForSession, hashCompactionConfig, nextCacheGeneration, readCompactionCache, writeCompactionCache, } from "./cache.js";
 import { compactEntries, CompactionValidationError, computeGenerationHash, computeSummaryBudget, HARD_REPLAY_CAP_TOKENS, resolveCompactorConfig, selectReplayTarget, } from "./compactor.js";
 import { parseHistoricalBlocks } from "./blocks.js";
-import { buildCausalMemory } from "./causal-memory.js";
 import { projectToolResultContext, projectionSourcesFromBranch, } from "./context-projection.js";
 import { createCandidateSegmentStore, loadCandidateRecordsForBranch, loadCandidateSegmentManifest, updateCandidateSegmentStore, } from "./candidate-segment-store.js";
-import { getSourceEntriesBefore, parseBranchEntries, readSessionJsonl } from "./jsonl.js";
+import { getSourceEntriesBefore } from "./jsonl.js";
 import { loadSourceLedger, sourceLedgerIsBusy, sourceLedgerMatchesSource, sourceLedgerPath } from "./source-ledger.js";
 import { createPiRegularSummary, previousRegularPiSummary, regularSummaryMessagesForCut, renderHybridCompaction, } from "./pi-hybrid.js";
 import { DEFAULT_VALUE_WORKER_SETTINGS } from "./value-worker-types.js";
 import { runValueWorker, loadCompatibleAdvice, valueWorkerConfigurationHash } from "./value-worker.js";
 import { readValueAdviceManifest, resetAdviceCircuit, valueAdviceStorePath } from "./value-advice-store.js";
-import { historyGet, historyGetFromLedger, historyRange, historyRangeFromLedger, historySearch, } from "./retrieval.js";
-import { buildLocalSearchIndex, renderRankedSearch, searchLocalHistory } from "./search-index.js";
-import { recallHistory, renderRecall } from "./recall.js";
+import { historyGetFromLedger, historyRangeFromLedger, } from "./retrieval.js";
+import { dispatchHistoryWorker, historyWorkerToolResult, historySearchIndexCacheStatus, createHistoryFeedbackAdmission } from "./history-worker-dispatch.js";
+import { LEGACY_HISTORY_MAX_BYTES } from "./history-worker-contract.js";
+export { LEGACY_HISTORY_MAX_BYTES, SEARCH_INDEX_SOURCE_MAX_BYTES } from "./history-worker-contract.js";
+export { historySearchIndexCacheStatus } from "./history-worker-dispatch.js";
 import { appendMemoryEvent, listMemories, memorySidecarPath, readMemoryEvents, renderPinnedMemory, searchMemories, } from "./memory-store.js";
 import { decideRegularSummaryRebase } from "./summary-rebase.js";
 import { RAW_TAIL_PRESET_TOKENS, isSafeCompactionCut, selectDynamicRawTail, selectRawTail, selectRawTailWithinMaximum, } from "./tail-selection.js";
@@ -26,10 +29,11 @@ import { decideCompactionTrigger } from "./trigger.js";
 import { applyConfigCommand, defaultUserConfigPath, loadUserConfig, saveUserConfig, } from "./user-config.js";
 import { emptyRetrievalFeedback, recordRetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, safeErrorMessage, stableStringify, truncateToTokens } from "./utils.js";
-import { runCompactionWorker } from "./compaction-worker-client.js";
+import { replayWorkerDiagnosticPath, runCompactionWorker } from "./compaction-worker-client.js";
+import { defaultSchedulerDirectory, schedulerArtifactCounts } from "./host-worker-scheduler.js";
 import { getRollupShadowStatus } from "./history-rollup-shadow.js";
 import { returnAuthoritativeAfterShadowSchedule } from "./post-result-shadow.js";
-const EXTENSION_VERSION = "2.0.0";
+const EXTENSION_VERSION = "2.0.3";
 export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
 const MAX_RAW_TAIL_WITH_HISTORY_TOKENS = 27_000;
 const RETENTION_HINT_CUSTOM_TYPE = "chrono-compact-retention-hint";
@@ -159,8 +163,26 @@ export function resolveExtensionSettings(overrides = {}) {
     };
 }
 async function workerSourceExpectation(sessionPath) {
-    const value = await stat(sessionPath);
-    return { deviceId: String(value.dev), inodeId: String(value.ino), size: value.size, mtimeMs: value.mtimeMs };
+    const before = await stat(sessionPath);
+    if (!before.isFile())
+        throw new Error("source-changed");
+    const prefixBytes = Math.min(before.size, 65_536);
+    const bytes = Buffer.alloc(prefixBytes);
+    const handle = await open(sessionPath, "r");
+    try {
+        if (prefixBytes > 0) {
+            const read = await handle.read(bytes, 0, prefixBytes, before.size - prefixBytes);
+            if (read.bytesRead !== prefixBytes)
+                throw new Error("source-changed");
+        }
+    }
+    finally {
+        await handle.close();
+    }
+    const after = await stat(sessionPath);
+    if (String(before.dev) !== String(after.dev) || String(before.ino) !== String(after.ino) || before.size !== after.size || before.mtimeMs !== after.mtimeMs)
+        throw new Error("source-changed");
+    return { deviceId: String(before.dev), inodeId: String(before.ino), size: before.size, mtimeMs: before.mtimeMs, prefixHash: createHash("sha256").update(bytes).digest("hex"), prefixBytes };
 }
 function rawTailDescription(settings) {
     if (settings.rawTailMode === "dynamic") {
@@ -463,27 +485,14 @@ function createTailTokenEstimator(entries) {
         return startIndex >= 0 && startIndex <= entries.length ? (suffixTokens[startIndex] ?? 0) : estimateEntryTokens(tail);
     };
 }
-async function loadSession(ctx) {
-    const path = ctx.sessionManager.getSessionFile();
-    if (path)
-        return readSessionJsonl(path);
-    const entries = ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch?.() ?? [];
-    return parseBranchEntries(asEntries(entries));
+async function historySourceState(path) {
+    const value = await stat(path);
+    if (!value.isFile())
+        throw new Error("history-source-unsafe-type");
+    return { deviceId: String(value.dev), inodeId: String(value.ino), size: value.size, mtimeMs: value.mtimeMs };
 }
 function toolText(text, details = {}) {
     return { content: [{ type: "text", text }], details };
-}
-const SEARCH_INDEX_CACHE_LIMIT = 4;
-const searchIndexes = new Map();
-function indexedSession(session) {
-    const built = buildLocalSearchIndex(session);
-    const cached = searchIndexes.get(built.generationHash);
-    if (cached)
-        return cached;
-    searchIndexes.set(built.generationHash, built);
-    while (searchIndexes.size > SEARCH_INDEX_CACHE_LIMIT)
-        searchIndexes.delete(searchIndexes.keys().next().value);
-    return built;
 }
 function feedbackKey(ctx) {
     return ctx.sessionManager.getSessionFile() ?? undefined;
@@ -493,11 +502,14 @@ function updateRetrievalFeedback(store, ctx, observation) {
     if (!key)
         return;
     const previous = store.get(key) ?? emptyRetrievalFeedback(observation.generationHash);
-    store.set(key, recordRetrievalFeedback(previous, observation));
+    const recorded = recordRetrievalFeedback(previous, observation);
+    // Bound retained feedback across repeated calls as well as each child result.
+    const boundedCounts = (values) => Object.fromEntries(Object.entries(values).slice(-256));
+    store.set(key, { ...recorded, readsByResource: boundedCounts(recorded.readsByResource), readsByBlockId: boundedCounts(recorded.readsByBlockId), queryCounts: boundedCounts(recorded.queryCounts) });
     while (store.size > 8)
         store.delete(store.keys().next().value);
 }
-function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger) {
+function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, transport, reserveFeedback) {
     pi.registerTool({
         name: "history_get",
         label: "Get Exact History",
@@ -519,8 +531,25 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger) 
                 maxChars: params.maxChars,
             };
             const ledger = await availableLedger(ctx);
-            const text = ledger ? await historyGetFromLedger(ledger.sessionPath, ledger.ledger, params.entryId, options).catch(async () => historyGet(await loadSession(ctx), params.entryId, options))
-                : historyGet(await loadSession(ctx), params.entryId, options);
+            let text;
+            try {
+                if (ledger) {
+                    try {
+                        text = await historyGetFromLedger(ledger.sessionPath, ledger.ledger, params.entryId, options);
+                    }
+                    catch {
+                        return historyWorkerToolResult(await dispatchHistoryWorker(ctx.sessionManager.getSessionFile(), { kind: "get", entryId: params.entryId, options }, transport, _signal), true);
+                    }
+                }
+                else {
+                    return historyWorkerToolResult(await dispatchHistoryWorker(ctx.sessionManager.getSessionFile(), { kind: "get", entryId: params.entryId, options }, transport, _signal), true);
+                }
+            }
+            catch (error) {
+                if (error.message === "history-load-memory-limit")
+                    return toolText("History unavailable: the bounded load could not be admitted within the local memory budget.", { status: "unavailable", code: "history-load-memory-limit" });
+                throw error;
+            }
             return toolText(text, { entryId: params.entryId, blockIndex: params.blockIndex });
         },
     });
@@ -548,48 +577,33 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger) 
             contextChars: Type.Optional(Type.Number({ minimum: 40, maximum: 200, description: "Legacy exact-scan context" })),
         }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-            const session = await loadSession(ctx);
+            if (!reserveFeedback())
+                return historyWorkerToolResult({ status: "refused", code: "history-feedback-memory-limit" });
             const selectedMode = params.regex ? "regex" : params.mode;
-            if (!settings().rankedSearchEnabled && selectedMode === undefined) {
-                const text = historySearch(session, params.query, {
-                    limit: params.limit,
-                    startMatch: params.startMatch,
-                    caseSensitive: params.caseSensitive,
-                    regex: params.regex,
-                    contextChars: params.contextChars,
-                });
-                return toolText(text, { query: params.query, mode: "legacy-exact" });
-            }
-            const index = indexedSession(session);
-            const result = searchLocalHistory(index, params.query, {
-                mode: selectedMode,
-                stage: params.stage,
-                limit: params.limit,
-                tokenBudget: params.tokenBudget,
-                cursor: params.cursor,
-                caseSensitive: params.caseSensitive,
-                fuzzyPath: params.fuzzyPath,
-                includeNeighbors: params.includeNeighbors,
-                filters: {
-                    ...(params.kind === undefined ? {} : { kinds: [params.kind] }),
-                    ...(params.toolName === undefined ? {} : { toolNames: [params.toolName] }),
-                    ...(params.error === undefined ? {} : { error: params.error }),
-                    ...(params.unresolved === undefined ? {} : { unresolved: params.unresolved }),
-                    ...(params.currentState === undefined ? {} : { currentState: params.currentState }),
+            const indexed = settings().rankedSearchEnabled || selectedMode !== undefined;
+            const operation = indexed ? {
+                kind: "search", query: params.query, options: {
+                    mode: selectedMode, stage: params.stage, limit: params.limit, tokenBudget: params.tokenBudget,
+                    cursor: params.cursor, caseSensitive: params.caseSensitive, fuzzyPath: params.fuzzyPath,
+                    includeNeighbors: params.includeNeighbors,
+                    filters: {
+                        ...(params.kind === undefined ? {} : { kinds: [params.kind] }),
+                        ...(params.toolName === undefined ? {} : { toolNames: [params.toolName] }),
+                        ...(params.error === undefined ? {} : { error: params.error }),
+                        ...(params.unresolved === undefined ? {} : { unresolved: params.unresolved }),
+                        ...(params.currentState === undefined ? {} : { currentState: params.currentState }),
+                    },
                 },
-            });
-            updateRetrievalFeedback(retrievalFeedback, ctx, {
-                generationHash: result.generationHash,
-                query: params.query,
-                resultCount: result.hits.filter((hit) => !hit.context).length,
-                retrievedTokens: result.returnedTokens,
-                resourceKeys: result.hits.flatMap((hit) => hit.resourceKey ? [hit.resourceKey] : []),
-                blockIds: result.hits.flatMap((hit) => {
-                    const blockId = index.documentByKey.get(hit.key)?.block.id;
-                    return blockId ? [blockId] : [];
-                }),
-            });
-            return toolText(renderRankedSearch(result), { query: params.query, mode: result.mode, generationHash: result.generationHash, hits: result.hits.length, tokenBudget: result.tokenBudget, returnedTokens: result.returnedTokens });
+            } : {
+                kind: "legacy-search", query: params.query, options: {
+                    limit: params.limit, startMatch: params.startMatch, caseSensitive: params.caseSensitive,
+                    regex: params.regex, contextChars: params.contextChars,
+                },
+            };
+            const response = await dispatchHistoryWorker(ctx.sessionManager.getSessionFile(), operation, transport, _signal);
+            if (response.status === "ok" && response.feedback)
+                updateRetrievalFeedback(retrievalFeedback, ctx, response.feedback);
+            return historyWorkerToolResult(response);
         },
     });
     pi.registerTool({
@@ -603,62 +617,20 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger) 
             tokenBudget: Type.Optional(Type.Number({ minimum: 120, maximum: 2_000 })),
         }),
         async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-            const session = await loadSession(ctx);
-            const index = indexedSession(session);
-            const model = buildCausalMemory(index.documents.map((document) => document.block), index.resourceLineage);
-            const result = recallHistory(index, model, params.query, { level: params.level, limit: params.limit, tokenBudget: params.tokenBudget });
-            const recalledKeys = result.items.flatMap((item) => item.sourceIds);
-            const recalledDocuments = index.documents
-                .filter((document) => recalledKeys.includes(document.key) || recalledKeys.includes(document.block.entryId));
-            const recalledResources = recalledDocuments.flatMap((document) => document.resourceKey ? [document.resourceKey] : []);
-            updateRetrievalFeedback(retrievalFeedback, ctx, {
-                generationHash: result.generationHash,
-                query: params.query,
-                resultCount: result.items.length,
-                retrievedTokens: result.renderedTokens,
-                expandedItems: result.items.length,
-                resourceKeys: recalledResources,
-                blockIds: recalledDocuments.map((document) => document.block.id),
-            });
-            let promotedMemories = 0;
-            let promotionWarning;
-            if (settings().editableMemoryEnabled && ctx.sessionManager.getSessionFile()) {
-                try {
-                    const path = memoryPathForContext(ctx);
-                    const memory = await readMemoryEvents(path);
-                    if (memory.status !== "ready")
-                        throw new Error(memory.error ?? "memory integrity failure");
-                    const turn = asEntries(ctx.sessionManager.getBranch()).length;
-                    const recalledMemories = searchMemories(memory, params.query, { includeDemoted: true, limit: 3 })
-                        .filter((candidate) => !candidate.protected && candidate.state !== "superseded");
-                    for (const recalled of recalledMemories) {
-                        const updated = await appendMemoryEvent(path, {
-                            action: recalled.state === "demoted" ? "promote" : "touch",
-                            memoryId: recalled.memoryId,
-                            timestamp: new Date().toISOString(),
-                            turn,
-                            sourceRef: `history-recall:${toolCallId}`,
-                            reason: `history_recall matched query ${params.query}`,
-                        });
-                        const event = updated.events[updated.events.length - 1];
-                        pi.appendEntry("chrono-memory-v2-event", event);
-                        promotedMemories += 1;
-                    }
-                }
-                catch (error) {
-                    promotionWarning = safeErrorMessage(error);
-                }
-            }
-            return toolText(renderRecall(result), {
-                query: params.query,
-                level: result.level,
-                generationHash: result.generationHash,
-                items: result.items.length,
-                tokenBudget: result.tokenBudget,
-                renderedTokens: result.renderedTokens,
-                promotedMemories,
-                ...(promotionWarning === undefined ? {} : { promotionWarning }),
-            });
+            if (!reserveFeedback())
+                return historyWorkerToolResult({ status: "refused", code: "history-feedback-memory-limit" });
+            const path = ctx.sessionManager.getSessionFile();
+            const response = await dispatchHistoryWorker(path, {
+                kind: "recall", query: params.query, options: { level: params.level, limit: params.limit, tokenBudget: params.tokenBudget },
+                ...(path && settings().editableMemoryEnabled ? { promotion: { toolCallId, leafId: ctx.sessionManager.getLeafId?.() } } : {}),
+            }, transport, _signal);
+            // A refusal can include bounded receipts for earlier committed promotions.
+            // Mirror those once without retrying the failed recall or sidecar append.
+            for (const event of response.promotionEvents ?? [])
+                pi.appendEntry("chrono-memory-v2-event", event);
+            if (response.status === "ok" && response.feedback)
+                updateRetrievalFeedback(retrievalFeedback, ctx, response.feedback);
+            return historyWorkerToolResult(response);
         },
     });
     pi.registerTool({
@@ -673,8 +645,25 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger) 
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             const options = { maxEntries: params.maxEntries };
             const ledger = await availableLedger(ctx);
-            const text = ledger ? await historyRangeFromLedger(ledger.sessionPath, ledger.ledger, params.startEntryId, params.endEntryId, options).catch(async () => historyRange(await loadSession(ctx), params.startEntryId, params.endEntryId, options))
-                : historyRange(await loadSession(ctx), params.startEntryId, params.endEntryId, options);
+            let text;
+            try {
+                if (ledger) {
+                    try {
+                        text = await historyRangeFromLedger(ledger.sessionPath, ledger.ledger, params.startEntryId, params.endEntryId, options);
+                    }
+                    catch {
+                        return historyWorkerToolResult(await dispatchHistoryWorker(ctx.sessionManager.getSessionFile(), { kind: "range", startEntryId: params.startEntryId, endEntryId: params.endEntryId, options }, transport, _signal), true);
+                    }
+                }
+                else {
+                    return historyWorkerToolResult(await dispatchHistoryWorker(ctx.sessionManager.getSessionFile(), { kind: "range", startEntryId: params.startEntryId, endEntryId: params.endEntryId, options }, transport, _signal), true);
+                }
+            }
+            catch (error) {
+                if (error.message === "history-load-memory-limit")
+                    return toolText("History unavailable: the bounded load could not be admitted within the local memory budget.", { status: "unavailable", code: "history-load-memory-limit" });
+                throw error;
+            }
             return toolText(text, { startEntryId: params.startEntryId, endEntryId: params.endEntryId });
         },
     });
@@ -814,12 +803,13 @@ function registerRetentionHintTool(pi) {
         },
     });
 }
-export default function chronoCompactExtension(pi) {
+export default function chronoCompactExtension(pi, adapters = {}) {
     const userConfigPath = defaultUserConfigPath();
     const loadedUserConfig = loadUserConfig(userConfigPath);
     let userConfig = loadedUserConfig.config;
     let userConfigWarning = loadedUserConfig.warning;
     const retrievalFeedback = new Map();
+    const feedbackAdmission = createHistoryFeedbackAdmission();
     let triggerPending = false;
     let lastTriggerAttemptTokens;
     let forcedCompactionReason;
@@ -845,6 +835,7 @@ export default function chronoCompactExtension(pi) {
     let legacyPiSummaryWarningShown = false;
     let projectionSeenToolCallIds = new Set();
     let lastProjectionMetrics;
+    let replayWorkerStatus = { state: "idle" };
     const availableHistoryLedger = async (ctx) => {
         const sessionPath = ctx.sessionManager.getSessionFile();
         if (!sessionPath) {
@@ -869,7 +860,7 @@ export default function chronoCompactExtension(pi) {
             return undefined;
         }
     };
-    registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger);
+    registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve);
     registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
     registerRetentionHintTool(pi);
     const incrementalConfig = (settings) => resolveCompactorConfig({
@@ -962,7 +953,7 @@ export default function chronoCompactExtension(pi) {
                         const request = { schemaVersion: 1, jobId: randomUUID(), jobType: "candidate-store-update", sessionPath,
                             expectedSource: await workerSourceExpectation(sessionPath), deadlineMs: Date.now() + settings.workerTimeoutSeconds * 1_000,
                             niceLevel: settings.workerNiceLevel, config };
-                        const worker = await runCompactionWorker(request, { slots: settings.hostWorkerSlots, workerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
+                        const worker = await runCompactionWorker(request, { schedulerDirectory: adapters.schedulerDirectory, slots: settings.hostWorkerSlots, workerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
                             schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000, signal: controller.signal, priority: "low" });
                         if (controller.signal.aborted || generation !== incrementalGeneration)
                             return;
@@ -1034,6 +1025,7 @@ export default function chronoCompactExtension(pi) {
                         retentionHints: input.retentionHints,
                     };
                     const execution = await runCompactionWorker(request, {
+                        schedulerDirectory: adapters.schedulerDirectory,
                         slots: input.settings.hostWorkerSlots,
                         workerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
                         schedulerTimeoutMs: input.settings.workerTimeoutSeconds * 1_000,
@@ -1170,6 +1162,8 @@ export default function chronoCompactExtension(pi) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_shutdown", () => {
+        retrievalFeedback.clear();
+        feedbackAdmission.release();
         cancelIncrementalWork(true);
         cancelShadowWork();
         cancelValueWorker();
@@ -1487,9 +1481,13 @@ export default function chronoCompactExtension(pi) {
                     ...(currentRetrievalFeedback === undefined ? {} : { retrievalFeedback: currentRetrievalFeedback }),
                     candidateStoreEnabled: settings.incrementalPrecomputeEnabled, cacheEnabled: settings.cacheEnabled,
                     valueWorkerMode: settings.valueWorker.mode, valueWorkerConfigurationHash: valueWorkerConfigurationHash(settings.valueWorker) };
-                workerExecution = await runCompactionWorker(request, { slots: settings.hostWorkerSlots,
+                replayWorkerStatus = { state: "running", jobId: request.jobId, startedAt: new Date().toISOString() };
+                workerExecution = await runCompactionWorker(request, { schedulerDirectory: adapters.schedulerDirectory, slots: settings.hostWorkerSlots,
                     workerTimeoutMs: settings.workerTimeoutSeconds * 1_000, schedulerTimeoutMs: settings.workerTimeoutSeconds * 1_000,
                     signal: event.signal, priority: "high" });
+                replayWorkerStatus = { state: workerExecution.response.status, jobId: request.jobId,
+                    ...(workerExecution.response.status === "failed" ? { failureCode: workerExecution.response.failureCode } : {}),
+                    totalWallMs: workerExecution.clientMetrics.workerTotalWallMs, responseBytes: workerExecution.clientMetrics.responseBytes };
                 if (workerExecution.response.status !== "ok" || !workerExecution.response.replay) {
                     const code = workerExecution.response.status === "failed" ? workerExecution.response.failureCode : "worker-protocol-error";
                     throw new Error(`Isolated worker failed: ${code}`);
@@ -1543,7 +1541,7 @@ export default function chronoCompactExtension(pi) {
                     ctx.ui.notify(`ChronoCompact cache write failed: ${safeErrorMessage(cacheError)}`, "warning");
                 }
             }
-            ctx.ui.notify(`ChronoCompact 2.0.0 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`, "info");
+            ctx.ui.notify(`ChronoCompact 2.0.3 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`, "info");
             const shadowBranchLeafId = sourceEntries.at(-1)?.id;
             const authoritativeResponse = {
                 compaction: {
@@ -1616,6 +1614,62 @@ export default function chronoCompactExtension(pi) {
             }
             return undefined;
         }
+    });
+    pi.registerCommand("chrono-worker-status", {
+        description: "Show bounded isolated-worker and scheduler status",
+        handler: async (_args, ctx) => {
+            if (!ctx.hasUI)
+                return;
+            const settings = resolveExtensionSettings(userConfig);
+            const artifacts = await schedulerArtifactCounts(adapters.schedulerDirectory ?? defaultSchedulerDirectory());
+            const host = await runtimeHostStatus({ schedulerDirectory: adapters.schedulerDirectory });
+            const memory = historySearchIndexCacheStatus();
+            ctx.ui.notify([
+                `Isolated replay worker: ${settings.isolatedWorkerEnabled ? "enabled" : "disabled"}`,
+                `Last replay state: ${String(replayWorkerStatus.state ?? "idle")}`,
+                `Last safe failure code: ${String(replayWorkerStatus.failureCode ?? "none")}`,
+                `Host slots: ${settings.hostWorkerSlots}; admitted policy ${host.configuredSlots ?? "not initialized"}`,
+                `Kernel containment: ${host.containmentAvailable ? "available" : "unavailable; unsafe jobs refused"}`,
+                `Legacy admission inhibitor: ${host.legacyAdmissionBlocked ? "verified" : "not verified; transition required"}`,
+                `Host jobs: ${host.active} active, ${host.queued} queued; malformed artifacts ${host.malformedArtifacts}`,
+                `Host memory limit: ${host.limits.hostMemoryBytes} bytes; source-read ceiling ${host.limits.sourceBytes} bytes`,
+                `Host progress: ${host.jobs.map((job) => `${job.category}:${job.stage}`).join(", ") || "idle"}`,
+                `Scheduler artifacts: ${artifacts.slots} slot(s), ${artifacts.tickets} ticket(s)`,
+                `Worker timeout: ${settings.workerTimeoutSeconds}s`,
+                `History memory admission: ${memory.admission.totalBytes}/${memory.admission.byteLimit} bytes; ${memory.admission.reservations} reservation(s)`,
+                `History memory components: load ${memory.admission.components.pendingLoad}, build ${memory.admission.components.pendingBuild}, index ${memory.admission.components.liveIndex}, query ${memory.admission.components.queryResults}, references ${memory.admission.components.retainedReferences}`,
+            ].join("\n"), "info");
+        },
+    });
+    pi.registerCommand("chrono-doctor", {
+        description: "Run read-only bounded ChronoCompact safety checks",
+        handler: async (_args, ctx) => {
+            if (!ctx.hasUI)
+                return;
+            const settings = resolveExtensionSettings(userConfig);
+            const sessionPath = ctx.sessionManager.getSessionFile();
+            const source = sessionPath ? await historySourceState(sessionPath).then((value) => ({ state: "ready", bytes: value.size, legacyHistory: value.size <= LEGACY_HISTORY_MAX_BYTES ? "allowed" : "refused" })).catch(() => ({ state: "unavailable", bytes: 0, legacyHistory: "refused" })) : { state: "ephemeral", bytes: 0, legacyHistory: "refused; unpersisted source" };
+            const ledger = await availableHistoryLedger(ctx);
+            const artifacts = await schedulerArtifactCounts(adapters.schedulerDirectory ?? defaultSchedulerDirectory());
+            const host = await runtimeHostStatus({ schedulerDirectory: adapters.schedulerDirectory });
+            const diagnosticBytes = sessionPath ? await stat(replayWorkerDiagnosticPath(sessionPath)).then((value) => value.size).catch(() => 0) : 0;
+            const memory = historySearchIndexCacheStatus();
+            ctx.ui.notify([
+                `Session source: ${source.state}; bytes ${source.bytes}`,
+                `Legacy whole-file history: ${source.legacyHistory}; limit ${LEGACY_HISTORY_MAX_BYTES}`,
+                `Verified source ledger: ${ledger ? "ready" : "unavailable"}`,
+                `Replay worker diagnostics: ${diagnosticBytes > 0 ? "owner-only records present" : "none"}`,
+                `Scheduler artifacts: ${artifacts.slots} slot(s), ${artifacts.tickets} ticket(s)`,
+                `Isolated worker configured: ${settings.isolatedWorkerEnabled ? "yes" : "no"}`,
+                `Kernel containment: ${host.containmentAvailable ? "available" : "unavailable; unsafe jobs refused"}`,
+                `Legacy admission inhibitor: ${host.legacyAdmissionBlocked ? "verified" : "not verified; transition required"}`,
+                `Host jobs: ${host.active} active, ${host.queued} queued; memory ceiling ${host.limits.hostMemoryBytes} bytes`,
+                "History indexes: child-only; no full index retained by Pi.",
+                `History memory admission: ${memory.admission.totalBytes}/${memory.admission.byteLimit} bytes`,
+                `History retained accounting: index ${memory.admission.components.liveIndex}, query ${memory.admission.components.queryResults}, references ${memory.admission.components.retainedReferences}`,
+                "Doctor mode: read-only; no session content or private path emitted.",
+            ].join("\n"), source.state === "unavailable" ? "warning" : "info");
+        },
     });
     pi.registerCommand("chrono-rollup-shadow-status", {
         description: "Show aggregate hierarchical rollup shadow metrics",

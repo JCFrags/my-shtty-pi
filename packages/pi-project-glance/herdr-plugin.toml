@@ -1,0 +1,16 @@
+id = "pi.project-glance"
+name = "Project Glance"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "Pi Project Glance static progress pane"
+platforms = ["linux"]
+
+[[build]]
+command = ["npm", "run", "build"]
+platforms = ["linux"]
+
+[[panes]]
+id = "glance"
+title = "Project Glance"
+placement = "split"
+command = ["./bin/pi-project-glance", "glance"]

@@ -1,7 +1,7 @@
 {
   "name": "pi-herdr-orchestrator",
   "version": "0.1.0",
-  "description": "Direct Herdr orchestration for Pi with Agent Board opener compatibility",
+  "description": "Direct Herdr orchestration and authenticated agent settings",
   "type": "module",
   "license": "MIT",
   "private": true,
@@ -10,6 +10,26 @@
   ],
   "engines": {
     "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-agent-core": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": false
+    },
+    "@earendil-works/pi-tui": {
+      "optional": false
+    }
   },
   "devDependencies": {
     "@types/node": "22.15.30",
@@ -29,7 +49,12 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.json",
-    "check:m10": "node checks/m10-reliability.mjs"
-  }
+    "build": "rm -rf dist && tsc -p tsconfig.json && cp -r schemas profiles workflows dist/",
+    "check:m10": "node checks/m10-reliability.mjs",
+    "test": "node --test checks/*.test.mjs && npm run check:m10"
+  },
+  "bin": {
+    "pi-herdr-orchestrator": "./bin/pi-herdr-orchestrator"
+  },
+  "files": ["bin", "dist", "herdr-plugin.toml", "README.md", "LICENSE", "package.json", "package-lock.json"]
 }

@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+
+const command = process.argv[2];
+if (command !== "glance") {
+  process.stderr.write("Usage: pi-project-glance glance\n");
+  process.exitCode = 2;
+} else {
+  try {
+    const module = await import("../dist/pane/main.js");
+    await module.main();
+  } catch {
+    process.stderr.write("Project Glance pane could not start.\n");
+    process.exitCode = 1;
+  }
+}

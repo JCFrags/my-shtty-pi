@@ -1,3 +1,4 @@
+import { WORKER_LIMITS } from "./worker-runtime-limits.js";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -167,11 +168,11 @@ export function validateUserConfig(value) {
     if (input.rollupShadowEnabled !== undefined)
         config.rollupShadowEnabled = booleanValue(input.rollupShadowEnabled, "rollupShadowEnabled");
     if (input.hostWorkerSlots !== undefined)
-        config.hostWorkerSlots = boundedInteger(input.hostWorkerSlots, "hostWorkerSlots", 1, 4);
+        config.hostWorkerSlots = boundedInteger(input.hostWorkerSlots, "hostWorkerSlots", WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max);
     if (input.workerTimeoutSeconds !== undefined)
-        config.workerTimeoutSeconds = boundedInteger(input.workerTimeoutSeconds, "workerTimeoutSeconds", 30, 3_600);
+        config.workerTimeoutSeconds = boundedInteger(input.workerTimeoutSeconds, "workerTimeoutSeconds", WORKER_LIMITS.timeoutSeconds.min, WORKER_LIMITS.timeoutSeconds.max);
     if (input.workerNiceLevel !== undefined)
-        config.workerNiceLevel = boundedInteger(input.workerNiceLevel, "workerNiceLevel", 0, 19);
+        config.workerNiceLevel = boundedInteger(input.workerNiceLevel, "workerNiceLevel", WORKER_LIMITS.nice.min, WORKER_LIMITS.nice.max);
     if (input.toolResultProjectionMode !== undefined)
         config.toolResultProjectionMode = projectionModeValue(input.toolResultProjectionMode);
     if (input.rankedSearchEnabled !== undefined)
@@ -344,13 +345,13 @@ export function applyConfigCommand(config, args) {
             value = booleanValue(raw, command);
             break;
         case "hostWorkerSlots":
-            value = boundedInteger(raw, command, 1, 4);
+            value = boundedInteger(raw, command, WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max);
             break;
         case "workerTimeoutSeconds":
-            value = boundedInteger(raw, command, 30, 3_600);
+            value = boundedInteger(raw, command, WORKER_LIMITS.timeoutSeconds.min, WORKER_LIMITS.timeoutSeconds.max);
             break;
         case "workerNiceLevel":
-            value = boundedInteger(raw, command, 0, 19);
+            value = boundedInteger(raw, command, WORKER_LIMITS.nice.min, WORKER_LIMITS.nice.max);
             break;
         case "toolResultProjectionMode":
             value = projectionModeValue(raw);

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -82,7 +82,7 @@ const deferredAsk = Type.Object({
   mode: StringEnum(["deferred"] as const),
   question: Type.String({ minLength: 1, maxLength: 160 }),
   reason: Type.String({ minLength: 1, maxLength: 4000 }),
-  class: StringEnum(["preference", "information", "reversible", "authorization"] as const),
+  class: StringEnum(["preference", "information", "reversible"] as const, { description: "Deferred questions cannot request authorization. Use ask_user mode=blocking for authorization." }),
   response: deferredResponse,
   recommendation: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
   recommendedOptionIds: Type.Optional(optionIds),
@@ -92,8 +92,8 @@ const deferredAsk = Type.Object({
     disclosure: Type.String({ minLength: 1, maxLength: 1000 }),
   }, { additionalProperties: false })),
   priority: Type.Optional(StringEnum(["normal", "high"] as const)),
-  escalationPolicy: Type.Optional(StringEnum(["never", "when_agent_settles"] as const)),
-  deliveryMode: Type.Optional(StringEnum(["steer", "followUp", "nextTurn"] as const)),
+  escalationPolicy: Type.Optional(StringEnum(["never"] as const, { description: "Automatic blocking escalation is not supported. Omit or use never." })),
+  deliveryMode: Type.Optional(StringEnum(["nextTurn"] as const, { description: "Busy work continues. Answers are delivered at safe idle for the next natural turn, without an automatic response. Omit or use nextTurn." })),
   affectedWork: Type.Optional(workItems),
   continuingWork: Type.Optional(workItems),
   attachments: Type.Optional(Type.Array(attachment, { maxItems: 10 })),
@@ -129,23 +129,45 @@ export function loadAskUserV1Enabled(path?: string): boolean {
   }
 }
 
+// This bounds provider acknowledgement work, not the time allowed for a user answer.
+export const ASK_USER_DEFERRED_TERMINAL_TIMEOUT_MS = 10_000;
+
 export function registerAskUserFacadeV1(pi: ExtensionAPI): void {
   const correlations = new Map<string, { readonly fingerprint: string; readonly correlationId: string }>();
   pi.registerTool({
     name: "ask_user",
     label: "Ask user",
-    description: "Ask one strict version-1 question in explicit blocking mode, or create or cancel one deferred Signals question. The selected provider must be present and healthy.",
+    description: "Ask one strict version-1 question in explicit blocking mode, or create or cancel one deferred question. The selected provider must be present and healthy. Deferred answers are delivered at safe idle for the next natural turn; busy work continues without immediate steering or an automatic response.",
     promptSnippet: "Ask a user question through an explicit blocking or deferred provider",
     promptGuidelines: [
       "Use ask_user with mode=blocking only when work cannot safely continue without the answer.",
       "Use ask_user with mode=deferred only when useful independent work can continue.",
       "Never change ask_user mode automatically.",
+      "Do not use ask_user mode=deferred for authorization; ask explicitly with mode=blocking instead.",
+      "Do not escalate ask_user deferred questions based only on elapsed time or agent settlement; continue only independent work.",
+      "Use ask_user deferred deliveryMode=nextTurn or omit it: busy work continues, answers are delivered at safe idle for the next natural turn, and no steering or follow-up response is started automatically.",
     ],
     parameters: ASK_USER_PARAMETERS_V1,
     executionMode: "sequential",
-    async execute(toolCallId, input, signal) {
-      const prior = correlations.get(toolCallId);
-      const correlationId = prior?.correlationId ?? `ask_${randomUUID()}`;
+    async execute(toolCallId, input, signal, _onUpdate, ctx) {
+      if (input.mode === "deferred" && input.operation === "ask" && (input.class as string) === "authorization") {
+        throw providerError({ code: "ASK_USER_INVALID_REQUEST", message: "Deferred questions cannot request authorization. Use ask_user with mode=blocking for authorization; do not assume approval.", retryable: false });
+      }
+      if (input.mode === "deferred" && input.operation === "ask") {
+        if (input.deliveryMode !== undefined && (input.deliveryMode as string) !== "nextTurn") {
+          throw providerError({ code: "ASK_USER_INVALID_REQUEST", message: "Deferred ask_user does not support steering or automatic follow-up delivery. Omit deliveryMode or use nextTurn; answers are delivered at safe idle for the next natural turn.", retryable: false });
+        }
+        if (input.escalationPolicy !== undefined && (input.escalationPolicy as string) !== "never") {
+          throw providerError({ code: "ASK_USER_INVALID_REQUEST", message: "Deferred ask_user does not support automatic blocking escalation. Omit escalationPolicy or use never; ask explicitly with mode=blocking when needed.", retryable: false });
+        }
+      }
+      const deferredCorrelation = input.mode === "deferred"
+        ? deferredCorrelationId(ctx?.sessionManager?.getSessionId?.(), toolCallId)
+        : undefined;
+      // Separate deferred sessions even if a host retains this factory across a switch.
+      const cacheKey = deferredCorrelation === undefined ? toolCallId : `deferred:${deferredCorrelation}`;
+      const prior = correlations.get(cacheKey);
+      const correlationId = deferredCorrelation ?? prior?.correlationId ?? `ask_${randomUUID()}`;
       const request = buildProviderRequest(input, correlationId, signal);
       const fingerprint = providerRequestFingerprint(request);
       if (prior !== undefined && prior.fingerprint !== fingerprint) {
@@ -155,7 +177,7 @@ export function registerAskUserFacadeV1(pi: ExtensionAPI): void {
           retryable: false,
         });
       }
-      if (prior === undefined) correlations.set(toolCallId, { fingerprint, correlationId });
+      if (prior === undefined) correlations.set(cacheKey, { fingerprint, correlationId });
       const result = request.mode === "blocking"
         ? normalizeBlocking(await dispatchBlocking(pi.events, request), request)
         : normalizeDeferred(await dispatchDeferred(pi.events, request), request);
@@ -165,6 +187,20 @@ export function registerAskUserFacadeV1(pi: ExtensionAPI): void {
       };
     },
   });
+}
+
+function deferredCorrelationId(sessionId: string | undefined, toolCallId: string): string {
+  if (typeof sessionId !== "string" || !sessionId.trim() || typeof toolCallId !== "string" || !toolCallId.trim()) {
+    throw providerError({ code: "ASK_USER_INVALID_REQUEST", message: "Deferred ask_user requires a stable Pi session ID and tool call ID. Restore the session context before retrying.", retryable: false });
+  }
+  // JSON tuple framing prevents ambiguous concatenation. Never include question content:
+  // changed content must reuse the ID and reach the provider's durable conflict check.
+  const bytes = createHash("sha256").update(JSON.stringify(["pi-ask-user:deferred-correlation-v1", sessionId, toolCallId])).digest().subarray(0, 16);
+  // Deterministic hash formatted to the existing V1 UUIDv4-shaped contract, NOT random UUID generation.
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `ask_${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function buildProviderRequest(input: AskUserToolInputV1, correlationId: string, signal: AbortSignal | undefined): AskUserBlockingProviderRequestV1 | AskUserDeferredProviderRequestV1 {
@@ -242,6 +278,12 @@ function dispatchProvider<Response extends AskUserBlockingProviderResponseV1 | A
   needsOpen: boolean,
 ): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
+    const deferred = !needsOpen;
+    if (deferred && request.signal?.aborted) {
+      reject(deferredInterrupted("aborted"));
+      return;
+    }
+    let terminalTimer: ReturnType<typeof setTimeout> | undefined;
     let accepted = false;
     let open = false;
     let settled = false;
@@ -250,9 +292,14 @@ function dispatchProvider<Response extends AskUserBlockingProviderResponseV1 | A
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (deferred) {
+        clearTimeout(terminalTimer);
+        request.signal?.removeEventListener("abort", abort);
+      }
       remove();
       action();
     };
+    const abort = () => finish(() => reject(deferredInterrupted("aborted")));
     const timer = setTimeout(() => finish(() => reject(providerError({
       code: "ASK_USER_PROVIDER_UNAVAILABLE",
       message: `No ${request.mode} ask_user provider accepted the version-1 request.`,
@@ -270,6 +317,11 @@ function dispatchProvider<Response extends AskUserBlockingProviderResponseV1 | A
         return;
       }
       if (value.state === "accepted") {
+        // Duplicate acceptance must not extend the deferred operation deadline.
+        if (deferred && !accepted) terminalTimer = setTimeout(
+          () => finish(() => reject(deferredInterrupted("timed out"))),
+          ASK_USER_DEFERRED_TERMINAL_TIMEOUT_MS,
+        );
         accepted = true;
         clearTimeout(timer);
         return;
@@ -288,11 +340,24 @@ function dispatchProvider<Response extends AskUserBlockingProviderResponseV1 | A
       }
       finish(() => resolve(value));
     });
+    if (deferred) {
+      request.signal?.addEventListener("abort", abort, { once: true });
+      if (request.signal?.aborted) abort();
+      if (settled) return;
+    }
     try {
       bus.emit(requestEvent, request);
     } catch {
       finish(() => reject(providerError({ code: "ASK_USER_PROVIDER_UNHEALTHY", message: "The ask_user provider failed while accepting the request.", retryable: true })));
     }
+  });
+}
+
+function deferredInterrupted(reason: "aborted" | "timed out"): Error {
+  return providerError({
+    code: "ASK_USER_PROVIDER_FAILURE",
+    message: `Deferred provider acknowledgement ${reason}. The operation outcome is unknown; no question cancellation or approval is implied. Retry only with the same session and tool call ID to reconcile the provider receipt.`,
+    retryable: true,
   });
 }
 
