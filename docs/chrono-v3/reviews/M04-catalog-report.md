@@ -40,6 +40,8 @@ Parent reruns, after dependency integration:
 | Default-off and opt-in lifecycle | 2 passed; synthetic source, disposable scheduler namespace, no whole-session/branch read |
 | Package typecheck/build/native probe/test compilation | Passed before integration tests |
 | Complete package suite | 491 passed, zero failures/skips; preserves the 412-test baseline |
+| Deterministic replay and fixed heaps | Normal, 512 MiB and 1,024 MiB lanes passed; small/medium output and generation hashes remain equal |
+| Fresh disposable Pi processes | Pi 0.84.2 and 0.85.1, each with catalog off/on: loader, doctor, worker/catalog status, history and contained compaction passed |
 
 The medium harness uses the M02 deterministic metadata/fork fixture and emits one synthetic body at a time. It retains no archive-sized body array. It ran 173 contained jobs, including ingestion, pinned paging, no-op and append checks:
 
@@ -69,6 +71,17 @@ node --max-old-space-size=128 scripts/catalog-benchmark.mjs --small
 node --max-old-space-size=128 scripts/catalog-benchmark.mjs
 ```
 
+### Disposable Pi procedure
+
+From the package directory, after the controlled native build:
+
+```sh
+node scripts/catalog-pi-canary.mjs "$PWD"
+# Optional: supply an explicitly selected installed Pi dist/cli.js as the second argument.
+```
+
+The harness creates only synthetic sessions and private temporary agent/config/scheduler directories. It loads the candidate through a wrapper that supplies the disposable scheduler namespace. A synthetic provider throws on any model call, and network fetch is disabled. No credentials are inherited and no production settings are read or changed. Both states produced the same 79,563-byte compaction summary, preserved the original source prefix, and reported no extension errors. The harness retains its synthetic directories rather than deleting possibly unconfirmed worker admissions. Pi 0.85.1 is an extra observed compatibility lane, not an expansion of the declared peer range.
+
 ## Disclosed failed runs and corrections
 
 - The stock native prebuild failed effective heap enforcement; replaced by the explicitly verified source build, not a larger global memory limit.
@@ -82,6 +95,6 @@ The engine supports at most 64 ancestry segments and 1,024 ordered declared shar
 
 The decoded hash checkpoint can retain at most 2,046 decoded carry bytes, privately and only until the string completes. This is not searchable text or whole-body retention, but it remains a storage/privacy review point. Raw-span SHA-256 and the versioned decoded UTF-16 hash chain are distinct contracts.
 
-Process-kill tests are not device power-loss testing. Corrupt pointer metadata refuses rather than reconstructing by scanning directories. Old-store cleanup is outside this change. Literal Node 21, future majors, other native platforms, and full store execution on the early runtime lanes remain unverified. The workstation Pi version is outside the unchanged locked peer range; disposable Pi compatibility evidence is still required.
+Process-kill tests are not device power-loss testing. Corrupt pointer metadata refuses rather than reconstructing by scanning directories. Old-store cleanup is outside this change. Literal Node 21, future majors, other native platforms, and full store execution on the early runtime lanes remain unverified. The workstation Pi 0.85.1 remains outside the unchanged locked peer range, although its disposable off/on canaries passed.
 
-Frozen-baseline/replay/fixed-heap/root/privacy/exact-head CI, fresh disposable Pi canaries, final verifier metadata and final draft PR remain pending. Project lead owns code/storage review and acceptance; implementation agents performed no independent code review. Production remains on accepted 2.0.4 with its alias, settings, policy, gate, inhibitors and rollback intact.
+Final integrated frozen-baseline/root/privacy/exact-head CI, verifier metadata and the draft PR remain pending. Project lead owns code/storage review and acceptance; implementation agents performed no independent code review. Production remains on accepted 2.0.4 with its alias, settings, policy, gate, inhibitors and rollback intact.
