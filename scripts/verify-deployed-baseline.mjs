@@ -217,6 +217,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/test/catalog-sqlite.test.ts",
   "packages/pi-chrono-compaction/test/catalog-store.test.ts",
   "packages/pi-chrono-compaction/test/user-config.test.ts",
+  "packages/pi-chrono-compaction/scripts/catalog-pi-canary.mjs",
 ]);
 
 const expectedSlugs = [
