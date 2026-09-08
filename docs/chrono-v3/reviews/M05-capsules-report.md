@@ -113,7 +113,31 @@ unsupported descriptor, rather than weakening readiness or fabricating a body.
 The worker entry and contained shadow bridge are implemented. Production/Pi
 activation is still absent; callers supply an explicit durable physical identity
 and both catalog/derived routes. Storage has no automatic identity discovery.
-Independent storage review and full M05 gates remain pending.
+The normal suite at this integration point passed 593/593 tests. This does not
+supersede review findings or establish acceptance of later changes.
+
+## Synthetic extension status and retained review findings
+
+The extension now accepts an explicitly injected synthetic prepared target only
+with an explicit isolated scheduler directory. No production setting or automatic
+UUID discovery was added. Session start and settled events schedule deferred
+contained work; switch, fork, and shutdown cancel it. `/chrono-capsules-status`
+reports cached progress and independent readiness without storage reads. Normal
+extension loading remains disabled for capsule work. The caller must retain the
+physical identity and supply an actual pinned M04 view.
+
+Build/typecheck and 13 focused extension tests passed, including a real synthetic
+capsule pass, cached status, and zero model mutations. An initial command-list
+assertion failed because it lacked the new status command; the explicit expected
+list was updated. The original failure is retained.
+
+Independent storage review reproduced three defects despite 17 passing focused
+tests: global artifact pagination let sibling rows poison fork/old-pin pages;
+check-then-rename could replace a raced destination; and status recreated a
+missing publication lock. Corrections are pending verification. Independent
+adapter review found that a `NaN` aggregate budget bypassed numeric comparisons;
+that correction is also pending. These findings block acceptance. No deployment
+or self-acceptance is claimed.
 
 ## Remaining evidence
 
