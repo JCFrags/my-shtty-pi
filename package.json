@@ -151,13 +151,6 @@
         ]
       },
       {
-        "slug": "temporary-orchestrator-cancel-isolation",
-        "status": "active-temporary",
-        "entrypoints": [
-          "extensions/temporary-orchestrator-cancel-isolation.ts"
-        ]
-      },
-      {
         "slug": "titlebar-spinner",
         "status": "active",
         "entrypoints": [

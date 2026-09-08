@@ -93,7 +93,12 @@ const HASH = /\b[a-f0-9]{7,64}\b/gi;
 const MAX_RESULTS = 50;
 const MAX_RESULT_TOKENS = 2_000;
 const DEFAULT_RESULT_TOKENS = 1_000;
+export const MAX_SEARCH_RESULT_CACHE_ENTRIES = 64;
 const cache = new WeakMap<LocalSearchIndex, Map<string, RankedSearchResult>>();
+
+export function searchResultCacheStatus(index: LocalSearchIndex): { entries: number; limit: number } {
+  return { entries: cache.get(index)?.size ?? 0, limit: MAX_SEARCH_RESULT_CACHE_ENTRIES };
+}
 
 function splitCamel(value: string): string[] {
   return value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[_./:@+\-]+|\s+/).filter((part) => part.length >= 2);
@@ -429,6 +434,8 @@ export function searchLocalHistory(index: LocalSearchIndex, query: string, optio
   cache.set(index, indexCache);
   const cached = indexCache.get(cacheKey);
   if (cached) {
+    indexCache.delete(cacheKey);
+    indexCache.set(cacheKey, cached);
     const cacheHit = { ...cached, cacheHit: true };
     return { ...cacheHit, returnedTokens: estimateTokensFromText(renderRankedSearch(cacheHit)) };
   }
@@ -505,6 +512,7 @@ export function searchLocalHistory(index: LocalSearchIndex, query: string, optio
   if (!rendered.complete) throw new Error("History search response cannot fit the supported response budget");
   const result = { ...preliminary, returnedTokens: estimateTokensFromText(rendered.text) };
   indexCache.set(cacheKey, result);
+  while (indexCache.size > MAX_SEARCH_RESULT_CACHE_ENTRIES) indexCache.delete(indexCache.keys().next().value!);
   return result;
 }
 

@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "decisions": [
+    {
+      "unitId": "constraint:user:0",
+      "importance": "low",
+      "confidence": 1,
+      "action": "compress"
+    },
+    {
+      "unitId": "noise:tool_result:0",
+      "importance": "low",
+      "confidence": 1,
+      "action": "compress"
+    }
+  ]
+}

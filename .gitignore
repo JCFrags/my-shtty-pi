@@ -8,3 +8,4 @@ packages/pi-project-glance/.runtime/
 packages/pi-project-glance/*.tgz
 *.log
 .DS_Store
+packages/pi-chrono-compaction/dist-test/

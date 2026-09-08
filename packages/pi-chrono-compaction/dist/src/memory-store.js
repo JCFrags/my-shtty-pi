@@ -1,3 +1,4 @@
+import { readBoundedHistorySidecar } from "./history-worker-bounded-read.js";
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { link, lstat, mkdir, open, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
@@ -391,9 +392,9 @@ export function listMemories(materialization, options = {}) {
         && (!options.state || memory.state === options.state)
         && (!options.authorities || options.authorities.includes(memory.authority)));
 }
-export async function readMemoryEvents(path) {
+export async function readMemoryEvents(path, options = {}) {
     try {
-        const text = await readFile(path, "utf8");
+        const text = options.maxReadBytes === undefined ? await readFile(path, "utf8") : await readBoundedHistorySidecar(path, options.maxReadBytes);
         const events = text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
         return materializeMemoryEvents(events);
     }
@@ -652,19 +653,23 @@ async function acquireMemoryLock(path) {
     }
     throw new Error("Timed out while serializing memory sidecar append operations.");
 }
-async function appendMemoryEventInternal(path, input, authoritativeSource) {
+async function appendMemoryEventInternal(path, input, authoritativeSource, options = {}) {
     const release = await acquireMemoryLock(path);
     let temporary;
     try {
-        const current = await readMemoryEvents(path);
+        const current = await readMemoryEvents(path, options);
         if (current.status !== "ready")
             throw new Error(`Refused memory write because the sidecar is corrupt: ${current.error ?? "unknown error"}`);
         const event = authoritativeSource
             ? createMemoryEventInternal(current.events, input, authoritativeSource)
             : createMemoryEvent(current.events, input);
+        options.validateAppendEvent?.(event);
         const nextEvents = [...current.events, event];
         temporary = `${path}.tmp-${process.pid}-${event.eventId}`;
-        await writeFile(temporary, `${nextEvents.map((item) => stableStringify(item)).join("\n")}\n`, { mode: 0o600 });
+        const serialized = `${nextEvents.map((item) => stableStringify(item)).join("\n")}\n`;
+        if (options.maxReadBytes !== undefined && Buffer.byteLength(serialized) > options.maxReadBytes)
+            throw new Error("history-promotion-source-too-large");
+        await writeFile(temporary, serialized, { mode: 0o600 });
         const temporaryHandle = await open(temporary, "r");
         try {
             await temporaryHandle.sync();
@@ -695,8 +700,8 @@ async function appendMemoryEventInternal(path, input, authoritativeSource) {
         await release();
     }
 }
-export async function appendMemoryEvent(path, input) {
-    return appendMemoryEventInternal(path, input);
+export async function appendMemoryEvent(path, input, options = {}) {
+    return appendMemoryEventInternal(path, input, undefined, options);
 }
 export async function appendConfiguredAuthoritativeMemoryEvent(path, input) {
     const source = await resolveConfiguredAuthoritativeSource(input.sourceRef);

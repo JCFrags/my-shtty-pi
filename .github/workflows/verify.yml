@@ -26,5 +26,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm test
       - run: npm run verify
+      - name: Verify preserved Chrono corrective package
+        run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
       - name: Verify separate historical capture
         run: npm run verify:history

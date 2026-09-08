@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { CHRONO_BASELINE, verifyChronoBuildMaps, verifyChronoFiles, verifyChronoIndex, verifyFrozenChrono } from './verify-chrono-v3-baseline.mjs';
 import { builtinModules } from 'node:module';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,9 +93,11 @@ export function scanBoundary(text, label, slug) {
 function isRuntime(path) {
   return !/(?:^|\/)(?:test|tests|fixtures)\//.test(path) && !/\.md$|DEPLOYED\.sha256$|(?:^|\/)LICENSE(?:\.[^/]*)?$/.test(path);
 }
-function scanFile(path, rel) {
-  if (/(?:^|\/)(?:\.runtime|node_modules)(?:\/|$)|\.(?:sock|tgz|jsonl|log)$/.test(rel)) throw new Error(`${rel}: runtime artifact`);
+export function scanFile(path, rel) {
   const bytes = readFileSync(path);
+  const syntheticFixture = rel === `${CHRONO_BASELINE.package}/test/fixtures/session.jsonl`
+    && createHash('sha256').update(bytes).digest('hex') === '23f198ab80ffe75dec1dbf1aad28037cfa6d5141261d43ea9a82502842efe047';
+  if (!syntheticFixture && /(?:^|\/)(?:\.runtime|node_modules)(?:\/|$)|\.(?:sock|tgz|jsonl|log)$/.test(rel)) throw new Error(`${rel}: runtime artifact`);
   if (bytes.includes(0)) return;
   const text = bytes.toString('utf8');
   scanPrivacy(text, rel);
@@ -109,7 +113,16 @@ function target(root, base, spec, generated = false) {
   if (!found && !generated) throw new Error(`unresolved local path ${relative(root, base)}: ${spec}`);
   return found;
 }
-function localReference(root, owner, source, text, spec) {
+export function localReference(root, owner, source, text, spec) {
+  if (relative(root, owner.dir) === CHRONO_BASELINE.package && spec.startsWith('../dist-test/')) {
+    if (relative(owner.dir, source) !== 'scripts/memory-characterization.mjs'
+        || !['../dist-test/src/jsonl.js', '../dist-test/src/search-index.js'].includes(spec)) throw new Error('chrono: unexpected test-build import');
+    const config = chronoTestBuild(owner.dir);
+    const emitted = resolve(dirname(source), spec);
+    const sourcePath = resolve(config.sourceRoot, relative(config.outputRoot, emitted).replace(/\.js$/, '.ts'));
+    if (!within(config.outputRoot, emitted) || !within(config.sourceRoot, sourcePath) || !config.sources.includes(sourcePath)) throw new Error('chrono: unresolved test-build source');
+    return sourcePath;
+  }
   // import.meta.url in compiled TypeScript is relative to the emitted file,
   // not its source directory. Validate that exact emitted resource location.
   const resources = [...text.matchAll(/new\s+URL\s*\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g)].map(match => match[1]);
@@ -127,6 +140,63 @@ function localReference(root, owner, source, text, spec) {
   const base = dirname(source);
   return target(root, base, spec, generatedTarget(owner.data, relative(owner.dir, resolve(base, spec))));
 }
+function chronoTestBuild(dir) {
+  const config = json(join(dir, 'tsconfig.test-build.json'));
+  const base = json(join(dir, 'tsconfig.json'));
+  if (config.extends !== './tsconfig.json' || config.compilerOptions?.outDir !== './dist-test'
+      || config.compilerOptions?.noEmit !== false || base.compilerOptions?.rootDir !== '.'
+      || base.compilerOptions?.sourceMap !== true || base.compilerOptions?.declaration !== false
+      || JSON.stringify(config.include) !== JSON.stringify(['src/**/*.ts', 'src/**/*.d.ts', 'test/**/*.ts'])
+      || JSON.stringify(config.exclude) !== JSON.stringify(['test/incremental-context.test.ts'])) throw new Error('chrono: test-build config drift');
+  const sources = ['src', 'test'].flatMap(part => walk(join(dir, part)))
+    .filter(path => path.endsWith('.ts') && !path.endsWith('.d.ts') && !config.exclude.includes(relative(dir, path)));
+  return { sourceRoot: resolve(dir, base.compilerOptions.rootDir), outputRoot: resolve(dir, config.compilerOptions.outDir), sources };
+}
+
+// Called only for disposable indexed builds, after tests and before packing.
+// Validate every output and source-map binding before removing any generated file.
+export function finishChronoBuild(root, files) {
+  if (existsSync(join(root, '.git'))) throw new Error('chrono: cleanup requires disposable snapshot');
+  const generatedFiles = directory => {
+    if (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink()) throw new Error('chrono: unsafe generated output');
+    return readdirSync(directory).flatMap(name => {
+      const path = join(directory, name), stat = lstatSync(path);
+      if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new Error('chrono: unsafe generated output');
+      return stat.isDirectory() ? generatedFiles(path) : [path];
+    });
+  };
+  const dir = join(root, CHRONO_BASELINE.package), indexed = new Set(files);
+  const config = chronoTestBuild(dir);
+  if (files.some(path => path.startsWith(`${CHRONO_BASELINE.package}/dist-test/`))) throw new Error('chrono: indexed test output');
+  const validateMaps = (outputRoot, sources) => {
+    const expected = sources.flatMap(source => {
+      if (!indexed.has(relative(root, source))) throw new Error('chrono: unindexed build source');
+      const emitted = join(outputRoot, relative(config.sourceRoot, source).replace(/\.ts$/, '.js'));
+      return [emitted, `${emitted}.map`];
+    }).sort();
+    const actual = generatedFiles(outputRoot).sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('chrono: generated output inventory drift');
+    for (const path of actual) {
+      scanFile(path, relative(root, path));
+      if (!path.endsWith('.map')) continue;
+      if (indexed.has(relative(root, path))) throw new Error('chrono: indexed generated map');
+      const map = json(path);
+      const expectedSource = resolve(config.sourceRoot, relative(outputRoot, path).replace(/\.js\.map$/, '.ts'));
+      if (map.version !== 3 || map.file !== path.slice(path.lastIndexOf('/') + 1, -4)
+          || map.sourceRoot !== '' || !Array.isArray(map.sources) || map.sources.length !== 1
+          || resolve(dirname(path), map.sources[0]) !== expectedSource || !sources.includes(expectedSource)) throw new Error('chrono: invalid generated source map');
+    }
+    return actual.filter(path => path.endsWith('.map'));
+  };
+  validateMaps(config.outputRoot, config.sources);
+  const runtimeSources = config.sources.filter(path => within(join(dir, 'src'), path));
+  const runtimeMaps = validateMaps(join(dir, 'dist'), runtimeSources);
+  // All removals are proven unindexed compiler output in this disposable build.
+  rmSync(config.outputRoot, { recursive: true });
+  for (const path of runtimeMaps) rmSync(path);
+  verifyChronoFiles(dir);
+}
+
 function manifestTargets(value) {
   if (typeof value === 'string') return [value];
   return value && typeof value === 'object' ? Object.values(value).flatMap(manifestTargets) : [];
@@ -192,7 +262,7 @@ export function validateManifests(root, files) {
 }
 
 export function verifyStatic(root, files) {
-  for (const path of ['package.json', 'package-lock.json', '.github/workflows/verify.yml', 'scripts/verify-supported.mjs', 'scripts/verify-supported.test.mjs', 'scripts/verify-deployed-baseline.mjs']) {
+  for (const path of ['package.json', 'package-lock.json', '.github/workflows/verify.yml', 'scripts/verify-supported.mjs', 'scripts/verify-supported.test.mjs', 'scripts/verify-deployed-baseline.mjs', 'scripts/verify-chrono-v3-baseline.mjs']) {
     if (!files.includes(path)) throw new Error(`required indexed root input: ${path}`);
   }
   for (const rel of files) scanFile(join(root, rel), rel);
@@ -200,9 +270,10 @@ export function verifyStatic(root, files) {
   if (!Array.isArray(products) || new Set(products.map(p => p.slug)).size !== products.length) throw new Error('invalid product registry');
   const dirs = readdirSync(join(root, 'packages'), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
   if (JSON.stringify(dirs) !== JSON.stringify(products.map(p => p.slug).sort())) throw new Error('package directories differ from supported registry');
-  if (products.some(p => p.slug === 'pi-signal-board')) throw new Error('retired product remains registered');
+  if (products.some(p => ['pi-signal-board', 'temporary-orchestrator-cancel-isolation'].includes(p.slug))) throw new Error('retired product remains registered');
   if (products.find(p => p.slug === 'pi-project-glance')?.status !== 'active') throw new Error('Project Glance must be active');
   const manifests = validateManifests(root, files);
+  if (products.some(product => product.slug === 'pi-chrono-compaction')) verifyChronoFiles(join(root, CHRONO_BASELINE.package));
   for (const product of products) {
     if (!['active', 'inactive', 'active-temporary'].includes(product.status) || !product.entrypoints?.length) throw new Error(`${product.slug}: invalid status/entrypoints`);
     const dir = join(root, 'packages', product.slug);
@@ -215,6 +286,26 @@ export function verifyStatic(root, files) {
   return { products, manifests };
 }
 
+// Explicitly requested candidate cleanup only: exact index + complete working
+// package proof, all 83 regular maps bound to retained sources, then map-only
+// unlink. Unlike finishChronoBuild, this helper can operate on a candidate Git
+// checkout. It never removes dist-test, dependencies, or indexed package files.
+export function removeChronoBuildMaps(root) {
+  verifyChronoIndex(output('git', ['ls-files', '--stage', '-z', '--', CHRONO_BASELINE.package], root));
+  const dir = join(root, CHRONO_BASELINE.package);
+  const { maps } = verifyChronoBuildMaps(dir);
+  for (const path of maps) rmSync(path);
+  const identity = verifyChronoFiles(dir);
+  return { status: 'passed', removedGeneratedMaps: maps.length, ...identity };
+}
+
+export function chronoScriptEnvironment(root) {
+  const home = join(root, '.verify-chrono-home');
+  const temporary = join(home, 'tmp');
+  mkdirSync(temporary, { recursive: true, mode: 0o700 });
+  return { PATH: process.env.PATH, HOME: home, TMPDIR: temporary, PI_CODING_AGENT_DIR: join(home, 'agent'), LANG: 'C.UTF-8' };
+}
+
 export function executeProducts(root, files, state, selected) {
   const env = { ...process.env, PYTHONPYCACHEPREFIX: join(root, '.verify-python-cache'), PI_PROJECT_GLANCE_VERIFIER_COPY: '1', PI_PROJECT_GLANCE_PROVIDER_ROOT: root };
   run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], root, { env });
@@ -222,6 +313,7 @@ export function executeProducts(root, files, state, selected) {
   for (const product of products) {
     const dir = join(root, 'packages', product.slug);
     const manifest = json(join(dir, 'package.json'));
+    const scriptEnv = product.slug === 'pi-chrono-compaction' ? chronoScriptEnvironment(root) : env;
     // Install all nested locked dependencies needed by a selected product.
     for (const nested of state.manifests.filter(m => within(dir, m.dir))) {
       if (existsSync(join(nested.dir, 'package-lock.json'))) run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], nested.dir, { env });
@@ -230,7 +322,7 @@ export function executeProducts(root, files, state, selected) {
     const expected = new Map(committedDist.map(path => [path, readFileSync(join(root, path))]));
     if (manifest.scripts?.build) rmSync(join(dir, 'dist'), { recursive: true, force: true });
     for (const script of ['typecheck', 'syntax', 'build', 'test']) {
-      if (manifest.scripts?.[script]) run('npm', ['run', '--ignore-scripts', script], dir, { env });
+      if (manifest.scripts?.[script]) run('npm', ['run', '--ignore-scripts', script], dir, { env: scriptEnv });
     }
     if (manifest.scripts?.build && !changedProducts.has(product.slug)) {
       for (const [path, bytes] of expected) if (!existsSync(join(root, path)) || !readFileSync(join(root, path)).equals(bytes)) throw new Error(`${path}: tracked compiled output differs from build`);
@@ -238,6 +330,7 @@ export function executeProducts(root, files, state, selected) {
       const trackedJs = committedDist.filter(path => path.endsWith('.js')).sort();
       if (JSON.stringify(actualJs) !== JSON.stringify(trackedJs)) throw new Error(`${product.slug}: build JavaScript inventory differs from indexed output`);
     }
+    if (product.slug === 'pi-chrono-compaction') finishChronoBuild(root, files);
     for (const entry of [...product.entrypoints, ...manifestTargets(manifest.pi?.extensions), ...manifestTargets(manifest.bin)]) target(root, dir, entry);
     for (const path of walk(dir)) {
       scanFile(path, relative(root, path));
@@ -282,6 +375,7 @@ export function main(args = process.argv.slice(2)) {
   chmodSync(temp, 0o700);
   try {
     const root = join(temp, 'repo');
+    verifyFrozenChrono(here);
     const files = snapshotIndex(here, root);
     const state = verifyStatic(root, files);
     if (selected && !state.products.some(p => p.slug === selected)) throw new Error(`unknown product: ${selected}`);

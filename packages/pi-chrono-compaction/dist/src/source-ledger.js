@@ -157,14 +157,21 @@ function sessionIdentity(header) {
             return header[key];
     return null;
 }
-async function anchorMatches(path, ledger) {
+async function openedSourceMatches(handle, ledger) {
+    const metadata = await handle.stat({ bigint: true });
+    if (!metadata.isFile() || !sameIdentity(ledger.sourceIdentity, identity(metadata)) || Number(metadata.size) < ledger.checkpoint.sourceFileSize) {
+        return { matches: false, bytesRead: 0, bytes: Buffer.alloc(0) };
+    }
     const checkpoint = ledger.checkpoint;
     const bytes = Buffer.alloc(checkpoint.anchorByteLength);
+    const read = await handle.read(bytes, 0, bytes.length, checkpoint.anchorSourceOffset);
+    return { matches: read.bytesRead === bytes.length && hashBytes(bytes) === checkpoint.anchorContentHash,
+        bytesRead: read.bytesRead, bytes: bytes.subarray(0, read.bytesRead) };
+}
+async function anchorMatches(path, ledger) {
     const handle = await open(path, noFollowFlags());
     try {
-        const read = await handle.read(bytes, 0, bytes.length, checkpoint.anchorSourceOffset);
-        return { matches: read.bytesRead === bytes.length && hashBytes(bytes) === checkpoint.anchorContentHash,
-            bytesRead: read.bytesRead, bytes: bytes.subarray(0, read.bytesRead) };
+        return await openedSourceMatches(handle, ledger);
     }
     finally {
         await handle.close();
@@ -425,6 +432,8 @@ export async function readSourceEntryRange(sessionPath, ledger, startIndex, endI
     const bytes = Buffer.alloc(rangeEnd - first.sourceByteOffset);
     const handle = await open(sessionPath, noFollowFlags());
     try {
+        if (!(await openedSourceMatches(handle, ledger)).matches)
+            throw new SourceLedgerError("Stale source ledger; source checkpoint failed verification.");
         const read = await handle.read(bytes, 0, bytes.length, first.sourceByteOffset);
         if (read.bytesRead !== bytes.length)
             throw new SourceLedgerError("Source range ended before the indexed byte boundary.");
@@ -444,6 +453,8 @@ export async function readSourceEntryRange(sessionPath, ledger, startIndex, endI
                 throw new SourceLedgerError(`Stale source ledger entry ${entry.entryId}; source identity failed verification.`);
             return { ledger: entry, text: content.toString("utf8") };
         });
+        if (!(await openedSourceMatches(handle, ledger)).matches)
+            throw new SourceLedgerError("Stale source ledger; source checkpoint failed verification.");
         return { entries: output, bytesRead: read.bytesRead };
     }
     finally {
@@ -456,6 +467,8 @@ export async function readExactSourceEntry(sessionPath, ledger, entryId) {
         throw new SourceLedgerError(`Unknown source entry ${entryId}.`);
     const handle = await open(sessionPath, noFollowFlags());
     try {
+        if (!(await openedSourceMatches(handle, ledger)).matches)
+            throw new SourceLedgerError(`Stale source ledger entry ${entryId}; source checkpoint failed verification.`);
         const bytes = Buffer.alloc(entry.sourceByteLength);
         const read = await handle.read(bytes, 0, bytes.length, entry.sourceByteOffset);
         if (read.bytesRead !== bytes.length || hashBytes(bytes) !== entry.sourceContentHash)
@@ -469,6 +482,8 @@ export async function readExactSourceEntry(sessionPath, ledger, entryId) {
         }
         if (value === null || typeof value !== "object" || value.id !== entryId)
             throw new SourceLedgerError(`Stale source ledger entry ${entryId}; source identity failed verification.`);
+        if (!(await openedSourceMatches(handle, ledger)).matches)
+            throw new SourceLedgerError(`Stale source ledger entry ${entryId}; source checkpoint failed verification.`);
         return { text: bytes.toString("utf8"), bytesRead: read.bytesRead };
     }
     finally {
@@ -485,9 +500,6 @@ export async function sourceLedgerIsBusy(sidecar) {
 }
 export async function sourceLedgerMatchesSource(sessionPath, ledger) {
     try {
-        const metadata = await stat(sessionPath, { bigint: true });
-        if (!metadata.isFile() || !sameIdentity(ledger.sourceIdentity, identity(metadata)) || Number(metadata.size) !== ledger.checkpoint.sourceFileSize)
-            return false;
         return (await anchorMatches(sessionPath, ledger)).matches;
     }
     catch {
