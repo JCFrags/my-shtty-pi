@@ -265,7 +265,12 @@ export async function createVerifiedCapsuleBindings(
   options: { readonly executeCatalog?: CapsuleCatalogExecutor; readonly signal?: AbortSignal } = {},
 ): Promise<CreateVerifiedCapsuleBindingsResult> {
   if (input.associations.length > CAPSULE_COMPATIBILITY_LIMITS.bindings) throw new Error("capsule-binding-limit");
-  const maximum = Math.min(CAPSULE_COMPATIBILITY_LIMITS.totalSourceBytes, Math.max(1, Math.floor(input.maxTotalSourceBytes ?? CAPSULE_COMPATIBILITY_LIMITS.totalSourceBytes)));
+  if (input.maxTotalSourceBytes !== undefined
+    && (!Number.isSafeInteger(input.maxTotalSourceBytes) || input.maxTotalSourceBytes < 1)) {
+    throw new Error("capsule-source-read-budget-invalid");
+  }
+  const maximum = Math.min(CAPSULE_COMPATIBILITY_LIMITS.totalSourceBytes,
+    input.maxTotalSourceBytes ?? CAPSULE_COMPATIBILITY_LIMITS.totalSourceBytes);
   const execute = options.executeCatalog ?? runCatalogWorker;
   const bindings: M04VerifiedCapsuleBinding[] = [];
   const rejected: CapsuleBindingRejection[] = [];

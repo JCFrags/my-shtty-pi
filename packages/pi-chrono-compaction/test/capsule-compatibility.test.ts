@@ -215,6 +215,23 @@ test("mismatched cuts, hashes, protected blocks, and unsupported families fall b
   assert.deepEqual(fallback, cold);
 });
 
+test("invalid aggregate read budgets reject before catalog execution", async t => {
+  const fixture = setup();
+  t.after(() => rmSync(fixture.directory, { recursive: true, force: true }));
+  const reduced = (await currentReduction(fixture)).text;
+  let executorCalls = 0;
+  const countingExecutor: CapsuleCatalogExecutor = async request => {
+    executorCalls += 1;
+    return executeCatalog(request);
+  };
+  for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1, 1.5]) {
+    await assert.rejects(() => createVerifiedCapsuleBindings({ catalogDirectory: fixture.directory, view: fixture.view,
+      maxTotalSourceBytes: invalid, associations: [{ block: fixture.block, envelope: fixture.envelope(reduced) }] },
+    { executeCatalog: countingExecutor }), /capsule-source-read-budget-invalid/);
+    assert.equal(executorCalls, 0, `invalid budget ${String(invalid)} must not reach M04`);
+  }
+});
+
 test("factory performs exact raw verification and enforces explicit aggregate read and window bounds", async t => {
   const fixture = setup();
   t.after(() => rmSync(fixture.directory, { recursive: true, force: true }));
