@@ -14,6 +14,23 @@ async function deriveToEnd(fixture: ReturnType<typeof setupCapsuleFixture>, view
   assert.fail("derive did not complete");
 }
 
+test("persisted capsule retrieval rejects malformed exit-code words before a valid failure", async () => {
+  const malformed = Array.from({ length: 16 }, (_, index) => `exit code${index + 1}abc`).join("|");
+  const valid = `exit code${" ".repeat(400)}17`;
+  const text = `${"H".repeat(4_500)}\n${malformed}\n${"M".repeat(1_200)}\n${valid}\n${"T".repeat(4_500)}`;
+  const fixture = setupCapsuleFixture(line("a", null, text));
+  try {
+    const view = await fixture.initialize();
+    await deriveToEnd(fixture, view);
+    const page = await fixture.ok(view, { op: "capsulePage", limit: 1 });
+    const primary = page.capsules[0].alternatives[0];
+    assert.deepEqual(primary.protectedCues.filter((cue: any) => cue.kind === "failure").map((cue: any) => cue.exactText), [valid]);
+    assert.ok(primary.text.includes(valid));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("persisted capsule retrieval retains exact streamed edges and protected middle clause", async () => {
   const clause = "Do not deploy to production unless Morgan approves; staging is permitted.";
   const text = `${Array.from({ length: 5_000 }, (_, index) => String.fromCharCode(0x400 + index % 700)).join("")}\n${"routine ".repeat(700)}${clause}${" tail".repeat(700)}`;

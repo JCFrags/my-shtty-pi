@@ -131,6 +131,14 @@ test("protected conditions, exceptions, negation, failures, unknowns, cancellati
   assert.deepEqual(envelope.alternatives[0]!.outcome, { status: "unknown" });
 });
 
+test("failure extraction requires a trailing word boundary after an exit code", () => {
+  const text = "exit code17a exit code17_ exit code17-";
+  const cues = reduceSourceBlock(fixture(text), options("generic-text")).alternatives[0]!.protectedCues
+    .filter((cue) => cue.kind === "failure");
+  assert.deepEqual(cues.map((cue) => cue.exactText), ["exit code17"]);
+  assert.equal(cues[0]!.decodedUtf16.start, text.lastIndexOf("exit code17"));
+});
+
 test("negated, quoted, and later-granted approval text never becomes a supported pending outcome", () => {
   for (const text of [
     "This is not pending approval.",

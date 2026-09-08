@@ -237,6 +237,21 @@ test("bounded failure grammar crosses more than the old overlap and remains part
   assert.ok(whole.alternatives[0]!.text.includes(failure));
 });
 
+test("malformed exit-code words cannot exhaust cues before a valid long-whitespace failure", () => {
+  const malformed = Array.from({ length: 16 }, (_, index) => `exit code${index + 1}abc`).join("|");
+  const valid = `exit code${" ".repeat(400)}17`;
+  const text = `${"H".repeat(4_500)}\n${malformed}\n${"M".repeat(1_200)}\n${valid}\n${"T".repeat(4_500)}`;
+  const whole = reducePartitioned(text, [32_768]);
+  const oneUnit = reducePartitioned(text, [1], 1);
+  const uneven = reducePartitioned(text, [17, 513, 4_097], 2);
+  assert.equal(JSON.stringify(oneUnit), JSON.stringify(whole));
+  assert.equal(JSON.stringify(uneven), JSON.stringify(whole));
+  const failureCues = whole.alternatives[0]!.protectedCues.filter((cue) => cue.kind === "failure");
+  assert.deepEqual(failureCues.map((cue) => cue.exactText), [valid]);
+  assert.ok(whole.alternatives[0]!.text.includes(valid));
+  assert.equal(failureCues.some((cue) => /(?:abc|_)$/u.test(cue.exactText)), false);
+});
+
 test("over-limit grammar and identifiers degrade explicitly with partition-stable final envelopes", () => {
   const overlongFailure = `exit code${" ".repeat(513)}17`;
   const overlongUrl = `https://example.com/${"a".repeat(241)}`;
