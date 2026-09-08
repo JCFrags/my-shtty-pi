@@ -1,6 +1,23 @@
 # M04 source catalog — implementation report
 
-Status: implemented for draft review, not accepted. Draft-review target: `rebuild/chrono-memory-v3`. No production activation or M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
+Status: project-lead changes requested; corrections in progress, not accepted. Draft-review target: `rebuild/chrono-memory-v3`. No production activation or M05. The accepted M03 integration merge is `afb5f81b9eb6931cbf6f08d90413b3766829f192`.
+
+## Project-lead review R1
+
+PR #36 was reviewed at `6ad9f19f9df85c03e66276ca4a0d868d1d017108`, against integration `afb5f81b9eb6931cbf6f08d90413b3766829f192`. M03 remains accepted; M04 is not accepted. The current architecture, charter and A-0004 scope are retained.
+
+- **F001:** Preserve established sampled source evidence across checkpoint handoff. Bind new anchors to accepted processing bytes, recheck prior evidence before commit, and prove transactional rollback under deterministic mutation, overlap and giant-continuation tests.
+- **F002:** Classify every registered history tool and explicit compatibility alias structurally. Preserve recall chronology and mixed-block provenance without treating recalled payloads as new independent evidence.
+- **F003:** Separate explicit creation/bootstrap from existing-store lookup. Missing, empty and wrong-identity referenced databases must refuse without replacement creation or metadata/source changes; valid WAL recovery and explicit fresh-store recovery remain supported.
+- **Coverage:** Add at least 50,000 high-cardinality records under fixed memory and shared M03 limits, including independent clients, append/no-op, late pins, forks and exact recovery. Retain the large-body campaign. Complete all local and exact-head CI gates before re-review.
+
+### Lifecycle readiness investigation
+
+The original push CI attempt at the reviewed head passed 490/491 tests but timed out in the existing 10-second incremental readiness assertion. Its unchanged retry and the PR run passed; this was disclosed in PR #36.
+
+The test polled readiness by invoking `session_before_compact`, which intentionally cancels pending incremental work. Manifest publication occurs before writer release. If the first poll arrives in that interval, it cancels the generation before `ready` is published; subsequent compaction calls cannot make that cancelled generation ready. This is a synchronization defect in the test, not evidence that a larger deadline is needed.
+
+The regression now holds the real writer release after manifest publication, reproduces the cancellation deterministically, then schedules healthy work and observes completion through the existing read-only status command before invoking compaction. The deadline is unchanged and timeout diagnostics include completion state. No runtime source change is needed. The focused build-and-test run passed on its first corrected invocation.
 
 ## Delivered boundary
 
