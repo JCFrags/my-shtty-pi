@@ -124,6 +124,50 @@ test("real contained chunkRange refuses a valid foreign same-view chunk associat
   }
 });
 
+test("real contained chunkRange refuses a valid foreign sibling chunk association", async () => {
+  const fixture = setupCapsuleFixture(line("a", null, "worker-ancestor") + line("b", "a", "worker-sibling-B"));
+  const schedulerDirectory = join(fixture.directory, "foreign-sibling-scheduler");
+  try {
+    const bView = await fixture.initialize("b");
+    const base = { v: 1 as const, identity: fixture.identity, catalogDirectory: fixture.catalogDirectory, derivedDirectory: fixture.derivedDirectory };
+    const derive = async (view: any) => {
+      for (let page = 0; page < 12; page++) {
+        const response = await runCapsuleWorker({ ...base, view, op: "derivePage" }, { schedulerDirectory, slots: 1 });
+        assert.equal(response.ok, true, JSON.stringify(response));
+        if (response.ok && response.result.complete === true) return;
+      }
+      assert.fail("real sibling worker derive did not complete");
+    };
+    await derive(bView);
+    fixture.append(line("c", "a", "worker-selected-C")); await fixture.ingest();
+    const cView = (await fixture.catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "s1", eventId: "c" } })).view;
+    await derive(cView);
+    const bPage = await runCapsuleWorker({ ...base, view: bView, op: "capsulePage", limit: 4 }, { schedulerDirectory, slots: 1 });
+    const cPage = await runCapsuleWorker({ ...base, view: cView, op: "capsulePage", limit: 4 }, { schedulerDirectory, slots: 1 });
+    assert.equal(bPage.ok, true, JSON.stringify(bPage)); assert.equal(cPage.ok, true, JSON.stringify(cPage));
+    if (!bPage.ok || !cPage.ok) throw new Error("sibling capsule page refused");
+    const sourceB = (bPage.result.capsules as any[]).find(item => item.source.eventSeq === 2)!.source;
+    const sourceC = (cPage.result.capsules as any[]).find(item => item.source.eventSeq === 3)!.source;
+    const chunks = join(fixture.derivedDirectory, "segments/chunks");
+    const immutableBefore = readdirSync(chunks).sort().map(name => [name, readFileSync(join(chunks, name))]);
+    const sourceBefore = readFileSync(fixture.sourcePath);
+    const db = CatalogSqlite.open(join(fixture.derivedDirectory, "derived.sqlite"));
+    const foreign = db.prepare("SELECT * FROM artifacts WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex=0").get(sourceB.eventSeq, sourceB.descriptor)!;
+    db.prepare("UPDATE artifacts SET source=?,record=?,manifestHash=?,segmentHash=?,segmentBytes=?,segmentOffset=?,payloadBytes=?,contentHash=? WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex=0")
+      .run(String(foreign.source), String(foreign.record), String(foreign.manifestHash), String(foreign.segmentHash), Number(foreign.segmentBytes), Number(foreign.segmentOffset), Number(foreign.payloadBytes), String(foreign.contentHash),
+        sourceC.eventSeq, sourceC.descriptor);
+    db.close();
+
+    const response = await runCapsuleWorker({ ...base, view: cView, op: "chunkRange", source: sourceC, decodedStart: 0, decodedLength: 8, limit: 1 }, { schedulerDirectory, slots: 1 });
+    assert.equal(response.ok, false, "contained worker must not return a valid chunk from a sibling ancestry");
+    assert.deepEqual(readdirSync(chunks).sort().map(name => [name, readFileSync(join(chunks, name))]), immutableBefore);
+    assert.deepEqual(readFileSync(fixture.sourcePath), sourceBefore);
+  } finally {
+    await assertWorkerSettlement(schedulerDirectory);
+    fixture.cleanup();
+  }
+});
+
 test("duplicate real clients coalesce and leave deterministic idempotent store artifacts", async () => {
   const fixture = setupCapsuleFixture(line("a", null, "small duplicate client fixture"));
   const schedulerDirectory = join(fixture.directory, "duplicate-scheduler");

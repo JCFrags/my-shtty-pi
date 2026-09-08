@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chmodSync, existsSync, linkSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { CatalogSqlite } from "../src/catalog-sqlite.js";
+import { CAPSULE_REDUCER_PIPELINE_VERSION } from "../src/capsule-contract.js";
+import { canonicalJson } from "../src/capsule-segment.js";
 import { executeCapsuleRequest } from "../src/capsule-store.js";
 import { setupCapsuleFixture, line } from "./capsule-storage-fixture.js";
 
@@ -32,6 +34,51 @@ async function deriveToEnd(f: ReturnType<typeof setupCapsuleFixture>, view: any,
 
 const immutableChunkBytes = (directory: string): Array<[string, Buffer]> =>
   readdirSync(join(directory, "segments/chunks")).sort().map(name => [name, readFileSync(join(directory, "segments/chunks", name))]);
+
+function snapshotTree(root: string): Array<[string, Buffer]> {
+  const output: Array<[string, Buffer]> = [];
+  const visit = (directory: string, relative = "") => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const child = join(directory, entry.name);
+      if (entry.isDirectory()) visit(child, childRelative);
+      else output.push([childRelative, readFileSync(child)]);
+    }
+  };
+  visit(root); return output;
+}
+
+function replacePipeline(value: unknown, version: string): unknown {
+  if (Array.isArray(value)) return value.map(item => replacePipeline(item, version));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) =>
+    [key, key === "reducerSetVersion" ? version : replacePipeline(child, version)]));
+}
+
+function rewriteStorePipeline(derivedDirectory: string, identity: any, version: string): any {
+  const oldIdentity = { ...identity, reducerSetVersion: version };
+  const db = CatalogSqlite.open(join(derivedDirectory, "derived.sqlite"));
+  try {
+    db.transaction(() => {
+      db.prepare("UPDATE meta SET identity=?").run(canonicalJson(oldIdentity));
+      const heads = [...db.prepare("SELECT lineage,cursor,privateState FROM heads").iterate(100)];
+      for (const row of heads) {
+        const privateState = row.privateState === null ? null : canonicalJson(replacePipeline(JSON.parse(String(row.privateState)), version));
+        const privateHash = privateState === null ? null : createHash("sha256").update(privateState).digest("hex");
+        const cursor = replacePipeline(JSON.parse(String(row.cursor)), version) as any;
+        if (cursor.partialBody && privateHash) cursor.partialBody.stateHash = privateHash;
+        db.prepare("UPDATE heads SET cursor=?,privateHash=?,privateState=? WHERE lineage=?")
+          .run(canonicalJson(cursor), privateHash, privateState, String(row.lineage));
+      }
+      const readiness = [...db.prepare("SELECT viewHash,cursor FROM readiness").iterate(100)];
+      for (const row of readiness) {
+        const cursor = replacePipeline(JSON.parse(String(row.cursor)), version);
+        db.prepare("UPDATE readiness SET cursor=? WHERE viewHash=?").run(canonicalJson(cursor), String(row.viewHash));
+      }
+    });
+  } finally { db.close(); }
+  return oldIdentity;
+}
 
 function associateChunkLookupWithForeignRecord(derivedDirectory: string, selected: any, foreign: any): void {
   const db = CatalogSqlite.open(join(derivedDirectory, "derived.sqlite"));
@@ -235,6 +282,38 @@ test("read-only requests never recreate a missing publication lock and the valid
     const status = await f.ok(view, { op: "status" }); assert.equal(status.readiness.chunks.ready, 1);
     const range = await f.ok(view, { op: "chunkRange", source: done.body.source, decodedStart: 0, decodedLength: 1 });
     assert.equal(Buffer.from(range.data, "base64").toString("utf16le"), "l");
+  } finally { f.cleanup(); }
+});
+
+for (const legacyCase of [
+  { name: "completed output", text: "completed legacy pipeline store", complete: true },
+  { name: "partial checkpoint", text: "p".repeat(200_000), complete: false },
+]) test(`derivePage refuses an old reducer pipeline ${legacyCase.name} before source or store work`, async () => {
+  const f = setupCapsuleFixture(line("a", null, legacyCase.text));
+  try {
+    const view = await f.initialize();
+    if (legacyCase.complete) await deriveToEnd(f, view);
+    else {
+      const first = await f.ok(view, { op: "derivePage" });
+      assert.ok(first.cursor.partialBody); assert.equal(first.complete, false);
+    }
+    assert.equal(f.identity.reducerSetVersion, CAPSULE_REDUCER_PIPELINE_VERSION);
+    const oldIdentity = rewriteStorePipeline(f.derivedDirectory, f.identity, "capsule-pure-v1");
+    const derivedBefore = snapshotTree(f.derivedDirectory), sourceBefore = readFileSync(f.sourcePath);
+    let catalogCalls = 0;
+    const oldResponse = await executeCapsuleRequest({ v: 1, derivedDirectory: f.derivedDirectory, catalogDirectory: f.catalogDirectory,
+      identity: oldIdentity, view, op: "derivePage" }, { catalogExecutor(value) { catalogCalls++; return f.catalogExecutor(value); } });
+    assert.equal(oldResponse.ok, false, "an old pipeline must not derive, reuse completion, or resume a checkpoint");
+    if (!oldResponse.ok) { assert.equal(oldResponse.code, "capsule-request-invalid"); assert.equal(oldResponse.sourceBytes, 0); }
+    assert.equal(catalogCalls, 0, "pipeline refusal must precede authoritative source work");
+    assert.deepEqual(snapshotTree(f.derivedDirectory), derivedBefore, "pipeline refusal must not open, repair, or mutate the old store");
+    assert.deepEqual(readFileSync(f.sourcePath), sourceBefore);
+
+    const currentResponse = await f.request(view, { op: "status" });
+    assert.equal(currentResponse.ok, false, "a current identity must not relabel or reuse an old physical store");
+    if (!currentResponse.ok) assert.equal(currentResponse.code, "capsule-store-mismatch");
+    assert.deepEqual(snapshotTree(f.derivedDirectory), derivedBefore);
+    assert.deepEqual(readFileSync(f.sourcePath), sourceBefore);
   } finally { f.cleanup(); }
 });
 
