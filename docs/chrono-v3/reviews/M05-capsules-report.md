@@ -1,6 +1,6 @@
 # M05 — Capsules and decoded chunks
 
-**Status: implementation in progress; not accepted, deployed, or ready for review.**
+**Status: implementation complete; final draft-review gates in progress. Not accepted or deployed.**
 
 ## Entry boundary
 
@@ -218,10 +218,39 @@ The clean normal suite passed 603/603 tests in 205.124 seconds, followed by the
 unchanged small/medium deterministic replay harness. This includes the original
 535-test baseline and added regressions, without skipped tests.
 
+The unchanged selected fault/memory suite also passed at both 512 and 1,024 MiB
+V8 limits, including small/medium replay and memory-accounting characterization.
+Separately, all 64 capsule tests passed at each heap limit. These are selected
+fixed-heap suites, not a claim that all 603 tests ran at each heap size.
+
+## Real client settlement
+
+Two additional isolation tests use the existing publication mutex as a barrier,
+without new runtime hooks. Two actual clients receive the same coalesced response
+with one admitted slot and no second ticket. Repeating a completed derive adds
+no immutable segments, manifests, or receipts. The cancellation test observes an
+admitted slot and an active owned systemd unit before aborting, then requires
+`capsule-worker-aborted`, zero tickets/slots, and an inactive unit before cleanup.
+The focused three-test isolation suite passed under a 128 MiB parent V8 limit.
+An initial strict-TypeScript compile failure was corrected with explicit response
+narrowing; no runtime behavior or deadline changed.
+
+After integration at `f7b7ae2`, typecheck and the complete normal suite passed
+605/605 tests in 207.898 seconds, followed by unchanged deterministic replay.
+All 66 capsule tests then passed separately at both 512 and 1,024 MiB V8 limits.
+No tests were skipped. These additions change tests only; the 107 compiled runtime
+files and candidate manifest remain byte-identical to the clean build.
+
 ## Remaining evidence
 
-Versioned reducer/publication contracts, implementation, fidelity and exact
-roundtrips, bounded append/noop/late-range measurements, native and real
-subprocess failure tests, independent review, full resource lanes, reproducible
-manifests, privacy/root checks, and exact final-head CI remain pending. Initial
-M04 compatibility checks are recorded separately from future M05 acceptance.
+Final integrated root/privacy checks and exact push/PR CI remain pending. The
+ad-hoc all-ref privacy preflight exceeded its 180-second caller limit and produced
+no completed result; it is not a privacy pass. The unchanged scanner reads every
+historical path context through Git, even when content findings are cached. No
+scanner checks, original root/CI deadlines, or privacy limits were weakened.
+
+The root verifier must distinguish the historical 291-file inventory from the
+12 exact M05 additions and verify the current reproducible hashes. Its initial
+adaptation incorrectly required unchanged hashes for the two existing Chrono
+modules that M05 modifies; that correction is pending. No draft PR, acceptance,
+merge, or deployment is claimed by these local results.
