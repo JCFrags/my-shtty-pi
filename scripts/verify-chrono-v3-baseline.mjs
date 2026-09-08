@@ -36,9 +36,9 @@ const EXPECTED = Object.freeze({
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
   sourceFiles: 96,
-  sourceTreeHash: "4f2f5716f0df5244448df3e498c017bec45bd7e2501644db4c3821fb2d72a446",
+  sourceTreeHash: "fdb6df74fc937e46ed46f680affdf3e5426c01724e04f16cab88a0576c1225cc",
   distFiles: 95,
-  distTreeHash: "f6c3c1dee39d977ec0776b34f10fc91bcfaf0058583e8e87a27eaa44ed0ee9cc",
+  distTreeHash: "d8f5892cfe89c89b2e7edb8e3ae99e96768f5d068f88d29a9cf64a1c50f780c0",
   entrypointHash: "ab28b018a42137c030dc94dfe88c44e977dce8e9cf76ed9526da55b20258ace4",
   m01PackageHash: "d35720bba151a820a1569355a9b78846a4341bcb03f7f7feecd05fa79bdbee4e",
   m01LockHash: "c02fb0133b915387981448d1af1321bd0ccb2bb7c50c0e8c7ab1e1f200bceb8f",
@@ -217,6 +217,10 @@ const correctionPaths = new Set([
   "packages/pi-chrono-compaction/test/catalog-store.test.ts",
   "packages/pi-chrono-compaction/test/user-config.test.ts",
   "packages/pi-chrono-compaction/scripts/catalog-pi-canary.mjs",
+  "packages/pi-chrono-compaction/test/catalog-source-handoff.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-history-provenance.test.ts",
+  "packages/pi-chrono-compaction/test/catalog-existing-store.test.ts",
+  "packages/pi-chrono-compaction/scripts/catalog-many-records.mjs",
 ]);
 
 class BaselineVerificationError extends Error {
