@@ -35,7 +35,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "24"
+          node-version: "24.18.0"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify public repository content boundary
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: "24", cache: npm }
+        with: { node-version: "24.18.0", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install ChronoCompact dependencies
         run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
@@ -67,10 +67,17 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: "24", cache: npm }
+        with: { node-version: "24.18.0", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install ChronoCompact dependencies
         run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+      - name: Build and verify controlled catalog SQLite (no release prebuild)
+        working-directory: packages/pi-chrono-compaction
+        run: |
+          node node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
+          npm run catalog:sqlite:build-record -- node_modules/node-gyp/bin/node-gyp.js "$RUNNER_TEMP/chrono-node-headers/24.18.0" 24.18.0
+          npm run build
+          npm run catalog:sqlite:probe-record
       - name: Unit and integration tests
         run: npm --prefix packages/pi-chrono-compaction test
 
@@ -81,7 +88,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: "24", cache: npm }
+        with: { node-version: "24.18.0", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install ChronoCompact dependencies
         run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
@@ -103,10 +110,17 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: "24", cache: npm }
+        with: { node-version: "24.18.0", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install ChronoCompact dependencies
         run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+      - name: Build and verify controlled catalog SQLite (no release prebuild)
+        working-directory: packages/pi-chrono-compaction
+        run: |
+          node node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
+          npm run catalog:sqlite:build-record -- node_modules/node-gyp/bin/node-gyp.js "$RUNNER_TEMP/chrono-node-headers/24.18.0" 24.18.0
+          npm run build
+          npm run catalog:sqlite:probe-record
       - name: Fixed-heap scale and fault safety
         run: npm --prefix packages/pi-chrono-compaction run test:fixed-heap -- --heaps ${{ matrix.heap }}
 
@@ -117,7 +131,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: "24", cache: npm }
+        with: { node-version: "24.18.0", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install ChronoCompact dependencies
         run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
@@ -143,9 +157,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "24"
+          node-version: "24.18.0"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare exact headers for isolated catalog source rebuild
+        run: |
+          npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+          node packages/pi-chrono-compaction/node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
+          echo "CHRONO_CATALOG_NODE_HEADERS=$RUNNER_TEMP/chrono-node-headers/24.18.0" >> "$GITHUB_ENV"
       - name: Verify frozen ChronoCompact baseline
         run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
       - name: Verify correction verifier tests

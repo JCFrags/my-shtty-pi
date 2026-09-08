@@ -11,7 +11,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -187,6 +187,14 @@ const expectedSlugs = [
   "pi-pixel-cua", "pi-progressive-tools", "pi-review-ui", "pi-signal-board",
   "pi-tool-controls", "temporary-orchestrator-cancel-isolation", "titlebar-spinner",
 ];
+// Explicit native preparation alternatives; validate all four exact commands.
+// The full verifier runs the controlled record-build/probe route after reinstall.
+const catalogNativeScripts = Object.freeze({
+  "catalog:sqlite:build": "node scripts/catalog-sqlite-probe.mjs --build-native",
+  "catalog:sqlite:probe": "node scripts/catalog-sqlite-probe.mjs --probe",
+  "catalog:sqlite:build-record": "node scripts/catalog-sqlite-probe.mjs --build-native-record",
+  "catalog:sqlite:probe-record": "node scripts/catalog-sqlite-probe.mjs --probe-record",
+});
 const expectedSafeScripts = Object.freeze({
   "files-ui": { typecheck: "tsc -p tsconfig.json --noEmit" },
   "herdr-status": { typecheck: "tsc -p tsconfig.json --noEmit" },
@@ -569,7 +577,8 @@ for (const manifestPath of packageManifestPaths) {
   const slug = relative(join(root, "packages"), packageRoot).split(sep)[0];
   const expectedScripts = expectedSafeScripts[slug] ?? {};
   if (packageRoot === join(root, "packages", slug)) {
-    if (!jsonEqual(manifest.scripts ?? {}, expectedScripts)) throw new Error(`${rel}: unexpected safe script set`);
+    const validatedScripts = slug === "pi-chrono-compaction" ? { ...expectedScripts, ...catalogNativeScripts } : expectedScripts;
+    if (!jsonEqual(manifest.scripts ?? {}, validatedScripts)) throw new Error(`${rel}: unexpected safe script set`);
     if (Object.keys(expectedScripts).length > 0) scriptPlans.push({ slug, packageRoot, scripts: expectedScripts });
   } else if (manifest.scripts !== undefined) {
     throw new Error(`${rel}: nested runtime manifests must not retain scripts`);
@@ -817,12 +826,20 @@ function executeScripts(plan) {
     if (Object.values(plan.scripts).some((command) => /\btsc\b/u.test(command))) {
       execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
     }
+    if (plan.slug === "pi-chrono-compaction") {
+      // Header preparation is an explicit prerequisite, never a hidden network fallback.
+      const headers = process.env.CHRONO_CATALOG_NODE_HEADERS ?? join(homedir(), ".cache", "node-gyp", "24.18.0");
+      execFileSync("npm", ["run", "catalog:sqlite:build-record", "--", "node_modules/node-gyp/bin/node-gyp.js", headers, "24.18.0"], { cwd: work, stdio: "inherit" });
+    }
     let passed = 0;
     let buildResult;
     for (const script of Object.keys(plan.scripts)) {
       execFileSync("npm", ["run", script], { cwd: work, stdio: "inherit" });
       passed += 1;
-      if (script === "build") buildResult = verifyBuiltOutput(product, plan.packageRoot, work);
+      if (script === "build") {
+        buildResult = verifyBuiltOutput(product, plan.packageRoot, work);
+        if (plan.slug === "pi-chrono-compaction") execFileSync("npm", ["run", "catalog:sqlite:probe-record"], { cwd: work, stdio: "inherit" });
+      }
     }
     return { passed, buildResult };
   } finally {
