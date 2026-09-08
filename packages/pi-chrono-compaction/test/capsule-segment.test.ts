@@ -40,6 +40,19 @@ test("chunk framing omits self locators and returns exact UTF16LE payload locati
   assert.deepEqual(encoded.bytes.subarray(encoded.chunk.segmentOffset, encoded.chunk.segmentOffset + 4), payload);
 });
 
+test("chunk decoding binds the encoded descriptor to the supplied descriptor", () => {
+  const payload = Buffer.from("foreign", "utf16le");
+  const foreignSource: ScopedBodySourceRef = { ...source, eventSeq: 2, ordinal: 2, descriptor: 2,
+    raw: { start: 10, end: 30 }, decodedUtf16: { start: 0, end: 7 } };
+  const suppliedSource: ScopedBodySourceRef = { ...foreignSource, eventSeq: 1, ordinal: 1, descriptor: 1 };
+  const foreign = encodeChunkSegment({ v: 1, source: foreignSource, chunkIndex: 0,
+    decodedUtf16: { start: 0, end: 7 }, utf16leBytes: payload.length,
+    contentHashAlgorithm: CHUNK_CONTENT_HASH, contentHash: hash(payload) }, payload);
+  const supplied = { ...foreign.chunk, source: suppliedSource };
+  assert.throws(() => decodeChunkPayload(foreign.bytes, supplied), /capsule-content-corrupt/);
+  assert.deepEqual(decodeChunkPayload(foreign.bytes, foreign.chunk), payload);
+});
+
 test("canonical one-segment manifest is source local and excludes cursor/view/job identity", () => {
   const segment = encodeCapsuleSegment(envelope()).descriptor;
   const one = encodeManifest(identity, "capsules", segment), two = encodeManifest(identity, "capsules", segment);

@@ -30,6 +30,21 @@ async function deriveToEnd(f: ReturnType<typeof setupCapsuleFixture>, view: any,
   assert.fail("derive did not complete");
 }
 
+const immutableChunkBytes = (directory: string): Array<[string, Buffer]> =>
+  readdirSync(join(directory, "segments/chunks")).sort().map(name => [name, readFileSync(join(directory, "segments/chunks", name))]);
+
+function associateChunkLookupWithForeignRecord(derivedDirectory: string, selected: any, foreign: any): void {
+  const db = CatalogSqlite.open(join(derivedDirectory, "derived.sqlite"));
+  try {
+    const row = db.prepare("SELECT * FROM artifacts WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex=0")
+      .get(foreign.eventSeq, foreign.descriptor)!;
+    assert.ok(row, "foreign valid chunk must exist");
+    db.prepare("UPDATE artifacts SET source=?,record=?,manifestHash=?,segmentHash=?,segmentBytes=?,segmentOffset=?,payloadBytes=?,contentHash=? WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex=0")
+      .run(String(row.source), String(row.record), String(row.manifestHash), String(row.segmentHash), Number(row.segmentBytes), Number(row.segmentOffset), Number(row.payloadBytes), String(row.contentHash),
+        selected.eventSeq, selected.descriptor);
+  } finally { db.close(); }
+}
+
 test("incremental derive publishes exact chunks before SQLite and restart/noop is byte-identical", async () => {
   const text = "x".repeat(70_000) + "😀tail", f = setupCapsuleFixture(line("a", null, text));
   try {
@@ -145,6 +160,47 @@ test("actual SIGKILL after segment rename releases the mutex and retry finishes 
     assert.equal(readdirSync(join(f.derivedDirectory, "segments/chunks")).length, 1);
     const recovered = await deriveToEnd(f, view); assert.equal(recovered.readiness.chunks.ready, 1);
     assert.equal(readdirSync(join(f.derivedDirectory, "segments/chunks")).length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("chunkRange refuses a valid foreign same-view chunk association without mutating source or immutable bytes", async () => {
+  const f = setupCapsuleFixture(line("a", null, "source-A") + line("b", "a", "source-B"));
+  try {
+    const view = await f.initialize("b"); await deriveToEnd(f, view);
+    const page = await f.ok(view, { op: "capsulePage", limit: 4 });
+    const [sourceA, sourceB] = page.capsules.map((item: any) => item.source);
+    assert.ok(sourceA && sourceB);
+    const sourceBefore = readFileSync(f.sourcePath), immutableBefore = immutableChunkBytes(f.derivedDirectory);
+    associateChunkLookupWithForeignRecord(f.derivedDirectory, sourceA, sourceB);
+
+    const response = await f.request(view, { op: "chunkRange", source: sourceA, decodedStart: 0, decodedLength: 8, limit: 1 });
+    assert.equal(response.ok, false, "authorized source A must not return valid source B bytes");
+    assert.deepEqual(readFileSync(f.sourcePath), sourceBefore);
+    assert.deepEqual(immutableChunkBytes(f.derivedDirectory), immutableBefore);
+    const db = CatalogSqlite.open(join(f.derivedDirectory, "derived.sqlite"));
+    const retained = db.prepare("SELECT source FROM artifacts WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex=0").get(sourceA.eventSeq, sourceA.descriptor)!;
+    db.close();
+    assert.deepEqual(JSON.parse(String(retained.source)), sourceB, "refusal must not repair the derived association");
+  } finally { f.cleanup(); }
+});
+
+test("chunkRange refuses a valid chunk from a sibling ancestry", async () => {
+  const f = setupCapsuleFixture(line("a", null, "ancestor") + line("b", "a", "sibling-B"));
+  try {
+    const bView = await f.initialize("b"); await deriveToEnd(f, bView);
+    f.append(line("c", "a", "selected-C")); await f.ingest();
+    const cView = (await f.catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "s1", eventId: "c" } })).view;
+    await deriveToEnd(f, cView);
+    const bPage = await f.ok(bView, { op: "capsulePage", limit: 4 });
+    const cPage = await f.ok(cView, { op: "capsulePage", limit: 4 });
+    const sourceB = bPage.capsules.find((item: any) => item.source.eventSeq === 2)!.source;
+    const sourceC = cPage.capsules.find((item: any) => item.source.eventSeq === 3)!.source;
+    const immutableBefore = immutableChunkBytes(f.derivedDirectory);
+    associateChunkLookupWithForeignRecord(f.derivedDirectory, sourceC, sourceB);
+
+    const response = await f.request(cView, { op: "chunkRange", source: sourceC, decodedStart: 0, decodedLength: 8, limit: 1 });
+    assert.equal(response.ok, false, "selected ancestry must not return a valid sibling chunk");
+    assert.deepEqual(immutableChunkBytes(f.derivedDirectory), immutableBefore);
   } finally { f.cleanup(); }
 });
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { runCapsuleWorker } from "../src/capsule-worker-client.js";
 import { schedulerArtifactCounts } from "../src/host-worker-scheduler.js";
@@ -8,6 +8,7 @@ import { withRuntimeMutex } from "../src/worker-runtime-mutex.js";
 import { runtimeUnitName, runtimeUnitState } from "../src/worker-runtime-systemd.js";
 import { setupCapsuleFixture, line } from "./capsule-storage-fixture.js";
 import type { CapsuleWorkerRequest } from "../src/capsule-contract.js";
+import { CatalogSqlite } from "../src/catalog-sqlite.js";
 
 async function waitForActiveOwnedUnit(schedulerDirectory: string): Promise<void> {
   const unit = runtimeUnitName(schedulerDirectory, 0), deadline = Date.now() + 10_000;
@@ -85,6 +86,39 @@ test("capsule derive and reads use real contained workers in a synthetic namespa
     assert.ok(observations.length >= 4);
   } finally {
     // Do not remove artifacts of an active worker. Awaited clients must settle.
+    await assertWorkerSettlement(schedulerDirectory);
+    fixture.cleanup();
+  }
+});
+
+test("real contained chunkRange refuses a valid foreign same-view chunk association", async () => {
+  const fixture = setupCapsuleFixture(line("a", null, "worker-A") + line("b", "a", "worker-B"));
+  const schedulerDirectory = join(fixture.directory, "foreign-chunk-scheduler");
+  try {
+    const view = await fixture.initialize("b");
+    const base = { v: 1 as const, identity: fixture.identity, view, catalogDirectory: fixture.catalogDirectory, derivedDirectory: fixture.derivedDirectory };
+    for (let page = 0; page < 12; page++) {
+      const derived = await runCapsuleWorker({ ...base, op: "derivePage" }, { schedulerDirectory, slots: 1 });
+      assert.equal(derived.ok, true, JSON.stringify(derived));
+      if (derived.ok && derived.result.complete === true) break;
+      if (page === 11) assert.fail("real worker derive did not complete");
+    }
+    const page = await runCapsuleWorker({ ...base, op: "capsulePage", limit: 4 }, { schedulerDirectory, slots: 1 });
+    assert.equal(page.ok, true, JSON.stringify(page)); if (!page.ok) throw new Error("capsule page refused");
+    const [sourceA, sourceB] = (page.result.capsules as any[]).map(item => item.source);
+    const chunks = join(fixture.derivedDirectory, "segments/chunks");
+    const immutableBefore = readdirSync(chunks).sort().map(name => [name, readFileSync(join(chunks, name))]);
+    const db = CatalogSqlite.open(join(fixture.derivedDirectory, "derived.sqlite"));
+    const foreign = db.prepare("SELECT * FROM artifacts WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex=0").get(sourceB.eventSeq, sourceB.descriptor)!;
+    db.prepare("UPDATE artifacts SET source=?,record=?,manifestHash=?,segmentHash=?,segmentBytes=?,segmentOffset=?,payloadBytes=?,contentHash=? WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex=0")
+      .run(String(foreign.source), String(foreign.record), String(foreign.manifestHash), String(foreign.segmentHash), Number(foreign.segmentBytes), Number(foreign.segmentOffset), Number(foreign.payloadBytes), String(foreign.contentHash),
+        sourceA.eventSeq, sourceA.descriptor);
+    db.close();
+
+    const response = await runCapsuleWorker({ ...base, op: "chunkRange", source: sourceA, decodedStart: 0, decodedLength: 8, limit: 1 }, { schedulerDirectory, slots: 1 });
+    assert.equal(response.ok, false, "contained worker must not return foreign valid bytes");
+    assert.deepEqual(readdirSync(chunks).sort().map(name => [name, readFileSync(join(chunks, name))]), immutableBefore);
+  } finally {
     await assertWorkerSettlement(schedulerDirectory);
     fixture.cleanup();
   }
