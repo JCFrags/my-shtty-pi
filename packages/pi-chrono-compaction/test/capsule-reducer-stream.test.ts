@@ -166,6 +166,56 @@ test("cue matching spans feed boundaries and preserves CRLF, escapes, Unicode an
   assert.ok(envelope.alternatives[0]!.protectedCues.some((cue) => cue.exactText === "requires approval"));
 });
 
+test("streamed head/tail coverage is exact at every 4 KiB boundary", () => {
+  for (const length of [4_095, 4_096, 4_097, 8_191, 8_192, 8_193]) {
+    const text = Array.from({ length }, (_, index) => String.fromCharCode(0x21 + index % 90)).join("");
+    const envelope = reducePartitioned(text, [1, 17, 509, 4_096], 3);
+    const primary = envelope.alternatives[0]!;
+    const exact = primary.omissions.filter((item) => item.kind === "exact-range");
+    if (length <= 8_192) {
+      assert.equal(primary.text, text, `length ${length} must retain every selected unit without a synthetic marker`);
+      assert.deepEqual(exact, [], `length ${length} must not claim an omission`);
+    } else {
+      assert.ok(primary.text.startsWith(text.slice(0, 4_096)));
+      assert.ok(primary.text.endsWith(text.slice(-4_096)));
+      assert.deepEqual(exact.map((item) => item.decodedUtf16), [{ start: 4_096, end: 4_097 }]);
+      assert.equal(exact[0]!.omittedUnits, 1);
+    }
+  }
+});
+
+test("overlapping tail remains retained and omission coverage follows final bytes", () => {
+  const text = Array.from({ length: 5_000 }, (_, index) => String.fromCharCode(0x400 + index % 700)).join("");
+  const primary = reducePartitioned(text, [37, 1_003, 2], 2).alternatives[0]!;
+  assert.equal(primary.text, text);
+  assert.equal(primary.text.endsWith(text.slice(-904)), true);
+  assert.equal(primary.omissions.some((item) => item.kind === "exact-range"), false);
+});
+
+test("protected middle text retains one exact bounded clause neighborhood", () => {
+  const clause = "Do not deploy to production unless Morgan approves; staging is permitted.";
+  const text = `${"ordinary head ".repeat(400)}${clause}${" ordinary tail".repeat(400)}`;
+  const whole = reducePartitioned(text, [32_768]);
+  const uneven = reducePartitioned(text, [1, 13, 257, 4_097], 4);
+  assert.equal(JSON.stringify(uneven), JSON.stringify(whole));
+  assert.ok(whole.alternatives[0]!.text.includes(clause));
+  assert.equal((whole.alternatives[0]!.text.match(/Do not deploy/g) ?? []).length, 1);
+  for (const cue of whole.alternatives[0]!.protectedCues) {
+    assert.equal(text.slice(cue.decodedUtf16.start, cue.decodedUtf16.end), cue.exactText);
+  }
+});
+
+test("bounded failure grammar crosses more than the old overlap and remains partition stable", () => {
+  const failure = `exit code${" ".repeat(400)}17`;
+  const text = `${"head ".repeat(900)}${failure}${" tail".repeat(900)}`;
+  const whole = reducePartitioned(text, [32_768]);
+  for (const sizes of [[1], [17, 65, 4_097], [257, 3, 8_191]] as const) {
+    assert.equal(JSON.stringify(reducePartitioned(text, sizes, 5)), JSON.stringify(whole));
+  }
+  assert.ok(whole.alternatives[0]!.protectedCues.some((cue) => cue.kind === "failure" && cue.exactText === failure));
+  assert.ok(whole.alternatives[0]!.text.includes(failure));
+});
+
 test("empty body finalizes without a feed and invalid feed order is refused", () => {
   const empty = beginCapsuleReduction(base(""), options);
   assert.equal(isReducerEnvelope(finalizeCapsuleReduction(empty)), true);
