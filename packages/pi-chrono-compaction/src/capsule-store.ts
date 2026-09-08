@@ -10,6 +10,8 @@ import {
   DERIVED_SCHEMA_VERSION,
   SEGMENT_CONTENT_HASH,
   isCapsuleWorkerRequest,
+  isDecodedChunkDescriptor,
+  isDerivedManifest,
   isDerivedPublicationReceipt,
   isReducerEnvelope,
   type CapsuleBodyDescriptor,
@@ -18,6 +20,8 @@ import {
   type CapsuleWorkerRequest,
   type CapsuleWorkerResponse,
   type DeriveCursor,
+  type DecodedChunkDescriptor,
+  type DerivedManifest,
   type DerivedPublicationReceipt,
   type LayerReadiness,
   type ReducerEnvelope,
@@ -265,14 +269,41 @@ function verifyReceipt(request: CapsuleWorkerRequest, store: Store, row: SqlRow)
   const encoded = encodeReceipt(base);
   if (!encoded.bytes.equals(bytes) || encoded.receipt.receiptHash !== hash) fail("capsule-content-corrupt");
 }
-function verifyArtifactManifest(request: CapsuleWorkerRequest, store: Store, artifact: SqlRow): void {
+function verifyArtifactManifest(request: CapsuleWorkerRequest, store: Store, artifact: SqlRow): DerivedManifest {
   const row = store.get("SELECT * FROM manifests WHERE hash=?", string(artifact, "manifestHash")) ?? fail("capsule-content-missing");
   if (string(row, "segmentHash") !== string(artifact, "segmentHash") || string(row, "layer") !== string(artifact, "layer")) fail("capsule-content-corrupt");
   const bytes = readExactNamed(join(request.derivedDirectory, "manifests"), string(row, "hash"), number(row, "bytes"));
-  let parsed: any;
+  let parsed: unknown;
   try { parsed = JSON.parse(bytes.toString("utf8")); } catch { fail("capsule-content-corrupt"); }
-  const encoded = encodeManifest(request.identity, string(row, "layer") as "capsules" | "chunks", parsed.segment);
-  if (encoded.manifest.hash !== string(row, "hash") || !encoded.bytes.equals(bytes) || parsed.hash !== encoded.manifest.hash) fail("capsule-content-corrupt");
+  if (!isDerivedManifest(parsed)) fail("capsule-content-corrupt");
+  const manifest = parsed as DerivedManifest;
+  const encoded = encodeManifest(request.identity, string(row, "layer") as "capsules" | "chunks", manifest.segment);
+  if (encoded.manifest.hash !== string(row, "hash") || !encoded.bytes.equals(bytes) || manifest.hash !== encoded.manifest.hash
+    || manifest.layer !== string(artifact, "layer") || manifest.segment.kind !== string(artifact, "layer")
+    || manifest.segment.hash !== string(artifact, "segmentHash") || manifest.segment.bytes !== number(artifact, "segmentBytes")) fail("capsule-content-corrupt");
+  const first = manifest.segment.first, last = manifest.segment.last;
+  if (first.eventSeq !== number(artifact, "eventSeq") || first.descriptor !== number(artifact, "descriptor")
+    || last.eventSeq !== first.eventSeq || last.descriptor !== first.descriptor) fail("capsule-content-corrupt");
+  if (manifest.segment.kind === "chunks" && (manifest.segment.first.chunkIndex !== number(artifact, "chunkIndex")
+    || manifest.segment.last.chunkIndex !== manifest.segment.first.chunkIndex)) fail("capsule-content-corrupt");
+  if (manifest.segment.kind === "capsules" && (manifest.segment.records !== 1 || number(artifact, "chunkIndex") !== 0)) fail("capsule-content-corrupt");
+  return manifest;
+}
+
+function chunkArtifact(row: SqlRow, requestedSource: ScopedBodySourceRef): DecodedChunkDescriptor {
+  if (number(row, "eventSeq") !== requestedSource.eventSeq || number(row, "descriptor") !== requestedSource.descriptor
+    || string(row, "source") !== canonicalJson(requestedSource)) fail("capsule-content-corrupt");
+  let parsed: unknown;
+  try { parsed = JSON.parse(string(row, "record")); } catch { fail("capsule-content-corrupt"); }
+  if (!isDecodedChunkDescriptor(parsed) || canonicalJson(parsed) !== string(row, "record")) fail("capsule-content-corrupt");
+  const descriptor = parsed as DecodedChunkDescriptor;
+  const start = descriptor.decodedUtf16.start, end = descriptor.decodedUtf16.end;
+  if (!sameSource(descriptor.source, requestedSource) || descriptor.chunkIndex !== number(row, "chunkIndex")
+    || descriptor.segmentHash !== string(row, "segmentHash") || descriptor.segmentOffset !== number(row, "segmentOffset")
+    || descriptor.utf16leBytes !== number(row, "payloadBytes") || descriptor.contentHash !== string(row, "contentHash")
+    || start !== descriptor.chunkIndex * CAPSULE_LIMITS.decodedChunkUnits || end <= start
+    || end > requestedSource.decodedUtf16.end || descriptor.utf16leBytes !== (end - start) * 2) fail("capsule-content-corrupt");
+  return descriptor;
 }
 
 interface PendingArtifact { layer: "capsules" | "chunks"; eventSeq: number; descriptor: number; chunkIndex: number; source: string; record: string;
@@ -454,12 +485,14 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
     const selected = rows.slice(0, requestedLimit);
     const capsules: ReducerEnvelope[] = [];
     for (const row of selected) {
-      const storedSource = JSON.parse(string(row, "source")) as ScopedBodySourceRef;
+      let storedSource!: ScopedBodySourceRef;
+      try { storedSource = JSON.parse(string(row, "source")) as ScopedBodySourceRef; } catch { fail("capsule-content-corrupt"); }
+      if (storedSource.eventSeq !== number(row, "eventSeq") || storedSource.descriptor !== number(row, "descriptor")) fail("capsule-content-corrupt");
       await authorizeBodyRef(request, storedSource, executor, budget);
       verifyArtifactManifest(request, store, row);
       const bytes = readVerifiedImmutable(join(request.derivedDirectory, "segments/capsules", string(row, "segmentHash")), string(row, "segmentHash"), number(row, "segmentBytes"));
       const envelope = decodeCapsuleSegment(bytes);
-      if (canonicalJson(envelope.source) !== string(row, "source")) fail("capsule-content-corrupt");
+      if (canonicalJson(envelope) !== string(row, "record") || canonicalJson(envelope.source) !== string(row, "source")) fail("capsule-content-corrupt");
       capsules.push(envelope);
       if (Buffer.byteLength(JSON.stringify({ capsules })) > CAPSULE_LIMITS.responseBytes - 4096) { capsules.pop(); break; }
     }
@@ -473,18 +506,22 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
   const rows = store.rows("SELECT * FROM artifacts WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex>=? ORDER BY chunkIndex LIMIT ?",
     request.limit ?? CAPSULE_LIMITS.rangeChunks, request.source.eventSeq, request.source.descriptor, firstChunk, request.limit ?? CAPSULE_LIMITS.rangeChunks);
   const wantedEnd = request.decodedStart + request.decodedLength;
-  const output = Buffer.alloc(request.decodedLength * 2); let copiedUnits = 0;
+  const output = Buffer.alloc(request.decodedLength * 2); let coveredUntil = request.decodedStart, expectedChunk = firstChunk;
   for (const row of rows) {
+    const descriptor = chunkArtifact(row, requestedSource);
+    if (descriptor.chunkIndex !== expectedChunk++) fail("capsule-chunk-missing");
     verifyArtifactManifest(request, store, row);
-    const descriptor = JSON.parse(string(row, "record"));
-    const start = Number(descriptor.decodedUtf16.start), end = Number(descriptor.decodedUtf16.end);
+    const start = descriptor.decodedUtf16.start, end = descriptor.decodedUtf16.end;
     if (start >= wantedEnd) break;
+    const from = Math.max(start, request.decodedStart), to = Math.min(end, wantedEnd);
+    if (from !== coveredUntil || to <= from) fail("capsule-chunk-missing");
     const bytes = readVerifiedImmutable(join(request.derivedDirectory, "segments/chunks", string(row, "segmentHash")), string(row, "segmentHash"), number(row, "segmentBytes"));
     const payload = decodeChunkPayload(bytes, descriptor);
-    const from = Math.max(start, request.decodedStart), to = Math.min(end, wantedEnd);
-    if (to > from) { payload.copy(output, (from - request.decodedStart) * 2, (from - start) * 2, (to - start) * 2); copiedUnits += to - from; }
+    payload.copy(output, (from - request.decodedStart) * 2, (from - start) * 2, (to - start) * 2);
+    coveredUntil = to;
+    if (coveredUntil === wantedEnd) break;
   }
-  if (copiedUnits !== request.decodedLength) fail("capsule-chunk-missing");
+  if (coveredUntil !== wantedEnd) fail("capsule-chunk-missing");
   return { source: requestedSource, decodedUtf16: { start: request.decodedStart, end: wantedEnd }, encoding: "base64-utf16le",
     data: output.toString("base64"), complete: true, metrics: { chunksRead: rows.length, sqliteStatements: store.statements } };
 }

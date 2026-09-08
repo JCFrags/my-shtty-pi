@@ -111,6 +111,12 @@ export function decodeChunkPayload(bytes: Buffer, descriptor: DecodedChunkDescri
   const magic = Buffer.from(CHUNK_MAGIC);
   if (!bytes.subarray(0, magic.length).equals(magic)) fail("capsule-segment-invalid");
   const header = parseLength(bytes, magic.length);
+  const headerText = bytes.subarray(header.next, header.next + header.length).toString("utf8");
+  let encodedDescriptor: unknown;
+  try { encodedDescriptor = JSON.parse(headerText); } catch { fail("capsule-segment-invalid"); }
+  const { segmentHash: _segmentHash, segmentOffset: _segmentOffset, ...expectedHeader } = descriptor;
+  if (!isDecodedChunkDescriptor(descriptor) || sha256(bytes) !== descriptor.segmentHash
+    || canonicalJson(encodedDescriptor) !== headerText || canonicalJson(encodedDescriptor) !== canonicalJson(expectedHeader)) fail("capsule-content-corrupt");
   const payloadLength = parseLength(bytes, header.next + header.length + 1);
   if (bytes[header.next + header.length] !== 10 || payloadLength.next !== descriptor.segmentOffset
     || payloadLength.length !== descriptor.utf16leBytes || payloadLength.next + payloadLength.length + 1 !== bytes.length || bytes.at(-1) !== 10) fail("capsule-segment-invalid");

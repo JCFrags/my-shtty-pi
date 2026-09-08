@@ -46,7 +46,7 @@ function associateChunkLookupWithForeignRecord(derivedDirectory: string, selecte
 }
 
 test("incremental derive publishes exact chunks before SQLite and restart/noop is byte-identical", async () => {
-  const text = "x".repeat(70_000) + "😀tail", f = setupCapsuleFixture(line("a", null, text));
+  const text = "x".repeat(32_767) + "😀" + "x".repeat(37_231) + "tail", f = setupCapsuleFixture(line("a", null, text));
   try {
     const view = await f.initialize();
     const first = await deriveToEnd(f, view);
@@ -60,6 +60,10 @@ test("incremental derive publishes exact chunks before SQLite and restart/noop i
     const range = await f.ok(view, { op: "chunkRange", source: first.body.source, decodedStart: 69_999, decodedLength: 3 });
     assert.equal(Buffer.from(range.data, "base64").toString("utf16le"), text.slice(69_999, 70_002));
     assert.equal(range.complete, true);
+    const splitPair = await f.ok(view, { op: "chunkRange", source: first.body.source, decodedStart: 32_767, decodedLength: 2, limit: 2 });
+    assert.equal(Buffer.from(splitPair.data, "base64").toString("utf16le"), "😀", "a surrogate pair split across valid chunks remains readable");
+    const boundaryHalf = await f.ok(view, { op: "chunkRange", source: first.body.source, decodedStart: 32_768, decodedLength: 1, limit: 1 });
+    assert.equal(Buffer.from(boundaryHalf.data, "base64").toString("utf16le"), text.slice(32_768, 32_769), "a boundary surrogate half remains exact");
     const capsules = await f.ok(view, { op: "capsulePage", limit: 2 });
     assert.equal(capsules.capsules.length, 1); assert.equal(capsules.capsules[0].source.bodyHash, first.body.bodyHash);
     assert.ok(capsules.capsules[0].alternatives.every((alternative: any) => alternative.outcome.status === "unknown"));
