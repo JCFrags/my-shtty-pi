@@ -38,6 +38,34 @@ refusal and actual subprocess crash test. This is focused fixture evidence, not
 M05 storage acceptance. Development dependencies were copied from the verified
 M04 worktree; this is not a claim of a fresh clean installation gate.
 
+## Initial compatibility and decoder evidence
+
+The initial M05 worktree passed typecheck and all 535 existing tests, followed
+by the normal small/medium deterministic replay harness. These checks preceded
+capsule/storage implementation and do not establish M05 acceptance.
+
+The shared `src/json-string-decoder.ts` extracts the existing M04 byte decoder
+without changing parser checkpoint version 1 or its six decoder state fields.
+It emits UTF-16 code units to a sink and retains no decoded output. The parent
+reviewed the extraction and ran all 17 parser/decoder tests after integration;
+all passed. The integrated worktree then passed typecheck and all 539 tests.
+The parent also repeated an exact baseline/extracted serialized checkpoint
+comparison at every byte across five synthetic fixtures, totaling 537 steps;
+valid escaped Unicode/CRLF/nested data and malformed input matched. The worker
+separately reported a matching comparison across 230 fixture steps.
+
+A generated 33,554,434-byte escaped Unicode string decoded to 8,388,608 UTF-16
+units in a subprocess with a 32 MiB V8 heap. Its largest serialized decoder
+state was 170 bytes, with a reusable 65,536-byte source buffer. The pinned hash
+was `07d02bc92e8618c10de61fd6157807852c57d5f281a3f2ed6090773a90669bb8`.
+This demonstrates bounded decoder state and V8-heap execution, not hard OS
+memory enforcement or a completed chunk storage pipeline.
+
+The worker retained one diagnosed test failure: an initial assertion expected
+inactive historical accumulator fields to be cleared. M04 retains those fields;
+the new test was corrected to require only pending-state fields to clear. Parser
+semantics were not changed to satisfy that assertion.
+
 ## Remaining evidence
 
 Versioned reducer/publication contracts, implementation, fidelity and exact
