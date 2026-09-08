@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants as F, fstatSync, fsyncSync, lstatSync, openSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { closeSync, constants as F, fstatSync, fsyncSync, lstatSync, openSync, readSync, unlinkSync, writeSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   CAPSULE_LIMITS,
   CAPSULE_SCHEMA_VERSION,
@@ -163,6 +164,33 @@ function readExactSafe(path: string, expectedBytes: number): Buffer {
 export type CapsuleSegmentFaultPoint = "before-file-write" | "before-file-fsync" | "before-file-rename" | "after-file-rename" | "before-directory-fsync" | "after-directory-fsync";
 export interface CapsuleSegmentHooks { readonly fault?: (point: CapsuleSegmentFaultPoint, kind: string) => void }
 
+// A syscall-only frontend: no shell, import path, site initialization, input,
+// copy fallback, or code derived from file names. Exit statuses are bounded.
+const RENAME_NOREPLACE_SOURCE = [
+  "import ctypes,errno,os,sys",
+  "try:",
+  " libc=ctypes.CDLL(None,use_errno=True); fn=libc.renameat2",
+  "except (AttributeError,OSError): sys.exit(125)",
+  "fn.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]",
+  "fn.restype=ctypes.c_int",
+  "if fn(-100,os.fsencode(sys.argv[1]),-100,os.fsencode(sys.argv[2]),1)==0: sys.exit(0)",
+  "value=ctypes.get_errno()",
+  "sys.exit(17 if value==errno.EEXIST else 125 if value in {errno.ENOSYS,errno.EINVAL,errno.ENOTSUP,errno.EOPNOTSUPP} else 126)",
+].join("\n");
+function renameNoReplace(source: string, destination: string): "published" | "exists" {
+  if (source.length > 4096 || destination.length > 4096 || dirname(source) !== dirname(destination)
+    || !/^\.pending-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(basename(source))
+    || !HASH.test(basename(destination))) fail("capsule-storage-range");
+  const result = spawnSync("/usr/bin/python3", ["-I", "-S", "-c", RENAME_NOREPLACE_SOURCE, source, destination], {
+    timeout: 5_000, killSignal: "SIGKILL", stdio: "ignore", env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+  });
+  if (result.error || result.signal || result.status === null) fail("capsule-storage-capability");
+  if (result.status === 0) return "published";
+  if (result.status === 17) return "exists";
+  if (result.status === 125) return fail("capsule-storage-capability");
+  return fail("capsule-storage-io");
+}
+
 /** Caller holds the store mutex. Existing immutable bytes are reused only after complete verification. */
 export function publishImmutable(directory: string, expectedHash: string, bytes: Uint8Array, kind: string, hooks: CapsuleSegmentHooks = {}, completeBytesHash = true): string {
   if (!HASH.test(expectedHash) || (completeBytesHash && sha256(bytes) !== expectedHash)) fail("capsule-content-hash");
@@ -190,8 +218,14 @@ export function publishImmutable(directory: string, expectedHash: string, bytes:
     hooks.fault?.("before-file-fsync", kind); fsyncSync(fd);
     const opened = fstatSync(fd);
     if (!opened.isFile() || opened.uid !== process.getuid?.() || opened.nlink !== 1 || (opened.mode & 0o7777) !== 0o600 || opened.size !== bytes.byteLength) fail("capsule-storage-unsafe");
-    try { lstatSync(finalPath); fail("capsule-publication-conflict"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    hooks.fault?.("before-file-rename", kind); renameSync(temporary, finalPath); hooks.fault?.("after-file-rename", kind);
+    hooks.fault?.("before-file-rename", kind);
+    const publication = renameNoReplace(temporary, finalPath);
+    if (publication === "exists") {
+      privateRegular(finalPath, bytes.byteLength);
+      const raced = completeBytesHash ? readVerifiedImmutable(finalPath, expectedHash, bytes.byteLength) : readExactSafe(finalPath, bytes.byteLength);
+      if (!raced.equals(Buffer.from(bytes))) fail("capsule-publication-conflict");
+    }
+    hooks.fault?.("after-file-rename", kind);
     privateRegular(finalPath, bytes.byteLength);
     hooks.fault?.("before-directory-fsync", kind); syncCapsuleDirectory(directory); hooks.fault?.("after-directory-fsync", kind);
     return finalPath;

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { constants as F, lstatSync, mkdirSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
   CAPSULE_LIMITS,
@@ -65,6 +67,7 @@ const schema = [
   "CREATE TABLE meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, identity TEXT NOT NULL, derivedRoute TEXT NOT NULL, catalogRoute TEXT NOT NULL, capsuleReady INTEGER NOT NULL, chunkReady INTEGER NOT NULL)",
   "CREATE TABLE artifacts (layer TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, chunkIndex INTEGER NOT NULL, source TEXT NOT NULL, record TEXT NOT NULL, manifestHash TEXT NOT NULL, segmentHash TEXT NOT NULL, segmentBytes INTEGER NOT NULL, segmentOffset INTEGER NOT NULL, payloadBytes INTEGER NOT NULL, contentHash TEXT NOT NULL, PRIMARY KEY(layer,eventSeq,descriptor,chunkIndex))",
   "CREATE INDEX artifact_range ON artifacts(layer,eventSeq,descriptor,chunkIndex)",
+  "CREATE TABLE capsule_ancestry (lineage TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, PRIMARY KEY(lineage,eventSeq,descriptor)) WITHOUT ROWID",
   "CREATE TABLE markers (eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, layer TEXT NOT NULL, state TEXT NOT NULL, marker TEXT NOT NULL, PRIMARY KEY(eventSeq,descriptor,layer))",
   "CREATE TABLE heads (lineage TEXT PRIMARY KEY, view TEXT NOT NULL, cursor TEXT NOT NULL, privateHash TEXT, privateState TEXT, receiptHash TEXT, capsuleEligible INTEGER NOT NULL, capsuleReady INTEGER NOT NULL, capsuleUnsupported INTEGER NOT NULL, capsuleFailed INTEGER NOT NULL, capsuleExcluded INTEGER NOT NULL, chunkEligible INTEGER NOT NULL, chunkReady INTEGER NOT NULL, chunkUnsupported INTEGER NOT NULL, chunkFailed INTEGER NOT NULL, chunkExcluded INTEGER NOT NULL)",
   "CREATE TABLE readiness (viewHash TEXT PRIMARY KEY, view TEXT NOT NULL, cursor TEXT NOT NULL, receiptHash TEXT, capsuleEligible INTEGER NOT NULL, capsuleReady INTEGER NOT NULL, capsuleUnsupported INTEGER NOT NULL, capsuleFailed INTEGER NOT NULL, capsuleExcluded INTEGER NOT NULL, chunkEligible INTEGER NOT NULL, chunkReady INTEGER NOT NULL, chunkUnsupported INTEGER NOT NULL, chunkFailed INTEGER NOT NULL, chunkExcluded INTEGER NOT NULL)",
@@ -131,6 +134,29 @@ function prepareDirectory(path: string, create: boolean): void {
 function prepareLayout(root: string, create: boolean): void {
   prepareDirectory(root, create);
   for (const child of ["segments", "segments/capsules", "segments/chunks", "manifests", "receipts"]) prepareDirectory(join(root, child), create);
+}
+
+/** Read-only requests may use an existing lock, but must never bootstrap one. */
+async function withExistingRuntimeMutex<T>(path: string, action: () => Promise<T>): Promise<T> {
+  if (process.platform !== "linux") fail("capsule-storage-capability");
+  const handle = await open(path, F.O_RDWR | F.O_NOFOLLOW);
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.nlink !== 1 || opened.uid !== process.getuid?.() || (opened.mode & 0o7777) !== 0o600) fail("capsule-storage-unsafe");
+    const child = spawn("/usr/bin/flock", ["--exclusive", "--timeout", "15", "/proc/self/fd/3", process.execPath, "-e", "process.stdout.write('ready');process.stdin.resume()"],
+      { stdio: ["pipe", "pipe", "ignore", handle.fd], env: { PATH: "/usr/bin:/bin" } });
+    const closed = new Promise<void>(resolveClosed => child.on("close", () => resolveClosed()));
+    await new Promise<void>((resolveReady, reject) => {
+      child.stdout!.once("data", () => resolveReady());
+      child.once("error", () => reject(Object.assign(new Error("capsule-storage-capability"), { code: "capsule-storage-capability" })));
+      child.once("exit", () => reject(Object.assign(new Error("capsule-store-busy"), { code: "capsule-store-busy" })));
+    });
+    try {
+      const current = lstatSync(path);
+      if (current.dev !== opened.dev || current.ino !== opened.ino || current.nlink !== 1) fail("capsule-storage-unsafe");
+      return await action();
+    } finally { child.stdin!.end(); await closed; }
+  } finally { await handle.close(); }
 }
 
 class Store {
@@ -257,6 +283,7 @@ async function derive(request: Extract<CapsuleWorkerRequest, { op: "derivePage" 
   let current = cursorAt(request, head), cursor = current.cursor, counts = current.counts, state = current.state;
   const artifacts: PendingArtifact[] = [], manifestHashes: string[] = [];
   const markers: { eventSeq: number; descriptor: number; layer: string; state: string; marker: string }[] = [];
+  const capsuleMemberships: { eventSeq: number; descriptor: number }[] = [];
   let descriptors = 0, events = 0, marker: string | undefined, exhausted = false, completedBody: CapsuleBodyDescriptor | undefined;
   while (descriptors < (request.maxDescriptors ?? CAPSULE_LIMITS.deriveDescriptors) && events < (request.maxEvents ?? CAPSULE_LIMITS.deriveEvents)) {
     const event = await eventAt(request, executor, budget, cursor);
@@ -283,6 +310,7 @@ async function derive(request: Extract<CapsuleWorkerRequest, { op: "derivePage" 
       const priorCapsule = store.get("SELECT state FROM markers WHERE eventSeq=? AND descriptor=? AND layer='capsules'", event.seq, block.index);
       counts = { ...counts, chunkEligible: counts.chunkEligible + 1, chunkReady: counts.chunkReady + 1, capsuleEligible: counts.capsuleEligible + 1,
         capsuleReady: counts.capsuleReady + (priorCapsule?.state === "ready" ? 1 : 0), capsuleUnsupported: counts.capsuleUnsupported + (priorCapsule?.state === "ready" ? 0 : 1) };
+      if (priorCapsule?.state === "ready") capsuleMemberships.push({ eventSeq: event.seq, descriptor: block.index });
       cursor = { ...cursor, afterEventSeq: event.seq, afterDescriptor: block.index + 1, bodyRawOffset: 0, bodyDecodedOffset: 0, partialBody: undefined }; continue;
     }
     if (!state) {
@@ -325,6 +353,7 @@ async function derive(request: Extract<CapsuleWorkerRequest, { op: "derivePage" 
         publishImmutable(join(request.derivedDirectory, "manifests"), manifest.manifest.hash, manifest.bytes, "manifest", options.segmentHooks, false);
         manifestHashes.push(manifest.manifest.hash); counts = { ...counts, capsuleReady: counts.capsuleReady + 1 };
         markers.push({ eventSeq: event.seq, descriptor: block.index, layer: "capsules", state: "ready", marker: "capsule-envelope-complete" });
+        capsuleMemberships.push({ eventSeq: event.seq, descriptor: block.index });
         artifacts.push({ layer: "capsules", eventSeq: event.seq, descriptor: block.index, chunkIndex: 0, source: canonicalJson(source), record: canonicalJson(envelope),
           manifestHash: manifest.manifest.hash, manifestBytes: manifest.bytes.length, segmentHash: encoded.descriptor.hash, segmentBytes: encoded.descriptor.bytes, segmentOffset: 0,
           payloadBytes: encoded.descriptor.bytes, contentHash: encoded.descriptor.hash });
@@ -354,6 +383,7 @@ async function derive(request: Extract<CapsuleWorkerRequest, { op: "derivePage" 
   const carriedReceipt = receipt?.receiptHash ?? (head && string(head, "view") === canonicalJson(request.view) ? current.receipt : undefined);
   options.fault?.("before-sqlite-transaction");
   store.transaction(() => {
+    for (const member of capsuleMemberships) store.run("INSERT OR IGNORE INTO capsule_ancestry VALUES(?,?,?)", lineage, member.eventSeq, member.descriptor);
     for (const item of markers) store.run("INSERT OR IGNORE INTO markers VALUES(?,?,?,?,?)", item.eventSeq, item.descriptor, item.layer, item.state, item.marker);
     for (const item of artifacts) {
       const prior = store.get("SELECT * FROM artifacts WHERE layer=? AND eventSeq=? AND descriptor=? AND chunkIndex=?", item.layer, item.eventSeq, item.descriptor, item.chunkIndex);
@@ -415,11 +445,15 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
     return { readiness: readiness(request, request.view, cursor, rowCounts(row)), metrics: { sqliteStatements: store.statements } };
   }
   if (request.op === "capsulePage") {
+    // Authorize the exact pinned view before touching the derived ancestry index.
+    await catalogCall(request, executor, budget, { op: "page", view: request.view, after: request.view.eventCut, limit: 1 });
     const afterEvent = request.afterEventSeq ?? 0, afterDescriptor = request.afterDescriptor ?? 0;
-    const rows = store.rows("SELECT * FROM artifacts WHERE layer='capsules' AND (eventSeq>? OR (eventSeq=? AND descriptor>?)) ORDER BY eventSeq,descriptor LIMIT ?",
-      request.limit ?? CAPSULE_LIMITS.page, afterEvent, afterEvent, afterDescriptor, request.limit ?? CAPSULE_LIMITS.page);
+    const requestedLimit = request.limit ?? CAPSULE_LIMITS.page, lineage = lineageHash(request.view);
+    const rows = store.rows("SELECT a.* FROM capsule_ancestry AS c JOIN artifacts AS a ON a.layer='capsules' AND a.eventSeq=c.eventSeq AND a.descriptor=c.descriptor AND a.chunkIndex=0 WHERE c.lineage=? AND c.eventSeq<=? AND (c.eventSeq>? OR (c.eventSeq=? AND c.descriptor>?)) ORDER BY c.eventSeq,c.descriptor LIMIT ?",
+      requestedLimit + 1, lineage, request.view.eventCut, afterEvent, afterEvent, afterDescriptor, requestedLimit + 1);
+    const selected = rows.slice(0, requestedLimit);
     const capsules: ReducerEnvelope[] = [];
-    for (const row of rows) {
+    for (const row of selected) {
       const storedSource = JSON.parse(string(row, "source")) as ScopedBodySourceRef;
       await authorizeBodyRef(request, storedSource, executor, budget);
       verifyArtifactManifest(request, store, row);
@@ -431,7 +465,7 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
     }
     const last = capsules.at(-1)?.source;
     return { capsules, next: { afterEventSeq: last?.eventSeq ?? afterEvent, afterDescriptor: last?.descriptor ?? afterDescriptor },
-      complete: rows.length < (request.limit ?? CAPSULE_LIMITS.page), metrics: { sqliteStatements: store.statements } };
+      complete: rows.length <= requestedLimit && capsules.length === rows.length, metrics: { sqliteStatements: store.statements } };
   }
   const requestedSource = request.source as ScopedBodySourceRef;
   await authorizeBodyRef(request, requestedSource, executor, budget);
@@ -464,7 +498,8 @@ export async function executeCapsuleRequest(value: unknown, options: CapsuleExec
   const budget = { bytes: 0 };
   try {
     prepareLayout(request.derivedDirectory, create);
-    return await withRuntimeMutex(join(request.derivedDirectory, "publication.lock"), async () => {
+    const mutex = create ? withRuntimeMutex : withExistingRuntimeMutex;
+    return await mutex(join(request.derivedDirectory, "publication.lock"), async () => {
       const dbPath = join(request.derivedDirectory, "derived.sqlite");
       const validate = (connection: CatalogSqlite): void => new Store(connection, request).validate(create);
       db = create ? CatalogSqlite.create(dbPath, validate) : CatalogSqlite.open(dbPath, validate);

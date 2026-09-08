@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chmodSync, linkSync, lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -98,15 +98,28 @@ test("same-branch append reuses its checkpoint while an old exact pin retains re
   } finally { f.cleanup(); }
 });
 
-test("fresh fork has an independent lineage cursor and cannot globally skip its branch", async () => {
+test("fork capsule pages filter selected ancestry before limit and old-pin continuation remains stable", async () => {
   const f = setupCapsuleFixture(line("a", null, "ancestor") + line("b", "a", "sibling-b"));
+  const page = async (view: any, cursor?: any) => f.ok(view, { op: "capsulePage", limit: 1, ...(cursor ?? {}) });
   try {
     const bView = await f.initialize("b"); await deriveToEnd(f, bView);
+    const b1 = await page(bView), b2 = await page(bView, b1.next);
+    assert.deepEqual(b1.capsules.map((item: any) => item.source.eventSeq), [1]);
+    assert.deepEqual(b2.capsules.map((item: any) => item.source.eventSeq), [2]);
+    assert.equal(b1.complete, false); assert.equal(b2.complete, true);
+
     f.append(line("c", "a", "fork-c")); await f.ingest();
     const cView = (await f.catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "s1", eventId: "c" } })).view;
     const c = await deriveToEnd(f, cView);
-    assert.equal(c.readiness.chunks.ready, 2, "ancestor and fork event are both selected; sibling b is not counted");
-    assert.notDeepEqual(c.cursor.view.segments, bView.segments);
+    assert.equal(c.readiness.chunks.ready, 2, "ancestor and fork event are selected; sibling b is excluded");
+    const c1 = await page(cView), c2 = await page(cView, c1.next);
+    assert.deepEqual(c1.capsules.map((item: any) => item.source.eventSeq), [1]);
+    assert.deepEqual(c2.capsules.map((item: any) => item.source.eventSeq), [3]);
+    assert.equal(c1.complete, false); assert.equal(c2.complete, true);
+
+    const retained1 = await page(bView), retained2 = await page(bView, retained1.next);
+    assert.deepEqual(retained1.capsules, b1.capsules); assert.deepEqual(retained2.capsules, b2.capsules);
+    assert.equal(retained2.complete, true);
   } finally { f.cleanup(); }
 });
 
@@ -146,6 +159,22 @@ test("missing/corrupt/unsafe selected content degrades explicitly and never scan
     response = await f.request(view, { op: "chunkRange", source: done.body.source, decodedStart: 0, decodedLength: 1 }); assert.equal(response.ok, false);
     rmSync(path); writeFileSync(path, Buffer.alloc(100, 1), { mode: 0o600 }); linkSync(path, `${path}.alias`);
     response = await f.request(view, { op: "chunkRange", source: done.body.source, decodedStart: 0, decodedLength: 1 }); assert.equal(response.ok, false);
+  } finally { f.cleanup(); }
+});
+
+test("read-only requests never recreate a missing publication lock and the valid store remains reusable", async () => {
+  const f = setupCapsuleFixture(line("a", null, "lock boundary"));
+  try {
+    const view = await f.initialize(), done = await deriveToEnd(f, view), lock = join(f.derivedDirectory, "publication.lock");
+    rmSync(lock);
+    for (const operation of [{ op: "status" }, { op: "capsulePage", limit: 1 },
+      { op: "chunkRange", source: done.body.source, decodedStart: 0, decodedLength: 1 }]) {
+      const response = await f.request(view, operation); assert.equal(response.ok, false); assert.equal(existsSync(lock), false);
+    }
+    writeFileSync(lock, "", { mode: 0o600 });
+    const status = await f.ok(view, { op: "status" }); assert.equal(status.readiness.chunks.ready, 1);
+    const range = await f.ok(view, { op: "chunkRange", source: done.body.source, decodedStart: 0, decodedLength: 1 });
+    assert.equal(Buffer.from(range.data, "base64").toString("utf16le"), "l");
   } finally { f.cleanup(); }
 });
 

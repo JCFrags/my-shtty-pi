@@ -65,6 +65,30 @@ test("locked immutable publication reuses exact bytes, refuses corruption and st
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("atomic no-replace preserves a target created at the publication seam", () => {
+  const root = mkdtempSync(join(tmpdir(), "capsule-segment-race-"));
+  try {
+    chmodSync(root, 0o700); const dir = join(root, "segments"); mkdirSync(dir, { mode: 0o700 });
+    const encoded = encodeCapsuleSegment(envelope()), path = join(dir, encoded.descriptor.hash);
+    const owner = Buffer.alloc(encoded.bytes.length, 0x5a);
+    assert.throws(() => publishImmutable(dir, encoded.descriptor.hash, encoded.bytes, "capsule", {
+      fault(point) { if (point === "before-file-rename") writeFileSync(path, owner, { mode: 0o600, flag: "wx" }); },
+    }));
+    assert.deepEqual(readFileSync(path), owner, "publication must not replace a raced target");
+    rmSync(path);
+    let racedInode = 0;
+    publishImmutable(dir, encoded.descriptor.hash, encoded.bytes, "capsule", {
+      fault(point) { if (point === "before-file-rename") { writeFileSync(path, encoded.bytes, { mode: 0o600, flag: "wx" }); racedInode = lstatSync(path).ino; } },
+    });
+    assert.equal(lstatSync(path).ino, racedInode, "matching raced bytes are validated and reused, not replaced");
+    rmSync(path);
+    assert.throws(() => publishImmutable(dir, encoded.descriptor.hash, encoded.bytes, "capsule", {
+      fault(point) { if (point === "before-file-rename") writeFileSync(path, encoded.bytes, { mode: 0o644, flag: "wx" }); },
+    }), /capsule-storage-unsafe/);
+    assert.equal(lstatSync(path).mode & 0o777, 0o644, "unsafe raced target remains intact");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("rename and directory-sync fault seams never expose partial bytes as valid", () => {
   const root = mkdtempSync(join(tmpdir(), "capsule-segment-fault-"));
   try {
