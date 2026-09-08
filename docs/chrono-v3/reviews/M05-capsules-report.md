@@ -66,6 +66,55 @@ inactive historical accumulator fields to be cleared. M04 retains those fields;
 the new test was corrected to require only pending-state fields to clear. Parser
 semantics were not changed to satisfy that assertion.
 
+## Contract and runtime scaffolding checks
+
+The parent verified the contract corrections with typecheck, build, and ten
+focused tests. Structural metadata now requires a caller-verified raw reference
+for each supplied field. A decoded body reference cannot establish metadata
+outside that body. Supported outcomes require structural facts; quoted phrases
+are not outcome evidence. These validators check structure, not raw-byte truth
+or pinned-view authorization.
+
+The bounded worker client and default-off shadow scheduler passed five focused
+tests after build. These cover request refusal before admission, wire limits,
+independent readiness, deferred scheduling, caller settlement before replacement,
+and sanitized failure without automatic retry. They do not establish real worker
+execution. A settled derive pass does not mean capsules or chunks are ready.
+
+## Initial independent reducer findings
+
+Independent read-only review of reducer candidate
+`1ad3c1e19ffaa10de3e2e087dd54b225b9eefd28` reproduced four defects despite
+14 passing pre-existing focused tests:
+
+- Negated or quoted “pending approval” produced a supported pending outcome.
+- Splitting a URL across legal feeds retained a prefix cue and changed output.
+- An internal text cap dropped content without a structured omission.
+- Structural metadata cited the decoded body instead of supporting raw bytes.
+
+The raw-fact contract and reducer corrections were integrated with focused
+regression tests. Parent verification then reproduced a remaining exact-boundary
+failure: splitting `pending approval tail` at unit 16 lost the cue. A separate
+settled scan offset corrected it. Exhaustive split positions, serialized restarts,
+one-unit feeds, and cue overflow checks were added. The overflow test initially
+failed because complete head coverage had no omission record; that was corrected
+without weakening the test or deadline. Original failures remain evidence.
+
+The integrated build and typecheck passed, followed by 54 focused capsule tests.
+One uses real M03-contained workers in an isolated synthetic scheduler namespace:
+derive, status, capsule page, and exact UTF-16 chunk retrieval passed with a
+256 MiB observed cgroup limit and bounded worker RSS/cgroup peak. Its tickets and
+slots settled to zero and its unit became inactive. Setup itself is not a claim
+of parent-process OS containment. An initial assertion incorrectly expected all
+capsule descriptors ready; M04 emits a bodyless block descriptor as well as its
+text-body descriptor. The corrected assertion requires one ready body and one
+unsupported descriptor, rather than weakening readiness or fabricating a body.
+
+The worker entry and contained shadow bridge are implemented. Production/Pi
+activation is still absent; callers supply an explicit durable physical identity
+and both catalog/derived routes. Storage has no automatic identity discovery.
+Independent storage review and full M05 gates remain pending.
+
 ## Remaining evidence
 
 Versioned reducer/publication contracts, implementation, fidelity and exact
