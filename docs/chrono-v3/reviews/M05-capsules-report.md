@@ -1,6 +1,6 @@
 # M05 — Capsules and decoded chunks
 
-**Status: project-lead changes requested at `bda0cb60d4cc55b7f0c7df7f2e4b5e1c510ab429`. Corrections in progress; not accepted or deployed.**
+**Status: project-lead F001–F004 corrections validated locally; publication CI pending. Not accepted or deployed.**
 
 ## Project-lead correction scope
 
@@ -16,7 +16,7 @@ CI did not constitute project-lead acceptance. Corrections must first reproduce
 the findings through final envelopes, persisted stores, and public worker routes.
 No production recovery, deployment, broad ingestion, or M06 is authorized.
 
-## Correction evidence in progress
+## F001–F004 correction evidence
 
 The F004 red regression commit `2f333da` precedes fix `51697bd`.
 Valid foreign chunks are rejected after binding the authorized source, artifact,
@@ -46,8 +46,9 @@ could exhaust the cue cap and hide a later valid long failure clause. The
 original reducer worker corrected the trailing word boundary in `ec81738`, after
 red commit `3a04083` reproduced the failure in final envelopes and persisted
 retrieval. Its 32 focused tests passed across whole, one-unit, and uneven restart
-feeds. Integrated full validation remains pending. Tiny caller budgets below the omission-marker
-length also safely refuse; this nonblocking limit is outside the default-budget
+feeds. The integrated validation below includes this correction. Tiny caller
+budgets below the omission-marker length also safely refuse; this nonblocking
+limit is outside the default-budget
 correction scope.
 
 The read-only operating check at 2026-09-08T20:25:11Z matched all 96 installed
@@ -58,8 +59,91 @@ M04 package to a helper intentionally pinned to M03. Independent byte checks
 confirmed M04; no helper, package, configuration, or admission repair was made.
 Configured policy is not current-boot executable admission evidence.
 
-All earlier large campaigns below are historical, not corrected-pipeline scale
-evidence. Full integrated gates and exact-head CI are still pending.
+All earlier large campaigns outside the corrected-candidate section below remain
+historical. They are not corrected-pipeline scale evidence.
+
+## Corrected-candidate validation
+
+The frozen runtime and generated artifacts at
+`62de2e3e6f40409c4fdb3dac69218a64245b1eb4` passed the full root verification
+command within the unchanged 25-minute limit. This includes 303/303 runtime
+hashes, a clean scripts-disabled dependency installation, the controlled native
+SQLite build and allocation probe, typecheck, reproducible JavaScript, normal
+and replay tests, both original fixed-heap lanes, package checks, privacy, and
+the frozen M00 baseline. Copied development dependencies are not the basis for
+this clean-install result.
+
+The parent normal suite passed 623/623 tests, preserving the earlier 605 tests.
+Both explicit capsule-plus-decoder lanes passed 88/88 tests at 512 and 1,024 MiB
+V8 heap limits. Baseline-verifier tests passed 31/31 and privacy tests passed
+40/40; no assertion or deadline was weakened. The final tree has 108 source
+files, 107 JavaScript files, and 108 manifest rows. Only five capsule runtime
+files changed relative to the reviewed candidate.
+
+The recursive map-preservation check validated and moved all 107 generated maps
+to retained local evidence. An initial non-recursive glob failed its 107-file
+assertion before moving any map; that failure is retained. No generated map was
+deleted. This packaging correction did not change runtime bytes.
+
+The corrected contained smoke passed 42 calls in 20.913 seconds. The separate
+136 MiB campaign passed 2,221 calls in 1,212.487 seconds, with 2,182 initial
+derivation jobs. It used derived schema 2 and `capsule-pure-v2`, not the earlier
+schema-1 runtime. The generated source had 142,606,336 decoded UTF-16 units and
+142,606,743 bytes. Initial derivation charged at most 163,840 source bytes per
+job; that phase's process-read characters were 5,134,153,898. These are different
+counters, not a claim of source-only total I/O.
+
+The first small primary capsule retained the exact small body. The giant primary
+capsule retained the exact terminal suffix, including Unicode, CRLF, and a lone
+surrogate. First and late UTF-16LE chunk samples matched their expected hashes
+with zero source reads. Source hashes matched before and after the one permitted
+append; old pins and branch checks passed. The sampled capsule state was
+`unsupported` while chunk readiness was `ready`: this is not successful semantic
+reduction of an unsupported family.
+
+The giant parent peak RSS was 98,320,384 bytes and its observed cgroup peak was
+212,959,232 bytes. Maximum initial-derivation worker RSS was 78,159,872 bytes
+and worker cgroup peak was 66,330,624 bytes. The wrapper independently contained
+the parent at 256 MiB with swap disabled; each worker had its own 256 MiB limit
+and 128 MiB V8 heap. These are separate, not combined, limits. The 64 MiB native
+SQLite allowance is configured, not a separately measured allocation peak.
+Campaign and worker deadlines stayed at 30 minutes and 30 seconds. Tickets and
+slots settled to zero, the unit became inactive, and the disposable namespace
+was removed. No production namespace was used or removed.
+
+The corrected 2,048-record / 1 MiB campaign also passed: 2,122 calls in
+1,215.071 seconds, with 2,068 initial derivation jobs and 1,532,781 source bytes.
+The benchmark labels this parameterized case `giant`; it is representative
+many-record evidence, not its 10,000-record high-cardinality profile or a 50,000-
+record acceptance run. Initial derivation charged at most 163,840 source bytes
+per job and recorded 5,048,872,893 process-read characters. The append/no-op/branch
+phase needed 46 calls, 76.841 seconds, and 1,219,365,860 process-read characters:
+bounded source reads do not establish constant total fork work or total I/O.
+
+The many-record parent's peak RSS was 77,201,408 bytes and cgroup peak was
+51,249,152 bytes. The largest worker RSS was 78,213,120 bytes and cgroup peak
+was 65,339,392 bytes. The same independent containment and unchanged deadlines
+applied. Exact small-body, terminal-suffix and first/late chunk assertions,
+source immutability except the explicit append, old-pin/branch checks, and
+zero-ticket/slot settlement all passed. Its sampled capsule state was likewise
+`unsupported`, independently of ready exact chunks. Both campaigns sample exact
+recovery; neither is a full-body readback or a universal semantic-quality claim.
+
+Retained local evidence SHA-256 values (logs are not published):
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Full root gate | `59c4ccde511733d072122531551ccf8c0ae363caee51d24320d2fb69364b604b` |
+| Normal 623-test suite | `2a17a0dee7b595ea4a238c97355a88990cbbca49256030c7276618b1d9fcbce6` |
+| Capsule/decoder 512 MiB | `1a7212f40ec752d626efaa8fcdd571f297361488d18c50721c5901f7c26ab172` |
+| Capsule/decoder 1,024 MiB | `1103a8b98368d920b77f6b9e3432cc158b261eeaf640f708d24abf46e27ffd5e` |
+| 136 MiB campaign JSON | `938f957539b7752fc47e148b56fadf3426ca1bc5a4e3d89dffac095a37e549e8` |
+| 2,048-record campaign JSON | `fe12d5bed04f094d00e3508e1bafe45045681110fcece992f88aadc630efa07e` |
+| Baseline-verifier 31-test suite | `0d762cde17aa47f8b3e3d3ca48a0d47b03c5af16daa30bed54a79d943a839bcc` |
+| Privacy 40-test suite | `6d5f861b80fef68644b62a909ba5a3157c1fbaf04faa8e9393cc6ee34fbd68e6` |
+
+Final exact-head publication CI remains pending. M05 approval remains withheld
+until independent project-lead re-review; PR #38 must remain draft and unmerged.
 
 ## Entry boundary
 
