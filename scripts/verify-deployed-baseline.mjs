@@ -266,6 +266,32 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/test/json-string-decoder.test.ts",
 ]);
 
+// M05 extends the live pi-chrono manifest without rewriting the frozen M00-M04
+// canonical count. These exact files are the only deployed-count additions.
+const historicalCanonicalDeployedFiles = 291;
+const m05VerifierBaseCommit = "4e319fede1dd6f97e65918745bd95d46472e619f";
+const m05CompiledAdditions = new Set([
+  "dist/src/capsule-compatibility.js",
+  "dist/src/capsule-contract.js",
+  "dist/src/capsule-derive.js",
+  "dist/src/capsule-reducer-stream.js",
+  "dist/src/capsule-reducer.js",
+  "dist/src/capsule-segment.js",
+  "dist/src/capsule-shadow-worker.js",
+  "dist/src/capsule-shadow.js",
+  "dist/src/capsule-store.js",
+  "dist/src/capsule-worker-client.js",
+  "dist/src/capsule-worker-entry.js",
+  "dist/src/json-string-decoder.js",
+]);
+const m05ChronoManifestRows = 108;
+const m05ChronoCompiledFiles = 107;
+const m05RuntimeGraphRoots = ["dist/src/capsule-worker-entry.js"];
+// This API is intentionally prepared for synthetic tests/integration only. It
+// is graph-checked here but does not become an active production entrypoint.
+const m05PreparedIntegrationGraphRoots = ["dist/src/capsule-compatibility.js"];
+const m05SourceGraphRoots = ["src/capsule-worker-entry.ts", "src/capsule-compatibility.ts"];
+
 const expectedSlugs = [
   "codex-usage-footer", "files-ui", "grounded-tools", "herdr-agent-state",
   "herdr-blocked-bridge", "herdr-status", "pi-agent-context",
@@ -330,15 +356,18 @@ function sha256Bytes(bytes) {
 function sha256(path) {
   return sha256Bytes(readFileSync(path));
 }
-function parseDeployed(path) {
+function parseDeployedBytes(bytes, label) {
   const entries = new Map();
-  for (const [index, line] of readFileSync(path, "utf8").trimEnd().split("\n").entries()) {
+  for (const [index, line] of bytes.toString("utf8").trimEnd().split("\n").entries()) {
     const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
-    if (!match) throw new Error(`${relative(root, path)}:${index + 1}: invalid DEPLOYED.sha256 line`);
-    if (entries.has(match[2])) throw new Error(`${relative(root, path)}: duplicate ${match[2]}`);
+    if (!match) throw new Error(`${label}:${index + 1}: invalid DEPLOYED.sha256 line`);
+    if (entries.has(match[2])) throw new Error(`${label}: duplicate ${match[2]}`);
     entries.set(match[2], match[1]);
   }
   return entries;
+}
+function parseDeployed(path) {
+  return parseDeployedBytes(readFileSync(path), relative(root, path));
 }
 function isWithin(parent, path) {
   return path === parent || path.startsWith(`${parent}${sep}`);
@@ -573,7 +602,7 @@ if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/ve
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
-if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 291) throw new Error("Stage 1 record or canonical deployed-file count changed");
+if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== historicalCanonicalDeployedFiles) throw new Error("Stage 1 record or canonical deployed-file count changed");
 if (consolidation.deployedBaselineCommit !== "049b6390fba7a7908d01908a7953dd2f50fa15df") throw new Error("unexpected deployed baseline commit");
 let hashCount = 0;
 let historicalMetadataHashes = 0;
@@ -584,6 +613,11 @@ for (const product of active) {
   const manifestPath = join(packageRoot, "DEPLOYED.sha256");
   if (!existsSync(manifestPath)) throw new Error(`${product.slug} lacks DEPLOYED.sha256`);
   const deployed = parseDeployed(manifestPath);
+  const manifestRel = relative(root, manifestPath).replaceAll(sep, "/");
+  const historicalDeployed = parseDeployedBytes(gitBytesAt(m05VerifierBaseCommit, manifestRel), `${m05VerifierBaseCommit}:${manifestRel}`);
+  for (const [rel, expected] of historicalDeployed) {
+    if (deployed.get(rel) !== expected) throw new Error(`${product.slug}: historical deployed record changed: ${rel}`);
+  }
   deployedByProduct.set(product.slug, deployed);
   for (const [rel, expected] of deployed) {
     const path = resolve(packageRoot, rel);
@@ -604,6 +638,12 @@ for (const product of active) {
     if (!deployed.has(entry)) throw new Error(`${product.slug}: active entrypoint absent from DEPLOYED.sha256: ${entry}`);
     if (!existsSync(join(packageRoot, entry))) throw new Error(`${product.slug}: missing entrypoint ${entry}`);
   }
+  if (product.slug === "pi-chrono-compaction") {
+    if (product.compiledCount !== m05ChronoCompiledFiles) throw new Error(`${product.slug}: M05 compiled count changed`);
+    const additions = [...deployed.keys()].filter((path) => m05CompiledAdditions.has(path)).sort();
+    if (deployed.size !== m05ChronoManifestRows) throw new Error(`${product.slug}: deployed manifest rows ${deployed.size}; expected ${m05ChronoManifestRows}`);
+    if (!jsonEqual(additions, [...m05CompiledAdditions].sort())) throw new Error(`${product.slug}: exact M05 compiled additions are incomplete`);
+  }
   if (product.compiledCount !== undefined) {
     const committed = walk(join(packageRoot, "dist")).filter((path) => path.endsWith(".js"));
     const declared = [...deployed.keys()].filter((path) => path.startsWith("dist/") && path.endsWith(".js"));
@@ -612,7 +652,11 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-if (hashCount !== 291) throw new Error(`canonical deployed hash count ${hashCount}; expected 291`);
+const m05DeployedAdditionCount = m05CompiledAdditions.size;
+const historicalDeployedHashCount = hashCount - m05DeployedAdditionCount;
+if (historicalDeployedHashCount !== historicalCanonicalDeployedFiles || hashCount !== historicalCanonicalDeployedFiles + m05DeployedAdditionCount) {
+  throw new Error(`deployed hash count ${historicalDeployedHashCount}+${m05DeployedAdditionCount}; expected ${historicalCanonicalDeployedFiles}+${m05CompiledAdditions.size}`);
+}
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -773,6 +817,7 @@ function graphClosure(starts, sourceMode) {
   return seen;
 }
 const activeRuntimeGraph = new Set();
+const preparedIntegrationGraph = new Set();
 const inactiveGraph = new Set();
 const sourceBuildGraph = new Set();
 const runtimeResourcePaths = new Set();
@@ -788,15 +833,22 @@ for (const product of products) {
     runtimeResourcePaths.add(path);
     if (product.status !== "inactive") activeRuntimeGraph.add(path);
   }
+  if (product.slug === "pi-chrono-compaction") {
+    for (const path of graphClosure(m05RuntimeGraphRoots.map((entry) => join(packageRoot, entry)), false)) activeRuntimeGraph.add(path);
+    for (const path of graphClosure(m05PreparedIntegrationGraphRoots.map((entry) => join(packageRoot, entry)), false)) preparedIntegrationGraph.add(path);
+  }
   if (product.compiledCount !== undefined) {
     if (!Array.isArray(product.sourceEntrypoints) || product.sourceEntrypoints.length === 0) throw new Error(`${product.slug}: compiled source entrypoints are required`);
-    const sourceClosure = graphClosure(product.sourceEntrypoints.map((entry) => join(packageRoot, entry)), true);
+    const sourceEntrypoints = product.slug === "pi-chrono-compaction"
+      ? [...product.sourceEntrypoints, ...m05SourceGraphRoots]
+      : product.sourceEntrypoints;
+    const sourceClosure = graphClosure(sourceEntrypoints.map((entry) => join(packageRoot, entry)), true);
     for (const path of sourceClosure) sourceBuildGraph.add(path);
     for (const path of walk(packageRoot).filter((candidate) => candidate.endsWith(".d.ts") && !candidate.includes(`${sep}dist${sep}`))) sourceBuildGraph.add(path);
   }
 }
 const deployedRuntimeCode = new Set([...deployedPaths].filter((path) => [".ts", ".js", ".mjs"].includes(extname(path))).map((path) => resolve(root, path)));
-const missingRuntimeCode = [...deployedRuntimeCode].filter((path) => !activeRuntimeGraph.has(path));
+const missingRuntimeCode = [...deployedRuntimeCode].filter((path) => !activeRuntimeGraph.has(path) && !preparedIntegrationGraph.has(path));
 if (missingRuntimeCode.length > 0) throw new Error(`deployed runtime code is unreachable: ${missingRuntimeCode.map((path) => relative(root, path)).join(",")}`);
 for (const product of products.filter((candidate) => candidate.compiledCount !== undefined)) {
   const packageRoot = join(root, "packages", product.slug);
@@ -1093,7 +1145,9 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: "291/291",
+  deployedHashesVerified: `${hashCount}/${historicalCanonicalDeployedFiles + m05DeployedAdditionCount}`,
+  historicalCanonicalDeployedFiles: `${historicalDeployedHashCount}/${historicalCanonicalDeployedFiles}`,
+  m05DeployedAdditions: `${m05DeployedAdditionCount}/${m05CompiledAdditions.size}`,
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),
@@ -1104,6 +1158,7 @@ console.log(JSON.stringify({
     deployedRuntime: categories.deployedRuntime,
     sourceBuildInputs: categories.sourceBuildInputs + categories.inactiveSource,
     runtimeResources: runtimeResourcePaths.size,
+    preparedIntegration: preparedIntegrationGraph.size,
     metadataDocs: categories.metadata + categories.docs + categories.rootVerification,
     unexplained: categories.unexplained,
   },
