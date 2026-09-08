@@ -15,7 +15,7 @@ type NativeStatement = { get(...values: SqlValue[]): SqlRow | undefined;
   iterate(...values: SqlValue[]): IterableIterator<SqlRow> };
 type NativeDatabase = { prepare(sql: string): NativeStatement; pragma(sql: string, options?: { simple: boolean }): unknown;
   transaction<T>(fn: () => T): (() => T); close(): void };
-type NativeConstructor = new (path: string, options: { timeout: number; fileMustExist: boolean }) => NativeDatabase;
+type NativeConstructor = new (path: string, options: { timeout: number; fileMustExist: boolean; readonly?: boolean }) => NativeDatabase;
 const require = createRequire(import.meta.url);
 export class CatalogSqliteError extends Error {
   constructor(readonly code: "catalog-storage-unsafe" | "catalog-sqlite-unavailable" | "catalog-sqlite-busy" |
@@ -70,15 +70,49 @@ export interface CatalogCapabilities { sqliteVersion: string; journalMode: "wal"
   busyTimeout: 50; cacheSize: -2048; mmapSize: 0; hardHeapLimit: number; tempStore: 2; fts5: true }
 export class CatalogSqlite {
   private constructor(private readonly path: string, private readonly db: NativeDatabase) {}
-  static open(path: string): CatalogSqlite {
-    validateStorage(path);
-    // Reserve the initial database with owner-only permissions, without truncating existing data.
-    try { const fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); closeSync(fd); }
-    catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw new CatalogSqliteError("catalog-storage-unsafe"); }
+  /** Existing lookup never reserves a replacement DB or initializes a blank file.
+   * Validation uses a read-only connection before WAL setup or writable close. */
+  static open(path: string, validate?: (db: CatalogSqlite) => void): CatalogSqlite {
+    return this.connect(path, false, validate);
+  }
+  /** Explicit fresh bootstrap / valid-store resume boundary. Blank files and
+   * orphan sidecars never authorize creation; use a fresh physical location. */
+  static create(path: string, validate?: (db: CatalogSqlite) => void): CatalogSqlite {
+    return this.connect(path, true, validate);
+  }
+  private static connect(path: string, create: boolean, validate?: (db: CatalogSqlite) => void): CatalogSqlite {
+    validateStorage(path, !create);
+    let size = 0, exists = true;
+    try { size = lstatSync(path).size; }
+    catch (e) { if (!create || (e as NodeJS.ErrnoException).code !== "ENOENT") throw new CatalogSqliteError("catalog-storage-unsafe"); exists = false; }
+    if (!size) {
+      if (!create || exists) throw new CatalogSqliteError("catalog-sqlite-corrupt");
+      for (const suffix of ["-wal", "-shm", "-journal"]) {
+        try { lstatSync(`${path}${suffix}`); }
+        catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") continue; throw new CatalogSqliteError("catalog-storage-unsafe"); }
+        throw new CatalogSqliteError("catalog-storage-unsafe");
+      }
+      try { const fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); closeSync(fd); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw new CatalogSqliteError("catalog-storage-unsafe"); }
+    }
     validateStorage(path, true);
     let Constructor: NativeConstructor;
     try { Constructor = require("better-sqlite3") as NativeConstructor; }
     catch { throw new CatalogSqliteError("catalog-sqlite-unavailable"); }
+    // Read-only open still supports SQLite's legitimate committed WAL recovery.
+    // Same-UID pathname replacement races are outside this observed-path boundary.
+    if (validate && lstatSync(path).size > 0) {
+      let reader: NativeDatabase | undefined;
+      try {
+        reader = new Constructor(path, { timeout: CATALOG_SQLITE_LIMITS.busyMs, fileMustExist: true, readonly: true });
+        reader.pragma("hard_heap_limit=67108864"); reader.pragma("cache_size=-2048");
+        reader.pragma("mmap_size=0"); reader.pragma("temp_store=MEMORY"); reader.pragma("trusted_schema=OFF");
+        validate(new CatalogSqlite(path, reader));
+      } catch (e) {
+        if (/^catalog-[a-z0-9-]+$/.test(String((e as { code?: unknown })?.code))) throw e;
+        throw sanitized(e);
+      } finally { try { reader?.close(); } catch { /* preserve validation refusal */ } }
+    }
     let db: NativeDatabase | undefined;
     try {
       db = new Constructor(path, { timeout: CATALOG_SQLITE_LIMITS.busyMs, fileMustExist: true });

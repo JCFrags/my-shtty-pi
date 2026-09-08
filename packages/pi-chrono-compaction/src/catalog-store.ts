@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants as F, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeSync, type Stats } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { executeCatalogRequest } from "./catalog-engine.js";
+import { executeCatalogRequest, type CatalogOpenOptions } from "./catalog-engine.js";
 import type { CatalogRequest, CatalogResponse } from "./catalog-contract.js";
 import { isCatalogStoreRequest, isStoreKey, type CatalogStoreRequest } from "./catalog-store-contract.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
@@ -12,11 +12,11 @@ const missing = (e: unknown): boolean => (e as NodeJS.ErrnoException)?.code === 
 const same = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.mode === b.mode && a.nlink === b.nlink && a.uid === b.uid;
 const key = (x: unknown): x is string => typeof x === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(x);
 interface Active { v: 1; sessionKey: string; storeKey: string }
-interface Stage { v: 1; sessionKey: string; folder: string; rebuildKey: string; expectedActiveStoreKey: string | null }
+interface Stage { v: 1; sessionKey: string; storeKey: string; folder: string; rebuildKey: string; expectedActiveStoreKey: string | null }
 interface Ref extends Active { folder: string; recovery?: { rebuildKey: string; generation: number; expectedActiveStoreKey: string | null } }
 const activeValid = (x: any): x is Active => x?.v === 1 && key(x.sessionKey) && isStoreKey(x.storeKey);
 const folderValid = (x: unknown): x is string => typeof x === "string" && /^(initial|recovery)-[0-9a-f]{64}$/.test(x);
-const stageValid = (x: any): x is Stage => x?.v === 1 && key(x.sessionKey) && folderValid(x.folder) && key(x.rebuildKey) && (x.expectedActiveStoreKey === null || isStoreKey(x.expectedActiveStoreKey));
+const stageValid = (x: any): x is Stage => x?.v === 1 && key(x.sessionKey) && isStoreKey(x.storeKey) && folderValid(x.folder) && key(x.rebuildKey) && (x.expectedActiveStoreKey === null || isStoreKey(x.expectedActiveStoreKey));
 const refValid = (x: any): x is Ref => !!x && folderValid(x.folder) && (x.recovery === undefined || (key(x.recovery.rebuildKey) && Number.isSafeInteger(x.recovery.generation) && x.recovery.generation > 0 && (x.recovery.expectedActiveStoreKey === null || isStoreKey(x.recovery.expectedActiveStoreKey)))) && activeValid(x);
 function privateDirectory(path: string): Stats {
   const s = lstatSync(path);
@@ -100,7 +100,7 @@ function atomic(path: string, value: unknown, hooks: CatalogStoreHooks): void {
 }
 
 /** Factory permits synthetic engine/fault tests; production uses the native engine below. */
-export function createCatalogStoreExecutor(engine: (request: unknown) => CatalogResponse, hooks: CatalogStoreHooks = {}): (request: unknown) => Promise<CatalogResponse> {
+export function createCatalogStoreExecutor(engine: (request: unknown, options?: CatalogOpenOptions) => CatalogResponse, hooks: CatalogStoreHooks = {}): (request: unknown) => Promise<CatalogResponse> {
   return async (value: unknown): Promise<CatalogResponse> => {
     if (!isCatalogStoreRequest(value)) return { v: 1, ok: false, code: "catalog-request-invalid", sourceBytes: 0 };
     const r: CatalogStoreRequest = value;
@@ -117,8 +117,8 @@ export function createCatalogStoreExecutor(engine: (request: unknown) => Catalog
         if (a && a.sessionKey !== r.sessionKey) fail("catalog-session-mismatch");
         return a;
       };
-      const call = (req: CatalogRequest): Record<string, unknown> => {
-        const response = engine(req); sourceBytes += response.sourceBytes;
+      const call = (req: CatalogRequest, options: CatalogOpenOptions = { create: false }): Record<string, unknown> => {
+        const response = engine(req, options); sourceBytes += response.sourceBytes;
         if (!response.ok) fail(response.code);
         return response.result;
       };
@@ -137,9 +137,22 @@ export function createCatalogStoreExecutor(engine: (request: unknown) => Catalog
         else atomic(refPath(ref.storeKey), ref, hooks);
         hooks.fault?.("after-ref-commit");
       };
-      const status = (folder: string): Record<string, unknown> => {
+      const prepareStore = (folder: string, referenced: boolean): void => {
+        const directory = join(root, "stores", folder);
+        let existed = true;
+        try { lstatSync(directory); } catch (e) { if (!missing(e)) throw e; existed = false; }
+        prepare(directory, !referenced);
+        if (existed && !referenced) {
+          // An existing directory with no reservation is ambiguous: do not
+          // recreate a lost DB even if its ref also disappeared. A crash in the
+          // mkdir-before-reservation window requires a fresh recovery token.
+          try { lstatSync(join(directory, `catalog-${hash(r.sessionKey)}.sqlite`)); }
+          catch (e) { if (missing(e)) fail("catalog-store-missing"); throw e; }
+        }
+      };
+      const status = (folder: string, options: CatalogOpenOptions = { create: false }): Record<string, unknown> => {
         prepare(join(root, "stores", folder), false);
-        return call({ v: 1, op: "status", sessionKey: r.sessionKey, catalogDirectory: join(root, "stores", folder) });
+        return call({ v: 1, op: "status", sessionKey: r.sessionKey, catalogDirectory: join(root, "stores", folder) }, options);
       };
       if (r.op === "recoverStart") {
         const folder = `recovery-${hash(`${r.sessionKey}\0${r.rebuildKey}`)}`;
@@ -151,13 +164,18 @@ export function createCatalogStoreExecutor(engine: (request: unknown) => Catalog
             syncDirectory(join(root, "stages"));
             return prior;
           }
-          const s: Stage = { v: 1, sessionKey: r.sessionKey, folder, rebuildKey: r.rebuildKey, expectedActiveStoreKey: active()?.storeKey ?? null };
+          try { lstatSync(join(root, "stores", folder)); fail("catalog-store-mismatch"); }
+          catch (e) { if (!missing(e)) throw e; }
+          const s: Stage = { v: 1, sessionKey: r.sessionKey, storeKey: randomUUID(), folder, rebuildKey: r.rebuildKey, expectedActiveStoreKey: active()?.storeKey ?? null };
           atomic(stagePath, s, hooks); return s;
         });
-        prepare(join(root, "stores", folder), true);
-        const result = call({ v: 1, op: "rebuildStep", action: "start", catalogDirectory: join(root, "stores", folder), sessionKey: r.sessionKey, rebuildKey: r.rebuildKey });
+        const referenced = record(refPath(stage.storeKey), refValid);
+        if (referenced && readRef(stage.storeKey).folder !== folder) fail("catalog-store-mismatch");
+        const options = { create: !referenced, expectedStoreKey: stage.storeKey };
+        prepareStore(folder, !!referenced);
+        const result = call({ v: 1, op: "rebuildStep", action: "start", catalogDirectory: join(root, "stores", folder), sessionKey: r.sessionKey, rebuildKey: r.rebuildKey }, options);
         hooks.fault?.("after-store-commit");
-        const s = status(folder);
+        const s = status(folder, { create: false, expectedStoreKey: stage.storeKey });
         syncDirectory(join(root, "stores", folder));
         if (!isStoreKey(s.storeKey) || !Number.isSafeInteger(result.generation) || Number(result.generation) < 1) fail("catalog-store-mismatch");
         const ref: Ref = { v: 1, sessionKey: r.sessionKey, storeKey: s.storeKey, folder, recovery: { rebuildKey: r.rebuildKey, generation: Number(result.generation), expectedActiveStoreKey: stage.expectedActiveStoreKey } };
@@ -167,10 +185,10 @@ export function createCatalogStoreExecutor(engine: (request: unknown) => Catalog
       if (r.op === "recoverPublish") {
         const ref = readRef(r.targetStoreKey);
         if (!ref.recovery || ref.recovery.generation !== r.generation || ref.recovery.expectedActiveStoreKey !== r.expectedActiveStoreKey) fail("catalog-recovery-mismatch");
-        if (status(ref.folder).storeKey !== ref.storeKey) fail("catalog-store-mismatch");
+        if (status(ref.folder, { create: false, expectedStoreKey: ref.storeKey }).storeKey !== ref.storeKey) fail("catalog-store-mismatch");
         // Bounded SQLite/source work stays outside the pointer mutex. A CAS loser
         // leaves its complete physical store intact but cannot replace the winner.
-        call({ v: 1, op: "rebuildStep", action: "publish", sessionKey: r.sessionKey, catalogDirectory: join(root, "stores", ref.folder), generation: r.generation, expectedShards: r.expectedShards });
+        call({ v: 1, op: "rebuildStep", action: "publish", sessionKey: r.sessionKey, catalogDirectory: join(root, "stores", ref.folder), generation: r.generation, expectedShards: r.expectedShards }, { create: false, expectedStoreKey: ref.storeKey });
         hooks.fault?.("after-store-commit");
         await lock(() => {
           const current = active()?.storeKey ?? null;
@@ -191,8 +209,27 @@ export function createCatalogStoreExecutor(engine: (request: unknown) => Catalog
           // Deterministic initial location: interrupted or competing initializers
           // resume one DB, never choose and overwrite another initializer's DB.
           const folder = `initial-${hash(r.sessionKey)}`;
-          prepare(join(root, "stores", folder), true);
-          const s = status(folder); hooks.fault?.("after-store-commit");
+          const stagePath = join(root, "stages", `${folder}.json`);
+          const stage = await lock(() => {
+            const prior = record(stagePath, stageValid);
+            if (prior) {
+              if (prior.sessionKey !== r.sessionKey || prior.folder !== folder || prior.rebuildKey !== "initial" || prior.expectedActiveStoreKey !== null) fail("catalog-store-mismatch");
+              syncDirectory(join(root, "stages")); return prior;
+            }
+            // An existing initial folder without its binding is ambiguous. Never
+            // adopt or replace it by guessing identity from directory contents.
+            try { lstatSync(join(root, "stores", folder)); }
+            catch (e) {
+              if (!missing(e)) throw e;
+              const intent: Stage = { v: 1, sessionKey: r.sessionKey, storeKey: randomUUID(), folder, rebuildKey: "initial", expectedActiveStoreKey: null };
+              atomic(stagePath, intent, hooks); return intent;
+            }
+            return fail("catalog-store-mismatch");
+          });
+          const referenced = record(refPath(stage.storeKey), refValid);
+          if (referenced && readRef(stage.storeKey).folder !== folder) fail("catalog-store-mismatch");
+          prepareStore(folder, !!referenced);
+          const s = status(folder, { create: !referenced, expectedStoreKey: stage.storeKey }); hooks.fault?.("after-store-commit");
           syncDirectory(join(root, "stores", folder));
           if (!isStoreKey(s.storeKey)) fail("catalog-store-mismatch");
           const ref: Ref = { v: 1, sessionKey: r.sessionKey, storeKey: s.storeKey, folder };
@@ -212,8 +249,8 @@ export function createCatalogStoreExecutor(engine: (request: unknown) => Catalog
         syncDirectory(join(root, "refs"));
         if (r.targetStoreKey === undefined) syncDirectory(root);
       }
-      if (status(ref.folder).storeKey !== ref.storeKey) fail("catalog-store-mismatch");
-      const result = call({ ...r, catalogDirectory: join(root, "stores", ref.folder) });
+      if (status(ref.folder, { create: false, expectedStoreKey: ref.storeKey }).storeKey !== ref.storeKey) fail("catalog-store-mismatch");
+      const result = call({ ...r, catalogDirectory: join(root, "stores", ref.folder) }, { create: false, expectedStoreKey: ref.storeKey });
       return { v: 1, ok: true, sourceBytes, result };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;

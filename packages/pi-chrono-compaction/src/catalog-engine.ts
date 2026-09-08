@@ -70,17 +70,29 @@ class Engine {
       });
     } catch (error) { throw domainError ?? error; }
   }
-  initialize(): void {
+  validate(bootstrap = false, expectedStoreKey?: string): void {
+    const exists = this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'");
+    if (!exists) {
+      if (bootstrap && !this.get("SELECT name FROM sqlite_master LIMIT 1")) return;
+      fail("catalog-version-mismatch");
+    }
+    const m = this.get("SELECT * FROM meta WHERE singleton=1");
+    if (!m || n(m, "version") !== 1 || text(m, "session") !== this.request.sessionKey) fail("catalog-version-mismatch");
+    if (expectedStoreKey !== undefined && text(m!, "store") !== expectedStoreKey) fail("catalog-store-mismatch");
+    if (n(this.get("SELECT COUNT(*) AS count FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'")!, "count") !== schema.length) fail("catalog-version-mismatch");
+    for (const sql of schema) {
+      const name = sql.split(" ")[2]!;
+      if (this.get("SELECT sql FROM sqlite_master WHERE name=?", name)?.sql !== sql) fail("catalog-version-mismatch");
+    }
+  }
+  initialize(bootstrap: boolean, expectedStoreKey?: string): void {
     this.transaction(() => {
-      const exists = this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'");
-      if (!exists) {
-        if (this.get("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")) fail("catalog-version-mismatch");
+      this.validate(bootstrap, expectedStoreKey);
+      if (!this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'")) {
         for (const sql of schema) this.run(sql);
-        this.run("INSERT INTO meta VALUES(1,1,?,1,?)", this.request.sessionKey, randomUUID());
+        this.run("INSERT INTO meta VALUES(1,1,?,1,?)", this.request.sessionKey, expectedStoreKey ?? randomUUID());
         this.run("INSERT INTO generations VALUES(1,'initial','active')");
       }
-      const m = this.get("SELECT * FROM meta WHERE singleton=1")!;
-      if (n(m, "version") !== 1 || text(m, "session") !== this.request.sessionKey) fail("catalog-version-mismatch");
     });
   }
   generation(requested?: number): number {
@@ -350,16 +362,21 @@ class Engine {
   }
 }
 /** Must only run inside M03 worker containment. Errors never include source paths/content. */
-export function executeCatalogRequest(request: unknown): CatalogResponse {
+export interface CatalogOpenOptions { create?: boolean; expectedStoreKey?: string }
+export function executeCatalogRequest(request: unknown, options?: CatalogOpenOptions): CatalogResponse {
   if (!isCatalogRequest(request)) return { v: 1, ok: false, code: "catalog-request-invalid", sourceBytes: 0 };
   let db: CatalogSqlite | undefined, engine: Engine | undefined;
   try {
     for (const path of [request.catalogDirectory, ...(request.op === "ingestStep" ? [request.sourcePath] : [])]) {
       if (Buffer.from(path, "utf8").toString("utf8") !== path) fail("catalog-identity-unsafe");
     }
-    if (request.op === "ingestStep" || (request.op === "rebuildStep" && request.action === "start")) prepareDirectory(request.catalogDirectory);
-    db = CatalogSqlite.open(join(request.catalogDirectory, `catalog-${hash(request.sessionKey)}.sqlite`));
-    engine = new Engine(db, request); engine.initialize();
+    const create = options?.create ?? (request.op === "ingestStep" || (request.op === "rebuildStep" && request.action === "start"));
+    const expectedStoreKey = options?.expectedStoreKey ?? ("view" in request ? request.view.storeKey : undefined);
+    if (create) prepareDirectory(request.catalogDirectory);
+    const path = join(request.catalogDirectory, `catalog-${hash(request.sessionKey)}.sqlite`);
+    const validate = (connection: CatalogSqlite): void => new Engine(connection, request).validate(create, expectedStoreKey);
+    db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
+    engine = new Engine(db, request); engine.initialize(create, expectedStoreKey);
     const result = engine.execute();
     const response: CatalogResponse = { v: 1, ok: true, result, sourceBytes: engine.bytes };
     if (Buffer.byteLength(JSON.stringify(response)) > L.wireBytes) fail("catalog-response-limit");

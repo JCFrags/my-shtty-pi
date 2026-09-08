@@ -15,7 +15,7 @@ function fixture() {
 function code(expected: string) { return (e: unknown) => e instanceof CatalogSqliteError && e.code === expected && e.message === expected; }
 
 test("WAL/FULL, heap/cache/temp readbacks, FTS5 bound MATCH, transactions and checkpoint", () => {
-  const f = fixture(); const db = CatalogSqlite.open(f.path);
+  const f = fixture(); const db = CatalogSqlite.create(f.path);
   try {
     assert.deepEqual(db.capabilities(), { sqliteVersion: "3.53.0", journalMode: "wal", synchronous: 2, busyTimeout: 50,
       cacheSize: -2048, mmapSize: 0, hardHeapLimit: 67108864, tempStore: 2, fts5: true });
@@ -38,7 +38,7 @@ test("WAL/FULL, heap/cache/temp readbacks, FTS5 bound MATCH, transactions and ch
 });
 
 test("two connections isolate uncommitted writes, reader snapshot, and bounded writer lock", () => {
-  const f = fixture(); const writer = CatalogSqlite.open(f.path); const reader = CatalogSqlite.open(f.path);
+  const f = fixture(); const writer = CatalogSqlite.create(f.path); const reader = CatalogSqlite.open(f.path);
   try {
     writer.prepare("CREATE TABLE synthetic (n INTEGER)").run(); writer.prepare("INSERT INTO synthetic VALUES (1)").run();
     writer.transaction(() => {
@@ -74,7 +74,7 @@ test("committed WAL survives actual subprocess SIGKILL; later uncommitted write 
   const moduleUrl = new URL("../src/catalog-sqlite.js", import.meta.url).href;
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     const { CatalogSqlite } = await import(${JSON.stringify(moduleUrl)});
-    const db = CatalogSqlite.open(${JSON.stringify(f.path)});
+    const db = CatalogSqlite.create(${JSON.stringify(f.path)});
     db.prepare('CREATE TABLE synthetic(n INTEGER)').run();
     db.transaction(() => db.prepare('INSERT INTO synthetic VALUES (1)').run());
     db.prepare('BEGIN IMMEDIATE').run(); db.prepare('INSERT INTO synthetic VALUES (2)').run();
@@ -97,7 +97,7 @@ test("effective native heap enforcement, not merely PRAGMA readback", () => {
     // Lowering the process-global limit is permanent through SQL, so isolate this check.
     const child = spawnSync(process.execPath, ["--max-old-space-size=32", "--input-type=module", "-e", `
       const { CatalogSqlite } = await import(${JSON.stringify(moduleUrl)});
-      const db = CatalogSqlite.open(${JSON.stringify(f.path)});
+      const db = CatalogSqlite.create(${JSON.stringify(f.path)});
       try {
         db.prepare('PRAGMA hard_heap_limit=1048576').get();
         try { db.prepare('SELECT length(randomblob(2097152)) AS n').get(); process.exitCode = 2; }
@@ -137,7 +137,7 @@ test("owner-only directory and DB/WAL/SHM: reject unsafe modes, symlinks and har
     chmodSync(f.dir, 0o700); symlinkSync(f.dir, join(f.dir, "alias"));
     assert.throws(() => CatalogSqlite.open(join(f.dir, "alias", "catalog.sqlite")), code("catalog-storage-unsafe"));
     assert.throws(() => CatalogSqlite.open(":memory:"), code("catalog-storage-unsafe"));
-    const db = CatalogSqlite.open(f.path);
+    const db = CatalogSqlite.create(f.path);
     try {
       chmodSync(f.path, 0o644);
       assert.throws(() => db.prepare("SELECT 1"), code("catalog-storage-unsafe"));
@@ -146,7 +146,7 @@ test("owner-only directory and DB/WAL/SHM: reject unsafe modes, symlinks and har
 });
 
 test("native SQLite reads bypass JS readSync source accounting (disclosure regression)", () => {
-  const f = fixture(); let db = CatalogSqlite.open(f.path); const original = fs.readSync;
+  const f = fixture(); let db = CatalogSqlite.create(f.path); const original = fs.readSync;
   try {
     db.prepare("CREATE TABLE synthetic (n INTEGER)").run(); db.prepare("INSERT INTO synthetic VALUES (7)").run(); db.checkpoint(); db.close();
     fs.readSync = (() => { throw new Error("JS source read forbidden"); }) as typeof fs.readSync;

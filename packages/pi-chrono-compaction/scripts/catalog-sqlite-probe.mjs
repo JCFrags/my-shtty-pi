@@ -92,7 +92,7 @@ try {
     } else if (nativeHashes.get(process.versions.modules) !== installedHash) throw new Error("unverified-native-binary");
     const { CatalogSqlite } = await import("../dist/src/catalog-sqlite.js");
     temporary = mkdtempSync(join(tmpdir(), "chrono-sqlite-probe-")); chmodSync(temporary, 0o700);
-    const db = CatalogSqlite.open(join(temporary, "synthetic.sqlite"));
+    const db = CatalogSqlite.create(join(temporary, "synthetic.sqlite"));
     try {
       const capabilities = db.capabilities();
       // SQL can only lower this process-global limit. Probe process exits after this test.
