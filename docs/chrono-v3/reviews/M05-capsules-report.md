@@ -134,10 +134,32 @@ list was updated. The original failure is retained.
 Independent storage review reproduced three defects despite 17 passing focused
 tests: global artifact pagination let sibling rows poison fork/old-pin pages;
 check-then-rename could replace a raced destination; and status recreated a
-missing publication lock. Corrections are pending verification. Independent
-adapter review found that a `NaN` aggregate budget bypassed numeric comparisons;
-that correction is also pending. These findings block acceptance. No deployment
-or self-acceptance is claimed.
+missing publication lock. The correction adds an indexed lineage selection before
+the page limit, an existing-only validated read lock, and syscall-only
+`renameat2(RENAME_NOREPLACE)` publication. The latter requires the installed
+Python 3 standard library and libc capability described in ADR-003; it has no
+ordinary-rename, copy, or hard-link fallback. Independent re-review passed all
+three corrections and 15 focused compiled tests. It also reproduced a versioning
+regression: the new ancestry table still used the predecessor's declared derived
+schema 1. A separate physical-schema version correction is required; existing
+stores must not be migrated, relabeled, or deleted.
+
+Independent adapter review found that a `NaN` aggregate budget bypassed numeric
+comparisons. The corrected public binding factory rejects any supplied budget
+that is not a positive safe integer before selecting or invoking an executor.
+Regression tests cover `NaN`, both infinities, zero, negative, and fractional
+values with exactly zero executor calls. The six focused adapter tests passed.
+
+The integrated correction build and typecheck passed, followed by 63 capsule
+tests under a 128 MiB V8 heap. A three-record, 1 MiB synthetic campaign then
+passed 43 contained calls in 20.951 seconds, including fork capsule ancestry and
+old-pin stability after sibling publication. Tickets and slots settled to zero
+and the worker unit became inactive. An initial campaign assertion confused the
+capsule `(eventSeq, descriptor)` cursor with the catalog's event-only cursor;
+the corrected request explicitly excludes all descriptors at the previous event.
+The failed assertion is retained. This small run did not contain its parent in
+an OS memory unit. Larger frozen-code campaigns and final schema verification
+remain pending. No deployment or self-acceptance is claimed.
 
 ## Remaining evidence
 
