@@ -64,8 +64,13 @@ const options: CapsuleReducerOptions = {
   budget: { maxTokens: 4096, maxUtf16Units: 24 * 1024, maxAlternatives: 2 },
 };
 
-function reducePartitioned(text: string, sizes: readonly number[], restartEvery = 0): ReturnType<typeof finalizeCapsuleReduction> {
-  let state: CapsuleReducerStreamState = beginCapsuleReduction(base(text), options);
+function reducePartitioned(
+  text: string,
+  sizes: readonly number[],
+  restartEvery = 0,
+  reducerOptions: CapsuleReducerOptions = options,
+): ReturnType<typeof finalizeCapsuleReduction> {
+  let state: CapsuleReducerStreamState = beginCapsuleReduction(base(text), reducerOptions);
   let offset = 0;
   let part = 0;
   while (offset < text.length) {
@@ -205,6 +210,22 @@ test("protected middle text retains one exact bounded clause neighborhood", () =
   }
 });
 
+test("protected middle lines retain restrictions, exceptions, failure detail, cancellation and pending approval without outcome inference", () => {
+  const lines = [
+    "Do not deploy unless Morgan approves; staging is permitted.",
+    "Failure detail: the command failed after exit code 9.",
+    "Cancellation was requested; the work remains unresolved.",
+    "The quoted phrase ‘pending approval’ does not grant approval.",
+  ];
+  const text = `${"head ".repeat(900)}\n${lines.join("\n")}\n${"tail ".repeat(900)}`;
+  const envelope = reducePartitioned(text, [1, 29, 513, 4_097], 5);
+  const primary = envelope.alternatives[0]!;
+  for (const line of lines) assert.ok(primary.text.includes(line), line);
+  assert.deepEqual(primary.outcome, { status: "unknown" });
+  const kinds = new Set(primary.protectedCues.map((cue) => cue.kind));
+  for (const kind of ["restriction", "condition", "failure", "cancelled", "unknown", "pending-approval", "negation"] as const) assert.ok(kinds.has(kind), kind);
+});
+
 test("bounded failure grammar crosses more than the old overlap and remains partition stable", () => {
   const failure = `exit code${" ".repeat(400)}17`;
   const text = `${"head ".repeat(900)}${failure}${" tail".repeat(900)}`;
@@ -214,6 +235,35 @@ test("bounded failure grammar crosses more than the old overlap and remains part
   }
   assert.ok(whole.alternatives[0]!.protectedCues.some((cue) => cue.kind === "failure" && cue.exactText === failure));
   assert.ok(whole.alternatives[0]!.text.includes(failure));
+});
+
+test("over-limit grammar and identifiers degrade explicitly with partition-stable final envelopes", () => {
+  const overlongFailure = `exit code${" ".repeat(513)}17`;
+  const overlongUrl = `https://example.com/${"a".repeat(241)}`;
+  const text = `${"head ".repeat(900)}${overlongFailure} and ${overlongUrl}${" tail".repeat(900)}`;
+  const whole = reducePartitioned(text, [32_768]);
+  for (const sizes of [[1], [19, 257, 4_097]] as const) {
+    assert.equal(JSON.stringify(reducePartitioned(text, sizes, 7)), JSON.stringify(whole));
+  }
+  assert.equal(whole.alternatives[0]!.protectedCues.some((cue) => cue.exactText === overlongFailure || cue.exactText === overlongUrl), false);
+  assert.ok(whole.alternatives[0]!.omissions.some((item) => item.kind === "transformation-loss" && /bounded-grammar/.test(item.description)));
+});
+
+test("post-render cap clips exact source coverage instead of retaining pre-cap ranges", () => {
+  const clause = "Unless approved, do not deploy to production; staging is permitted.";
+  const text = `${"H".repeat(4_500)}${clause}${"T".repeat(4_500)}`;
+  const cappedOptions: CapsuleReducerOptions = { ...options, budget: { ...options.budget, maxUtf16Units: 6_000 } };
+  const whole = reducePartitioned(text, [32_768], 0, cappedOptions);
+  const restarted = reducePartitioned(text, [1, 31, 257, 4_097], 3, cappedOptions);
+  assert.equal(JSON.stringify(restarted), JSON.stringify(whole));
+  const primary = whole.alternatives[0]!;
+  assert.equal(primary.text.length, 6_000);
+  assert.ok(primary.omissions.some((item) => item.kind === "transformation-loss" && /Post-reducer/.test(item.description)));
+  const exact = primary.omissions.filter((item) => item.kind === "exact-range");
+  assert.ok(exact.length >= 1);
+  for (const item of exact) {
+    assert.equal(item.omittedUnits, item.decodedUtf16.end - item.decodedUtf16.start);
+  }
 });
 
 test("empty body finalizes without a feed and invalid feed order is refused", () => {
