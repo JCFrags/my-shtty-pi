@@ -98,7 +98,7 @@ if (process.argv[2] === "--generate") {
     if (!process.argv.includes("--small")) assert.ok(sourceBytes >= 250 * 1024 * 1024 && sourceBytes <= 500 * 1024 * 1024);
     await ingestAll();
     const initial = { jobs: metrics.jobs, sourceBytes: metrics.workerSourceBytes };
-    assert.ok(initial.sourceBytes <= sourceBytes + initial.jobs * 65536, "initial delta plus fixed anchor overhead");
+    assert.ok(initial.sourceBytes <= sourceBytes + initial.jobs * 163840, "initial delta plus <=64KiB discarded read-ahead and <=96KiB handoff verification");
     const noop = await call(ingest); assert.ok(noop.sourceBytes <= 32768);
     const pinned = (await call({ op: "pin", branchKey: "timeline", leaf: { shardKey: "one", eventId: expected.leaf } })).result.view;
     assert.deepEqual(await timeline(pinned), { count: expected.timelineCount, hash: expected.timelineHash });
@@ -109,7 +109,7 @@ if (process.argv[2] === "--generate") {
     const appended = JSON.stringify({ type: "message", id: "appended", parentId: expected.leaf, message: { role: "user", content: "Synthetic append remains after the immutable cut." } }) + "\n";
     appendFileSync(sourcePath, appended);
     const append = await call(ingest); assert.equal(append.result.caughtUp, true);
-    assert.ok(append.sourceBytes <= Buffer.byteLength(appended) + 65536);
+    assert.ok(append.sourceBytes <= Buffer.byteLength(appended) + 98304);
     assert.deepEqual(await timeline(pinned), { count: expected.timelineCount, hash: expected.timelineHash }, "old view remains immutable after append");
     completed = true;
     console.log(JSON.stringify({ passed: true, profile: process.argv.includes("--small") ? "small" : "medium", sourceBytes, sourceRecords: expected.records, timelineEvents: expected.timelineCount, initial, noopSourceBytes: noop.sourceBytes, appendSourceBytes: append.sourceBytes, ...metrics, wallMs: Math.round(performance.now() - started), ioMeaning: "Worker process totals include native SQLite, JS, startup and measurement reads; storage counters exclude cache hits. Independent source verification is excluded." }));

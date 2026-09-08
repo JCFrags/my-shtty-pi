@@ -19,6 +19,45 @@ The test polled readiness by invoking `session_before_compact`, which intentiona
 
 The regression now holds the real writer release after manifest publication, reproduces the cancellation deterministically, then schedules healthy work and observes completion through the existing read-only status command before invoking compaction. The deadline is unchanged and timeout diagnostics include completion state. No runtime source change is needed. The focused build-and-test run passed on its first corrected invocation.
 
+### R1 implementation and verification
+
+The focused corrections are `b830977` (F001), `ef09cf1` (F002), `0e0908c` (F003), and `a171fe7` (many-record harness). Parent integration `58e3d93` preserves reproducible source/dist and the 96-entry deployment manifest. No dependency, production version, charter or runtime-cap change occurred.
+
+- **F001:** At most 32 KiB of first/tail evidence advances only with parser-consumed buffers. Candidate verification and prior-anchor recheck occur inside the transaction before checkpoint publication; total verification overhead is at most 96 KiB. Six deterministic native-engine mutation tests prove complete ingestion-state rollback, including capture races, overlapping windows and giant continuations. All six fail against the original implementation because it accepts the mutation. Pure append remains valid; the helper reaches the exact 7 MiB + 96 KiB bound without exceeding the unchanged 8 MiB source budget. Sampled evidence still cannot certify unsampled bytes or writes after the final relevant read.
+- **F002:** Exact registered retrieval names and the `history_read` alias are generated-copy provenance. Twelve tests cover registry drift, mixed prose, explicit/indexed results, parser and process restart, sibling/session isolation, immutable pins and exact UTF-8 raw bytes. `history_retention_hint` is explicitly non-retrieval. Existing indexed provenance requires an explicit derived rebuild; it is not silently rewritten.
+- **F003:** Explicit creation is separate from existing lookup. UUID-bound initial/recovery intents prevent identity adoption on restart. Missing/empty referenced stores refuse without bootstrap, and ambiguous missing/zero reservations require a fresh recovery key. Twenty-two new tests cover actual native and physical routes, valid committed WAL recovery, refusal, restart/publication and healthy old pins. **Native limitation:** nonempty read-only identity/schema validation can create an empty WAL and a 32,768-byte SHM or rebuild transient SHM bookkeeping. Main DB and existing committed WAL bytes remain unchanged with no checkpoint/delete/schema writes. Missing/empty lookup preserves all orphan artifacts without native open. This is not an all-artifact preservation guarantee for nonempty preflight.
+- Parent build, typecheck, strict native allocation-refusal probe, **138/138 focused catalog/extension/configuration tests**, and **535/535 complete package tests** passed. Normal deterministic replay matched the retained small/medium output and generation hashes. Locked Pi 0.84.2 and global 0.85.1 disposable off/on canaries passed: unchanged 79,563-byte summaries/source prefixes, zero extension errors and external provider calls. The global lane does not expand the peer range.
+
+### R1 fixed-memory high-cardinality campaign
+
+Run `node scripts/catalog-many-records.mjs` after native preparation and distribution build. `--small` selects a 1,024-record development fixture. The final integrated campaign passed with **50,000 initial unique records**, 13,588,883 source bytes and 167 contained calls in 100,132 ms. Initial ingestion used 98 jobs plus one status request. Three continuations and two sibling-fork appends are the only permitted source changes.
+
+| Measurement | R1 integrated result |
+| --- | ---: |
+| Initial / total source-reader bytes | 28,730,624 / 29,643,664 |
+| Maximum job source reads / response | 294,912 / 5,693 bytes |
+| Generator / parent peak RSS | 63,287,296 / 82,886,656 bytes |
+| Parent plus independent clients cgroup peak / limit | 111,235,072 / 268,435,456 bytes |
+| Maximum worker RSS / observed cgroup peak | 75,206,656 / 48,701,440 bytes |
+| First / middle / late page maximum call latency | 503.149 / 489.036 / 524.956 ms |
+| Initial kernel read / write characters | 121,428,536 / 103,707,512 |
+| Initial kernel storage read / write bytes | 0 / 0 (cached/tmpfs) |
+
+Each parent/client uses a 128 MiB V8 heap; their combined OS cgroup is 256 MiB. Workers retain 256 MiB OS/128 MiB V8 limits. Two independent client PIDs ran in each disposable slots=1 and slots=2 lane, with observed occupancy one and two. All admissions, task sockets and units settled before namespace removal. No global limits changed.
+
+First/middle/late cursor windows (including 49,968 through 50,000 and an empty next page), six no-ops, append/fork isolation, sampled exact raw recovery, and full deterministic pre/final source hashes passed. Metadata paging read zero source bytes. This is not a full 50,000-page walk or all-record raw recovery. Latencies include process launch; kernel I/O includes native SQLite and startup, not SQLite-only query cost. RSS is observation, not native allocation enforcement; the separate allocation-refusal probe establishes that bound.
+
+The retained large-body campaign also passed after updating its accounting assertion: 289,678,089 source bytes (276.3 MiB), 1,025 records, 1,016 timeline events, 40 ingestion/173 total jobs. Initial reads were 293,544,713 bytes; total 293,675,934; maximum job 7,438,336; no-op 32,768; append 98,453. Maximum response was 6,049 bytes, process RSS 95,490,048 and cgroup peak 65,228,800. Kernel read/write characters were 354,789,485/10,991,834 with storage counters 0/0. Wall time was 96,152 ms. Exact source/pinned timeline checks passed. These R1 figures supersede the original campaign figures below for the corrected implementation.
+
+### R1 failed attempts and corrections
+
+- F001's first new regressions reached rollback correctly but six final healthy-read assertions used incorrect response field names. Corrected `seq`/`rawStart`; worker 33/33 and parent integrated checks passed. The six baseline-negative failures are expected regression evidence, not failed corrected runs.
+- F002's first run passed 11/12; registration drift exposed the advisory `history_retention_hint` tool. Its actual non-retrieval contract was added explicitly rather than using a broad name-prefix rule.
+- F003's earlier broader run passed 68/69: an existing cross-session fixture used status to bootstrap. The parent now explicitly ingests the other session and asserts missing-status refusal; integrated tests pass.
+- The many-record development harness initially omitted bounded discarded read-ahead in its accounting expectation, then tried to change slots policy on an existing namespace. Corrected the proof and used separate disposable namespaces per policy. Both failed namespaces were retained after confirming settlement; no runtime limits changed.
+- The verifier worker's first frozen check refused 95 untracked build-generated source maps. The exact task-generated maps were moved into ignored private build output; frozen verification then passed without weakening clean-worktree enforcement.
+- The first integrated large-body rerun failed its old 64 KiB anchor-overhead expectation after F001 added a prior-anchor recheck. Both campaign assertions now account for at most 64 KiB discarded read-ahead plus 96 KiB verification, and at most 96 KiB verification for a small append. This changes measurement expectations, not the enforced 8 MiB source cap. The failed disposable namespace was retained; the corrected large-body rerun passed.
+
 ## Delivered boundary
 
 The new catalog is a disposable SQLite/WAL index of explicitly supplied synthetic/session JSONL sources. It stores structural metadata, byte ranges, raw-span hashes, decoded body hash descriptors, branch links, and resumable parser checkpoints. It does not become model memory, replace history tools, or change compaction, first tool-result consumption, the required Pi summary, retrieval authority, or source files.
