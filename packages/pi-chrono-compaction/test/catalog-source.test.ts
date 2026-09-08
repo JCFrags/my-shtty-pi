@@ -19,7 +19,9 @@ test("catalog source append/no-op reads have fixed verification overhead", () =>
   const next = new CatalogSource(path);
   try {
     next.verify(checkpoint);
-    assert.equal(next.read(checkpoint.size, 5).toString(), "delta");
+    const delta = next.read(checkpoint.size, 5);
+    assert.equal(delta.toString(), "delta");
+    next.accept(checkpoint.size, delta);
     assert.equal(next.bytesRead, 2 * CATALOG_SOURCE_ANCHOR_BYTES + 5);
     const current = next.snapshot();
     assert.equal(current.size, checkpoint.size + 5);
@@ -75,5 +77,75 @@ test("catalog source snapshots validate canonical anchor shape including empty f
     const snapshot = source.snapshot(); source.verify(snapshot);
     assert.equal(source.bytesRead, 0);
     assert.throws(() => source.verify({ ...snapshot, anchors: [] }), /catalog-source-range/);
+  } finally { source.close(); }
+}));
+function mutate(path: string, offset: number): void {
+  const fd = openSync(path, "r+");
+  try { writeSync(fd, Buffer.from("B"), 0, 1, offset); } finally { closeSync(fd); }
+}
+test("handoff refuses a previously verified anchor changed before publication", () => fixture(path => {
+  const first = new CatalogSource(path), saved = first.snapshot(); first.close();
+  appendFileSync(path, "delta");
+  const source = new CatalogSource(path);
+  try {
+    source.verify(saved);
+    source.accept(saved.size, source.read(saved.size, 5));
+    mutate(path, 100);
+    source.assertCurrent(); // Identity and size alone cannot protect the handoff.
+    assert.throws(() => source.snapshot(saved.size + 5), /catalog-source-changed/);
+  } finally { source.close(); }
+}));
+test("handoff does not adopt changed new bytes or an unconsumed read suffix", () => fixture(path => {
+  const first = new CatalogSource(path), saved = first.snapshot(); first.close();
+  appendFileSync(path, "delta");
+  const source = new CatalogSource(path);
+  try {
+    source.verify(saved);
+    const bytes = source.read(saved.size, 5);
+    source.accept(saved.size, bytes.subarray(0, 3));
+    assert.throws(() => source.snapshot(saved.size + 5), /catalog-source-range/);
+    mutate(path, saved.size + 1);
+    assert.throws(() => source.snapshot(saved.size + 3), /catalog-source-changed/);
+  } finally { source.close(); }
+}));
+test("handoff carries small overlapping windows and keeps a fixed 96 KiB verification bound", () => fixture(path => {
+  writeFileSync(path, Buffer.alloc(8000, 65));
+  const first = new CatalogSource(path), saved = first.snapshot(); first.close();
+  appendFileSync(path, Buffer.alloc(7 * 1024 * 1024, 65));
+  const source = new CatalogSource(path);
+  try {
+    source.verify(saved);
+    for (let offset = saved.size; offset < source.size; offset += CATALOG_SOURCE_CHUNK_BYTES) {
+      const bytes = source.read(offset, Math.min(CATALOG_SOURCE_CHUNK_BYTES, source.size - offset));
+      source.accept(offset, bytes);
+    }
+    const current = source.snapshot();
+    assert.equal(current.size, source.size);
+    assert.ok(source.bytesRead <= 7 * 1024 * 1024 + 6 * CATALOG_SOURCE_ANCHOR_BYTES);
+    const check = new CatalogSource(path);
+    try { check.verify(current); } finally { check.close(); }
+  } finally { source.close(); }
+}));
+test("handoff allows concurrent pure append and charges at most 7 MiB plus 96 KiB", () => fixture(path => {
+  const first = new CatalogSource(path), saved = first.snapshot(); first.close();
+  appendFileSync(path, Buffer.alloc(7 * 1024 * 1024, 65));
+  const source = new CatalogSource(path);
+  try {
+    source.verify(saved);
+    for (let offset = saved.size; offset < source.size; offset += CATALOG_SOURCE_CHUNK_BYTES) {
+      const bytes = source.read(offset, Math.min(CATALOG_SOURCE_CHUNK_BYTES, source.size - offset));
+      source.accept(offset, bytes);
+    }
+    appendFileSync(path, "concurrent append"); // Outside this job's pinned size.
+    const current = source.snapshot();
+    assert.equal(current.size, source.size);
+    assert.equal(source.bytesRead, 7 * 1024 * 1024 + 6 * CATALOG_SOURCE_ANCHOR_BYTES);
+    const check = new CatalogSource(path);
+    try {
+      check.verify(current);
+      const delta = check.read(current.size, check.size - current.size);
+      assert.equal(delta.toString(), "concurrent append");
+      check.accept(current.size, delta); check.snapshot();
+    } finally { check.close(); }
   } finally { source.close(); }
 }));

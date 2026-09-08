@@ -36,6 +36,9 @@ export class CatalogSource {
   readonly size: number;
   private fd: number;
   private used = 0;
+  // At most two 16 KiB windows, never a lifetime read log. Only accept() advances
+  // these windows: a read can contain a suffix the parser did not consume.
+  private evidence?: { size: number; first: Buffer; tail: Buffer; prior: CatalogSourceSnapshot };
   private readonly filename: string;
   constructor(filename: string, readonly budget = CATALOG_SOURCE_JOB_BYTES) {
     if (!isAbsolute(filename) || filename.includes("\0") || !validInteger(budget) || budget < 1 || budget > CATALOG_SOURCE_JOB_BYTES) throw new CatalogSourceError("catalog-source-range");
@@ -95,9 +98,23 @@ export class CatalogSource {
     const first = Math.min(size, CATALOG_SOURCE_ANCHOR_BYTES);
     const spans = [{ offset: 0, length: first }];
     if (size > first) spans.push({ offset: Math.max(first, size - CATALOG_SOURCE_ANCHOR_BYTES), length: Math.min(size - first, CATALOG_SOURCE_ANCHOR_BYTES) });
-    const anchors = spans.map(span => ({ ...span, sha256: digest(this.read(span.offset, span.length)) }));
-    this.assertCurrent(size);
-    return { schemaVersion: 1, identity: this.identity, size, anchors };
+    const evidence = this.evidence;
+    if (evidence && size !== evidence.size) throw new CatalogSourceError("catalog-source-range");
+    const buffers = spans.map((span, index) => evidence
+      ? (index === 0 ? evidence.first : evidence.tail.subarray(evidence.tail.length - span.length))
+      : this.read(span.offset, span.length));
+    const anchors = spans.map((span, index) => ({ ...span, sha256: digest(buffers[index]!) }));
+    const snapshot: CatalogSourceSnapshot = { schemaVersion: 1, identity: this.identity, size, anchors };
+    if (evidence) {
+      // New anchors must match bytes accepted by the parser, not freshly adopted
+      // filesystem bytes. Recheck old evidence AFTER candidate capture as well:
+      // overlapping windows must not erase a mutation in the retiring old tail.
+      for (const anchor of anchors) this.verifyRange(anchor);
+      for (const anchor of evidence.prior.anchors) this.verifyRange(anchor);
+    }
+    this.assertCurrent();
+    this.seedEvidence(snapshot, buffers);
+    return snapshot;
   }
   verify(snapshot: CatalogSourceSnapshot): void {
     if (snapshot?.schemaVersion !== 1 || !validInteger(snapshot.size) || snapshot.size > this.size || snapshot.identity?.device !== this.identity.device || snapshot.identity?.inode !== this.identity.inode) throw new CatalogSourceError("catalog-source-changed");
@@ -105,12 +122,33 @@ export class CatalogSource {
     const expected = [{ offset: 0, length: first }];
     if (snapshot.size > first) expected.push({ offset: Math.max(first, snapshot.size - CATALOG_SOURCE_ANCHOR_BYTES), length: Math.min(snapshot.size - first, CATALOG_SOURCE_ANCHOR_BYTES) });
     if (!Array.isArray(snapshot.anchors) || snapshot.anchors.length !== expected.length) throw new CatalogSourceError("catalog-source-range");
-    snapshot.anchors.forEach((anchor, index) => {
+    const buffers = snapshot.anchors.map((anchor, index) => {
       const span = expected[index]!;
       if (anchor.offset !== span.offset || anchor.length !== span.length || !/^[a-f0-9]{64}$/.test(anchor.sha256)) throw new CatalogSourceError("catalog-source-range");
-      this.verifyRange(anchor);
+      return this.verifyRange(anchor);
     });
     this.assertCurrent(snapshot.size);
+    this.seedEvidence(snapshot, buffers);
+  }
+  private seedEvidence(snapshot: CatalogSourceSnapshot, buffers: readonly Buffer[]): void {
+    this.evidence = {
+      size: snapshot.size,
+      first: Buffer.from(buffers[0]!),
+      tail: Buffer.from(Buffer.concat(buffers).subarray(-CATALOG_SOURCE_ANCHOR_BYTES)),
+      prior: { ...snapshot, identity: { ...snapshot.identity }, anchors: snapshot.anchors.map(anchor => ({ ...anchor })) },
+    };
+  }
+  /** Hand off exactly the contiguous bytes consumed and hashed by ingestion.
+   * Memory and final verification are bounded independently of prefix length.
+   * As with every sampled check, writes after the final read cannot be excluded.
+   */
+  accept(offset: number, bytes: Uint8Array): void {
+    const evidence = this.evidence;
+    if (!evidence || offset !== evidence.size || bytes.length > CATALOG_SOURCE_CHUNK_BYTES || bytes.length > this.size - offset) throw new CatalogSourceError("catalog-source-range");
+    const remaining = CATALOG_SOURCE_ANCHOR_BYTES - evidence.first.length;
+    if (remaining > 0) evidence.first = Buffer.concat([evidence.first, bytes.subarray(0, remaining)]);
+    evidence.tail = Buffer.from(Buffer.concat([evidence.tail, bytes]).subarray(-CATALOG_SOURCE_ANCHOR_BYTES));
+    evidence.size += bytes.length;
   }
   /** Selected-byte recovery verifies the complete bounded hashed span, not just
    * its returned subrange. Callers store these hashes atomically with offsets. */

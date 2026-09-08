@@ -205,14 +205,19 @@ class Engine {
             for (const record of result.records) { this.saveRecord(g, shard, record); records++; }
             if (result.error || !result.consumedBytes) break;
           }
-          if (consumed) this.run("INSERT INTO spans VALUES(?,?,?,?,?)", g, r.shardKey, start, consumed, hash(bytes.subarray(0, consumed)));
+          if (consumed) {
+            const accepted = bytes.subarray(0, consumed);
+            source.accept(start, accepted);
+            this.run("INSERT INTO spans VALUES(?,?,?,?,?)", g, r.shardKey, start, consumed, hash(accepted));
+          }
           // Charge all bytes read, including a bounded unread suffix discarded at a job cut.
           delta += bytes.length;
           if (state.error || !consumed) break;
         }
         const saved = JSON.stringify(state);
         if (Buffer.byteLength(saved) > L.checkpointBytes) fail("catalog-checkpoint-limit");
-        source.assertCurrent();
+        // Bounded transactional handoff: snapshot checks consumed-byte evidence
+        // and rechecks the previous anchors before any checkpoint is published.
         const snapshot = source.snapshot(state.byteOffset);
         const parseError = (state as CatalogParserState).error;
         const caught = state.byteOffset === source.size && !parseError && state.recordStart === state.byteOffset;
