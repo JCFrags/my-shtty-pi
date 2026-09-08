@@ -621,7 +621,9 @@ for (const product of active) {
   const historicalDeployed = parseDeployedBytes(gitBytesAt(m05VerifierBaseCommit, manifestRel), `${m05VerifierBaseCommit}:${manifestRel}`);
   for (const [rel, expected] of historicalDeployed) {
     const current = deployed.get(rel);
-    const authorized = product.slug === "pi-chrono-compaction" && m05AuthorizedHistoricalHashChanges.get(rel) === current;
+    const authorized = product.slug === "pi-chrono-compaction"
+      && m05AuthorizedHistoricalHashChanges.has(rel)
+      && m05AuthorizedHistoricalHashChanges.get(rel) === current;
     if (current !== expected && !authorized) throw new Error(`${product.slug}: historical deployed record changed: ${rel}`);
   }
   deployedByProduct.set(product.slug, deployed);

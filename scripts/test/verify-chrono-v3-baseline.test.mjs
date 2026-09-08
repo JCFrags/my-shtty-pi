@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +42,18 @@ function withClonedRepository(fn) {
 }
 function runStatic(repositoryRoot, ...args) {
   return run("--repository-root", repositoryRoot, "--allow-missing-live", "--static-only", "--allow-dirty", ...args);
+}
+function runSyntheticDeployed(repositoryRoot) {
+  const deployedVerifier = join(repositoryRoot, "scripts", "verify-deployed-baseline.mjs");
+  const source = readFileSync(join(root, "scripts", "verify-deployed-baseline.mjs"), "utf8");
+  const scannerCall = "const publicationScan = verifyPublicationScanner();";
+  assert.equal(source.split(scannerCall).length, 2, "expected one publication scanner call");
+  writeFileSync(deployedVerifier, source.replace(scannerCall, 'const publicationScan = "test-bypass";'));
+  return spawnSync(process.execPath, [deployedVerifier, "--static-only", "--product", "pi-chrono-compaction"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    timeout: 120000,
+  });
 }
 function mutatePackage(repositoryRoot, mutate) {
   const path = join(repositoryRoot, "packages", "pi-chrono-compaction", "package.json");
@@ -298,6 +311,28 @@ test("DEPLOYED manifest extra path fails", () => withClonedRepository((repositor
   const result = runStatic(repositoryRoot);
   assert.equal(result.status, 1);
   assert.equal(result.json.code, "deployed-manifest-scope-changed");
+}));
+
+test("deployed verifier accepts the two exact authorized historical hashes", () => withClonedRepository((repositoryRoot) => {
+  const result = runSyntheticDeployed(repositoryRoot);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.deployedHashesVerified, "303/303");
+  assert.equal(output.historicalCanonicalDeployedFiles, "291/291");
+  assert.equal(output.m05DeployedAdditions, "12/12");
+}));
+
+test("deployed verifier rejects a same-count historical non-JS substitution", () => withClonedRepository((repositoryRoot) => {
+  const path = manifestPath(repositoryRoot);
+  const lines = readFileSync(path, "utf8").trimEnd().split("\n");
+  const index = lines.findIndex((line) => line.endsWith("  package.json"));
+  assert.notEqual(index, -1);
+  const readme = readFileSync(join(repositoryRoot, "packages", "pi-chrono-compaction", "README.md"));
+  lines[index] = `${createHash("sha256").update(readme).digest("hex")}  README.md`;
+  writeFileSync(path, `${lines.join("\n")}\n`);
+  const result = runSyntheticDeployed(repositoryRoot);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /historical deployed record changed: package\.json/u);
 }));
 
 test("dirty repository fails by default", () => withClonedRepository((repositoryRoot) => {
