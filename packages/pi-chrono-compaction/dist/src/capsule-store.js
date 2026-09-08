@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { constants as F, lstatSync, mkdirSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { CAPSULE_LIMITS, DERIVED_SCHEMA_VERSION, SEGMENT_CONTENT_HASH, isCapsuleWorkerRequest, isDerivedPublicationReceipt, isReducerEnvelope, } from "./capsule-contract.js";
+import { CAPSULE_LIMITS, CAPSULE_REDUCER_PIPELINE_VERSION, DERIVED_SCHEMA_VERSION, SEGMENT_CONTENT_HASH, isCapsuleWorkerRequest, isDecodedChunkDescriptor, isDerivedManifest, isDerivedPublicationReceipt, isReducerEnvelope, } from "./capsule-contract.js";
 import { CatalogSqlite } from "./catalog-sqlite.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
@@ -262,9 +262,47 @@ function verifyArtifactManifest(request, store, artifact) {
     catch {
         fail("capsule-content-corrupt");
     }
-    const encoded = encodeManifest(request.identity, string(row, "layer"), parsed.segment);
-    if (encoded.manifest.hash !== string(row, "hash") || !encoded.bytes.equals(bytes) || parsed.hash !== encoded.manifest.hash)
+    if (!isDerivedManifest(parsed))
         fail("capsule-content-corrupt");
+    const manifest = parsed;
+    const encoded = encodeManifest(request.identity, string(row, "layer"), manifest.segment);
+    if (encoded.manifest.hash !== string(row, "hash") || !encoded.bytes.equals(bytes) || manifest.hash !== encoded.manifest.hash
+        || manifest.layer !== string(artifact, "layer") || manifest.segment.kind !== string(artifact, "layer")
+        || manifest.segment.hash !== string(artifact, "segmentHash") || manifest.segment.bytes !== number(artifact, "segmentBytes"))
+        fail("capsule-content-corrupt");
+    const first = manifest.segment.first, last = manifest.segment.last;
+    if (first.eventSeq !== number(artifact, "eventSeq") || first.descriptor !== number(artifact, "descriptor")
+        || last.eventSeq !== first.eventSeq || last.descriptor !== first.descriptor)
+        fail("capsule-content-corrupt");
+    if (manifest.segment.kind === "chunks" && (manifest.segment.first.chunkIndex !== number(artifact, "chunkIndex")
+        || manifest.segment.last.chunkIndex !== manifest.segment.first.chunkIndex))
+        fail("capsule-content-corrupt");
+    if (manifest.segment.kind === "capsules" && (manifest.segment.records !== 1 || number(artifact, "chunkIndex") !== 0))
+        fail("capsule-content-corrupt");
+    return manifest;
+}
+function chunkArtifact(row, requestedSource) {
+    if (number(row, "eventSeq") !== requestedSource.eventSeq || number(row, "descriptor") !== requestedSource.descriptor
+        || string(row, "source") !== canonicalJson(requestedSource))
+        fail("capsule-content-corrupt");
+    let parsed;
+    try {
+        parsed = JSON.parse(string(row, "record"));
+    }
+    catch {
+        fail("capsule-content-corrupt");
+    }
+    if (!isDecodedChunkDescriptor(parsed) || canonicalJson(parsed) !== string(row, "record"))
+        fail("capsule-content-corrupt");
+    const descriptor = parsed;
+    const start = descriptor.decodedUtf16.start, end = descriptor.decodedUtf16.end;
+    if (!sameSource(descriptor.source, requestedSource) || descriptor.chunkIndex !== number(row, "chunkIndex")
+        || descriptor.segmentHash !== string(row, "segmentHash") || descriptor.segmentOffset !== number(row, "segmentOffset")
+        || descriptor.utf16leBytes !== number(row, "payloadBytes") || descriptor.contentHash !== string(row, "contentHash")
+        || start !== descriptor.chunkIndex * CAPSULE_LIMITS.decodedChunkUnits || end <= start
+        || end > requestedSource.decodedUtf16.end || descriptor.utf16leBytes !== (end - start) * 2)
+        fail("capsule-content-corrupt");
+    return descriptor;
 }
 async function derive(request, store, options, executor, budget) {
     const reducer = options.reducer ?? defaultReducer;
@@ -471,12 +509,20 @@ async function execute(request, store, options, executor, budget) {
         const selected = rows.slice(0, requestedLimit);
         const capsules = [];
         for (const row of selected) {
-            const storedSource = JSON.parse(string(row, "source"));
+            let storedSource;
+            try {
+                storedSource = JSON.parse(string(row, "source"));
+            }
+            catch {
+                fail("capsule-content-corrupt");
+            }
+            if (storedSource.eventSeq !== number(row, "eventSeq") || storedSource.descriptor !== number(row, "descriptor"))
+                fail("capsule-content-corrupt");
             await authorizeBodyRef(request, storedSource, executor, budget);
             verifyArtifactManifest(request, store, row);
             const bytes = readVerifiedImmutable(join(request.derivedDirectory, "segments/capsules", string(row, "segmentHash")), string(row, "segmentHash"), number(row, "segmentBytes"));
             const envelope = decodeCapsuleSegment(bytes);
-            if (canonicalJson(envelope.source) !== string(row, "source"))
+            if (canonicalJson(envelope) !== string(row, "record") || canonicalJson(envelope.source) !== string(row, "source"))
                 fail("capsule-content-corrupt");
             capsules.push(envelope);
             if (Buffer.byteLength(JSON.stringify({ capsules })) > CAPSULE_LIMITS.responseBytes - 4096) {
@@ -494,22 +540,26 @@ async function execute(request, store, options, executor, budget) {
     const rows = store.rows("SELECT * FROM artifacts WHERE layer='chunks' AND eventSeq=? AND descriptor=? AND chunkIndex>=? ORDER BY chunkIndex LIMIT ?", request.limit ?? CAPSULE_LIMITS.rangeChunks, request.source.eventSeq, request.source.descriptor, firstChunk, request.limit ?? CAPSULE_LIMITS.rangeChunks);
     const wantedEnd = request.decodedStart + request.decodedLength;
     const output = Buffer.alloc(request.decodedLength * 2);
-    let copiedUnits = 0;
+    let coveredUntil = request.decodedStart, expectedChunk = firstChunk;
     for (const row of rows) {
+        const descriptor = chunkArtifact(row, requestedSource);
+        if (descriptor.chunkIndex !== expectedChunk++)
+            fail("capsule-chunk-missing");
         verifyArtifactManifest(request, store, row);
-        const descriptor = JSON.parse(string(row, "record"));
-        const start = Number(descriptor.decodedUtf16.start), end = Number(descriptor.decodedUtf16.end);
+        const start = descriptor.decodedUtf16.start, end = descriptor.decodedUtf16.end;
         if (start >= wantedEnd)
             break;
+        const from = Math.max(start, request.decodedStart), to = Math.min(end, wantedEnd);
+        if (from !== coveredUntil || to <= from)
+            fail("capsule-chunk-missing");
         const bytes = readVerifiedImmutable(join(request.derivedDirectory, "segments/chunks", string(row, "segmentHash")), string(row, "segmentHash"), number(row, "segmentBytes"));
         const payload = decodeChunkPayload(bytes, descriptor);
-        const from = Math.max(start, request.decodedStart), to = Math.min(end, wantedEnd);
-        if (to > from) {
-            payload.copy(output, (from - request.decodedStart) * 2, (from - start) * 2, (to - start) * 2);
-            copiedUnits += to - from;
-        }
+        payload.copy(output, (from - request.decodedStart) * 2, (from - start) * 2, (to - start) * 2);
+        coveredUntil = to;
+        if (coveredUntil === wantedEnd)
+            break;
     }
-    if (copiedUnits !== request.decodedLength)
+    if (coveredUntil !== wantedEnd)
         fail("capsule-chunk-missing");
     return { source: requestedSource, decodedUtf16: { start: request.decodedStart, end: wantedEnd }, encoding: "base64-utf16le",
         data: output.toString("base64"), complete: true, metrics: { chunksRead: rows.length, sqliteStatements: store.statements } };
@@ -519,7 +569,12 @@ export async function executeCapsuleRequest(value, options = {}) {
     if (!isCapsuleWorkerRequest(value))
         return { v: 1, ok: false, code: "capsule-request-invalid", sourceBytes: 0,
             sqliteNativeLimitBytes: CAPSULE_LIMITS.nativeSqliteBytes, resumable: false };
-    const request = value, create = request.op === "derivePage";
+    const request = value;
+    if (request.op === "derivePage" && request.identity.reducerSetVersion !== CAPSULE_REDUCER_PIPELINE_VERSION) {
+        return { v: 1, ok: false, code: "capsule-request-invalid", sourceBytes: 0,
+            sqliteNativeLimitBytes: CAPSULE_LIMITS.nativeSqliteBytes, resumable: false };
+    }
+    const create = request.op === "derivePage";
     let db;
     const budget = { bytes: 0 };
     try {

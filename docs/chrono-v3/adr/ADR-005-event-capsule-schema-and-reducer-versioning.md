@@ -57,6 +57,41 @@ Facts are structural or exact extractive facts. Outcome defaults to `unknown`. `
 
 Conditions, exceptions, negation, failure, unknown status, cancellation, pending approval, restrictions, and identifiers survive as exact protected cues with coordinates. Loss outside a bounded neighborhood uses an `exact-range` omission with a real removed range and unit count. Normalization or repeat collapse uses `transformation-loss`, an affected source range, and `omittedUnits: "unknown"`; it never fabricates an exact removed count. A cue or source reference is never itself lossy authority.
 
+### Project-lead F001–F003 correction candidate
+
+The corrected streaming pipeline is `capsule-pure-v2`. Its resumable reducer
+state is version 2; version-1 state must not resume under the new mechanics.
+Terminal and small-JSON family versions become 3.0.0; the other affected
+families become 2.0.0. Derived SQLite layout stays version 2 and capsule, chunk,
+and wire schemas stay version 1. These are different version boundaries.
+
+Derivation must require the current pipeline identity before storage or source
+work. A family-version change alone cannot prevent reuse of an already complete
+artifact. Use a fresh physical derived identity for the corrected pipeline; do
+not relabel or migrate an old store. Old read-only pins remain available under
+their original identity, without authorizing further old-pipeline derivation.
+
+Head, tail, and protected neighborhoods form an ordered union of exact source
+spans. Overlap must not discard an uncovered suffix or duplicate bytes. Only a
+real gap gets an omission marker. Internal source-to-output mappings are clipped
+through final rendering and output caps, so coverage describes retained output,
+not merely an earlier selection.
+
+Protected evidence uses bounded exact clause/line neighborhoods, with up to 128
+UTF-16 units on either side of an ordinary cue. At most 16 neighborhoods and
+4,096 neighborhood units are retained, separately from the 16-cue/2,048-unit
+cue budget. These are not universal sentence-understanding guarantees. A
+truncated neighborhood or exhausted cap must disclose loss and exact recovery;
+a detached cue never establishes approval or a resolved outcome.
+
+The `exit code` recognizer carries incremental grammar state, with at most 512
+whitespace units and 32 digits. Longer forms and over-limit URL/path tokens
+must disclose lexical degradation rather than depend on the feed partition.
+Ordinary scanning retains bounded context and batches small feeds. Final bytes,
+loss accounting, and restart behavior must agree across legal partitions.
+Earlier pipeline campaigns are historical evidence, not validation of these
+corrected mechanics.
+
 ## Bounded requests and readiness
 
 The pure worker request union has four operations:

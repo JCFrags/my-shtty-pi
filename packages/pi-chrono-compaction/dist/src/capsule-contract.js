@@ -3,6 +3,8 @@
  * no filesystem work, loads no SQLite binding, and starts no worker.
  */
 export const CAPSULE_PROTOCOL_VERSION = 1;
+/** Pipeline identity for corrected reducer selection/scanning semantics. */
+export const CAPSULE_REDUCER_PIPELINE_VERSION = "capsule-pure-v2";
 export const CAPSULE_SCHEMA_VERSION = 1;
 export const DERIVED_SCHEMA_VERSION = 2;
 export const CHUNK_SCHEMA_VERSION = 1;

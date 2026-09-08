@@ -255,6 +255,7 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/test/capsule-contract.test.ts",
   "packages/pi-chrono-compaction/test/capsule-derive.test.ts",
   "packages/pi-chrono-compaction/test/capsule-extension.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-reducer-persistence.test.ts",
   "packages/pi-chrono-compaction/test/capsule-reducer-stream.test.ts",
   "packages/pi-chrono-compaction/test/capsule-reducer.test.ts",
   "packages/pi-chrono-compaction/test/capsule-segment.test.ts",

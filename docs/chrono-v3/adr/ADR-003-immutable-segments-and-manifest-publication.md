@@ -72,7 +72,20 @@ A cursor can advance into a view only when physical identity and branch key matc
 
 A decoded read selects one source reference through the actual M04 `CatalogView`, uses an indexed SQLite range lookup, reads at most the requested 32,768 units from the identified immutable chunk segment, and verifies segment/content/body identities as applicable. It does not decode a prefix or load a full manifest.
 
-If SQLite references a missing or corrupt segment/manifest, the worker does not guess another path. When authoritative M04 source remains available and within the bounded job, it regenerates the exact deterministic object and verifies the expected hash before a new durable publication. Otherwise it returns a resumable explicit degradation marker. Unsupported, failed, excluded, or degraded objects never count as ready.
+A valid foreign segment is not valid evidence for the requested source. Before
+returning bytes, the reader binds the M04-authorized source to the artifact key
+and canonical source/record, the manifest's layer/event/descriptor/chunk index,
+the complete segment hash and length, the encoded canonical descriptor and
+payload offset, and the payload hash. Fixed chunk indexes and source coordinates
+must cover the requested range contiguously; summed copied length is not enough.
+Capsule reads also bind the decoded envelope to the stored record and source.
+
+If SQLite references a missing, corrupt, or foreign segment/manifest, a read
+refuses. It does not guess another path, regenerate an artifact, repair a lookup,
+or rewrite source or immutable bytes. Recovery uses an explicitly selected new
+derived identity and bounded authoritative source access; it is not an implicit
+read side effect. Unsupported, failed, excluded, or degraded objects never count
+as successful reduction.
 
 Physical derived-database corruption is recovered into a new derived UUID and directory using explicit routes and caller-declared catalog views. The old store is not opened for writes, moved, deleted, or auto-repaired. Old healthy stores, manifests, segments, receipts, and pins remain independently readable. Pointer publication, if added by integration, uses compare-and-swap and retains old UUID-to-directory refs.
 

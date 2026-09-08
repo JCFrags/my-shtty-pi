@@ -1,6 +1,65 @@
 # M05 — Capsules and decoded chunks
 
-**Status: draft review candidate. Not accepted or deployed.**
+**Status: project-lead changes requested at `bda0cb60d4cc55b7f0c7df7f2e4b5e1c510ab429`. Corrections in progress; not accepted or deployed.**
+
+## Project-lead correction scope
+
+M04 remains accepted. The M05 project-lead review withheld code/storage approval
+for F001–F004: overlapping edge selection and coverage, meaningful protected
+source neighborhoods, partition-invariant recognition and versioning, and exact
+chunk-to-source identity binding. The existing catalog, immutable-segment, and
+contained-worker architecture remains required. PR #38 stays draft and unmerged.
+
+The results below describe the previously reviewed candidate unless a correction
+section states a later exact version and head. Local secondary review and passing
+CI did not constitute project-lead acceptance. Corrections must first reproduce
+the findings through final envelopes, persisted stores, and public worker routes.
+No production recovery, deployment, broad ingestion, or M06 is authorized.
+
+## Correction evidence in progress
+
+The F004 red regression commit `2f333da` precedes fix `51697bd`.
+Valid foreign chunks are rejected after binding the authorized source, artifact,
+manifest, encoded descriptor, contiguous coordinates, and segment/payload hashes.
+The parent independently passed 23 focused store, segment, and contained-worker
+tests after build and typecheck. A fresh read-only review of the frozen fix found
+no blocking defect. Same-view substitution has original failing worker evidence;
+additional sibling-worker coverage was added with the pipeline follow-up.
+
+The F001–F003 red regression commit `ffb5d41` precedes fix `bad4481`.
+The parent passed 29 focused reducer and native-persistence tests after build and
+typecheck. These include overlapping edge lengths around 4,096 and 8,192 units,
+final coverage, protected neighborhoods, long failure grammar, partition changes,
+and JSON checkpoint restarts. This is focused evidence, not a completed gate.
+
+Pipeline red commit `2424fbc` precedes fix `dfe1a20`. The current derivation
+identity is `capsule-pure-v2`. Old-identity completed and partial derives refuse
+before catalog calls or store preparation; durable database, immutable-object,
+and source bytes stay unchanged. Current identity cannot relabel an old physical
+store. Old read-only pins retain their original identity. There is no physical
+schema migration. The parent passed all 20 focused store, worker, and persistence
+tests after integrating this follow-up.
+
+The independent reducer review reproduced a remaining blocker: `exit code17a`
+and `exit code17_` incorrectly became failure cues. Sixteen malformed tokens
+could exhaust the cue cap and hide a later valid long failure clause. The
+original reducer worker corrected the trailing word boundary in `ec81738`, after
+red commit `3a04083` reproduced the failure in final envelopes and persisted
+retrieval. Its 32 focused tests passed across whole, one-unit, and uneven restart
+feeds. Integrated full validation remains pending. Tiny caller budgets below the omission-marker
+length also safely refuse; this nonblocking limit is outside the default-budget
+correction scope.
+
+The read-only operating check at 2026-09-08T20:25:11Z matched all 96 installed
+M04 manifest rows and the selected alias/settings. Isolated workers remain ON,
+catalog shadow remains OFF, both admission namespaces are absent, and all four
+fixed units are inactive. A helper refusal was retained: the caller supplied the
+M04 package to a helper intentionally pinned to M03. Independent byte checks
+confirmed M04; no helper, package, configuration, or admission repair was made.
+Configured policy is not current-boot executable admission evidence.
+
+All earlier large campaigns below are historical, not corrected-pipeline scale
+evidence. Full integrated gates and exact-head CI are still pending.
 
 ## Entry boundary
 

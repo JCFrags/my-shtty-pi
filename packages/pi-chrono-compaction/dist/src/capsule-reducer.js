@@ -9,14 +9,14 @@ import { reduceTerminalOutput } from "./reducers/terminal.js";
 import { reduceTestOutput } from "./reducers/test-output.js";
 import { estimateTokensFromText, stableStringify } from "./utils.js";
 export const CAPSULE_REDUCER_FAMILY_VERSIONS = Object.freeze({
-    terminal: "2.0.0",
-    "test-output": "1.0.0",
-    "git-diff": "1.0.0",
-    "generic-text": "1.0.0",
-    "assistant-extractive": "1.0.0",
-    "assistant-cleanup": "1.0.0",
-    "lossless-normalizer": "1.0.0",
-    "small-json": "2.0.0",
+    terminal: "3.0.0",
+    "test-output": "2.0.0",
+    "git-diff": "2.0.0",
+    "generic-text": "2.0.0",
+    "assistant-extractive": "2.0.0",
+    "assistant-cleanup": "2.0.0",
+    "lossless-normalizer": "2.0.0",
+    "small-json": "3.0.0",
 });
 export const CAPSULE_REDUCER_DEFAULT_BUDGET = Object.freeze({
     maxTokens: 4_096,
@@ -29,10 +29,10 @@ const CUE_PATTERNS = [
     { kind: "condition", regex: /\b(?:if|unless|when|whenever|provided that|only if)\b/giu },
     { kind: "exception", regex: /\b(?:except|exception|however|but not|other than)\b/giu },
     { kind: "negation", regex: /\b(?:not|never|no|cannot|can't|must not|do not|don't|without)\b/giu },
-    { kind: "failure", regex: /\b(?:failed|failure|error|fatal|panic|exception|timed out|timeout|exit code\s*[1-9][0-9]*)\b/giu },
+    { kind: "failure", regex: /\b(?:failed|failure|error|fatal|panic|exception|timed out|timeout|exit code\s*[1-9][0-9]*(?![\p{L}\p{N}_]))\b/giu },
     { kind: "unknown", regex: /\b(?:unknown|unresolved|uncertain|not yet|still pending|open question)\b/giu },
     { kind: "restriction", regex: /\b(?:must|must not|only|required|prohibited|forbidden|do not|don't|never)\b/giu },
-    { kind: "identifier", regex: /(?:https?:\/\/[^\s)\]}>"']{1,240}|(?:\.{0,2}\/|~\/)[A-Za-z0-9_.@+\-/]{2,240}|\b[0-9a-f]{8}-[0-9a-f-]{27,56}\b|\b[A-Fa-f0-9]{12,64}\b)/gu },
+    { kind: "identifier", regex: /(?:https?:\/\/[^\s)\]}>"']{1,240}(?![^\s)\]}>"'])|(?:\.{0,2}\/|~\/)[A-Za-z0-9_.@+\-/]{2,240}(?![A-Za-z0-9_.@+\-/])|\b[0-9a-f]{8}-[0-9a-f-]{27,56}\b|\b[A-Fa-f0-9]{12,64}\b)/gu },
 ];
 export function extractProtectedCues(text, absoluteStart, source) {
     const cues = [];
@@ -214,6 +214,52 @@ function canonicalInputHash(base, options) {
     };
     return createHash("sha256").update(stableStringify(identity), "utf8").digest("hex");
 }
+function capMappedText(text, maximum, coverage) {
+    if (text.length <= maximum)
+        return { text, coverage, capped: false };
+    const marker = "\n…[capsule text budget omitted]…\n";
+    const available = Math.max(0, maximum - marker.length);
+    const prefix = Math.ceil(available * 0.7), suffix = Math.floor(available * 0.3), suffixStart = text.length - suffix;
+    const kept = [];
+    const retain = (item, start, end, outputShift) => {
+        const from = Math.max(item.output.start, start), to = Math.min(item.output.end, end);
+        if (to <= from)
+            return;
+        kept.push({ source: { start: item.source.start + from - item.output.start, end: item.source.start + to - item.output.start },
+            output: { start: outputShift + from - start, end: outputShift + to - start } });
+    };
+    for (const item of coverage) {
+        retain(item, 0, prefix, 0);
+        retain(item, suffixStart, text.length, prefix + marker.length);
+    }
+    return { text: `${text.slice(0, prefix)}${marker}${text.slice(suffixStart)}`, coverage: kept, capped: true };
+}
+function exactCoverageOmissions(source, coverage) {
+    const ranges = coverage.map(item => item.source).filter(item => item.end > item.start)
+        .sort((a, b) => a.start - b.start || a.end - b.end);
+    const merged = [];
+    for (const item of ranges) {
+        const previous = merged.at(-1);
+        if (previous && item.start <= previous.end)
+            previous.end = Math.max(previous.end, item.end);
+        else
+            merged.push({ ...item });
+    }
+    const omissions = [];
+    let cursor = source.decodedUtf16.start;
+    for (const item of merged) {
+        if (item.start > cursor)
+            omissions.push({ kind: "exact-range", reason: "middle", source,
+                decodedUtf16: { start: cursor, end: item.start }, omittedUnits: item.start - cursor,
+                description: "Source interval absent from the final exact capsule representation; exact source remains recoverable." });
+        cursor = Math.max(cursor, item.end);
+    }
+    if (cursor < source.decodedUtf16.end)
+        omissions.push({ kind: "exact-range", reason: "middle", source,
+            decodedUtf16: { start: cursor, end: source.decodedUtf16.end }, omittedUnits: source.decodedUtf16.end - cursor,
+            description: "Source interval absent from the final exact capsule representation; exact source remains recoverable." });
+    return omissions;
+}
 /** Internal integration point shared with the bounded streaming reducer. */
 export function buildReducerEnvelope(base, options, selected) {
     if (options.familyVersion !== CAPSULE_REDUCER_FAMILY_VERSIONS[options.family])
@@ -229,28 +275,35 @@ export function buildReducerEnvelope(base, options, selected) {
         base.source,
         ...structuralSourceRefs,
     ];
-    const omissions = [...selected.omissions, ...transformationOmissions(result.omissions, base.source, selected.decodedUtf16)];
     const cueText = selected.protectedCues.length === 0 ? "" : `\n\nProtected exact cues:\n${selected.protectedCues.map((cue) => cue.exactText).join("\n")}`;
-    // Leave fixed wire headroom for JSON escaping, source references, cues, facts,
-    // omissions, and a second representation.
-    const textLimit = Math.min(options.budget.maxUtf16Units, CAPSULE_LIMITS.reducerOutputUnits, 8 * 1024);
-    const uncappedPrimary = `${result.text}${cueText}`;
-    const primaryText = capText(uncappedPrimary, textLimit);
+    // Streaming selections can exceed the old 8 KiB convenience target while
+    // remaining below the frozen wire and caller budgets. Their exact mapping is
+    // clipped together with the text, so omission ranges describe final bytes.
+    const textLimit = Math.min(options.budget.maxUtf16Units, CAPSULE_LIMITS.reducerOutputUnits, selected.preserveExactSelection ? 16 * 1024 : 8 * 1024);
+    const uncappedPrimary = selected.preserveExactSelection ? selected.text : `${result.text}${cueText}`;
+    const mapped = selected.preserveExactSelection
+        ? capMappedText(uncappedPrimary, textLimit, selected.coverage ?? [])
+        : { text: capText(uncappedPrimary, textLimit), coverage: [], capped: uncappedPrimary.length > textLimit };
+    const primaryOmissions = selected.preserveExactSelection
+        ? [...exactCoverageOmissions(base.source, mapped.coverage), ...selected.omissions,
+            ...(mapped.capped ? postReducerCapOmission(uncappedPrimary, textLimit, base.source, selected.decodedUtf16) : [])]
+        : [...selected.omissions, ...transformationOmissions(result.omissions, base.source, selected.decodedUtf16),
+            ...postReducerCapOmission(uncappedPrimary, textLimit, base.source, selected.decodedUtf16)];
     const alternatives = [{
             alternative: 0,
             family: options.family,
             familyVersion: options.familyVersion,
             maxTokens: options.budget.maxTokens,
-            text: primaryText,
+            text: mapped.text,
             lossy: true,
             facts,
             protectedCues: selected.protectedCues,
-            omissions: [...omissions, ...postReducerCapOmission(uncappedPrimary, textLimit, base.source, selected.decodedUtf16)],
+            omissions: primaryOmissions,
             outcome: outcome(facts),
             sourceRefs,
         }];
     const normalized = normalizeTerminalText(selected.text);
-    if (options.budget.maxAlternatives > 1 && normalized.text !== result.text) {
+    if (!selected.preserveExactSelection && options.budget.maxAlternatives > 1 && normalized.text !== result.text) {
         const uncappedNormalized = `${normalized.text}${cueText}`;
         alternatives.push({
             ...alternatives[0],
@@ -263,7 +316,7 @@ export function buildReducerEnvelope(base, options, selected) {
             ],
         });
     }
-    if (selected.completeBody && alternatives.length < options.budget.maxAlternatives && selected.text.length > 1_024) {
+    if (!selected.preserveExactSelection && selected.completeBody && alternatives.length < options.budget.maxAlternatives && selected.text.length > 1_024) {
         const edge = Math.min(512, Math.floor(selected.text.length / 2));
         const middleStart = selected.decodedUtf16.start + edge;
         const middleEnd = selected.decodedUtf16.end - edge;
