@@ -174,6 +174,10 @@ async function campaign(options) {
     const forkEvents = await catalogCall({ op: "page", view: forkView, after: Math.max(0, options.records - 2), limit: 4 });
     assert.equal(forkEvents.events.at(-1).metadata.id, id(forkId));
     await derive(forkView);
+    const forkCapsules = await capsuleCall({ op: "capsulePage", view: forkView, afterEventSeq: Math.max(0, options.records - 2), afterDescriptor: Number.MAX_SAFE_INTEGER, limit: 4 });
+    assert.deepEqual(forkCapsules.capsules.map(item => item.source.eventSeq), forkEvents.events.map(item => item.seq), "fork capsule page selects only actual ancestry");
+    const oldAfterFork = await capsuleCall({ op: "capsulePage", view: oldView, afterEventSeq: options.records - 1, limit: 2 });
+    assert.deepEqual(oldAfterFork.capsules.map(item => item.source.bodyHash), oldLateAgain.capsules.map(item => item.source.bodyHash), "old capsule pin remains unchanged after sibling publication");
     const finalStatus = await capsuleCall({ op: "status", view: forkView });
     report.samples.readiness = { catalog: finalStatus.readiness.catalog, capsuleState: finalStatus.readiness.capsules.state, chunkState: finalStatus.readiness.chunks.state,
       eligible: finalStatus.readiness.chunks.eligible, ready: finalStatus.readiness.chunks.ready };
