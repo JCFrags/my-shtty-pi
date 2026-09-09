@@ -1,6 +1,6 @@
 # M05 — Capsules and decoded chunks
 
-**Status: remaining F003 correction integrated; final v3 scale and root validation in progress. Not accepted or deployed.**
+**Status: remaining F003 correction passes final v3 local gates; new publication CI pending. Not accepted or deployed.**
 
 ## Remaining F003 correction — pipeline v3
 
@@ -37,9 +37,48 @@ mixed-cue example and long head, tail, and middle padding.
 
 Before the four route follow-up tests, parent typecheck, build, native probe,
 629/629 normal tests, and replay passed. Verifier/privacy regressions passed
-77/77. Final root and both final-pipeline scale campaigns remain pending here;
-no historical v2 result is claimed as v3 evidence. The accepted once-through
-`test:normal` root orchestration and its truthful accounting remain unchanged.
+77/77. Final clean-root validation at `2129ca4` passed in 935.13 seconds,
+with exactly one 633/633 normal suite, replay, both original fixed-heap lanes,
+controlled native source rebuild/probe, reproducibility, privacy, all package
+checks, 17 pack checks, and 58 matched passing phase records. Accounting remains
+15 safe declarations / 14 direct executions / 1 wrapper-covered declaration and
+4 native declarations / 2 controlled executions. The inventory is 303 runtime,
+226 build inputs, 8 resources, 41 integration, 110 metadata, unexplained 0.
+Supplemental capsule/decoder checks passed 98/98 at each 512/1,024 MiB heap.
+The accepted once-through `test:normal` orchestration is unchanged. No historical
+v2 result is claimed as v3 evidence.
+
+Both final `capsule-pure-v3` campaigns passed under unchanged 30-minute campaign,
+30-second worker, 256 MiB per-process OS, 128 MiB V8, and 64 MiB native limits:
+
+| Campaign | Source bytes / initial derives | Calls / wall time | Evidence JSON SHA-256 |
+| --- | --- | --- | --- |
+| 136 MiB body / 2 records | 142,606,743 / 2,182 | 2,221 / 1,232,858 ms | `34721c455cd3c9da0cf91702816f84a32957dcd1e5ed8fecd061c44d9f2f2979` |
+| 2,048 records / 1 MiB body | 1,532,781 / 2,068 | 2,122 / 1,254,122 ms | `811f7a7ae3ae3e10463824b2c58c8706837e27d510615a69ec5a4c9b00841fe5` |
+
+Both verified exact first/late decoded ranges and terminal suffix, source hash
+and inode continuity with only one declared append, no-op, immutable old pins,
+actual fork ancestry, zero tickets/slots, inactive worker unit, and synthetic
+namespace cleanup. The designated giant capsule remains unsupported while its
+chunks are ready; this is not an inferred capsule success or 10k/50k acceptance.
+The parent and worker have separate OS limits, not a combined-memory ceiling.
+The script reports `osContainedByThisScript:false`; the external unit supplies
+the parent limit. Parent observed cgroup peaks were 213,549,056 and 51,064,832
+bytes; maximum worker cgroup peaks were 66,899,968 and 65,859,584 bytes. These
+are separately observed peaks, not a synchronized combined peak. Source counters
+exclude independent hash verification; process I/O includes startup and SQLite,
+and storage counters omit cache hits. Native allocation is configured, not
+separately measured. Capsule alternatives remain lossy, not semantic understanding.
+
+An initial giant launch failed before loading the campaign because the external
+unit used the wrong working directory. Its evidence is retained. The corrected
+launch explicitly sets the working directory; no deadline or budget increased.
+The red failures, initial route-test oversize-feed error, and dirty-document
+static-check refusal are also retained, not replaced by later passes.
+Final root log SHA-256:
+`b8b8edcdd7a67968f31aa648fed16e8d3accddac42755a75055a895148868e4a`;
+phase stderr SHA-256:
+`bd8767132c2eaedc8ef94bbcbfae535b1d5e92f8d278eb2c71594f08f0e05134`.
 
 Runtime artifact commit `681993f` contains 108 source files, 107 compiled JS
 files, and 108 manifest entries. Source inventory SHA-256:
