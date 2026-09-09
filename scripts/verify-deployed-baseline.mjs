@@ -1139,19 +1139,22 @@ function verifyProjectGlance() {
     runPhase("project-tests", projectGlanceSlug, () => {
       execFileSync("npm", ["test"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
     });
-    const output = runPhase("packaging", projectGlanceSlug, () => execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }));
-    const result = JSON.parse(output);
-    if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error("pi-project-glance: invalid pack result");
-    const distFiles = walk(join(work, "dist"))
-      .filter((path) => statSync(path).isFile())
-      .map((path) => relative(work, path).replaceAll(sep, "/"))
-      .sort();
-    const packFiles = result[0].files.map((entry) => entry.path).sort();
-    const required = ["README.md", "bin/pi-project-glance", "herdr-plugin.toml", "package.json", ...distFiles].sort();
-    for (const path of required) if (!packFiles.includes(path)) throw new Error(`pi-project-glance: pack omitted ${path}`);
-    for (const path of packFiles) {
-      if (!required.includes(path) && path !== "package-lock.json") throw new Error(`pi-project-glance: pack includes unexplained file ${path}`);
-    }
+    const packFiles = runPhase("packaging", projectGlanceSlug, () => {
+      const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+      const result = JSON.parse(output);
+      if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error("pi-project-glance: invalid pack result");
+      const distFiles = walk(join(work, "dist"))
+        .filter((path) => statSync(path).isFile())
+        .map((path) => relative(work, path).replaceAll(sep, "/"))
+        .sort();
+      const packed = result[0].files.map((entry) => entry.path).sort();
+      const required = ["README.md", "bin/pi-project-glance", "herdr-plugin.toml", "package.json", ...distFiles].sort();
+      for (const path of required) if (!packed.includes(path)) throw new Error(`pi-project-glance: pack omitted ${path}`);
+      for (const path of packed) {
+        if (!required.includes(path) && path !== "package-lock.json") throw new Error(`pi-project-glance: pack includes unexplained file ${path}`);
+      }
+      return packed;
+    });
     return { ...staticResult, status: "pass", tests: "pass", packFiles: packFiles.length };
   } finally {
     rmSync(temp, { recursive: true, force: true });
