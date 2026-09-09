@@ -73,7 +73,7 @@ test("push documentation diff selects documentation validation", () => withFixtu
   assert.deepEqual(result.json, { classification: "docs", broad: "false", reason: "documentation-only-diff" });
 }));
 
-test("PR Chrono diff selects routine runtime and forged merge SHA fails", () => withFixture((root) => {
+test("PR qualification uses exact checkout parents, not asynchronous merge metadata", () => withFixture((root) => {
   const { base, head, merge } = pullRequest(root, "packages/pi-chrono-compaction/src/search-v3.ts");
   const pull = { base: { sha: base }, head: { sha: head }, merge_commit_sha: merge };
   const accepted = run(root, "pull_request", { pull_request: pull }, merge);
@@ -85,10 +85,11 @@ test("PR Chrono diff selects routine runtime and forged merge SHA fails", () => 
   const forged = run(root, "pull_request", { pull_request: { base: pull.head, head: pull.base } }, merge);
   assert.equal(forged.json.reason, "pull-request-merge-parents-mismatch");
 
-  const rejected = run(root, "pull_request", { pull_request: { ...pull, merge_commit_sha: head } }, merge);
-  assert.notEqual(rejected.status, 0);
-  assert.equal(rejected.json.classification, "unknown");
-  assert.equal(rejected.json.reason, "pull-request-merge-sha-mismatch");
+  const stale = run(root, "pull_request", { pull_request: { ...pull, merge_commit_sha: head } }, merge);
+  assert.equal(stale.status, 0);
+  const wrongCheckout = run(root, "pull_request", { pull_request: pull }, head);
+  assert.notEqual(wrongCheckout.status, 0);
+  assert.equal(wrongCheckout.json.reason, "checkout-head-mismatch");
 }));
 
 test("unsupported paths and unqualified events fail closed", () => withFixture((root) => {

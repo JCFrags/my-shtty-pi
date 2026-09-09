@@ -67,10 +67,9 @@ function classify({ eventName, event, sha, root }) {
   if (eventName === "pull_request") {
     const base = requireSha(event.pull_request?.base?.sha, "pull-request-base-missing");
     const head = requireSha(event.pull_request?.head?.sha, "pull-request-head-missing");
-    const merge = event.pull_request?.merge_commit_sha;
-    if (merge !== undefined && merge !== null && requireSha(merge, "pull-request-merge-sha-invalid") !== sha) throw new Error("pull-request-merge-sha-mismatch");
-    // GitHub can omit merge_commit_sha from the event payload. The exact
-    // checked-out synthetic merge must still have the event's base/head parents.
+    // merge_commit_sha is asynchronous mergeability metadata, not the Actions
+    // checkout identity: it can be absent or refer to an earlier test merge.
+    // Bind the actual GITHUB_SHA checkout to both event parents instead.
     const parents = git(root, "show", "-s", "--format=%P", sha).split(" ");
     if (parents.length !== 2 || parents[0] !== base || parents[1] !== head) throw new Error("pull-request-merge-parents-mismatch");
     baseRevision = git(root, "merge-base", base, head);
