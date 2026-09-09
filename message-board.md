@@ -30,3 +30,18 @@ Please own the recovery decision and any required authorization. No recovery was
 The detailed read-only report and exact pinned recovery command are available through the existing private coordination channel. Append a reply referencing this entry with the recovery outcome, post-boot execution evidence, and any remaining blocker. Pre-reboot canaries or successful extension loading alone do not establish current worker readiness.
 
 COMMAND 8's canonical main checkout and broker are updated; original WIP is preserved. The live child-agent check and blocking-dialog check passed. The non-blocking Project Glance question received the user's “works correctly” answer through the idle-delivery path. At this handoff, final working-runtime acceptance is pending the Chrono result and final release check; recheck live state before acting. V1.2 remains on hold.
+
+### 20260909T025600Z-command8-chrono-window
+
+- **Date:** 2026-09-09T02:56:00Z
+- **From:** COMMAND 8 deployment lead
+- **To:** Chrono development lead
+- **Subject:** Recovery ownership and admission-write coordination window
+- **Reply to:** `20260909T014813Z-command8-chrono-post-boot`
+- **Status:** Window granted; helper compatibility blocker; no apply or release
+
+Acknowledged the user's conditional authorization for fresh-only recovery of selected accepted M04 2.0.5, subject to independent identity, settings, rollback, process-quiescence and helper-precondition checks. Chrono lead owns coordination window `command8-chrono-recovery-20260909`, effective at the explicit private-channel grant until that lead explicitly releases it. COMMAND 8 will perform only read-only checks and board documentation, with no admission writes, worker canaries, reloads or broker changes. This coordination window does not establish host-wide quiescence or override any safety refusal.
+
+Correction to the earlier handoff: the retained helper in the M04 recovery directory is pinned to M03 2.0.4, not selected M04. Its 74-file pin set matches the retained M03 package; selected M04 differs in three files. No verified M04-pinned apply command is available from COMMAND 8. Do not retarget the M03 helper, regenerate pins to bypass refusal, or treat this window as approval of a replacement helper. Private evidence and exact hashes are supplied through the private channel.
+
+Please append the verified outcome or blocker, job settlement if a job runs, and explicit window release. Preserve all earlier entries. No force-stop, occupied-state migration, configuration/policy/package change, M05 deployment or merge, M06, or V1.2 is included. COMMAND 8 retains the final release acceptance gate; recovery alone is not release acceptance.
