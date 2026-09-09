@@ -1,6 +1,6 @@
 # M06 incremental search candidate
 
-Status: implementation candidate, not milestone acceptance. Keep the M06 PR unmerged into `rebuild/chrono-memory-v3`. Production selection remains accepted M04 2.0.5 until a separately recorded limited development canary. This report does not authorize other sessions or defaults.
+Status: implementation candidate, not milestone acceptance. Keep the M06 PR unmerged into `rebuild/chrono-memory-v3`. Selected package is 2.0.7 at `215ac43e9582ef357f95219334ac9f05c066965f`; post-reboot worker readiness and successful implementing-session retrieval remain unproven. This report does not authorize other sessions or defaults.
 
 ## Accepted predecessor and recovery
 
@@ -52,7 +52,7 @@ The local final artifact/static baseline check passed. A separate deployed-stati
 
 ## Completion correction after the first development increment
 
-The owner accepted the delivered M04 recovery evidence; initialization and recovery tests must not be repeated. M06 remains active and unmerged. The first 2.0.6 offline command-driven canary is historical evidence, not the required implementing-session rollout.
+The owner accepted the delivered M04 recovery evidence. The later post-boot authorization below is a separate recovery scope; it does not repeat or replace that accepted evidence. M06 remains active and unmerged. The first 2.0.6 offline command-driven canary is historical evidence, not the required implementing-session rollout.
 
 The completion candidate uses the previously unused 2.0.7 identity. Its read-only `history_status` and `/chrono-search-status` surfaces report cached layer progress, requested/indexed cuts, lag, validated last-ready availability and a safe error, without scheduling work or reading archives. `/chrono-search on|off` changes only the current session runtime; it does not write persistent settings or enable other sessions. Session replacement resets the override.
 
@@ -69,3 +69,18 @@ The two allowed local focused invocations are retained honestly:
 - Combined backend/adapter: 4/5 passed in 26.21 seconds including compilation. All four backend cases passed. The adapter stopped at an over-strict new assertion that generated status output must have no search cue. The actual hit was correctly labeled generated and non-independent. The assertion now checks those required evidence properties; later adapter assertions did not run in this local invocation.
 
 No third local runtime invocation was run. The corrected adapter fixture must pass applicable routine CI before activation. Build passed after the final runtime changes. CI, exact deployment identity and actual implementing-session use belong in the completion receipt; this section does not claim them.
+
+## Authorized post-boot recovery and automatic resume
+
+The owner subsequently authorized a separately Git-pinned recovery for installed 2.0.7, preserving the original 2.0.5 recovery profile, helper and rollback assets. All 115 installed runtime manifest records were verified against Git-derived hashes from `215ac43e9582ef357f95219334ac9f05c066965f`. The namespace, gate, systemd and resource-limit APIs have no source difference from accepted M04. The separate private recovery derivative is prepared, not applied. PR43 placed a fresh COMMAND 8 window request on `main`; a request or merged board entry is not a grant. One ordinary installed worker operation, settlement and explicit window release remain required.
+
+The new candidate persists rollout only for an exact session ID and source-path identity. It reads one bounded owner-only record outside history during normal session loading. Missing records retain defaults; unsafe records disable rollout. An explicit environment/configuration disable takes precedence. Optional `/chrono-search on|off` writes only that session record; no activation command is required after normal loading. Session changes invalidate pending reads and callbacks. No history source, regular Pi summary, provider configuration or global feature default is changed.
+
+A separate bounded startup process reads a trusted deployment authorization. It verifies exact package manifest hashes, canonical package binding, configuration projection and unchanged limits before importing runtime APIs. A fixed owner-only OS lock serializes startup across deployments. A verified current-boot gate is reused without interrupting legitimate work. Fresh initialization requires both namespaces absent, fixed units inactive and repeated bounded worker-quiescence checks. Unsafe, partial, foreign or ambiguous state refuses without cleanup or migration. Startup authorization is not stored in source history or inferred from a session message. It must be created by the authorized deployment procedure from the exact pushed Git identity.
+
+Two focused invocations were allowed for this new batch:
+
+- First: 1 pass and 4 failures in 0.14 seconds. A runtime manifest check incorrectly assumed `package.json` sorted before `dist/`. It was corrected to membership validation. The failure is retained; it was not a passing startup check.
+- Second: 7/7 passed in 12.80 seconds. It covered fresh initialization, concurrent repeat/reuse, unsafe authorization, partial state, a foreign artifact and malformed ticket metadata. Two fresh offline Pi processes used normal extension loading and a persisted exact-session rollout, without an activation command, then completed actual registered-tool search, recall and exact recovery. The fixture also checks another session is not opted in and explicit disable persists.
+
+The second check uses isolated scheduler namespaces and synthetic history. It does not prove production recovery or successful retrieval in the implementing development session. No third local runtime invocation, review agent, reboot test or broad campaign was run. Required build/artifact/publication checks and applicable routine CI remain separate. PR42 stays unmerged; M06 is not accepted and M07 has not started.
