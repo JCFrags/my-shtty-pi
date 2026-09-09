@@ -1,6 +1,61 @@
 # M05 — Capsules and decoded chunks
 
-**Status: remaining F003 correction passes final v3 local gates; new publication CI pending. Not accepted or deployed.**
+**Status: deferred ordinary-match F003 correction passes focused checks; v4 publication CI pending. Not accepted or deployed.**
+
+## Deferred ordinary-match correction — pipeline v4
+
+The directing assistant reproduced a missing 200-unit path at `[5000,5200)`:
+with a split at 5568, v3 deferred the match by its end while discarding its
+prefix. Red `c0709cb` reproduces the defect; fix `d2acff6` changes settlement
+to an exclusive start-coordinate frontier. A 256-unit conservative ordinary
+match bound plus `max(1-unit lookahead, 128-unit right context)` gives 384
+unsettled units. The unchanged 512-unit post-scan carry retains those starts
+and 128 units of left context. Settled matches can therefore render complete
+neighborhoods; unresolved ordinary matches are re-extracted rather than saved
+as provisional cues. Completed incremental cues share source-ordered admission
+before caps. No external budget or overlap constant was increased.
+
+The small parameterized path/long-URL regression compares full envelopes at
+splits 5567/5568/5569, with and without serialized restart, exact identifier
+coordinates and retained text. Test-only `0272229` adds 257-unit feeds with
+restart after every feed: carry stays below 768 between scans, is 512 after
+scans, and serialized state stays below 128 KiB. An existing persistence
+fixture confirms storage round-trip. Writer affected/immediate integrations
+passed 68/68 in 19.94s; parent stream/persistence checks passed 31/31 in 7.98s.
+Build and typecheck passed. These are focused checks, not whole-project or
+large-scale acceptance.
+
+Pipeline and checkpoint are v4; terminal/small-JSON families are 5.0.0 and other
+affected families 4.0.0. Old complete/partial derivation refuses before work;
+valid read-only pins retain their original identity. Package 2.0.5, derived
+layout 2 and public capsule/chunk/wire schemas 1 remain unchanged.
+Artifact commit `f27c6c9` retains 108 source files, 107 JS files and 108 manifest
+entries. Source inventory SHA-256:
+`1d4cf3a225fb0eb54d45074aa472fab8880fcf44a3a0deb4fca2df4cb35fd641`;
+dist inventory: `22d3a772079fb16db974b9bfaf2e8ba23fabf60114b07663b299b62ae8fa4376`;
+manifest: `01d6b645a815aa880fbe3114bfb042abb3992f1c43029e9f30fa4fb79593fa04`.
+All 107 generated maps were preserved and byte-verified privately.
+
+Under the standing owner direction in the [review instructions](../independent-review.md),
+no local full root/normal/native/heap sequence or 136 MiB/2,048-record campaign
+was repeated. Required final CI supplies the broad candidate checks. Prior v3
+campaigns at artifact `681993f` and delivery `59402a8` remain evidence of their
+original runtime and limits, not v4 measurements. v3 push 34310515546 and PR
+34310516994 passed 8/8, with roots 21m27s/18m35s; their receipt is retained in
+[comment 5595987036](https://github.com/JCFrags/my-shtty-pi/pull/38#issuecomment-5595987036).
+New CI results belong in the PR, without report-only pushes or unchanged retries.
+
+Separately, a preparation-only M04 recovery procedure is being returned through
+the private coordination channel. Its trust comes from accepted Git commit
+`dcd91924`, not newly trusted installed bytes. Original M03 assets remain
+unchanged; production apply is disabled and the write window remains released.
+Synthetic evidence cannot establish production readiness or COMMAND 8 release
+acceptance. No recovery apply, M05 merge/deployment, M06 or V1.2 is authorized.
+
+## Historical v3 evidence
+
+The following v3 development and validation record is preserved, not current
+v4 measurement or acceptance.
 
 ## Remaining F003 correction — pipeline v3
 

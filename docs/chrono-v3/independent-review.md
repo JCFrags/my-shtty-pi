@@ -10,6 +10,16 @@ Historical references to “independent review” in earlier records mean local 
 
 ## Current state
 
-M00, M01, M02, and M03 have project-lead acceptance records in [`reviews/`](./reviews/). The directing assistant accepted M03 at `afec7d3ac48ef369b27c6609347666af2f8c289b` and closed F001/F002; see the current closeout in [`M03-runtime-report.md`](./reviews/M03-runtime-report.md). Live ChronoCompact remains 2.0.4 at `ad23f0b71ee473d33aff26d367459e76d208c631`. Metadata-only integration merge is authorized after CI. External-proposal review and owner discussion are complete; M04 implementation is authorized, but M05 and production catalog activation are not.
+M00–M04 have directing-assistant acceptance; see the [milestone ledger](./milestone-ledger.md). Selected M04 is separately accepted 2.0.5 at `dcd91924dbcfc0c02489e04c3e163b33e2b08e86`; installed identity does not prove current-boot worker readiness. M05 remains unaccepted, draft and unmerged in PR #38. Its corrected candidate returns to the directing assistant for independent review. Recovery-procedure preparation is separate and does not authorize production apply, a new write window, deployment, M06, or V1.2.
+
+## Standing owner direction: proportionate validation
+
+For current and future Chrono assignments, do not commission review-only agents or recursive peer-review rounds. Implementation delegation is allowed. Perform the normal implementation self-check, then return the pushed candidate to the directing assistant. Preserve useful findings from existing reviews without ordering another round.
+
+During edits, run affected tests and immediate integrations. Use small parameterized regressions and the smallest fixtures that cross the real boundary; preserve unique assertions rather than growing test counts. Prefer explicit readiness/completion signals over arbitrary sleeps. Targets are under one second for ordinary pure cases, ten seconds for ordinary integrations, and two minutes for a focused group. These targets do not weaken required behavior or authorize blind deadline changes; retain slower real-process checks when needed.
+
+Batch related fixes and necessary documentation before one required final push/PR validation pair. Required CI provides comprehensive candidate checks; do not duplicate local root, normal, native and heap sequences without a specific local-only risk. Documentation-only changes need relevant static/publication checks, not runtime campaigns. Record final CI in the PR, not report-only pushes. Preserve failures; no unchanged retry loops or bypass of protected checks.
+
+Long scale/endurance/fault campaigns belong at relevant milestone or release gates, or where storage, I/O, containment, retained-state bounds or a concrete scale risk invalidates existing evidence. The blanket F003 136 MiB / 2,048-record rerun requirement is withdrawn. Use focused mixed-detector, Unicode, restart, final-byte, small persisted/contained and bounded multi-chunk regressions. Identify reused evidence by its original revision and limits; never label it as a new-runtime measurement. No known defect, product invariant, recovery safeguard, or acceptance boundary is waived. This direction supersedes earlier broad-rerun process requirements without changing the frozen charter.
 
 Historical review results above remain historical evidence, not the current milestone state.
