@@ -310,9 +310,10 @@ const m05AuthorizedHistoricalHashChanges = new Map([
   ["dist/src/pi-extension.js", "42a25258b76bea32a68600ebf25a885b3e7c2a416d89b13cb55db49754967eb4"],
 ]);
 const m06AuthorizedHistoricalHashChanges = new Map([
-  ["package.json", "3de1f721ba21cd1a2757e4cbfc65b6f9afe19387ffa9a691c683771d1793c529"],
-  ["dist/src/pi-extension.js", "f7bec08244cb4b2dff01857f011ed1db5a9ef23bb2a5432651c7b7d84a1f17ba"],
+  ["package.json", "8c04418d5960f68f2b2df97bf5c33846622b0e4eb7251285bd1d5cfb45d9e20c"],
+  ["dist/src/pi-extension.js", "5badd48e33f4117da115082c0eaab1678284e793e55e1438f05f03b6b48133e7"],
   ["dist/src/user-config.js", "fc4e3a512a147192328f57aada22219469c16ec65c27b9ee019d1a57aa6f03c0"],
+  ["dist/src/catalog-parser.js", "51f8410be3bf31b6a842e836d990c31c289a2073801a83999216ef35dd0e7f91"],
 ]);
 const m05CompiledAdditions = new Set([
   "dist/src/capsule-compatibility.js",

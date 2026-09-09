@@ -576,7 +576,7 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
     pi.registerTool({
         name: "history_search",
         label: "Search History",
-        description: "Search normalized immutable history with deterministic BM25, exact or regex matching, filters, fuzzy paths, diversity, and bounded exact snippets.",
+        description: "Search source-linked history with bounded relevance, exact or supported regex matching, filters, practical path matching, and bounded snippets. Indexed pages may be smaller than limit to fit tokenBudget; use continuation and reported coverage.",
         parameters: Type.Object({
             query: Type.String({ description: "Terms, literal text, source ID, path, or regular expression" }),
             mode: Type.Optional(Type.Union([Type.Literal("ranked"), Type.Literal("exact"), Type.Literal("regex")])),
@@ -593,7 +593,7 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             error: Type.Optional(Type.Boolean()),
             unresolved: Type.Optional(Type.Boolean()),
             currentState: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("superseded"), Type.Literal("any")])),
-            scan: Type.Optional(Type.Boolean({ description: "Explicit bounded resumable scan for regex queries" })),
+            scan: Type.Optional(Type.Boolean({ description: "Explicit bounded resumable lexical or supported regex scan; inspect coverage limits" })),
             startMatch: Type.Optional(Type.Number({ minimum: 0, description: "Legacy exact-scan cursor" })),
             contextChars: Type.Optional(Type.Number({ minimum: 40, maximum: 200, description: "Legacy exact-scan context" })),
         }),
@@ -842,8 +842,14 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let userConfig = loadedUserConfig.config;
     let userConfigWarning = loadedUserConfig.warning;
     const search = new HistorySearchAdapter({ schedulerDirectory: adapters.schedulerDirectory, slots: resolveExtensionSettings(userConfig).hostWorkerSlots });
+    // Session-runtime override only. Never writes global settings or opts another
+    // session in; session_start resets the override when the session ID changes.
+    let sessionSearchOverride;
+    let searchSessionId;
+    const searchSettings = () => ({ ...resolveExtensionSettings(userConfig),
+        ...(sessionSearchOverride === undefined ? {} : { searchIndexEnabled: sessionSearchOverride }) });
     const scheduleSearch = (ctx) => {
-        if (!resolveExtensionSettings(userConfig).searchIndexEnabled) {
+        if (!searchSettings().searchIndexEnabled) {
             search.disable();
             return;
         }
@@ -899,7 +905,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     });
     const scheduleCatalogShadow = (ctx) => {
         const settings = resolveExtensionSettings(userConfig);
-        if (settings.searchIndexEnabled || !settings.catalogShadowEnabled) {
+        if (searchSettings().searchIndexEnabled || !settings.catalogShadowEnabled) {
             catalogShadow.disable();
             return;
         }
@@ -965,7 +971,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             return undefined;
         }
     };
-    registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve, search);
+    registerHistoryTools(pi, searchSettings, retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve, search);
     registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
     registerRetentionHintTool(pi);
     const incrementalConfig = (settings) => resolveCompactorConfig({
@@ -1235,6 +1241,10 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
     });
     pi.on("session_start", (_event, ctx) => {
+        const nextSearchSessionId = ctx.sessionManager.getSessionId();
+        if (nextSearchSessionId !== searchSessionId)
+            sessionSearchOverride = undefined;
+        searchSessionId = nextSearchSessionId;
         search.cancel();
         capsuleShadow.cancel();
         scheduleCapsuleShadow(ctx);
@@ -1737,6 +1747,29 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             }
             return undefined;
         }
+    });
+    pi.registerTool({
+        name: "history_status", label: "History status",
+        description: "Read bounded indexed-history readiness, requested/indexed cuts, lag and safe error. No ingestion or archive reads.",
+        parameters: Type.Object({}),
+        async execute() { return toolText(JSON.stringify(search.status()), search.status()); },
+    });
+    pi.registerCommand("chrono-search-status", {
+        description: "Read cached search readiness without ingestion or archive scans",
+        handler: async (_args, ctx) => { ctx.ui.notify(JSON.stringify(search.status()), "info"); },
+    });
+    pi.registerCommand("chrono-search", {
+        description: "Enable or disable indexed history for this session runtime only: on|off",
+        handler: async (args, ctx) => {
+            if (args !== "on" && args !== "off") {
+                ctx.ui.notify("Usage: /chrono-search on|off. This changes only this session runtime.", "info");
+                return;
+            }
+            sessionSearchOverride = args === "on";
+            scheduleCatalogShadow(ctx);
+            scheduleSearch(ctx);
+            ctx.ui.notify(JSON.stringify(search.status()), "info");
+        },
     });
     pi.registerCommand("chrono-worker-status", {
         description: "Show bounded isolated-worker and scheduler status",

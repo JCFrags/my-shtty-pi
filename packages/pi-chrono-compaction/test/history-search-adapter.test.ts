@@ -24,15 +24,31 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
   const sourcePath = join(directory, "source.jsonl");
   const schedulerDirectory = join(directory, "scheduler");
   mkdirSync(schedulerDirectory, { mode: 0o700 });
-  const first = line("a", null, "amber compass source one");
+  const generatedStatus = JSON.stringify({ type: "message", id: "status", parentId: null, message: { role: "toolResult", toolName: "history_status", content: [{ type: "text", text: "generatedstatusneedle" }] } }) + "\n";
+  const first = line("a", "status", "amber compass source one");
   const second = line("b", "a", "amber compass source two");
-  writeFileSync(sourcePath, first + second, { mode: 0o600 });
+  writeFileSync(sourcePath, generatedStatus + first + second, { mode: 0o600 });
   const adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
   const target = { sourcePath, schedulerDirectory, catalogDirectory: join(directory, "catalog"), sessionKey: hash("adapter-session"), shardKey: hash("adapter-shard"), leafId: "b" };
   // The public scheduler target deliberately contains no worker configuration.
   const schedule = (leafId: string) => adapter.schedule({ sourcePath: target.sourcePath, catalogDirectory: target.catalogDirectory, sessionKey: target.sessionKey, shardKey: target.shardKey, leafId });
   try {
     schedule("b"); await ready(adapter);
+    assert.equal(adapter.status().enabled, true);
+    assert.equal(adapter.status().lag, 0);
+    assert.equal(adapter.status().requestedCut, adapter.status().indexedCut);
+    const stableStatus = adapter.status();
+    assert.deepEqual(adapter.status(), stableStatus); // read-only cached surface
+    const excludedStatus = await adapter.search({ query: "generatedstatusneedle" });
+    assert.equal(excludedStatus.details.status, "ok");
+    for (const hit of excludedStatus.details.hits as { independentEvidence: boolean; provenance: string }[]) {
+      assert.equal(hit.independentEvidence, false, "history_status output is not independent source evidence");
+      assert.equal(hit.provenance, "generated");
+    }
+    const budgeted = await adapter.search({ query: "source", limit: 8 });
+    assert.equal(budgeted.details.status, "ok");
+    assert.equal((budgeted.details.hits as unknown[]).length, 1);
+    assert.ok(budgeted.details.nextCursor, "budgeted page must keep continuation");
     const found = await adapter.search({ query: "source two", mode: "exact", limit: 1 });
     assert.equal(found.details.status, "ok", JSON.stringify(found.details));
     const handle = (found.details.hits as { handle: string }[])[0]?.handle;
@@ -51,14 +67,24 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
     assert.equal(range.details.complete, false);
     const cursor = String(range.details.nextCursor);
     appendFileSync(sourcePath, line("c", "b", "later source"));
-    schedule("c"); await ready(adapter);
+    schedule("c");
+    const pendingDeadline = Date.now() + 10_000;
+    while (adapter.status().catalog !== "ready" && Date.now() < pendingDeadline) await new Promise(r => setTimeout(r, 10));
+    const catchingUp = adapter.status();
+    assert.equal(catchingUp.servingLastReady, true);
+    assert.ok(Number(catchingUp.lag) > 0, JSON.stringify(catchingUp));
+    assert.equal((await adapter.recall(handle)).details.status, "ok", "validated old view remains available during append catch-up");
+    await ready(adapter);
+    assert.equal(adapter.status().lag, 0);
     const continued = await adapter.range("a", "b", 1, cursor);
     assert.equal(continued.details.status, "ok", JSON.stringify(continued.details));
     assert.equal(continued.details.complete, true);
     const entries = continued.details.entries as { data: string }[];
     assert.equal(Buffer.from(entries[0]!.data, "base64").toString("utf8"), second);
     appendFileSync(sourcePath, line("fork", "a", "sibling source"));
-    schedule("fork"); await ready(adapter);
+    schedule("fork");
+    assert.equal(adapter.status().servingLastReady, false, "unvalidated branch cannot expose old view");
+    await ready(adapter);
     const refused = await adapter.recall(handle);
     assert.equal(refused.details.status, "unavailable");
     const sibling = await adapter.getRaw("b", {});

@@ -34,7 +34,7 @@ These are focused development results, not a new large-scale campaign. Historica
 
 ## Explicit limits
 
-- Current/superseded and unresolved inference belong to M07 and are unsupported. Episode/resource recall, neighbor expansion and fuzzy-path compatibility are not yet implemented by the M06 adapter; they refuse explicitly rather than silently fabricating results.
+- Current/superseded and unresolved inference belong to M07 and are unsupported. Episode/resource recall and neighbor expansion remain unsupported. Practical path matching normalizes slash, backslash and case, then matches an exact path or path-component suffix; this is not edit-distance matching.
 - Regex requires an explicit bounded scan. Literal token-index results are explicitly non-exhaustive; use `scan:true` with exact mode for substring or punctuation coverage. Case-insensitive literal matching preserves original UTF-16 coordinates. Indexed candidate overflow returns a query-budget refusal rather than claiming complete search coverage.
 - SQLite candidate materialization is capped and no longer sorts lifetime FTS results. SQLite can still traverse additional postings rejected by scope filters; no hard per-posting work budget is claimed. The M03 worker deadline remains the final interruption boundary for synchronous statements.
 - Search currently retains zero result-cache bytes. SQLite and worker limits remain enforced; this is not a claim that all queries complete inside the budget.
@@ -43,8 +43,29 @@ These are focused development results, not a new large-scale campaign. Historica
 
 ## Artifact and validation procedure
 
-The candidate uses previously unused version 2.0.6, with 115 source files and 114 compiled JavaScript files. The source, compiled tree, entrypoint and package hashes are pinned in the baseline verifier and `DEPLOYED.sha256`. A build also emits ignored source maps; remove only those generated `dist/**/*.js.map` files before a local repository-identity check, because the deployed inventory contains JavaScript only. A clean checkout does not contain those maps.
+The first increment used version 2.0.6; the completion candidate uses previously unused 2.0.7, with 115 source files and 114 compiled JavaScript files. The source, compiled tree, entrypoint and package hashes are pinned in the baseline verifier and `DEPLOYED.sha256`. A build also emits ignored source maps; remove only those generated `dist/**/*.js.map` files before a local repository-identity check, because the deployed inventory contains JavaScript only. A clean checkout does not contain those maps.
 
 Routine CI classifies exact event diffs, performs scoped publication checks, build/type checks, focused search checks and static baseline verification. Root metadata classification permits only the exact Chrono compiled-count transition from 107 to 114; unrelated metadata fails closed. Six classifier regressions passed in 0.91 seconds. Broad normal/replay/heap/root campaigns require explicit exact-head milestone dispatch. A new-branch push with an all-zero `before` refuses classification and requires PR qualification; it must not be retried unchanged or treated as a pass.
 
 The local final artifact/static baseline check passed. A separate deployed-static invocation reached its all-ref privacy phase and was terminated at the caller's 90-second limit; it is retained as unfinished, not a passing gate. It was not retried. Required scoped publication and PR checks remain separate.
+
+
+## Completion correction after the first development increment
+
+The owner accepted the delivered M04 recovery evidence; initialization and recovery tests must not be repeated. M06 remains active and unmerged. The first 2.0.6 offline command-driven canary is historical evidence, not the required implementing-session rollout.
+
+The completion candidate uses the previously unused 2.0.7 identity. Its read-only `history_status` and `/chrono-search-status` surfaces report cached layer progress, requested/indexed cuts, lag, validated last-ready availability and a safe error, without scheduling work or reading archives. `/chrono-search on|off` changes only the current session runtime; it does not write persistent settings or enable other sessions. Session replacement resets the override.
+
+During append catch-up, the adapter retains one last-ready target. It serves that target only after the new catalog pin proves the old view is a prefix of the requested branch. A source/session/shard change or incompatible pinned branch discards it. Before that bounded validation completes, readiness is explicitly unavailable; the adapter does not guess that an unvalidated leaf is an append.
+
+Indexed tool responses use one-result pages with continuation to keep ordinary default budgets usable. Exact recall omits a redundant handle and can reduce decoded text to the remaining budget, returning adjusted exact coordinates and a continuation character. A budget too small for even the verified source reference still refuses explicitly.
+
+Backend correction `873be7c12ccf9962036a9d1710138356a8419a8f` was integrated as `ea25f751b870bb389af79ba65c56fcef4ab651c8`. Ranked spans now use verified source matches and real handle validation. Recall evidence labels come from stored provenance. Kind/tool/error filtering and bounded phrase/term relevance are implemented. Empty-event traversal stops after the existing event budget and persists its cursor. Search configuration identity advances to v2 for changed path/identifier derivation; old index files and M05 derivations are not rewritten.
+
+Regex source anchors do not treat an internal chunk edge as a source boundary. Only ASCII literal alternatives and source anchors have a directly established exhaustive finite-width route. Other patterns report non-exhaustive window coverage. Lookarounds, lexical boundary assertions and patterns matching empty input refuse explicitly; zero-length matches are not emitted as recoverable spans. Arbitrary expressions have no exhaustive whole-body claim.
+
+The two allowed local focused invocations are retained honestly:
+- Backend: 3/4 passed in 14.97 seconds including compilation. The omitted-phrase fixture failed its prerequisite because a newly placed protected path caused the phrase to be retained. Moving that metadata to the beginning corrected the fixture.
+- Combined backend/adapter: 4/5 passed in 26.21 seconds including compilation. All four backend cases passed. The adapter stopped at an over-strict new assertion that generated status output must have no search cue. The actual hit was correctly labeled generated and non-independent. The assertion now checks those required evidence properties; later adapter assertions did not run in this local invocation.
+
+No third local runtime invocation was run. The corrected adapter fixture must pass applicable routine CI before activation. Build passed after the final runtime changes. CI, exact deployment identity and actual implementing-session use belong in the completion receipt; this section does not claim them.

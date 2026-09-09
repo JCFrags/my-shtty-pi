@@ -211,7 +211,7 @@ function closeContainer(s: CatalogParserState): void {
  * a generated copy, not another independent original source. Its raw call and
  * result remain archived in chronology; assistant prose is classified separately.
  */
-const retrieval = new Set(["history_get", "history_search", "history_recall", "history_range", "history_read"]);
+const retrieval = new Set(["history_get", "history_search", "history_recall", "history_range", "history_read", "history_status"]);
 function classify(r: CatalogRecordMetadata): void {
   const generated = r.type === "compaction" || r.type === "branch_summary"
     || ((r.type === "custom" || r.type === "custom_message") && /^chrono(?:[-_:]|$)/.test(r.customType ?? ""))

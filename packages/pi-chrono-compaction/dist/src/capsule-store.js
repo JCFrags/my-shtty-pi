@@ -506,8 +506,8 @@ async function execute(request, store, options, executor, budget) {
         let afterEventSeq = request.afterEventSeq ?? 0, afterDescriptor = request.afterDescriptor ?? 0;
         const limit = request.limit ?? CAPSULE_LIMITS.page, maximum = request.maxDescriptors ?? CAPSULE_LIMITS.deriveDescriptors;
         const sources = [];
-        let scanned = 0, complete = false;
-        while (sources.length < limit && scanned < maximum) {
+        let scanned = 0, visitedEvents = 0, complete = false;
+        while (sources.length < limit && scanned < maximum && visitedEvents < CAPSULE_LIMITS.deriveEvents) {
             const page = await catalogCall(request, executor, budget, { op: "page", view: request.view,
                 after: afterDescriptor > 0 ? Math.max(0, afterEventSeq - 1) : afterEventSeq, limit: 1 });
             const event = page.events?.[0];
@@ -522,6 +522,7 @@ async function execute(request, store, options, executor, budget) {
             if (!block) {
                 afterEventSeq = event.seq;
                 afterDescriptor = 0;
+                visitedEvents++;
                 continue;
             }
             scanned++;
@@ -544,7 +545,7 @@ async function execute(request, store, options, executor, budget) {
             sources.push(item);
         }
         return { sources, next: { afterEventSeq, afterDescriptor }, complete,
-            readiness: { chunks: complete ? "ready" : "partial", scannedDescriptors: scanned }, metrics: { sqliteStatements: store.statements } };
+            readiness: { chunks: complete ? "ready" : "partial", scannedDescriptors: scanned, visitedEvents }, metrics: { sqliteStatements: store.statements } };
     }
     if (request.op === "capsulePage") {
         // Authorize the exact pinned view before touching the derived ancestry index.

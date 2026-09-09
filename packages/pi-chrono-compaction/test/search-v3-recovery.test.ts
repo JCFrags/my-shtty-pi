@@ -162,6 +162,10 @@ test("literal search finds capsule-omitted text and recall recovers the exact so
       identity, op: "query", view, query: "A$", mode: "regex", limit: 2, scan: { maxChunks: 8, maxMs: 250 } });
     assert.equal(internalEndAnchor.ok, true, JSON.stringify(internalEndAnchor));
     if (internalEndAnchor.ok) assert.equal((internalEndAnchor.result as any).hits.length, 0, "an internal decoded chunk end is not a source end");
+    const unsupportedBoundary = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+      identity, op: "query", view, query: "\\bA", mode: "regex", limit: 2, scan: { maxChunks: 8, maxMs: 250 } });
+    assert.equal(unsupportedBoundary.ok, false);
+    if (!unsupportedBoundary.ok) assert.equal(unsupportedBoundary.code, "search-v3-regex-unsupported");
     const arbitraryRegex = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
       identity, op: "query", view, query: "violet.*station", mode: "regex", limit: 2, scan: { maxChunks: 8, maxMs: 250 } });
     assert.equal(arbitraryRegex.ok, true, JSON.stringify(arbitraryRegex));

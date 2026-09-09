@@ -267,9 +267,10 @@ function relevance(queryText: string, searchable: string, evidence: Candidate["e
   return (evidence === "raw-source" ? 1_000 : 100) + phrase + matchedTerms * 25;
 }
 function boundedRegex(source: string): boolean {
-  // A conservative supported subset: finite-width expressions without
-  // lookarounds, backreferences, or unbounded/braced repetition.
-  return !/(^|[^\\])(?:[+*{]|\\[1-9])|\(\?/u.test(source);
+  // Only ASCII literal alternatives and source anchors have an immediate
+  // UTF-16 width bound <= queryUnits. Other syntax is window-only, including
+  // Unicode wildcards whose width can exceed the regex source length.
+  return /^[A-Za-z0-9 _|^$-]+$/.test(source);
 }
 function windowRegexMatch(source: string, text: string, decodedStart: number, decodedEnd: number,
   sourceStart: number, sourceEnd: number, caseSensitive: boolean): VerifiedMatch | undefined {
@@ -277,7 +278,7 @@ function windowRegexMatch(source: string, text: string, decodedStart: number, de
   const window = prefix + text + suffix, pattern = compileRegex(source, caseSensitive, true);
   for (let found = pattern.exec(window); found; found = pattern.exec(window)) {
     const start = found.index - prefix.length, end = start + found[0].length;
-    if (start >= 0 && end <= text.length) return { start, end, text: found[0] };
+    if (start >= 0 && end <= text.length && end > start) return { start, end, text: found[0] };
     if (found[0].length === 0) pattern.lastIndex++;
   }
   return undefined;
@@ -326,6 +327,10 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
     fail("search-v3-filter-unsupported");
   const mode = request.mode ?? "ranked", filter = filterSql(request.filters), bounds = viewBoundsSql(request.view);
   if (mode === "regex" && !request.scan) fail("search-v3-scan-required");
+  // Synthetic edge guards establish source-anchor semantics, not arbitrary
+  // lexical/lookaround context. Refuse those assertions rather than invent it.
+  if (mode === "regex" && (/\(\?|\\[bB]/u.test(request.query) || compileRegex(request.query, request.caseSensitive).test("")))
+    fail("search-v3-regex-unsupported");
   const match = request.scan || mode === "regex" ? undefined : ftsQuery(request.query);
   if (mode === "literal" && !match && !request.scan) fail("search-v3-scan-required");
   const queryHash = sha256(canonicalJson({ op: "query", view: request.view, query: request.query, mode,

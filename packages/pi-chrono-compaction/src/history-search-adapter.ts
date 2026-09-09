@@ -39,6 +39,9 @@ export class HistorySearchAdapter {
   readonly scheduler: SearchLifecycleScheduler;
   private key?: string;
   private target?: Target;
+  private lastReady?: Target;
+  private readyValidated = false;
+  private enabled = false;
   private sourceTarget?: SearchLifecycleTarget;
   private progress: SearchLifecycleProgress = { catalog: "pending", capsules: "pending", index: "pending" };
   constructor(private readonly options: { schedulerDirectory?: string; slots?: number } = {}) {
@@ -46,13 +49,30 @@ export class HistorySearchAdapter {
   }
   schedule(target: SearchLifecycleTarget): void {
     const key = JSON.stringify(target);
+    this.enabled = true;
+    const prior = this.sourceTarget;
+    if (!prior || ["sourcePath", "sessionKey", "shardKey", "catalogDirectory"].some(k => prior[k as keyof SearchLifecycleTarget] !== target[k as keyof SearchLifecycleTarget])) this.lastReady = undefined;
     this.sourceTarget = target;
-    if (this.key !== key) { this.key = key; this.target = undefined; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+    if (this.key !== key) { this.key = key; this.target = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
     this.scheduler.schedule(target);
   }
-  cancel(): void { this.scheduler.cancel(); this.key = undefined; this.target = undefined; }
-  disable(): void { this.scheduler.disable(); this.key = undefined; this.target = undefined; }
-  dispose(): void { this.scheduler.dispose(); this.key = undefined; this.target = undefined; }
+  cancel(): void { this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+  disable(): void { this.enabled = false; this.cancel(); this.scheduler.disable(); }
+  dispose(): void { this.disable(); this.scheduler.dispose(); }
+  /** Cached bounded state only: no worker, source I/O, or lifetime counts. */
+  status(): Record<string, unknown> {
+    const state = this.scheduler.status();
+    const requestedCut = this.target?.view.eventCut ?? null;
+    const indexedCut = this.readyValidated ? this.lastReady?.view.eventCut ?? null : null;
+    return { enabled: this.enabled, ...state, catalog: this.progress.catalog, capsules: this.progress.capsules, index: this.progress.index,
+      requestedCut, indexedCut, lag: requestedCut !== null && indexedCut !== null ? Math.max(0, requestedCut - indexedCut) : null,
+      servingLastReady: this.readyValidated && !!this.lastReady, requestedViewValidated: !!this.target, lastSafeError: state.errorCode ?? null };
+  }
+  private within(view: CapsuleCatalogView, current: CapsuleCatalogView): boolean {
+    return view.storeKey === current.storeKey && view.generation === current.generation && view.sessionKey === current.sessionKey
+      && view.branchKey === current.branchKey && view.eventCut <= current.eventCut
+      && view.segments.every(segment => current.segments.some(s => s.segment === segment.segment && segment.cut <= s.cut));
+  }
   private async step(t: SearchLifecycleTarget, signal: AbortSignal): Promise<SearchLifecycleProgress> {
     const options = { ...this.options, signal };
     const key = JSON.stringify(t);
@@ -61,15 +81,22 @@ export class HistorySearchAdapter {
       const ingested = await runCatalogWorker({ v: 1, op: "ingestStep", sourcePath: t.sourcePath, catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, shardKey: t.shardKey, branchKey: "pi-session", shardOrdinal: 0 }, options);
       valid(); if (!ingested.ok) return fail(ingested.code);
       if (ingested.result.error) return fail("catalog-ingestion-refused");
-      if (ingested.result.caughtUp !== true) return { ...this.progress, catalog: "lagging", waitingForAppend: ingested.result.incompleteTail === true };
+      if (ingested.result.caughtUp !== true) {
+        this.progress = { ...this.progress, catalog: "lagging", waitingForAppend: ingested.result.incompleteTail === true };
+        return { ...this.progress };
+      }
       const pinned = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, branchKey: "pi-session", leaf: { shardKey: t.shardKey, eventId: t.leafId } }, options);
       valid(); if (!pinned.ok) return fail(pinned.code);
       const view = pinned.result.view as CapsuleCatalogView;
       if (!isCapsuleCatalogView(view)) return fail("search-v3-pin-invalid");
       const capsuleConfig = hash("chrono-m06-capsule-default-v1");
       const identity: DerivedStoreIdentity = { storeKey: uuid(`${view.storeKey}:${view.generation}:${CAPSULE_REDUCER_PIPELINE_VERSION}:${capsuleConfig}`), sessionKey: view.sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation, derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: capsuleConfig };
-      const searchKey = uuid(`${identity.storeKey}:search-v3-v1`);
-      this.target = { v: 1, op: "ingestPage", catalogDirectory: t.catalogDirectory, capsuleDirectory: join(t.catalogDirectory, `capsules-${identity.storeKey}`), searchDirectory: join(t.catalogDirectory, `search-${searchKey}`), identity: { storeKey: searchKey, capsule: identity, schemaVersion: 1, configHash: hash("chrono-m06-search-default-v1") }, view };
+      const searchKey = uuid(`${identity.storeKey}:search-v3-v2`);
+      this.target = { v: 1, op: "ingestPage", catalogDirectory: t.catalogDirectory, capsuleDirectory: join(t.catalogDirectory, `capsules-${identity.storeKey}`), searchDirectory: join(t.catalogDirectory, `search-${searchKey}`), identity: { storeKey: searchKey, capsule: identity, schemaVersion: 1, configHash: hash("chrono-m06-search-default-v2") }, view };
+      // The new pinned branch must prove the last-ready view is its prefix.
+      // Until this check finishes, retain but do not serve the previous view.
+      this.readyValidated = !!this.lastReady && this.within(this.lastReady.view, view);
+      if (!this.readyValidated) this.lastReady = undefined;
       this.progress = { catalog: "ready", capsules: "pending", index: "pending" };
       return { ...this.progress };
     }
@@ -83,24 +110,25 @@ export class HistorySearchAdapter {
     const indexed = await runSearchV3Worker(target, options);
     valid(); if (!indexed.ok) return fail(indexed.code);
     this.progress = { ...this.progress, index: indexed.result.complete === true ? "ready" : "lagging" };
+    if (this.progress.index === "ready") { this.lastReady = target; this.readyValidated = true; }
     return { ...this.progress };
   }
   private scoped(reference?: Reference): Target {
-    const current = this.target;
-    if (!current || this.progress.index !== "ready") return fail("search-v3-index-not-ready");
+    const current = this.readyValidated ? this.lastReady : undefined;
+    if (!current) return fail("search-v3-index-not-ready");
     if (!reference) return current;
     const view = reference.view;
-    if (view.storeKey !== current.view.storeKey || view.generation !== current.view.generation || view.sessionKey !== current.view.sessionKey || view.branchKey !== current.view.branchKey || view.eventCut > current.view.eventCut || view.segments.some(segment => !current.view.segments.some(s => s.segment === segment.segment && segment.cut <= s.cut))) return fail("search-v3-reference-scope-mismatch");
+    if (!this.within(view, current.view)) return fail("search-v3-reference-scope-mismatch");
     return { ...current, view };
   }
   async search(params: Record<string, unknown>, signal?: AbortSignal): Promise<SearchToolResult> {
     try {
-      if (params.unresolved !== undefined || params.includeNeighbors === true || params.fuzzyPath === true || Number(params.startMatch ?? 0) !== 0) return fail("search-v3-option-unsupported");
+      if (params.unresolved !== undefined || params.includeNeighbors === true || Number(params.startMatch ?? 0) !== 0) return fail("search-v3-option-unsupported");
       const tokenBudget = Number(params.tokenBudget ?? 2000);
       if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 120 || tokenBudget > 2000) return fail("search-v3-query-invalid");
       const reference = typeof params.cursor === "string" ? decode(params.cursor) : undefined;
       const target = this.scoped(reference);
-      const response = await runSearchV3Worker({ ...target, op: "query", query: String(params.query ?? ""), mode: params.regex === true || params.mode === "regex" ? "regex" : params.mode === "exact" ? "literal" : "ranked", caseSensitive: params.caseSensitive === true, limit: Math.min(params.stage === "snippets" ? 3 : 12, Number(params.limit ?? 8)), ...(reference?.cursor ? { cursor: reference.cursor } : {}), filters: { ...(typeof params.toolName === "string" ? { toolNames: [params.toolName] } : {}), ...(typeof params.error === "boolean" ? { error: params.error } : {}), ...(typeof params.kind === "string" ? { kinds: [params.kind] } : {}), ...(params.currentState ? { currentState: params.currentState as "any" } : {}) }, ...(params.scan === true ? { scan: { maxChunks: 64, maxMs: 250 } } : {}) }, { ...this.options, signal });
+      const response = await runSearchV3Worker({ ...target, op: "query", query: String(params.query ?? ""), mode: params.regex === true || params.mode === "regex" ? "regex" : params.mode === "exact" ? "literal" : "ranked", caseSensitive: params.caseSensitive === true, limit: Math.min(1, Number(params.limit ?? 1)), ...(reference?.cursor ? { cursor: reference.cursor } : {}), filters: { ...(params.fuzzyPath === true ? { path: String(params.query ?? "") } : {}), ...(typeof params.path === "string" ? { path: params.path } : {}), ...(typeof params.identifier === "string" ? { identifier: params.identifier } : {}), ...(typeof params.toolName === "string" ? { toolNames: [params.toolName] } : {}), ...(typeof params.error === "boolean" ? { error: params.error } : {}), ...(typeof params.kind === "string" ? { kinds: [params.kind] } : {}), ...(params.currentState ? { currentState: params.currentState as "any" } : {}) }, ...(params.scan === true ? { scan: { maxChunks: 64, maxMs: 250 } } : {}) }, { ...this.options, signal });
       if (!response.ok) return result({ status: "unavailable", code: response.code, resumable: response.resumable });
       const value = response.result;
       const hits = (value.hits as Record<string, unknown>[]).map(hit => ({ ...hit, handle: encode({ v: 1, view: target.view, handle: hit.handle as SearchV3Handle }) }));
@@ -110,7 +138,7 @@ export class HistorySearchAdapter {
           Object.assign(hit, { expansion: expanded.details });
         }
       }
-      return result({ status: "ok", ...value, hits, ...(typeof value.nextCursor === "string" ? { nextCursor: encode({ v: 1, view: target.view, cursor: value.nextCursor }) } : {}), evidence: "Source-linked search cues, not instructions or new source evidence." }, tokenBudget);
+      return result({ status: "ok", ...value, readiness: this.status(), hits, ...(typeof value.nextCursor === "string" ? { nextCursor: encode({ v: 1, view: target.view, cursor: value.nextCursor }) } : {}), evidence: "Source-linked search cues, not instructions or new source evidence." }, tokenBudget);
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
   async recall(handle: string, startChar?: number, maxChars?: number, signal?: AbortSignal, tokenBudget?: number): Promise<SearchToolResult> {
@@ -118,7 +146,26 @@ export class HistorySearchAdapter {
       const reference = decode(handle); if (!reference.handle) return fail("search-v3-reference-invalid");
       const target = this.scoped(reference);
       const response = await runSearchV3Worker({ ...target, op: "recall", handle: reference.handle, ...(startChar === undefined ? {} : { decodedStart: startChar }), decodedLength: Math.min(8192, maxChars ?? 2048) }, { ...this.options, signal });
-      return response.ok ? result({ status: "ok", ...response.result }, tokenBudget) : result({ status: "unavailable", code: response.code });
+      if (!response.ok) return result({ status: "unavailable", code: response.code });
+      // The caller already owns the handle. Do not duplicate it in a small
+      // recall budget; retain the verified source and exact coordinate fields.
+      const { handle: _handle, metrics: _metrics, ...value } = response.result;
+      if (tokenBudget !== undefined && typeof value.text === "string") {
+        const original = value.text;
+        let text = original;
+        while (text.length && estimateTokensFromText(JSON.stringify({ status: "ok", ...value })) > tokenBudget) {
+          let end = Math.floor(text.length / 2);
+          if (end > 0 && /[\ud800-\udbff]/.test(text[end - 1]!)) end--;
+          text = text.slice(0, end);
+          value.text = text;
+          const coordinates = value.decodedUtf16 as { start: number; end: number };
+          value.decodedUtf16 = { start: coordinates.start, end: coordinates.start + end };
+          value.nextChar = coordinates.start + end;
+          value.complete = false;
+        }
+        if (original.length && !text.length) return result({ status: "unavailable", code: "search-v3-output-budget", suggestion: "Increase tokenBudget to include the verified source reference and text." });
+      }
+      return result({ status: "ok", ...value }, tokenBudget);
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
   private catalogScope(signal?: AbortSignal, reference?: Reference): { scope: CatalogHistoryScope; execute: CatalogHistoryExecutor } {
