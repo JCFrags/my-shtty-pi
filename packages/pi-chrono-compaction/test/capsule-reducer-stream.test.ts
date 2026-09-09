@@ -158,11 +158,15 @@ test("malformed partial literals and repetitions do not hide a later valid long 
   assert.ok(complete.alternatives[0]!.text.includes(valid));
 });
 
-test("pipeline and serialized checkpoint expose the new settled-frontier semantics", () => {
-  const state = feedCapsuleReduction(beginCapsuleReduction(base("exit"), options), { decodedUtf16: { start: 0, end: 4 }, text: "exit" });
-  assert.equal(CAPSULE_REDUCER_PIPELINE_VERSION, "capsule-pure-v4");
-  assert.equal(Number(state.v), 4);
-  assert.equal(Number((JSON.parse(JSON.stringify(state)) as { v: number }).v), 4);
+test("pipeline and serialized checkpoint expose the new lexical-consumption semantics", () => {
+  const text = "exit code";
+  const state = feedCapsuleReduction(beginCapsuleReduction(base(text), options), { decodedUtf16: { start: 0, end: 4 }, text: "exit" });
+  assert.equal(CAPSULE_REDUCER_PIPELINE_VERSION, "capsule-pure-v5");
+  assert.equal(Number(state.v), 5);
+  assert.equal(Number((JSON.parse(JSON.stringify(state)) as { v: number }).v), 5);
+  const oldState = { ...state, v: 4 } as unknown as CapsuleReducerStreamState;
+  assert.throws(() => feedCapsuleReduction(oldState, { decodedUtf16: { start: 4, end: 5 }, text: " " }), /capsule-stream-noncontiguous-feed/);
+  assert.throws(() => finalizeCapsuleReduction(oldState), /capsule-stream-incomplete/);
 });
 
 test("identifier prefixes at a feed boundary are deferred until the match is settled", () => {
@@ -202,6 +206,7 @@ test("ordinary identifiers crossing the settled frontier retain exact coordinate
         assert.equal(state.scanCarry.length, 512, `fixed post-scan carry at ${end}`);
         sawPostScanCarry = true;
       }
+      assert.ok(Object.keys(state.ordinaryConsumedThrough).length <= 9, `fixed per-recognizer consumption state at ${end}`);
       const serialized = JSON.stringify(state);
       assert.ok(Buffer.byteLength(serialized) < 128 * 1024, `bounded serialized state at ${end}`);
       state = JSON.parse(serialized) as CapsuleReducerStreamState;
@@ -249,8 +254,12 @@ test("every split position and one-unit feeds preserve phrase, URL, negation and
     assert.equal(JSON.stringify(restarted), JSON.stringify(whole), `restart split ${split}`);
   }
   assert.equal(JSON.stringify(reducePartitioned(text, [1], 1)), JSON.stringify(whole));
-  const kinds = new Set(whole.alternatives[0]!.protectedCues.map((cue) => cue.kind));
+  const cues = whole.alternatives[0]!.protectedCues;
+  const kinds = new Set(cues.map((cue) => cue.kind));
   for (const kind of ["condition", "pending-approval", "negation", "restriction", "identifier"] as const) assert.ok(kinds.has(kind));
+  const doNotStart = text.indexOf("do not");
+  assert.deepEqual(cues.filter((cue) => cue.decodedUtf16.start === doNotStart)
+    .map((cue) => [cue.kind, cue.exactText]), [["negation", "do not"], ["restriction", "do not"]]);
 });
 
 test("settled scan cursor keeps overflow count and selected-cue priority partition-stable", () => {

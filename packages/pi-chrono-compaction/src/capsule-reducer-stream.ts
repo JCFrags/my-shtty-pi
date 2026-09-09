@@ -5,6 +5,7 @@ import type {
   CapsuleReductionState,
   CoordinateRange,
   ProtectedCue,
+  ProtectedCueKind,
   SourceBlockReducerBaseInput,
 } from "./capsule-contract.js";
 import {
@@ -46,6 +47,8 @@ interface NeighborhoodSpan extends ExactSpan {
   readonly targetEnd: number;
   readonly closed: boolean;
 }
+type OrdinaryRecognizerConsumption = Partial<Record<ProtectedCueKind, number>>;
+
 interface FailureGrammarState {
   readonly stage: "idle" | "literal" | "space" | "digits";
   readonly start: number;
@@ -65,6 +68,8 @@ export interface CapsuleReducerStreamState extends Omit<CapsuleReductionState, "
   readonly scanCarryStart: number;
   /** Exclusive start-coordinate frontier for settled ordinary lexical matches. */
   readonly scanSettledOffset: number;
+  /** Exclusive consumed end per ordinary recognizer; fixed by cue-kind count. */
+  readonly ordinaryConsumedThrough: OrdinaryRecognizerConsumption;
   readonly protectedCueUnits: number;
   readonly protectedCueOverflow: number;
   readonly protectedNeighborhoods: readonly NeighborhoodSpan[];
@@ -94,9 +99,9 @@ export function beginCapsuleReduction(base: SourceBlockReducerBaseInput, options
   if (!isSourceBlockReducerInput(emptyWindow) || base.source.decodedUtf16.start !== 0
     || options.familyVersion !== CAPSULE_REDUCER_FAMILY_VERSIONS[options.family]
     || options.reducerSetVersion !== base.identity.reducerSetVersion || options.configHash !== base.identity.configHash) throw new Error("capsule-stream-invalid-base");
-  return { v: 4, base, options, nextDecodedOffset: base.source.decodedUtf16.start, head: [], tail: [], protectedCues: [], omissions: [],
+  return { v: 5, base, options, nextDecodedOffset: base.source.decodedUtf16.start, head: [], tail: [], protectedCues: [], omissions: [],
     complete: base.source.decodedUtf16.start === base.source.decodedUtf16.end, scanCarry: "", scanCarryStart: base.source.decodedUtf16.start,
-    scanSettledOffset: base.source.decodedUtf16.start, protectedCueUnits: 0, protectedCueOverflow: 0, protectedNeighborhoods: [],
+    scanSettledOffset: base.source.decodedUtf16.start, ordinaryConsumedThrough: {}, protectedCueUnits: 0, protectedCueOverflow: 0, protectedNeighborhoods: [],
     protectedNeighborhoodUnits: 0, lexicalOverflow: 0, pendingProtectedCues: [], failureGrammar: idleFailure() };
 }
 
@@ -214,7 +219,7 @@ function addNeighborhoods(
 }
 
 export function feedCapsuleReduction(state: CapsuleReducerStreamState, feed: CapsuleReductionFeed): CapsuleReducerStreamState {
-  if (state.v !== 4 || state.complete || feed.text.length > CAPSULE_LIMITS.decodedChunkUnits || feed.decodedUtf16.start !== state.nextDecodedOffset
+  if (state.v !== 5 || state.complete || feed.text.length > CAPSULE_LIMITS.decodedChunkUnits || feed.decodedUtf16.start !== state.nextDecodedOffset
     || feed.decodedUtf16.end !== feed.decodedUtf16.start + feed.text.length || feed.decodedUtf16.end > state.base.source.decodedUtf16.end) throw new Error("capsule-stream-noncontiguous-feed");
   if (feed.text.length === 0) throw new Error("capsule-stream-empty-feed");
   const oldHead = state.head.map(item => item.text).join("");
@@ -233,11 +238,21 @@ export function feedCapsuleReduction(state: CapsuleReducerStreamState, feed: Cap
   const shouldScan = completes || scanned.length >= ORDINARY_UNSETTLED_UNITS * 2;
   const settledThrough = completes ? feed.decodedUtf16.end : scannedStart + Math.max(0, scanned.length - ORDINARY_UNSETTLED_UNITS);
   const observedOrdinary = shouldScan ? extractProtectedCues(scanned, scannedStart, state.base.source) : [];
-  const ordinary = observedOrdinary
-    .filter(cue => cue.decodedUtf16.start >= state.scanSettledOffset && cue.decodedUtf16.start < settledThrough)
+  const ordinaryConsumedThrough: OrdinaryRecognizerConsumption = { ...state.ordinaryConsumedThrough };
+  const ordinary: ProtectedCue[] = [];
+  for (const cue of observedOrdinary) {
+    if (cue.decodedUtf16.start < state.scanSettledOffset || cue.decodedUtf16.start >= settledThrough) continue;
     // This grammar has explicit carry and over-limit behavior below; accepting
     // the regex copy would make neighborhoods depend on feed size.
-    .filter(cue => !(cue.kind === "failure" && /^exit code/iu.test(cue.exactText)));
+    if (cue.kind === "failure" && /^exit code/iu.test(cue.exactText)) continue;
+    // Each ordinary regex is one non-overlapping recognizer. Preserve its
+    // consumed end across rescans, including matches later omitted by cue
+    // budgets, without suppressing overlaps produced by another recognizer.
+    const consumedThrough = ordinaryConsumedThrough[cue.kind] ?? state.base.source.decodedUtf16.start;
+    if (cue.decodedUtf16.start < consumedThrough) continue;
+    ordinary.push(cue);
+    ordinaryConsumedThrough[cue.kind] = cue.decodedUtf16.end;
+  }
   OVERLONG_IDENTIFIER.lastIndex = 0;
   const observedOverflowStarts = shouldScan ? [...scanned.matchAll(OVERLONG_IDENTIFIER)].map(match =>
     scannedStart + (match.index ?? 0)).filter(start => start >= state.scanSettledOffset && start < settledThrough) : [];
@@ -272,7 +287,7 @@ export function feedCapsuleReduction(state: CapsuleReducerStreamState, feed: Cap
   const carry = shouldScan ? scanned.slice(-RETAINED_SCAN_UNITS) : scanned, next = feed.decodedUtf16.end;
   return { ...state, nextDecodedOffset: next, head, tail, protectedCues, complete: next === state.base.source.decodedUtf16.end,
     scanCarry: carry, scanCarryStart: next - carry.length,
-    scanSettledOffset: nextSettledOffset,
+    scanSettledOffset: nextSettledOffset, ordinaryConsumedThrough,
     protectedCueUnits: cueUnits, protectedCueOverflow: overflow, protectedNeighborhoods: neighborhoods,
     protectedNeighborhoodUnits: neighborhoodUnits, pendingProtectedCues,
     lexicalOverflow: state.lexicalOverflow + grammar.overflow + identifierOverflow, failureGrammar: grammar.state };
@@ -307,7 +322,7 @@ function renderSpans(spans: readonly ExactSpan[]): { text: string; coverage: Cap
 }
 
 export function finalizeCapsuleReduction(state: CapsuleReducerStreamState): ReducerEnvelope {
-  if (state.v !== 4 || !state.complete || state.pendingProtectedCues.length !== 0
+  if (state.v !== 5 || !state.complete || state.pendingProtectedCues.length !== 0
     || state.nextDecodedOffset !== state.base.source.decodedUtf16.end) throw new Error("capsule-stream-incomplete");
   const exactCues = state.protectedCues.map(cue => span(cue.decodedUtf16.start, cue.exactText));
   const spans = mergeExactSpans([...state.head, ...state.tail, ...state.protectedNeighborhoods, ...exactCues]);

@@ -229,7 +229,7 @@ test("contained worker derives and retrieves the same source-ordered cue selecti
 });
 
 test("persisted capsule retrieval retains a frontier-crossing ordinary identifier", async () => {
-  const identifier = "./" + "x".repeat(198);
+  const identifier = "https://example.com/" + "x".repeat(181) + "/tail/path";
   const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
   const fixture = setupCapsuleFixture(line("a", null, text));
   try {
@@ -238,10 +238,11 @@ test("persisted capsule retrieval retains a frontier-crossing ordinary identifie
     const page = await fixture.ok(view, { op: "capsulePage", limit: 1 });
     const persisted = page.capsules[0];
     assert.equal(canonicalJson(directEnvelope(text, persisted, view, [text.length])), JSON.stringify(persisted));
+    assert.equal(canonicalJson(directEnvelope(text, persisted, view, [5_568, text.length - 5_568], 1)), JSON.stringify(persisted));
     const primary = persisted.alternatives[0];
-    const cue = primary.protectedCues.find((candidate: any) => candidate.kind === "identifier");
-    assert.deepEqual(cue?.decodedUtf16, { start: 5_000, end: 5_200 });
-    assert.equal(cue?.exactText, identifier);
+    const cues = primary.protectedCues.filter((candidate: any) => candidate.kind === "identifier");
+    assert.deepEqual(cues.map((cue: any) => cue.decodedUtf16), [{ start: 5_000, end: 5_211 }]);
+    assert.deepEqual(cues.map((cue: any) => cue.exactText), [identifier]);
     assert.ok(primary.text.includes(`\n${identifier}\n`));
   } finally {
     fixture.cleanup();
