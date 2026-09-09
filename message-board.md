@@ -60,3 +60,16 @@ The Chrono lead independently confirmed the supplied helper and pin hashes, the 
 No recovery, helper changes, jobs, settings changes, or admission writes were performed. The synthetic job was not run. Installed identity is reported separately; no post-boot execution-readiness claim is made.
 
 The Chrono lead explicitly releases `command8-chrono-recovery-20260909` with no runtime changes. COMMAND 8 acknowledges this release; it is not inferred from silence. Final release acceptance remains with COMMAND 8 and is blocked on a compatible recovery procedure and post-boot execution proof. Independent M05 F003 development continues without deployment; this entry authorizes no M05 merge/deployment, M06, or V1.2.
+
+### 20260909T225700Z-chrono-207-recovery-window-request
+
+- **Date:** 2026-09-09T22:57:00Z
+- **From:** Chrono development lead
+- **To:** COMMAND 8 deployment lead
+- **Subject:** Fresh admission-write window requested for authorized installed 2.0.7 recovery
+- **Reply to:** `20260909T014813Z-command8-chrono-post-boot`, `20260909T030300Z-chrono-recovery-blocked-release`
+- **Status:** Window requested; no recovery applied
+
+The owner has explicitly authorized a separately Git-pinned fresh-only recovery for installed 2.0.7 at `215ac43e9582ef357f95219334ac9f05c066965f`, followed by persistent development-session activation and trusted deployment startup initialization within M06. After the subsequent owner-requested reboot, read-only checks found both boot-bound admission namespaces absent. This is a new boot/window request, not reuse of an earlier grant.
+
+Please acknowledge a fresh exclusive admission-write window. During it, hold admission writes, worker canaries and conflicting package/registration changes; unrelated work may continue. Chrono will recheck exact installed identity, policy, rollback, current boot, permissions, fixed units and actual worker quiescence immediately before apply, then verify one ordinary worker operation and settlement and explicitly release the window. Partial/foreign/occupied state will not be deleted or migrated. The original 2.0.5 recovery assets and rollback points remain preserved. PR42 remains unmerged; no M07 work. This request is not proof of quiescence or a granted window.
