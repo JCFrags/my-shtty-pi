@@ -1,0 +1,100 @@
+--- reviewed-preparation/boot-recovery-m04.mjs
++++ production-derivative/boot-recovery-m04.mjs
+@@ -1,6 +1,6 @@
+ #!/usr/bin/env node
+ // @ts-nocheck -- standalone Node ESM helper, validated with node --check.
+-// PREPARATION ONLY: production apply is intentionally impossible in this candidate.
++// PRODUCTION RECOVERY: production namespace access requires an explicit authorization flag.
+ import { constants } from 'node:fs';
+ import { open, lstat, realpath, readdir, mkdir } from 'node:fs/promises';
+ import { createHash } from 'node:crypto';
+@@ -13,7 +13,7 @@
+ const need = (v, code) => { if (!v) fail(code); };
+ const uid = process.getuid?.();
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+-const PROFILE_HASH = '2c0b48e15d817a6d1333eaa4855cbb8cd41a32d3ba0c6be41479e6e6022507b9';
++const PROFILE_HASH = 'a7b3d8483c022a8fab9a3a01ff340a6cf2621fb5521a7a7a0cc453ffe792e744';
+ const ACCEPTED_COMMIT = 'dcd91924dbcfc0c02489e04c3e163b33e2b08e86';
+ 
+ async function ancestors(path) {
+@@ -96,16 +96,18 @@
+ async function main() {
+   need(process.platform === 'linux' && Number.isInteger(uid) && uid !== 0, 'linux-user-required');
+   const a = process.argv.slice(2);
+-  let pkg, mode, synthetic;
++  let pkg, mode, synthetic, productionAuthorized = false;
+   while (a.length) {
+     const k = a.shift();
+     if (k === '--package' && !pkg) pkg = a.shift();
+     else if ((k === '--check' || k === '--apply') && !mode) mode = k;
+     else if (k === '--synthetic-root' && !synthetic) synthetic = a.shift();
++    else if (k === '--production-mode-authorized' && !productionAuthorized) productionAuthorized = true;
+     else fail('invalid-arguments');
+   }
+   need(pkg && mode && isAbsolute(pkg), 'explicit-package-and-mode-required');
+-  if (mode === '--apply') need(synthetic, 'production-apply-disabled');
++  if (synthetic) need(!productionAuthorized, 'mutually-exclusive-recovery-modes');
++  else need(productionAuthorized, 'production-mode-authorization-required');
+   for (const key of Object.keys(process.env)) {
+     if (key.startsWith('PI_CHRONO_') || ['TMPDIR', 'TMP', 'TEMP'].includes(key)) fail('environment-override-refused');
+   }
+@@ -116,7 +118,7 @@
+   const profileBytes = await bytes(profilePath, 65536, true);
+   need(hash(profileBytes) === PROFILE_HASH, 'profile-record-mismatch');
+   const profile = JSON.parse(profileBytes);
+-  need(profile.schemaVersion === 2 && profile.preparationOnly === true && profile.productionApplyEnabled === false, 'profile-scope-mismatch');
++  need(profile.schemaVersion === 2 && profile.preparationOnly === false && profile.productionApplyEnabled === true, 'profile-scope-mismatch');
+   need(profile.accepted.sourceCommit === ACCEPTED_COMMIT && profile.accepted.packageName === 'pi-chrono-compact' && profile.accepted.packageVersion === '2.0.5', 'accepted-identity-mismatch');
+   need(profile.accepted.runtimeManifestEntryCount === 96 && Object.keys(profile.files).length === 96, 'runtime-manifest-count-mismatch');
+   for (const [rel, digest] of Object.entries(profile.files)) {
+@@ -186,12 +188,12 @@
+   const r = await present(runtime), l = await present(legacy);
+   need(!r && !l, r !== l ? 'partial-or-foreign-namespace' : 'occupied-namespace-refused');
+   if (mode === '--check') {
+-    console.log(JSON.stringify({ ready: false, recoverableFresh: true, changed: false, synthetic: !!synthetic, acceptedCommit: ACCEPTED_COMMIT, manifestEntries: 96, productionApplyEnabled: false }));
++    console.log(JSON.stringify({ ready: false, recoverableFresh: true, changed: false, recoveryMode: synthetic ? 'synthetic' : 'production', productionModeAuthorized: productionAuthorized, acceptedCommit: ACCEPTED_COMMIT, manifestEntries: 96, productionApplyEnabled: true }));
+     process.exitCode = 2;
+     return;
+   }
+ 
+-  // Synthetic apply only. Reserve both absent namespaces exclusively. Never remove partial state on failure.
++  // Fresh-bootstrap apply. Reserve both absent namespaces exclusively. This helper does not remove partial namespaces on failure; the accepted gate installer may roll back only inhibitors it created during its own failed installation.
+   await mkdir(runtime, { mode: 0o700 });
+   const ri = await privateDir(runtime);
+   await mkdir(legacy, { mode: 0o700 });
+@@ -220,12 +222,12 @@
+   await config();
+   await inactive();
+   need(await doubleQuiescent(profile.workerProcessBasenames), 'legacy-not-quiescent');
+-  console.log(JSON.stringify({ ready: true, changed: true, mode, synthetic: true, acceptedCommit: ACCEPTED_COMMIT, manifestEntries: 96, exactPolicy: true, fixedUnitsInactive: true, workersQuiescent: true, productionApplyEnabled: false }));
++  console.log(JSON.stringify({ ready: true, changed: true, mode, recoveryMode: synthetic ? 'synthetic' : 'production', productionModeAuthorized: productionAuthorized, acceptedCommit: ACCEPTED_COMMIT, manifestEntries: 96, exactPolicy: true, fixedUnitsInactive: true, workersQuiescent: true, productionApplyEnabled: true }));
+ }
+ 
+ try { await main(); }
+ catch (e) {
+   const message = typeof e?.message === 'string' && /^[a-z][a-z0-9-]{0,80}$/.test(e.message) ? e.message : 'boot-recovery-refused';
+-  console.error(JSON.stringify({ ready: false, refused: true, reason: message, partialStatePreserved: true, productionApplyEnabled: false }));
++  console.error(JSON.stringify({ ready: false, refused: true, reason: message, helperCleanupPerformed: false, installerMayRollbackOwnNewInhibitors: true, productionApplyEnabled: true }));
+   process.exitCode = 1;
+ }
+--- reviewed-preparation/recovery-profile.json
++++ production-derivative/recovery-profile.json
+@@ -1,7 +1,7 @@
+ {
+   "schemaVersion": 2,
+-  "preparationOnly": true,
+-  "productionApplyEnabled": false,
++  "preparationOnly": false,
++  "productionApplyEnabled": true,
+   "accepted": {
+     "sourceCommit": "dcd91924dbcfc0c02489e04c3e163b33e2b08e86",
+     "packageTree": "5c70e9c1826fe88c0da9f9e4f51b41aa62b2240c",
+@@ -39,7 +39,7 @@
+   "policy": {
+     "schemaVersion": 2
+   },
+-  "syntheticRootBase": "<PREPARATION_PRIVATE_SYNTHETIC_BASE>",
++  "syntheticRootBase": "<PRODUCTION_PRIVATE_SYNTHETIC_BASE>",
+   "workerProcessBasenames": [
+     "catalog-worker-entry.js",
+     "compaction-worker-entry.js",

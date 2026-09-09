@@ -4,6 +4,7 @@ import { env } from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { HistorySearchAdapter, isSearchReference } from "./history-search-adapter.js";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
 import { createContainedCapsuleShadow } from "./capsule-shadow-worker.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
@@ -139,6 +140,7 @@ export function resolveExtensionSettings(overrides = {}) {
         incrementalPrecomputeEnabled: booleanSetting("PI_CHRONO_INCREMENTAL_PRECOMPUTE", false, overrides.incrementalPrecomputeEnabled),
         isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
         rollupShadowEnabled: booleanSetting("PI_CHRONO_ROLLUP_SHADOW", false, overrides.rollupShadowEnabled),
+        searchIndexEnabled: booleanSetting("PI_CHRONO_SEARCH_INDEX", false, overrides.searchIndexEnabled),
         catalogShadowEnabled: booleanSetting("PI_CHRONO_CATALOG_SHADOW", false, overrides.catalogShadowEnabled),
         hostWorkerSlots: numberSetting("PI_CHRONO_HOST_WORKER_SLOTS", 1, 1, 4, overrides.hostWorkerSlots),
         workerTimeoutSeconds: numberSetting("PI_CHRONO_WORKER_TIMEOUT_SECONDS", 900, 30, 3_600, overrides.workerTimeoutSeconds),
@@ -513,13 +515,14 @@ function updateRetrievalFeedback(store, ctx, observation) {
     while (store.size > 8)
         store.delete(store.keys().next().value);
 }
-function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, transport, reserveFeedback) {
+function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, transport, reserveFeedback, search) {
     pi.registerTool({
         name: "history_get",
         label: "Get Exact History",
         description: "Return an exact immutable Pi JSONL entry or one exact content block, with nearby context.",
         parameters: Type.Object({
-            entryId: Type.String({ description: "Pi session entry ID" }),
+            entryId: Type.String({ description: "Pi session entry ID or indexed source handle" }),
+            startByte: Type.Optional(Type.Number({ minimum: 0, description: "Continue exact raw byte recovery at nextByte" })),
             blockIndex: Type.Optional(Type.Number({ minimum: 0 })),
             contextBefore: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
             contextAfter: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
@@ -527,6 +530,19 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             maxChars: Type.Optional(Type.Number({ minimum: 1, maximum: 12_000 })),
         }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            if (settings().searchIndexEnabled) {
+                if (isSearchReference(params.entryId)) {
+                    if (params.blockIndex !== undefined || params.contextBefore || params.contextAfter || params.startByte !== undefined)
+                        return toolText("A source handle already selects a decoded block; byte offsets and neighbors are not supported here.", { status: "unavailable", code: "search-v3-option-unsupported" });
+                    return search.recall(params.entryId, params.startChar, params.maxChars, _signal);
+                }
+                if (params.blockIndex !== undefined) {
+                    if (params.contextBefore || params.contextAfter || params.startByte !== undefined)
+                        return toolText("Indexed block recovery uses decoded character coordinates without neighbors.", { status: "unavailable", code: "search-v3-option-unsupported" });
+                    return search.getBlock(params.entryId, params.blockIndex, params.startChar, params.maxChars, _signal);
+                }
+                return search.getRaw(params.entryId, params, _signal);
+            }
             const options = {
                 blockIndex: params.blockIndex,
                 contextBefore: params.contextBefore,
@@ -577,10 +593,13 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             error: Type.Optional(Type.Boolean()),
             unresolved: Type.Optional(Type.Boolean()),
             currentState: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("superseded"), Type.Literal("any")])),
+            scan: Type.Optional(Type.Boolean({ description: "Explicit bounded resumable scan for regex queries" })),
             startMatch: Type.Optional(Type.Number({ minimum: 0, description: "Legacy exact-scan cursor" })),
             contextChars: Type.Optional(Type.Number({ minimum: 40, maximum: 200, description: "Legacy exact-scan context" })),
         }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            if (settings().searchIndexEnabled)
+                return search.search(params, _signal);
             if (!reserveFeedback())
                 return historyWorkerToolResult({ status: "refused", code: "history-feedback-memory-limit" });
             const selectedMode = params.regex ? "regex" : params.mode;
@@ -621,6 +640,13 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             tokenBudget: Type.Optional(Type.Number({ minimum: 120, maximum: 2_000 })),
         }),
         async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+            if (settings().searchIndexEnabled) {
+                if (params.level === "episode" || params.level === "resource")
+                    return toolText("Indexed recall supports cues and source blocks; episode and resource expansion are not available.", { status: "unavailable", code: "search-v3-option-unsupported" });
+                if (isSearchReference(params.query))
+                    return search.recall(params.query, undefined, Math.min(2048, (params.tokenBudget ?? 1000) * 2), _signal, params.tokenBudget ?? 2000);
+                return search.search({ query: params.query, limit: params.limit, tokenBudget: params.tokenBudget, stage: params.level === "cue" ? "cues" : "snippets" }, _signal);
+            }
             if (!reserveFeedback())
                 return historyWorkerToolResult({ status: "refused", code: "history-feedback-memory-limit" });
             const path = ctx.sessionManager.getSessionFile();
@@ -645,8 +671,11 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             startEntryId: Type.String(),
             endEntryId: Type.String(),
             maxEntries: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
+            cursor: Type.Optional(Type.String({ description: "Pinned indexed range continuation" })),
         }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            if (settings().searchIndexEnabled)
+                return search.range(params.startEntryId, params.endEntryId, params.maxEntries, params.cursor, _signal);
             const options = { maxEntries: params.maxEntries };
             const ledger = await availableLedger(ctx);
             let text;
@@ -812,6 +841,22 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     const loadedUserConfig = loadUserConfig(userConfigPath);
     let userConfig = loadedUserConfig.config;
     let userConfigWarning = loadedUserConfig.warning;
+    const search = new HistorySearchAdapter({ schedulerDirectory: adapters.schedulerDirectory, slots: resolveExtensionSettings(userConfig).hostWorkerSlots });
+    const scheduleSearch = (ctx) => {
+        if (!resolveExtensionSettings(userConfig).searchIndexEnabled) {
+            search.disable();
+            return;
+        }
+        const sourcePath = ctx.sessionManager.getSessionFile();
+        const leafId = ctx.sessionManager.getLeafId?.();
+        if (!sourcePath || !leafId) {
+            search.cancel();
+            return;
+        }
+        const sessionKey = createHash("sha256").update("pi-session-v1\0").update(ctx.sessionManager.getSessionId()).digest("hex");
+        const shardKey = createHash("sha256").update("pi-jsonl-v1\0").update(sourcePath).digest("hex");
+        search.schedule({ sourcePath, sessionKey, shardKey, leafId, catalogDirectory: join(dirname(sourcePath), ".chrono-catalog", sessionKey) });
+    };
     const capsuleShadow = createContainedCapsuleShadow({ schedulerDirectory: adapters.schedulerDirectory });
     let capsuleTargetRefused = false;
     const scheduleCapsuleShadow = (ctx) => {
@@ -828,6 +873,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 capsuleShadow.cancel();
         }
         catch {
+            search.cancel();
             capsuleShadow.cancel();
             capsuleTargetRefused = true;
         }
@@ -853,7 +899,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     });
     const scheduleCatalogShadow = (ctx) => {
         const settings = resolveExtensionSettings(userConfig);
-        if (!settings.catalogShadowEnabled) {
+        if (settings.searchIndexEnabled || !settings.catalogShadowEnabled) {
             catalogShadow.disable();
             return;
         }
@@ -919,7 +965,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             return undefined;
         }
     };
-    registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve);
+    registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve, search);
     registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
     registerRetentionHintTool(pi);
     const incrementalConfig = (settings) => resolveCompactorConfig({
@@ -1189,10 +1235,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
     });
     pi.on("session_start", (_event, ctx) => {
+        search.cancel();
         capsuleShadow.cancel();
         scheduleCapsuleShadow(ctx);
         catalogShadow.cancel();
         scheduleCatalogShadow(ctx);
+        scheduleSearch(ctx);
         cancelIncrementalWork(true);
         cancelShadowWork();
         cancelValueWorker();
@@ -1211,6 +1259,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         scheduleIncrementalWork(ctx);
     });
     pi.on("session_before_switch", () => {
+        search.cancel();
         capsuleShadow.cancel();
         catalogShadow.cancel();
         cancelIncrementalWork(true);
@@ -1220,6 +1269,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_before_fork", () => {
+        search.cancel();
         capsuleShadow.cancel();
         catalogShadow.cancel();
         cancelIncrementalWork(true);
@@ -1229,6 +1279,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_shutdown", () => {
+        search.dispose();
         capsuleShadow.dispose();
         catalogShadow.dispose();
         retrievalFeedback.clear();
@@ -1270,6 +1321,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("agent_settled", (_event, ctx) => {
         scheduleCapsuleShadow(ctx);
         scheduleCatalogShadow(ctx);
+        scheduleSearch(ctx);
         scheduleIncrementalWork(ctx);
         const usage = ctx.getContextUsage();
         if (forcedCompactionReason) {
@@ -1832,6 +1884,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 saveUserConfig(selected, userConfigPath);
                 userConfig = selected;
                 scheduleCatalogShadow(ctx);
+                scheduleSearch(ctx);
                 userConfigWarning = undefined;
                 lastTriggerAttemptTokens = undefined;
                 cancelIncrementalWork(true);
@@ -1854,6 +1907,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
                     `Source catalog shadow: ${settings.catalogShadowEnabled ? catalogShadow.status().state : "disabled"}; ingestion only, pending storage review`,
                     capsuleStatusText(),
+                    `Indexed history: ${JSON.stringify(search.scheduler.status())}`,
                     `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
                     `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,
                     `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,

@@ -39,9 +39,11 @@ function isDocumentation(path) {
 
 const supportedValidationPaths = new Set([
   ".github/workflows/verify.yml",
+  "package.json", // Root compiled-count inventory; baseline verification remains required.
   "scripts/chrono-validation-scope.mjs",
   "scripts/test/chrono-validation-scope.test.mjs",
   "scripts/verify-chrono-v3-baseline.mjs",
+  "scripts/verify-deployed-baseline.mjs",
   "scripts/verify-chrono-v3-privacy.mjs",
 ]);
 
@@ -60,20 +62,36 @@ function classify({ eventName, event, sha, root }) {
   }
 
   let paths;
+  let baseRevision;
+  let headRevision;
   if (eventName === "pull_request") {
     const base = requireSha(event.pull_request?.base?.sha, "pull-request-base-missing");
     const head = requireSha(event.pull_request?.head?.sha, "pull-request-head-missing");
     const merge = requireSha(event.pull_request?.merge_commit_sha, "pull-request-merge-sha-missing");
     if (merge !== sha) throw new Error("pull-request-merge-sha-mismatch");
+    baseRevision = git(root, "merge-base", base, head);
+    headRevision = head;
     paths = changedPaths(root, `${base}...${head}`);
   } else if (eventName === "push") {
     const before = requireSha(event.before, "push-before-missing");
     const after = requireSha(event.after, "push-after-missing");
     if (/^0{40}$/u.test(before)) throw new Error("new-branch-push-needs-pull-request-qualification");
     if (after !== sha) throw new Error("push-head-mismatch");
+    baseRevision = before;
+    headRevision = after;
     paths = changedPaths(root, `${before}..${after}`);
   } else {
     throw new Error("unsupported-event");
+  }
+
+  if (paths.includes("package.json")) {
+    const before = JSON.parse(git(root, "show", `${baseRevision}:package.json`));
+    const after = JSON.parse(git(root, "show", `${headRevision}:package.json`));
+    const oldProduct = before.piConsolidation?.products?.find(p => p.slug === "pi-chrono-compaction");
+    const newProduct = after.piConsolidation?.products?.find(p => p.slug === "pi-chrono-compaction");
+    if (oldProduct?.compiledCount !== 107 || newProduct?.compiledCount !== 114) throw new Error("unsupported-root-inventory-change");
+    newProduct.compiledCount = oldProduct.compiledCount;
+    if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("unsupported-root-metadata-change");
   }
 
   const unsupported = paths.find((path) => !isDocumentation(path) && !isSupportedRuntime(path));

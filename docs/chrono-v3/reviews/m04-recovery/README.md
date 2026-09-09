@@ -88,14 +88,41 @@ window. This helper has no production-enable flag. The write window remains
 released; accepted M04, verified 2.0.4 rollback, settings and admissions are not
 changed by this delivery.
 
-## Publication-check limitation
+## Accepted inventory repair and recovery
 
-This branch is documentation-only from `rebuild/chrono-memory-v3`. Its existing
-exact correction-file inventories do not include this new directory. Required
-automatic checks remain unchanged and may refuse the added documentation as
-`unexpected-correction-artifact`. No inventory, scanner, workflow or branch
-protection is weakened here. Delivery and byte verification do not imply passing
-those inventory gates or approval to merge.
+The owner authorized exactly the eleven review-file inventory additions. PR41
+head `a1c867054438639e7675e632387d38d26acc3e3b` passed all eight checks on both
+push 34393031775 and PR 34393037538. Root checks took 22m47s and 22m46s.
+PR41 merged only into integration at
+`853f45eb72e3bff2dc791b39c17168655391505e`. The original inventory failures
+remain historical evidence; scanners and their protections were not relaxed.
+
+The original preparation files above remain unchanged and production-disabled.
+The owner separately authorized a mechanical production derivative. Its
+[review diff](production-derivative-diff.patch) and
+[checksum relationship](production-checksum-relationship.json) identify the
+exact original and tested derivative. Only authorization arguments, scope labels,
+and corresponding helper/profile identity changed. All 96 accepted pins,
+configuration projection, limits, validation and gate logic were preserved.
+The two private synthetic-base paths in the diff are redacted; this review patch
+is not a runnable profile or byte-identical copy of the private exact diff.
+
+One short promoted synthetic check passed. In a new exclusive COMMAND8 window,
+immediate preflight found a genuinely fresh state and production apply reported
+ready with the exact accepted M04 policy. One normal installed catalog ingestion
+job succeeded and caught up. The post-job harness then failed because it imported
+`legacySchedulerDirectory` from the wrong module. That failure was preserved;
+only read-only settlement inspection was corrected, not the worker job repeated.
+Settlement confirmed zero active, queued or malformed claims, no remaining
+capacity claims, and the valid current-boot compatibility gate. The window was
+explicitly released and COMMAND8 acknowledged release.
+
+Installed selection remains accepted M04 2.0.5; settings, aliases and the verified
+2.0.4 rollback were not changed. Original private assets and partial failure
+evidence remain preserved. The installer can undo only inhibitors created by
+its own failed installation; this is not a claim of no cleanup at all.
+COMMAND8 retains its separate release-acceptance decision. Any future recovery
+requires a new window and fresh checks; healthy state must not be recreated.
 
 ## Future review handoffs
 

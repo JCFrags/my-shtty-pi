@@ -130,14 +130,16 @@ jobs:
           npm run build
           npm run catalog:sqlite:probe-record
           test -f test/search-lifecycle.test.ts
+          test -f test/history-search-adapter.test.ts
           search_sources=(test/search-v3-*.test.ts)
           test -e "${search_sources[0]}"
           rm -rf dist-test
           npx tsc -p tsconfig.test-build.json
           search_tests=(dist-test/test/search-v3-*.test.js)
           test -f dist-test/test/search-lifecycle.test.js
+          test -f dist-test/test/history-search-adapter.test.js
           test -e "${search_tests[0]}"
-          node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js "${search_tests[@]}"
+          node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js dist-test/test/history-search-adapter.test.js "${search_tests[@]}"
       - name: Build and run complete unit/integration tests
         if: needs.validation-scope.outputs.classification == 'milestone'
         working-directory: packages/pi-chrono-compaction

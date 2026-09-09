@@ -27,7 +27,7 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values pin the private 2.0.5 M05 draft repository candidate, not a deployment.
+// These values pin the 2.0.6 M06 draft repository candidate, not a deployment.
 // This verifies repository and optional live byte identity; it does not assert activation.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
@@ -35,21 +35,44 @@ const EXPECTED = Object.freeze({
   m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
-  sourceFiles: 108,
-  sourceTreeHash: "dfd225a2f973cd9fcbc34179b6353cf1bea84c43e7a7c07feb671bdee4077511",
-  distFiles: 107,
-  distTreeHash: "5677fe18ad6bffe43e8bf4257932bcca6e33575c7f14e8f0ad6e0e0db3cb5e71",
-  entrypointHash: "42a25258b76bea32a68600ebf25a885b3e7c2a416d89b13cb55db49754967eb4",
-  m01PackageHash: "6082b36dac835779ce35ea29a6ebc05e40bf9fcb5bcec3d4f49e68be7d150260",
-  m01LockHash: "9f0d9218009cae48b2116edce63b99363defa90ed2aa064e91da0a0f22c56571",
-  livePackageHash: "6082b36dac835779ce35ea29a6ebc05e40bf9fcb5bcec3d4f49e68be7d150260",
-  deployedPackageHash: "6082b36dac835779ce35ea29a6ebc05e40bf9fcb5bcec3d4f49e68be7d150260",
+  sourceFiles: 115,
+  sourceTreeHash: "e76da94980ba6e3dddfde7cd24790eb4fac3c626b85acdc2018fa9be0fe0267c",
+  distFiles: 114,
+  distTreeHash: "4961d05b750f7195f6145ddba139c60ecc7f05344c87ecfba4f77f0f6c49f5e3",
+  entrypointHash: "f7bec08244cb4b2dff01857f011ed1db5a9ef23bb2a5432651c7b7d84a1f17ba",
+  m01PackageHash: "3de1f721ba21cd1a2757e4cbfc65b6f9afe19387ffa9a691c683771d1793c529",
+  m01LockHash: "8a84b905ffe07018bd62d854ed5d6258df751c4ca844fca761316e80d7b639ba",
+  livePackageHash: "3de1f721ba21cd1a2757e4cbfc65b6f9afe19387ffa9a691c683771d1793c529",
+  deployedPackageHash: "3de1f721ba21cd1a2757e4cbfc65b6f9afe19387ffa9a691c683771d1793c529",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
   canonicalDeployedFiles: 291,
 });
 
 const correctionPaths = new Set([
+  "packages/pi-chrono-compaction/src/catalog-history.ts",
+  "packages/pi-chrono-compaction/src/history-search-adapter.ts",
+  "packages/pi-chrono-compaction/src/search-lifecycle.ts",
+  "packages/pi-chrono-compaction/src/search-v3-contract.ts",
+  "packages/pi-chrono-compaction/src/search-v3-store.ts",
+  "packages/pi-chrono-compaction/src/search-v3-worker-client.ts",
+  "packages/pi-chrono-compaction/src/search-v3-worker-entry.ts",
+  "packages/pi-chrono-compaction/dist/src/catalog-history.js",
+  "packages/pi-chrono-compaction/dist/src/history-search-adapter.js",
+  "packages/pi-chrono-compaction/dist/src/search-lifecycle.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-contract.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-store.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-worker-entry.js",
+  "packages/pi-chrono-compaction/test/catalog-history.test.ts",
+  "packages/pi-chrono-compaction/test/history-search-adapter.test.ts",
+  "packages/pi-chrono-compaction/test/search-lifecycle.test.ts",
+  "packages/pi-chrono-compaction/test/search-v3-recovery.test.ts",
+  "docs/chrono-v3/reviews/M06-search-report.md",
+  "docs/chrono-v3/reviews/m04-recovery/production-checksum-relationship.json",
+  "docs/chrono-v3/reviews/m04-recovery/production-derivative-diff.patch",
+  "scripts/chrono-validation-scope.mjs",
+  "scripts/test/chrono-validation-scope.test.mjs",
   "docs/chrono-v3/reviews/m04-recovery/ORIGINAL-SHA256SUMS",
   "docs/chrono-v3/reviews/m04-recovery/README.md",
   "docs/chrono-v3/reviews/m04-recovery/SHA256SUMS",
@@ -539,7 +562,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.5") fail("package-version-changed");
+  if (packageJson.version !== "2.0.6") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");

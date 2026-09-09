@@ -25,7 +25,7 @@ function fixture() {
 function commit(root, path, content) {
   mkdirSync(join(root, path, ".."), { recursive: true });
   writeFileSync(join(root, path), content);
-  git(root, "add", ".");
+  git(root, "add", "--", path);
   git(root, "commit", "--quiet", "-m", path);
   return git(root, "rev-parse", "HEAD");
 }
@@ -53,6 +53,17 @@ function withFixture(fn) {
   const root = fixture();
   try { fn(root); } finally { rmSync(root, { recursive: true, force: true }); }
 }
+
+test("both baseline inventory verifiers select routine validation", () => withFixture((root) => {
+  for (const path of ["scripts/verify-chrono-v3-baseline.mjs", "scripts/verify-deployed-baseline.mjs"]) {
+    const before = git(root, "rev-parse", "HEAD");
+    const after = commit(root, path, "// exact inventory update\n");
+    const result = run(root, "push", { before, after }, after);
+    assert.equal(result.status, 0);
+    assert.equal(result.json.classification, "runtime");
+    assert.equal(result.json.broad, "false");
+  }
+}));
 
 test("push documentation diff selects documentation validation", () => withFixture((root) => {
   const before = git(root, "rev-parse", "HEAD");
@@ -106,4 +117,15 @@ test("broad validation is selected only by exact-head milestone dispatch", () =>
     assert.notEqual(rejected.status, 0);
     assert.equal(rejected.json.broad, "false");
   }
+}));
+
+test("root inventory permits only the exact M06 compiled-count change", () => withFixture((root) => {
+  const manifest = { piConsolidation: { products: [{ slug: "pi-chrono-compaction", compiledCount: 107 }] } };
+  const before = commit(root, "package.json", JSON.stringify(manifest));
+  manifest.piConsolidation.products[0].compiledCount = 114;
+  const after = commit(root, "package.json", JSON.stringify(manifest));
+  assert.equal(run(root, "push", { before, after }, after).status, 0);
+  manifest.unrelated = true;
+  const unrelated = commit(root, "package.json", JSON.stringify(manifest));
+  assert.equal(run(root, "push", { before, after: unrelated }, unrelated).json.reason, "unsupported-root-metadata-change");
 }));
