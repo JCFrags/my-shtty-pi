@@ -19,8 +19,10 @@ import type { ReducerEnvelope } from "./capsule-contract.js";
 
 const HEAD_UNITS = 4 * 1024;
 const TAIL_UNITS = 4 * 1024;
-// The longest ordinary pattern is an HTTPS identifier: the eight-unit scheme
-// plus 240 Unicode code points. Every code point can occupy two UTF-16 units.
+// The longest supported ordinary pattern is an HTTPS identifier: the eight-unit
+// scheme plus 240 Unicode code points. Every code point can occupy two UTF-16
+// units. The over-limit detector needs 8 + 241 * 2 = 490 units, which is also
+// covered by this match bound plus the two-unit boundary lookahead below.
 const ORDINARY_MAX_MATCH_UNITS = 8 + 240 * 2;
 // A Unicode word/token boundary can require one complete astral code point.
 const ORDINARY_BOUNDARY_LOOKAHEAD_UNITS = 2;

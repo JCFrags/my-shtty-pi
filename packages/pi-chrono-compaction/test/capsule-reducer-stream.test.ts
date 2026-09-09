@@ -184,46 +184,26 @@ test("identifier prefixes at a feed boundary are deferred until the match is set
   assert.deepEqual(identifiers.map((cue) => cue.exactText), ["https://example.com/alpha/beta"]);
 });
 
-test("astral identifiers respect the pattern code-point cap across UTF-16 partitions", () => {
-  for (const example of [
-    { emoji: 200, supported: true },
-    { emoji: 228, supported: true }, // 12 code points in example.com/ + 228 = the 240-code-point payload cap.
-    { emoji: 229, supported: false },
-  ]) {
-    const identifier = "https://example.com/" + "😀".repeat(example.emoji);
-    const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
-    const complete = reducePartitioned(text, [text.length]);
-    const identifierEnd = 5_000 + identifier.length;
-    const splits = [...new Set([5_389, 5_390, 5_391, identifierEnd - 1, identifierEnd, identifierEnd + 1])];
-    for (const splitAt of splits) {
-      for (const restartEvery of [0, 1]) {
-        const split = reducePartitioned(text, [splitAt, text.length - splitAt], restartEvery);
-        assert.equal(JSON.stringify(split), JSON.stringify(complete), `${example.emoji} emoji split ${splitAt} restart ${restartEvery}`);
-      }
-    }
-    const primary = complete.alternatives[0]!;
-    const cues = primary.protectedCues.filter((cue) => cue.kind === "identifier");
-    if (example.supported) {
-      assert.deepEqual(cues.map((cue) => cue.decodedUtf16), [{ start: 5_000, end: identifierEnd }]);
-      assert.deepEqual(cues.map((cue) => cue.exactText), [identifier]);
-      assert.ok(primary.text.includes(`\n${identifier}\n`));
-    } else {
-      assert.deepEqual(cues, [], "one adjacent code point over the payload cap is not retained as an identifier");
-      assert.ok(primary.omissions.some((item) => item.kind === "transformation-loss" && /bounded-grammar/.test(item.description)));
-    }
-  }
-});
-
 test("ordinary identifiers crossing the settled frontier retain exact coordinates and neighborhoods", () => {
-  const identifiers = [
+  const fullIdentifiers = [
     "./" + "x".repeat(198),
     "https://example.com/" + "x".repeat(220),
     "https://example.com/" + "x".repeat(181) + "/tail/path",
+    "https://example.com/" + "😀".repeat(200),
+    "https://example.com/" + "😀".repeat(228), // 12 + 228 = the 240-code-point URL payload cap.
   ];
-  for (const identifier of identifiers) {
+  const examples = [
+    ...fullIdentifiers.map(identifier => ({ identifier, expected: [{ start: 0, end: identifier.length, exactText: identifier }], overLimit: false })),
+    { identifier: "https://example.com/" + "😀".repeat(229),
+      expected: [{ start: 6, end: 20, exactText: "//example.com/" }], overLimit: true },
+  ];
+  for (const example of examples) {
+    const { identifier } = example;
     const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
     const complete = reducePartitioned(text, [text.length]);
-    for (const split of [5_567, 5_568, 5_569]) {
+    const identifierEnd = 5_000 + identifier.length;
+    const splits = [...new Set([5_389, 5_390, 5_391, 5_567, 5_568, 5_569, identifierEnd - 1, identifierEnd, identifierEnd + 1])];
+    for (const split of splits) {
       for (const restartEvery of [0, 1]) {
         const actual = reducePartitioned(text, [split, text.length - split], restartEvery);
         assert.equal(JSON.stringify(actual), JSON.stringify(complete), `${identifier.slice(0, 12)} split ${split} restart ${restartEvery}`);
@@ -249,9 +229,15 @@ test("ordinary identifiers crossing the settled frontier retain exact coordinate
     assert.equal(JSON.stringify(finalizeCapsuleReduction(state)), JSON.stringify(complete), "small multi-chunk restart envelope");
     const primary = complete.alternatives[0]!;
     const identifierCues = primary.protectedCues.filter((candidate) => candidate.kind === "identifier");
-    assert.deepEqual(identifierCues.map((cue) => cue.decodedUtf16), [{ start: 5_000, end: 5_000 + identifier.length }]);
-    assert.deepEqual(identifierCues.map((cue) => cue.exactText), [identifier]);
-    assert.ok(primary.text.includes(`\n${identifier}\n`));
+    assert.deepEqual(identifierCues.map((cue) => cue.decodedUtf16),
+      example.expected.map(cue => ({ start: 5_000 + cue.start, end: 5_000 + cue.end })));
+    assert.deepEqual(identifierCues.map((cue) => cue.exactText), example.expected.map(cue => cue.exactText));
+    if (example.overLimit) {
+      assert.deepEqual(primary.omissions.filter(item => item.kind === "transformation-loss").map(item => ({
+        reason: item.reason, affectedDecodedUtf16: item.affectedDecodedUtf16, omittedUnits: item.omittedUnits, description: item.description,
+      })), [{ reason: "budget", affectedDecodedUtf16: { start: 0, end: text.length }, omittedUnits: "unknown",
+        description: "1 additional protected-cue match(es) exceeded fixed recognition or bounded-grammar budgets." }]);
+    } else assert.ok(primary.text.includes(`\n${identifier}\n`));
   }
 
   const identifier = "https://example.com/" + "x".repeat(181) + "/tail/path";
