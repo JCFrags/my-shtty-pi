@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { CAPSULE_TEXT_HASH, isReducerEnvelope, type SourceBlockReducerBaseInput } from "../src/capsule-contract.js";
+import {
+  CAPSULE_REDUCER_PIPELINE_VERSION,
+  CAPSULE_TEXT_HASH,
+  isReducerEnvelope,
+  type SourceBlockReducerBaseInput,
+} from "../src/capsule-contract.js";
 import { CAPSULE_REDUCER_FAMILY_VERSIONS, type CapsuleReducerOptions } from "../src/capsule-reducer.js";
 import {
   beginCapsuleReduction,
@@ -96,6 +101,68 @@ test("feed partition and serialized restart produce identical envelope bytes", (
   assert.ok(cues.some((cue) => cue.kind === "condition" && cue.exactText === "ONLY IF"));
   assert.ok(cues.some((cue) => cue.kind === "pending-approval"));
   for (const cue of cues) assert.equal(text.slice(cue.decodedUtf16.start, cue.decodedUtf16.end), cue.exactText);
+});
+
+test("ordinary and incremental cues share source ordering before capped admission", () => {
+  const mixed = `${"must ".repeat(16)}${"exit code 1 ".repeat(16)}.`;
+  for (const text of [mixed, `${"long head ".repeat(700)}${mixed}${" long tail".repeat(700)}`]) {
+    const complete = reducePartitioned(text, [text.length]);
+    const oneUnit = reducePartitioned(text, [1]);
+    const uneven = reducePartitioned(text, [7, 1, 97, 3, 509]);
+    const restarted = reducePartitioned(text, [1, 31, 257], 2);
+    for (const actual of [oneUnit, uneven, restarted]) {
+      assert.equal(JSON.stringify(actual), JSON.stringify(complete), "same final envelope bytes for every partition and restart");
+    }
+    const primary = complete.alternatives[0]!;
+    assert.equal(primary.protectedCues.length, 16);
+    assert.deepEqual(primary.protectedCues.map(cue => cue.exactText), Array(16).fill("must"));
+    assert.ok(primary.text.includes("must"));
+    assert.equal(primary.protectedCues.some(cue => cue.kind === "failure"), false);
+    assert.ok(primary.omissions.some(item => item.kind === "transformation-loss" && /16 additional protected-cue/.test(item.description)));
+    for (const cue of primary.protectedCues) assert.equal(text.slice(cue.decodedUtf16.start, cue.decodedUtf16.end), cue.exactText);
+  }
+});
+
+test("failure grammar rejects lexical continuations across BMP, astral, split-surrogate, and restart boundaries", () => {
+  const astralLetter = "𝒂"; // U+1D482, two UTF-16 code units.
+  const loneHigh = String.fromCharCode(0xd835), loneLow = String.fromCharCode(0xdc82);
+  const invalid = [
+    "eexit code 17", "aexit code 17", `${astralLetter}exit code 17`,
+    "exit code 17a", `exit code 17${astralLetter}`,
+  ];
+  const valid = [
+    { source: `exit code${" ".repeat(400)}17.`, cue: `exit code${" ".repeat(400)}17` },
+    { source: `exit code 19${loneHigh}.`, cue: "exit code 19" },
+    { source: `${loneLow}exit code 23.`, cue: "exit code 23" },
+  ];
+  const text = `${invalid.join(" | ")} | ${valid.map(value => value.source).join(" | ")}`;
+  const complete = reducePartitioned(text, [text.length]);
+  for (const actual of [
+    reducePartitioned(text, [1]),
+    reducePartitioned(text, [text.indexOf(astralLetter) + 1, 1, 3, 17], 1),
+    reducePartitioned(text, [2, 31, 257], 2),
+  ]) assert.equal(JSON.stringify(actual), JSON.stringify(complete));
+  const failures = complete.alternatives[0]!.protectedCues.filter(cue => cue.kind === "failure").map(cue => cue.exactText);
+  assert.deepEqual(failures, valid.map(value => value.cue));
+});
+
+test("malformed partial literals and repetitions do not hide a later valid long failure clause", () => {
+  const malformed = `${"eexit code 17 | exit codex 18 | exit code 19𝒂 | ".repeat(24)}`;
+  const valid = `exit code${" ".repeat(400)}29`;
+  const text = `${"H".repeat(4_500)}${malformed}${"M".repeat(900)}${valid}.${"T".repeat(4_500)}`;
+  const complete = reducePartitioned(text, [text.length]);
+  for (const actual of [reducePartitioned(text, [1], 1), reducePartitioned(text, [13, 2, 511, 4_097], 3)]) {
+    assert.equal(JSON.stringify(actual), JSON.stringify(complete));
+  }
+  assert.deepEqual(complete.alternatives[0]!.protectedCues.filter(cue => cue.kind === "failure").map(cue => cue.exactText), [valid]);
+  assert.ok(complete.alternatives[0]!.text.includes(valid));
+});
+
+test("pipeline and serialized checkpoint expose the new settled-frontier semantics", () => {
+  const state = feedCapsuleReduction(beginCapsuleReduction(base("exit"), options), { decodedUtf16: { start: 0, end: 4 }, text: "exit" });
+  assert.equal(CAPSULE_REDUCER_PIPELINE_VERSION, "capsule-pure-v3");
+  assert.equal(Number(state.v), 3);
+  assert.equal(Number((JSON.parse(JSON.stringify(state)) as { v: number }).v), 3);
 });
 
 test("identifier prefixes at a feed boundary are deferred until the match is settled", () => {

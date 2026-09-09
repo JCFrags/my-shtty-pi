@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
+import { runCapsuleWorker } from "../src/capsule-worker-client.js";
 import { line, setupCapsuleFixture } from "./capsule-storage-fixture.js";
 
 async function deriveToEnd(fixture: ReturnType<typeof setupCapsuleFixture>, view: any): Promise<void> {
@@ -26,6 +29,54 @@ test("persisted capsule retrieval rejects malformed exit-code words before a val
     const primary = page.capsules[0].alternatives[0];
     assert.deepEqual(primary.protectedCues.filter((cue: any) => cue.kind === "failure").map((cue: any) => cue.exactText), [valid]);
     assert.ok(primary.text.includes(valid));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("persisted retrieval uses source-ordered capped cue admission", async () => {
+  const mixed = `${"must ".repeat(16)}${"exit code 1 ".repeat(16)}.`;
+  const text = `${"H".repeat(4_500)}${mixed}${"T".repeat(4_500)}`;
+  const fixture = setupCapsuleFixture(line("a", null, text));
+  try {
+    const view = await fixture.initialize();
+    await deriveToEnd(fixture, view);
+    const page = await fixture.ok(view, { op: "capsulePage", limit: 1 });
+    const primary = page.capsules[0].alternatives[0];
+    assert.deepEqual(primary.protectedCues.map((cue: any) => cue.exactText), Array(16).fill("must"));
+    assert.ok(primary.omissions.some((item: any) => item.kind === "transformation-loss" && /16 additional protected-cue/.test(item.description)));
+    assert.ok(primary.text.includes("must"));
+    assert.equal(primary.protectedCues.some((cue: any) => cue.kind === "failure"), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("contained worker derives and retrieves the same source-ordered cue selection", async () => {
+  const mixed = `${"must ".repeat(16)}${"exit code 1 ".repeat(16)}.`;
+  const text = `${"head ".repeat(900)}${mixed}${" tail".repeat(900)}`;
+  const fixture = setupCapsuleFixture(line("a", null, text));
+  try {
+    const view = await fixture.initialize();
+    const schedulerDirectory = join(fixture.directory, "scheduler");
+    mkdirSync(schedulerDirectory, { mode: 0o700 });
+    let cursor: any;
+    for (let page = 0; page < 200; page += 1) {
+      const response = await runCapsuleWorker({ v: 1, derivedDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+        identity: fixture.identity, view, op: "derivePage", ...(cursor === undefined ? {} : { cursor }) }, { schedulerDirectory, slots: 1 });
+      assert.equal(response.ok, true, JSON.stringify(response));
+      if (!response.ok) return;
+      cursor = (response.result as any).cursor;
+      if ((response.result as any).complete) break;
+      if (page === 199) assert.fail("contained derive did not complete");
+    }
+    const response = await runCapsuleWorker({ v: 1, derivedDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+      identity: fixture.identity, view, op: "capsulePage", limit: 1 }, { schedulerDirectory, slots: 1 });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    if (!response.ok) return;
+    const primary = (response.result as any).capsules[0].alternatives[0];
+    assert.deepEqual(primary.protectedCues.map((cue: any) => cue.exactText), Array(16).fill("must"));
+    assert.equal(primary.protectedCues.some((cue: any) => cue.kind === "failure"), false);
   } finally {
     fixture.cleanup();
   }
