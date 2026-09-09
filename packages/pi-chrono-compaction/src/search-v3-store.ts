@@ -23,6 +23,8 @@ const num = (row: SqlRow, key: string): number => Number(row[key]);
 const str = (row: SqlRow, key: string): string => String(row[key]);
 const LINEAGE = (view: SearchV3View): string => sha256(canonicalJson({ branchKey: view.branchKey, segments: view.segments.map(item => item.segment) }));
 const VIEW = (view: SearchV3View): string => sha256(canonicalJson(view));
+const INGEST_ENUMERATION_PAGES = 4;
+const INGEST_ENUMERATION_DESCRIPTORS = 64;
 const schema = [
   "CREATE TABLE meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, identity TEXT NOT NULL, searchRoute TEXT NOT NULL, capsuleRoute TEXT NOT NULL, catalogRoute TEXT NOT NULL, generation INTEGER NOT NULL)",
   "CREATE TABLE documents (sourceKey TEXT PRIMARY KEY, source TEXT NOT NULL, segment INTEGER NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, blockIndex INTEGER, shardKey TEXT NOT NULL, kind TEXT NOT NULL, provenance TEXT NOT NULL, toolName TEXT, error INTEGER, cue TEXT NOT NULL, identifiers TEXT NOT NULL, paths TEXT NOT NULL, indexGeneration INTEGER NOT NULL)",
@@ -147,11 +149,13 @@ async function ingest(request: Extract<SearchV3Request, { op: "ingestPage" }>, s
   let generation = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation");
   let cueReady = row ? num(row, "cueReady") : 0, rawReady = row ? num(row, "rawReady") : 0, excluded = row ? num(row, "excluded") : 0;
   if (row) { const old = JSON.parse(str(row, "view")) as SearchV3View; if (!extendsView(request.view, old)) fail("search-v3-cursor-invalid"); }
-  let sources = 0, chunks = 0, complete = false;
-  while (sources < (request.maxSources ?? SEARCH_V3_LIMITS.ingestSources) && chunks < (request.maxChunks ?? SEARCH_V3_LIMITS.ingestChunks)) {
+  let sources = 0, chunks = 0, enumerationPages = 0, complete = false;
+  while (sources < (request.maxSources ?? SEARCH_V3_LIMITS.ingestSources) && chunks < (request.maxChunks ?? SEARCH_V3_LIMITS.ingestChunks)
+    && (active !== undefined || enumerationPages < INGEST_ENUMERATION_PAGES)) {
     if (!active) {
+      enumerationPages++;
       const page = await capsuleCall(request, executor, sourceBudget, { op: "chunkSourcePage", view: request.view, afterEventSeq, afterDescriptor, limit: 1,
-        maxDescriptors: CAPSULE_LIMITS.deriveDescriptors });
+        maxDescriptors: INGEST_ENUMERATION_DESCRIPTORS });
       const item = page.sources?.[0] as { source: ScopedBodySourceRef; provenance: "original" | "mixed" | "generated"; capsule?: ReducerEnvelope } | undefined;
       if (!item) {
         afterEventSeq = Number(page.next?.afterEventSeq ?? afterEventSeq); afterDescriptor = Number(page.next?.afterDescriptor ?? afterDescriptor);
@@ -172,8 +176,16 @@ async function ingest(request: Extract<SearchV3Request, { op: "ingestPage" }>, s
       const chunkIndex = Math.floor(active.nextDecoded / CAPSULE_LIMITS.decodedChunkUnits), indexed = active.carry + text;
       const indexedStart = active.nextDecoded - active.carry.length;
       store.transaction(() => {
-        store.run("INSERT OR IGNORE INTO chunks VALUES(?,?,?,?,?)", key, chunkIndex, indexedStart, active!.nextDecoded + length, indexed);
-        if (!store.get("SELECT rowid FROM raw_fts WHERE sourceKey=? AND chunkIndex=?", key, chunkIndex)) store.run("INSERT INTO raw_fts(sourceKey,chunkIndex,text) VALUES(?,?,?)", key, chunkIndex, indexed);
+        const prior = store.get("SELECT decodedStart,decodedEnd,text FROM chunks WHERE sourceKey=? AND chunkIndex=?", key, chunkIndex);
+        if (prior) {
+          if (num(prior, "decodedStart") !== indexedStart || num(prior, "decodedEnd") !== active!.nextDecoded + length || str(prior, "text") !== indexed)
+            fail("search-v3-chunk-conflict");
+        } else {
+          store.run("INSERT INTO chunks VALUES(?,?,?,?,?)", key, chunkIndex, indexedStart, active!.nextDecoded + length, indexed);
+          // The exact chunk row and its FTS row commit atomically. A present
+          // chunk therefore proves the FTS insertion without scanning FTS.
+          store.run("INSERT INTO raw_fts(sourceKey,chunkIndex,text) VALUES(?,?,?)", key, chunkIndex, indexed);
+        }
       });
       active.paths = [...new Set([...active.paths.split(" ").filter(Boolean), ...paths(text)])].slice(0, 64).join(" ");
       active.identifiers = [...new Set([...active.identifiers.split(" ").filter(Boolean), ...identifiers(text)])].slice(0, 128).join(" ");
@@ -181,17 +193,23 @@ async function ingest(request: Extract<SearchV3Request, { op: "ingestPage" }>, s
       active.nextDecoded += length; chunks++;
     }
     if (active.nextDecoded === active.source.decodedUtf16.end) {
-      const completed = active, exists = store.get("SELECT sourceKey FROM documents WHERE sourceKey=?", key) !== undefined;
-      const nextGeneration = exists ? generation : generation + 1;
+      const completed = active, candidateGeneration = generation + 1; let inserted = false;
       store.transaction(() => {
-        store.run("INSERT OR IGNORE INTO documents VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", key, canonicalJson(completed.source), completed.source.segment,
-          completed.source.eventSeq, completed.source.descriptor, completed.source.blockIndex ?? null, completed.source.shardKey, completed.kind, completed.provenance,
-          completed.toolName, completed.error, completed.cue, completed.identifiers, completed.paths, nextGeneration);
-        if (!store.get("SELECT rowid FROM cue_fts WHERE sourceKey=?", key)) store.run("INSERT INTO cue_fts(sourceKey,cue,identifiers,paths) VALUES(?,?,?,?)", key, completed.cue, completed.identifiers, completed.paths);
+        const prior = store.get("SELECT * FROM documents WHERE sourceKey=?", key);
+        if (prior) {
+          if (str(prior, "source") !== canonicalJson(completed.source)) fail("search-v3-document-conflict");
+        } else {
+          store.run("INSERT INTO documents VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", key, canonicalJson(completed.source), completed.source.segment,
+            completed.source.eventSeq, completed.source.descriptor, completed.source.blockIndex ?? null, completed.source.shardKey, completed.kind, completed.provenance,
+            completed.toolName, completed.error, completed.cue, completed.identifiers, completed.paths, candidateGeneration);
+          // Document and cue FTS rows share one transaction. Never probe FTS
+          // columns as a substitute for the indexed document identity.
+          store.run("INSERT INTO cue_fts(sourceKey,cue,identifiers,paths) VALUES(?,?,?,?)", key, completed.cue, completed.identifiers, completed.paths);
+          store.run("UPDATE meta SET generation=? WHERE singleton=1", candidateGeneration); inserted = true;
+        }
         store.run("INSERT OR IGNORE INTO membership VALUES(?,?,?,?)", lineage, key, completed.source.eventSeq, completed.source.descriptor);
-        if (!exists) store.run("UPDATE meta SET generation=? WHERE singleton=1", nextGeneration);
       });
-      generation = nextGeneration; cueReady++; if (completed.provenance !== "generated") rawReady++;
+      if (inserted) generation = candidateGeneration; cueReady++; if (completed.provenance !== "generated") rawReady++;
       afterEventSeq = completed.source.eventSeq; afterDescriptor = completed.source.descriptor + 1; active = undefined; sources++;
     }
   }
@@ -199,13 +217,18 @@ async function ingest(request: Extract<SearchV3Request, { op: "ingestPage" }>, s
     active ? canonicalJson(active) : null, generation, cueReady, rawReady, excluded, complete && !active ? 1 : 0);
   return { complete: complete && !active, cursor: { afterEventSeq, afterDescriptor, activeDecodedOffset: active?.nextDecoded ?? 0 }, indexGeneration: generation,
     readiness: { cue: complete && !active ? "ready" : "partial", raw: complete && !active ? "ready" : "partial", cueReady, rawReady, excluded,
-      cursor: { afterEventSeq, afterDescriptor, activeDecodedOffset: active?.nextDecoded ?? 0 } }, metrics: { sources, chunks, sqliteStatements: store.statements } };
+      cursor: { afterEventSeq, afterDescriptor, activeDecodedOffset: active?.nextDecoded ?? 0 } },
+    metrics: { sources, chunks, enumerationPages, enumerationDescriptorsLimit: INGEST_ENUMERATION_PAGES * INGEST_ENUMERATION_DESCRIPTORS, sqliteStatements: store.statements } };
 }
 function ftsQuery(query: string): string | undefined {
   const values = terms(query).filter(value => value.length >= 2).slice(0, 12);
   return values.length ? values.map(value => `"${value.replaceAll('"', '""')}"`).join(" OR ") : undefined;
 }
 function normalizePath(value: string): string { return value.trim().replaceAll("\\", "/").replace(/\/{2,}/g, "/").replace(/\/$/, "").toLowerCase() || "/"; }
+function viewBoundsSql(view: SearchV3View, alias = "d"): { sql: string; values: SqlValue[] } {
+  const clauses = view.segments.map(() => `(${alias}.segment=? AND ${alias}.eventSeq<=?)`);
+  return { sql: ` AND (${clauses.join(" OR ")})`, values: view.segments.flatMap(item => [item.segment, item.cut]) };
+}
 function filterSql(filters: SearchV3Filters | undefined, alias = "d"): { sql: string; values: SqlValue[] } {
   const clauses: string[] = [], values: SqlValue[] = [];
   if (filters?.kinds?.length) { clauses.push(`${alias}.kind IN (${filters.kinds.map(() => "?").join(",")})`); values.push(...filters.kinds); }
@@ -256,35 +279,39 @@ function compileRegex(query: string, caseSensitive = false): RegExp { try { retu
 function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store): Record<string, unknown> {
   if ((request.filters?.currentState !== undefined && request.filters.currentState !== "any") || request.filters?.unresolved !== undefined
     || request.filters?.kinds !== undefined) fail("search-v3-filter-unsupported");
-  const mode = request.mode ?? "ranked", filter = filterSql(request.filters);
+  const mode = request.mode ?? "ranked", filter = filterSql(request.filters), bounds = viewBoundsSql(request.view);
   if (mode === "regex" && !request.scan) fail("search-v3-scan-required");
-  const match = mode === "regex" ? undefined : ftsQuery(request.query), queryHash = sha256(canonicalJson({ op: "query", view: request.view, query: request.query, mode,
+  const match = request.scan || mode === "regex" ? undefined : ftsQuery(request.query);
+  if (mode === "literal" && !match && !request.scan) fail("search-v3-scan-required");
+  const queryHash = sha256(canonicalJson({ op: "query", view: request.view, query: request.query, mode,
     caseSensitive: request.caseSensitive ?? false, filters: request.filters ?? null, scan: request.scan ?? null }));
   const pin = pinnedGeneration(store, request, queryHash), lineage = LINEAGE(request.view), maximum = SEARCH_V3_LIMITS.candidates;
   let candidates: Candidate[] = [], scanOffset = pin.scanOffset, scanComplete = true;
   let scanLast = { eventSeq: pin.afterEventSeq, descriptor: pin.afterDescriptor, sourceKey: pin.afterSourceKey, chunkIndex: pin.afterChunkIndex };
   if (match) {
     if (mode === "ranked") {
-      const cueRows = store.rows(`SELECT d.* FROM cue_fts JOIN documents d ON d.sourceKey=cue_fts.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE cue_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${filter.sql} ORDER BY d.eventSeq,d.descriptor,d.sourceKey LIMIT ?`,
-        maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...filter.values, maximum + 1);
+      const cueRows = store.rows(`SELECT d.* FROM cue_fts JOIN documents d ON d.sourceKey=cue_fts.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE cue_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`,
+        maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
       if (cueRows.length > maximum) fail("search-v3-query-budget");
       candidates.push(...cueRows.map(row => ({ row, score: 1_000, evidence: "generated-cue" as const, reason: "bounded capsule cue lexical match" })));
     }
-    const rawRows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${filter.sql} ORDER BY d.eventSeq,d.descriptor,d.sourceKey,c.chunkIndex LIMIT ?`,
-      maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...filter.values, maximum + 1);
+    const rawRows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`,
+      maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
     if (rawRows.length > maximum) fail("search-v3-query-budget");
+    const literalPattern = mode === "literal" ? compileRegex(request.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), request.caseSensitive ?? false) : undefined;
     for (const row of rawRows) {
-      const text = str(row, "text"), at = request.caseSensitive ? text.indexOf(request.query) : text.toLocaleLowerCase().indexOf(request.query.toLocaleLowerCase());
+      const text = str(row, "text"), at = literalPattern ? literalPattern.exec(text)?.index ?? -1 : -1;
       if (mode !== "ranked" && at < 0) continue;
       const found = at < 0 ? terms(request.query).map(term => text.toLowerCase().indexOf(term)).find(index => index >= 0) ?? 0 : at;
       candidates.push({ row, score: 1_000_000, evidence: "raw-source", start: num(row, "decodedStart") + found,
         end: num(row, "decodedStart") + found + Math.max(1, request.query.length),
         reason: mode === "literal" ? "verified exact raw phrase" : "raw lexical match" });
     }
-  } else if (mode === "regex") {
-    const started = Date.now(), pattern = compileRegex(request.query, request.caseSensitive ?? false);
-    const rows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM chunks c JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.eventSeq<=? AND d.indexGeneration<=?${filter.sql} AND (d.eventSeq>? OR (d.eventSeq=? AND (d.descriptor>? OR (d.descriptor=? AND (d.sourceKey>? OR (d.sourceKey=? AND c.chunkIndex>?)))))) ORDER BY d.eventSeq,d.descriptor,d.sourceKey,c.chunkIndex LIMIT ?`,
-      request.scan!.maxChunks, lineage, request.view.eventCut, pin.generation, ...filter.values, pin.afterEventSeq, pin.afterEventSeq, pin.afterDescriptor,
+  } else if ((mode === "regex" || mode === "literal") && request.scan) {
+    const source = mode === "literal" ? request.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : request.query;
+    const started = Date.now(), pattern = compileRegex(source, request.caseSensitive ?? false);
+    const rows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM chunks c JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} AND (d.eventSeq>? OR (d.eventSeq=? AND (d.descriptor>? OR (d.descriptor=? AND (d.sourceKey>? OR (d.sourceKey=? AND c.chunkIndex>?)))))) ORDER BY d.eventSeq,d.descriptor,d.sourceKey,c.chunkIndex LIMIT ?`,
+      request.scan!.maxChunks, lineage, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, pin.afterEventSeq, pin.afterEventSeq, pin.afterDescriptor,
       pin.afterDescriptor, pin.afterSourceKey, pin.afterSourceKey, pin.afterChunkIndex, request.scan!.maxChunks);
     let consumed = 0;
     for (const row of rows) {
@@ -294,7 +321,7 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
       const found = pattern.exec(str(row, "text"));
       if (found) {
         candidates.push({ row, score: 1_000_000, evidence: "raw-source", start: num(row, "decodedStart") + found.index,
-          end: num(row, "decodedStart") + found.index + found[0].length, reason: "explicit bounded raw scan" });
+          end: num(row, "decodedStart") + found.index + found[0].length, reason: mode === "literal" ? "explicit bounded exact literal scan" : "explicit bounded raw regex scan" });
         if (candidates.length >= (request.limit ?? SEARCH_V3_LIMITS.page)) { scanComplete = false; break; }
       }
     }
@@ -312,8 +339,11 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
   const nextCursor = hasMore ? cursorEncode({ storeKey: request.identity.storeKey, viewHash: VIEW(request.view), queryHash, generation: pin.generation,
     offset: nextOffset < diverse.length ? nextOffset : 0, scanOffset, afterEventSeq: scanLast.eventSeq, afterDescriptor: scanLast.descriptor,
     afterSourceKey: scanLast.sourceKey, afterChunkIndex: scanLast.chunkIndex }) : undefined;
+  const exhaustive = request.scan !== undefined || mode !== "literal";
   return { indexGeneration: pin.generation, branchKey: request.view.branchKey, eventCut: request.view.eventCut, hits: selected.map(item => hit(request, item, pin.generation)),
-    ...(nextCursor ? { nextCursor } : {}), complete: !hasMore, scan: mode === "regex" ? { explicit: Boolean(request.scan), complete: scanComplete, chunksScanned: scanOffset - pin.scanOffset } : undefined,
+    ...(nextCursor ? { nextCursor } : {}), complete: exhaustive && !hasMore, exhaustive,
+    coverage: request.scan ? "explicit-bounded-raw-scan" : mode === "literal" ? "indexed-token-candidates" : "indexed-cue-and-token-candidates",
+    scan: request.scan ? { explicit: true, complete: scanComplete, chunksScanned: scanOffset - pin.scanOffset } : undefined,
     cache: { hit: false, bytes: 0, limitBytes: SEARCH_V3_LIMITS.cacheBytes }, metrics: { candidates: diverse.length, sqliteStatements: store.statements } };
 }
 async function recall(request: Extract<SearchV3Request, { op: "recall" }>, store: Store, executor: CapsuleExecutor, sourceBudget: { bytes: number }): Promise<Record<string, unknown>> {
@@ -337,8 +367,11 @@ async function recall(request: Extract<SearchV3Request, { op: "recall" }>, store
 }
 function sources(request: Extract<SearchV3Request, { op: "sources" }>, store: Store): Record<string, unknown> {
   const generation = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation"), limit = request.limit ?? SEARCH_V3_LIMITS.page;
-  const rows = store.rows("SELECT d.* FROM documents d JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.eventSeq=? AND d.eventSeq<=? AND d.descriptor>? AND (? IS NULL OR d.blockIndex=?) AND d.indexGeneration<=? ORDER BY d.descriptor,d.sourceKey LIMIT ?",
-    limit + 1, LINEAGE(request.view), request.eventSeq, request.view.eventCut, request.afterDescriptor ?? -1, request.blockIndex ?? null, request.blockIndex ?? null, generation, limit + 1);
+  const bounds = viewBoundsSql(request.view);
+  const rows = store.rows(`SELECT d.* FROM documents d JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.eventSeq=? AND d.eventSeq<=?${bounds.sql}
+    AND d.descriptor>? AND (? IS NULL OR d.blockIndex=?) AND d.indexGeneration<=? ORDER BY d.descriptor,d.sourceKey LIMIT ?`,
+    limit + 1, LINEAGE(request.view), request.eventSeq, request.view.eventCut, ...bounds.values, request.afterDescriptor ?? -1,
+    request.blockIndex ?? null, request.blockIndex ?? null, generation, limit + 1);
   const selected = rows.slice(0, limit), last = selected.at(-1);
   return { indexGeneration: generation, branchKey: request.view.branchKey, eventCut: request.view.eventCut,
     sources: selected.map(row => ({ handle: handle(request, request.view, generation, row), descriptor: num(row, "descriptor"),
@@ -348,13 +381,19 @@ function sources(request: Extract<SearchV3Request, { op: "sources" }>, store: St
 }
 function range(request: Extract<SearchV3Request, { op: "range" }>, store: Store): Record<string, unknown> {
   const queryHash = sha256(canonicalJson({ op: "range", view: request.view })), pin = pinnedGeneration(store, request, queryHash), limit = request.limit ?? SEARCH_V3_LIMITS.page;
-  const rows = store.rows("SELECT d.* FROM documents d JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.eventSeq<=? AND d.indexGeneration<=? ORDER BY d.eventSeq,d.descriptor LIMIT ? OFFSET ?",
-    limit + 1, LINEAGE(request.view), request.view.eventCut, pin.generation, limit + 1, pin.offset);
-  const selected = rows.slice(0, limit), nextOffset = pin.offset + selected.length;
+  if (pin.offset !== 0) fail("search-v3-cursor-invalid");
+  const bounds = viewBoundsSql(request.view);
+  const rows = store.rows(`SELECT d.* FROM documents d JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}
+    AND (d.eventSeq>? OR (d.eventSeq=? AND (d.descriptor>? OR (d.descriptor=? AND d.sourceKey>?)))) ORDER BY d.eventSeq,d.descriptor,d.sourceKey LIMIT ?`,
+    limit + 1, LINEAGE(request.view), request.view.eventCut, pin.generation, ...bounds.values, pin.afterEventSeq, pin.afterEventSeq,
+    pin.afterDescriptor, pin.afterDescriptor, pin.afterSourceKey, limit + 1);
+  const selected = rows.slice(0, limit), last = selected.at(-1);
   return { indexGeneration: pin.generation, branchKey: request.view.branchKey, eventCut: request.view.eventCut,
     items: selected.map(row => ({ handle: handle(request, request.view, pin.generation, row), eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"),
       kind: str(row, "kind"), provenance: str(row, "provenance"), cue: str(row, "cue").replace(/\s+/g, " ").slice(0, 240) })),
-    ...(rows.length > limit ? { nextCursor: cursorEncode({ storeKey: request.identity.storeKey, viewHash: VIEW(request.view), queryHash, generation: pin.generation, offset: nextOffset, scanOffset: 0 }) } : {}),
+    ...(rows.length > limit && last ? { nextCursor: cursorEncode({ storeKey: request.identity.storeKey, viewHash: VIEW(request.view), queryHash,
+      generation: pin.generation, offset: 0, scanOffset: 0, afterEventSeq: num(last, "eventSeq"), afterDescriptor: num(last, "descriptor"),
+      afterSourceKey: str(last, "sourceKey"), afterChunkIndex: 0 }) } : {}),
     complete: rows.length <= limit, metrics: { sqliteStatements: store.statements } };
 }
 async function execute(request: SearchV3Request, store: Store, executor: CapsuleExecutor, sourceBudget: { bytes: number }): Promise<Record<string, unknown>> {
