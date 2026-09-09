@@ -177,7 +177,11 @@ test("identifier prefixes at a feed boundary are deferred until the match is set
 });
 
 test("ordinary identifiers crossing the settled frontier retain exact coordinates and neighborhoods", () => {
-  const identifiers = ["./" + "x".repeat(198), "https://example.com/" + "x".repeat(220)];
+  const identifiers = [
+    "./" + "x".repeat(198),
+    "https://example.com/" + "x".repeat(220),
+    "https://example.com/" + "x".repeat(181) + "/tail/path",
+  ];
   for (const identifier of identifiers) {
     const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
     const complete = reducePartitioned(text, [text.length]);
@@ -205,10 +209,23 @@ test("ordinary identifiers crossing the settled frontier retain exact coordinate
     assert.equal(sawPostScanCarry, true);
     assert.equal(JSON.stringify(finalizeCapsuleReduction(state)), JSON.stringify(complete), "small multi-chunk restart envelope");
     const primary = complete.alternatives[0]!;
-    const cue = primary.protectedCues.find((candidate) => candidate.kind === "identifier");
-    assert.deepEqual(cue?.decodedUtf16, { start: 5_000, end: 5_000 + identifier.length });
-    assert.equal(cue?.exactText, identifier);
+    const identifierCues = primary.protectedCues.filter((candidate) => candidate.kind === "identifier");
+    assert.deepEqual(identifierCues.map((cue) => cue.decodedUtf16), [{ start: 5_000, end: 5_000 + identifier.length }]);
+    assert.deepEqual(identifierCues.map((cue) => cue.exactText), [identifier]);
     assert.ok(primary.text.includes(`\n${identifier}\n`));
+  }
+
+  const identifier = "https://example.com/" + "x".repeat(181) + "/tail/path";
+  const cuePrefix = "must ".repeat(16);
+  const text = `${cuePrefix}${"H".repeat(5_000 - cuePrefix.length)}${identifier}\n${"T".repeat(4_999)}`;
+  const complete = reducePartitioned(text, [text.length]);
+  assert.equal(complete.alternatives[0]!.protectedCues.length, 16);
+  assert.equal(complete.alternatives[0]!.protectedCues.some((cue) => cue.kind === "identifier"), false);
+  for (const split of [5_567, 5_568, 5_569]) {
+    for (const restartEvery of [0, 1]) {
+      const actual = reducePartitioned(text, [split, text.length - split], restartEvery);
+      assert.equal(JSON.stringify(actual), JSON.stringify(complete), `cue cap split ${split} restart ${restartEvery}`);
+    }
   }
 });
 
