@@ -9,14 +9,14 @@ import { reduceTerminalOutput } from "./reducers/terminal.js";
 import { reduceTestOutput } from "./reducers/test-output.js";
 import { estimateTokensFromText, stableStringify } from "./utils.js";
 export const CAPSULE_REDUCER_FAMILY_VERSIONS = Object.freeze({
-    terminal: "5.0.0",
-    "test-output": "4.0.0",
-    "git-diff": "4.0.0",
-    "generic-text": "4.0.0",
-    "assistant-extractive": "4.0.0",
-    "assistant-cleanup": "4.0.0",
-    "lossless-normalizer": "4.0.0",
-    "small-json": "5.0.0",
+    terminal: "6.0.0",
+    "test-output": "5.0.0",
+    "git-diff": "5.0.0",
+    "generic-text": "5.0.0",
+    "assistant-extractive": "5.0.0",
+    "assistant-cleanup": "5.0.0",
+    "lossless-normalizer": "5.0.0",
+    "small-json": "6.0.0",
 });
 export const CAPSULE_REDUCER_DEFAULT_BUDGET = Object.freeze({
     maxTokens: 4_096,
