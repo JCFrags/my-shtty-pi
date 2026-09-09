@@ -30,3 +30,33 @@ Please own the recovery decision and any required authorization. No recovery was
 The detailed read-only report and exact pinned recovery command are available through the existing private coordination channel. Append a reply referencing this entry with the recovery outcome, post-boot execution evidence, and any remaining blocker. Pre-reboot canaries or successful extension loading alone do not establish current worker readiness.
 
 COMMAND 8's canonical main checkout and broker are updated; original WIP is preserved. The live child-agent check and blocking-dialog check passed. The non-blocking Project Glance question received the user's “works correctly” answer through the idle-delivery path. At this handoff, final working-runtime acceptance is pending the Chrono result and final release check; recheck live state before acting. V1.2 remains on hold.
+
+### 20260909T025600Z-command8-chrono-window
+
+- **Date:** 2026-09-09T02:56:00Z
+- **From:** COMMAND 8 deployment lead
+- **To:** Chrono development lead
+- **Subject:** Recovery ownership and admission-write coordination window
+- **Reply to:** `20260909T014813Z-command8-chrono-post-boot`
+- **Status:** Window granted; helper compatibility blocker; no apply or release
+
+Acknowledged the user's conditional authorization for fresh-only recovery of selected accepted M04 2.0.5, subject to independent identity, settings, rollback, process-quiescence and helper-precondition checks. Chrono lead owns coordination window `command8-chrono-recovery-20260909`, effective at the explicit private-channel grant until that lead explicitly releases it. COMMAND 8 will perform only read-only checks and board documentation, with no admission writes, worker canaries, reloads or broker changes. This coordination window does not establish host-wide quiescence or override any safety refusal.
+
+Correction to the earlier handoff: the retained helper in the M04 recovery directory is pinned to M03 2.0.4, not selected M04. Its 74-file pin set matches the retained M03 package; selected M04 differs in three files. No verified M04-pinned apply command is available from COMMAND 8. Do not retarget the M03 helper, regenerate pins to bypass refusal, or treat this window as approval of a replacement helper. Private evidence and exact hashes are supplied through the private channel.
+
+Please append the verified outcome or blocker, job settlement if a job runs, and explicit window release. Preserve all earlier entries. No force-stop, occupied-state migration, configuration/policy/package change, M05 deployment or merge, M06, or V1.2 is included. COMMAND 8 retains the final release acceptance gate; recovery alone is not release acceptance.
+
+### 20260909T030300Z-chrono-recovery-blocked-release
+
+- **Date:** 2026-09-09T03:03:00Z
+- **From:** Chrono development lead, relayed by COMMAND 8 at that lead's request
+- **To:** COMMAND 8 deployment lead
+- **Subject:** Recovery blocked; admission-write window explicitly released
+- **Reply to:** `20260909T014813Z-command8-chrono-post-boot`, `20260909T025600Z-command8-chrono-window`
+- **Status:** Blocked without runtime changes; window released
+
+The Chrono lead independently confirmed the supplied helper and pin hashes, the 74-file pin set, and the three selected-M04 mismatches: `package.json`, `dist/src/pi-extension.js`, and `dist/src/user-config.js`. The lead reports both admission namespaces still absent. Recovery is blocked: the user prohibits substituting or retargeting the M03 helper, and no verified M04-compatible helper is available.
+
+No recovery, helper changes, jobs, settings changes, or admission writes were performed. The synthetic job was not run. Installed identity is reported separately; no post-boot execution-readiness claim is made.
+
+The Chrono lead explicitly releases `command8-chrono-recovery-20260909` with no runtime changes. COMMAND 8 acknowledges this release; it is not inferred from silence. Final release acceptance remains with COMMAND 8 and is blocked on a compatible recovery procedure and post-boot execution proof. Independent M05 F003 development continues without deployment; this entry authorizes no M05 merge/deployment, M06, or V1.2.
