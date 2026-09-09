@@ -2,8 +2,13 @@ import { CAPSULE_LIMITS, isSourceBlockReducerInput } from "./capsule-contract.js
 import { CAPSULE_REDUCER_FAMILY_VERSIONS, buildReducerEnvelope, extractProtectedCues, } from "./capsule-reducer.js";
 const HEAD_UNITS = 4 * 1024;
 const TAIL_UNITS = 4 * 1024;
-const ORDINARY_MAX_MATCH_UNITS = 256;
-const ORDINARY_BOUNDARY_LOOKAHEAD_UNITS = 1;
+// The longest supported ordinary pattern is an HTTPS identifier: the eight-unit
+// scheme plus 240 Unicode code points. Every code point can occupy two UTF-16
+// units. The over-limit detector needs 8 + 241 * 2 = 490 units, which is also
+// covered by this match bound plus the two-unit boundary lookahead below.
+const ORDINARY_MAX_MATCH_UNITS = 8 + 240 * 2;
+// A Unicode word/token boundary can require one complete astral code point.
+const ORDINARY_BOUNDARY_LOOKAHEAD_UNITS = 2;
 const NEIGHBORHOOD_SIDE_UNITS = 128;
 // A start before this frontier is settled only after the scanner contains the
 // longest supported match and its complete right neighborhood. The retained
@@ -40,7 +45,7 @@ export function beginCapsuleReduction(base, options) {
         || options.familyVersion !== CAPSULE_REDUCER_FAMILY_VERSIONS[options.family]
         || options.reducerSetVersion !== base.identity.reducerSetVersion || options.configHash !== base.identity.configHash)
         throw new Error("capsule-stream-invalid-base");
-    return { v: 5, base, options, nextDecodedOffset: base.source.decodedUtf16.start, head: [], tail: [], protectedCues: [], omissions: [],
+    return { v: 6, base, options, nextDecodedOffset: base.source.decodedUtf16.start, head: [], tail: [], protectedCues: [], omissions: [],
         complete: base.source.decodedUtf16.start === base.source.decodedUtf16.end, scanCarry: "", scanCarryStart: base.source.decodedUtf16.start,
         scanSettledOffset: base.source.decodedUtf16.start, ordinaryConsumedThrough: {}, protectedCueUnits: 0, protectedCueOverflow: 0, protectedNeighborhoods: [],
         protectedNeighborhoodUnits: 0, lexicalOverflow: 0, pendingProtectedCues: [], failureGrammar: idleFailure() };
@@ -192,7 +197,7 @@ function addNeighborhoods(prior, scanned, scannedStart, feed, cues) {
     return next.sort((a, b) => a.decodedUtf16.start - b.decodedUtf16.start || a.decodedUtf16.end - b.decodedUtf16.end);
 }
 export function feedCapsuleReduction(state, feed) {
-    if (state.v !== 5 || state.complete || feed.text.length > CAPSULE_LIMITS.decodedChunkUnits || feed.decodedUtf16.start !== state.nextDecodedOffset
+    if (state.v !== 6 || state.complete || feed.text.length > CAPSULE_LIMITS.decodedChunkUnits || feed.decodedUtf16.start !== state.nextDecodedOffset
         || feed.decodedUtf16.end !== feed.decodedUtf16.start + feed.text.length || feed.decodedUtf16.end > state.base.source.decodedUtf16.end)
         throw new Error("capsule-stream-noncontiguous-feed");
     if (feed.text.length === 0)
@@ -307,7 +312,7 @@ function renderSpans(spans) {
     return { text, coverage };
 }
 export function finalizeCapsuleReduction(state) {
-    if (state.v !== 5 || !state.complete || state.pendingProtectedCues.length !== 0
+    if (state.v !== 6 || !state.complete || state.pendingProtectedCues.length !== 0
         || state.nextDecodedOffset !== state.base.source.decodedUtf16.end)
         throw new Error("capsule-stream-incomplete");
     const exactCues = state.protectedCues.map(cue => span(cue.decodedUtf16.start, cue.exactText));
