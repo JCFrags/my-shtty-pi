@@ -59,10 +59,10 @@ Conditions, exceptions, negation, failure, unknown status, cancellation, pending
 
 ### Project-lead F001–F003 correction candidate
 
-The current correction candidate uses `capsule-pure-v4`. Its resumable reducer
-state is version 4; older state must not resume under the new mechanics.
-Terminal and small-JSON family versions become 5.0.0; the other affected
-families become 4.0.0. Historical v3 used state 3, terminal/small-JSON 4.0.0
+The current correction candidate uses `capsule-pure-v5`. Its resumable reducer
+state is version 5; older state must not resume under the new mechanics.
+Terminal and small-JSON family versions become 6.0.0; the other affected
+families become 5.0.0. Historical v4 used state 4 and family versions 5.0.0/4.0.0. Historical v3 used state 3, terminal/small-JSON 4.0.0
 and other families 3.0.0; v2 used state 2, terminal/small-JSON 3.0.0 and other
 families 2.0.0. Derived SQLite layout stays version 2 and capsule, chunk,
 and wire schemas stay version 1. These are different version boundaries.
@@ -102,7 +102,12 @@ right neighborhood available; an unresolved start and its left context remain
 available for re-extraction. Provisional ordinary matches are not serialized.
 Completed incremental cues share that start frontier before capped admission;
 lexical overflow is counted by settled start rather than retained end points.
-Global input, output, memory, and time limits do not increase. The grammar tracks Unicode code points while retaining
+Each ordinary recognizer also checkpoints its exclusive consumed end before
+cue-budget admission. Rescanning cannot reinterpret a suffix inside that
+recognizer's previously settled match, even if the match exceeded the cue cap.
+The fixed map stores at most nine numeric offsets, not match text. Consumption
+is independent across recognizers: legitimate condition, negation and restriction
+overlaps remain valid. Global input, output, memory, and time limits do not increase. The grammar tracks Unicode code points while retaining
 exact UTF-16 coordinates, including a pending high surrogate across feeds.
 Failed literal matches retain lexical context instead of inventing a new word
 boundary. Final bytes, loss accounting, and restart behavior must agree across

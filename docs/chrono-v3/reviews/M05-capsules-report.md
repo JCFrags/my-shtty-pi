@@ -1,6 +1,55 @@
 # M05 — Capsules and decoded chunks
 
-**Status: deferred ordinary-match F003 correction passes focused checks; v4 publication CI pending. Not accepted or deployed.**
+**Status: identifier-rescan F003 correction passes focused checks; v5 publication CI pending. Not accepted or deployed.**
+
+## Identifier rescan correction — pipeline v5
+
+The actual streaming reducer reproduced the lead's nested URL finding before
+implementation: complete input yields `[5000,5211)`, but a split around 5568
+adds `/tail/path` at `[5201,5211)`. Red `71df39e` preserves the failure.
+Fix `318b4f7` records each ordinary recognizer's exclusive consumed end before
+cue-budget admission. Rescans cannot reinterpret its consumed suffix, including
+when the original match was recognized but omitted by the cue budget. This is
+not global overlap suppression: condition, negation and restriction recognizers
+remain independent. Source ordering and exact UTF-16 coordinates are unchanged.
+
+The existing small parameterized identifier regression now includes nested
+paths, splits 5567/5568/5569, serialized restarts and a cue-cap case. It asserts
+complete-envelope equality and the sole exact identifier coordinates. The
+existing storage fixture compares persisted bytes to a split-5568 restart.
+Small multi-chunk checks bound consumption to nine numeric offsets and retain
+the existing 512-unit post-scan carry, sub-768 scan trigger and sub-128 KiB
+serialized-state assertion. No match text is added to persisted consumption.
+
+Writer focused checks passed 38/38 (stream 0.93s, contracts/reducers 0.15s,
+storage round trip 0.53s, old-pipeline guards 0.85s). Parent stream checks passed
+22/22 in 0.87s and the storage round trip passed in 0.47s. Build passed.
+A preliminary worker check failed due to an unavailable native dependency in
+an ignored development copy and incorrectly positioned test-name filtering;
+that failed attempt remains retained. Copied dependencies are development
+convenience, not clean-install evidence; required CI supplies that evidence.
+
+Pipeline/checkpoint v5 and family versions 6.0.0 (terminal/small-JSON) / 5.0.0
+(other affected families) segregate changed persisted semantics. Old complete
+and partial derive requests refuse before work; valid old read-only pins remain
+valid. Public schemas, package 2.0.5 and resource limits do not change.
+Artifact `d7d3a0e` has source inventory SHA-256
+`e11f50d89473a01293c81f918615c0f2448ea2d00ec7706d26bb7a541ed3567a`,
+dist inventory `36fcb2a175480beb7e5fdf90e1fe5b3471ef6b46ce927fd6870a4a41422ebf81`,
+and manifest `3759b2fba5849981cbb54ebb42eb7752d16d6b1864009c72a8782ab8d302f4bb`.
+Counts remain 108 sources / 107 JS / 108 manifest entries; 107 maps preserved.
+
+No large campaigns or duplicate local broad sequence were run. Historical v4
+head `2151c7b` passed push 34343801148 and PR 34343803889; historical v3 scale
+evidence remains tied to `681993f` / `59402a8`, not v5 measurements. Required
+new CI results belong in the PR without report-only pushes or unchanged retries.
+The recovery preparation remains byte-unchanged and production apply disabled;
+its existing sanitized results and exact review assets were bundled privately
+for conversation transfer, without new tests or a production write window.
+
+## Historical v4 evidence
+
+The following record is retained with its original revision and limits.
 
 ## Deferred ordinary-match correction — pipeline v4
 
