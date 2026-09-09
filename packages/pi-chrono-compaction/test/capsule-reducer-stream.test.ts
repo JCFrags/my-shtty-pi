@@ -187,6 +187,23 @@ test("ordinary identifiers crossing the settled frontier retain exact coordinate
         assert.equal(JSON.stringify(actual), JSON.stringify(complete), `${identifier.slice(0, 12)} split ${split} restart ${restartEvery}`);
       }
     }
+    let state = beginCapsuleReduction(base(text), options);
+    let sawPostScanCarry = false;
+    for (let offset = 0; offset < text.length; offset += 257) {
+      const end = Math.min(text.length, offset + 257);
+      const priorSettled = state.scanSettledOffset;
+      state = feedCapsuleReduction(state, { decodedUtf16: { start: offset, end }, text: text.slice(offset, end) });
+      assert.ok(state.scanCarry.length < 768, `bounded between-scan carry at ${end}`);
+      if (state.scanSettledOffset > priorSettled) {
+        assert.equal(state.scanCarry.length, 512, `fixed post-scan carry at ${end}`);
+        sawPostScanCarry = true;
+      }
+      const serialized = JSON.stringify(state);
+      assert.ok(Buffer.byteLength(serialized) < 128 * 1024, `bounded serialized state at ${end}`);
+      state = JSON.parse(serialized) as CapsuleReducerStreamState;
+    }
+    assert.equal(sawPostScanCarry, true);
+    assert.equal(JSON.stringify(finalizeCapsuleReduction(state)), JSON.stringify(complete), "small multi-chunk restart envelope");
     const primary = complete.alternatives[0]!;
     const cue = primary.protectedCues.find((candidate) => candidate.kind === "identifier");
     assert.deepEqual(cue?.decodedUtf16, { start: 5_000, end: 5_000 + identifier.length });
