@@ -67,8 +67,12 @@ function classify({ eventName, event, sha, root }) {
   if (eventName === "pull_request") {
     const base = requireSha(event.pull_request?.base?.sha, "pull-request-base-missing");
     const head = requireSha(event.pull_request?.head?.sha, "pull-request-head-missing");
-    const merge = requireSha(event.pull_request?.merge_commit_sha, "pull-request-merge-sha-missing");
-    if (merge !== sha) throw new Error("pull-request-merge-sha-mismatch");
+    const merge = event.pull_request?.merge_commit_sha;
+    if (merge !== undefined && merge !== null && requireSha(merge, "pull-request-merge-sha-invalid") !== sha) throw new Error("pull-request-merge-sha-mismatch");
+    // GitHub can omit merge_commit_sha from the event payload. The exact
+    // checked-out synthetic merge must still have the event's base/head parents.
+    const parents = git(root, "show", "-s", "--format=%P", sha).split(" ");
+    if (parents.length !== 2 || parents[0] !== base || parents[1] !== head) throw new Error("pull-request-merge-parents-mismatch");
     baseRevision = git(root, "merge-base", base, head);
     headRevision = head;
     paths = changedPaths(root, `${base}...${head}`);

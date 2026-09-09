@@ -80,6 +80,11 @@ test("PR Chrono diff selects routine runtime and forged merge SHA fails", () => 
   assert.equal(accepted.status, 0);
   assert.deepEqual(accepted.json, { classification: "runtime", broad: "false", reason: "supported-chrono-runtime-diff" });
 
+  const omitted = run(root, "pull_request", { pull_request: { base: pull.base, head: pull.head } }, merge);
+  assert.equal(omitted.status, 0);
+  const forged = run(root, "pull_request", { pull_request: { base: pull.head, head: pull.base } }, merge);
+  assert.equal(forged.json.reason, "pull-request-merge-parents-mismatch");
+
   const rejected = run(root, "pull_request", { pull_request: { ...pull, merge_commit_sha: head } }, merge);
   assert.notEqual(rejected.status, 0);
   assert.equal(rejected.json.classification, "unknown");
