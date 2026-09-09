@@ -149,7 +149,7 @@ test("failure grammar rejects lexical continuations across BMP, astral, split-su
 test("malformed partial literals and repetitions do not hide a later valid long failure clause", () => {
   const malformed = `${"eexit code 17 | exit codex 18 | exit code 19𝒂 | ".repeat(24)}`;
   const valid = `exit code${" ".repeat(400)}29`;
-  const text = `${"H".repeat(4_500)}${malformed}${"M".repeat(900)}${valid}.${"T".repeat(4_500)}`;
+  const text = `${"H".repeat(4_500)}.${malformed}${"M".repeat(900)}.${valid}.${"T".repeat(4_500)}`;
   const complete = reducePartitioned(text, [text.length]);
   for (const actual of [reducePartitioned(text, [1], 1), reducePartitioned(text, [13, 2, 511, 4_097], 3)]) {
     assert.equal(JSON.stringify(actual), JSON.stringify(complete));

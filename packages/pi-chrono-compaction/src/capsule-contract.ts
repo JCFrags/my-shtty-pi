@@ -4,7 +4,7 @@
  */
 export const CAPSULE_PROTOCOL_VERSION = 1 as const;
 /** Pipeline identity for corrected reducer selection/scanning semantics. */
-export const CAPSULE_REDUCER_PIPELINE_VERSION = "capsule-pure-v2" as const;
+export const CAPSULE_REDUCER_PIPELINE_VERSION = "capsule-pure-v3" as const;
 export const CAPSULE_SCHEMA_VERSION = 1 as const;
 export const DERIVED_SCHEMA_VERSION = 2 as const;
 export const CHUNK_SCHEMA_VERSION = 1 as const;
@@ -207,8 +207,8 @@ export interface CapsuleReductionFeed {
 }
 /** Serializable bounded reducer state. Retained excerpts contain their actual selected bytes. */
 export interface CapsuleReductionState {
-  /** Reducer-private checkpoint shape; v1 states must never resume in v2. */
-  readonly v: 2;
+  /** Reducer-private checkpoint shape; earlier states must never resume in v3. */
+  readonly v: 3;
   readonly base: SourceBlockReducerBaseInput;
   readonly options: CapsuleReductionOptions;
   readonly nextDecodedOffset: number;

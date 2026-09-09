@@ -49,6 +49,8 @@ interface FailureGrammarState {
   readonly digits: number;
   readonly text: string;
   readonly previousWord: boolean;
+  /** A trailing high surrogate is unsettled until the next code unit arrives. */
+  readonly pendingHighSurrogate: { readonly unit: string; readonly start: number } | null;
 }
 
 export interface CapsuleReducerStreamState extends Omit<CapsuleReductionState, "options"> {
@@ -63,14 +65,18 @@ export interface CapsuleReducerStreamState extends Omit<CapsuleReductionState, "
   readonly protectedNeighborhoods: readonly NeighborhoodSpan[];
   readonly protectedNeighborhoodUnits: number;
   readonly lexicalOverflow: number;
+  /** Over-limit lexical matches wait for the same ordinary settled frontier. */
+  readonly pendingLexicalOverflowEnds: readonly number[];
+  /** Incremental cues wait here until the ordinary scanner settles the same source frontier. */
+  readonly pendingProtectedCues: readonly ProtectedCue[];
   readonly failureGrammar: FailureGrammarState;
 }
 
 function span(start: number, text: string): ExactSpan {
   return { decodedUtf16: { start, end: start + text.length }, text };
 }
-function idleFailure(previousWord = false): FailureGrammarState {
-  return { stage: "idle", start: 0, literalIndex: 0, whitespace: 0, digits: 0, text: "", previousWord };
+function idleFailure(previousWord = false, pendingHighSurrogate: FailureGrammarState["pendingHighSurrogate"] = null): FailureGrammarState {
+  return { stage: "idle", start: 0, literalIndex: 0, whitespace: 0, digits: 0, text: "", previousWord, pendingHighSurrogate };
 }
 function word(character: string): boolean { return /[\p{L}\p{N}_]/u.test(character); }
 function sameCue(a: ProtectedCue, b: ProtectedCue): boolean {
@@ -85,10 +91,10 @@ export function beginCapsuleReduction(base: SourceBlockReducerBaseInput, options
   if (!isSourceBlockReducerInput(emptyWindow) || base.source.decodedUtf16.start !== 0
     || options.familyVersion !== CAPSULE_REDUCER_FAMILY_VERSIONS[options.family]
     || options.reducerSetVersion !== base.identity.reducerSetVersion || options.configHash !== base.identity.configHash) throw new Error("capsule-stream-invalid-base");
-  return { v: 2, base, options, nextDecodedOffset: base.source.decodedUtf16.start, head: [], tail: [], protectedCues: [], omissions: [],
+  return { v: 3, base, options, nextDecodedOffset: base.source.decodedUtf16.start, head: [], tail: [], protectedCues: [], omissions: [],
     complete: base.source.decodedUtf16.start === base.source.decodedUtf16.end, scanCarry: "", scanCarryStart: base.source.decodedUtf16.start,
     scanSettledOffset: base.source.decodedUtf16.start, protectedCueUnits: 0, protectedCueOverflow: 0, protectedNeighborhoods: [],
-    protectedNeighborhoodUnits: 0, lexicalOverflow: 0, failureGrammar: idleFailure() };
+    protectedNeighborhoodUnits: 0, lexicalOverflow: 0, pendingLexicalOverflowEnds: [], pendingProtectedCues: [], failureGrammar: idleFailure() };
 }
 
 function scanFailureGrammar(
@@ -102,13 +108,13 @@ function scanFailureGrammar(
   let overflow = 0;
   const settle = (): void => {
     if (state.stage === "digits") cues.push({ kind: "failure", source, decodedUtf16: { start: state.start, end: state.start + state.text.length }, exactText: state.text });
-    state = idleFailure(state.stage === "idle" ? state.previousWord : false);
+    state = idleFailure(false);
   };
-  const consume = (character: string, absolute: number, retry = true): void => {
+  const consume = (character: string, absolute: number): void => {
     if (state.stage === "idle") {
-      const previousWord = state.previousWord;
-      if (!previousWord && character.toLocaleLowerCase() === "e") state = { stage: "literal", start: absolute, literalIndex: 1, whitespace: 0, digits: 0, text: character, previousWord: false };
-      else state = idleFailure(word(character));
+      if (!state.previousWord && character.toLocaleLowerCase() === "e") {
+        state = { stage: "literal", start: absolute, literalIndex: 1, whitespace: 0, digits: 0, text: character, previousWord: false, pendingHighSurrogate: null };
+      } else state = idleFailure(word(character));
       return;
     }
     if (state.stage === "literal") {
@@ -117,35 +123,55 @@ function scanFailureGrammar(
         state = { ...state, literalIndex: nextIndex, text: state.text + character, stage: nextIndex === FAILURE_LITERAL.length ? "space" : "literal" };
         return;
       }
-    } else if (state.stage === "space") {
-      if (/\s/u.test(character)) {
-        if (state.whitespace === MAX_FAILURE_WHITESPACE) { overflow += 1; state = idleFailure(word(character)); return; }
-        state = { ...state, whitespace: state.whitespace + 1, text: state.text + character }; return;
-      }
-      if (/[1-9]/u.test(character)) { state = { ...state, stage: "digits", digits: 1, text: state.text + character }; return; }
-    } else if (state.stage === "digits") {
-      if (/[0-9]/u.test(character)) {
-        if (state.digits === MAX_FAILURE_DIGITS) { overflow += 1; state = idleFailure(true); return; }
-        state = { ...state, digits: state.digits + 1, text: state.text + character }; return;
-      }
-      if (word(character)) {
-        // A letter, number, or underscore continues the same lexical word, so
-        // the apparent numeric code is invalid. Consume it without settling a
-        // cue and retain its word-boundary effect for the following unit.
-        state = idleFailure(true);
-        consume(character, absolute, false);
-        return;
-      }
-      settle();
-      consume(character, absolute, false);
+      // A malformed partial literal remains lexical context. In particular,
+      // the second 'e' in "eexit" cannot start a fresh boundary match.
+      state = idleFailure(word(character));
       return;
     }
-    state = idleFailure(false);
-    if (retry) consume(character, absolute, false);
-    else state = idleFailure(word(character));
+    if (state.stage === "space") {
+      if (/\s/u.test(character)) {
+        if (state.whitespace === MAX_FAILURE_WHITESPACE) { overflow += 1; state = idleFailure(word(character)); return; }
+        state = { ...state, whitespace: state.whitespace + 1, text: state.text + character };
+        return;
+      }
+      if (/[1-9]/u.test(character)) { state = { ...state, stage: "digits", digits: 1, text: state.text + character }; return; }
+      state = idleFailure(word(character));
+      return;
+    }
+    if (/[0-9]/u.test(character)) {
+      if (state.digits === MAX_FAILURE_DIGITS) { overflow += 1; state = idleFailure(true); return; }
+      state = { ...state, digits: state.digits + 1, text: state.text + character };
+      return;
+    }
+    if (word(character)) { state = idleFailure(true); return; }
+    settle();
+    consume(character, absolute);
   };
-  for (let index = 0; index < feed.text.length; index += 1) consume(feed.text[index]!, feed.decodedUtf16.start + index);
-  if (complete) settle();
+
+  let index = 0;
+  const pending = state.pendingHighSurrogate;
+  if (pending) {
+    state = { ...state, pendingHighSurrogate: null };
+    const first = feed.text[0];
+    if (first !== undefined && /[\udc00-\udfff]/u.test(first)) { consume(pending.unit + first, pending.start); index = 1; }
+    else consume(pending.unit, pending.start);
+  }
+  while (index < feed.text.length) {
+    const unit = feed.text[index]!;
+    const absolute = feed.decodedUtf16.start + index;
+    if (/[\ud800-\udbff]/u.test(unit)) {
+      const next = feed.text[index + 1];
+      if (next !== undefined && /[\udc00-\udfff]/u.test(next)) { consume(unit + next, absolute); index += 2; continue; }
+      if (next === undefined && !complete) { state = { ...state, pendingHighSurrogate: { unit, start: absolute } }; index += 1; continue; }
+    }
+    consume(unit, absolute);
+    index += 1;
+  }
+  if (complete) {
+    const trailing = state.pendingHighSurrogate;
+    if (trailing) { state = { ...state, pendingHighSurrogate: null }; consume(trailing.unit, trailing.start); }
+    settle();
+  }
   return { state, cues, overflow };
 }
 
@@ -185,7 +211,7 @@ function addNeighborhoods(
 }
 
 export function feedCapsuleReduction(state: CapsuleReducerStreamState, feed: CapsuleReductionFeed): CapsuleReducerStreamState {
-  if (state.v !== 2 || state.complete || feed.text.length > CAPSULE_LIMITS.decodedChunkUnits || feed.decodedUtf16.start !== state.nextDecodedOffset
+  if (state.v !== 3 || state.complete || feed.text.length > CAPSULE_LIMITS.decodedChunkUnits || feed.decodedUtf16.start !== state.nextDecodedOffset
     || feed.decodedUtf16.end !== feed.decodedUtf16.start + feed.text.length || feed.decodedUtf16.end > state.base.source.decodedUtf16.end) throw new Error("capsule-stream-noncontiguous-feed");
   if (feed.text.length === 0) throw new Error("capsule-stream-empty-feed");
   const oldHead = state.head.map(item => item.text).join("");
@@ -209,13 +235,22 @@ export function feedCapsuleReduction(state: CapsuleReducerStreamState, feed: Cap
     // the regex copy would make neighborhoods depend on feed size.
     .filter(cue => !(cue.kind === "failure" && /^exit code/iu.test(cue.exactText)));
   OVERLONG_IDENTIFIER.lastIndex = 0;
-  const identifierOverflow = shouldScan ? [...scanned.matchAll(OVERLONG_IDENTIFIER)].filter(match => {
-    const end = scannedStart + (match.index ?? 0) + match[0].length;
-    return end > state.scanSettledOffset && end <= settledThrough;
-  }).length : 0;
+  const observedOverflowEnds = shouldScan ? [...scanned.matchAll(OVERLONG_IDENTIFIER)].map(match =>
+    scannedStart + (match.index ?? 0) + match[0].length).filter(end => end > state.scanSettledOffset) : [];
   const grammar = scanFailureGrammar(state.failureGrammar, feed, completes, state.base.source);
-  const candidates = [...ordinary, ...grammar.cues].filter(cue => !state.protectedCues.some(old => sameCue(old, cue)))
+  const nextSettledOffset = shouldScan ? Math.max(state.scanSettledOffset, settledThrough) : state.scanSettledOffset;
+  const overflowEnds = [...new Set([...state.pendingLexicalOverflowEnds, ...observedOverflowEnds])].sort((a, b) => a - b);
+  const identifierOverflow = overflowEnds.filter(end => end <= nextSettledOffset).length;
+  const pendingLexicalOverflowEnds = overflowEnds.filter(end => end > nextSettledOffset);
+  const ordered = [...state.pendingProtectedCues, ...ordinary, ...grammar.cues]
+    .filter(cue => !state.protectedCues.some(old => sameCue(old, cue)))
     .sort((a, b) => a.decodedUtf16.start - b.decodedUtf16.start || a.decodedUtf16.end - b.decodedUtf16.end || a.kind.localeCompare(b.kind));
+  const unique = ordered.filter((cue, index) => index === 0 || !sameCue(ordered[index - 1]!, cue));
+  // No cue reaches the cap until both scanners have settled its source range.
+  // This makes admission a single source-ordered decision, independent of how
+  // feeds and serialized restarts partition the body.
+  const candidates = unique.filter(cue => cue.decodedUtf16.end <= nextSettledOffset);
+  const pendingProtectedCues = unique.filter(cue => cue.decodedUtf16.end > nextSettledOffset);
   const protectedCues = [...state.protectedCues];
   let cueUnits = state.protectedCueUnits, overflow = state.protectedCueOverflow;
   for (const cue of candidates) {
@@ -230,12 +265,16 @@ export function feedCapsuleReduction(state: CapsuleReducerStreamState, feed: Cap
   while (neighborhoods.length > MAX_NEIGHBORHOODS || neighborhoodUnits > MAX_NEIGHBORHOOD_UNITS) {
     const removed = neighborhoods.pop()!; neighborhoodUnits -= removed.text.length; overflow += 1;
   }
-  const carry = shouldScan ? scanned.slice(-SCAN_OVERLAP_UNITS) : scanned, next = feed.decodedUtf16.end;
+  // Keep the settled frontier plus the left-neighborhood allowance. This is
+  // still fixed-size, but ensures a cue found just after a scan boundary has
+  // the same exact context as a cue found in a larger feed.
+  const carryUnits = SCAN_OVERLAP_UNITS + NEIGHBORHOOD_SIDE_UNITS;
+  const carry = shouldScan ? scanned.slice(-carryUnits) : scanned, next = feed.decodedUtf16.end;
   return { ...state, nextDecodedOffset: next, head, tail, protectedCues, complete: next === state.base.source.decodedUtf16.end,
     scanCarry: carry, scanCarryStart: next - carry.length,
-    scanSettledOffset: shouldScan ? Math.max(state.scanSettledOffset, settledThrough) : state.scanSettledOffset,
+    scanSettledOffset: nextSettledOffset,
     protectedCueUnits: cueUnits, protectedCueOverflow: overflow, protectedNeighborhoods: neighborhoods,
-    protectedNeighborhoodUnits: neighborhoodUnits,
+    protectedNeighborhoodUnits: neighborhoodUnits, pendingProtectedCues, pendingLexicalOverflowEnds,
     lexicalOverflow: state.lexicalOverflow + grammar.overflow + identifierOverflow, failureGrammar: grammar.state };
 }
 
@@ -268,7 +307,8 @@ function renderSpans(spans: readonly ExactSpan[]): { text: string; coverage: Cap
 }
 
 export function finalizeCapsuleReduction(state: CapsuleReducerStreamState): ReducerEnvelope {
-  if (state.v !== 2 || !state.complete || state.nextDecodedOffset !== state.base.source.decodedUtf16.end) throw new Error("capsule-stream-incomplete");
+  if (state.v !== 3 || !state.complete || state.pendingProtectedCues.length !== 0 || state.pendingLexicalOverflowEnds.length !== 0
+    || state.nextDecodedOffset !== state.base.source.decodedUtf16.end) throw new Error("capsule-stream-incomplete");
   const exactCues = state.protectedCues.map(cue => span(cue.decodedUtf16.start, cue.exactText));
   const spans = mergeExactSpans([...state.head, ...state.tail, ...state.protectedNeighborhoods, ...exactCues]);
   const rendered = renderSpans(spans);

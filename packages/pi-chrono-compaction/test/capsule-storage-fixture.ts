@@ -5,7 +5,15 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { executeCatalogStoreRequest } from "../src/catalog-store.js";
 import { executeCapsuleRequest, type CapsuleExecutionOptions } from "../src/capsule-store.js";
-import { CAPSULE_REDUCER_PIPELINE_VERSION, type CapsuleCatalogView, type CapsuleWorkerResponse, type DerivedStoreIdentity } from "../src/capsule-contract.js";
+import {
+  CAPSULE_REDUCER_PIPELINE_VERSION,
+  CAPSULE_SCHEMA_VERSION,
+  CHUNK_SCHEMA_VERSION,
+  DERIVED_SCHEMA_VERSION,
+  type CapsuleCatalogView,
+  type CapsuleWorkerResponse,
+  type DerivedStoreIdentity,
+} from "../src/capsule-contract.js";
 import type { CatalogResponse } from "../src/catalog-contract.js";
 
 export const line = (id: string, parentId: string | null, content: unknown = "synthetic", role = "user"): string =>
@@ -27,7 +35,8 @@ export function setupCapsuleFixture(initial = line("a", null)) {
     await ingest();
     const view = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "s1", eventId: leaf } })).view as CapsuleCatalogView;
     identity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation,
-      derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION,
+      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
+      reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION,
       configHash: createHash("sha256").update("synthetic-config").digest("hex") };
     return view;
   };

@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { CatalogSqlite } from "../src/catalog-sqlite.js";
 import { CAPSULE_REDUCER_PIPELINE_VERSION } from "../src/capsule-contract.js";
-import { canonicalJson } from "../src/capsule-segment.js";
+import { canonicalJson, encodeCapsuleSegment, encodeManifest } from "../src/capsule-segment.js";
 import { executeCapsuleRequest } from "../src/capsule-store.js";
 import { setupCapsuleFixture, line } from "./capsule-storage-fixture.js";
 
@@ -75,6 +75,29 @@ function rewriteStorePipeline(derivedDirectory: string, identity: any, version: 
       for (const row of readiness) {
         const cursor = replacePipeline(JSON.parse(String(row.cursor)), version);
         db.prepare("UPDATE readiness SET cursor=? WHERE viewHash=?").run(canonicalJson(cursor), String(row.viewHash));
+      }
+    });
+  } finally { db.close(); }
+  return oldIdentity;
+}
+
+function rewriteCompletedCapsulePipeline(derivedDirectory: string, identity: any, version: string): any {
+  const oldIdentity = rewriteStorePipeline(derivedDirectory, identity, version);
+  const db = CatalogSqlite.open(join(derivedDirectory, "derived.sqlite"));
+  try {
+    db.transaction(() => {
+      const capsuleRows = [...db.prepare("SELECT * FROM artifacts WHERE layer='capsules'").iterate(100)];
+      for (const row of capsuleRows) {
+        const envelope = replacePipeline(JSON.parse(String(row.record)), version) as any;
+        const segment = encodeCapsuleSegment(envelope);
+        const manifest = encodeManifest(oldIdentity, "capsules", segment.descriptor);
+        writeFileSync(join(derivedDirectory, "segments/capsules", segment.descriptor.hash), segment.bytes, { mode: 0o600 });
+        writeFileSync(join(derivedDirectory, "manifests", manifest.manifest.hash), manifest.bytes, { mode: 0o600 });
+        db.prepare("UPDATE artifacts SET record=?,manifestHash=?,segmentHash=?,segmentBytes=?,payloadBytes=?,contentHash=? WHERE layer='capsules' AND eventSeq=? AND descriptor=? AND chunkIndex=0")
+          .run(canonicalJson(envelope), manifest.manifest.hash, segment.descriptor.hash, segment.descriptor.bytes, segment.descriptor.bytes,
+            segment.descriptor.hash, Number(row.eventSeq), Number(row.descriptor));
+        db.prepare("INSERT OR REPLACE INTO manifests VALUES(?,?,?,?)")
+          .run(manifest.manifest.hash, "capsules", segment.descriptor.hash, manifest.bytes.length);
       }
     });
   } finally { db.close(); }
@@ -299,7 +322,15 @@ for (const legacyCase of [
       assert.ok(first.cursor.partialBody); assert.equal(first.complete, false);
     }
     assert.equal(f.identity.reducerSetVersion, CAPSULE_REDUCER_PIPELINE_VERSION);
-    const oldIdentity = rewriteStorePipeline(f.derivedDirectory, f.identity, "capsule-pure-v1");
+    const oldIdentity = legacyCase.complete
+      ? rewriteCompletedCapsulePipeline(f.derivedDirectory, f.identity, "capsule-pure-v2")
+      : rewriteStorePipeline(f.derivedDirectory, f.identity, "capsule-pure-v2");
+    if (legacyCase.complete) {
+      const readOnly = await executeCapsuleRequest({ v: 1, derivedDirectory: f.derivedDirectory, catalogDirectory: f.catalogDirectory,
+        identity: oldIdentity, view, op: "capsulePage", limit: 1 });
+      assert.equal(readOnly.ok, true, JSON.stringify(readOnly));
+      if (readOnly.ok) assert.equal((readOnly.result as any).capsules[0].reducerSetVersion, "capsule-pure-v2");
+    }
     const derivedBefore = snapshotTree(f.derivedDirectory), sourceBefore = readFileSync(f.sourcePath);
     let catalogCalls = 0;
     const oldResponse = await executeCapsuleRequest({ v: 1, derivedDirectory: f.derivedDirectory, catalogDirectory: f.catalogDirectory,

@@ -36,7 +36,7 @@ test("persisted capsule retrieval rejects malformed exit-code words before a val
 
 test("persisted retrieval uses source-ordered capped cue admission", async () => {
   const mixed = `${"must ".repeat(16)}${"exit code 1 ".repeat(16)}.`;
-  const text = `${"H".repeat(4_500)}${mixed}${"T".repeat(4_500)}`;
+  const text = `${"H".repeat(4_500)}.${mixed}${"T".repeat(4_500)}`;
   const fixture = setupCapsuleFixture(line("a", null, text));
   try {
     const view = await fixture.initialize();
