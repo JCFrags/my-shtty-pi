@@ -61,8 +61,44 @@ package Git tree `51da47a808999b55b845ea0bfbb45baba2935a98` includes runtime
 source, compiled files, dependency contract, manifest, tests, and campaigns. The
 runtime remains `62de2e3e6f40409c4fdb3dac69218a64245b1eb4`. The corrected scale
 campaigns above/below retain their exact identities and are not rerun for this
-verifier-only correction. Local corrected-root and new publication results will
-be recorded after they complete; M05 remains unaccepted.
+verifier-only correction.
+
+The complete clean root gate passed at `775ec028a2c2c23256c58a24bdbd206ae1741f0f`
+on 2026-09-09, 01:36:14–01:51:53 UTC: **939 seconds**, within the unchanged
+25-minute limit. The ignored `node_modules/verifier-regression` fixture was present
+during verification and removed afterward. The worktree remained clean. This is
+local evidence, not a CI pass or a same-machine before/after speedup measurement.
+
+| Corrected local phase | Seconds | Result |
+| --- | ---: | --- |
+| Publication privacy | 533.237 | Passed |
+| Chrono clean dependency install | 1.676 | Passed, scripts disabled |
+| Controlled native build / probe | 30.424 / 0.176 | Passed; allocation refusal verified |
+| Chrono typecheck / build / reproducibility | 2.771 / 3.018 / 0.004 | Passed; 107 compiled files reproduced |
+| Normal wrapper, including the full suite and replay | 227.169 | One 623/623 suite; small/medium replay hashes unchanged |
+| Fixed heaps | 116.113 | Both original 512/1024 MiB lanes passed |
+| Complete root | 939 | All packages and final summary passed |
+
+The final root summary reports 15/15 safe declarations, 14/14 direct commands,
+1/1 wrapper-covered declaration, 4/4 native declarations, 2/2 controlled native
+commands, 17/17 pack checks, and passing Project Glance tests/packaging. It retains
+303 runtime records, 226 build inputs, 8 resources, 41 prepared integration files,
+110 metadata documents, zero unexplained files, and the frozen M00 baseline.
+The timing data identifies privacy as the largest measured local phase; unlike
+the original logs, it now has an explicit boundary. No privacy work was removed.
+
+Retained local evidence SHA-256:
+
+- Complete root log: `e6a4c1cf8c2f32eb4aa471f2d361a07ab73941673f7db27954ee1c0ae5ae8638`.
+- Phase log: `e8619ea33911e53a953868bc93c28327bb24e9fbdd652460447f7f131d51b43f`.
+- 77-test verifier/privacy log: `a12205922c63eb973980a74d2de71ce9249281e9bfbc25411408e7e8a81dc187`.
+
+Only this report changes after the complete root run. The final static/privacy
+gates will check those publication bytes. One new push/PR CI pair is authorized;
+its actual results belong in the PR evidence, without a further documentation
+commit that triggers another pair. A new root timeout requires stopping and
+proposing a measured, narrowly scoped split, not retrying or extending deadlines.
+M05 remains unaccepted pending independent project-lead re-review.
 
 ## Project-lead correction scope
 
