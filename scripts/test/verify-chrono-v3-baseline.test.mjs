@@ -55,14 +55,14 @@ function runSyntheticDeployed(repositoryRoot) {
     timeout: 120000,
   });
 }
-function runSyntheticExecutor(repositoryRoot, { staticOnly = false, fail = "", product = "pi-chrono-compaction" } = {}) {
+function runSyntheticExecutor(repositoryRoot, { staticOnly = false, fail = "", packOutput = JSON.stringify([{ files: [] }]), product = "pi-chrono-compaction" } = {}) {
   const deployedVerifier = join(repositoryRoot, "scripts", "verify-deployed-baseline.mjs");
   const commandLog = join(repositoryRoot, ".synthetic-executor-log");
   rmSync(commandLog, { force: true });
   let source = readFileSync(join(root, "scripts", "verify-deployed-baseline.mjs"), "utf8");
   source = source.replace(
     'import { execFileSync } from "node:child_process";',
-    `import { execFileSync as realExecFileSync } from "node:child_process";\nimport { appendFileSync } from "node:fs";\nfunction execFileSync(command, args, options = {}) {\n  if (process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG && command === "npm") {\n    appendFileSync(process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG, JSON.stringify(args) + "\\n");\n    const phase = args[0] === "run" ? args[1] : args[0];\n    if (process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL === phase || (phase === "test:normal" && ["nested-test", "replay"].includes(process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL))) throw new Error("synthetic command failure");\n    if (args[0] === "pack") return JSON.stringify([{ files: [] }]);\n    return options.encoding ? "" : Buffer.alloc(0);\n  }\n  return realExecFileSync(command, args, options);\n}`,
+    `import { execFileSync as realExecFileSync } from "node:child_process";\nimport { appendFileSync, mkdirSync, writeFileSync } from "node:fs";\nfunction execFileSync(command, args, options = {}) {\n  if (process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG && command === "npm") {\n    appendFileSync(process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG, JSON.stringify(args) + "\\n");\n    const phase = args[0] === "run" ? args[1] : args[0];\n    if (process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL === phase || (phase === "test:normal" && ["nested-test", "replay"].includes(process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL))) throw new Error("synthetic command failure");\n    if (args[0] === "test") {\n      for (const path of ["dist/pi/extension.js", "dist/pane/main.js"]) {\n        mkdirSync(dirname(join(options.cwd, path)), { recursive: true });\n        writeFileSync(join(options.cwd, path), "synthetic\\n");\n      }\n    }\n    if (args[0] === "pack") return process.env.CHRONO_SYNTHETIC_PACK_OUTPUT;\n    return options.encoding ? "" : Buffer.alloc(0);\n  }\n  return realExecFileSync(command, args, options);\n}`,
   );
   source = source.replace('runPhase("privacy", "root", verifyPublicationScanner)', 'runPhase("privacy", "root", () => "test-bypass")');
   source = source.replace("verifyBuiltOutput(product, plan.packageRoot, work)", "107");
@@ -78,6 +78,7 @@ function runSyntheticExecutor(repositoryRoot, { staticOnly = false, fail = "", p
       ...process.env,
       CHRONO_SYNTHETIC_EXECUTOR_LOG: commandLog,
       CHRONO_SYNTHETIC_EXECUTOR_FAIL: fail,
+      CHRONO_SYNTHETIC_PACK_OUTPUT: packOutput,
     },
   });
   const commands = existsSync(commandLog)
@@ -469,6 +470,27 @@ test("Chrono executor reports wrapper, native, and heap failures before rethrowi
     assert.equal(result.status, 1, `${failure}: ${result.stderr}`);
     assert.ok(result.events.some((event) => event.event === "phase-complete" && event.phase === phase && event.outcome === "failed"), failure);
   }
+}));
+
+test("Project Glance packaging validation failure reports a failed phase", () => withClonedRepository((repositoryRoot) => {
+  const result = runSyntheticExecutor(repositoryRoot, { product: "pi-project-glance", packOutput: "not-json" });
+  assert.equal(result.status, 1, result.stderr);
+  const packaging = result.events.filter((event) => event.phase === "packaging" && event.slug === "pi-project-glance");
+  assert.equal(packaging.at(-1)?.event, "phase-complete");
+  assert.equal(packaging.at(-1)?.outcome, "failed");
+}));
+
+test("Project Glance packaging pass keeps its JSON report", () => withClonedRepository((repositoryRoot) => {
+  const files = [
+    "README.md", "bin/pi-project-glance", "dist/pane/main.js", "dist/pi/extension.js",
+    "herdr-plugin.toml", "package-lock.json", "package.json",
+  ].map((path) => ({ path }));
+  const result = runSyntheticExecutor(repositoryRoot, { product: "pi-project-glance", packOutput: JSON.stringify([{ files }]) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.json.projectGlance.status, "pass");
+  assert.equal(result.json.projectGlance.tests, "pass");
+  assert.equal(result.json.projectGlance.packFiles, files.length);
+  assert.ok(result.events.some((event) => event.event === "phase-complete" && event.phase === "packaging" && event.slug === "pi-project-glance" && event.outcome === "passed"));
 }));
 
 test("static deployed verification reports all declarations without runtime execution", () => withClonedRepository((repositoryRoot) => {
