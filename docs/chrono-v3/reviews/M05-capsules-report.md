@@ -2,6 +2,68 @@
 
 **Status: project-lead F001–F004 corrections validated locally; publication CI pending. Not accepted or deployed.**
 
+## Root validation orchestration correction
+
+The publication gate at `e180ae8d671f939245831dd46a44a8882c0236b3` did
+not complete on PR CI. These original results are retained, not replaced by
+local success or by the successful push:
+
+| Existing run / root job | First full suite | Normal wrapper | Fixed heaps | Overall root |
+| --- | --- | --- | --- | --- |
+| Push [34283211170](https://github.com/JCFrags/my-shtty-pi/actions/runs/34283211170), job `102254428802` | 623/623; 252.622 s | Second 623/623 plus normal harness; 243.079 s | Both lanes passed; 124.694 s | Passed |
+| PR [34283214409, attempt 1](https://github.com/JCFrags/my-shtty-pi/actions/runs/34283214409/attempts/1), job `102254450049` | 623/623; 274.846 s | Second 623/623 plus normal harness; 276.652 s | Both lanes passed; 151.439 s | Cancelled at the 25-minute job limit during later package checks |
+| PR [34283214409, attempt 2](https://github.com/JCFrags/my-shtty-pi/actions/runs/34283214409/attempts/2), job `102283584588` | 623/623; 270.950 s | Second 623/623 plus normal harness; 275.620 s | Started; no final result before cancellation | Cancelled at the same 25-minute job limit |
+
+Durations above use command and terminal-output timestamps, not only the test
+runner's internal timer. Attempt 1 completed the orchestrator build and portal
+syntax check after heaps, but not all later packages or the final root summary.
+Attempt 2 left the fixed-heap phase and all later phases unfinished. It is not a
+passing heap or root result. The normal harness reported success in all three
+runs; there was no separate timestamped replay phase in those logs.
+
+Before the correction, the interval from root verifier invocation to the first
+visible package-install output was 532.726 seconds on push, 648.024 seconds on
+PR attempt 1, and 666.747 seconds on PR attempt 2. That silent interval includes
+multiple checks and cannot be attributed to privacy alone. Native source builds
+took 65.514, 79.920, and 89.232 seconds respectively. No original attempt was
+recreated. The single authorized unchanged-head retry is preserved as attempt 2;
+no further unchanged retry is authorized.
+
+The confirmed duplicate is the direct `test` command followed by `test:normal`,
+whose exact declaration already runs `npm test` before the normal replay
+harness. The correction is limited to verifier execution, timing, regression
+coverage, and this report. It must retain both exact script-declaration checks,
+run the complete normal suite once through that wrapper, and retain native,
+reproducibility, heap, packaging, privacy, inventory, and ignored-directory gates.
+The implementation at `8f9ec53` runs four Chrono commands directly:
+`typecheck`, `build`, `test:normal`, and `test:fixed-heap`. The root report separates
+15 validated safe declarations, 14 direct commands, and one declaration covered
+through the successful normal wrapper. Four native declarations and two controlled
+native commands are reported separately. Static-only mode reports zero executed
+commands and zero wrapper-covered execution, not a runtime pass.
+
+Phase start/completion JSON records go to stderr with fixed phase/product labels,
+elapsed milliseconds, and passed/failed outcomes. They include privacy, packaging
+(including output validation), clean copying, dependencies, native build/probe,
+reproducibility, normal/replay, heaps, and other package checks. No new record
+includes source text, an exception message, or an absolute workspace path. Existing
+final machine-readable results remain on stdout, with explicit script accounting.
+
+Red-first regressions reproduced the duplicate invocation. Local secondary review
+also reproduced a packaging timer that reported success before output validation;
+a separate red regression and correction moved that validation inside the phase.
+The integrated verifier and privacy tests passed 77/77 (37 verifier, 40 privacy).
+Synthetic executor seams check ordering and failure propagation; the complete root
+run must separately establish actual toolchain, nested tests, replay, and heaps.
+
+All 356 tracked Chrono package files remain byte-identical to the starting head;
+package Git tree `51da47a808999b55b845ea0bfbb45baba2935a98` includes runtime
+source, compiled files, dependency contract, manifest, tests, and campaigns. The
+runtime remains `62de2e3e6f40409c4fdb3dac69218a64245b1eb4`. The corrected scale
+campaigns above/below retain their exact identities and are not rerun for this
+verifier-only correction. Local corrected-root and new publication results will
+be recorded after they complete; M05 remains unaccepted.
+
 ## Project-lead correction scope
 
 M04 remains accepted. The M05 project-lead review withheld code/storage approval
