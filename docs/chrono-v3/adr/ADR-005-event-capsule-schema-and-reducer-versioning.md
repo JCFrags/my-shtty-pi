@@ -59,10 +59,11 @@ Conditions, exceptions, negation, failure, unknown status, cancellation, pending
 
 ### Project-lead F001–F003 correction candidate
 
-The corrected streaming pipeline is `capsule-pure-v2`. Its resumable reducer
-state is version 2; version-1 state must not resume under the new mechanics.
-Terminal and small-JSON family versions become 3.0.0; the other affected
-families become 2.0.0. Derived SQLite layout stays version 2 and capsule, chunk,
+The current correction candidate uses `capsule-pure-v3`. Its resumable reducer
+state is version 3; version-1 and version-2 state must not resume under the new
+mechanics. Terminal and small-JSON family versions become 4.0.0; the other
+affected families become 3.0.0. The earlier v2 candidate used state version 2,
+terminal/small-JSON 3.0.0, and other families 2.0.0. Derived SQLite layout stays version 2 and capsule, chunk,
 and wire schemas stay version 1. These are different version boundaries.
 
 Derivation must require the current pipeline identity before storage or source
@@ -87,8 +88,17 @@ a detached cue never establishes approval or a resolved outcome.
 The `exit code` recognizer carries incremental grammar state, with at most 512
 whitespace units and 32 digits. Longer forms and over-limit URL/path tokens
 must disclose lexical degradation rather than depend on the feed partition.
-Ordinary scanning retains bounded context and batches small feeds. Final bytes,
-loss accounting, and restart behavior must agree across legal partitions.
+Ordinary and incremental grammar cues wait behind one settled source frontier
+before source-ordered admission to the fixed cue cap. Sorting only a feed's
+matches or already admitted cues is insufficient. Ordinary scanning retains a
+fixed 512-unit carry: 384 units of unsettled scan context plus 128 units for
+exact left neighborhoods. Pending cues and lexical-overflow endpoints cover
+only this bounded unsettled region; global input, output, memory, and time
+limits do not increase. The grammar tracks Unicode code points while retaining
+exact UTF-16 coordinates, including a pending high surrogate across feeds.
+Failed literal matches retain lexical context instead of inventing a new word
+boundary. Final bytes, loss accounting, and restart behavior must agree across
+legal partitions.
 Earlier pipeline campaigns are historical evidence, not validation of these
 corrected mechanics.
 
