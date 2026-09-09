@@ -223,7 +223,79 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/test/catalog-existing-store.test.ts",
   "packages/pi-chrono-compaction/scripts/catalog-many-records.mjs",
   "packages/pi-chrono-compaction/scripts/catalog-deployment-canary.mjs",
+  "docs/chrono-v3/adr/ADR-003-immutable-segments-and-manifest-publication.md",
+  "docs/chrono-v3/adr/ADR-005-event-capsule-schema-and-reducer-versioning.md",
+  "docs/chrono-v3/reviews/M05-capsules-report.md",
+  "packages/pi-chrono-compaction/scripts/capsule-benchmark.mjs",
+  "packages/pi-chrono-compaction/src/capsule-compatibility.ts",
+  "packages/pi-chrono-compaction/src/capsule-contract.ts",
+  "packages/pi-chrono-compaction/src/capsule-derive.ts",
+  "packages/pi-chrono-compaction/src/capsule-reducer-stream.ts",
+  "packages/pi-chrono-compaction/src/capsule-reducer.ts",
+  "packages/pi-chrono-compaction/src/capsule-segment.ts",
+  "packages/pi-chrono-compaction/src/capsule-shadow-worker.ts",
+  "packages/pi-chrono-compaction/src/capsule-shadow.ts",
+  "packages/pi-chrono-compaction/src/capsule-store.ts",
+  "packages/pi-chrono-compaction/src/capsule-worker-client.ts",
+  "packages/pi-chrono-compaction/src/capsule-worker-entry.ts",
+  "packages/pi-chrono-compaction/src/json-string-decoder.ts",
+  "packages/pi-chrono-compaction/dist/src/capsule-compatibility.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-contract.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-derive.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-reducer-stream.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-reducer.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-segment.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-shadow-worker.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-shadow.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-store.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/capsule-worker-entry.js",
+  "packages/pi-chrono-compaction/dist/src/json-string-decoder.js",
+  "packages/pi-chrono-compaction/test/capsule-compatibility.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-contract.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-derive.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-extension.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-reducer-persistence.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-reducer-stream.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-reducer.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-segment.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-shadow.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-storage-fixture.ts",
+  "packages/pi-chrono-compaction/test/capsule-store.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-worker-client.test.ts",
+  "packages/pi-chrono-compaction/test/capsule-worker-isolation.test.ts",
+  "packages/pi-chrono-compaction/test/json-string-decoder.test.ts",
 ]);
+
+// M05 extends the live pi-chrono manifest without rewriting the frozen M00-M04
+// canonical count. These exact files are the only deployed-count additions.
+const historicalCanonicalDeployedFiles = 291;
+const m05VerifierBaseCommit = "4e319fede1dd6f97e65918745bd95d46472e619f";
+const m05AuthorizedHistoricalHashChanges = new Map([
+  ["dist/src/catalog-parser.js", "8f8bd54e46f7ad2ab63e4c3e5d8826dfb7d39dc4ca604adde213196b00ab013d"],
+  ["dist/src/pi-extension.js", "42a25258b76bea32a68600ebf25a885b3e7c2a416d89b13cb55db49754967eb4"],
+]);
+const m05CompiledAdditions = new Set([
+  "dist/src/capsule-compatibility.js",
+  "dist/src/capsule-contract.js",
+  "dist/src/capsule-derive.js",
+  "dist/src/capsule-reducer-stream.js",
+  "dist/src/capsule-reducer.js",
+  "dist/src/capsule-segment.js",
+  "dist/src/capsule-shadow-worker.js",
+  "dist/src/capsule-shadow.js",
+  "dist/src/capsule-store.js",
+  "dist/src/capsule-worker-client.js",
+  "dist/src/capsule-worker-entry.js",
+  "dist/src/json-string-decoder.js",
+]);
+const m05ChronoManifestRows = 108;
+const m05ChronoCompiledFiles = 107;
+const m05RuntimeGraphRoots = ["dist/src/capsule-worker-entry.js"];
+// This API is intentionally prepared for synthetic tests/integration only. It
+// is graph-checked here but does not become an active production entrypoint.
+const m05PreparedIntegrationGraphRoots = ["dist/src/capsule-compatibility.js"];
+const m05SourceGraphRoots = ["src/capsule-worker-entry.ts", "src/capsule-compatibility.ts"];
 
 const expectedSlugs = [
   "codex-usage-footer", "files-ui", "grounded-tools", "herdr-agent-state",
@@ -289,15 +361,18 @@ function sha256Bytes(bytes) {
 function sha256(path) {
   return sha256Bytes(readFileSync(path));
 }
-function parseDeployed(path) {
+function parseDeployedBytes(bytes, label) {
   const entries = new Map();
-  for (const [index, line] of readFileSync(path, "utf8").trimEnd().split("\n").entries()) {
+  for (const [index, line] of bytes.toString("utf8").trimEnd().split("\n").entries()) {
     const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
-    if (!match) throw new Error(`${relative(root, path)}:${index + 1}: invalid DEPLOYED.sha256 line`);
-    if (entries.has(match[2])) throw new Error(`${relative(root, path)}: duplicate ${match[2]}`);
+    if (!match) throw new Error(`${label}:${index + 1}: invalid DEPLOYED.sha256 line`);
+    if (entries.has(match[2])) throw new Error(`${label}: duplicate ${match[2]}`);
     entries.set(match[2], match[1]);
   }
   return entries;
+}
+function parseDeployed(path) {
+  return parseDeployedBytes(readFileSync(path), relative(root, path));
 }
 function isWithin(parent, path) {
   return path === parent || path.startsWith(`${parent}${sep}`);
@@ -311,6 +386,24 @@ function gitBytesAt(commit, rel) {
 }
 function jsonEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+const phaseNames = new Set([
+  "privacy", "packaging", "clean-copy", "dependencies", "native-build-record",
+  "typecheck", "build", "reproducibility", "native-probe-record", "syntax",
+  "normal-replay", "fixed-heaps", "project-tests",
+]);
+function runPhase(phase, slug, action) {
+  if (!phaseNames.has(phase) || !["root", projectGlanceSlug, ...expectedSlugs].includes(slug)) throw new Error("invalid phase telemetry label");
+  const started = Date.now();
+  process.stderr.write(`${JSON.stringify({ event: "phase-start", phase, slug })}\n`);
+  try {
+    const result = action();
+    process.stderr.write(`${JSON.stringify({ event: "phase-complete", phase, slug, elapsedMs: Date.now() - started, outcome: "passed" })}\n`);
+    return result;
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({ event: "phase-complete", phase, slug, elapsedMs: Date.now() - started, outcome: "failed" })}\n`);
+    throw error;
+  }
 }
 function gitNameList(args) {
   try {
@@ -526,13 +619,13 @@ function verifyPublicationScanner() {
 verifyWorkflowBoundary();
 verifyCorrectionScope();
 const governance = verifyGovernanceArtifacts();
-const publicationScan = verifyPublicationScanner();
+const publicationScan = runPhase("privacy", "root", verifyPublicationScanner);
 const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path)).sort();
 if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/verify-chrono-v3-privacy.test.mjs", "verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers and their tests are allowed under scripts/");
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
-if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== 291) throw new Error("Stage 1 record or canonical deployed-file count changed");
+if (consolidation.stage1RuntimeRecords !== 272 || consolidation.canonicalDeployedFiles !== historicalCanonicalDeployedFiles) throw new Error("Stage 1 record or canonical deployed-file count changed");
 if (consolidation.deployedBaselineCommit !== "049b6390fba7a7908d01908a7953dd2f50fa15df") throw new Error("unexpected deployed baseline commit");
 let hashCount = 0;
 let historicalMetadataHashes = 0;
@@ -543,6 +636,15 @@ for (const product of active) {
   const manifestPath = join(packageRoot, "DEPLOYED.sha256");
   if (!existsSync(manifestPath)) throw new Error(`${product.slug} lacks DEPLOYED.sha256`);
   const deployed = parseDeployed(manifestPath);
+  const manifestRel = relative(root, manifestPath).replaceAll(sep, "/");
+  const historicalDeployed = parseDeployedBytes(gitBytesAt(m05VerifierBaseCommit, manifestRel), `${m05VerifierBaseCommit}:${manifestRel}`);
+  for (const [rel, expected] of historicalDeployed) {
+    const current = deployed.get(rel);
+    const authorized = product.slug === "pi-chrono-compaction"
+      && m05AuthorizedHistoricalHashChanges.has(rel)
+      && m05AuthorizedHistoricalHashChanges.get(rel) === current;
+    if (current !== expected && !authorized) throw new Error(`${product.slug}: historical deployed record changed: ${rel}`);
+  }
   deployedByProduct.set(product.slug, deployed);
   for (const [rel, expected] of deployed) {
     const path = resolve(packageRoot, rel);
@@ -563,6 +665,12 @@ for (const product of active) {
     if (!deployed.has(entry)) throw new Error(`${product.slug}: active entrypoint absent from DEPLOYED.sha256: ${entry}`);
     if (!existsSync(join(packageRoot, entry))) throw new Error(`${product.slug}: missing entrypoint ${entry}`);
   }
+  if (product.slug === "pi-chrono-compaction") {
+    if (product.compiledCount !== m05ChronoCompiledFiles) throw new Error(`${product.slug}: M05 compiled count changed`);
+    const additions = [...deployed.keys()].filter((path) => m05CompiledAdditions.has(path)).sort();
+    if (deployed.size !== m05ChronoManifestRows) throw new Error(`${product.slug}: deployed manifest rows ${deployed.size}; expected ${m05ChronoManifestRows}`);
+    if (!jsonEqual(additions, [...m05CompiledAdditions].sort())) throw new Error(`${product.slug}: exact M05 compiled additions are incomplete`);
+  }
   if (product.compiledCount !== undefined) {
     const committed = walk(join(packageRoot, "dist")).filter((path) => path.endsWith(".js"));
     const declared = [...deployed.keys()].filter((path) => path.startsWith("dist/") && path.endsWith(".js"));
@@ -571,7 +679,11 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-if (hashCount !== 291) throw new Error(`canonical deployed hash count ${hashCount}; expected 291`);
+const m05DeployedAdditionCount = m05CompiledAdditions.size;
+const historicalDeployedHashCount = hashCount - m05DeployedAdditionCount;
+if (historicalDeployedHashCount !== historicalCanonicalDeployedFiles || hashCount !== historicalCanonicalDeployedFiles + m05DeployedAdditionCount) {
+  throw new Error(`deployed hash count ${historicalDeployedHashCount}+${m05DeployedAdditionCount}; expected ${historicalCanonicalDeployedFiles}+${m05CompiledAdditions.size}`);
+}
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
 }
@@ -732,6 +844,7 @@ function graphClosure(starts, sourceMode) {
   return seen;
 }
 const activeRuntimeGraph = new Set();
+const preparedIntegrationGraph = new Set();
 const inactiveGraph = new Set();
 const sourceBuildGraph = new Set();
 const runtimeResourcePaths = new Set();
@@ -747,15 +860,22 @@ for (const product of products) {
     runtimeResourcePaths.add(path);
     if (product.status !== "inactive") activeRuntimeGraph.add(path);
   }
+  if (product.slug === "pi-chrono-compaction") {
+    for (const path of graphClosure(m05RuntimeGraphRoots.map((entry) => join(packageRoot, entry)), false)) activeRuntimeGraph.add(path);
+    for (const path of graphClosure(m05PreparedIntegrationGraphRoots.map((entry) => join(packageRoot, entry)), false)) preparedIntegrationGraph.add(path);
+  }
   if (product.compiledCount !== undefined) {
     if (!Array.isArray(product.sourceEntrypoints) || product.sourceEntrypoints.length === 0) throw new Error(`${product.slug}: compiled source entrypoints are required`);
-    const sourceClosure = graphClosure(product.sourceEntrypoints.map((entry) => join(packageRoot, entry)), true);
+    const sourceEntrypoints = product.slug === "pi-chrono-compaction"
+      ? [...product.sourceEntrypoints, ...m05SourceGraphRoots]
+      : product.sourceEntrypoints;
+    const sourceClosure = graphClosure(sourceEntrypoints.map((entry) => join(packageRoot, entry)), true);
     for (const path of sourceClosure) sourceBuildGraph.add(path);
     for (const path of walk(packageRoot).filter((candidate) => candidate.endsWith(".d.ts") && !candidate.includes(`${sep}dist${sep}`))) sourceBuildGraph.add(path);
   }
 }
 const deployedRuntimeCode = new Set([...deployedPaths].filter((path) => [".ts", ".js", ".mjs"].includes(extname(path))).map((path) => resolve(root, path)));
-const missingRuntimeCode = [...deployedRuntimeCode].filter((path) => !activeRuntimeGraph.has(path));
+const missingRuntimeCode = [...deployedRuntimeCode].filter((path) => !activeRuntimeGraph.has(path) && !preparedIntegrationGraph.has(path));
 if (missingRuntimeCode.length > 0) throw new Error(`deployed runtime code is unreachable: ${missingRuntimeCode.map((path) => relative(root, path)).join(",")}`);
 for (const product of products.filter((candidate) => candidate.compiledCount !== undefined)) {
   const packageRoot = join(root, "packages", product.slug);
@@ -867,26 +987,44 @@ function executeScripts(plan) {
   chmodSync(temp, 0o700);
   const work = join(temp, "package");
   try {
-    cpSync(plan.packageRoot, work, { recursive: true, filter: (path) => !["node_modules"].includes(basename(path)) });
+    runPhase("clean-copy", plan.slug, () => {
+      cpSync(plan.packageRoot, work, { recursive: true, filter: (path) => !["node_modules"].includes(basename(path)) });
+    });
     if (Object.values(plan.scripts).some((command) => /\btsc\b/u.test(command))) {
-      execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+      runPhase("dependencies", plan.slug, () => {
+        execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+      });
     }
     if (plan.slug === "pi-chrono-compaction") {
       // Header preparation is an explicit prerequisite, never a hidden network fallback.
       const headers = process.env.CHRONO_CATALOG_NODE_HEADERS ?? join(homedir(), ".cache", "node-gyp", "24.18.0");
-      execFileSync("npm", ["run", "catalog:sqlite:build-record", "--", "node_modules/node-gyp/bin/node-gyp.js", headers, "24.18.0"], { cwd: work, stdio: "inherit" });
+      runPhase("native-build-record", plan.slug, () => {
+        execFileSync("npm", ["run", "catalog:sqlite:build-record", "--", "node_modules/node-gyp/bin/node-gyp.js", headers, "24.18.0"], { cwd: work, stdio: "inherit" });
+      });
     }
+    const executionPlan = plan.slug === "pi-chrono-compaction"
+      ? ["typecheck", "build", "test:normal", "test:fixed-heap"]
+      : Object.keys(plan.scripts);
     let passed = 0;
+    let wrapperCovered = 0;
     let buildResult;
-    for (const script of Object.keys(plan.scripts)) {
-      execFileSync("npm", ["run", script], { cwd: work, stdio: "inherit" });
+    for (const script of executionPlan) {
+      const phase = script === "test:normal" ? "normal-replay" : script === "test:fixed-heap" ? "fixed-heaps" : script;
+      runPhase(phase, plan.slug, () => {
+        execFileSync("npm", ["run", script], { cwd: work, stdio: "inherit" });
+      });
       passed += 1;
+      if (script === "test:normal") wrapperCovered += 1;
       if (script === "build") {
-        buildResult = verifyBuiltOutput(product, plan.packageRoot, work);
-        if (plan.slug === "pi-chrono-compaction") execFileSync("npm", ["run", "catalog:sqlite:probe-record"], { cwd: work, stdio: "inherit" });
+        buildResult = runPhase("reproducibility", plan.slug, () => verifyBuiltOutput(product, plan.packageRoot, work));
+        if (plan.slug === "pi-chrono-compaction") {
+          runPhase("native-probe-record", plan.slug, () => {
+            execFileSync("npm", ["run", "catalog:sqlite:probe-record"], { cwd: work, stdio: "inherit" });
+          });
+        }
       }
     }
-    return { passed, buildResult };
+    return { passed, wrapperCovered, buildResult };
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -980,32 +1118,43 @@ function verifyProjectGlance() {
   chmodSync(temp, 0o700);
   const work = join(temp, "package");
   try {
-    cpSync(packageRoot, work, {
-      recursive: true,
-      filter: (path) => {
-        const rel = relative(packageRoot, path).replaceAll(sep, "/");
-        if (rel === "") return true;
-        if (["dist", "node_modules", ".runtime"].some((name) => rel === name || rel.startsWith(`${name}/`))) return false;
-        return !rel.endsWith(".tgz");
-      },
+    runPhase("clean-copy", projectGlanceSlug, () => {
+      cpSync(packageRoot, work, {
+        recursive: true,
+        filter: (path) => {
+          const rel = relative(packageRoot, path).replaceAll(sep, "/");
+          if (rel === "") return true;
+          if (["dist", "node_modules", ".runtime"].some((name) => rel === name || rel.startsWith(`${name}/`))) return false;
+          return !rel.endsWith(".tgz");
+        },
+      });
     });
-    execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+    runPhase("dependencies", projectGlanceSlug, () => {
+      execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+    });
     const isolatedEnv = { ...process.env, PI_PROJECT_GLANCE_VERIFIER_COPY: "1" };
-    execFileSync("npm", ["run", "typecheck"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
-    execFileSync("npm", ["test"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
-    const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
-    const result = JSON.parse(output);
-    if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error("pi-project-glance: invalid pack result");
-    const distFiles = walk(join(work, "dist"))
-      .filter((path) => statSync(path).isFile())
-      .map((path) => relative(work, path).replaceAll(sep, "/"))
-      .sort();
-    const packFiles = result[0].files.map((entry) => entry.path).sort();
-    const required = ["README.md", "bin/pi-project-glance", "herdr-plugin.toml", "package.json", ...distFiles].sort();
-    for (const path of required) if (!packFiles.includes(path)) throw new Error(`pi-project-glance: pack omitted ${path}`);
-    for (const path of packFiles) {
-      if (!required.includes(path) && path !== "package-lock.json") throw new Error(`pi-project-glance: pack includes unexplained file ${path}`);
-    }
+    runPhase("typecheck", projectGlanceSlug, () => {
+      execFileSync("npm", ["run", "typecheck"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
+    });
+    runPhase("project-tests", projectGlanceSlug, () => {
+      execFileSync("npm", ["test"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
+    });
+    const packFiles = runPhase("packaging", projectGlanceSlug, () => {
+      const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+      const result = JSON.parse(output);
+      if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error("pi-project-glance: invalid pack result");
+      const distFiles = walk(join(work, "dist"))
+        .filter((path) => statSync(path).isFile())
+        .map((path) => relative(work, path).replaceAll(sep, "/"))
+        .sort();
+      const packed = result[0].files.map((entry) => entry.path).sort();
+      const required = ["README.md", "bin/pi-project-glance", "herdr-plugin.toml", "package.json", ...distFiles].sort();
+      for (const path of required) if (!packed.includes(path)) throw new Error(`pi-project-glance: pack omitted ${path}`);
+      for (const path of packed) {
+        if (!required.includes(path) && path !== "package-lock.json") throw new Error(`pi-project-glance: pack includes unexplained file ${path}`);
+      }
+      return packed;
+    });
     return { ...staticResult, status: "pass", tests: "pass", packFiles: packFiles.length };
   } finally {
     rmSync(temp, { recursive: true, force: true });
@@ -1013,26 +1162,32 @@ function verifyProjectGlance() {
 }
 
 let safeScriptsPassed = 0;
+let wrapperCoveredDeclarations = 0;
 let packPassed = 0;
 const packFiles = {};
 const buildResults = {};
 const baselineScopeSelected = selectedSlug !== projectGlanceSlug;
 if (!staticOnly) {
   for (const product of products.filter((candidate) => baselineScopeSelected && (!selectedSlug || candidate.slug === selectedSlug))) {
-    packFiles[product.slug] = packDryRun(product, join(root, "packages", product.slug));
+    packFiles[product.slug] = runPhase("packaging", product.slug, () => packDryRun(product, join(root, "packages", product.slug)));
     packPassed += 1;
   }
   for (const plan of scriptPlans.filter((candidate) => baselineScopeSelected && (!selectedSlug || candidate.slug === selectedSlug))) {
     const result = executeScripts(plan);
     safeScriptsPassed += result.passed;
+    wrapperCoveredDeclarations += result.wrapperCovered;
     if (result.buildResult !== undefined) buildResults[plan.slug] = result.buildResult;
   }
 }
 const expectedScriptTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug
   ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length
   : Object.values(expectedSafeScripts).reduce((total, scripts) => total + Object.keys(scripts).length, 0);
+const chronoSelected = baselineScopeSelected && (!selectedSlug || selectedSlug === "pi-chrono-compaction");
+const expectedWrapperCoveredDeclarations = chronoSelected ? 1 : 0;
+const expectedDirectScriptTotal = expectedScriptTotal - expectedWrapperCoveredDeclarations;
 const expectedPackTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? 1 : 17;
-if (!staticOnly && safeScriptsPassed !== expectedScriptTotal) throw new Error(`safe scripts passed ${safeScriptsPassed}/${expectedScriptTotal}`);
+if (!staticOnly && safeScriptsPassed !== expectedDirectScriptTotal) throw new Error(`direct safe scripts passed ${safeScriptsPassed}/${expectedDirectScriptTotal}`);
+if (!staticOnly && wrapperCoveredDeclarations !== expectedWrapperCoveredDeclarations) throw new Error(`wrapper-covered scripts passed ${wrapperCoveredDeclarations}/${expectedWrapperCoveredDeclarations}`);
 if (!staticOnly && packPassed !== expectedPackTotal) throw new Error(`pack dry runs passed ${packPassed}/${expectedPackTotal}`);
 if (!staticOnly) {
   for (const product of products.filter((candidate) => baselineScopeSelected && candidate.compiledCount !== undefined && (!selectedSlug || candidate.slug === selectedSlug))) {
@@ -1052,17 +1207,29 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: "291/291",
+  deployedHashesVerified: `${hashCount}/${historicalCanonicalDeployedFiles + m05DeployedAdditionCount}`,
+  historicalCanonicalDeployedFiles: `${historicalDeployedHashCount}/${historicalCanonicalDeployedFiles}`,
+  m05DeployedAdditions: `${m05DeployedAdditionCount}/${m05CompiledAdditions.size}`,
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),
-  safeScripts: staticOnly ? "skipped" : `${safeScriptsPassed}/${expectedScriptTotal}`,
+  safeScripts: {
+    mode: staticOnly ? "static-only" : "executed",
+    declarationsValidated: `${expectedScriptTotal}/${expectedScriptTotal}`,
+    directCommands: `${staticOnly ? 0 : safeScriptsPassed}/${expectedDirectScriptTotal}`,
+    wrapperCoveredDeclarations: `${staticOnly ? 0 : wrapperCoveredDeclarations}/${expectedWrapperCoveredDeclarations}`,
+  },
+  nativeScripts: {
+    declarationsValidated: `${Object.keys(catalogNativeScripts).length}/${Object.keys(catalogNativeScripts).length}`,
+    controlledCommands: `${staticOnly || !chronoSelected ? 0 : 2}/${chronoSelected ? 2 : 0}`,
+  },
   packDryRuns: staticOnly ? "skipped" : `${packPassed}/${expectedPackTotal}`,
   projectGlance: projectGlanceResult,
   dependencyRuntimeGraph: {
     deployedRuntime: categories.deployedRuntime,
     sourceBuildInputs: categories.sourceBuildInputs + categories.inactiveSource,
     runtimeResources: runtimeResourcePaths.size,
+    preparedIntegration: preparedIntegrationGraph.size,
     metadataDocs: categories.metadata + categories.docs + categories.rootVerification,
     unexplained: categories.unexplained,
   },
