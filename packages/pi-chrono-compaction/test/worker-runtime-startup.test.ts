@@ -81,4 +81,11 @@ test("trusted startup initializes only fresh state, serializes repeats, and refu
       await assert.rejects(initializeTrustedWorkerRuntime({ authorizationPath: f.authorizationPath, testOnly: f.testOnly }), /partial-or-foreign-namespace/);
     } finally { await rm(f.root, { recursive: true, force: true }); }
   });
+  await t.test("owned-looking malformed ticket is ambiguous", async () => {
+    const f = await fixture(); try {
+      await initializeTrustedWorkerRuntime({ authorizationPath: f.authorizationPath, testOnly: f.testOnly });
+      await privateFile(join(f.runtimeDirectory, `ticket-${"b".repeat(32)}.json`), "{}");
+      await assert.rejects(initializeTrustedWorkerRuntime({ authorizationPath: f.authorizationPath, testOnly: f.testOnly }), /malformed-scheduler-artifact/);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
 });

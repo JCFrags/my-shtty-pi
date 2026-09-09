@@ -86,7 +86,13 @@ async function safeBytes(path: string, maximum: number, privateMode = false): Pr
     const stat = await handle.stat();
     need(stat.isFile() && stat.nlink === 1 && stat.uid === process.getuid?.() && !(stat.mode & 0o022) && stat.size <= maximum, "unsafe-file");
     if (privateMode) need((stat.mode & 0o777) === 0o600, "unsafe-file");
-    const bytes = await handle.readFile(); need(bytes.length <= maximum, "file-bound"); return bytes;
+    const bytes = Buffer.alloc(maximum + 1); let offset = 0;
+    while (offset <= maximum) {
+      const { bytesRead } = await handle.read(bytes, offset, maximum + 1 - offset, offset);
+      if (bytesRead === 0) return bytes.subarray(0, offset);
+      offset += bytesRead;
+    }
+    fail("file-bound");
   } finally { await handle.close(); }
 }
 async function privateDirectory(path: string) {
@@ -175,12 +181,52 @@ async function inactive(apis: RuntimeApis, runtime: string): Promise<void> {
   const states = await Promise.all(Array.from({ length: 4 }, (_, slot) => apis.runtimeUnitState(apis.runtimeUnitName(runtime, slot))));
   need(states.every(state => state === "inactive"), "fixed-unit-not-inactive");
 }
-async function safeRuntimeEntries(runtime: string): Promise<void> {
-  const allowed = /^(?:policy\.json|admission\.lock|legacy-gate\.json|queue\.lock|turns\.json|ticket-[a-f0-9]{32}\.json|slot-[0-3]\.json|\.(?:(?:ticket-[a-f0-9]{32}|slot-[0-3]|policy)\.json-[a-f0-9]{32}|turns-[a-f0-9]{32})\.tmp)$/;
-  for (const name of await readdir(runtime)) {
-    need(allowed.test(name), "partial-or-foreign-namespace");
-    const stat = await lstat(join(runtime, name));
-    need(stat.isFile() && !stat.isSymbolicLink() && stat.uid === process.getuid?.() && (stat.mode & 0o077) === 0 && stat.size <= 16384, "unsafe-scheduler-artifact");
+function validOwner(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const owner = value as Record<string, unknown>, keys = Object.keys(owner).sort().join(",");
+  return (keys === "createdAtMs,jobType,key,nonce,pid,priority,processStartIdentity,schemaVersion" || keys === "createdAtMs,jobType,nonce,pid,priority,processStartIdentity,schemaVersion")
+    && owner.schemaVersion === 1 && Number.isSafeInteger(owner.pid) && (owner.pid as number) > 0
+    && typeof owner.processStartIdentity === "string" && owner.processStartIdentity.length > 0 && owner.processStartIdentity.length <= 64
+    && typeof owner.nonce === "string" && /^[a-f0-9]{32}$/.test(owner.nonce)
+    && Number.isSafeInteger(owner.createdAtMs) && (owner.createdAtMs as number) > 0
+    && (owner.priority === "high" || owner.priority === "low")
+    && ["replay-compaction", "candidate-store-update", "rollup-shadow"].includes(owner.jobType as string)
+    && (owner.key === undefined || (typeof owner.key === "string" && /^[a-f0-9]{64}$/.test(owner.key)));
+}
+function validTurns(value: unknown): boolean {
+  return !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length <= 128
+    && Object.entries(value).every(([key, item]) => /^[a-f0-9]{64}$/.test(key) && Number.isSafeInteger(item));
+}
+function validState(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !exact(value as object, ["schemaVersion", "category", "stage"])) return false;
+  const state = value as Record<string, unknown>;
+  return state.schemaVersion === 1 && ["replay-compaction", "candidate-store-update", "rollup-shadow", "history-search", "other"].includes(state.category as string)
+    && typeof state.stage === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(state.stage);
+}
+async function artifactJson(path: string, maximum = 16384): Promise<unknown> {
+  try { return JSON.parse((await safeBytes(path, maximum, true)).toString()); }
+  catch (error) { if (error instanceof Error && /^[a-z][a-z0-9-]{0,80}$/.test(error.message)) throw error; fail("malformed-scheduler-artifact"); }
+}
+async function safeRuntimeEntries(runtime: string, policy: string): Promise<void> {
+  const names = await readdir(runtime); need(names.length <= 256, "runtime-artifact-bound");
+  for (const name of names) {
+    const path = join(runtime, name);
+    if (name === "policy.json") need((await safeBytes(path, 1024, true)).toString() === policy, "policy-mismatch");
+    else if (name === "admission.lock" || name === "queue.lock") await safeBytes(path, 0, true);
+    else if (name === "legacy-gate.json") await safeBytes(path, 4096, true);
+    else if (/^(?:ticket-[a-f0-9]{32}|slot-[0-3])\.json$/.test(name)) {
+      const owner = await artifactJson(path, 1000); need(validOwner(owner), "malformed-scheduler-artifact");
+      if (name.startsWith("ticket-")) need(name === `ticket-${(owner as Record<string, unknown>).nonce}.json`, "malformed-scheduler-artifact");
+    } else if (name === "turns.json") need(validTurns(await artifactJson(path)), "malformed-scheduler-artifact");
+    else if (/^state-[0-3]\.json$/.test(name)) need(validState(await artifactJson(path, 4096)), "malformed-scheduler-artifact");
+    else if (/^\.(?:ticket-[a-f0-9]{32}|slot-[0-3])\.json-[a-f0-9]{32}\.tmp$/.test(name)) {
+      const owner = await artifactJson(path, 1000) as Record<string, unknown>, nonces = name.match(/[a-f0-9]{32}/g) ?? [];
+      need(validOwner(owner) && nonces.at(-1) === owner.nonce && (!name.startsWith(".ticket-") || nonces[0] === owner.nonce), "malformed-scheduler-artifact");
+    }
+    else if (/^\.policy\.json-[a-f0-9]{32}\.tmp$/.test(name)) need((await safeBytes(path, 1024, true)).toString() === policy, "policy-mismatch");
+    else if (/^\.turns-[a-f0-9]{32}\.tmp$/.test(name)) need(validTurns(await artifactJson(path)), "malformed-scheduler-artifact");
+    else if (/^\.state-[a-f0-9]{16}$/.test(name)) need(validState(await artifactJson(path, 4096)), "malformed-scheduler-artifact");
+    else fail("partial-or-foreign-namespace");
   }
 }
 async function safeLegacyEntries(legacy: string): Promise<void> {
@@ -192,6 +238,7 @@ async function safeLegacyEntries(legacy: string): Promise<void> {
 async function initializeTrustedWorkerRuntimeInner(options: WorkerRuntimeStartupOptions): Promise<WorkerRuntimeStartupResult> {
   need(process.platform === "linux" && Number.isInteger(process.getuid?.()) && process.getuid?.() !== 0, "linux-user-required");
   need(isAbsolute(options.authorizationPath) && resolve(options.authorizationPath) === options.authorizationPath, "authorization-path-required");
+  await privateDirectory(dirname(options.authorizationPath));
   const a = parseAuthorization(JSON.parse((await safeBytes(options.authorizationPath, MAX_AUTHORIZATION_BYTES, true)).toString()));
   if (options.expectedPackagePath !== undefined) {
     need(isAbsolute(options.expectedPackagePath) && resolve(options.expectedPackagePath) === options.expectedPackagePath, "expected-package-path-invalid");
@@ -210,7 +257,7 @@ async function initializeTrustedWorkerRuntimeInner(options: WorkerRuntimeStartup
   return withStartupLock(lock, async () => {
     const r = await present(runtime), l = await present(legacy);
     if (r && l) {
-      await privateDirectory(runtime); await privateDirectory(legacy); await safeRuntimeEntries(runtime); await safeLegacyEntries(legacy);
+      await privateDirectory(runtime); await privateDirectory(legacy); await safeRuntimeEntries(runtime, policy); await safeLegacyEntries(legacy);
       need((await safeBytes(join(runtime, "policy.json"), 1024, true)).toString() === policy, "policy-mismatch");
       need(await apis.verifyLegacyAdmissionGate(runtime, legacy), "gate-not-verified");
       return { ready: true, changed: false, sourceCommit: a.package.sourceCommit };
@@ -228,10 +275,15 @@ async function initializeTrustedWorkerRuntimeInner(options: WorkerRuntimeStartup
     await identities();
     await apis.installLegacyAdmissionGate({ runtimeDirectory: runtime, legacyDirectory: legacy, confirmLegacyQuiescent: async () => {
       await identities(); await configuration(a, apis.limits); await inactive(apis, runtime);
+      const runtimeNames = (await readdir(runtime)).sort(), legacyNames = (await readdir(legacy)).sort();
+      need(JSON.stringify(runtimeNames) === JSON.stringify(["admission.lock", "policy.json"]), "partial-or-foreign-namespace");
+      need(JSON.stringify(legacyNames) === JSON.stringify(["slot-0.json", "slot-1.json", "slot-2.json", "slot-3.json"]), "partial-or-foreign-namespace");
       need((await safeBytes(join(runtime, "policy.json"), 1024, true)).toString() === policy, "policy-mismatch");
+      await safeBytes(join(runtime, "admission.lock"), 0, true);
+      for (const name of legacyNames) await safeBytes(join(legacy, name), 4096, true);
       return doubleQuiescent(a.workerProcessBasenames, quiescent);
     } });
-    await identities(); await safeRuntimeEntries(runtime); await safeLegacyEntries(legacy);
+    await identities(); await safeRuntimeEntries(runtime, policy); await safeLegacyEntries(legacy);
     need((await safeBytes(join(runtime, "policy.json"), 1024, true)).toString() === policy && await apis.verifyLegacyAdmissionGate(runtime, legacy), "gate-not-verified");
     await configuration(a, apis.limits); await inactive(apis, runtime); need(await doubleQuiescent(a.workerProcessBasenames, quiescent), "legacy-not-quiescent");
     return { ready: true, changed: true, sourceCommit: a.package.sourceCommit };
