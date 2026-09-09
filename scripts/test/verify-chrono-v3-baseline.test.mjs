@@ -46,27 +46,29 @@ function runStatic(repositoryRoot, ...args) {
 function runSyntheticDeployed(repositoryRoot) {
   const deployedVerifier = join(repositoryRoot, "scripts", "verify-deployed-baseline.mjs");
   const source = readFileSync(join(root, "scripts", "verify-deployed-baseline.mjs"), "utf8");
-  const scannerCall = "const publicationScan = verifyPublicationScanner();";
+  const scannerCall = 'runPhase("privacy", "root", verifyPublicationScanner)';
   assert.equal(source.split(scannerCall).length, 2, "expected one publication scanner call");
-  writeFileSync(deployedVerifier, source.replace(scannerCall, 'const publicationScan = "test-bypass";'));
+  writeFileSync(deployedVerifier, source.replace(scannerCall, 'runPhase("privacy", "root", () => "test-bypass")'));
   return spawnSync(process.execPath, [deployedVerifier, "--static-only", "--product", "pi-chrono-compaction"], {
     cwd: repositoryRoot,
     encoding: "utf8",
     timeout: 120000,
   });
 }
-function runSyntheticExecutor(repositoryRoot, { staticOnly = false, fail = "" } = {}) {
+function runSyntheticExecutor(repositoryRoot, { staticOnly = false, fail = "", product = "pi-chrono-compaction" } = {}) {
   const deployedVerifier = join(repositoryRoot, "scripts", "verify-deployed-baseline.mjs");
   const commandLog = join(repositoryRoot, ".synthetic-executor-log");
+  rmSync(commandLog, { force: true });
   let source = readFileSync(join(root, "scripts", "verify-deployed-baseline.mjs"), "utf8");
   source = source.replace(
     'import { execFileSync } from "node:child_process";',
-    `import { execFileSync as realExecFileSync } from "node:child_process";\nimport { appendFileSync } from "node:fs";\nfunction execFileSync(command, args, options = {}) {\n  if (process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG && command === "npm") {\n    appendFileSync(process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG, JSON.stringify(args) + "\\n");\n    const phase = args[0] === "run" ? args[1] : args[0];\n    if (process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL === phase) throw new Error("synthetic command failure");\n    if (args[0] === "pack") return JSON.stringify([{ files: [] }]);\n    return options.encoding ? "" : Buffer.alloc(0);\n  }\n  return realExecFileSync(command, args, options);\n}`,
+    `import { execFileSync as realExecFileSync } from "node:child_process";\nimport { appendFileSync } from "node:fs";\nfunction execFileSync(command, args, options = {}) {\n  if (process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG && command === "npm") {\n    appendFileSync(process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG, JSON.stringify(args) + "\\n");\n    const phase = args[0] === "run" ? args[1] : args[0];\n    if (process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL === phase || (phase === "test:normal" && ["nested-test", "replay"].includes(process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL))) throw new Error("synthetic command failure");\n    if (args[0] === "pack") return JSON.stringify([{ files: [] }]);\n    return options.encoding ? "" : Buffer.alloc(0);\n  }\n  return realExecFileSync(command, args, options);\n}`,
   );
-  source = source.replace("const publicationScan = verifyPublicationScanner();", 'const publicationScan = "test-bypass";');
-  source = source.replace("buildResult = verifyBuiltOutput(product, plan.packageRoot, work);", "buildResult = 107;");
+  source = source.replace('runPhase("privacy", "root", verifyPublicationScanner)', 'runPhase("privacy", "root", () => "test-bypass")');
+  source = source.replace("verifyBuiltOutput(product, plan.packageRoot, work)", "107");
   writeFileSync(deployedVerifier, source);
-  const args = [deployedVerifier, "--product", "pi-chrono-compaction"];
+  const args = [deployedVerifier];
+  if (product) args.push("--product", product);
   if (staticOnly) args.push("--static-only");
   const result = spawnSync(process.execPath, args, {
     cwd: repositoryRoot,
@@ -458,7 +460,9 @@ test("Chrono executor runs the wrapper once without directly duplicating nested 
 test("Chrono executor reports wrapper, native, and heap failures before rethrowing", () => withClonedRepository((repositoryRoot) => {
   for (const [failure, phase] of [
     ["catalog:sqlite:build-record", "native-build-record"],
-    ["test:normal", "normal-replay"],
+    ["catalog:sqlite:probe-record", "native-probe-record"],
+    ["nested-test", "normal-replay"],
+    ["replay", "normal-replay"],
     ["test:fixed-heap", "fixed-heaps"],
   ]) {
     const result = runSyntheticExecutor(repositoryRoot, { fail: failure });
@@ -467,14 +471,18 @@ test("Chrono executor reports wrapper, native, and heap failures before rethrowi
   }
 }));
 
-test("static deployed verification reports declarations without runtime execution", () => withClonedRepository((repositoryRoot) => {
-  const result = runSyntheticExecutor(repositoryRoot, { staticOnly: true });
+test("static deployed verification reports all declarations without runtime execution", () => withClonedRepository((repositoryRoot) => {
+  const result = runSyntheticExecutor(repositoryRoot, { staticOnly: true, product: null });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.commands, []);
   assert.deepEqual(result.json.safeScripts, {
     mode: "static-only",
-    declarationsValidated: "5/5",
-    directCommands: "0/4",
+    declarationsValidated: "15/15",
+    directCommands: "0/14",
     wrapperCoveredDeclarations: "0/1",
+  });
+  assert.deepEqual(result.json.nativeScripts, {
+    declarationsValidated: "4/4",
+    controlledCommands: "0/2",
   });
 }));

@@ -387,6 +387,24 @@ function gitBytesAt(commit, rel) {
 function jsonEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
+const phaseNames = new Set([
+  "privacy", "packaging", "clean-copy", "dependencies", "native-build-record",
+  "typecheck", "build", "reproducibility", "native-probe-record", "syntax",
+  "normal-replay", "fixed-heaps", "project-tests",
+]);
+function runPhase(phase, slug, action) {
+  if (!phaseNames.has(phase) || !["root", projectGlanceSlug, ...expectedSlugs].includes(slug)) throw new Error("invalid phase telemetry label");
+  const started = Date.now();
+  process.stderr.write(`${JSON.stringify({ event: "phase-start", phase, slug })}\n`);
+  try {
+    const result = action();
+    process.stderr.write(`${JSON.stringify({ event: "phase-complete", phase, slug, elapsedMs: Date.now() - started, outcome: "passed" })}\n`);
+    return result;
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({ event: "phase-complete", phase, slug, elapsedMs: Date.now() - started, outcome: "failed" })}\n`);
+    throw error;
+  }
+}
 function gitNameList(args) {
   try {
     return execFileSync("git", args, { cwd: root, encoding: null, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
@@ -601,7 +619,7 @@ function verifyPublicationScanner() {
 verifyWorkflowBoundary();
 verifyCorrectionScope();
 const governance = verifyGovernanceArtifacts();
-const publicationScan = verifyPublicationScanner();
+const publicationScan = runPhase("privacy", "root", verifyPublicationScanner);
 const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path)).sort();
 if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/verify-chrono-v3-privacy.test.mjs", "verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers and their tests are allowed under scripts/");
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
@@ -969,26 +987,44 @@ function executeScripts(plan) {
   chmodSync(temp, 0o700);
   const work = join(temp, "package");
   try {
-    cpSync(plan.packageRoot, work, { recursive: true, filter: (path) => !["node_modules"].includes(basename(path)) });
+    runPhase("clean-copy", plan.slug, () => {
+      cpSync(plan.packageRoot, work, { recursive: true, filter: (path) => !["node_modules"].includes(basename(path)) });
+    });
     if (Object.values(plan.scripts).some((command) => /\btsc\b/u.test(command))) {
-      execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+      runPhase("dependencies", plan.slug, () => {
+        execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+      });
     }
     if (plan.slug === "pi-chrono-compaction") {
       // Header preparation is an explicit prerequisite, never a hidden network fallback.
       const headers = process.env.CHRONO_CATALOG_NODE_HEADERS ?? join(homedir(), ".cache", "node-gyp", "24.18.0");
-      execFileSync("npm", ["run", "catalog:sqlite:build-record", "--", "node_modules/node-gyp/bin/node-gyp.js", headers, "24.18.0"], { cwd: work, stdio: "inherit" });
+      runPhase("native-build-record", plan.slug, () => {
+        execFileSync("npm", ["run", "catalog:sqlite:build-record", "--", "node_modules/node-gyp/bin/node-gyp.js", headers, "24.18.0"], { cwd: work, stdio: "inherit" });
+      });
     }
+    const executionPlan = plan.slug === "pi-chrono-compaction"
+      ? ["typecheck", "build", "test:normal", "test:fixed-heap"]
+      : Object.keys(plan.scripts);
     let passed = 0;
+    let wrapperCovered = 0;
     let buildResult;
-    for (const script of Object.keys(plan.scripts)) {
-      execFileSync("npm", ["run", script], { cwd: work, stdio: "inherit" });
+    for (const script of executionPlan) {
+      const phase = script === "test:normal" ? "normal-replay" : script === "test:fixed-heap" ? "fixed-heaps" : script;
+      runPhase(phase, plan.slug, () => {
+        execFileSync("npm", ["run", script], { cwd: work, stdio: "inherit" });
+      });
       passed += 1;
+      if (script === "test:normal") wrapperCovered += 1;
       if (script === "build") {
-        buildResult = verifyBuiltOutput(product, plan.packageRoot, work);
-        if (plan.slug === "pi-chrono-compaction") execFileSync("npm", ["run", "catalog:sqlite:probe-record"], { cwd: work, stdio: "inherit" });
+        buildResult = runPhase("reproducibility", plan.slug, () => verifyBuiltOutput(product, plan.packageRoot, work));
+        if (plan.slug === "pi-chrono-compaction") {
+          runPhase("native-probe-record", plan.slug, () => {
+            execFileSync("npm", ["run", "catalog:sqlite:probe-record"], { cwd: work, stdio: "inherit" });
+          });
+        }
       }
     }
-    return { passed, buildResult };
+    return { passed, wrapperCovered, buildResult };
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -1082,20 +1118,28 @@ function verifyProjectGlance() {
   chmodSync(temp, 0o700);
   const work = join(temp, "package");
   try {
-    cpSync(packageRoot, work, {
-      recursive: true,
-      filter: (path) => {
-        const rel = relative(packageRoot, path).replaceAll(sep, "/");
-        if (rel === "") return true;
-        if (["dist", "node_modules", ".runtime"].some((name) => rel === name || rel.startsWith(`${name}/`))) return false;
-        return !rel.endsWith(".tgz");
-      },
+    runPhase("clean-copy", projectGlanceSlug, () => {
+      cpSync(packageRoot, work, {
+        recursive: true,
+        filter: (path) => {
+          const rel = relative(packageRoot, path).replaceAll(sep, "/");
+          if (rel === "") return true;
+          if (["dist", "node_modules", ".runtime"].some((name) => rel === name || rel.startsWith(`${name}/`))) return false;
+          return !rel.endsWith(".tgz");
+        },
+      });
     });
-    execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+    runPhase("dependencies", projectGlanceSlug, () => {
+      execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, stdio: "inherit" });
+    });
     const isolatedEnv = { ...process.env, PI_PROJECT_GLANCE_VERIFIER_COPY: "1" };
-    execFileSync("npm", ["run", "typecheck"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
-    execFileSync("npm", ["test"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
-    const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+    runPhase("typecheck", projectGlanceSlug, () => {
+      execFileSync("npm", ["run", "typecheck"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
+    });
+    runPhase("project-tests", projectGlanceSlug, () => {
+      execFileSync("npm", ["test"], { cwd: work, env: isolatedEnv, stdio: "inherit" });
+    });
+    const output = runPhase("packaging", projectGlanceSlug, () => execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }));
     const result = JSON.parse(output);
     if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0].files)) throw new Error("pi-project-glance: invalid pack result");
     const distFiles = walk(join(work, "dist"))
@@ -1115,26 +1159,32 @@ function verifyProjectGlance() {
 }
 
 let safeScriptsPassed = 0;
+let wrapperCoveredDeclarations = 0;
 let packPassed = 0;
 const packFiles = {};
 const buildResults = {};
 const baselineScopeSelected = selectedSlug !== projectGlanceSlug;
 if (!staticOnly) {
   for (const product of products.filter((candidate) => baselineScopeSelected && (!selectedSlug || candidate.slug === selectedSlug))) {
-    packFiles[product.slug] = packDryRun(product, join(root, "packages", product.slug));
+    packFiles[product.slug] = runPhase("packaging", product.slug, () => packDryRun(product, join(root, "packages", product.slug)));
     packPassed += 1;
   }
   for (const plan of scriptPlans.filter((candidate) => baselineScopeSelected && (!selectedSlug || candidate.slug === selectedSlug))) {
     const result = executeScripts(plan);
     safeScriptsPassed += result.passed;
+    wrapperCoveredDeclarations += result.wrapperCovered;
     if (result.buildResult !== undefined) buildResults[plan.slug] = result.buildResult;
   }
 }
 const expectedScriptTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug
   ? Object.keys(expectedSafeScripts[selectedSlug] ?? {}).length
   : Object.values(expectedSafeScripts).reduce((total, scripts) => total + Object.keys(scripts).length, 0);
+const chronoSelected = baselineScopeSelected && (!selectedSlug || selectedSlug === "pi-chrono-compaction");
+const expectedWrapperCoveredDeclarations = chronoSelected ? 1 : 0;
+const expectedDirectScriptTotal = expectedScriptTotal - expectedWrapperCoveredDeclarations;
 const expectedPackTotal = selectedSlug === projectGlanceSlug ? 0 : selectedSlug ? 1 : 17;
-if (!staticOnly && safeScriptsPassed !== expectedScriptTotal) throw new Error(`safe scripts passed ${safeScriptsPassed}/${expectedScriptTotal}`);
+if (!staticOnly && safeScriptsPassed !== expectedDirectScriptTotal) throw new Error(`direct safe scripts passed ${safeScriptsPassed}/${expectedDirectScriptTotal}`);
+if (!staticOnly && wrapperCoveredDeclarations !== expectedWrapperCoveredDeclarations) throw new Error(`wrapper-covered scripts passed ${wrapperCoveredDeclarations}/${expectedWrapperCoveredDeclarations}`);
 if (!staticOnly && packPassed !== expectedPackTotal) throw new Error(`pack dry runs passed ${packPassed}/${expectedPackTotal}`);
 if (!staticOnly) {
   for (const product of products.filter((candidate) => baselineScopeSelected && candidate.compiledCount !== undefined && (!selectedSlug || candidate.slug === selectedSlug))) {
@@ -1160,7 +1210,16 @@ console.log(JSON.stringify({
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),
-  safeScripts: staticOnly ? "skipped" : `${safeScriptsPassed}/${expectedScriptTotal}`,
+  safeScripts: {
+    mode: staticOnly ? "static-only" : "executed",
+    declarationsValidated: `${expectedScriptTotal}/${expectedScriptTotal}`,
+    directCommands: `${staticOnly ? 0 : safeScriptsPassed}/${expectedDirectScriptTotal}`,
+    wrapperCoveredDeclarations: `${staticOnly ? 0 : wrapperCoveredDeclarations}/${expectedWrapperCoveredDeclarations}`,
+  },
+  nativeScripts: {
+    declarationsValidated: `${Object.keys(catalogNativeScripts).length}/${Object.keys(catalogNativeScripts).length}`,
+    controlledCommands: `${staticOnly || !chronoSelected ? 0 : 2}/${chronoSelected ? 2 : 0}`,
+  },
   packDryRuns: staticOnly ? "skipped" : `${packPassed}/${expectedPackTotal}`,
   projectGlance: projectGlanceResult,
   dependencyRuntimeGraph: {
