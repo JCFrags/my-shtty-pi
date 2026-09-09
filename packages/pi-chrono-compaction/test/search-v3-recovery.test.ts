@@ -13,7 +13,7 @@ import { executeSearchV3Request } from "../src/search-v3-store.js";
 import { executeCatalogStoreRequest } from "../src/catalog-store.js";
 import { CatalogSqlite } from "../src/catalog-sqlite.js";
 import { runSearchV3Worker } from "../src/search-v3-worker-client.js";
-import type { SearchV3Identity, SearchV3Request } from "../src/search-v3-contract.js";
+import { isSearchV3Handle, type SearchV3Identity, type SearchV3Request } from "../src/search-v3-contract.js";
 import { line, setupCapsuleFixture } from "./capsule-storage-fixture.js";
 
 async function deriveAll(fixture: ReturnType<typeof setupCapsuleFixture>, view: CapsuleCatalogView): Promise<void> {
@@ -72,9 +72,27 @@ test("ingest bounds empty noncomplete enumeration pages and persists their curso
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("chunk-source traversal bounds visited empty events as well as descriptors", async () => {
+  const records: string[] = [];
+  for (let index = 0; index < CAPSULE_LIMITS.deriveEvents * 2; index++) records.push(JSON.stringify({ type: "message", id: `e${index}`,
+    parentId: index ? `e${index - 1}` : null, message: { role: "user", content: [] } }) + "\n");
+  const fixture = setupCapsuleFixture(records.join(""));
+  try {
+    const view = await fixture.initialize(`e${records.length - 1}`);
+    await deriveAll(fixture, view);
+    const page = await fixture.ok(view, { op: "chunkSourcePage", limit: 1, maxDescriptors: CAPSULE_LIMITS.deriveDescriptors });
+    assert.equal(page.sources.length, 0);
+    assert.equal(page.complete, false);
+    assert.equal(page.readiness.visitedEvents, CAPSULE_LIMITS.deriveEvents);
+    assert.equal(page.readiness.scannedDescriptors, 0);
+    assert.equal(page.next.afterEventSeq, CAPSULE_LIMITS.deriveEvents);
+  } finally { fixture.cleanup(); }
+});
+
 test("literal search finds capsule-omitted text and recall recovers the exact source", async () => {
-  const phrase = "violet marmalade station";
-  const text = `${"head ordinary words ".repeat(2_400)}İ${phrase}${" tail ordinary words".repeat(2_400)}`;
+  const phrase = "violet marmalade station", path = "/Repo/SRC/Foo.ts", identifier = "BuildIdentifierAlpha";
+  let text = `${path} ${identifier} ${"head ordinary words ".repeat(2_400)}İ${phrase}${" tail ordinary words".repeat(2_400)}`;
+  text = `${text.slice(0, CAPSULE_LIMITS.decodedChunkUnits - 1)}AB${text.slice(CAPSULE_LIMITS.decodedChunkUnits + 1)}`;
   assert.ok(text.length > CAPSULE_LIMITS.reducerInputUnits);
   const fixture = setupCapsuleFixture(line("a", null, text));
   try {
@@ -93,6 +111,7 @@ test("literal search finds capsule-omitted text and recall recovers the exact so
     assert.equal(found.ok, true, JSON.stringify(found));
     if (!found.ok) return;
     const hit = (found.result as any).hits[0];
+    assert.equal(isSearchV3Handle(hit.handle), true);
     assert.equal(hit.independentEvidence, true);
     assert.equal(hit.handle.evidence, "raw-source");
     assert.equal(hit.handle.decodedUtf16.start, text.indexOf(phrase), "case folding must not shift UTF-16 source coordinates");
@@ -109,9 +128,25 @@ test("literal search finds capsule-omitted text and recall recovers the exact so
     assert.equal(scannedSubstring.ok, true, JSON.stringify(scannedSubstring));
     if (scannedSubstring.ok) assert.equal((scannedSubstring.result as any).hits[0].handle.decodedUtf16.start, text.indexOf("iolet"));
     const recalled = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory,
-      catalogDirectory: fixture.catalogDirectory, identity, op: "recall", view, handle: hit.handle });
+      catalogDirectory: fixture.catalogDirectory, identity, op: "recall", view, handle: { ...hit.handle, evidence: "generated-cue" } });
     assert.equal(recalled.ok, true, JSON.stringify(recalled));
-    if (recalled.ok) assert.ok((recalled.result as any).text.includes(phrase));
+    if (recalled.ok) {
+      assert.ok((recalled.result as any).text.includes(phrase));
+      assert.equal((recalled.result as any).independentEvidence, true, "stored provenance, not the mutable handle label, controls recall evidence");
+      assert.equal((recalled.result as any).generatedRetrieval, false);
+    }
+    const ranked = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+      identity, op: "query", view, query: `${identifier} absent`, mode: "ranked", limit: 2 });
+    assert.equal(ranked.ok, true, JSON.stringify(ranked));
+    if (ranked.ok) for (const item of (ranked.result as any).hits) {
+      assert.equal(isSearchV3Handle(item.handle), true);
+      const span = item.handle.decodedUtf16;
+      if (span) assert.match(text.slice(span.start, span.end), /BuildIdentifierAlpha/iu, "ranked spans must identify actual source text");
+    }
+    const filtered = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+      identity, op: "query", view, query: phrase, mode: "ranked", filters: { kinds: [hit.kind], path: "src\\foo.ts", identifier: identifier.toLowerCase() }, limit: 2 });
+    assert.equal(filtered.ok, true, JSON.stringify(filtered));
+    if (filtered.ok) assert.equal((filtered.result as any).hits.length, 1);
     const sourceLookup = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
       identity, op: "sources", view, eventSeq: hit.handle.source.eventSeq, blockIndex: hit.handle.source.blockIndex, limit: 2 });
     assert.equal(sourceLookup.ok, true, JSON.stringify(sourceLookup));
@@ -123,6 +158,25 @@ test("literal search finds capsule-omitted text and recall recovers the exact so
       identity, op: "query", view, query: "violet|absent", mode: "regex", limit: 2, scan: { maxChunks: 8, maxMs: 250 } });
     assert.equal(explicitRegex.ok, true, JSON.stringify(explicitRegex));
     if (explicitRegex.ok) assert.equal((explicitRegex.result as any).hits.length, 1);
+    const internalEndAnchor = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+      identity, op: "query", view, query: "A$", mode: "regex", limit: 2, scan: { maxChunks: 8, maxMs: 250 } });
+    assert.equal(internalEndAnchor.ok, true, JSON.stringify(internalEndAnchor));
+    if (internalEndAnchor.ok) assert.equal((internalEndAnchor.result as any).hits.length, 0, "an internal decoded chunk end is not a source end");
+    const arbitraryRegex = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+      identity, op: "query", view, query: "violet.*station", mode: "regex", limit: 2, scan: { maxChunks: 8, maxMs: 250 } });
+    assert.equal(arbitraryRegex.ok, true, JSON.stringify(arbitraryRegex));
+    if (arbitraryRegex.ok) {
+      assert.equal((arbitraryRegex.result as any).exhaustive, false);
+      assert.equal((arbitraryRegex.result as any).coverage, "explicit-bounded-regex-windows-nonexhaustive");
+    }
+    const status = await run({ v: 1, searchDirectory, capsuleDirectory: fixture.derivedDirectory, catalogDirectory: fixture.catalogDirectory,
+      identity, op: "status", view });
+    assert.equal(status.ok, true, JSON.stringify(status));
+    if (status.ok) {
+      assert.equal((status.result as any).readiness.raw, "ready");
+      assert.equal((status.result as any).requestedView.eventCut, view.eventCut);
+      assert.equal((status.result as any).indexedView.eventCut, view.eventCut);
+    }
   } finally { fixture.cleanup(); }
 });
 
@@ -185,6 +239,15 @@ test("append restart keeps a cursor generation pinned and real fork views isolat
     appendFileSync(mainPath, line("b3", "b2", `${phrase} main appended`));
     await ingestMain(); await ingestFork();
     const fork = await pin("fork", "s2", "c2"), newMain = await pin("main", "s1", "b3");
+    const lagging = await run({ v: 1, searchDirectory, capsuleDirectory, catalogDirectory, identity: searchIdentity,
+      op: "status", view: newMain });
+    assert.equal(lagging.ok, true, JSON.stringify(lagging));
+    if (lagging.ok) {
+      assert.equal((lagging.result as any).readiness.raw, "partial");
+      assert.equal((lagging.result as any).indexedView.eventCut, oldMain.eventCut);
+      assert.equal((lagging.result as any).requestedView.eventCut, newMain.eventCut);
+      assert.equal((lagging.result as any).error, "search-v3-index-lag");
+    }
     await derive(fork);
     const forkCapsules = await executeCapsuleRequest({ v: 1, derivedDirectory: capsuleDirectory, catalogDirectory, identity: capsuleIdentity,
       op: "capsulePage", view: fork, limit: 12 });
@@ -213,8 +276,17 @@ test("append restart keeps a cursor generation pinned and real fork views isolat
       const continued = await run({ v: 1, searchDirectory, capsuleDirectory, catalogDirectory, identity: searchIdentity,
         op: "range", view: fork, limit: 2, cursor: (chronology.result as any).nextCursor });
       assert.equal(continued.ok, true, JSON.stringify(continued));
-      if (continued.ok) assert.deepEqual([...(chronology.result as any).items, ...(continued.result as any).items]
-        .map((item: any) => item.handle.source.entryId), ["a", "c1", "c2"]);
+      if (continued.ok) {
+        const all = [...(chronology.result as any).items, ...(continued.result as any).items];
+        assert.deepEqual(all.map((item: any) => item.handle.source.entryId), ["a", "c1", "c2"]);
+        for (const item of all) {
+          assert.equal(isSearchV3Handle(item.handle), true);
+          const exact = await run({ v: 1, searchDirectory, capsuleDirectory, catalogDirectory, identity: searchIdentity,
+            op: "recall", view: fork, handle: item.handle, decodedStart: item.handle.source.decodedUtf16.start, decodedLength: 1 });
+          assert.equal(exact.ok, true, JSON.stringify(exact));
+          if (exact.ok) assert.equal((exact.result as any).exact, true);
+        }
+      }
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

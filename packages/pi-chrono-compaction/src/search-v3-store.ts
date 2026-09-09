@@ -4,6 +4,7 @@ import { resolve, join } from "node:path";
 import {
   SEARCH_V3_LIMITS,
   SEARCH_V3_SCHEMA_VERSION,
+  isSearchV3Handle,
   isSearchV3Request,
   type SearchV3Filters,
   type SearchV3Handle,
@@ -106,12 +107,16 @@ function terms(text: string): string[] {
     .flatMap(value => [value.toLowerCase(), ...value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[_./:@+\-]+|\s+/).map(part => part.toLowerCase())])
     .filter(value => value.length >= 2))];
 }
+function normalizePath(value: string): string {
+  const normalized = value.trim().replaceAll("\\", "/").replace(/\/{2,}/g, "/").replace(/\/$/, "").toLowerCase();
+  return normalized || "/";
+}
 function paths(text: string): string[] {
-  const found = text.match(/(?:\.?\.?\/|\/)[\w@.+\-~]+(?:\/[\w@.+\-~]+)+|[\w@.+\-]+(?:\/[\w@.+\-]+)+/g) ?? [];
-  return [...new Set(found.map(value => value.trim().replaceAll("\\", "/").replace(/\/{2,}/g, "/").replace(/\/$/, "").toLowerCase()))].slice(0, 64);
+  const found = text.match(/(?:[A-Za-z]:[\\/]|\.?\.?[\\/]|\/)?[\w@.+\-~]+(?:[\\/][\w@.+\-~]+)+/g) ?? [];
+  return [...new Set(found.map(normalizePath))].slice(0, 64);
 }
 function identifiers(text: string): string[] {
-  return [...new Set(text.match(/\b(?:[a-f0-9]{7,64}|[A-Za-z_$][A-Za-z0-9_$.-]{4,127})\b/g) ?? [])].slice(0, 128);
+  return [...new Set((text.match(/\b(?:[a-f0-9]{7,64}|[A-Za-z_$][A-Za-z0-9_$.-]{4,127})\b/g) ?? []).map(value => value.toLowerCase()))].slice(0, 128);
 }
 function capsuleMetadata(envelope: ReducerEnvelope): Active {
   const alternative = envelope.alternatives[0]!, exact = alternative.protectedCues.map(item => item.exactText).join("\n");
@@ -224,7 +229,6 @@ function ftsQuery(query: string): string | undefined {
   const values = terms(query).filter(value => value.length >= 2).slice(0, 12);
   return values.length ? values.map(value => `"${value.replaceAll('"', '""')}"`).join(" OR ") : undefined;
 }
-function normalizePath(value: string): string { return value.trim().replaceAll("\\", "/").replace(/\/{2,}/g, "/").replace(/\/$/, "").toLowerCase() || "/"; }
 function viewBoundsSql(view: SearchV3View, alias = "d"): { sql: string; values: SqlValue[] } {
   const clauses = view.segments.map(() => `(${alias}.segment=? AND ${alias}.eventSeq<=?)`);
   return { sql: ` AND (${clauses.join(" OR ")})`, values: view.segments.flatMap(item => [item.segment, item.cut]) };
@@ -236,20 +240,59 @@ function filterSql(filters: SearchV3Filters | undefined, alias = "d"): { sql: st
   if (filters?.shardKeys?.length) { clauses.push(`${alias}.shardKey IN (${filters.shardKeys.map(() => "?").join(",")})`); values.push(...filters.shardKeys); }
   if (filters?.toolNames?.length) { clauses.push(`${alias}.toolName IN (${filters.toolNames.map(() => "?").join(",")})`); values.push(...filters.toolNames); }
   if (filters?.error !== undefined) { clauses.push(`${alias}.error=?`); values.push(filters.error ? 1 : 0); }
-  if (filters?.path !== undefined) { clauses.push(`${alias}.paths LIKE ?`); values.push(`%${normalizePath(filters.path)}%`); }
-  if (filters?.identifier !== undefined) { clauses.push(`lower(${alias}.identifiers) LIKE ?`); values.push(`%${filters.identifier.toLowerCase()}%`); }
+  if (filters?.path !== undefined) {
+    const path = normalizePath(filters.path);
+    clauses.push(`(instr(' ' || ${alias}.paths || ' ', ' ' || ? || ' ')>0 OR instr(' ' || ${alias}.paths || ' ', '/' || ? || ' ')>0)`);
+    values.push(path, path.replace(/^\/+/, ""));
+  }
+  if (filters?.identifier !== undefined) {
+    clauses.push(`instr(' ' || lower(${alias}.identifiers) || ' ', ' ' || ? || ' ')>0`);
+    values.push(filters.identifier.trim().toLowerCase());
+  }
   return { sql: clauses.length ? ` AND ${clauses.join(" AND ")}` : "", values };
 }
 interface Candidate { row: SqlRow; score: number; evidence: "raw-source" | "generated-cue"; start?: number; end?: number; reason: string }
+interface VerifiedMatch { start: number; end: number; text: string }
+function escapedLiteral(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function firstMatch(text: string, patterns: readonly string[], caseSensitive: boolean): VerifiedMatch | undefined {
+  for (const source of patterns) {
+    const found = compileRegex(escapedLiteral(source), caseSensitive).exec(text);
+    if (found) return { start: found.index, end: found.index + found[0].length, text: found[0] };
+  }
+  return undefined;
+}
+function relevance(queryText: string, searchable: string, evidence: Candidate["evidence"], caseSensitive: boolean): number {
+  const phrase = firstMatch(searchable, [queryText], caseSensitive) ? 500 : 0;
+  const matchedTerms = terms(queryText).filter(term => firstMatch(searchable, [term], caseSensitive)).length;
+  return (evidence === "raw-source" ? 1_000 : 100) + phrase + matchedTerms * 25;
+}
+function boundedRegex(source: string): boolean {
+  // A conservative supported subset: finite-width expressions without
+  // lookarounds, backreferences, or unbounded/braced repetition.
+  return !/(^|[^\\])(?:[+*{]|\\[1-9])|\(\?/u.test(source);
+}
+function windowRegexMatch(source: string, text: string, decodedStart: number, decodedEnd: number,
+  sourceStart: number, sourceEnd: number, caseSensitive: boolean): VerifiedMatch | undefined {
+  const prefix = decodedStart > sourceStart ? "\u0000" : "", suffix = decodedEnd < sourceEnd ? "\u0000" : "";
+  const window = prefix + text + suffix, pattern = compileRegex(source, caseSensitive, true);
+  for (let found = pattern.exec(window); found; found = pattern.exec(window)) {
+    const start = found.index - prefix.length, end = start + found[0].length;
+    if (start >= 0 && end <= text.length) return { start, end, text: found[0] };
+    if (found[0].length === 0) pattern.lastIndex++;
+  }
+  return undefined;
+}
 function cursorEncode(value: Record<string, unknown>): string { return Buffer.from(canonicalJson(value)).toString("base64url"); }
 function cursorDecode(cursor: string): Record<string, unknown> { try { const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")); if (!value || typeof value !== "object") throw 0; return value; } catch { return fail("search-v3-cursor-invalid"); } }
 function handle(request: SearchV3Request, view: SearchV3View, generation: number, row: SqlRow, candidate?: Candidate): SearchV3Handle {
   const source = JSON.parse(str(row, "source")) as ScopedBodySourceRef;
-  return { v: 1, searchStoreKey: request.identity.storeKey, capsuleStoreKey: request.identity.capsule.storeKey,
+  const value: SearchV3Handle = { v: 1, searchStoreKey: request.identity.storeKey, capsuleStoreKey: request.identity.capsule.storeKey,
     catalogStoreKey: request.identity.capsule.catalogStoreKey, catalogGeneration: request.identity.capsule.catalogGeneration,
     sessionKey: request.identity.capsule.sessionKey, branchKey: view.branchKey, eventCut: view.eventCut, indexGeneration: generation, source,
     evidence: candidate?.evidence ?? (str(row, "provenance") === "generated" ? "generated-cue" : "raw-source"),
     ...(candidate?.start === undefined ? {} : { decodedUtf16: { start: candidate.start, end: candidate.end! } }) };
+  if (!isSearchV3Handle(value)) fail("search-v3-handle-invalid");
+  return value;
 }
 function pinnedGeneration(store: Store, request: Extract<SearchV3Request, { op: "query" | "range" }>, queryHash: string): {
   generation: number; offset: number; scanOffset: number; afterEventSeq: number; afterDescriptor: number; afterSourceKey: string; afterChunkIndex: number;
@@ -275,10 +318,12 @@ function hit(request: Extract<SearchV3Request, { op: "query" }>, candidate: Cand
     kind: str(candidate.row, "kind"), provenance: str(candidate.row, "provenance"), cue: snippet, score: candidate.score, scoreReason: candidate.reason,
     exactSourceAvailable: true, independentEvidence: candidate.evidence === "raw-source" };
 }
-function compileRegex(query: string, caseSensitive = false): RegExp { try { return new RegExp(query, caseSensitive ? "u" : "iu"); } catch { return fail("search-v3-query-invalid"); } }
+function compileRegex(query: string, caseSensitive = false, global = false): RegExp {
+  try { return new RegExp(query, `${caseSensitive ? "" : "i"}u${global ? "g" : ""}`); } catch { return fail("search-v3-query-invalid"); }
+}
 function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store): Record<string, unknown> {
-  if ((request.filters?.currentState !== undefined && request.filters.currentState !== "any") || request.filters?.unresolved !== undefined
-    || request.filters?.kinds !== undefined) fail("search-v3-filter-unsupported");
+  if ((request.filters?.currentState !== undefined && request.filters.currentState !== "any") || request.filters?.unresolved !== undefined)
+    fail("search-v3-filter-unsupported");
   const mode = request.mode ?? "ranked", filter = filterSql(request.filters), bounds = viewBoundsSql(request.view);
   if (mode === "regex" && !request.scan) fail("search-v3-scan-required");
   const match = request.scan || mode === "regex" ? undefined : ftsQuery(request.query);
@@ -286,30 +331,35 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
   const queryHash = sha256(canonicalJson({ op: "query", view: request.view, query: request.query, mode,
     caseSensitive: request.caseSensitive ?? false, filters: request.filters ?? null, scan: request.scan ?? null }));
   const pin = pinnedGeneration(store, request, queryHash), lineage = LINEAGE(request.view), maximum = SEARCH_V3_LIMITS.candidates;
+  const caseSensitive = request.caseSensitive ?? false;
   let candidates: Candidate[] = [], scanOffset = pin.scanOffset, scanComplete = true;
   let scanLast = { eventSeq: pin.afterEventSeq, descriptor: pin.afterDescriptor, sourceKey: pin.afterSourceKey, chunkIndex: pin.afterChunkIndex };
+  let regexIsBounded = false;
   if (match) {
     if (mode === "ranked") {
       const cueRows = store.rows(`SELECT d.* FROM cue_fts JOIN documents d ON d.sourceKey=cue_fts.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE cue_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`,
         maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
       if (cueRows.length > maximum) fail("search-v3-query-budget");
-      candidates.push(...cueRows.map(row => ({ row, score: 1_000, evidence: "generated-cue" as const, reason: "bounded capsule cue lexical match" })));
+      candidates.push(...cueRows.map(row => ({ row, score: relevance(request.query, str(row, "cue"), "generated-cue", caseSensitive),
+        evidence: "generated-cue" as const, reason: "bounded capsule cue relevance" })));
     }
     const rawRows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`,
       maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
     if (rawRows.length > maximum) fail("search-v3-query-budget");
-    const literalPattern = mode === "literal" ? compileRegex(request.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), request.caseSensitive ?? false) : undefined;
     for (const row of rawRows) {
-      const text = str(row, "text"), at = literalPattern ? literalPattern.exec(text)?.index ?? -1 : -1;
-      if (mode !== "ranked" && at < 0) continue;
-      const found = at < 0 ? terms(request.query).map(term => text.toLowerCase().indexOf(term)).find(index => index >= 0) ?? 0 : at;
-      candidates.push({ row, score: 1_000_000, evidence: "raw-source", start: num(row, "decodedStart") + found,
-        end: num(row, "decodedStart") + found + Math.max(1, request.query.length),
-        reason: mode === "literal" ? "verified exact raw phrase" : "raw lexical match" });
+      const text = str(row, "text");
+      const found = mode === "literal" ? firstMatch(text, [request.query], caseSensitive)
+        : firstMatch(text, [request.query, ...terms(request.query).sort((a, b) => b.length - a.length)], caseSensitive);
+      if (mode === "literal" && !found) continue;
+      candidates.push({ row, score: relevance(request.query, text, "raw-source", caseSensitive), evidence: "raw-source",
+        ...(found ? { start: num(row, "decodedStart") + found.start, end: num(row, "decodedStart") + found.end } : {}),
+        reason: mode === "literal" ? "verified exact raw phrase" : found ? "verified raw lexical relevance" : "bounded raw lexical candidate" });
     }
   } else if ((mode === "regex" || mode === "literal") && request.scan) {
-    const source = mode === "literal" ? request.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : request.query;
-    const started = Date.now(), pattern = compileRegex(source, request.caseSensitive ?? false);
+    const source = mode === "literal" ? escapedLiteral(request.query) : request.query;
+    compileRegex(source, caseSensitive);
+    regexIsBounded = mode === "literal" || boundedRegex(source);
+    const started = Date.now();
     const rows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM chunks c JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} AND (d.eventSeq>? OR (d.eventSeq=? AND (d.descriptor>? OR (d.descriptor=? AND (d.sourceKey>? OR (d.sourceKey=? AND c.chunkIndex>?)))))) ORDER BY d.eventSeq,d.descriptor,d.sourceKey,c.chunkIndex LIMIT ?`,
       request.scan!.maxChunks, lineage, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, pin.afterEventSeq, pin.afterEventSeq, pin.afterDescriptor,
       pin.afterDescriptor, pin.afterSourceKey, pin.afterSourceKey, pin.afterChunkIndex, request.scan!.maxChunks);
@@ -318,10 +368,14 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
       if (Date.now() - started >= request.scan!.maxMs) { scanComplete = false; break; }
       consumed++;
       scanLast = { eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"), chunkIndex: num(row, "chunkIndex") };
-      const found = pattern.exec(str(row, "text"));
+      const sourceRef = JSON.parse(str(row, "source")) as ScopedBodySourceRef;
+      const found = windowRegexMatch(source, str(row, "text"), num(row, "decodedStart"), num(row, "decodedEnd"),
+        sourceRef.decodedUtf16.start, sourceRef.decodedUtf16.end, caseSensitive);
       if (found) {
-        candidates.push({ row, score: 1_000_000, evidence: "raw-source", start: num(row, "decodedStart") + found.index,
-          end: num(row, "decodedStart") + found.index + found[0].length, reason: mode === "literal" ? "explicit bounded exact literal scan" : "explicit bounded raw regex scan" });
+        candidates.push({ row, score: relevance(request.query, str(row, "text"), "raw-source", caseSensitive), evidence: "raw-source",
+          start: num(row, "decodedStart") + found.start, end: num(row, "decodedStart") + found.end,
+          reason: mode === "literal" ? "explicit bounded exact literal scan"
+            : regexIsBounded ? "explicit bounded supported-regex scan" : "explicit bounded regex-window match" });
         if (candidates.length >= (request.limit ?? SEARCH_V3_LIMITS.page)) { scanComplete = false; break; }
       }
     }
@@ -331,7 +385,8 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
   candidates.sort((a, b) => b.score - a.score || num(b.row, "eventSeq") - num(a.row, "eventSeq") || num(a.row, "descriptor") - num(b.row, "descriptor"));
   for (const candidate of candidates) {
     const key = str(candidate.row, "sourceKey"), prior = bySource.get(key);
-    if (!prior || candidate.evidence === "raw-source" && prior.evidence !== "raw-source") bySource.set(key, candidate);
+    if (!prior || candidate.score > prior.score || candidate.score === prior.score && candidate.evidence === "raw-source" && prior.evidence !== "raw-source")
+      bySource.set(key, candidate);
   }
   const diverse = [...bySource.values()], limit = request.limit ?? SEARCH_V3_LIMITS.page;
   const selected = diverse.slice(pin.offset, pin.offset + limit).sort((a, b) => num(a.row, "eventSeq") - num(b.row, "eventSeq") || num(a.row, "descriptor") - num(b.row, "descriptor"));
@@ -339,11 +394,16 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
   const nextCursor = hasMore ? cursorEncode({ storeKey: request.identity.storeKey, viewHash: VIEW(request.view), queryHash, generation: pin.generation,
     offset: nextOffset < diverse.length ? nextOffset : 0, scanOffset, afterEventSeq: scanLast.eventSeq, afterDescriptor: scanLast.descriptor,
     afterSourceKey: scanLast.sourceKey, afterChunkIndex: scanLast.chunkIndex }) : undefined;
-  const exhaustive = request.scan !== undefined || mode !== "literal";
+  const exhaustiveRoute = Boolean(request.scan) && (mode === "literal" || regexIsBounded);
+  const coverage = !request.scan ? (mode === "literal" ? "indexed-token-candidates" : "indexed-cue-and-token-candidates")
+    : mode === "literal" ? "explicit-bounded-literal-scan"
+    : regexIsBounded ? "explicit-bounded-supported-regex-scan" : "explicit-bounded-regex-windows-nonexhaustive";
   return { indexGeneration: pin.generation, branchKey: request.view.branchKey, eventCut: request.view.eventCut, hits: selected.map(item => hit(request, item, pin.generation)),
-    ...(nextCursor ? { nextCursor } : {}), complete: exhaustive && !hasMore, exhaustive,
-    coverage: request.scan ? "explicit-bounded-raw-scan" : mode === "literal" ? "indexed-token-candidates" : "indexed-cue-and-token-candidates",
-    scan: request.scan ? { explicit: true, complete: scanComplete, chunksScanned: scanOffset - pin.scanOffset } : undefined,
+    ...(nextCursor ? { nextCursor } : {}), complete: exhaustiveRoute && !hasMore, exhaustive: exhaustiveRoute && !hasMore, coverage,
+    scan: request.scan ? { explicit: true, complete: scanComplete, chunksScanned: scanOffset - pin.scanOffset,
+      patternSupport: mode === "literal" || regexIsBounded ? "bounded" : "window-only",
+      ...(mode === "regex" && !regexIsBounded ? { unsupported: "unbounded-regex-exhaustiveness" } : {}),
+      overlapUnits: SEARCH_V3_LIMITS.queryUnits - 1 } : undefined,
     cache: { hit: false, bytes: 0, limitBytes: SEARCH_V3_LIMITS.cacheBytes }, metrics: { candidates: diverse.length, sqliteStatements: store.statements } };
 }
 async function recall(request: Extract<SearchV3Request, { op: "recall" }>, store: Store, executor: CapsuleExecutor, sourceBudget: { bytes: number }): Promise<Record<string, unknown>> {
@@ -354,6 +414,7 @@ async function recall(request: Extract<SearchV3Request, { op: "recall" }>, store
   const key = sourceKey(h.source), row = store.get("SELECT d.* FROM documents d JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE d.sourceKey=? AND d.eventSeq<=? AND d.indexGeneration<=?",
     LINEAGE(request.view), key, h.eventCut, h.indexGeneration);
   if (!row || str(row, "source") !== canonicalJson(h.source)) fail("search-v3-handle-invalid");
+  const storedProvenance = str(row!, "provenance");
   const requestedStart = request.decodedStart ?? Math.max(h.source.decodedUtf16.start, (h.decodedUtf16?.start ?? h.source.decodedUtf16.start) - 256);
   const desired = request.decodedLength ?? Math.min(1024, h.source.decodedUtf16.end - requestedStart);
   const start = Math.max(h.source.decodedUtf16.start, Math.min(requestedStart, h.source.decodedUtf16.end));
@@ -363,7 +424,8 @@ async function recall(request: Extract<SearchV3Request, { op: "recall" }>, store
   const bytes = Buffer.from(String(result.data), "base64"), text = bytes.toString("utf16le");
   if (bytes.length !== length * 2 || text.length !== length) fail("search-v3-chunk-invalid");
   return { handle: h, source: h.source, decodedUtf16: { start, end: start + length }, text, exact: true,
-    independentEvidence: h.evidence === "raw-source", generatedRetrieval: h.evidence === "generated-cue", metrics: { sqliteStatements: store.statements } };
+    independentEvidence: storedProvenance !== "generated", generatedRetrieval: storedProvenance === "generated", storedProvenance,
+    metrics: { sqliteStatements: store.statements } };
 }
 function sources(request: Extract<SearchV3Request, { op: "sources" }>, store: Store): Record<string, unknown> {
   const generation = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation"), limit = request.limit ?? SEARCH_V3_LIMITS.page;
@@ -406,10 +468,25 @@ async function execute(request: SearchV3Request, store: Store, executor: Capsule
   if (!request.view) return { identity: request.identity, indexGeneration: generation, readiness: { cue: "view-required", raw: "view-required" },
     cache: { bytes: 0, limitBytes: SEARCH_V3_LIMITS.cacheBytes }, metrics: { sqliteStatements: store.statements } };
   const row = store.get("SELECT * FROM heads WHERE lineage=?", LINEAGE(request.view));
-  return { identity: request.identity, indexGeneration: generation, readiness: row ? { cue: num(row, "complete") ? "ready" : "partial", raw: num(row, "complete") ? "ready" : "partial",
-    cueReady: num(row, "cueReady"), rawReady: num(row, "rawReady"), excluded: num(row, "excluded"),
-    cursor: { afterEventSeq: num(row, "afterEventSeq"), afterDescriptor: num(row, "afterDescriptor"), active: row.active !== null } }
-    : { cue: "missing", raw: "missing", cueReady: 0, rawReady: 0, excluded: 0 }, metrics: { sqliteStatements: store.statements } };
+  if (!row) return { identity: request.identity, indexGeneration: generation,
+    requestedView: { branchKey: request.view.branchKey, eventCut: request.view.eventCut, hash: VIEW(request.view) },
+    indexedView: null, lag: { events: request.view.eventCut, present: true }, error: "search-v3-view-not-indexed",
+    readiness: { cue: "missing", raw: "missing", cueReady: 0, rawReady: 0, excluded: 0 }, metrics: { sqliteStatements: store.statements } };
+  const indexedView = (() => {
+    try { return JSON.parse(str(row, "view")) as SearchV3View; } catch { return fail("search-v3-checkpoint-corrupt"); }
+  })();
+  const compatible = extendsView(request.view, indexedView) || extendsView(indexedView, request.view);
+  const covered = compatible && num(row, "complete") === 1 && extendsView(indexedView, request.view);
+  const lagEvents = compatible ? Math.max(0, request.view.eventCut - indexedView.eventCut) : request.view.eventCut;
+  const error = !compatible ? "search-v3-indexed-view-incompatible" : covered ? undefined : "search-v3-index-lag";
+  return { identity: request.identity, indexGeneration: generation,
+    requestedView: { branchKey: request.view.branchKey, eventCut: request.view.eventCut, hash: VIEW(request.view) },
+    indexedView: { branchKey: indexedView.branchKey, eventCut: indexedView.eventCut, hash: VIEW(indexedView), complete: num(row, "complete") === 1 },
+    lag: { events: lagEvents, present: !covered }, ...(error ? { error } : {}),
+    readiness: { cue: covered ? "ready" : "partial", raw: covered ? "ready" : "partial",
+      cueReady: num(row, "cueReady"), rawReady: num(row, "rawReady"), excluded: num(row, "excluded"),
+      cursor: { afterEventSeq: num(row, "afterEventSeq"), afterDescriptor: num(row, "afterDescriptor"), active: row.active !== null } },
+    metrics: { sqliteStatements: store.statements } };
 }
 
 /** Direct executor for tests and the contained worker entry. */

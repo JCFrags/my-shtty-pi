@@ -115,8 +115,8 @@ function isFilters(value: unknown): value is SearchV3Filters {
     && (value.toolNames === undefined || smallStrings(value.toolNames, 16))
     && (value.error === undefined || typeof value.error === "boolean")
     && (value.unresolved === undefined || typeof value.unresolved === "boolean")
-    && (value.path === undefined || typeof value.path === "string" && value.path.length <= 512)
-    && (value.identifier === undefined || typeof value.identifier === "string" && value.identifier.length <= 256)
+    && (value.path === undefined || typeof value.path === "string" && value.path.trim().length > 0 && value.path.length <= 512)
+    && (value.identifier === undefined || typeof value.identifier === "string" && value.identifier.trim().length > 0 && value.identifier.length <= 256)
     && (value.currentState === undefined || ["current", "superseded", "any"].includes(String(value.currentState)));
 }
 export function isSearchV3Handle(value: unknown): value is SearchV3Handle {

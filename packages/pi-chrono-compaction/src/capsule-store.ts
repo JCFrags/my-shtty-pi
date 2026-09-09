@@ -482,8 +482,8 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
     let afterEventSeq = request.afterEventSeq ?? 0, afterDescriptor = request.afterDescriptor ?? 0;
     const limit = request.limit ?? CAPSULE_LIMITS.page, maximum = request.maxDescriptors ?? CAPSULE_LIMITS.deriveDescriptors;
     const sources: Array<{ source: ScopedBodySourceRef; provenance: "original" | "generated" | "mixed"; capsule?: ReducerEnvelope }> = [];
-    let scanned = 0, complete = false;
-    while (sources.length < limit && scanned < maximum) {
+    let scanned = 0, visitedEvents = 0, complete = false;
+    while (sources.length < limit && scanned < maximum && visitedEvents < CAPSULE_LIMITS.deriveEvents) {
       const page = await catalogCall(request, executor, budget, { op: "page", view: request.view,
         after: afterDescriptor > 0 ? Math.max(0, afterEventSeq - 1) : afterEventSeq, limit: 1 });
       const event = page.events?.[0] as CatalogEventShape | undefined;
@@ -491,7 +491,7 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
       if (afterDescriptor > 0 && event.seq !== afterEventSeq) fail("capsule-cursor-invalid");
       const blockResult = await catalogCall(request, executor, budget, { op: "blocks", view: request.view, eventSeq: event.seq, after: afterDescriptor, limit: 1 });
       const block = blockResult.blocks?.[0] as CatalogBlockShape | undefined;
-      if (!block) { afterEventSeq = event.seq; afterDescriptor = 0; continue; }
+      if (!block) { afterEventSeq = event.seq; afterDescriptor = 0; visitedEvents++; continue; }
       scanned++; afterEventSeq = event.seq; afterDescriptor = block.index + 1;
       const source = bodySource(request.identity, request.view, event, block);
       if (!source || store.get("SELECT state FROM markers WHERE eventSeq=? AND descriptor=? AND layer='chunks'", event.seq, block.index)?.state !== "ready") continue;
@@ -507,7 +507,7 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
       sources.push(item);
     }
     return { sources, next: { afterEventSeq, afterDescriptor }, complete,
-      readiness: { chunks: complete ? "ready" : "partial", scannedDescriptors: scanned }, metrics: { sqliteStatements: store.statements } };
+      readiness: { chunks: complete ? "ready" : "partial", scannedDescriptors: scanned, visitedEvents }, metrics: { sqliteStatements: store.statements } };
   }
   if (request.op === "capsulePage") {
     // Authorize the exact pinned view before touching the derived ancestry index.
