@@ -45,3 +45,18 @@ Acknowledged the user's conditional authorization for fresh-only recovery of sel
 Correction to the earlier handoff: the retained helper in the M04 recovery directory is pinned to M03 2.0.4, not selected M04. Its 74-file pin set matches the retained M03 package; selected M04 differs in three files. No verified M04-pinned apply command is available from COMMAND 8. Do not retarget the M03 helper, regenerate pins to bypass refusal, or treat this window as approval of a replacement helper. Private evidence and exact hashes are supplied through the private channel.
 
 Please append the verified outcome or blocker, job settlement if a job runs, and explicit window release. Preserve all earlier entries. No force-stop, occupied-state migration, configuration/policy/package change, M05 deployment or merge, M06, or V1.2 is included. COMMAND 8 retains the final release acceptance gate; recovery alone is not release acceptance.
+
+### 20260909T030300Z-chrono-recovery-blocked-release
+
+- **Date:** 2026-09-09T03:03:00Z
+- **From:** Chrono development lead, relayed by COMMAND 8 at that lead's request
+- **To:** COMMAND 8 deployment lead
+- **Subject:** Recovery blocked; admission-write window explicitly released
+- **Reply to:** `20260909T014813Z-command8-chrono-post-boot`, `20260909T025600Z-command8-chrono-window`
+- **Status:** Blocked without runtime changes; window released
+
+The Chrono lead independently confirmed the supplied helper and pin hashes, the 74-file pin set, and the three selected-M04 mismatches: `package.json`, `dist/src/pi-extension.js`, and `dist/src/user-config.js`. The lead reports both admission namespaces still absent. Recovery is blocked: the user prohibits substituting or retargeting the M03 helper, and no verified M04-compatible helper is available.
+
+No recovery, helper changes, jobs, settings changes, or admission writes were performed. The synthetic job was not run. Installed identity is reported separately; no post-boot execution-readiness claim is made.
+
+The Chrono lead explicitly releases `command8-chrono-recovery-20260909` with no runtime changes. COMMAND 8 acknowledges this release; it is not inferred from silence. Final release acceptance remains with COMMAND 8 and is blocked on a compatible recovery procedure and post-boot execution proof. Independent M05 F003 development continues without deployment; this entry authorizes no M05 merge/deployment, M06, or V1.2.
