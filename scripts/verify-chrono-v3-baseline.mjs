@@ -50,6 +50,17 @@ const EXPECTED = Object.freeze({
 });
 
 const correctionPaths = new Set([
+  "docs/chrono-v3/reviews/m04-recovery/ORIGINAL-SHA256SUMS",
+  "docs/chrono-v3/reviews/m04-recovery/README.md",
+  "docs/chrono-v3/reviews/m04-recovery/SHA256SUMS",
+  "docs/chrono-v3/reviews/m04-recovery/boot-recovery-m04.mjs",
+  "docs/chrono-v3/reviews/m04-recovery/helper-diff-vs-original.patch",
+  "docs/chrono-v3/reviews/m04-recovery/preparation-README.md",
+  "docs/chrono-v3/reviews/m04-recovery/publication-provenance.json",
+  "docs/chrono-v3/reviews/m04-recovery/receipts/synthetic-check-20260909T105702Z-3LuuzF2W.json",
+  "docs/chrono-v3/reviews/m04-recovery/recovery-profile.json",
+  "docs/chrono-v3/reviews/m04-recovery/synthetic-check-results.json",
+  "docs/chrono-v3/reviews/m04-recovery/synthetic-checks.sh",
   "packages/pi-chrono-compaction/test/worker-runtime-waiter-bounds.test.ts",
   "packages/pi-chrono-compaction/test/host-worker-admission-atomic.test.ts",
   ".gitignore",
