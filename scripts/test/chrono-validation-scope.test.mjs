@@ -126,9 +126,9 @@ test("broad validation is selected only by exact-head milestone dispatch", () =>
 }));
 
 test("root inventory permits only the exact M06 compiled-count change", () => withFixture((root) => {
-  const manifest = { piConsolidation: { products: [{ slug: "pi-chrono-compaction", compiledCount: 107 }] } };
+  const manifest = { piConsolidation: { products: [{ slug: "pi-chrono-compaction", compiledCount: 114 }] } };
   const before = commit(root, "package.json", JSON.stringify(manifest));
-  manifest.piConsolidation.products[0].compiledCount = 114;
+  manifest.piConsolidation.products[0].compiledCount = 118;
   const after = commit(root, "package.json", JSON.stringify(manifest));
   assert.equal(run(root, "push", { before, after }, after).status, 0);
   manifest.unrelated = true;

@@ -69,6 +69,15 @@ const correctionArtifactPaths = new Set([
   "packages/pi-chrono-compaction/test/history-search-adapter.test.ts",
   "packages/pi-chrono-compaction/test/search-lifecycle.test.ts",
   "packages/pi-chrono-compaction/test/search-v3-recovery.test.ts",
+  "packages/pi-chrono-compaction/src/session-rollout.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup-entry.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup-client.ts",
+  "packages/pi-chrono-compaction/dist/src/session-rollout.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup-entry.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup-client.js",
+  "packages/pi-chrono-compaction/test/worker-runtime-startup.test.ts",
   "docs/chrono-v3/reviews/M06-search-report.md",
   "docs/chrono-v3/reviews/m04-recovery/production-checksum-relationship.json",
   "docs/chrono-v3/reviews/m04-recovery/production-derivative-diff.patch",
@@ -310,8 +319,8 @@ const m05AuthorizedHistoricalHashChanges = new Map([
   ["dist/src/pi-extension.js", "42a25258b76bea32a68600ebf25a885b3e7c2a416d89b13cb55db49754967eb4"],
 ]);
 const m06AuthorizedHistoricalHashChanges = new Map([
-  ["package.json", "8c04418d5960f68f2b2df97bf5c33846622b0e4eb7251285bd1d5cfb45d9e20c"],
-  ["dist/src/pi-extension.js", "5badd48e33f4117da115082c0eaab1678284e793e55e1438f05f03b6b48133e7"],
+  ["package.json", "24b43f4ea7c1ec1ea898abdde834018426d14bac28d8421ad539d5ef8e584afd"],
+  ["dist/src/pi-extension.js", "d059190f64cf12126da96785881d53541c756f6d52c50ea5b4e21655106d7c31"],
   ["dist/src/user-config.js", "fc4e3a512a147192328f57aada22219469c16ec65c27b9ee019d1a57aa6f03c0"],
   ["dist/src/catalog-parser.js", "51f8410be3bf31b6a842e836d990c31c289a2073801a83999216ef35dd0e7f91"],
 ]);
@@ -337,10 +346,14 @@ const m06CompiledAdditions = new Set([
   "dist/src/search-v3-store.js",
   "dist/src/search-v3-worker-client.js",
   "dist/src/search-v3-worker-entry.js",
+  "dist/src/session-rollout.js",
+  "dist/src/worker-runtime-startup.js",
+  "dist/src/worker-runtime-startup-entry.js",
+  "dist/src/worker-runtime-startup-client.js",
 ]);
 const currentCompiledAdditions = new Set([...m05CompiledAdditions, ...m06CompiledAdditions]);
-const m06ChronoManifestRows = 115;
-const m06ChronoCompiledFiles = 114;
+const m06ChronoManifestRows = 119;
+const m06ChronoCompiledFiles = 118;
 const m05RuntimeGraphRoots = ["dist/src/capsule-worker-entry.js"];
 // This API is intentionally prepared for synthetic tests/integration only. It
 // is graph-checked here but does not become an active production entrypoint.
@@ -910,13 +923,13 @@ for (const product of products) {
     if (product.status !== "inactive") activeRuntimeGraph.add(path);
   }
   if (product.slug === "pi-chrono-compaction") {
-    for (const path of graphClosure([...m05RuntimeGraphRoots, "dist/src/search-v3-worker-entry.js"].map((entry) => join(packageRoot, entry)), false)) activeRuntimeGraph.add(path);
+    for (const path of graphClosure([...m05RuntimeGraphRoots, "dist/src/search-v3-worker-entry.js", "dist/src/worker-runtime-startup-entry.js"].map((entry) => join(packageRoot, entry)), false)) activeRuntimeGraph.add(path);
     for (const path of graphClosure(m05PreparedIntegrationGraphRoots.map((entry) => join(packageRoot, entry)), false)) preparedIntegrationGraph.add(path);
   }
   if (product.compiledCount !== undefined) {
     if (!Array.isArray(product.sourceEntrypoints) || product.sourceEntrypoints.length === 0) throw new Error(`${product.slug}: compiled source entrypoints are required`);
     const sourceEntrypoints = product.slug === "pi-chrono-compaction"
-      ? [...product.sourceEntrypoints, ...m05SourceGraphRoots, "src/search-v3-worker-entry.ts"]
+      ? [...product.sourceEntrypoints, ...m05SourceGraphRoots, "src/search-v3-worker-entry.ts", "src/worker-runtime-startup-entry.ts"]
       : product.sourceEntrypoints;
     const sourceClosure = graphClosure(sourceEntrypoints.map((entry) => join(packageRoot, entry)), true);
     for (const path of sourceClosure) sourceBuildGraph.add(path);

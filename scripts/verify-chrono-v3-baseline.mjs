@@ -27,7 +27,7 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values pin the 2.0.7 M06 draft repository candidate, not a deployment.
+// These values pin the 2.0.8 M06 repository candidate, not a deployment.
 // This verifies repository and optional live byte identity; it does not assert activation.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
@@ -35,15 +35,15 @@ const EXPECTED = Object.freeze({
   m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
-  sourceFiles: 115,
-  sourceTreeHash: "e3d94bafdaa16a436d80e213b5fdbc481ef6b647c9e9b12379c29059268dfb85",
-  distFiles: 114,
-  distTreeHash: "6bd84319b5452e5239711472016aa128ecf376aff4437be529280b087dda99f2",
-  entrypointHash: "5badd48e33f4117da115082c0eaab1678284e793e55e1438f05f03b6b48133e7",
-  m01PackageHash: "8c04418d5960f68f2b2df97bf5c33846622b0e4eb7251285bd1d5cfb45d9e20c",
-  m01LockHash: "1ff2555749a6d0e157ee4ad376c36f5c35146d1a5286e52d19ebbb915a8efbe1",
-  livePackageHash: "8c04418d5960f68f2b2df97bf5c33846622b0e4eb7251285bd1d5cfb45d9e20c",
-  deployedPackageHash: "8c04418d5960f68f2b2df97bf5c33846622b0e4eb7251285bd1d5cfb45d9e20c",
+  sourceFiles: 119,
+  sourceTreeHash: "551230f6faee5a78a7f46a1c42aab15fe6ce6aa8cbbc2afe3a489bbc0d6c869a",
+  distFiles: 118,
+  distTreeHash: "3e8a97e5d74ef1b7fa9dd089e1efc62ac9ecc5551b16b9af7a410c70f968b33c",
+  entrypointHash: "d059190f64cf12126da96785881d53541c756f6d52c50ea5b4e21655106d7c31",
+  m01PackageHash: "24b43f4ea7c1ec1ea898abdde834018426d14bac28d8421ad539d5ef8e584afd",
+  m01LockHash: "734a1f12a48b169720d1688ff6644bad04528161098f5f376b522ad9830462e9",
+  livePackageHash: "24b43f4ea7c1ec1ea898abdde834018426d14bac28d8421ad539d5ef8e584afd",
+  deployedPackageHash: "24b43f4ea7c1ec1ea898abdde834018426d14bac28d8421ad539d5ef8e584afd",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
   canonicalDeployedFiles: 291,
@@ -68,6 +68,15 @@ const correctionPaths = new Set([
   "packages/pi-chrono-compaction/test/history-search-adapter.test.ts",
   "packages/pi-chrono-compaction/test/search-lifecycle.test.ts",
   "packages/pi-chrono-compaction/test/search-v3-recovery.test.ts",
+  "packages/pi-chrono-compaction/src/session-rollout.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup-entry.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup-client.ts",
+  "packages/pi-chrono-compaction/dist/src/session-rollout.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup-entry.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup-client.js",
+  "packages/pi-chrono-compaction/test/worker-runtime-startup.test.ts",
   "docs/chrono-v3/reviews/M06-search-report.md",
   "docs/chrono-v3/reviews/m04-recovery/production-checksum-relationship.json",
   "docs/chrono-v3/reviews/m04-recovery/production-derivative-diff.patch",
@@ -562,7 +571,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.7") fail("package-version-changed");
+  if (packageJson.version !== "2.0.8") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");
