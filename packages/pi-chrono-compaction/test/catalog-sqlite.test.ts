@@ -124,7 +124,12 @@ test("owner-only directory and DB/WAL/SHM: reject unsafe modes, symlinks and har
       try {
         const target = join(f.dir, "synthetic-target"); writeFileSync(target, "", { mode: 0o600 });
         const path = f.path + suffix;
-        if (hazard === "mode") writeFileSync(path, "", { mode: 0o644 });
+        if (hazard === "mode") {
+          writeFileSync(path, "", { mode: 0o600 });
+          // Creation mode is filtered by umask; explicitly establish the unsafe fixture.
+          chmodSync(path, 0o644);
+          assert.equal(lstatSync(path).mode & 0o777, 0o644);
+        }
         if (hazard === "symlink") symlinkSync(target, path);
         if (hazard === "hardlink") linkSync(target, path);
         assert.throws(() => CatalogSqlite.open(f.path), code("catalog-storage-unsafe"));

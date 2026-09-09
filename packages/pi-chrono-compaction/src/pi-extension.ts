@@ -6,6 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
+import { createContainedCapsuleShadow } from "./capsule-shadow-worker.js";
+import type { CapsuleShadowTarget } from "./capsule-shadow.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
 import { createHistoryRuntimeTransport } from "./history-runtime-transport.js";
 import { runtimeHostStatus } from "./worker-runtime.js";
@@ -889,12 +891,37 @@ export interface HistoryRuntimeAdapters {
   readonly historyTransport?: HistoryWorkerTransport;
   /** Explicit isolated namespace for synthetic integration callers only. */
   readonly schedulerDirectory?: string;
+  /** Synthetic-only, synchronous prepared target. Caller retains the physical
+   * identity and actual pinned M04 view; this callback must not ingest or read
+   * source bodies. Requires an explicit isolated schedulerDirectory. */
+  readonly capsuleShadowTarget?: (context: ExtensionContext) => CapsuleShadowTarget | undefined;
 }
 export default function chronoCompactExtension(pi: ExtensionAPI, adapters: HistoryRuntimeAdapters = {}): void {
   const userConfigPath = defaultUserConfigPath();
   const loadedUserConfig = loadUserConfig(userConfigPath);
   let userConfig = loadedUserConfig.config;
   let userConfigWarning = loadedUserConfig.warning;
+  const capsuleShadow = createContainedCapsuleShadow({ schedulerDirectory: adapters.schedulerDirectory });
+  let capsuleTargetRefused = false;
+  const scheduleCapsuleShadow = (ctx: ExtensionContext): void => {
+    capsuleTargetRefused = false;
+    if (!adapters.schedulerDirectory || !adapters.capsuleShadowTarget) { capsuleShadow.disable(); return; }
+    try {
+      const target = adapters.capsuleShadowTarget(ctx);
+      if (target) capsuleShadow.schedule(target, true);
+      else capsuleShadow.cancel();
+    } catch {
+      capsuleShadow.cancel();
+      capsuleTargetRefused = true;
+    }
+  };
+  const capsuleStatusText = (): string => {
+    const status = capsuleShadow.status();
+    const readiness = status.readiness;
+    return `Capsule shadow: ${capsuleTargetRefused ? "target-refused" : status.state}. Synthetic prepared targets only; no model-facing change.`
+      + (readiness ? ` Capsules: ${readiness.capsules.state} (${readiness.capsules.ready}/${readiness.capsules.eligible}); chunks: ${readiness.chunks.state} (${readiness.chunks.ready}/${readiness.chunks.eligible}).` : "")
+      + (status.errorCode ? ` Safe refusal: ${status.errorCode}.` : "");
+  };
   const catalogShadow = new CatalogShadowScheduler(async (target, signal) => {
     const response = await runCatalogWorker({ v: 1, op: "ingestStep", ...target, branchKey: "pi-session", shardOrdinal: 0 }, {
       signal, slots: resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory,
@@ -1200,6 +1227,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_start", (_event, ctx) => {
+    capsuleShadow.cancel();
+    scheduleCapsuleShadow(ctx);
     catalogShadow.cancel();
     scheduleCatalogShadow(ctx);
     cancelIncrementalWork(true);
@@ -1215,6 +1244,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_switch", () => {
+    capsuleShadow.cancel();
     catalogShadow.cancel();
     cancelIncrementalWork(true);
     cancelShadowWork();
@@ -1224,6 +1254,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_fork", () => {
+    capsuleShadow.cancel();
     catalogShadow.cancel();
     cancelIncrementalWork(true);
     cancelShadowWork();
@@ -1233,6 +1264,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_shutdown", () => {
+    capsuleShadow.dispose();
     catalogShadow.dispose();
     retrievalFeedback.clear();
     feedbackAdmission.release();
@@ -1271,6 +1303,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    scheduleCapsuleShadow(ctx);
     scheduleCatalogShadow(ctx);
     scheduleIncrementalWork(ctx);
     const usage = ctx.getContextUsage();
@@ -1776,6 +1809,13 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
+  pi.registerCommand("chrono-capsules-status", {
+    description: "Show cached synthetic M05 capsule/chunk progress; no storage reads",
+    handler: async (_args, ctx) => {
+      if (ctx.hasUI) ctx.ui.notify(capsuleStatusText(), "info");
+    },
+  });
+
   pi.registerCommand("chrono-catalog-status", {
     description: "Show local M04 catalog shadow state; no database or archive scan",
     handler: async (_args, ctx) => {
@@ -1879,6 +1919,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
             ...(settings.legacyHistoryEditorEnabled ? ["Warning: the old history classifier setting is retired and cannot start a model call. Use the value-worker controls."] : []),
             `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
             `Source catalog shadow: ${settings.catalogShadowEnabled ? catalogShadow.status().state : "disabled"}; ingestion only, pending storage review`,
+            capsuleStatusText(),
             `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
             `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,
             `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,

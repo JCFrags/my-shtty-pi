@@ -1,0 +1,795 @@
+# M05 — Capsules and decoded chunks
+
+**Status: Unicode length-contract F003 correction passes focused checks; v6 publication CI pending. Not accepted or deployed.**
+
+## Unicode length-contract correction — pipeline v6
+
+Red `d091ec9` reproduces the actual begin/feed/finalize envelope mismatch:
+`https://example.com/` plus 200 emoji at `[5000,5420)` becomes `[5000,5390)`
+after a split at 5390, also with serialized restart. Selected text agrees in
+this fixture but cue metadata does not. Both red failure logs are retained.
+Fix `4c863f1` derives scanner bounds in UTF-16 units, not Unicode regex
+repetition counts. Follow-up `96e1eed` removes an unrequested path-grammar
+restriction found during parent self-check and consolidates the regression.
+The final recognizer grammar and per-recognizer consumption are unchanged.
+
+The longest ordinary match is an eight-unit scheme plus 240 payload code
+points, each at most two units: 488 UTF-16 units. Two units of boundary
+lookahead also cover the 490-unit over-limit prefix. With 128-unit right
+neighborhoods, unsettled context is 616 units; another 128 left-context units
+give 744-unit post-scan carry and a 1,232-unit scan trigger. Only these internal
+bounds increase. External worker memory, read, output and deadline limits do
+not change. See [ADR-005](../adr/ADR-005-event-capsule-schema-and-reducer-versioning.md).
+
+The existing parameterized regression includes 200 emoji, 228 at the payload
+cap, and 229 adjacent over-limit emoji. Splits before/inside/after surrogate
+and identifier boundaries, including 5390, and serialized restarts assert
+complete-envelope equality, exact cue coordinates and loss accounting. The
+229-emoji case preserves the existing `//example.com/` fallback `[5006,5020)`
+and one explicit bounded-recognition loss; it does not silently redefine the
+grammar. Small 257-unit feeds include Unicode and restart after each feed:
+carry stays below 1,232, is 744 after scans, consumption has at most nine offsets,
+and serialized state stays below 128 KiB. One reused persisted fixture compares
+the 228-emoji envelope with a split-5390 restart and exact `[5000,5476)` cue.
+
+Final writer scanner checks passed 22/22 in 1.01s and the named persisted check
+passed in 0.53s. Earlier affected contract/reducer checks passed 23/23 in 0.23s,
+and two immediate old-pipeline storage checks passed in 0.85s. Parent build and
+test compilation passed; scanner checks passed 22/22 in 0.96s and the persisted
+check passed in 0.48s. A trailing shell log-display command failed after those
+successful checks; the original output is retained and no tests were rerun for
+that display error. No review-only agents or broad local sequence were used.
+
+Pipeline/checkpoint v6 and family versions 7.0.0 (terminal/small-JSON) / 6.0.0
+(other affected families) segregate changed persisted semantics. Old v5 complete
+and partial derivation refuse before work; valid old read-only pins remain
+available without migration or relabeling. Package 2.0.5 and public schemas stay
+unchanged. Artifact `17f038f` retains 108 sources / 107 JS / 108 manifest entries;
+107 generated maps were preserved and byte-verified privately. Inventory hashes:
+- Source: `dfd225a2f973cd9fcbc34179b6353cf1bea84c43e7a7c07feb671bdee4077511`.
+- Dist: `5677fe18ad6bffe43e8bf4257932bcca6e33575c7f14e8f0ad6e0e0db3cb5e71`.
+- Manifest: `d10d15d901cec231a950f1e1e130ff72762449af098b616b6d2383efef548e1e`.
+
+Required final push/PR CI supplies comprehensive validation; its receipt belongs
+in PR #38 without a report-only push. Historical campaigns remain at their
+original revisions, not v6 measurements. Recovery ZIP transfer remains pending
+Q-1; recovery assets are unchanged, production apply disabled and window released.
+No acceptance, merge, deployment, M06 or production action is authorized.
+
+## Historical v5 evidence
+
+Head `9a2e34753abda9869bf6884052a746009bf52738` passed push 34363562391 and
+PR 34363566084, each 8/8 checks, 635 tests once and 58 passing root phases.
+Root durations were 22m33s / 24m21s. The directing assistant accepted the
+per-recognizer consumption correction and exact-head CI, but withheld M05
+acceptance for the Unicode length mismatch corrected above. Receipt:
+https://github.com/JCFrags/my-shtty-pi/pull/38#issuecomment-5603969498.
+The following record remains historical, including its original internal bounds.
+
+## Identifier rescan correction — pipeline v5
+
+The actual streaming reducer reproduced the lead's nested URL finding before
+implementation: complete input yields `[5000,5211)`, but a split around 5568
+adds `/tail/path` at `[5201,5211)`. Red `71df39e` preserves the failure.
+Fix `318b4f7` records each ordinary recognizer's exclusive consumed end before
+cue-budget admission. Rescans cannot reinterpret its consumed suffix, including
+when the original match was recognized but omitted by the cue budget. This is
+not global overlap suppression: condition, negation and restriction recognizers
+remain independent. Source ordering and exact UTF-16 coordinates are unchanged.
+
+The existing small parameterized identifier regression now includes nested
+paths, splits 5567/5568/5569, serialized restarts and a cue-cap case. It asserts
+complete-envelope equality and the sole exact identifier coordinates. The
+existing storage fixture compares persisted bytes to a split-5568 restart.
+Small multi-chunk checks bound consumption to nine numeric offsets and retain
+the existing 512-unit post-scan carry, sub-768 scan trigger and sub-128 KiB
+serialized-state assertion. No match text is added to persisted consumption.
+
+Writer focused checks passed 38/38 (stream 0.93s, contracts/reducers 0.15s,
+storage round trip 0.53s, old-pipeline guards 0.85s). Parent stream checks passed
+22/22 in 0.87s and the storage round trip passed in 0.47s. Build passed.
+A preliminary worker check failed due to an unavailable native dependency in
+an ignored development copy and incorrectly positioned test-name filtering;
+that failed attempt remains retained. Copied dependencies are development
+convenience, not clean-install evidence; required CI supplies that evidence.
+
+Pipeline/checkpoint v5 and family versions 6.0.0 (terminal/small-JSON) / 5.0.0
+(other affected families) segregate changed persisted semantics. Old complete
+and partial derive requests refuse before work; valid old read-only pins remain
+valid. Public schemas, package 2.0.5 and resource limits do not change.
+Artifact `d7d3a0e` has source inventory SHA-256
+`e11f50d89473a01293c81f918615c0f2448ea2d00ec7706d26bb7a541ed3567a`,
+dist inventory `36fcb2a175480beb7e5fdf90e1fe5b3471ef6b46ce927fd6870a4a41422ebf81`,
+and manifest `3759b2fba5849981cbb54ebb42eb7752d16d6b1864009c72a8782ab8d302f4bb`.
+Counts remain 108 sources / 107 JS / 108 manifest entries; 107 maps preserved.
+
+No large campaigns or duplicate local broad sequence were run. Historical v4
+head `2151c7b` passed push 34343801148 and PR 34343803889; historical v3 scale
+evidence remains tied to `681993f` / `59402a8`, not v5 measurements. Required
+new CI results belong in the PR without report-only pushes or unchanged retries.
+The recovery preparation remains byte-unchanged and production apply disabled;
+its existing sanitized results and exact review assets were bundled privately
+for conversation transfer, without new tests or a production write window.
+
+## Historical v4 evidence
+
+The following record is retained with its original revision and limits.
+
+## Deferred ordinary-match correction — pipeline v4
+
+The directing assistant reproduced a missing 200-unit path at `[5000,5200)`:
+with a split at 5568, v3 deferred the match by its end while discarding its
+prefix. Red `c0709cb` reproduces the defect; fix `d2acff6` changes settlement
+to an exclusive start-coordinate frontier. A 256-unit conservative ordinary
+match bound plus `max(1-unit lookahead, 128-unit right context)` gives 384
+unsettled units. The unchanged 512-unit post-scan carry retains those starts
+and 128 units of left context. Settled matches can therefore render complete
+neighborhoods; unresolved ordinary matches are re-extracted rather than saved
+as provisional cues. Completed incremental cues share source-ordered admission
+before caps. No external budget or overlap constant was increased.
+
+The small parameterized path/long-URL regression compares full envelopes at
+splits 5567/5568/5569, with and without serialized restart, exact identifier
+coordinates and retained text. Test-only `0272229` adds 257-unit feeds with
+restart after every feed: carry stays below 768 between scans, is 512 after
+scans, and serialized state stays below 128 KiB. An existing persistence
+fixture confirms storage round-trip. Writer affected/immediate integrations
+passed 68/68 in 19.94s; parent stream/persistence checks passed 31/31 in 7.98s.
+Build and typecheck passed. These are focused checks, not whole-project or
+large-scale acceptance.
+
+Pipeline and checkpoint are v4; terminal/small-JSON families are 5.0.0 and other
+affected families 4.0.0. Old complete/partial derivation refuses before work;
+valid read-only pins retain their original identity. Package 2.0.5, derived
+layout 2 and public capsule/chunk/wire schemas 1 remain unchanged.
+Artifact commit `f27c6c9` retains 108 source files, 107 JS files and 108 manifest
+entries. Source inventory SHA-256:
+`1d4cf3a225fb0eb54d45074aa472fab8880fcf44a3a0deb4fca2df4cb35fd641`;
+dist inventory: `22d3a772079fb16db974b9bfaf2e8ba23fabf60114b07663b299b62ae8fa4376`;
+manifest: `01d6b645a815aa880fbe3114bfb042abb3992f1c43029e9f30fa4fb79593fa04`.
+All 107 generated maps were preserved and byte-verified privately.
+
+Under the standing owner direction in the [review instructions](../independent-review.md),
+no local full root/normal/native/heap sequence or 136 MiB/2,048-record campaign
+was repeated. Required final CI supplies the broad candidate checks. Prior v3
+campaigns at artifact `681993f` and delivery `59402a8` remain evidence of their
+original runtime and limits, not v4 measurements. v3 push 34310515546 and PR
+34310516994 passed 8/8, with roots 21m27s/18m35s; their receipt is retained in
+[comment 5595987036](https://github.com/JCFrags/my-shtty-pi/pull/38#issuecomment-5595987036).
+New CI results belong in the PR, without report-only pushes or unchanged retries.
+
+Separately, a preparation-only M04 recovery procedure is being returned through
+the private coordination channel. Its trust comes from accepted Git commit
+`dcd91924`, not newly trusted installed bytes. Original M03 assets remain
+unchanged; production apply is disabled and the write window remains released.
+Synthetic evidence cannot establish production readiness or COMMAND 8 release
+acceptance. No recovery apply, M05 merge/deployment, M06 or V1.2 is authorized.
+
+## Historical v3 evidence
+
+The following v3 development and validation record is preserved, not current
+v4 measurement or acceptance.
+
+## Remaining F003 correction — pipeline v3
+
+Red `799c99a` (integrated as `abff390`) reproduced six failures in capped
+ordering, persisted ordering, Unicode boundaries, malformed-literal starvation,
+and semantic version identity. Fix `170c4e6` (integrated as `2da5266`) settles
+ordinary and failure candidates through one source frontier before capped
+admission. Sorting an already capped result is not the correction. Pending
+candidates and overflow tracking remain bounded. Lexical boundaries use Unicode
+code points while source coordinates remain exact UTF-16 units, including split
+and lone surrogates. Failed partial literals cannot starve a later valid clause.
+
+`capsule-pure-v3` and checkpoint version 3 replace v2 for new derivation.
+Terminal and small-JSON families are 4.0.0; other affected families are 3.0.0.
+Package 2.0.5, public schemas, wire protocol, admission policy, and external
+budgets are unchanged. The fixed internal carry is 512 units: 384 unsettled
+scan units plus 128 units of left neighborhood. Old partial and completed
+pipelines refuse derivation before work; old read-only pins remain readable
+without migration, deletion, or relabeling. See proposed ADR-005.
+
+An independent read-only source review found no reproduced implementation or
+boundedness failure, but identified missing complete-envelope evidence on the
+actual persisted and contained routes. Test-only `21c8645` (integrated as
+`80ed6eb`) closes that coverage gap. Native and contained derivation/retrieval
+compare complete canonical envelope bytes and all alternatives against direct
+complete legal feeds, one-unit feeds, uneven feeds, and serialized restarts.
+The fixtures split a capped cue and an astral lexical character at the real
+32,768-unit production boundary. They include BMP/astral word boundaries,
+lone surrogates, repeated malformed literals, and a later valid 400-space
+failure clause. Coordinates, all selected cues, coverage, and omissions are
+compared, not only a cue subset. Parent verification passed all eight route
+tests. The earlier direct regression matrix also covers the exact unpadded
+mixed-cue example and long head, tail, and middle padding.
+
+Before the four route follow-up tests, parent typecheck, build, native probe,
+629/629 normal tests, and replay passed. Verifier/privacy regressions passed
+77/77. Final clean-root validation at `2129ca4` passed in 935.13 seconds,
+with exactly one 633/633 normal suite, replay, both original fixed-heap lanes,
+controlled native source rebuild/probe, reproducibility, privacy, all package
+checks, 17 pack checks, and 58 matched passing phase records. Accounting remains
+15 safe declarations / 14 direct executions / 1 wrapper-covered declaration and
+4 native declarations / 2 controlled executions. The inventory is 303 runtime,
+226 build inputs, 8 resources, 41 integration, 110 metadata, unexplained 0.
+Supplemental capsule/decoder checks passed 98/98 at each 512/1,024 MiB heap.
+The accepted once-through `test:normal` orchestration is unchanged. No historical
+v2 result is claimed as v3 evidence.
+
+Both final `capsule-pure-v3` campaigns passed under unchanged 30-minute campaign,
+30-second worker, 256 MiB per-process OS, 128 MiB V8, and 64 MiB native limits:
+
+| Campaign | Source bytes / initial derives | Calls / wall time | Evidence JSON SHA-256 |
+| --- | --- | --- | --- |
+| 136 MiB body / 2 records | 142,606,743 / 2,182 | 2,221 / 1,232,858 ms | `34721c455cd3c9da0cf91702816f84a32957dcd1e5ed8fecd061c44d9f2f2979` |
+| 2,048 records / 1 MiB body | 1,532,781 / 2,068 | 2,122 / 1,254,122 ms | `811f7a7ae3ae3e10463824b2c58c8706837e27d510615a69ec5a4c9b00841fe5` |
+
+Both verified exact first/late decoded ranges and terminal suffix, source hash
+and inode continuity with only one declared append, no-op, immutable old pins,
+actual fork ancestry, zero tickets/slots, inactive worker unit, and synthetic
+namespace cleanup. The designated giant capsule remains unsupported while its
+chunks are ready; this is not an inferred capsule success or 10k/50k acceptance.
+The parent and worker have separate OS limits, not a combined-memory ceiling.
+The script reports `osContainedByThisScript:false`; the external unit supplies
+the parent limit. Parent observed cgroup peaks were 213,549,056 and 51,064,832
+bytes; maximum worker cgroup peaks were 66,899,968 and 65,859,584 bytes. These
+are separately observed peaks, not a synchronized combined peak. Source counters
+exclude independent hash verification; process I/O includes startup and SQLite,
+and storage counters omit cache hits. Native allocation is configured, not
+separately measured. Capsule alternatives remain lossy, not semantic understanding.
+
+An initial giant launch failed before loading the campaign because the external
+unit used the wrong working directory. Its evidence is retained. The corrected
+launch explicitly sets the working directory; no deadline or budget increased.
+The red failures, initial route-test oversize-feed error, and dirty-document
+static-check refusal are also retained, not replaced by later passes.
+Final root log SHA-256:
+`b8b8edcdd7a67968f31aa648fed16e8d3accddac42755a75055a895148868e4a`;
+phase stderr SHA-256:
+`bd8767132c2eaedc8ef94bbcbfae535b1d5e92f8d278eb2c71594f08f0e05134`.
+
+Runtime artifact commit `681993f` contains 108 source files, 107 compiled JS
+files, and 108 manifest entries. Source inventory SHA-256:
+`af545351e204322c759b3934750ff4568763ac8fe7fa3843e32682d2a025ce59`;
+compiled inventory:
+`2a50c71089c9efbf46d19b9b52f48d40dfa1925d9f7abade4cf892d084ce3b38`;
+manifest:
+`199302beedc5e93bc7e1ea0067909762649546a51de4a315a6b2f089f7fe5358`.
+All 107 generated maps were preserved separately and byte-verified.
+
+### Separate post-boot recovery outcome
+
+COMMAND 8 coordination concluded with a blocker, not recovery. The retained
+helper pins M03, not selected accepted M04 `dcd91924`; its location and historical
+readiness report do not establish compatibility. No apply, retargeting, pin
+regeneration, ownership deletion, admission change, or synthetic job occurred.
+The reserved window was explicitly released. Protected-main PR #40 records the
+outcome, merged as `9d84e80127c5378ef3077835bdd2026f0a444e48`; main was not
+imported into this M05 branch. Installed identity does not prove this boot's
+execution readiness. Recovery and COMMAND 8 release acceptance remain blocked
+until a compatible authorized procedure and fresh execution/settlement evidence
+exist. This does not grant M05 acceptance, merge, deployment, M06, or V1.2.
+
+## Historical v2 evidence
+
+The following root correction and earlier campaign results are retained as
+historical evidence, not final v3 validation. Its one authorized publication pair
+at `ea334c2` passed all eight jobs on push 34301680934 and PR 34301684157,
+without retries. Root jobs took 21m22s and 21m53s respectively; each had 58
+matched passing phases and one 623-test suite. The receipt remains in
+[PR comment 5594900481](https://github.com/JCFrags/my-shtty-pi/pull/38#issuecomment-5594900481).
+The new substantive F003 publication pair has not yet been run.
+
+## Root validation orchestration correction
+
+The publication gate at `e180ae8d671f939245831dd46a44a8882c0236b3` did
+not complete on PR CI. These original results are retained, not replaced by
+local success or by the successful push:
+
+| Existing run / root job | First full suite | Normal wrapper | Fixed heaps | Overall root |
+| --- | --- | --- | --- | --- |
+| Push [34283211170](https://github.com/JCFrags/my-shtty-pi/actions/runs/34283211170), job `102254428802` | 623/623; 252.622 s | Second 623/623 plus normal harness; 243.079 s | Both lanes passed; 124.694 s | Passed |
+| PR [34283214409, attempt 1](https://github.com/JCFrags/my-shtty-pi/actions/runs/34283214409/attempts/1), job `102254450049` | 623/623; 274.846 s | Second 623/623 plus normal harness; 276.652 s | Both lanes passed; 151.439 s | Cancelled at the 25-minute job limit during later package checks |
+| PR [34283214409, attempt 2](https://github.com/JCFrags/my-shtty-pi/actions/runs/34283214409/attempts/2), job `102283584588` | 623/623; 270.950 s | Second 623/623 plus normal harness; 275.620 s | Started; no final result before cancellation | Cancelled at the same 25-minute job limit |
+
+Durations above use command and terminal-output timestamps, not only the test
+runner's internal timer. Attempt 1 completed the orchestrator build and portal
+syntax check after heaps, but not all later packages or the final root summary.
+Attempt 2 left the fixed-heap phase and all later phases unfinished. It is not a
+passing heap or root result. The normal harness reported success in all three
+runs; there was no separate timestamped replay phase in those logs.
+
+Before the correction, the interval from root verifier invocation to the first
+visible package-install output was 532.726 seconds on push, 648.024 seconds on
+PR attempt 1, and 666.747 seconds on PR attempt 2. That silent interval includes
+multiple checks and cannot be attributed to privacy alone. Native source builds
+took 65.514, 79.920, and 89.232 seconds respectively. No original attempt was
+recreated. The single authorized unchanged-head retry is preserved as attempt 2;
+no further unchanged retry is authorized.
+
+The confirmed duplicate is the direct `test` command followed by `test:normal`,
+whose exact declaration already runs `npm test` before the normal replay
+harness. The correction is limited to verifier execution, timing, regression
+coverage, and this report. It must retain both exact script-declaration checks,
+run the complete normal suite once through that wrapper, and retain native,
+reproducibility, heap, packaging, privacy, inventory, and ignored-directory gates.
+The implementation at `8f9ec53` runs four Chrono commands directly:
+`typecheck`, `build`, `test:normal`, and `test:fixed-heap`. The root report separates
+15 validated safe declarations, 14 direct commands, and one declaration covered
+through the successful normal wrapper. Four native declarations and two controlled
+native commands are reported separately. Static-only mode reports zero executed
+commands and zero wrapper-covered execution, not a runtime pass.
+
+Phase start/completion JSON records go to stderr with fixed phase/product labels,
+elapsed milliseconds, and passed/failed outcomes. They include privacy, packaging
+(including output validation), clean copying, dependencies, native build/probe,
+reproducibility, normal/replay, heaps, and other package checks. No new record
+includes source text, an exception message, or an absolute workspace path. Existing
+final machine-readable results remain on stdout, with explicit script accounting.
+
+Red-first regressions reproduced the duplicate invocation. Local secondary review
+also reproduced a packaging timer that reported success before output validation;
+a separate red regression and correction moved that validation inside the phase.
+The integrated verifier and privacy tests passed 77/77 (37 verifier, 40 privacy).
+Synthetic executor seams check ordering and failure propagation; the complete root
+run must separately establish actual toolchain, nested tests, replay, and heaps.
+
+All 356 tracked Chrono package files remain byte-identical to the starting head;
+package Git tree `51da47a808999b55b845ea0bfbb45baba2935a98` includes runtime
+source, compiled files, dependency contract, manifest, tests, and campaigns. The
+runtime remains `62de2e3e6f40409c4fdb3dac69218a64245b1eb4`. The corrected scale
+campaigns above/below retain their exact identities and are not rerun for this
+verifier-only correction.
+
+The complete clean root gate passed at `775ec028a2c2c23256c58a24bdbd206ae1741f0f`
+on 2026-09-09, 01:36:14–01:51:53 UTC: **939 seconds**, within the unchanged
+25-minute limit. The ignored `node_modules/verifier-regression` fixture was present
+during verification and removed afterward. The worktree remained clean. This is
+local evidence, not a CI pass or a same-machine before/after speedup measurement.
+
+| Corrected local phase | Seconds | Result |
+| --- | ---: | --- |
+| Publication privacy | 533.237 | Passed |
+| Chrono clean dependency install | 1.676 | Passed, scripts disabled |
+| Controlled native build / probe | 30.424 / 0.176 | Passed; allocation refusal verified |
+| Chrono typecheck / build / reproducibility | 2.771 / 3.018 / 0.004 | Passed; 107 compiled files reproduced |
+| Normal wrapper, including the full suite and replay | 227.169 | One 623/623 suite; small/medium replay hashes unchanged |
+| Fixed heaps | 116.113 | Both original 512/1024 MiB lanes passed |
+| Complete root | 939 | All packages and final summary passed |
+
+The final root summary reports 15/15 safe declarations, 14/14 direct commands,
+1/1 wrapper-covered declaration, 4/4 native declarations, 2/2 controlled native
+commands, 17/17 pack checks, and passing Project Glance tests/packaging. It retains
+303 runtime records, 226 build inputs, 8 resources, 41 prepared integration files,
+110 metadata documents, zero unexplained files, and the frozen M00 baseline.
+The timing data identifies privacy as the largest measured local phase; unlike
+the original logs, it now has an explicit boundary. No privacy work was removed.
+
+Retained local evidence SHA-256:
+
+- Complete root log: `e6a4c1cf8c2f32eb4aa471f2d361a07ab73941673f7db27954ee1c0ae5ae8638`.
+- Phase log: `e8619ea33911e53a953868bc93c28327bb24e9fbdd652460447f7f131d51b43f`.
+- 77-test verifier/privacy log: `a12205922c63eb973980a74d2de71ce9249281e9bfbc25411408e7e8a81dc187`.
+
+Only this report changes after the complete root run. The final static/privacy
+gates will check those publication bytes. One new push/PR CI pair is authorized;
+its actual results belong in the PR evidence, without a further documentation
+commit that triggers another pair. A new root timeout requires stopping and
+proposing a measured, narrowly scoped split, not retrying or extending deadlines.
+M05 remains unaccepted pending independent project-lead re-review.
+
+## Project-lead correction scope
+
+M04 remains accepted. The M05 project-lead review withheld code/storage approval
+for F001–F004: overlapping edge selection and coverage, meaningful protected
+source neighborhoods, partition-invariant recognition and versioning, and exact
+chunk-to-source identity binding. The existing catalog, immutable-segment, and
+contained-worker architecture remains required. PR #38 stays draft and unmerged.
+
+The results below describe the previously reviewed candidate unless a correction
+section states a later exact version and head. Local secondary review and passing
+CI did not constitute project-lead acceptance. Corrections must first reproduce
+the findings through final envelopes, persisted stores, and public worker routes.
+No production recovery, deployment, broad ingestion, or M06 is authorized.
+
+## F001–F004 correction evidence
+
+The F004 red regression commit `2f333da` precedes fix `51697bd`.
+Valid foreign chunks are rejected after binding the authorized source, artifact,
+manifest, encoded descriptor, contiguous coordinates, and segment/payload hashes.
+The parent independently passed 23 focused store, segment, and contained-worker
+tests after build and typecheck. A fresh read-only review of the frozen fix found
+no blocking defect. Same-view substitution has original failing worker evidence;
+additional sibling-worker coverage was added with the pipeline follow-up.
+
+The F001–F003 red regression commit `ffb5d41` precedes fix `bad4481`.
+The parent passed 29 focused reducer and native-persistence tests after build and
+typecheck. These include overlapping edge lengths around 4,096 and 8,192 units,
+final coverage, protected neighborhoods, long failure grammar, partition changes,
+and JSON checkpoint restarts. This is focused evidence, not a completed gate.
+
+Pipeline red commit `2424fbc` precedes fix `dfe1a20`. The current derivation
+identity is `capsule-pure-v2`. Old-identity completed and partial derives refuse
+before catalog calls or store preparation; durable database, immutable-object,
+and source bytes stay unchanged. Current identity cannot relabel an old physical
+store. Old read-only pins retain their original identity. There is no physical
+schema migration. The parent passed all 20 focused store, worker, and persistence
+tests after integrating this follow-up.
+
+The independent reducer review reproduced a remaining blocker: `exit code17a`
+and `exit code17_` incorrectly became failure cues. Sixteen malformed tokens
+could exhaust the cue cap and hide a later valid long failure clause. The
+original reducer worker corrected the trailing word boundary in `ec81738`, after
+red commit `3a04083` reproduced the failure in final envelopes and persisted
+retrieval. Its 32 focused tests passed across whole, one-unit, and uneven restart
+feeds. The integrated validation below includes this correction. Tiny caller
+budgets below the omission-marker length also safely refuse; this nonblocking
+limit is outside the default-budget
+correction scope.
+
+The read-only operating check at 2026-09-08T20:25:11Z matched all 96 installed
+M04 manifest rows and the selected alias/settings. Isolated workers remain ON,
+catalog shadow remains OFF, both admission namespaces are absent, and all four
+fixed units are inactive. A helper refusal was retained: the caller supplied the
+M04 package to a helper intentionally pinned to M03. Independent byte checks
+confirmed M04; no helper, package, configuration, or admission repair was made.
+Configured policy is not current-boot executable admission evidence.
+
+All earlier large campaigns outside the corrected-candidate section below remain
+historical. They are not corrected-pipeline scale evidence.
+
+## Corrected-candidate validation
+
+The frozen runtime and generated artifacts at
+`62de2e3e6f40409c4fdb3dac69218a64245b1eb4` passed the full root verification
+command within the unchanged 25-minute limit. This includes 303/303 runtime
+hashes, a clean scripts-disabled dependency installation, the controlled native
+SQLite build and allocation probe, typecheck, reproducible JavaScript, normal
+and replay tests, both original fixed-heap lanes, package checks, privacy, and
+the frozen M00 baseline. Copied development dependencies are not the basis for
+this clean-install result.
+
+The parent normal suite passed 623/623 tests, preserving the earlier 605 tests.
+Both explicit capsule-plus-decoder lanes passed 88/88 tests at 512 and 1,024 MiB
+V8 heap limits. Baseline-verifier tests passed 31/31 and privacy tests passed
+40/40; no assertion or deadline was weakened. The final tree has 108 source
+files, 107 JavaScript files, and 108 manifest rows. Only five capsule runtime
+files changed relative to the reviewed candidate.
+
+The recursive map-preservation check validated and moved all 107 generated maps
+to retained local evidence. An initial non-recursive glob failed its 107-file
+assertion before moving any map; that failure is retained. No generated map was
+deleted. This packaging correction did not change runtime bytes.
+
+The corrected contained smoke passed 42 calls in 20.913 seconds. The separate
+136 MiB campaign passed 2,221 calls in 1,212.487 seconds, with 2,182 initial
+derivation jobs. It used derived schema 2 and `capsule-pure-v2`, not the earlier
+schema-1 runtime. The generated source had 142,606,336 decoded UTF-16 units and
+142,606,743 bytes. Initial derivation charged at most 163,840 source bytes per
+job; that phase's process-read characters were 5,134,153,898. These are different
+counters, not a claim of source-only total I/O.
+
+The first small primary capsule retained the exact small body. The giant primary
+capsule retained the exact terminal suffix, including Unicode, CRLF, and a lone
+surrogate. First and late UTF-16LE chunk samples matched their expected hashes
+with zero source reads. Source hashes matched before and after the one permitted
+append; old pins and branch checks passed. The sampled capsule state was
+`unsupported` while chunk readiness was `ready`: this is not successful semantic
+reduction of an unsupported family.
+
+The giant parent peak RSS was 98,320,384 bytes and its observed cgroup peak was
+212,959,232 bytes. Maximum initial-derivation worker RSS was 78,159,872 bytes
+and worker cgroup peak was 66,330,624 bytes. The wrapper independently contained
+the parent at 256 MiB with swap disabled; each worker had its own 256 MiB limit
+and 128 MiB V8 heap. These are separate, not combined, limits. The 64 MiB native
+SQLite allowance is configured, not a separately measured allocation peak.
+Campaign and worker deadlines stayed at 30 minutes and 30 seconds. Tickets and
+slots settled to zero, the unit became inactive, and the disposable namespace
+was removed. No production namespace was used or removed.
+
+The corrected 2,048-record / 1 MiB campaign also passed: 2,122 calls in
+1,215.071 seconds, with 2,068 initial derivation jobs and 1,532,781 source bytes.
+The benchmark labels this parameterized case `giant`; it is representative
+many-record evidence, not its 10,000-record high-cardinality profile or a 50,000-
+record acceptance run. Initial derivation charged at most 163,840 source bytes
+per job and recorded 5,048,872,893 process-read characters. The append/no-op/branch
+phase needed 46 calls, 76.841 seconds, and 1,219,365,860 process-read characters:
+bounded source reads do not establish constant total fork work or total I/O.
+
+The many-record parent's peak RSS was 77,201,408 bytes and cgroup peak was
+51,249,152 bytes. The largest worker RSS was 78,213,120 bytes and cgroup peak
+was 65,339,392 bytes. The same independent containment and unchanged deadlines
+applied. Exact small-body, terminal-suffix and first/late chunk assertions,
+source immutability except the explicit append, old-pin/branch checks, and
+zero-ticket/slot settlement all passed. Its sampled capsule state was likewise
+`unsupported`, independently of ready exact chunks. Both campaigns sample exact
+recovery; neither is a full-body readback or a universal semantic-quality claim.
+
+Retained local evidence SHA-256 values (logs are not published):
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Full root gate | `59c4ccde511733d072122531551ccf8c0ae363caee51d24320d2fb69364b604b` |
+| Normal 623-test suite | `2a17a0dee7b595ea4a238c97355a88990cbbca49256030c7276618b1d9fcbce6` |
+| Capsule/decoder 512 MiB | `1a7212f40ec752d626efaa8fcdd571f297361488d18c50721c5901f7c26ab172` |
+| Capsule/decoder 1,024 MiB | `1103a8b98368d920b77f6b9e3432cc158b261eeaf640f708d24abf46e27ffd5e` |
+| 136 MiB campaign JSON | `938f957539b7752fc47e148b56fadf3426ca1bc5a4e3d89dffac095a37e549e8` |
+| 2,048-record campaign JSON | `fe12d5bed04f094d00e3508e1bafe45045681110fcece992f88aadc630efa07e` |
+| Baseline-verifier 31-test suite | `0d762cde17aa47f8b3e3d3ca48a0d47b03c5af16daa30bed54a79d943a839bcc` |
+| Privacy 40-test suite | `6d5f861b80fef68644b62a909ba5a3157c1fbaf04faa8e9393cc6ee34fbd68e6` |
+
+Final exact-head publication CI remains pending. M05 approval remains withheld
+until independent project-lead re-review; PR #38 must remain draft and unmerged.
+
+## Entry boundary
+
+M04 was accepted at `a13669b4a8a5afdf758cdfd357d01d9a68b5e5e7`.
+Metadata-only acceptance closeout `d2a00bf16d770071edf14347cbd0f44b4fffb3ec`
+passed local frozen/static/privacy verification and exact-head push
+[34235976242](https://github.com/JCFrags/my-shtty-pi/actions/runs/34235976242)
+and PR [34235980568](https://github.com/JCFrags/my-shtty-pi/actions/runs/34235980568)
+CI, attempt 1, eight passing jobs each. PR #36 was marked ready and merged only
+into `rebuild/chrono-memory-v3` at `49b63c88380ce02e335bf7142d49140242b4bb5c`.
+M05's dedicated `work/chrono-v3-m05-capsules` branch starts at that merge.
+
+This work does not deploy the acceptance metadata or M05. Installed private 2.0.5
+remains at `dcd91924dbcfc0c02489e04c3e163b33e2b08e86`: catalog shadow globally
+OFF, isolated workers ON. No settings, aliases, admission policy, or production
+sources are changed. The reconciled Chrono-only 2.0.4 rollback is verified, not
+exercised. The separate read-only post-reboot check found missing boot-bound
+admission state; historical execution evidence is not current-boot worker proof.
+No recovery is authorized or performed by this implementation work.
+
+M05 must return as a draft, unmerged PR for project-lead code/storage review.
+No model-facing authority, ordinary history/summary behavior change, M06, broad
+ingestion, or activation is included. The master charter remains byte-frozen.
+
+## Permission fixture correction
+
+`test/catalog-sqlite.test.ts` now explicitly applies `chmodSync(path, 0o644)`
+and asserts the observed 0644 mode before testing unsafe-file refusal. File
+creation mode alone is filtered by the caller's umask and did not establish
+the intended unsafe fixture under 077. Runtime safety checks are unchanged.
+
+After building and probing the pinned native dependency, the seven SQLite tests
+passed under each of explicit umask 077 and 022, including the native allocation
+refusal and actual subprocess crash test. This is focused fixture evidence, not
+M05 storage acceptance. Development dependencies were copied from the verified
+M04 worktree; this is not a claim of a fresh clean installation gate.
+
+## Initial compatibility and decoder evidence
+
+The initial M05 worktree passed typecheck and all 535 existing tests, followed
+by the normal small/medium deterministic replay harness. These checks preceded
+capsule/storage implementation and do not establish M05 acceptance.
+
+The shared `src/json-string-decoder.ts` extracts the existing M04 byte decoder
+without changing parser checkpoint version 1 or its six decoder state fields.
+It emits UTF-16 code units to a sink and retains no decoded output. The parent
+reviewed the extraction and ran all 17 parser/decoder tests after integration;
+all passed. The integrated worktree then passed typecheck and all 539 tests.
+The parent also repeated an exact baseline/extracted serialized checkpoint
+comparison at every byte across five synthetic fixtures, totaling 537 steps;
+valid escaped Unicode/CRLF/nested data and malformed input matched. The worker
+separately reported a matching comparison across 230 fixture steps.
+
+A generated 33,554,434-byte escaped Unicode string decoded to 8,388,608 UTF-16
+units in a subprocess with a 32 MiB V8 heap. Its largest serialized decoder
+state was 170 bytes, with a reusable 65,536-byte source buffer. The pinned hash
+was `07d02bc92e8618c10de61fd6157807852c57d5f281a3f2ed6090773a90669bb8`.
+This demonstrates bounded decoder state and V8-heap execution, not hard OS
+memory enforcement or a completed chunk storage pipeline.
+
+The worker retained one diagnosed test failure: an initial assertion expected
+inactive historical accumulator fields to be cleared. M04 retains those fields;
+the new test was corrected to require only pending-state fields to clear. Parser
+semantics were not changed to satisfy that assertion.
+
+## Contract and runtime scaffolding checks
+
+The parent verified the contract corrections with typecheck, build, and ten
+focused tests. Structural metadata now requires a caller-verified raw reference
+for each supplied field. A decoded body reference cannot establish metadata
+outside that body. Supported outcomes require structural facts; quoted phrases
+are not outcome evidence. These validators check structure, not raw-byte truth
+or pinned-view authorization.
+
+The bounded worker client and default-off shadow scheduler passed five focused
+tests after build. These cover request refusal before admission, wire limits,
+independent readiness, deferred scheduling, caller settlement before replacement,
+and sanitized failure without automatic retry. They do not establish real worker
+execution. A settled derive pass does not mean capsules or chunks are ready.
+
+## Initial independent reducer findings
+
+Independent read-only review of reducer candidate
+`1ad3c1e19ffaa10de3e2e087dd54b225b9eefd28` reproduced four defects despite
+14 passing pre-existing focused tests:
+
+- Negated or quoted “pending approval” produced a supported pending outcome.
+- Splitting a URL across legal feeds retained a prefix cue and changed output.
+- An internal text cap dropped content without a structured omission.
+- Structural metadata cited the decoded body instead of supporting raw bytes.
+
+The raw-fact contract and reducer corrections were integrated with focused
+regression tests. Parent verification then reproduced a remaining exact-boundary
+failure: splitting `pending approval tail` at unit 16 lost the cue. A separate
+settled scan offset corrected it. Exhaustive split positions, serialized restarts,
+one-unit feeds, and cue overflow checks were added. The overflow test initially
+failed because complete head coverage had no omission record; that was corrected
+without weakening the test or deadline. Original failures remain evidence.
+
+The integrated build and typecheck passed, followed by 54 focused capsule tests.
+One uses real M03-contained workers in an isolated synthetic scheduler namespace:
+derive, status, capsule page, and exact UTF-16 chunk retrieval passed with a
+256 MiB observed cgroup limit and bounded worker RSS/cgroup peak. Its tickets and
+slots settled to zero and its unit became inactive. Setup itself is not a claim
+of parent-process OS containment. An initial assertion incorrectly expected all
+capsule descriptors ready; M04 emits a bodyless block descriptor as well as its
+text-body descriptor. The corrected assertion requires one ready body and one
+unsupported descriptor, rather than weakening readiness or fabricating a body.
+
+The worker entry and contained shadow bridge are implemented. Production/Pi
+activation is still absent; callers supply an explicit durable physical identity
+and both catalog/derived routes. Storage has no automatic identity discovery.
+The normal suite at this integration point passed 593/593 tests. This does not
+supersede review findings or establish acceptance of later changes.
+
+## Synthetic extension status and retained review findings
+
+The extension now accepts an explicitly injected synthetic prepared target only
+with an explicit isolated scheduler directory. No production setting or automatic
+UUID discovery was added. Session start and settled events schedule deferred
+contained work; switch, fork, and shutdown cancel it. `/chrono-capsules-status`
+reports cached progress and independent readiness without storage reads. Normal
+extension loading remains disabled for capsule work. The caller must retain the
+physical identity and supply an actual pinned M04 view.
+
+Build/typecheck and 13 focused extension tests passed, including a real synthetic
+capsule pass, cached status, and zero model mutations. An initial command-list
+assertion failed because it lacked the new status command; the explicit expected
+list was updated. The original failure is retained.
+
+Independent storage review reproduced three defects despite 17 passing focused
+tests: global artifact pagination let sibling rows poison fork/old-pin pages;
+check-then-rename could replace a raced destination; and status recreated a
+missing publication lock. The correction adds an indexed lineage selection before
+the page limit, an existing-only validated read lock, and syscall-only
+`renameat2(RENAME_NOREPLACE)` publication. The latter requires the installed
+Python 3 standard library and libc capability described in ADR-003; it has no
+ordinary-rename, copy, or hard-link fallback. Independent re-review passed all
+three corrections and 15 focused compiled tests. It also reproduced a versioning
+regression: the new ancestry table still used the predecessor's declared derived
+schema 1. The separate correction sets only the derived physical schema to 2.
+A regression verifies fresh version 2 operation and refusal of version 1 requests
+and stores without changing database bytes. No migration, relabeling, or deletion
+is implemented.
+
+Independent adapter review found that a `NaN` aggregate budget bypassed numeric
+comparisons. The corrected public binding factory rejects any supplied budget
+that is not a positive safe integer before selecting or invoking an executor.
+Regression tests cover `NaN`, both infinities, zero, negative, and fractional
+values with exactly zero executor calls. The six focused adapter tests passed.
+
+The integrated correction build and typecheck passed, followed by 63 capsule
+tests under a 128 MiB V8 heap. A three-record, 1 MiB synthetic campaign then
+passed 43 contained calls in 20.951 seconds, including fork capsule ancestry and
+old-pin stability after sibling publication. Tickets and slots settled to zero
+and the worker unit became inactive. An initial campaign assertion confused the
+capsule `(eventSeq, descriptor)` cursor with the catalog's event-only cursor;
+the corrected request explicitly excludes all descriptors at the previous event.
+The failed assertion is retained. This small run did not contain its parent in
+an OS memory unit. No deployment or self-acceptance is claimed.
+
+## Bounded synthetic scale campaigns
+
+Two campaigns passed on frozen `4e319fe` runtime/script behavior, before the
+derived-schema discriminator changed from 1 to 2. They retain the original
+30-minute campaign limit and 30-second per-worker limit.
+
+| Input | Calls | Wall time | Parent cgroup peak / limit | Largest worker cgroup peak / limit |
+| --- | ---: | ---: | ---: | ---: |
+| 2 records, 136 MiB body | 2,221 | 1,174.837 s | 212,119,552 / 268,435,456 B | 64,311,296 / 268,435,456 B |
+| 2,048 records, 1 MiB body | 2,122 | 1,194.954 s | 50,659,328 / 268,435,456 B | 62,275,584 / 268,435,456 B |
+
+Each parent and its streaming generator ran in an external 256 MiB systemd unit
+with swap disabled; each sequential worker had a separate 256 MiB unit. Both
+parent V8 heaps were 128 MiB. These are separate enforced limits, not a measured
+single combined cgroup. The report correctly says the script does not contain
+itself; the external launcher supplies parent containment.
+
+The giant body contains 142,606,336 UTF-16 units in a 142,606,743-byte source.
+Initial derivation took 2,182 jobs, reading at most 163,840 source bytes per job.
+The 2,048-record run took 2,068 initial derive jobs with the same maximum. Both
+verified first and late exact UTF-16LE chunk samples, including Unicode, lone
+surrogates, and CRLF, and unchanged source hashes except one explicit append.
+Exact chunk retrieval read zero authoritative source bytes. Fork capsule pages
+matched M04 ancestry, and old-pin capsule hashes remained stable after sibling
+publication. Tickets and slots reached zero, units became inactive, and each
+owned synthetic namespace was removed after settlement.
+
+Source counters are not total I/O: initial derive process-read counters were
+5,104,020,271 and 5,019,194,338 characters respectively, including native SQLite,
+startup, and measurement reads. Native allocation has a configured 64 MiB cap;
+it was not separately measured. The combined append/noop/fork phase took 15 calls
+for the giant case and 46 for the 2,048-record case, including bounded resumable
+fork-prefix reuse. This is not a 50,000-record M05 claim or proof that complete
+fork reconstruction takes constant total work. Capsule readiness remains honestly
+unsupported where M04 emits bodyless descriptors; eligible text chunks are ready.
+
+After the schema correction, a fresh version 2 smoke campaign passed 43 calls in
+21.629 seconds with an externally enforced 256 MiB parent limit. Its first attempt
+refused because the campaign script still supplied literal schema 1. The script
+now imports schema constants and reports the derived version explicitly; the
+original failure and its synthetic diagnostics are retained. The large campaigns
+were not rerun under schema 2 and are not represented as final-head scale runs.
+
+## Clean build and normal-suite evidence
+
+A separate clean worktree at `fc0a08a` installed the pinned dependencies with
+lifecycle scripts disabled, then performed the controlled native build. The
+native probe verified SQLite 3.53.0, WAL/FULL, zero mmap, the 64 MiB hard heap cap,
+and allocation refusal. Build and typecheck passed. Its 107 JavaScript outputs
+byte-matched the integrated development build. The candidate manifest has 108
+rows; it does not change the installed package or historical deployed inventory.
+
+The clean normal suite passed 603/603 tests in 205.124 seconds, followed by the
+unchanged small/medium deterministic replay harness. This includes the original
+535-test baseline and added regressions, without skipped tests.
+
+The unchanged selected fault/memory suite also passed at both 512 and 1,024 MiB
+V8 limits, including small/medium replay and memory-accounting characterization.
+Separately, all 64 capsule tests passed at each heap limit. These are selected
+fixed-heap suites, not a claim that all 603 tests ran at each heap size.
+
+## Real client settlement
+
+Two additional isolation tests use the existing publication mutex as a barrier,
+without new runtime hooks. Two actual clients receive the same coalesced response
+with one admitted slot and no second ticket. Repeating a completed derive adds
+no immutable segments, manifests, or receipts. The cancellation test observes an
+admitted slot and an active owned systemd unit before aborting, then requires
+`capsule-worker-aborted`, zero tickets/slots, and an inactive unit before cleanup.
+The focused three-test isolation suite passed under a 128 MiB parent V8 limit.
+An initial strict-TypeScript compile failure was corrected with explicit response
+narrowing; no runtime behavior or deadline changed.
+
+After integration at `f7b7ae2`, typecheck and the complete normal suite passed
+605/605 tests in 207.898 seconds, followed by unchanged deterministic replay.
+All 66 capsule tests then passed separately at both 512 and 1,024 MiB V8 limits.
+No tests were skipped. These additions change tests only; the 107 compiled runtime
+files and candidate manifest remain byte-identical to the clean build.
+
+## Root verification and retained gate corrections
+
+The full root gate passed at `79e9e26` within its unchanged 25-minute deadline:
+303 current hashes, historical 291 plus 12 exact additions, 107 reproducible
+compiled files, all five safe scripts, pack verification, all-ref privacy, frozen
+M00 preservation, and zero unexplained artifacts. It performed a clean temporary
+build, native checks, normal tests/replay, and the original fixed-heap lanes.
+Prepared compatibility integration is recorded separately from the production
+entrypoint graph. This is repository evidence, not installed-byte verification.
+
+Independent review reproduced one defect in the new historical-manifest guard:
+a missing unmapped path compared equal to an undefined authorization. Replacing
+the historical package metadata row with an existing README row kept the same
+counts and incorrectly passed the synthetic verifier. `78d47b0` requires explicit
+map membership before exact hash equality. All 71 verifier tests passed after
+integration, including valid authorization and same-count substitution rejection.
+Only isolated test copies bypass the expensive publication scan; the real scanner
+and publication gates remain unchanged. This correction changes no runtime bytes.
+
+The earlier adaptation also incorrectly froze the two legitimately changed old
+Chrono module hashes; exact named hashes now authorize only those two changes.
+An initial clean-tree check refused untracked generated maps; all 107 maps were
+preserved outside the worktree, not deleted. A caller then omitted the static-only
+flag and obtained the expected draft-versus-installed identity mismatch. The
+correct repository-only check passed cleanly without a dirty-tree exception or
+production action. These invocation failures are retained, not counted as passes.
+
+The ad-hoc all-ref privacy preflight exceeded its 180-second caller limit and
+produced no completed result. The later planned standard root gate completed its
+unchanged privacy scan successfully. No scanner policy, original root/CI deadline,
+or safety assertion was weakened. Final static/publication checks and both
+exact-head CI receipts belong with the draft PR handoff. Local results do not
+accept M05 or authorize merge, deployment, boot recovery, or M06.

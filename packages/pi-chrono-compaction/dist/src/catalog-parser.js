@@ -1,4 +1,5 @@
 import { CATALOG_TEXT_HASH, catalogHashUnit, createCatalogHash, finishCatalogHash } from "./catalog-parser-hash.js";
+import { decodeJsonStringByte, isJsonStringDecoderError } from "./json-string-decoder.js";
 export const CATALOG_PARSER_VERSION = 1;
 export const CATALOG_PARSER_LIMITS = Object.freeze({ depth: 64, metadataUnits: 1024, blocks: 256, bodies: 512, recordsPerCall: 64,
     /** Conservative UTF-8 JSON size bound derived from the fixed structural caps,
@@ -115,77 +116,8 @@ function finishString(s, t) {
     }
     delete s.token;
 }
-function stringByte(s, t, b) {
-    if (t.utfLeft) {
-        if (b < 0x80 || b > 0xbf)
-            fail(s, "catalog-invalid-utf8");
-        t.utfValue = t.utfValue * 64 + (b & 63);
-        if (--t.utfLeft === 0) {
-            const cp = t.utfValue;
-            if (cp < t.utfMin || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))
-                fail(s, "catalog-invalid-utf8");
-            if (cp > 0xffff) {
-                unit(s, t, 0xd800 + ((cp - 0x10000) >>> 10));
-                unit(s, t, 0xdc00 + ((cp - 0x10000) & 1023));
-            }
-            else
-                unit(s, t, cp);
-        }
-        return;
-    }
-    if (t.unicodeLeft) {
-        const h = b >= 48 && b <= 57 ? b - 48 : b >= 65 && b <= 70 ? b - 55 : b >= 97 && b <= 102 ? b - 87 : -1;
-        if (h < 0)
-            fail(s, "catalog-invalid-escape");
-        t.unicode = t.unicode * 16 + h;
-        if (--t.unicodeLeft === 0)
-            unit(s, t, t.unicode);
-        return;
-    }
-    if (t.escape) {
-        t.escape = false;
-        if (b === 117) {
-            t.unicodeLeft = 4;
-            t.unicode = 0;
-            return;
-        }
-        const map = { 34: 34, 92: 92, 47: 47, 98: 8, 102: 12, 110: 10, 114: 13, 116: 9 };
-        if (map[b] === undefined)
-            fail(s, "catalog-invalid-escape");
-        unit(s, t, map[b]);
-        return;
-    }
-    if (b === 34) {
-        finishString(s, t);
-        return;
-    }
-    if (b === 92) {
-        t.escape = true;
-        return;
-    }
-    if (b < 32)
-        fail(s, "catalog-invalid-string");
-    if (b < 128) {
-        unit(s, t, b);
-        return;
-    }
-    if (b >= 0xc2 && b <= 0xdf) {
-        t.utfLeft = 1;
-        t.utfValue = b & 31;
-        t.utfMin = 0x80;
-    }
-    else if (b >= 0xe0 && b <= 0xef) {
-        t.utfLeft = 2;
-        t.utfValue = b & 15;
-        t.utfMin = 0x800;
-    }
-    else if (b >= 0xf0 && b <= 0xf4) {
-        t.utfLeft = 3;
-        t.utfValue = b & 7;
-        t.utfMin = 0x10000;
-    }
-    else
-        fail(s, "catalog-invalid-utf8");
+function parserStringUnit(s, u) {
+    unit(s, s.token, u);
 }
 function numberByte(t, b) {
     const digit = b >= 48 && b <= 57;
@@ -351,8 +283,10 @@ export function parseCatalogChunk(state, input, maxRecords = 16) {
                 fail(state, "catalog-coordinate-overflow");
             const b = input[consumedBytes];
             const t = state.token;
-            if (t?.kind === "string")
-                stringByte(state, t, b);
+            if (t?.kind === "string") {
+                if (decodeJsonStringByte(t, b, parserStringUnit, state))
+                    finishString(state, t);
+            }
             else if (t?.kind === "number" && numberByte(t, b)) {
                 if (t.mode === "metadata")
                     unit(state, t, b);
@@ -452,9 +386,16 @@ export function parseCatalogChunk(state, input, maxRecords = 16) {
         }
     }
     catch (e) {
-        if (!e || typeof e !== "object" || !("code" in e) || !("byteOffset" in e))
-            throw e;
-        state.error = e;
+        if (isJsonStringDecoderError(e)) {
+            const code = e.code === "json-string-invalid-utf8" ? "catalog-invalid-utf8"
+                : e.code === "json-string-invalid-escape" ? "catalog-invalid-escape" : "catalog-invalid-string";
+            state.error = { code, byteOffset: state.byteOffset };
+        }
+        else {
+            if (!e || typeof e !== "object" || !("code" in e) || !("byteOffset" in e))
+                throw e;
+            state.error = e;
+        }
     }
     return { state, consumedBytes, records, ...(state.error ? { error: state.error } : {}) };
 }
