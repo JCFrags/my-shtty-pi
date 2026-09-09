@@ -1,6 +1,77 @@
 # M05 — Capsules and decoded chunks
 
-**Status: project-lead F001–F004 corrections validated locally; publication CI pending. Not accepted or deployed.**
+**Status: remaining F003 correction integrated; final v3 scale and root validation in progress. Not accepted or deployed.**
+
+## Remaining F003 correction — pipeline v3
+
+Red `799c99a` (integrated as `abff390`) reproduced six failures in capped
+ordering, persisted ordering, Unicode boundaries, malformed-literal starvation,
+and semantic version identity. Fix `170c4e6` (integrated as `2da5266`) settles
+ordinary and failure candidates through one source frontier before capped
+admission. Sorting an already capped result is not the correction. Pending
+candidates and overflow tracking remain bounded. Lexical boundaries use Unicode
+code points while source coordinates remain exact UTF-16 units, including split
+and lone surrogates. Failed partial literals cannot starve a later valid clause.
+
+`capsule-pure-v3` and checkpoint version 3 replace v2 for new derivation.
+Terminal and small-JSON families are 4.0.0; other affected families are 3.0.0.
+Package 2.0.5, public schemas, wire protocol, admission policy, and external
+budgets are unchanged. The fixed internal carry is 512 units: 384 unsettled
+scan units plus 128 units of left neighborhood. Old partial and completed
+pipelines refuse derivation before work; old read-only pins remain readable
+without migration, deletion, or relabeling. See proposed ADR-005.
+
+An independent read-only source review found no reproduced implementation or
+boundedness failure, but identified missing complete-envelope evidence on the
+actual persisted and contained routes. Test-only `21c8645` (integrated as
+`80ed6eb`) closes that coverage gap. Native and contained derivation/retrieval
+compare complete canonical envelope bytes and all alternatives against direct
+complete legal feeds, one-unit feeds, uneven feeds, and serialized restarts.
+The fixtures split a capped cue and an astral lexical character at the real
+32,768-unit production boundary. They include BMP/astral word boundaries,
+lone surrogates, repeated malformed literals, and a later valid 400-space
+failure clause. Coordinates, all selected cues, coverage, and omissions are
+compared, not only a cue subset. Parent verification passed all eight route
+tests. The earlier direct regression matrix also covers the exact unpadded
+mixed-cue example and long head, tail, and middle padding.
+
+Before the four route follow-up tests, parent typecheck, build, native probe,
+629/629 normal tests, and replay passed. Verifier/privacy regressions passed
+77/77. Final root and both final-pipeline scale campaigns remain pending here;
+no historical v2 result is claimed as v3 evidence. The accepted once-through
+`test:normal` root orchestration and its truthful accounting remain unchanged.
+
+Runtime artifact commit `681993f` contains 108 source files, 107 compiled JS
+files, and 108 manifest entries. Source inventory SHA-256:
+`af545351e204322c759b3934750ff4568763ac8fe7fa3843e32682d2a025ce59`;
+compiled inventory:
+`2a50c71089c9efbf46d19b9b52f48d40dfa1925d9f7abade4cf892d084ce3b38`;
+manifest:
+`199302beedc5e93bc7e1ea0067909762649546a51de4a315a6b2f089f7fe5358`.
+All 107 generated maps were preserved separately and byte-verified.
+
+### Separate post-boot recovery outcome
+
+COMMAND 8 coordination concluded with a blocker, not recovery. The retained
+helper pins M03, not selected accepted M04 `dcd91924`; its location and historical
+readiness report do not establish compatibility. No apply, retargeting, pin
+regeneration, ownership deletion, admission change, or synthetic job occurred.
+The reserved window was explicitly released. Protected-main PR #40 records the
+outcome, merged as `9d84e80127c5378ef3077835bdd2026f0a444e48`; main was not
+imported into this M05 branch. Installed identity does not prove this boot's
+execution readiness. Recovery and COMMAND 8 release acceptance remain blocked
+until a compatible authorized procedure and fresh execution/settlement evidence
+exist. This does not grant M05 acceptance, merge, deployment, M06, or V1.2.
+
+## Historical v2 evidence
+
+The following root correction and earlier campaign results are retained as
+historical evidence, not final v3 validation. Its one authorized publication pair
+at `ea334c2` passed all eight jobs on push 34301680934 and PR 34301684157,
+without retries. Root jobs took 21m22s and 21m53s respectively; each had 58
+matched passing phases and one 623-test suite. The receipt remains in
+[PR comment 5594900481](https://github.com/JCFrags/my-shtty-pi/pull/38#issuecomment-5594900481).
+The new substantive F003 publication pair has not yet been run.
 
 ## Root validation orchestration correction
 
