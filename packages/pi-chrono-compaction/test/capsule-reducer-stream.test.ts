@@ -180,6 +180,19 @@ test("identifier prefixes at a feed boundary are deferred until the match is set
   assert.deepEqual(identifiers.map((cue) => cue.exactText), ["https://example.com/alpha/beta"]);
 });
 
+test("astral identifier at the pattern code-point cap is partition stable", () => {
+  const identifier = "https://example.com/" + "😀".repeat(200);
+  const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
+  const complete = reducePartitioned(text, [text.length]);
+  for (const restartEvery of [0, 1]) {
+    const split = reducePartitioned(text, [5_390, text.length - 5_390], restartEvery);
+    assert.equal(JSON.stringify(split), JSON.stringify(complete), `split 5390 restart ${restartEvery}`);
+  }
+  const cues = complete.alternatives[0]!.protectedCues.filter((cue) => cue.kind === "identifier");
+  assert.deepEqual(cues.map((cue) => cue.decodedUtf16), [{ start: 5_000, end: 5_420 }]);
+  assert.deepEqual(cues.map((cue) => cue.exactText), [identifier]);
+});
+
 test("ordinary identifiers crossing the settled frontier retain exact coordinates and neighborhoods", () => {
   const identifiers = [
     "./" + "x".repeat(198),
