@@ -6,6 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference } from "./history-search-adapter.js";
+import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
+import { startAuthorizedWorkerRuntime, startupAuthorizationPath, type WorkerStartupStatus } from "./worker-runtime-startup-client.js";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
 import { createContainedCapsuleShadow } from "./capsule-shadow-worker.js";
 import type { CapsuleShadowTarget } from "./capsule-shadow.js";
@@ -914,6 +916,8 @@ function registerRetentionHintTool(pi: ExtensionAPI): void {
 
 export interface HistoryRuntimeAdapters {
   readonly historyTransport?: HistoryWorkerTransport;
+  /** Owner-only rollout sidecars; explicit override for isolated integration. */
+  readonly sessionRolloutDirectory?: string;
   /** Explicit isolated namespace for synthetic integration callers only. */
   readonly schedulerDirectory?: string;
   /** Synthetic-only, synchronous prepared target. Caller retains the physical
@@ -927,20 +931,45 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   let userConfig = loadedUserConfig.config;
   let userConfigWarning = loadedUserConfig.warning;
   const search = new HistorySearchAdapter({ schedulerDirectory: adapters.schedulerDirectory, slots: resolveExtensionSettings(userConfig).hostWorkerSlots });
-  // Session-runtime override only. Never writes global settings or opts another
-  // session in; session_start resets the override when the session ID changes.
+  // Only an exact session/source sidecar can opt this session in persistently.
+  // Ordinary extension loading reads it; history queries never read or write it.
+  const sessionRolloutDirectory = adapters.sessionRolloutDirectory ?? join(dirname(userConfigPath), "chrono-session-rollouts");
   let sessionSearchOverride: boolean | undefined;
-  let searchSessionId: string | undefined;
-  const searchSettings = (): ReturnType<typeof resolveExtensionSettings> => ({ ...resolveExtensionSettings(userConfig),
-    ...(sessionSearchOverride === undefined ? {} : { searchIndexEnabled: sessionSearchOverride }) });
+  let rolloutEpoch = 0;
+  let rolloutError: string | undefined;
+  let startupStatus: WorkerStartupStatus = { state: adapters.schedulerDirectory ? "ready" : "pending" };
+  let startupContext: ExtensionContext | undefined;
+  const searchSettings = (): ReturnType<typeof resolveExtensionSettings> => {
+    const settings = resolveExtensionSettings(userConfig);
+    // An explicit environment/config disable takes precedence over rollout.
+    const explicit = configuredValue("PI_CHRONO_SEARCH_INDEX", userConfig.searchIndexEnabled);
+    const disabled = explicit !== undefined && !booleanSetting("PI_CHRONO_SEARCH_INDEX", false, userConfig.searchIndexEnabled);
+    return { ...settings, searchIndexEnabled: disabled ? false : (sessionSearchOverride ?? settings.searchIndexEnabled) };
+  };
+  const searchStatus = (): Record<string, unknown> => ({ ...search.status(),
+    enabled: searchSettings().searchIndexEnabled,
+    rollout: { persisted: sessionSearchOverride !== undefined, enabled: searchSettings().searchIndexEnabled },
+    startup: { ...startupStatus },
+    ...((rolloutError ?? startupStatus.errorCode) ? { lastSafeError: rolloutError ?? startupStatus.errorCode } : {}) });
   const scheduleSearch = (ctx: ExtensionContext): void => {
     if (!searchSettings().searchIndexEnabled) { search.disable(); return; }
+    if (startupStatus.state !== "ready") { search.cancel(); return; }
     const sourcePath = ctx.sessionManager.getSessionFile();
     const leafId = ctx.sessionManager.getLeafId?.();
     if (!sourcePath || !leafId) { search.cancel(); return; }
     const sessionKey = createHash("sha256").update("pi-session-v1\0").update(ctx.sessionManager.getSessionId()).digest("hex");
     const shardKey = createHash("sha256").update("pi-jsonl-v1\0").update(sourcePath).digest("hex");
     search.schedule({ sourcePath, sessionKey, shardKey, leafId, catalogDirectory: join(dirname(sourcePath), ".chrono-catalog", sessionKey) });
+  };
+  const beginStartup = (ctx: ExtensionContext): void => {
+    startupContext = ctx;
+    if (startupStatus.state !== "pending") return;
+    startupStatus = { state: "running" };
+    // Do not await this from a Pi hook: the child has its own bounded deadline.
+    void startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath)).then(status => {
+      startupStatus = status;
+      if (status.state === "ready" && startupContext) scheduleSearch(startupContext);
+    });
   };
   const capsuleShadow = createContainedCapsuleShadow({ schedulerDirectory: adapters.schedulerDirectory });
   let capsuleTargetRefused = false;
@@ -1268,11 +1297,23 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     }
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    const epoch = ++rolloutEpoch;
     const nextSearchSessionId = ctx.sessionManager.getSessionId();
-    if (nextSearchSessionId !== searchSessionId) sessionSearchOverride = undefined;
-    searchSessionId = nextSearchSessionId;
+    const sourcePath = ctx.sessionManager.getSessionFile();
+    sessionSearchOverride = undefined;
+    rolloutError = undefined;
     search.cancel();
+    try {
+      const enabled = sourcePath ? await readSessionRollout(sessionRolloutDirectory, { sessionId: nextSearchSessionId, sourcePath }) : undefined;
+      if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId) return;
+      sessionSearchOverride = enabled;
+    } catch {
+      if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId) return;
+      sessionSearchOverride = false;
+      rolloutError = "search-v3-rollout-unsafe";
+    }
+    beginStartup(ctx);
     capsuleShadow.cancel();
     scheduleCapsuleShadow(ctx);
     catalogShadow.cancel();
@@ -1291,6 +1332,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_switch", () => {
+    startupContext = undefined;
+    rolloutEpoch++;
     search.cancel();
     capsuleShadow.cancel();
     catalogShadow.cancel();
@@ -1302,6 +1345,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_fork", () => {
+    startupContext = undefined;
+    rolloutEpoch++;
     search.cancel();
     capsuleShadow.cancel();
     catalogShadow.cancel();
@@ -1313,6 +1358,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_shutdown", () => {
+    startupContext = undefined;
+    rolloutEpoch++;
     search.dispose();
     capsuleShadow.dispose();
     catalogShadow.dispose();
@@ -1808,20 +1855,27 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     name: "history_status", label: "History status",
     description: "Read bounded indexed-history readiness, requested/indexed cuts, lag and safe error. No ingestion or archive reads.",
     parameters: Type.Object({}),
-    async execute() { return toolText(JSON.stringify(search.status()), search.status()); },
+    async execute() { const status = searchStatus(); return toolText(JSON.stringify(status), status); },
   });
   pi.registerCommand("chrono-search-status", {
     description: "Read cached search readiness without ingestion or archive scans",
-    handler: async (_args, ctx) => { ctx.ui.notify(JSON.stringify(search.status()), "info"); },
+    handler: async (_args, ctx) => { ctx.ui.notify(JSON.stringify(searchStatus()), "info"); },
   });
   pi.registerCommand("chrono-search", {
-    description: "Enable or disable indexed history for this session runtime only: on|off",
+    description: "Persistently enable or disable indexed history for only this session: on|off. Normal startup needs no command.",
     handler: async (args, ctx) => {
-      if (args !== "on" && args !== "off") { ctx.ui.notify("Usage: /chrono-search on|off. This changes only this session runtime.", "info"); return; }
+      if (args !== "on" && args !== "off") { ctx.ui.notify("Usage: /chrono-search on|off. This changes only this session's persistent rollout.", "info"); return; }
+      const sourcePath = ctx.sessionManager.getSessionFile();
+      if (!sourcePath) { ctx.ui.notify("Search rollout requires a saved session.", "warning"); return; }
+      const epoch = rolloutEpoch, sessionId = ctx.sessionManager.getSessionId();
+      try { await writeSessionRollout(sessionRolloutDirectory, { sessionId, sourcePath }, args === "on"); }
+      catch { ctx.ui.notify("Search rollout was not changed: unsafe sidecar state.", "warning"); return; }
+      if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId) return;
+      rolloutError = undefined;
       sessionSearchOverride = args === "on";
       scheduleCatalogShadow(ctx);
       scheduleSearch(ctx);
-      ctx.ui.notify(JSON.stringify(search.status()), "info");
+      ctx.ui.notify(JSON.stringify(searchStatus()), "info");
     },
   });
 
