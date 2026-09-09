@@ -1,6 +1,70 @@
 # M05 — Capsules and decoded chunks
 
-**Status: identifier-rescan F003 correction passes focused checks; v5 publication CI pending. Not accepted or deployed.**
+**Status: Unicode length-contract F003 correction passes focused checks; v6 publication CI pending. Not accepted or deployed.**
+
+## Unicode length-contract correction — pipeline v6
+
+Red `d091ec9` reproduces the actual begin/feed/finalize envelope mismatch:
+`https://example.com/` plus 200 emoji at `[5000,5420)` becomes `[5000,5390)`
+after a split at 5390, also with serialized restart. Selected text agrees in
+this fixture but cue metadata does not. Both red failure logs are retained.
+Fix `4c863f1` derives scanner bounds in UTF-16 units, not Unicode regex
+repetition counts. Follow-up `96e1eed` removes an unrequested path-grammar
+restriction found during parent self-check and consolidates the regression.
+The final recognizer grammar and per-recognizer consumption are unchanged.
+
+The longest ordinary match is an eight-unit scheme plus 240 payload code
+points, each at most two units: 488 UTF-16 units. Two units of boundary
+lookahead also cover the 490-unit over-limit prefix. With 128-unit right
+neighborhoods, unsettled context is 616 units; another 128 left-context units
+give 744-unit post-scan carry and a 1,232-unit scan trigger. Only these internal
+bounds increase. External worker memory, read, output and deadline limits do
+not change. See [ADR-005](../adr/ADR-005-event-capsule-schema-and-reducer-versioning.md).
+
+The existing parameterized regression includes 200 emoji, 228 at the payload
+cap, and 229 adjacent over-limit emoji. Splits before/inside/after surrogate
+and identifier boundaries, including 5390, and serialized restarts assert
+complete-envelope equality, exact cue coordinates and loss accounting. The
+229-emoji case preserves the existing `//example.com/` fallback `[5006,5020)`
+and one explicit bounded-recognition loss; it does not silently redefine the
+grammar. Small 257-unit feeds include Unicode and restart after each feed:
+carry stays below 1,232, is 744 after scans, consumption has at most nine offsets,
+and serialized state stays below 128 KiB. One reused persisted fixture compares
+the 228-emoji envelope with a split-5390 restart and exact `[5000,5476)` cue.
+
+Final writer scanner checks passed 22/22 in 1.01s and the named persisted check
+passed in 0.53s. Earlier affected contract/reducer checks passed 23/23 in 0.23s,
+and two immediate old-pipeline storage checks passed in 0.85s. Parent build and
+test compilation passed; scanner checks passed 22/22 in 0.96s and the persisted
+check passed in 0.48s. A trailing shell log-display command failed after those
+successful checks; the original output is retained and no tests were rerun for
+that display error. No review-only agents or broad local sequence were used.
+
+Pipeline/checkpoint v6 and family versions 7.0.0 (terminal/small-JSON) / 6.0.0
+(other affected families) segregate changed persisted semantics. Old v5 complete
+and partial derivation refuse before work; valid old read-only pins remain
+available without migration or relabeling. Package 2.0.5 and public schemas stay
+unchanged. Artifact `17f038f` retains 108 sources / 107 JS / 108 manifest entries;
+107 generated maps were preserved and byte-verified privately. Inventory hashes:
+- Source: `dfd225a2f973cd9fcbc34179b6353cf1bea84c43e7a7c07feb671bdee4077511`.
+- Dist: `5677fe18ad6bffe43e8bf4257932bcca6e33575c7f14e8f0ad6e0e0db3cb5e71`.
+- Manifest: `d10d15d901cec231a950f1e1e130ff72762449af098b616b6d2383efef548e1e`.
+
+Required final push/PR CI supplies comprehensive validation; its receipt belongs
+in PR #38 without a report-only push. Historical campaigns remain at their
+original revisions, not v6 measurements. Recovery ZIP transfer remains pending
+Q-1; recovery assets are unchanged, production apply disabled and window released.
+No acceptance, merge, deployment, M06 or production action is authorized.
+
+## Historical v5 evidence
+
+Head `9a2e34753abda9869bf6884052a746009bf52738` passed push 34363562391 and
+PR 34363566084, each 8/8 checks, 635 tests once and 58 passing root phases.
+Root durations were 22m33s / 24m21s. The directing assistant accepted the
+per-recognizer consumption correction and exact-head CI, but withheld M05
+acceptance for the Unicode length mismatch corrected above. Receipt:
+https://github.com/JCFrags/my-shtty-pi/pull/38#issuecomment-5603969498.
+The following record remains historical, including its original internal bounds.
 
 ## Identifier rescan correction — pipeline v5
 

@@ -59,10 +59,11 @@ Conditions, exceptions, negation, failure, unknown status, cancellation, pending
 
 ### Project-lead F001–F003 correction candidate
 
-The current correction candidate uses `capsule-pure-v5`. Its resumable reducer
-state is version 5; older state must not resume under the new mechanics.
-Terminal and small-JSON family versions become 6.0.0; the other affected
-families become 5.0.0. Historical v4 used state 4 and family versions 5.0.0/4.0.0. Historical v3 used state 3, terminal/small-JSON 4.0.0
+The current correction candidate uses `capsule-pure-v6`. Its resumable reducer
+state is version 6; older state must not resume under the new mechanics.
+Terminal and small-JSON family versions become 7.0.0; the other affected
+families become 6.0.0. Historical v5 used state 5 and family versions 6.0.0/5.0.0;
+historical v4 used state 4 and family versions 5.0.0/4.0.0. Historical v3 used state 3, terminal/small-JSON 4.0.0
 and other families 3.0.0; v2 used state 2, terminal/small-JSON 3.0.0 and other
 families 2.0.0. Derived SQLite layout stays version 2 and capsule, chunk,
 and wire schemas stay version 1. These are different version boundaries.
@@ -92,12 +93,19 @@ must disclose lexical degradation rather than depend on the feed partition.
 Ordinary and incremental grammar cues wait behind one settled source frontier
 before source-ordered admission to the fixed cue cap. Sorting only a feed's
 matches or already admitted cues is insufficient. The frontier is an exclusive
-**start-coordinate** boundary, not an end-coordinate cutoff. With a conservative
-256-unit supported ordinary match bound, one unit of boundary lookahead and
-128 units of right neighborhood, unsettled context is
-`256 + max(1, 128) = 384` units. Retaining a further 128 units of left context
-keeps the existing 512-unit post-scan carry. Between batched scans, carry stays
-below the 768-unit scan trigger. Thus a settled start has the full match and
+**start-coordinate** boundary, not an end-coordinate cutoff. All scanner bounds
+use UTF-16 code units, not Unicode regex repetition counts. The longest ordinary
+pattern accepts an eight-unit HTTPS scheme and 240 Unicode payload code points:
+`8 + 240 * 2 = 488` UTF-16 units. The ASCII path, UUID, hash and fixed-word
+patterns are shorter; the unbounded regex failure form uses separate bounded
+incremental grammar instead. One complete Unicode boundary code point needs up
+to two UTF-16 units. With 128 units of right neighborhood, unsettled context is
+`488 + max(2, 128) = 616` units. This also covers the 490-unit maximum prefix
+needed to detect 241 over-limit URL payload code points. Retaining another 128
+units of left context gives 744-unit post-scan carry. Between batched scans,
+carry stays below the 1,232-unit scan trigger. A surrogate pair split by a feed
+is available in full before its match can settle; retained left context keeps
+an unresolved match away from a potentially split carry edge. Thus a settled start has the full match and
 right neighborhood available; an unresolved start and its left context remain
 available for re-extraction. Provisional ordinary matches are not serialized.
 Completed incremental cues share that start frontier before capped admission;
