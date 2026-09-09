@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
-import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 
@@ -54,6 +54,44 @@ function runSyntheticDeployed(repositoryRoot) {
     encoding: "utf8",
     timeout: 120000,
   });
+}
+function runSyntheticExecutor(repositoryRoot, { staticOnly = false, fail = "" } = {}) {
+  const deployedVerifier = join(repositoryRoot, "scripts", "verify-deployed-baseline.mjs");
+  const commandLog = join(repositoryRoot, ".synthetic-executor-log");
+  let source = readFileSync(join(root, "scripts", "verify-deployed-baseline.mjs"), "utf8");
+  source = source.replace(
+    'import { execFileSync } from "node:child_process";',
+    `import { execFileSync as realExecFileSync } from "node:child_process";\nimport { appendFileSync } from "node:fs";\nfunction execFileSync(command, args, options = {}) {\n  if (process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG && command === "npm") {\n    appendFileSync(process.env.CHRONO_SYNTHETIC_EXECUTOR_LOG, JSON.stringify(args) + "\\n");\n    const phase = args[0] === "run" ? args[1] : args[0];\n    if (process.env.CHRONO_SYNTHETIC_EXECUTOR_FAIL === phase) throw new Error("synthetic command failure");\n    if (args[0] === "pack") return JSON.stringify([{ files: [] }]);\n    return options.encoding ? "" : Buffer.alloc(0);\n  }\n  return realExecFileSync(command, args, options);\n}`,
+  );
+  source = source.replace("const publicationScan = verifyPublicationScanner();", 'const publicationScan = "test-bypass";');
+  source = source.replace("buildResult = verifyBuiltOutput(product, plan.packageRoot, work);", "buildResult = 107;");
+  writeFileSync(deployedVerifier, source);
+  const args = [deployedVerifier, "--product", "pi-chrono-compaction"];
+  if (staticOnly) args.push("--static-only");
+  const result = spawnSync(process.execPath, args, {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    timeout: 120000,
+    env: {
+      ...process.env,
+      CHRONO_SYNTHETIC_EXECUTOR_LOG: commandLog,
+      CHRONO_SYNTHETIC_EXECUTOR_FAIL: fail,
+    },
+  });
+  const commands = existsSync(commandLog)
+    ? readFileSync(commandLog, "utf8").trimEnd().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  const events = result.stderr.split("\n").flatMap((line) => {
+    try {
+      const value = JSON.parse(line);
+      return value.event?.startsWith("phase-") ? [value] : [];
+    } catch {
+      return [];
+    }
+  });
+  let json;
+  if (result.status === 0) json = JSON.parse(result.stdout);
+  return { ...result, commands, events, json };
 }
 function mutatePackage(repositoryRoot, mutate) {
   const path = join(repositoryRoot, "packages", "pi-chrono-compaction", "package.json");
@@ -266,6 +304,13 @@ test("changed test command fails", () => withClonedRepository((repositoryRoot) =
   assert.equal(result.json.code, "chrono-package-metadata-changed");
 }));
 
+test("changed normal wrapper command fails", () => withClonedRepository((repositoryRoot) => {
+  mutatePackage(repositoryRoot, (value) => { value.scripts["test:normal"] = "node scripts/benchmark-harness.mjs normal"; });
+  const result = runStatic(repositoryRoot);
+  assert.equal(result.status, 1);
+  assert.equal(result.json.code, "chrono-package-metadata-changed");
+}));
+
 test("a second package field plus test command fails", () => withClonedRepository((repositoryRoot) => {
   mutatePackage(repositoryRoot, (value) => { value.scripts.test = "node --test"; value.description = "also changed"; });
   const result = runStatic(repositoryRoot);
@@ -384,4 +429,52 @@ test("equivalent verification output is deterministic", () => withClonedReposito
   assert.equal(first.status, 0);
   assert.equal(second.status, 0);
   assert.deepEqual(second.json, first.json);
+}));
+
+test("Chrono executor runs the wrapper once without directly duplicating nested test", () => withClonedRepository((repositoryRoot) => {
+  const result = runSyntheticExecutor(repositoryRoot);
+  assert.equal(result.status, 0, result.stderr);
+  const runScripts = result.commands.filter((args) => args[0] === "run").map((args) => args[1]);
+  assert.deepEqual(runScripts, [
+    "catalog:sqlite:build-record",
+    "typecheck",
+    "build",
+    "catalog:sqlite:probe-record",
+    "test:normal",
+    "test:fixed-heap",
+  ]);
+  assert.deepEqual(result.json.safeScripts, {
+    mode: "executed",
+    declarationsValidated: "5/5",
+    directCommands: "4/4",
+    wrapperCoveredDeclarations: "1/1",
+  });
+  const completed = result.events.filter((event) => event.event === "phase-complete");
+  for (const phase of ["packaging", "clean-copy", "dependencies", "native-build-record", "typecheck", "build", "reproducibility", "native-probe-record", "normal-replay", "fixed-heaps"]) {
+    assert.ok(completed.some((event) => event.phase === phase && event.outcome === "passed" && Number.isInteger(event.elapsedMs)), phase);
+  }
+}));
+
+test("Chrono executor reports wrapper, native, and heap failures before rethrowing", () => withClonedRepository((repositoryRoot) => {
+  for (const [failure, phase] of [
+    ["catalog:sqlite:build-record", "native-build-record"],
+    ["test:normal", "normal-replay"],
+    ["test:fixed-heap", "fixed-heaps"],
+  ]) {
+    const result = runSyntheticExecutor(repositoryRoot, { fail: failure });
+    assert.equal(result.status, 1, `${failure}: ${result.stderr}`);
+    assert.ok(result.events.some((event) => event.event === "phase-complete" && event.phase === phase && event.outcome === "failed"), failure);
+  }
+}));
+
+test("static deployed verification reports declarations without runtime execution", () => withClonedRepository((repositoryRoot) => {
+  const result = runSyntheticExecutor(repositoryRoot, { staticOnly: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.commands, []);
+  assert.deepEqual(result.json.safeScripts, {
+    mode: "static-only",
+    declarationsValidated: "5/5",
+    directCommands: "0/4",
+    wrapperCoveredDeclarations: "0/1",
+  });
 }));
