@@ -176,6 +176,25 @@ test("identifier prefixes at a feed boundary are deferred until the match is set
   assert.deepEqual(identifiers.map((cue) => cue.exactText), ["https://example.com/alpha/beta"]);
 });
 
+test("ordinary identifiers crossing the settled frontier retain exact coordinates and neighborhoods", () => {
+  const identifiers = ["./" + "x".repeat(198), "https://example.com/" + "x".repeat(220)];
+  for (const identifier of identifiers) {
+    const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
+    const complete = reducePartitioned(text, [text.length]);
+    for (const split of [5_567, 5_568, 5_569]) {
+      for (const restartEvery of [0, 1]) {
+        const actual = reducePartitioned(text, [split, text.length - split], restartEvery);
+        assert.equal(JSON.stringify(actual), JSON.stringify(complete), `${identifier.slice(0, 12)} split ${split} restart ${restartEvery}`);
+      }
+    }
+    const primary = complete.alternatives[0]!;
+    const cue = primary.protectedCues.find((candidate) => candidate.kind === "identifier");
+    assert.deepEqual(cue?.decodedUtf16, { start: 5_000, end: 5_000 + identifier.length });
+    assert.equal(cue?.exactText, identifier);
+    assert.ok(primary.text.includes(`\n${identifier}\n`));
+  }
+});
+
 test("exact cue-end feed boundary is reconsidered when the following delimiter settles it", () => {
   const text = "pending approval tail";
   const whole = reducePartitioned(text, [text.length]);

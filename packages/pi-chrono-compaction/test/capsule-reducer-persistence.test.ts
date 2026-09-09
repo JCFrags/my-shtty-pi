@@ -228,6 +228,26 @@ test("contained worker derives and retrieves the same source-ordered cue selecti
   }
 });
 
+test("persisted capsule retrieval retains a frontier-crossing ordinary identifier", async () => {
+  const identifier = "./" + "x".repeat(198);
+  const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
+  const fixture = setupCapsuleFixture(line("a", null, text));
+  try {
+    const view = await fixture.initialize();
+    await deriveToEnd(fixture, view);
+    const page = await fixture.ok(view, { op: "capsulePage", limit: 1 });
+    const persisted = page.capsules[0];
+    assert.equal(canonicalJson(directEnvelope(text, persisted, view, [text.length])), JSON.stringify(persisted));
+    const primary = persisted.alternatives[0];
+    const cue = primary.protectedCues.find((candidate: any) => candidate.kind === "identifier");
+    assert.deepEqual(cue?.decodedUtf16, { start: 5_000, end: 5_200 });
+    assert.equal(cue?.exactText, identifier);
+    assert.ok(primary.text.includes(`\n${identifier}\n`));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("persisted capsule retrieval retains exact streamed edges and protected middle clause", async () => {
   const clause = "Do not deploy to production unless Morgan approves; staging is permitted.";
   const text = `${Array.from({ length: 5_000 }, (_, index) => String.fromCharCode(0x400 + index % 700)).join("")}\n${"routine ".repeat(700)}${clause}${" tail".repeat(700)}`;
