@@ -30,14 +30,14 @@ import type { HistoricalBlock, OmissionNotice } from "./types.js";
 import { estimateTokensFromText, stableStringify } from "./utils.js";
 
 export const CAPSULE_REDUCER_FAMILY_VERSIONS: Readonly<Record<SourceReducerFamily, string>> = Object.freeze({
-  terminal: "6.0.0",
-  "test-output": "5.0.0",
-  "git-diff": "5.0.0",
-  "generic-text": "5.0.0",
-  "assistant-extractive": "5.0.0",
-  "assistant-cleanup": "5.0.0",
-  "lossless-normalizer": "5.0.0",
-  "small-json": "6.0.0",
+  terminal: "7.0.0",
+  "test-output": "6.0.0",
+  "git-diff": "6.0.0",
+  "generic-text": "6.0.0",
+  "assistant-extractive": "6.0.0",
+  "assistant-cleanup": "6.0.0",
+  "lossless-normalizer": "6.0.0",
+  "small-json": "7.0.0",
 });
 
 export interface CapsuleReducerOptions extends CapsuleReductionOptions {
@@ -60,7 +60,7 @@ const CUE_PATTERNS: readonly { readonly kind: ProtectedCueKind; readonly regex: 
   { kind: "failure", regex: /\b(?:failed|failure|error|fatal|panic|exception|timed out|timeout|exit code\s*[1-9][0-9]*(?![\p{L}\p{N}_]))\b/giu },
   { kind: "unknown", regex: /\b(?:unknown|unresolved|uncertain|not yet|still pending|open question)\b/giu },
   { kind: "restriction", regex: /\b(?:must|must not|only|required|prohibited|forbidden|do not|don't|never)\b/giu },
-  { kind: "identifier", regex: /(?:https?:\/\/[^\s)\]}>"']{1,240}(?![^\s)\]}>"'])|(?:\.{0,2}\/|~\/)[A-Za-z0-9_.@+\-/]{2,240}(?![A-Za-z0-9_.@+\-/])|\b[0-9a-f]{8}-[0-9a-f-]{27,56}\b|\b[A-Fa-f0-9]{12,64}\b)/gu },
+  { kind: "identifier", regex: /(?:https?:\/\/[^\s)\]}>"']{1,240}(?![^\s)\]}>"'])|(?<![A-Za-z0-9_.@+\-\/:])(?:\.{0,2}\/|~\/)[A-Za-z0-9_.@+\-/]{2,240}(?![A-Za-z0-9_.@+\-/])|\b[0-9a-f]{8}-[0-9a-f-]{27,56}\b|\b[A-Fa-f0-9]{12,64}\b)/gu },
 ];
 
 export function extractProtectedCues(

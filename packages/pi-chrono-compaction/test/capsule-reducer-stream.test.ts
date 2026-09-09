@@ -161,10 +161,14 @@ test("malformed partial literals and repetitions do not hide a later valid long 
 test("pipeline and serialized checkpoint expose the new lexical-consumption semantics", () => {
   const text = "exit code";
   const state = feedCapsuleReduction(beginCapsuleReduction(base(text), options), { decodedUtf16: { start: 0, end: 4 }, text: "exit" });
-  assert.equal(CAPSULE_REDUCER_PIPELINE_VERSION, "capsule-pure-v5");
-  assert.equal(Number(state.v), 5);
-  assert.equal(Number((JSON.parse(JSON.stringify(state)) as { v: number }).v), 5);
-  const oldState = { ...state, v: 4 } as unknown as CapsuleReducerStreamState;
+  assert.equal(CAPSULE_REDUCER_PIPELINE_VERSION, "capsule-pure-v6");
+  assert.equal(Number(state.v), 6);
+  assert.equal(Number((JSON.parse(JSON.stringify(state)) as { v: number }).v), 6);
+  assert.deepEqual(CAPSULE_REDUCER_FAMILY_VERSIONS, {
+    terminal: "7.0.0", "test-output": "6.0.0", "git-diff": "6.0.0", "generic-text": "6.0.0",
+    "assistant-extractive": "6.0.0", "assistant-cleanup": "6.0.0", "lossless-normalizer": "6.0.0", "small-json": "7.0.0",
+  });
+  const oldState = { ...state, v: 5 } as unknown as CapsuleReducerStreamState;
   assert.throws(() => feedCapsuleReduction(oldState, { decodedUtf16: { start: 4, end: 5 }, text: " " }), /capsule-stream-noncontiguous-feed/);
   assert.throws(() => finalizeCapsuleReduction(oldState), /capsule-stream-incomplete/);
 });
@@ -180,17 +184,34 @@ test("identifier prefixes at a feed boundary are deferred until the match is set
   assert.deepEqual(identifiers.map((cue) => cue.exactText), ["https://example.com/alpha/beta"]);
 });
 
-test("astral identifier at the pattern code-point cap is partition stable", () => {
-  const identifier = "https://example.com/" + "😀".repeat(200);
-  const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
-  const complete = reducePartitioned(text, [text.length]);
-  for (const restartEvery of [0, 1]) {
-    const split = reducePartitioned(text, [5_390, text.length - 5_390], restartEvery);
-    assert.equal(JSON.stringify(split), JSON.stringify(complete), `split 5390 restart ${restartEvery}`);
+test("astral identifiers respect the pattern code-point cap across UTF-16 partitions", () => {
+  for (const example of [
+    { emoji: 200, supported: true },
+    { emoji: 228, supported: true }, // 12 code points in example.com/ + 228 = the 240-code-point payload cap.
+    { emoji: 229, supported: false },
+  ]) {
+    const identifier = "https://example.com/" + "😀".repeat(example.emoji);
+    const text = `${"H".repeat(4_999)}\n${identifier}\n${"T".repeat(4_999)}`;
+    const complete = reducePartitioned(text, [text.length]);
+    const identifierEnd = 5_000 + identifier.length;
+    const splits = [...new Set([5_389, 5_390, 5_391, identifierEnd - 1, identifierEnd, identifierEnd + 1])];
+    for (const splitAt of splits) {
+      for (const restartEvery of [0, 1]) {
+        const split = reducePartitioned(text, [splitAt, text.length - splitAt], restartEvery);
+        assert.equal(JSON.stringify(split), JSON.stringify(complete), `${example.emoji} emoji split ${splitAt} restart ${restartEvery}`);
+      }
+    }
+    const primary = complete.alternatives[0]!;
+    const cues = primary.protectedCues.filter((cue) => cue.kind === "identifier");
+    if (example.supported) {
+      assert.deepEqual(cues.map((cue) => cue.decodedUtf16), [{ start: 5_000, end: identifierEnd }]);
+      assert.deepEqual(cues.map((cue) => cue.exactText), [identifier]);
+      assert.ok(primary.text.includes(`\n${identifier}\n`));
+    } else {
+      assert.deepEqual(cues, [], "one adjacent code point over the payload cap is not retained as an identifier");
+      assert.ok(primary.omissions.some((item) => item.kind === "transformation-loss" && /bounded-grammar/.test(item.description)));
+    }
   }
-  const cues = complete.alternatives[0]!.protectedCues.filter((cue) => cue.kind === "identifier");
-  assert.deepEqual(cues.map((cue) => cue.decodedUtf16), [{ start: 5_000, end: 5_420 }]);
-  assert.deepEqual(cues.map((cue) => cue.exactText), [identifier]);
 });
 
 test("ordinary identifiers crossing the settled frontier retain exact coordinates and neighborhoods", () => {
@@ -214,9 +235,9 @@ test("ordinary identifiers crossing the settled frontier retain exact coordinate
       const end = Math.min(text.length, offset + 257);
       const priorSettled = state.scanSettledOffset;
       state = feedCapsuleReduction(state, { decodedUtf16: { start: offset, end }, text: text.slice(offset, end) });
-      assert.ok(state.scanCarry.length < 768, `bounded between-scan carry at ${end}`);
+      assert.ok(state.scanCarry.length < 1_232, `bounded between-scan carry at ${end}`);
       if (state.scanSettledOffset > priorSettled) {
-        assert.equal(state.scanCarry.length, 512, `fixed post-scan carry at ${end}`);
+        assert.equal(state.scanCarry.length, 744, `fixed post-scan carry at ${end}`);
         sawPostScanCarry = true;
       }
       assert.ok(Object.keys(state.ordinaryConsumedThrough).length <= 9, `fixed per-recognizer consumption state at ${end}`);
