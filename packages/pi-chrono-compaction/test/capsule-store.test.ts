@@ -323,13 +323,13 @@ for (const legacyCase of [
     }
     assert.equal(f.identity.reducerSetVersion, CAPSULE_REDUCER_PIPELINE_VERSION);
     const oldIdentity = legacyCase.complete
-      ? rewriteCompletedCapsulePipeline(f.derivedDirectory, f.identity, "capsule-pure-v2")
-      : rewriteStorePipeline(f.derivedDirectory, f.identity, "capsule-pure-v2");
+      ? rewriteCompletedCapsulePipeline(f.derivedDirectory, f.identity, "capsule-pure-v3")
+      : rewriteStorePipeline(f.derivedDirectory, f.identity, "capsule-pure-v3");
     if (legacyCase.complete) {
       const readOnly = await executeCapsuleRequest({ v: 1, derivedDirectory: f.derivedDirectory, catalogDirectory: f.catalogDirectory,
         identity: oldIdentity, view, op: "capsulePage", limit: 1 });
       assert.equal(readOnly.ok, true, JSON.stringify(readOnly));
-      if (readOnly.ok) assert.equal((readOnly.result as any).capsules[0].reducerSetVersion, "capsule-pure-v2");
+      if (readOnly.ok) assert.equal((readOnly.result as any).capsules[0].reducerSetVersion, "capsule-pure-v3");
     }
     const derivedBefore = snapshotTree(f.derivedDirectory), sourceBefore = readFileSync(f.sourcePath);
     let catalogCalls = 0;

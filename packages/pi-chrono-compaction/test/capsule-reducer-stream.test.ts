@@ -160,9 +160,9 @@ test("malformed partial literals and repetitions do not hide a later valid long 
 
 test("pipeline and serialized checkpoint expose the new settled-frontier semantics", () => {
   const state = feedCapsuleReduction(beginCapsuleReduction(base("exit"), options), { decodedUtf16: { start: 0, end: 4 }, text: "exit" });
-  assert.equal(CAPSULE_REDUCER_PIPELINE_VERSION, "capsule-pure-v3");
-  assert.equal(Number(state.v), 3);
-  assert.equal(Number((JSON.parse(JSON.stringify(state)) as { v: number }).v), 3);
+  assert.equal(CAPSULE_REDUCER_PIPELINE_VERSION, "capsule-pure-v4");
+  assert.equal(Number(state.v), 4);
+  assert.equal(Number((JSON.parse(JSON.stringify(state)) as { v: number }).v), 4);
 });
 
 test("identifier prefixes at a feed boundary are deferred until the match is settled", () => {

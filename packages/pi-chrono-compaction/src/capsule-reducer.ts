@@ -30,14 +30,14 @@ import type { HistoricalBlock, OmissionNotice } from "./types.js";
 import { estimateTokensFromText, stableStringify } from "./utils.js";
 
 export const CAPSULE_REDUCER_FAMILY_VERSIONS: Readonly<Record<SourceReducerFamily, string>> = Object.freeze({
-  terminal: "4.0.0",
-  "test-output": "3.0.0",
-  "git-diff": "3.0.0",
-  "generic-text": "3.0.0",
-  "assistant-extractive": "3.0.0",
-  "assistant-cleanup": "3.0.0",
-  "lossless-normalizer": "3.0.0",
-  "small-json": "4.0.0",
+  terminal: "5.0.0",
+  "test-output": "4.0.0",
+  "git-diff": "4.0.0",
+  "generic-text": "4.0.0",
+  "assistant-extractive": "4.0.0",
+  "assistant-cleanup": "4.0.0",
+  "lossless-normalizer": "4.0.0",
+  "small-json": "5.0.0",
 });
 
 export interface CapsuleReducerOptions extends CapsuleReductionOptions {
