@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { estimateTokensFromText } from "./utils.js";
 import { resolveCatalogHistory, readCatalogHistoryPage, type CatalogHistoryExecutor, type CatalogHistoryScope } from "./catalog-history.js";
-import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, type CapsuleCatalogView, type DerivedStoreIdentity } from "./capsule-contract.js";
+import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, isCapsuleReadiness, type CapsuleCatalogView, type DerivedStoreIdentity } from "./capsule-contract.js";
+import { canonicalJson } from "./capsule-segment.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
 import { runCapsuleWorker } from "./capsule-worker-client.js";
 import { runSearchV3Worker } from "./search-v3-worker-client.js";
@@ -40,6 +41,7 @@ export class HistorySearchAdapter {
   private key?: string;
   private target?: Target;
   private workTarget?: Target;
+  private resumeChecked = false;
   private lastReady?: Target;
   private readyValidated = false;
   private enabled = false;
@@ -54,10 +56,10 @@ export class HistorySearchAdapter {
     const prior = this.sourceTarget;
     if (!prior || ["sourcePath", "sessionKey", "shardKey", "catalogDirectory"].some(k => prior[k as keyof SearchLifecycleTarget] !== target[k as keyof SearchLifecycleTarget])) this.lastReady = undefined;
     this.sourceTarget = target;
-    if (this.key !== key) { this.key = key; this.target = undefined; this.workTarget = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+    if (this.key !== key) { this.key = key; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
     this.scheduler.schedule(target);
   }
-  cancel(): void { this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+  cancel(): void { this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
   disable(): void { this.enabled = false; this.cancel(); this.scheduler.disable(); }
   dispose(): void { this.disable(); this.scheduler.dispose(); }
   /** Cached bounded state only: no worker, source I/O, or lifetime counts. */
@@ -100,6 +102,7 @@ export class HistorySearchAdapter {
       if (!isCapsuleCatalogView(view)) return fail("search-v3-pin-invalid");
       this.target = this.makeTarget(t, view);
       this.workTarget = undefined;
+      this.resumeChecked = false;
       // The new pinned branch must prove the last-ready view is its prefix.
       // Until this check finishes, retain but do not serve the previous view.
       this.readyValidated = !!this.lastReady && this.within(this.lastReady.view, view);
@@ -110,6 +113,56 @@ export class HistorySearchAdapter {
       return { ...this.progress };
     }
     const requested = this.target; if (!requested) return fail("search-v3-target-missing");
+    if (!this.resumeChecked) {
+      const status = await runSearchV3Worker({ ...requested, op: "status", view: requested.view }, options);
+      valid();
+      // A status open cannot distinguish an absent route from a generic missing
+      // path. The subsequent create operation remains authoritative and will
+      // preserve any real storage failure.
+      if (!status.ok) {
+        if (status.code !== "search-v3-storage-io") return fail(status.code);
+        this.resumeChecked = true;
+        return { ...this.progress };
+      }
+      const indexed = status.result.indexedView as { branchKey?: unknown; eventCut?: unknown; hash?: unknown; complete?: unknown } | null;
+      if (indexed === null) {
+        this.resumeChecked = true;
+        return { ...this.progress };
+      }
+      if (indexed.branchKey !== requested.view.branchKey || !Number.isSafeInteger(indexed.eventCut) || Number(indexed.eventCut) < 1
+        || Number(indexed.eventCut) > requested.view.eventCut || typeof indexed.hash !== "string" || !/^[a-f0-9]{64}$/.test(indexed.hash)
+        || typeof indexed.complete !== "boolean") return fail("search-v3-resume-invalid");
+      const cut = Number(indexed.eventCut);
+      const catalogView = { ...requested.view, segments: requested.view.segments.map(segment => ({ ...segment })) };
+      const page = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, view: catalogView, after: cut - 1, limit: 1 }, options);
+      valid(); if (!page.ok) return fail(page.code);
+      const leaf = (page.result.events as import("./catalog-contract.js").CatalogEvent[])[0];
+      if (!leaf || leaf.seq !== cut) return fail("search-v3-resume-invalid");
+      const pinned = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, branchKey: "pi-session", leaf: { shardKey: leaf.shardKey, ordinal: leaf.ordinal } }, options);
+      valid(); if (!pinned.ok) return fail(pinned.code);
+      const view = pinned.result.view as CapsuleCatalogView;
+      if (!isCapsuleCatalogView(view) || !this.within(view, requested.view) || view.eventCut !== cut
+        || hash(canonicalJson(view)) !== indexed.hash) return fail("search-v3-resume-invalid");
+      const resumed = this.makeTarget(t, view);
+      if (indexed.complete) {
+        this.lastReady = resumed;
+        this.readyValidated = true;
+        this.progress = cut === requested.view.eventCut
+          ? { catalog: "ready", capsules: "ready", index: "ready" }
+          : { catalog: "ready", capsules: "pending", index: "pending" };
+      } else {
+        const capsule = await runCapsuleWorker({ v: 1, op: "status", derivedDirectory: resumed.capsuleDirectory, catalogDirectory: resumed.catalogDirectory, identity: resumed.identity.capsule, view }, options);
+        valid(); if (!capsule.ok) return fail(capsule.code);
+        const readiness = capsule.result.readiness;
+        if (!isCapsuleReadiness(readiness) || canonicalJson(readiness.view) !== canonicalJson(view)
+          || readiness.capsules.afterEventSeq !== cut || readiness.capsules.afterDescriptor !== 0
+          || readiness.chunks.afterEventSeq !== cut || readiness.chunks.afterDescriptor !== 0) return fail("search-v3-resume-invalid");
+        this.workTarget = resumed;
+        this.progress = { catalog: "ready", capsules: "ready", index: "pending" };
+      }
+      this.resumeChecked = true;
+      return { ...this.progress };
+    }
     if (!this.workTarget) {
       const after = this.readyValidated ? this.lastReady?.view.eventCut ?? 0 : 0;
       const catalogView = { ...requested.view, segments: requested.view.segments.map(segment => ({ ...segment })) };
