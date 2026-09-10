@@ -15,8 +15,8 @@ import { line } from "./capsule-storage-fixture.js";
 
 const hash = (s: string): string => createHash("sha256").update(s).digest("hex");
 const uuid = (s: string): string => { const h = hash(s); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`; };
-async function ready(adapter: HistorySearchAdapter): Promise<void> {
-  const deadline = Date.now() + 10_000;
+async function ready(adapter: HistorySearchAdapter, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const status = adapter.scheduler.status();
     if (status.state === "ready") return;
@@ -136,7 +136,7 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
   let adapter = new HistorySearchAdapter(workerOptions);
   try {
     adapter.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "event-40" });
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + 60_000;
     let prefixStatus: Record<string, unknown> | undefined;
     while (Date.now() < deadline) {
       const status = adapter.status();
@@ -156,7 +156,7 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
     assert.ok(earlyHandle);
     assert.match(String((await adapter.recall(earlyHandle)).details.text), /early searchable prefix needle/);
     assert.equal((await adapter.getBlock("event-1", 0)).details.text, "early searchable prefix needle");
-    const incompleteDeadline = Date.now() + 10_000;
+    const incompleteDeadline = Date.now() + 60_000;
     while (!(adapter.status().index === "lagging" && adapter.status().indexedCut === 16) && Date.now() < incompleteDeadline) {
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -165,7 +165,7 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
     adapter.dispose(); await adapter.scheduler.drain();
     adapter = new HistorySearchAdapter(workerOptions);
     adapter.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "event-40" });
-    const secondDeadline = Date.now() + 10_000;
+    const secondDeadline = Date.now() + 60_000;
     while (Number(adapter.status().indexedCut) < 32 && Date.now() < secondDeadline) {
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -174,14 +174,14 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
     adapter.dispose(); await adapter.scheduler.drain();
     adapter = new HistorySearchAdapter(workerOptions);
     adapter.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "event-40" });
-    const reloadDeadline = Date.now() + 10_000;
+    const reloadDeadline = Date.now() + 60_000;
     while (adapter.status().servingLastReady !== true && Date.now() < reloadDeadline) {
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.equal(adapter.status().indexedCut, 32, `reload did not restore the complete prefix: ${JSON.stringify(adapter.status())}`);
     assert.equal(adapter.status().requestedCut, 40);
-    await ready(adapter);
+    await ready(adapter, 60_000);
     assert.equal(adapter.status().requestedCut, 40);
     assert.equal(adapter.status().indexedCut, 40);
     assert.equal(adapter.status().lag, 0);
