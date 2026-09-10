@@ -40,7 +40,10 @@ async function readyLayers(adapter: HistorySearchAdapter): Promise<void> {
       const value = adapter.status()[stage];
       return typeof value === "object" && value !== null ? (value as { state?: string }).state : value;
     };
-    while (layerState() !== "ready") {
+    // Prefix restoration may make a layer ready before append catch-up finishes.
+    // The final stage must also settle the whole scheduled target, within this
+    // same deadline, rather than accepting an intermediate cached publication.
+    while (layerState() !== "ready" || stage === "rollup" && adapter.scheduler.status().state !== "ready") {
       const status = adapter.scheduler.status();
       assert.notEqual(status.state, "error", JSON.stringify({ stage, status, observed }));
       assert.notEqual(status[stage], "error", JSON.stringify({ stage, status, observed }));

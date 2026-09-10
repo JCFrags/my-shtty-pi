@@ -528,3 +528,11 @@ Runtime CI now selects these two named scenarios instead of accumulating all pri
 M06–M09 runtime scenarios. Full tests remain available for milestone qualification.
 Required status, native provenance, build and publication gates remain in place.
 Staged original-cut comparison and exact-head CI results are still pending.
+
+The first corrected CI pair passed producer coverage but exposed a second
+readiness race at append: cached prefix layers were ready while the scheduler
+still reported lagging for the requested target. The final stage now requires
+both rollup readiness and whole-target scheduler settlement within the same
+existing stage deadline. No timeout was increased and no publication/recovery
+assertion was removed. This substantive fixture correction receives fresh CI,
+not an unchanged rerun. Runtime and derived semantics are byte-identical.
