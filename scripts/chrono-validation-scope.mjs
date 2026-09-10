@@ -92,7 +92,7 @@ function classify({ eventName, event, sha, root }) {
     const after = JSON.parse(git(root, "show", `${headRevision}:package.json`));
     const oldProduct = before.piConsolidation?.products?.find(p => p.slug === "pi-chrono-compaction");
     const newProduct = after.piConsolidation?.products?.find(p => p.slug === "pi-chrono-compaction");
-    if (![107, 114].includes(oldProduct?.compiledCount) || newProduct?.compiledCount !== 118) throw new Error("unsupported-root-inventory-change");
+    if (oldProduct?.compiledCount !== 118 || newProduct?.compiledCount !== 121) throw new Error("unsupported-root-inventory-change");
     newProduct.compiledCount = oldProduct.compiledCount;
     if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("unsupported-root-metadata-change");
   }

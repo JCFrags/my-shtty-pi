@@ -139,7 +139,8 @@ jobs:
           test -f dist-test/test/search-lifecycle.test.js
           test -f dist-test/test/history-search-adapter.test.js
           test -e "${search_tests[0]}"
-          node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js dist-test/test/history-search-adapter.test.js "${search_tests[@]}"
+          test -f dist-test/test/episode-state.test.js
+          node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js dist-test/test/history-search-adapter.test.js "${search_tests[@]}" dist-test/test/episode-state.test.js
       - name: Build and run complete unit/integration tests
         if: needs.validation-scope.outputs.classification == 'milestone'
         working-directory: packages/pi-chrono-compaction

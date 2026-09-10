@@ -3,12 +3,13 @@ import { join } from "node:path";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { estimateTokensFromText } from "./utils.js";
 import { resolveCatalogHistory, readCatalogHistoryPage } from "./catalog-history.js";
-import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, isCapsuleReadiness } from "./capsule-contract.js";
+import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, isCapsuleReadiness, isScopedBodySourceRef, isScopedRawSourceRef, sourceRefWithinViewBounds } from "./capsule-contract.js";
 import { canonicalJson } from "./capsule-segment.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
 import { runCapsuleWorker } from "./capsule-worker-client.js";
 import { runSearchV3Worker } from "./search-v3-worker-client.js";
 import { isSearchV3Handle } from "./search-v3-contract.js";
+import { EPISODE_STATE_RULESET_VERSION } from "./episode-state-contract.js";
 import { SearchLifecycleScheduler } from "./search-lifecycle.js";
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const uuid = (text) => { const h = hash(text); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`; };
@@ -26,6 +27,16 @@ function decode(text) {
         return fail("search-v3-reference-invalid");
     }
     if (r.v !== 1 || !isCapsuleCatalogView(r.view) || (r.handle !== undefined && !isSearchV3Handle(r.handle)) || (r.cursor !== undefined && (typeof r.cursor !== "string" || r.cursor.length > 4096)))
+        return fail("search-v3-reference-invalid");
+    if (r.source !== undefined && (!isScopedBodySourceRef(r.source) || !sourceRefWithinViewBounds(r.source, r.view)))
+        return fail("search-v3-reference-invalid");
+    if (r.rawSource !== undefined && (!isScopedRawSourceRef(r.rawSource) || !sourceRefWithinViewBounds(r.rawSource, r.view)
+        || r.rawSource.raw.end - r.rawSource.raw.start > 65536))
+        return fail("search-v3-reference-invalid");
+    if (r.memory && (!["episode", "resource", "state"].includes(r.memory.level) || !r.memory.after || !Number.isSafeInteger(r.memory.after.eventSeq)
+        || !Number.isSafeInteger(r.memory.after.descriptor) || r.memory.after.eventSeq < 1 || r.memory.after.descriptor < 0
+        || (r.memory.query !== undefined && (typeof r.memory.query !== "string" || r.memory.query.length > 256))
+        || (r.memory.source !== undefined && (!isScopedBodySourceRef(r.memory.source) || !sourceRefWithinViewBounds(r.memory.source, r.view)))))
         return fail("search-v3-reference-invalid");
     if (r.range && (typeof r.range.start !== "string" || r.range.start.length > 1024 || typeof r.range.end !== "string" || r.range.end.length > 1024 || !Number.isSafeInteger(r.range.after) || r.range.after < 0 || (r.range.byte !== undefined && (!Number.isSafeInteger(r.range.byte) || r.range.byte < 0))))
         return fail("search-v3-reference-invalid");
@@ -51,6 +62,8 @@ export class HistorySearchAdapter {
     lastReady;
     readyValidated = false;
     enabled = false;
+    memory = { state: "pending", knownThroughCut: null };
+    memoryTick = 0;
     sourceTarget;
     progress = { catalog: "pending", capsules: "pending", index: "pending" };
     constructor(options = {}) {
@@ -65,6 +78,8 @@ export class HistorySearchAdapter {
             this.lastReady = undefined;
         this.sourceTarget = target;
         if (this.key !== key) {
+            this.memory = { state: "pending", knownThroughCut: null };
+            this.memoryTick = 0;
             this.key = key;
             this.target = undefined;
             this.workTarget = undefined;
@@ -74,7 +89,7 @@ export class HistorySearchAdapter {
         }
         this.scheduler.schedule(target);
     }
-    cancel() { this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+    cancel() { this.memory = { state: "pending", knownThroughCut: null }; this.memoryTick = 0; this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
     disable() { this.enabled = false; this.cancel(); this.scheduler.disable(); }
     dispose() { this.disable(); this.scheduler.dispose(); }
     /** Cached bounded state only: no worker, source I/O, or lifetime counts. */
@@ -83,6 +98,7 @@ export class HistorySearchAdapter {
         const requestedCut = this.target?.view.eventCut ?? null;
         const indexedCut = this.readyValidated ? this.lastReady?.view.eventCut ?? null : null;
         return { enabled: this.enabled, ...state, catalog: this.progress.catalog, capsules: this.progress.capsules, index: this.progress.index,
+            memory: { ...this.memory, requestedCut, coverage: "Known through the materialized branch cut only; later state may exist." },
             requestedCut, indexedCut, lag: requestedCut !== null && indexedCut !== null ? Math.max(0, requestedCut - indexedCut) : null,
             servingLastReady: this.readyValidated && !!this.lastReady, requestedViewValidated: !!this.target, lastSafeError: state.errorCode ?? null };
     }
@@ -100,6 +116,30 @@ export class HistorySearchAdapter {
         return { v: 1, op: "ingestPage", catalogDirectory: t.catalogDirectory, capsuleDirectory: join(t.catalogDirectory, `capsules-${identity.storeKey}`), searchDirectory: join(t.catalogDirectory, `search-${searchKey}`), identity: { storeKey: searchKey, capsule: identity, schemaVersion: 1, configHash: hash("chrono-m06-search-default-v2") }, view };
     }
     async step(t, signal) {
+        const searchable = this.readyValidated ? this.lastReady : undefined;
+        const searchComplete = this.progress.catalog === "ready" && this.progress.capsules === "ready" && this.progress.index === "ready";
+        // One shadow job per eight search steps while catching up. Once search is
+        // ready, finish shadow deltas without making queries perform ingestion.
+        if (searchable && this.memory.state !== "error" && (this.memory.complete !== true || this.memory.knownThroughCut !== searchable.view.eventCut)
+            && (searchComplete || this.memoryTick++ % 8 === 0)) {
+            const key = this.key;
+            const response = await runSearchV3Worker({ ...searchable, op: "materializeState" }, { ...this.options, signal });
+            if (signal.aborted || key !== this.key)
+                return fail("search-v3-worker-aborted");
+            this.memory = response.ok
+                ? { state: response.result.complete === true ? "ready" : "lagging", complete: response.result.complete === true,
+                    knownThroughCut: response.result.knownThroughCut ?? null, partial: response.result.partial === true,
+                    stateGeneration: response.result.stateGeneration ?? null,
+                    metadata: response.result.metadata ?? { complete: false, afterEventSeq: 0 } }
+                : { ...this.memory, state: "error", lastSafeError: response.code };
+        }
+        else if (!searchComplete)
+            await this.searchStep(t, signal);
+        const memory = this.memory.state === "error" ? "error" : this.readyValidated && this.lastReady
+            && this.memory.complete === true && this.memory.knownThroughCut === this.lastReady.view.eventCut ? "ready" : "pending";
+        return { ...this.progress, memory };
+    }
+    async searchStep(t, signal) {
         const options = { ...this.options, signal };
         const key = JSON.stringify(t);
         const valid = () => { if (signal.aborted || key !== this.key)
@@ -203,12 +243,27 @@ export class HistorySearchAdapter {
         if (!this.workTarget) {
             const after = this.readyValidated ? this.lastReady?.view.eventCut ?? 0 : 0;
             const catalogView = { ...requested.view, segments: requested.view.segments.map(segment => ({ ...segment })) };
-            const page = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, view: catalogView, after, limit: 16 }, options);
-            valid();
-            if (!page.ok)
-                return fail(page.code);
-            const events = page.result.events;
-            const leaf = events.at(-1);
+            // Keep the first useful prefix small. Later prefixes coalesce at most
+            // eight existing 16-event pages before one pin/publication. This removes
+            // repeated pin/publication overhead without changing any worker limit,
+            // configuration identity or already committed derived checkpoint.
+            let leaf;
+            let pageAfter = after;
+            for (let batch = 0; batch < (after === 0 ? 1 : 8); batch++) {
+                const page = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, view: catalogView, after: pageAfter, limit: 16 }, options);
+                valid();
+                if (!page.ok)
+                    return fail(page.code);
+                const events = page.result.events;
+                if (!events.length)
+                    break;
+                leaf = events.at(-1);
+                if (leaf.seq <= pageAfter)
+                    return fail("search-v3-prefix-page-invalid");
+                pageAfter = leaf.seq;
+                if (events.length < 16 || pageAfter === requested.view.eventCut)
+                    break;
+            }
             if (!leaf)
                 return fail("search-v3-prefix-page-invalid");
             const pinned = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, branchKey: "pi-session", leaf: { shardKey: leaf.shardKey, ordinal: leaf.ordinal } }, options);
@@ -284,12 +339,110 @@ export class HistorySearchAdapter {
             return result({ status: "unavailable", code: this.code(error) });
         }
     }
+    async recallState(query, level, tokenBudget = 2000, signal) {
+        try {
+            if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 120 || tokenBudget > 2000)
+                return fail("search-v3-query-invalid");
+            const reference = isSearchReference(query) ? decode(query) : undefined;
+            if (reference?.memory && reference.memory.level !== level)
+                return fail("search-v3-reference-invalid");
+            if (reference?.memory && reference.memory.ruleset !== EPISODE_STATE_RULESET_VERSION)
+                return fail("search-v3-state-version-mismatch");
+            const target = this.scoped(reference);
+            const source = reference?.memory?.source ?? reference?.source ?? reference?.handle?.source;
+            const terms = reference?.memory?.query ?? (reference ? undefined : query.trim() || undefined);
+            const response = await runSearchV3Worker({ ...target, op: "recallState", level, limit: 1,
+                ...(source ? { source } : {}), ...(terms ? { query: terms } : {}), ...(reference?.memory ? { after: reference.memory.after } : {}) }, { ...this.options, signal });
+            if (!response.ok)
+                return result({ status: "unavailable", code: response.code });
+            // Display is bounded and explicitly lossy. The reference retains the exact
+            // immutable source; a caller can recover omitted text in one tool call.
+            const display = (value) => {
+                if (Array.isArray(value))
+                    return value.map(display);
+                if (!value || typeof value !== "object")
+                    return value;
+                const input = value, output = {};
+                for (const [key, child] of Object.entries(input)) {
+                    if (key === "source" && isScopedBodySourceRef(child)) {
+                        output.recovery = encode({ v: 1, view: target.view, source: child });
+                        output.entryId = child.entryId;
+                        output.eventSeq = child.eventSeq;
+                        output.descriptor = child.descriptor;
+                    }
+                    else if (key === "source" && isScopedRawSourceRef(child)) {
+                        output.recovery = encode({ v: 1, view: target.view, rawSource: child });
+                        output.eventSeq = child.eventSeq;
+                        output.descriptor = child.descriptor;
+                    }
+                    else if (key === "structuralSource")
+                        continue; // retained in the stored record; recovery rechecks raw authority
+                    else if (typeof child === "string" && child.length > 240) {
+                        output[key] = child.slice(0, 240);
+                        output[`${key}OmittedUtf16`] = child.length - 240;
+                    }
+                    else
+                        output[key] = display(child);
+                }
+                return output;
+            };
+            const { metrics: _metrics, workerObservation: _observation, next, ...value } = response.result;
+            return result({ status: "ok", ...display(value),
+                ...(next ? { nextCursor: encode({ v: 1, view: target.view, memory: { ruleset: EPISODE_STATE_RULESET_VERSION, level, ...(terms ? { query: terms } : {}),
+                            ...(source ? { source } : {}), after: next } }) } : {}),
+                evidence: "Source-backed derived memory, known through this branch cut only. Not authority or proof of later absence. Use nextCursor as query to continue." }, tokenBudget);
+        }
+        catch (error) {
+            return result({ status: "unavailable", code: this.code(error) });
+        }
+    }
     async recall(handle, startChar, maxChars, signal, tokenBudget) {
         try {
             const reference = decode(handle);
+            const target = this.scoped(reference);
+            if (reference.rawSource) {
+                const source = reference.rawSource, length = source.raw.end - source.raw.start;
+                if (length < 1 || length > 65536)
+                    return fail("search-v3-reference-invalid");
+                const page = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: target.catalogDirectory,
+                    sessionKey: target.view.sessionKey, view: { ...target.view, segments: target.view.segments.map(item => ({ ...item })) }, after: source.eventSeq - 1, limit: 1 }, { ...this.options, signal });
+                if (!page.ok)
+                    return result({ status: "unavailable", code: page.code });
+                const event = page.result.events?.[0];
+                if (!event || event.seq !== source.eventSeq || event.shardKey !== source.shardKey || event.ordinal !== source.ordinal
+                    || Number(event.rawStart) > source.raw.start || Number(event.rawEnd) < source.raw.end)
+                    return fail("search-v3-reference-invalid");
+                const raw = await runCatalogWorker({ v: 1, op: "raw", catalogDirectory: target.catalogDirectory,
+                    sessionKey: target.view.sessionKey, view: { ...target.view, segments: target.view.segments.map(item => ({ ...item })) }, eventSeq: source.eventSeq, offset: source.raw.start, length }, { ...this.options, signal });
+                if (!raw.ok)
+                    return result({ status: "unavailable", code: raw.code });
+                const bytes = Buffer.from(String(raw.result.data), "base64");
+                if (bytes.length !== length || createHash("sha256").update(bytes).digest("hex") !== source.rawHash)
+                    return fail("search-v3-reference-invalid");
+                const whole = bytes.toString("utf8"), start = startChar ?? 0;
+                if (!Number.isSafeInteger(start) || start < 0 || start > whole.length)
+                    return fail("search-v3-reference-invalid");
+                const text = whole.slice(start, start + Math.min(8192, maxChars ?? 2048));
+                return result({ status: "ok", source, text, startChar: start, nextChar: start + text.length,
+                    complete: start + text.length === whole.length, evidence: "Exact hash-verified source JSONL; metadata authority remains advisory." }, tokenBudget);
+            }
+            if (reference.source) {
+                const source = reference.source;
+                const start = startChar ?? source.decodedUtf16.start;
+                const length = Math.min(8192, maxChars ?? 2048, source.decodedUtf16.end - start);
+                if (!Number.isSafeInteger(start) || start < source.decodedUtf16.start || length < 0)
+                    return fail("search-v3-reference-invalid");
+                const response = await runCapsuleWorker({ v: 1, op: "chunkRange", derivedDirectory: target.capsuleDirectory,
+                    catalogDirectory: target.catalogDirectory, identity: target.identity.capsule, view: target.view, source,
+                    decodedStart: start, decodedLength: length, limit: 2 }, { ...this.options, signal });
+                if (!response.ok)
+                    return result({ status: "unavailable", code: response.code });
+                const text = Buffer.from(String(response.result.data), "base64").toString("utf16le");
+                return result({ status: "ok", source, text, startChar: start, nextChar: start + text.length,
+                    complete: start + text.length === source.decodedUtf16.end, evidence: "Exact source text; derived memory is not authority." }, tokenBudget);
+            }
             if (!reference.handle)
                 return fail("search-v3-reference-invalid");
-            const target = this.scoped(reference);
             const response = await runSearchV3Worker({ ...target, op: "recall", handle: reference.handle, ...(startChar === undefined ? {} : { decodedStart: startChar }), decodedLength: Math.min(8192, maxChars ?? 2048) }, { ...this.options, signal });
             if (!response.ok)
                 return result({ status: "unavailable", code: response.code });

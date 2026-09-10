@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { SEARCH_V3_LIMITS, isSearchV3Request, type SearchV3Request, type SearchV3Response } from "./search-v3-contract.js";
+import { isEpisodeStateRequest, type EpisodeStateRequest } from "./episode-state-contract.js";
 import { runBoundedWorker, WorkerRuntimeError } from "./worker-runtime.js";
 
 export const SEARCH_V3_WORKER_CAPS = Object.freeze({
@@ -24,20 +25,20 @@ export function validateSearchV3Response(value: unknown): SearchV3Response {
     || Object.keys(response).sort().join(",") !== "code,ok,resumable,sourceBytes,sqliteNativeLimitBytes,v") throw new Error("search-v3-response-invalid");
   return value as SearchV3Response;
 }
-export async function runSearchV3Worker(request: SearchV3Request, options: { signal?: AbortSignal; slots?: number; schedulerDirectory?: string } = {}): Promise<SearchV3Response> {
+export async function runSearchV3Worker(request: SearchV3Request | EpisodeStateRequest, options: { signal?: AbortSignal; slots?: number; schedulerDirectory?: string } = {}): Promise<SearchV3Response> {
   try {
-    const validateRequest = (value: unknown): SearchV3Request => {
-      if (!isSearchV3Request(value) || Buffer.byteLength(JSON.stringify(value)) > SEARCH_V3_WORKER_CAPS.requestBytes) throw new Error("search-v3-request-invalid");
+    const validateRequest = (value: unknown): SearchV3Request | EpisodeStateRequest => {
+      if ((!isSearchV3Request(value) && !isEpisodeStateRequest(value)) || Buffer.byteLength(JSON.stringify(value)) > SEARCH_V3_WORKER_CAPS.requestBytes) throw new Error("search-v3-request-invalid");
       return value;
     };
     validateRequest(request);
     const sessionKey = createHash("sha256").update(request.catalogDirectory).update("\0").update(request.identity.capsule.sessionKey).digest("hex");
-    const { value } = await runBoundedWorker<SearchV3Request, SearchV3Response>({
+    const { value } = await runBoundedWorker<SearchV3Request | EpisodeStateRequest, SearchV3Response>({
       entryPath: fileURLToPath(new URL("./search-v3-worker-entry.js", import.meta.url)), request,
       identity: { schemaVersion: 1, kind: `search-v3-${request.op.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, sessionKey },
       caps: { deadlineMs: Date.now() + SEARCH_V3_WORKER_CAPS.timeoutMs, sourceBytes: SEARCH_V3_WORKER_CAPS.sourceBytes,
         responseBytes: SEARCH_V3_WORKER_CAPS.responseBytes, memoryBytes: SEARCH_V3_WORKER_CAPS.memoryBytes, heapMiB: SEARCH_V3_WORKER_CAPS.heapMiB },
-      signal: options.signal, slots: options.slots, schedulerDirectory: options.schedulerDirectory, priority: request.op === "ingestPage" ? "low" : "high",
+      signal: options.signal, slots: options.slots, schedulerDirectory: options.schedulerDirectory, priority: request.op === "ingestPage" || request.op === "materializeState" ? "low" : "high",
       validateRequest, validateResponse: validateSearchV3Response,
     });
     return value;

@@ -708,20 +708,21 @@ function registerHistoryTools(
   pi.registerTool({
     name: "history_recall",
     label: "Expand Historical Memory",
-    description: "Recall history in stages: compact cue, episode, resource evolution, or source block snippet. Exact bytes remain in history_get and history_range.",
+    description: "Recall a cue, chronological episode, resource evolution, source-backed state, or exact block. Memory is known through its indexed branch cut only. Pass nextCursor as query to continue; use recovery handles with history_get.",
     parameters: Type.Object({
       query: Type.String(),
-      level: Type.Optional(Type.Union([Type.Literal("cue"), Type.Literal("episode"), Type.Literal("resource"), Type.Literal("block")])),
+      level: Type.Optional(Type.Union([Type.Literal("cue"), Type.Literal("episode"), Type.Literal("resource"), Type.Literal("state"), Type.Literal("block")])),
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
       tokenBudget: Type.Optional(Type.Number({ minimum: 120, maximum: 2_000 })),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       if (settings().searchIndexEnabled) {
-        if (params.level === "episode" || params.level === "resource") return toolText("Indexed recall supports cues and source blocks; episode and resource expansion are not available.", { status: "unavailable", code: "search-v3-option-unsupported" });
+        if (params.level === "episode" || params.level === "resource" || params.level === "state") return search.recallState(params.query, params.level, params.tokenBudget ?? 2000, _signal);
         if (isSearchReference(params.query)) return search.recall(params.query, undefined, Math.min(2048, (params.tokenBudget ?? 1000) * 2), _signal, params.tokenBudget ?? 2000);
         return search.search({ query: params.query, limit: params.limit, tokenBudget: params.tokenBudget, stage: params.level === "cue" ? "cues" : "snippets" }, _signal);
       }
       if (!reserveFeedback()) return historyWorkerToolResult({ status: "refused", code: "history-feedback-memory-limit" });
+      if (params.level === "state") return toolText("Source-backed state requires the indexed memory path.", { status: "unavailable", code: "search-v3-option-unsupported" });
       const path = ctx.sessionManager.getSessionFile();
       const response = await dispatchHistoryWorker(path, {
         kind: "recall", query: params.query, options: { level: params.level, limit: params.limit, tokenBudget: params.tokenBudget },

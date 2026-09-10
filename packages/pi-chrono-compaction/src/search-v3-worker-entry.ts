@@ -1,4 +1,6 @@
 import { SEARCH_V3_LIMITS, isSearchV3Request, type SearchV3Response } from "./search-v3-contract.js";
+import { isEpisodeStateRequest } from "./episode-state-contract.js";
+import { executeEpisodeStateRequest } from "./episode-state-store.js";
 import { executeSearchV3Request } from "./search-v3-store.js";
 import { observeCatalogWorker } from "./catalog-worker-observation.js";
 
@@ -7,8 +9,9 @@ process.once("message", async (request: unknown) => {
     sqliteNativeLimitBytes: SEARCH_V3_LIMITS.nativeSqliteBytes, resumable: true });
   let response: SearchV3Response;
   try {
-    response = isSearchV3Request(request) && Buffer.byteLength(JSON.stringify(request)) <= SEARCH_V3_LIMITS.requestBytes
-      ? await executeSearchV3Request(request) : failure("search-v3-request-invalid");
+    if (Buffer.byteLength(JSON.stringify(request) ?? "") > SEARCH_V3_LIMITS.requestBytes) response = failure("search-v3-request-invalid");
+    else if (isEpisodeStateRequest(request)) response = await executeEpisodeStateRequest(request);
+    else response = isSearchV3Request(request) ? await executeSearchV3Request(request) : failure("search-v3-request-invalid");
     if (response.ok) response.result.workerObservation = observeCatalogWorker();
     if (Buffer.byteLength(JSON.stringify(response)) > SEARCH_V3_LIMITS.responseBytes) response = failure("search-v3-response-limit", response.sourceBytes);
   } catch { response = failure("search-v3-worker-failed"); }
