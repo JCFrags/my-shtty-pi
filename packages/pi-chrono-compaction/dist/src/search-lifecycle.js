@@ -69,9 +69,11 @@ export class SearchLifecycleScheduler {
             if (this.closed || epoch !== this.epoch)
                 return;
             if (!progress || [progress.catalog, progress.capsules, progress.index].some(x => !["pending", "lagging", "ready"].includes(x)) ||
-                (progress.waitingForAppend !== undefined && typeof progress.waitingForAppend !== "boolean"))
+                (progress.waitingForAppend !== undefined && typeof progress.waitingForAppend !== "boolean") ||
+                (progress.memory !== undefined && !["pending", "lagging", "ready", "error"].includes(progress.memory)))
                 throw new Error("search-lifecycle-response-invalid");
-            const complete = progress.catalog === "ready" && progress.capsules === "ready" && progress.index === "ready";
+            const complete = progress.catalog === "ready" && progress.capsules === "ready" && progress.index === "ready"
+                && (progress.memory === undefined || progress.memory === "ready" || progress.memory === "error");
             this.current = { ...progress, state: complete ? "ready" : "lagging" };
             if (!complete && !progress.waitingForAppend && !this.queued)
                 this.queued = target;

@@ -1,6 +1,10 @@
 # M06 incremental search candidate
 
-Status: implementation candidate, not milestone acceptance. Keep the M06 PR unmerged into `rebuild/chrono-memory-v3`. Selected package is 2.0.7 at `215ac43e9582ef357f95219334ac9f05c066965f`; post-reboot worker readiness and successful implementing-session retrieval remain unproven. This report does not authorize other sessions or defaults.
+Status: M06 accepted by the directing assistant at `a4ad86c1fff3c28a5f27eee739a6508afb9181ed`, deployed and loaded as 2.0.9. Actual development-session indexed search → recall → exact recovery succeeded with explicit prefix coverage. PR42 merged only into `rebuild/chrono-memory-v3` at `6ac27c2def386ccaeb03d8ef0e1c208504f4c9f3`, using applicable existing checks and no acceptance-only push. Older candidate statements below are historical evidence, not current acceptance or deployment status.
+
+Full archive catch-up and release-scale qualification remain incomplete. At ordinary M07 work boundaries, indexed coverage advanced from cut 113 to 1,265 while the requested cut grew from 13,640 to 13,681. This is continuing catch-up, not a stalled worker or complete archive coverage. The accepted indexed prefix remains usable. The peer declaration is still `>=0.84.2 <0.85.0`; observed Pi 0.85.1 use does not establish broader declared compatibility. Later large-archive qualification remains separate.
+
+M07 is authorized and in development on `work/chrono-v3-m07-state`. Its first substantive increment carries this acceptance record. M07 must remain unmerged for directing-assistant acceptance; authoritative compaction remains unchanged until M09. No other sessions or defaults are authorized by this report.
 
 ## Accepted predecessor and recovery
 
@@ -107,3 +111,50 @@ The two focused invocations for this correction are exhausted:
 - Second: existing append/fork and exact recovery passed in 24.727 seconds. The prefix fixture timed out at its 10-second deadline while capsules were still lagging without an error; total invocation 36.340 seconds. Its waits were changed to bounded 60-second waits, preserving assertions. This correction is not a passing runtime result. Exact routine CI must qualify the final fixture; no third local invocation was run.
 
 Build passed. Artifact counts remain 119 source records, 118 compiled JavaScript files and 119 deployment rows. The frozen charter, protected workflow, resource limits, M05 schemas and reducers are unchanged. Actual-session prefix search → recall → exact recovery remains required after qualified deployment. PR42 remains draft/unmerged; M06 is not accepted and M07 is unstarted.
+
+## M07 development candidate (2.0.10, not accepted)
+
+The next substantive increment adds bounded episode membership, source-backed
+state and resource observations through the existing contained search worker and
+`history_recall`/cached status. It does not replace authoritative compaction.
+The SQLite store binds catalog/capsule/search identities and physical routes;
+per-source generations preserve old branch-cut reads across later writes.
+Episode closure means a chronological span ended at another original request,
+not that the earlier task succeeded. Resource mentions preserve declared versus
+unknown revisions; neither a tool-result hash nor a declaration proves the current
+file revision or validation freshness. Queries validate the catalog view but never
+ingest. Exact decoded recovery and original-entry IDs accompany displayed memory.
+
+Materialization handles at most eight capsules per job, with bounded exact raw
+role/tool metadata (64 KiB event), decoded bodies (32,768 UTF-16 units), source
+reads (8 MiB), and the existing contained-worker limits. Oversized or unknown-role
+records remain partial. Memory jobs run behind search catch-up. The first search
+prefix remains 16 branch events; later prefixes coalesce at most eight existing
+16-event page calls before one pin/publication. Store/configuration identities and
+already committed progress are unchanged. No measured speedup is claimed yet.
+
+Two local runtime invocations were used, with failures preserved:
+
+1. The engine fixture failed at first materialization (0/1, 1.39 s): 15 SQL
+   placeholders for 14 state columns. The implementation was corrected without
+   an unchanged rerun.
+2. The integrated invocation ran the engine fixture and one existing real
+   lifecycle scenario (38.15 s). The lifecycle scenario passed: contained worker,
+   state/resource/episode recall, exact memory recovery, append, restart and
+   branch isolation. The engine fixture failed because it required every resource
+   observation to have a declared revision, including an assistant report with
+   none. Its assertion now requires that report to retain a null/unknown revision.
+   This assertion correction awaits routine CI; no third local invocation ran.
+
+Final source and test-build compilation passed. Parent integration also corrected
+source-exact lookup, cut-bound generations, path punctuation, conditional approval
+handling, and conservative resource freshness. Routine CI and deployment remain
+pending at this checkpoint. No startup suite, full local suite or scale campaign
+was repeated. Live 2.0.9, automatic rollout, source stores and rollback are unchanged.
+
+Remaining limits: extraction is deterministic and conservative, not semantic task
+understanding. Compound prose can omit secondary claims; episode retrieval pages
+members rather than returning an unlimited narrative. Existing editable-memory
+and retention tools remain intact, but their custom metadata mirrors are not yet
+materialized by this body-capsule path. Large-archive qualification and full live
+catch-up remain outstanding. These are not claims of M07 acceptance.

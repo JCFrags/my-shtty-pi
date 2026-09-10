@@ -32,10 +32,10 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
   const schedulerDirectory = join(directory, "scheduler");
   mkdirSync(schedulerDirectory, { mode: 0o700 });
   const generatedStatus = JSON.stringify({ type: "message", id: "status", parentId: null, message: { role: "toolResult", toolName: "history_status", content: [{ type: "text", text: "generatedstatusneedle" }] } }) + "\n";
-  const first = line("a", "status", "amber compass source one");
+  const first = line("a", "status", "amber compass source one. Do not edit /project/amber.ts.");
   const second = line("b", "a", "amber compass source two");
   writeFileSync(sourcePath, generatedStatus + first + second, { mode: 0o600 });
-  const adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
+  let adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
   const target = { sourcePath, schedulerDirectory, catalogDirectory: join(directory, "catalog"), sessionKey: hash("adapter-session"), shardKey: hash("adapter-shard"), leafId: "b" };
   // The public scheduler target deliberately contains no worker configuration.
   const schedule = (leafId: string) => adapter.schedule({ sourcePath: target.sourcePath, catalogDirectory: target.catalogDirectory, sessionKey: target.sessionKey, shardKey: target.shardKey, leafId });
@@ -44,6 +44,22 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
     assert.equal(adapter.status().enabled, true);
     assert.equal(adapter.status().lag, 0);
     assert.equal(adapter.status().requestedCut, adapter.status().indexedCut);
+    const memoryStatus = adapter.status().memory as Record<string, unknown>;
+    assert.equal(memoryStatus.state, "ready", JSON.stringify(memoryStatus));
+    assert.equal(memoryStatus.knownThroughCut, adapter.status().indexedCut);
+    const memory = await adapter.recallState("amber", "state");
+    assert.equal(memory.details.status, "ok", JSON.stringify(memory.details));
+    const stateItems = memory.details.items as { kind: string; evidence: { recovery: string } }[];
+    assert.ok(stateItems.some(item => item.kind === "restriction"), JSON.stringify(memory.details));
+    const memoryHandle = stateItems[0]!.evidence.recovery;
+    assert.ok(memoryHandle);
+    assert.match(String((await adapter.recall(memoryHandle)).details.text), /Do not edit \/project\/amber.ts/);
+    const episode = await adapter.recallState("amber", "episode");
+    assert.equal(episode.details.status, "ok", JSON.stringify(episode.details));
+    assert.ok((episode.details.items as unknown[]).length > 0);
+    const resource = await adapter.recallState("amber", "resource");
+    assert.equal(resource.details.status, "ok", JSON.stringify(resource.details));
+    assert.ok((resource.details.items as unknown[]).length > 0);
     const stableStatus = adapter.status();
     assert.deepEqual(adapter.status(), stableStatus); // read-only cached surface
     const excludedStatus = await adapter.search({ query: "generatedstatusneedle" });
@@ -88,6 +104,12 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
     assert.equal(continued.details.complete, true);
     const entries = continued.details.entries as { data: string }[];
     assert.equal(Buffer.from(entries[0]!.data, "base64").toString("utf8"), second);
+    const beforeRestart = (adapter.status().memory as Record<string, unknown>).stateGeneration;
+    adapter.dispose(); await adapter.scheduler.drain();
+    adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
+    schedule("c"); await ready(adapter);
+    assert.equal((adapter.status().memory as Record<string, unknown>).stateGeneration, beforeRestart, "restart must not reprocess completed deltas");
+    assert.equal((await adapter.recall(memoryHandle)).details.status, "ok");
     appendFileSync(sourcePath, line("fork", "a", "sibling source"));
     schedule("fork");
     assert.equal(adapter.status().servingLastReady, false, "unvalidated branch cannot expose old view");
@@ -161,16 +183,16 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    assert.equal(adapter.status().index, "lagging", `no incomplete cut-32 index head: ${JSON.stringify(adapter.status())}`);
+    assert.equal(adapter.status().index, "lagging", `no incomplete cut-40 index head: ${JSON.stringify(adapter.status())}`);
     adapter.dispose(); await adapter.scheduler.drain();
     adapter = new HistorySearchAdapter(workerOptions);
     adapter.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "event-40" });
     const secondDeadline = Date.now() + 60_000;
-    while (Number(adapter.status().indexedCut) < 32 && Date.now() < secondDeadline) {
+    while (Number(adapter.status().indexedCut) < 40 && Date.now() < secondDeadline) {
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    assert.equal(adapter.status().indexedCut, 32, `reload did not resume the incomplete prefix: ${JSON.stringify(adapter.status())}`);
+    assert.equal(adapter.status().indexedCut, 40, `reload did not resume the incomplete prefix: ${JSON.stringify(adapter.status())}`);
     adapter.dispose(); await adapter.scheduler.drain();
     adapter = new HistorySearchAdapter(workerOptions);
     adapter.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "event-40" });
@@ -179,7 +201,7 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    assert.equal(adapter.status().indexedCut, 32, `reload did not restore the complete prefix: ${JSON.stringify(adapter.status())}`);
+    assert.equal(adapter.status().indexedCut, 40, `reload did not restore the complete prefix: ${JSON.stringify(adapter.status())}`);
     assert.equal(adapter.status().requestedCut, 40);
     await ready(adapter, 60_000);
     assert.equal(adapter.status().requestedCut, 40);

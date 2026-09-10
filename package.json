@@ -76,7 +76,7 @@
         "entrypoints": [
           "dist/src/pi-extension.js"
         ],
-        "compiledCount": 118,
+        "compiledCount": 121,
         "buildConfig": "tsconfig.json",
         "sourceEntrypoints": [
           "src/pi-extension.ts"

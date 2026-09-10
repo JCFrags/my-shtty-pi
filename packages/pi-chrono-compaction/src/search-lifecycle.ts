@@ -11,6 +11,8 @@ export interface SearchLifecycleProgress {
   readonly catalog: SearchLayerState;
   readonly capsules: SearchLayerState;
   readonly index: SearchLayerState;
+  /** Optional shadow materialization. An error stops only this layer. */
+  readonly memory?: SearchLayerState | "error";
   /** An incomplete JSONL tail waits for the next real lifecycle event. */
   readonly waitingForAppend?: boolean;
 }
@@ -76,8 +78,10 @@ export class SearchLifecycleScheduler {
     active.settled = Promise.resolve().then(() => this.step(target, active.controller.signal)).then(progress => {
       if (this.closed || epoch !== this.epoch) return;
       if (!progress || [progress.catalog, progress.capsules, progress.index].some(x => !["pending", "lagging", "ready"].includes(x)) ||
-        (progress.waitingForAppend !== undefined && typeof progress.waitingForAppend !== "boolean")) throw new Error("search-lifecycle-response-invalid");
-      const complete = progress.catalog === "ready" && progress.capsules === "ready" && progress.index === "ready";
+        (progress.waitingForAppend !== undefined && typeof progress.waitingForAppend !== "boolean") ||
+        (progress.memory !== undefined && !["pending", "lagging", "ready", "error"].includes(progress.memory))) throw new Error("search-lifecycle-response-invalid");
+      const complete = progress.catalog === "ready" && progress.capsules === "ready" && progress.index === "ready"
+        && (progress.memory === undefined || progress.memory === "ready" || progress.memory === "error");
       this.current = { ...progress, state: complete ? "ready" : "lagging" };
       if (!complete && !progress.waitingForAppend && !this.queued) this.queued = target;
     }).catch((error: unknown) => {

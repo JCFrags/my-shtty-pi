@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { SEARCH_V3_LIMITS, isSearchV3Request } from "./search-v3-contract.js";
+import { isEpisodeStateRequest } from "./episode-state-contract.js";
 import { runBoundedWorker, WorkerRuntimeError } from "./worker-runtime.js";
 export const SEARCH_V3_WORKER_CAPS = Object.freeze({
     requestBytes: SEARCH_V3_LIMITS.requestBytes,
@@ -31,7 +32,7 @@ export function validateSearchV3Response(value) {
 export async function runSearchV3Worker(request, options = {}) {
     try {
         const validateRequest = (value) => {
-            if (!isSearchV3Request(value) || Buffer.byteLength(JSON.stringify(value)) > SEARCH_V3_WORKER_CAPS.requestBytes)
+            if ((!isSearchV3Request(value) && !isEpisodeStateRequest(value)) || Buffer.byteLength(JSON.stringify(value)) > SEARCH_V3_WORKER_CAPS.requestBytes)
                 throw new Error("search-v3-request-invalid");
             return value;
         };
@@ -42,7 +43,7 @@ export async function runSearchV3Worker(request, options = {}) {
             identity: { schemaVersion: 1, kind: `search-v3-${request.op.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, sessionKey },
             caps: { deadlineMs: Date.now() + SEARCH_V3_WORKER_CAPS.timeoutMs, sourceBytes: SEARCH_V3_WORKER_CAPS.sourceBytes,
                 responseBytes: SEARCH_V3_WORKER_CAPS.responseBytes, memoryBytes: SEARCH_V3_WORKER_CAPS.memoryBytes, heapMiB: SEARCH_V3_WORKER_CAPS.heapMiB },
-            signal: options.signal, slots: options.slots, schedulerDirectory: options.schedulerDirectory, priority: request.op === "ingestPage" ? "low" : "high",
+            signal: options.signal, slots: options.slots, schedulerDirectory: options.schedulerDirectory, priority: request.op === "ingestPage" || request.op === "materializeState" ? "low" : "high",
             validateRequest, validateResponse: validateSearchV3Response,
         });
         return value;
