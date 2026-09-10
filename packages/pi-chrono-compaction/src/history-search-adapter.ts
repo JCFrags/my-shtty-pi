@@ -39,6 +39,7 @@ export class HistorySearchAdapter {
   readonly scheduler: SearchLifecycleScheduler;
   private key?: string;
   private target?: Target;
+  private workTarget?: Target;
   private lastReady?: Target;
   private readyValidated = false;
   private enabled = false;
@@ -53,10 +54,10 @@ export class HistorySearchAdapter {
     const prior = this.sourceTarget;
     if (!prior || ["sourcePath", "sessionKey", "shardKey", "catalogDirectory"].some(k => prior[k as keyof SearchLifecycleTarget] !== target[k as keyof SearchLifecycleTarget])) this.lastReady = undefined;
     this.sourceTarget = target;
-    if (this.key !== key) { this.key = key; this.target = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+    if (this.key !== key) { this.key = key; this.target = undefined; this.workTarget = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
     this.scheduler.schedule(target);
   }
-  cancel(): void { this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+  cancel(): void { this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
   disable(): void { this.enabled = false; this.cancel(); this.scheduler.disable(); }
   dispose(): void { this.disable(); this.scheduler.dispose(); }
   /** Cached bounded state only: no worker, source I/O, or lifetime counts. */
@@ -72,6 +73,14 @@ export class HistorySearchAdapter {
     return view.storeKey === current.storeKey && view.generation === current.generation && view.sessionKey === current.sessionKey
       && view.branchKey === current.branchKey && view.eventCut <= current.eventCut
       && view.segments.every(segment => current.segments.some(s => s.segment === segment.segment && segment.cut <= s.cut));
+  }
+  private makeTarget(t: SearchLifecycleTarget, view: CapsuleCatalogView): Target {
+    // Prefix catch-up is a deliberate new derivation configuration. It must not
+    // rewind or overwrite an installed whole-view head with the old config.
+    const capsuleConfig = hash("chrono-m06-capsule-prefix-v1");
+    const identity: DerivedStoreIdentity = { storeKey: uuid(`${view.storeKey}:${view.generation}:${CAPSULE_REDUCER_PIPELINE_VERSION}:${capsuleConfig}`), sessionKey: view.sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation, derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: capsuleConfig };
+    const searchKey = uuid(`${identity.storeKey}:search-v3-v2`);
+    return { v: 1, op: "ingestPage", catalogDirectory: t.catalogDirectory, capsuleDirectory: join(t.catalogDirectory, `capsules-${identity.storeKey}`), searchDirectory: join(t.catalogDirectory, `search-${searchKey}`), identity: { storeKey: searchKey, capsule: identity, schemaVersion: 1, configHash: hash("chrono-m06-search-default-v2") }, view };
   }
   private async step(t: SearchLifecycleTarget, signal: AbortSignal): Promise<SearchLifecycleProgress> {
     const options = { ...this.options, signal };
@@ -89,18 +98,36 @@ export class HistorySearchAdapter {
       valid(); if (!pinned.ok) return fail(pinned.code);
       const view = pinned.result.view as CapsuleCatalogView;
       if (!isCapsuleCatalogView(view)) return fail("search-v3-pin-invalid");
-      const capsuleConfig = hash("chrono-m06-capsule-default-v1");
-      const identity: DerivedStoreIdentity = { storeKey: uuid(`${view.storeKey}:${view.generation}:${CAPSULE_REDUCER_PIPELINE_VERSION}:${capsuleConfig}`), sessionKey: view.sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation, derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1, reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: capsuleConfig };
-      const searchKey = uuid(`${identity.storeKey}:search-v3-v2`);
-      this.target = { v: 1, op: "ingestPage", catalogDirectory: t.catalogDirectory, capsuleDirectory: join(t.catalogDirectory, `capsules-${identity.storeKey}`), searchDirectory: join(t.catalogDirectory, `search-${searchKey}`), identity: { storeKey: searchKey, capsule: identity, schemaVersion: 1, configHash: hash("chrono-m06-search-default-v2") }, view };
+      this.target = this.makeTarget(t, view);
+      this.workTarget = undefined;
       // The new pinned branch must prove the last-ready view is its prefix.
       // Until this check finishes, retain but do not serve the previous view.
       this.readyValidated = !!this.lastReady && this.within(this.lastReady.view, view);
       if (!this.readyValidated) this.lastReady = undefined;
+      this.progress = this.readyValidated && this.lastReady?.view.eventCut === view.eventCut
+        ? { catalog: "ready", capsules: "ready", index: "ready" }
+        : { catalog: "ready", capsules: "pending", index: "pending" };
+      return { ...this.progress };
+    }
+    const requested = this.target; if (!requested) return fail("search-v3-target-missing");
+    if (!this.workTarget) {
+      const after = this.readyValidated ? this.lastReady?.view.eventCut ?? 0 : 0;
+      const catalogView = { ...requested.view, segments: requested.view.segments.map(segment => ({ ...segment })) };
+      const page = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, view: catalogView, after, limit: 16 }, options);
+      valid(); if (!page.ok) return fail(page.code);
+      const events = page.result.events as import("./catalog-contract.js").CatalogEvent[];
+      const leaf = events.at(-1);
+      if (!leaf) return fail("search-v3-prefix-page-invalid");
+      const pinned = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, branchKey: "pi-session", leaf: { shardKey: leaf.shardKey, ordinal: leaf.ordinal } }, options);
+      valid(); if (!pinned.ok) return fail(pinned.code);
+      const view = pinned.result.view as CapsuleCatalogView;
+      if (!isCapsuleCatalogView(view) || !this.within(view, requested.view) || view.eventCut !== leaf.seq
+        || this.readyValidated && this.lastReady && !this.within(this.lastReady.view, view)) return fail("search-v3-prefix-pin-invalid");
+      this.workTarget = this.makeTarget(t, view);
       this.progress = { catalog: "ready", capsules: "pending", index: "pending" };
       return { ...this.progress };
     }
-    const target = this.target; if (!target) return fail("search-v3-target-missing");
+    const target = this.workTarget;
     if (this.progress.capsules !== "ready") {
       const derived = await runCapsuleWorker({ v: 1, op: "derivePage", derivedDirectory: target.capsuleDirectory, catalogDirectory: target.catalogDirectory, identity: target.identity.capsule, view: target.view }, options);
       valid(); if (!derived.ok) return fail(derived.code);
@@ -110,7 +137,13 @@ export class HistorySearchAdapter {
     const indexed = await runSearchV3Worker(target, options);
     valid(); if (!indexed.ok) return fail(indexed.code);
     this.progress = { ...this.progress, index: indexed.result.complete === true ? "ready" : "lagging" };
-    if (this.progress.index === "ready") { this.lastReady = target; this.readyValidated = true; }
+    if (this.progress.index === "ready") {
+      this.lastReady = target; this.readyValidated = true;
+      if (target.view.eventCut < requested.view.eventCut) {
+        this.workTarget = undefined;
+        this.progress = { catalog: "ready", capsules: "pending", index: "pending" };
+      }
+    }
     return { ...this.progress };
   }
   private scoped(reference?: Reference): Target {

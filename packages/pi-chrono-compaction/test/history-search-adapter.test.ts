@@ -8,9 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { HistorySearchAdapter } from "../src/history-search-adapter.js";
+import { CAPSULE_REDUCER_PIPELINE_VERSION, type CapsuleCatalogView, type DerivedStoreIdentity } from "../src/capsule-contract.js";
+import { runCatalogWorker } from "../src/catalog-worker-client.js";
+import { runCapsuleWorker } from "../src/capsule-worker-client.js";
 import { line } from "./capsule-storage-fixture.js";
 
 const hash = (s: string): string => createHash("sha256").update(s).digest("hex");
+const uuid = (s: string): string => { const h = hash(s); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`; };
 async function ready(adapter: HistorySearchAdapter): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
@@ -92,6 +96,72 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
     assert.equal(refused.details.status, "unavailable");
     const sibling = await adapter.getRaw("b", {});
     assert.equal(sibling.details.status, "unavailable");
+  } finally {
+    adapter.dispose(); await adapter.scheduler.drain();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("bounded initial catch-up serves a searchable committed prefix before the full requested view", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-prefix-"));
+  const sourcePath = join(directory, "source.jsonl");
+  const schedulerDirectory = join(directory, "scheduler");
+  mkdirSync(schedulerDirectory, { mode: 0o700 });
+  let content = "", parent: string | null = null;
+  for (let index = 1; index <= 40; index += 1) {
+    const id = `event-${index}`;
+    content += line(id, parent, index === 1 ? "early searchable prefix needle" : index === 40 ? "eventual tail needle" : `ordinary history ${index}`);
+    parent = id;
+  }
+  writeFileSync(sourcePath, content, { mode: 0o600 });
+  const catalogDirectory = join(directory, "catalog"), sessionKey = hash("prefix-session"), shardKey = hash("prefix-shard");
+  const workerOptions = { schedulerDirectory, slots: 1 };
+  // Model an installed 2.0.8 head under the old configuration identity. The
+  // new prefix configuration must preserve it and use a separate route.
+  const ingested = await runCatalogWorker({ v: 1, op: "ingestStep", sourcePath, catalogDirectory, sessionKey, shardKey, branchKey: "pi-session", shardOrdinal: 0 }, workerOptions);
+  if (!ingested.ok) assert.fail(JSON.stringify(ingested));
+  assert.equal(ingested.result.caughtUp, true);
+  const oldPin = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory, sessionKey, branchKey: "pi-session", leaf: { shardKey, eventId: "event-40" } }, workerOptions);
+  if (!oldPin.ok) assert.fail(JSON.stringify(oldPin));
+  const oldView = oldPin.result.view as CapsuleCatalogView;
+  const oldConfig = hash("chrono-m06-capsule-default-v1");
+  const oldIdentity: DerivedStoreIdentity = { storeKey: uuid(`${oldView.storeKey}:${oldView.generation}:${CAPSULE_REDUCER_PIPELINE_VERSION}:${oldConfig}`), sessionKey,
+    catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation, derivedSchemaVersion: 2, capsuleSchemaVersion: 1, chunkSchemaVersion: 1,
+    reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: oldConfig };
+  const oldDirectory = join(catalogDirectory, `capsules-${oldIdentity.storeKey}`);
+  const oldHead = await runCapsuleWorker({ v: 1, op: "derivePage", derivedDirectory: oldDirectory, catalogDirectory, identity: oldIdentity, view: oldView }, workerOptions);
+  if (!oldHead.ok) assert.fail(JSON.stringify(oldHead));
+  assert.equal(oldHead.result.complete, false, "fixture must leave the old whole-view head in progress");
+
+  const adapter = new HistorySearchAdapter(workerOptions);
+  try {
+    adapter.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "event-40" });
+    const deadline = Date.now() + 10_000;
+    let prefixStatus: Record<string, unknown> | undefined;
+    while (Date.now() < deadline) {
+      const status = adapter.status();
+      if (status.servingLastReady === true && Number(status.indexedCut) < Number(status.requestedCut)) { prefixStatus = status; break; }
+      assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(status));
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(prefixStatus, `no committed prefix became available: ${JSON.stringify(adapter.status())}`);
+    assert.equal(prefixStatus.requestedCut, 40);
+    assert.equal(prefixStatus.indexedCut, 16);
+    assert.equal(prefixStatus.lag, 24);
+    assert.equal(prefixStatus.index, "pending", "the whole requested view is not falsely complete");
+    assert.equal(oldIdentity.configHash, hash("chrono-m06-capsule-default-v1"));
+    const early = await adapter.search({ query: "early searchable prefix needle", mode: "exact", limit: 1 });
+    assert.equal(early.details.status, "ok", JSON.stringify(early.details));
+    const earlyHandle = (early.details.hits as { handle: string }[])[0]?.handle;
+    assert.ok(earlyHandle);
+    assert.match(String((await adapter.recall(earlyHandle)).details.text), /early searchable prefix needle/);
+    assert.equal((await adapter.getBlock("event-1", 0)).details.text, "early searchable prefix needle");
+    await ready(adapter);
+    assert.equal(adapter.status().requestedCut, 40);
+    assert.equal(adapter.status().indexedCut, 40);
+    assert.equal(adapter.status().lag, 0);
+    const tail = await adapter.search({ query: "eventual tail needle", mode: "exact", limit: 1 });
+    assert.equal((tail.details.hits as unknown[]).length, 1, JSON.stringify(tail.details));
   } finally {
     adapter.dispose(); await adapter.scheduler.drain();
     rmSync(directory, { recursive: true, force: true });
