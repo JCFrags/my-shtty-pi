@@ -4,6 +4,7 @@ import {
   sourceRefWithinViewBounds,
   type CapsuleCatalogView,
   type ScopedBodySourceRef,
+  type ScopedRawSourceRef,
 } from "./capsule-contract.js";
 import { isSearchV3Identity, type SearchV3Identity, type SearchV3Response } from "./search-v3-contract.js";
 
@@ -31,6 +32,10 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
   rollupNodesPerRecall: 24,
   rollupNodesPerJob: 64,
   rollupTreeLevels: 32,
+  composeProtected: 24,
+  composeState: 12,
+  composeRecentMembers: 12,
+  composeUtf8Bytes: 80 * 1024,
 });
 
 export type EpisodeStateLevel = "episode" | "resource" | "state";
@@ -56,6 +61,64 @@ export interface EpisodeRollupAfter {
   readonly queryHash: string;
 }
 
+export interface EpisodeStateSelectionItem {
+  readonly stableKey: string;
+  readonly propositionKey: string;
+  readonly spanKey: string;
+  readonly subject: string;
+  readonly revision: string;
+  readonly kind: EpisodeStateKind;
+  readonly authority: EpisodeStateAuthority;
+  readonly confidence: EpisodeStateConfidence;
+  readonly status: "current" | "unresolved";
+  readonly effectiveAtCut: number;
+  readonly evidence: unknown;
+}
+
+export interface EpisodeStateSelectionMember {
+  readonly episodeKey: string;
+  readonly eventSeq: number;
+  readonly descriptor: number;
+  readonly sourceKey: string;
+  readonly source: ScopedBodySourceRef | ScopedRawSourceRef;
+  readonly cue: string;
+  readonly episode: {
+    readonly start: { readonly eventSeq: number; readonly descriptor: number };
+    readonly end: { readonly eventSeq: number; readonly descriptor: number };
+    readonly open: boolean;
+    readonly objective: string;
+    readonly objectiveEvidence: unknown;
+  };
+}
+
+/** One bounded read-only M09 snapshot. Omission flags mean at least one more record exists. */
+export interface EpisodeStateSelection {
+  readonly stateGeneration: number;
+  readonly branchKey: string;
+  readonly sourceView: CapsuleCatalogView;
+  readonly requestedCut: number;
+  readonly processedCut: number;
+  readonly processedMemoryCut: number;
+  readonly complete: boolean;
+  readonly partial: boolean;
+  readonly coverage: {
+    readonly bodyComplete: boolean;
+    readonly metadataComplete: boolean;
+    readonly partialMemory: boolean;
+    readonly qualifiedReducers: boolean;
+  };
+  readonly protected: readonly EpisodeStateSelectionItem[];
+  readonly current: readonly EpisodeStateSelectionItem[];
+  readonly recent: readonly EpisodeStateSelectionMember[];
+  readonly omissions: {
+    readonly protectedAtLeastOne: boolean;
+    readonly currentAtLeastOne: boolean;
+    readonly recentAtLeastOne: boolean;
+    readonly responseBudgetAtLeastOne: boolean;
+  };
+  readonly metrics: { readonly sqliteStatements: number };
+}
+
 export interface EpisodeRollupHandle {
   readonly schemaVersion: 1;
   readonly ruleset: "episode-rollup-exact-v1";
@@ -78,6 +141,7 @@ interface Base {
 export type EpisodeStateRequest = Base & (
   | { readonly op: "materializeState"; readonly after?: EpisodeStateAfter; readonly limit?: number }
   | { readonly op: "stateStatus" }
+  | { readonly op: "composeStateSelection" }
   | { readonly op: "recallState"; readonly query?: string; readonly source?: ScopedBodySourceRef;
       readonly level?: EpisodeStateLevel; readonly limit?: number; readonly after?: EpisodeStateAfter }
   | { readonly op: "materializeRollup"; readonly limit?: number }
@@ -125,6 +189,7 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
   switch (value.op) {
     case "materializeState": return stateCommon;
     case "stateStatus": return value.limit === undefined && value.after === undefined;
+    case "composeStateSelection": return value.limit === undefined && value.after === undefined;
     case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
         && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)
       && (value.source === undefined || isScopedBodySourceRef(value.source) && sourceRefWithinViewBounds(value.source, value.view))

@@ -16,6 +16,9 @@ import {
   type EpisodeStateAfter,
   type EpisodeStateRequest,
   type EpisodeStateResponse,
+  type EpisodeStateSelection,
+  type EpisodeStateSelectionItem,
+  type EpisodeStateSelectionMember,
 } from "./episode-state-contract.js";
 import { reduceEpisodeStateEnvelope, type ReducedEpisodeEvent, type VerifiedEventStructuralFacts } from "./episode-state-reducer.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
@@ -461,6 +464,67 @@ function recall(request: Extract<EpisodeStateRequest, { op: "recallState" }>, st
     level, items, ...(rows.length > items.length && last ? { next: { eventSeq: num(last, eventColumn), descriptor: num(last, descriptorColumn), stableKey: str(last, keyColumn), generation } } : {}),
     metrics: { sqliteStatements: store.statements } };
 }
+function selectionItem(row: SqlRow, effectiveAtCut: number): EpisodeStateSelectionItem {
+  return { stableKey: str(row, "stableKey"), propositionKey: str(row, "propositionKey"), spanKey: str(row, "spanKey"),
+    subject: str(row, "subject"), revision: str(row, "revision"), kind: str(row, "kind") as EpisodeStateSelectionItem["kind"],
+    authority: str(row, "authority") as EpisodeStateSelectionItem["authority"], confidence: str(row, "confidence") as EpisodeStateSelectionItem["confidence"],
+    status: str(row, "status") as EpisodeStateSelectionItem["status"], effectiveAtCut, evidence: JSON.parse(str(row, "evidence")) };
+}
+
+/** M09 selection reads one common body and metadata prefix without materialization or source-body access. */
+function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "composeStateSelection" }>, store: Store): EpisodeStateSelection {
+  const line = lineage(request), requestedCut = request.view.eventCut;
+  const head = store.get("SELECT * FROM heads WHERE lineage=?", line) ?? fail("search-v3-state-not-ready");
+  let indexed: EpisodeStateRequest["view"];
+  try { indexed = JSON.parse(str(head, "view")); } catch { return fail("search-v3-state-checkpoint-corrupt"); }
+  if (!extendsView(indexed, request.view) && !extendsView(request.view, indexed)) fail("search-v3-state-view-incompatible");
+  const bodyCut = num(head, "complete") === 1 ? Math.min(requestedCut, indexed.eventCut)
+    : Math.max(0, Math.min(requestedCut, num(head, "afterEventSeq") - 1));
+  const processedMemoryCut = Math.max(0, Math.min(requestedCut, indexed.eventCut, num(head, "metadataAfterEventSeq")));
+  const processedCut = Math.min(bodyCut, processedMemoryCut);
+  const generationRow = store.get("SELECT MAX(generation) AS generation FROM cuts WHERE lineage=? AND eventSeq<=?", line, processedCut);
+  const stateGeneration = generationRow?.generation === null || generationRow?.generation === undefined ? 0 : num(generationRow, "generation");
+  if (stateGeneration > num(head, "generation")) fail("search-v3-state-checkpoint-corrupt");
+  const active = "createdGeneration<=? AND eventSeq<=? AND (supersededGeneration IS NULL OR supersededGeneration>? OR json_extract(resolutionEvidence,'$.source.eventSeq')>?)";
+  const protectedRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('restriction','openwork','blocker') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
+    EPISODE_STATE_LIMITS.composeProtected + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeProtected + 1);
+  const currentRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('goal','decision') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
+    EPISODE_STATE_LIMITS.composeState + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeState + 1);
+  const recentEpisode = store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.startEventSeq<=? AND e.endEventSeq<=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=? AND v.endEventSeq<=?) ORDER BY e.startEventSeq DESC,e.startDescriptor DESC,e.episodeKey DESC LIMIT 1",
+    line, processedCut, processedCut, stateGeneration, processedCut);
+  const recentRows = recentEpisode ? store.rows("SELECT * FROM episode_membership WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT ?",
+    EPISODE_STATE_LIMITS.composeRecentMembers + 1, line, str(recentEpisode, "episodeKey"), stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeRecentMembers + 1) : [];
+  const protectedItems = protectedRows.slice(0, EPISODE_STATE_LIMITS.composeProtected).reverse().map(row => selectionItem(row, processedCut));
+  const currentItems = currentRows.slice(0, EPISODE_STATE_LIMITS.composeState).reverse().map(row => selectionItem(row, processedCut));
+  const recentItems: EpisodeStateSelectionMember[] = recentEpisode ? recentRows.slice(0, EPISODE_STATE_LIMITS.composeRecentMembers).reverse().map(row => ({
+    episodeKey: str(row, "episodeKey"), eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"),
+    source: JSON.parse(str(row, "source")), cue: visibleMemberCue(store, row, stateGeneration, processedCut), episode: {
+      start: { eventSeq: num(recentEpisode, "startEventSeq"), descriptor: num(recentEpisode, "startDescriptor") },
+      end: { eventSeq: num(recentEpisode, "endEventSeq"), descriptor: num(recentEpisode, "endDescriptor") }, open: num(recentEpisode, "open") === 1,
+      objective: str(recentEpisode, "objective"), objectiveEvidence: JSON.parse(str(recentEpisode, "objectiveEvidence")) } })) : [];
+  let protectedAtLeastOne = protectedRows.length > EPISODE_STATE_LIMITS.composeProtected;
+  let currentAtLeastOne = currentRows.length > EPISODE_STATE_LIMITS.composeState;
+  let recentAtLeastOne = recentRows.length > EPISODE_STATE_LIMITS.composeRecentMembers;
+  let responseBudgetAtLeastOne = false;
+  const bodyComplete = bodyCut >= requestedCut, metadataComplete = processedMemoryCut >= requestedCut;
+  const partialMemory = !metadataComplete;
+  const qualifiedReducers = num(head, "partialCount") > 0;
+  const build = (): EpisodeStateSelection => {
+    const partial = !bodyComplete || !metadataComplete || qualifiedReducers || protectedAtLeastOne || currentAtLeastOne || recentAtLeastOne || responseBudgetAtLeastOne;
+    return { stateGeneration, branchKey: request.view.branchKey, sourceView: request.view, requestedCut, processedCut, processedMemoryCut, complete: !partial, partial,
+      coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers }, protected: protectedItems, current: currentItems, recent: recentItems,
+      omissions: { protectedAtLeastOne, currentAtLeastOne, recentAtLeastOne, responseBudgetAtLeastOne }, metrics: { sqliteStatements: store.statements } };
+  };
+  while (Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
+    responseBudgetAtLeastOne = true;
+    if (recentItems.length) { recentItems.shift(); recentAtLeastOne = true; continue; }
+    if (currentItems.length) { currentItems.shift(); currentAtLeastOne = true; continue; }
+    if (protectedItems.length) { protectedItems.shift(); protectedAtLeastOne = true; continue; }
+    fail("search-v3-state-response-limit");
+  }
+  return build();
+}
+
 function status(request: Extract<EpisodeStateRequest, { op: "stateStatus" }>, store: Store): Record<string, unknown> {
   const generation = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation"), head = store.get("SELECT * FROM heads WHERE lineage=?", lineage(request));
   if (!head) return { identity: request.identity, ruleset: EPISODE_STATE_RULESET_VERSION, stateGeneration: generation, knownThroughCut: 0, knownThrough: 0, partial: true,
@@ -647,7 +711,7 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
     await catalogCall(request, options.catalogExecutor ?? executeCatalogStoreRequest, budget, { op: "page", view: request.view, after: request.view.eventCut, limit: 1 });
     const action = async (): Promise<EpisodeStateResponse> => {
       const path = join(request.searchDirectory, "state-v2.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
-      if (request.op === "stateStatus") {
+      if (request.op === "stateStatus" || request.op === "composeStateSelection") {
         try { lstatSync(path); } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("search-v3-state-store-missing");
           throw error;
@@ -657,12 +721,13 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
       const store = new Store(db, request); if (create) store.initialize(); else store.validate(false);
       const result = request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest,
         options.catalogExecutor ?? executeCatalogStoreRequest, budget)
-        : request.op === "recallState" ? recall(request, store) : status(request, store);
+        : request.op === "recallState" ? recall(request, store)
+        : request.op === "composeStateSelection" ? composeStateSelection(request, store) : status(request, store);
       const response: EpisodeStateResponse = { v: 1, ok: true, result: { ...result,
         coverageScope: "Body capsules plus structurally validated ordinary writer metadata. Custom type and hash-chain checks are not producer authentication; no metadata gains instruction authority.",
       }, sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };
       if (Buffer.byteLength(JSON.stringify(response)) > EPISODE_STATE_LIMITS.responseBytes) fail("search-v3-state-response-limit");
-      try { db.checkpoint(); } catch { /* committed WAL remains authoritative */ }
+      if (create) try { db.checkpoint(); } catch { /* committed WAL remains authoritative */ }
       return response;
     };
     return create ? await withRuntimeMutex(join(request.searchDirectory, "state-publication.lock"), action) : await action();
