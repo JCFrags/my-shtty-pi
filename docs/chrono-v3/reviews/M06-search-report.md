@@ -536,3 +536,14 @@ both rollup readiness and whole-target scheduler settlement within the same
 existing stage deadline. No timeout was increased and no publication/recovery
 assertion was removed. This substantive fixture correction receives fresh CI,
 not an unchanged rerun. Runtime and derived semantics are byte-identical.
+
+The first staged v3 comparison at the original cut retained twelve user
+restriction paragraphs and user-sourced open work, but only one recent row.
+This demonstrated over-reservation: the fixed 40% response reserve discarded
+chronology before actual context sizes were known. Patch 2.0.18 removes that
+percentage. Context allocation uses actual bytes within the unchanged 80 KiB
+ceiling, dropping optional detail only when mandatory expansion needs the space.
+Whole paragraphs and individual obligations remain protected. The same v3
+memory derivation remains compatible; no second memory rebuild is needed.
+Earlier artifacts remain preserved. This correction receives routine CI, not
+additional local tests. The frozen installation remains unchanged.

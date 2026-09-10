@@ -562,7 +562,7 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
       coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers, restrictionsComplete, openWorkComplete }, protected: protectedItems, current: currentItems, recent: recentItems, older: olderItems,
       omissions: { protectedAtLeastOne, openWorkAtLeastOne, currentAtLeastOne, recentAtLeastOne, responseBudgetAtLeastOne }, metrics: { sqliteStatements: store.statements } };
   };
-  while (Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.composeUtf8Bytes * 0.6) {
+  while (Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
     responseBudgetAtLeastOne = true;
     if (olderItems.length) { olderItems.shift(); continue; }
     if (currentItems.length) { currentItems.shift(); currentAtLeastOne = true; continue; }
@@ -608,17 +608,30 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
       omissions: [{ beforeUtf16: start, afterUtf16: text.length - end }], contextComplete: true } };
   };
   const result = { ...selection, protected: [...selection.protected], current: [...selection.current],
+    recent: [...selection.recent], older: [...(selection.older ?? [])], omissions: { ...selection.omissions },
     delta: selection.delta ? { ...selection.delta, protected: [...selection.delta.protected], current: [...selection.delta.current] } : undefined };
   result.protected.sort((a, b) => Number(b.kind === "restriction") - Number(a.kind === "restriction"));
   const groups = [result.protected, result.current, ...(result.delta ? [result.delta.protected, result.delta.current] : [])];
   for (const group of groups) for (let index = 0; index < group.length; index++) {
     const original = group[index]!;
     group[index] = await enrich(original);
-    // Keep each successful bounded expansion. A later large source must not
-    // undo previously verified context or displace a different obligation.
+    // Allocate using actual context bytes, not an up-front percentage that
+    // discards chronology even when the final response has room for it.
+    // Mandatory context takes precedence over optional detail. Never remove a
+    // different obligation to make this expansion fit.
+    if (group === result.protected) {
+      while (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
+        result.omissions.responseBudgetAtLeastOne = true;
+        if (result.older.length) { result.older.pop(); continue; }
+        if (result.current.length) { result.current.pop(); result.omissions.currentAtLeastOne = true; continue; }
+        if (result.recent.length) { result.recent.splice(Math.floor(result.recent.length / 2), 1); result.omissions.recentAtLeastOne = true; continue; }
+        break;
+      }
+    }
     if (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes) group[index] = original;
   }
-  return result;
+  const loss = Object.values(result.omissions).some(Boolean);
+  return { ...result, partial: result.partial || loss, complete: result.complete && !loss };
 }
 
 /** Read a small committed capsule delta, never derive missing capsules or replay lifetime state. */
