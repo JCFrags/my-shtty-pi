@@ -22,9 +22,19 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
   recallUtf8Bytes: 8 * 1024,
   page: 12,
   queryUnits: 256,
+  rollupFanout: 8,
+  rollupLeafMembers: 8,
+  rollupLeavesPerJob: 8,
+  rollupProtectedPerNode: 32,
+  rollupMetadataPerNode: 16,
+  rollupNodeUtf8Bytes: 64 * 1024,
+  rollupNodesPerRecall: 24,
+  rollupNodesPerJob: 64,
+  rollupTreeLevels: 32,
 });
 
 export type EpisodeStateLevel = "episode" | "resource" | "state";
+export type EpisodeRollupRecallLevel = "root" | "child" | "episode" | "source";
 export type EpisodeStateKind = "restriction" | "goal" | "openwork" | "blocker" | "decision" | "approval"
   | "reportedimplementation" | "observedverification" | "deployment" | "memory" | "retentionhint";
 export type EpisodeStateAuthority = "user" | "verified-tool" | "assistant-report" | "ordinary-memory" | "verified-configured-source";
@@ -36,6 +46,24 @@ export interface EpisodeStateAfter {
   readonly stableKey?: string;
   /** Pins reads so later append/supersession cannot leak into a continued page. */
   readonly generation?: number;
+}
+
+export interface EpisodeRollupAfter {
+  readonly nodeId: string;
+  readonly itemIndex: number;
+  readonly generation: number;
+  readonly level: EpisodeRollupRecallLevel;
+  readonly queryHash: string;
+}
+
+export interface EpisodeRollupHandle {
+  readonly schemaVersion: 1;
+  readonly ruleset: "episode-rollup-exact-v1";
+  readonly branchKey: string;
+  readonly eventCut: number;
+  readonly stateGeneration: number;
+  readonly rollupGeneration: number;
+  readonly rootNodeId: string;
 }
 
 interface Base {
@@ -51,6 +79,11 @@ export type EpisodeStateRequest = Base & (
   | { readonly op: "stateStatus" }
   | { readonly op: "recallState"; readonly query?: string; readonly source?: ScopedBodySourceRef;
       readonly level?: EpisodeStateLevel; readonly limit?: number; readonly after?: EpisodeStateAfter }
+  | { readonly op: "materializeRollup"; readonly limit?: number }
+  | { readonly op: "rollupStatus" }
+  | { readonly op: "recallRollup"; readonly query?: string; readonly nodeId?: string; readonly path?: readonly string[];
+      readonly level?: EpisodeRollupRecallLevel; readonly limit?: number; readonly generation?: number;
+      readonly after?: EpisodeRollupAfter; readonly handle?: EpisodeRollupHandle }
 );
 export type EpisodeStateResponse = SearchV3Response;
 
@@ -68,22 +101,47 @@ function after(value: unknown): value is EpisodeStateAfter {
     && (value.stableKey === undefined || typeof value.stableKey === "string" && value.stableKey.length <= 128)
     && (value.generation === undefined || positive(value.generation));
 }
+function rollupAfter(value: unknown): value is EpisodeRollupAfter {
+  return object(value) && typeof value.nodeId === "string" && /^[a-f0-9]{64}$/u.test(value.nodeId)
+    && integer(value.itemIndex) && value.itemIndex <= EPISODE_STATE_LIMITS.rollupNodesPerRecall && positive(value.generation)
+    && (value.level === "root" || value.level === "child" || value.level === "episode" || value.level === "source")
+    && typeof value.queryHash === "string" && /^[a-f0-9]{64}$/u.test(value.queryHash);
+}
+function rollupHandle(value: unknown): value is EpisodeRollupHandle {
+  return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v1"
+    && typeof value.branchKey === "string" && value.branchKey.length > 0 && value.branchKey.length <= 256
+    && integer(value.eventCut) && positive(value.stateGeneration) && positive(value.rollupGeneration)
+    && typeof value.rootNodeId === "string" && /^[a-f0-9]{64}$/u.test(value.rootNodeId);
+}
 
 export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequest {
   if (!byteSizeWithin(value) || !object(value) || value.v !== 1 || !path(value.catalogDirectory) || !path(value.capsuleDirectory)
     || !path(value.searchDirectory) || value.catalogDirectory === value.capsuleDirectory || value.catalogDirectory === value.searchDirectory
     || value.capsuleDirectory === value.searchDirectory || !isSearchV3Identity(value.identity) || !isCapsuleCatalogView(value.view)
     || !identityMatchesView(value.identity, value.view)) return false;
-  const common = (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page)
+  const stateCommon = (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page)
     && (value.after === undefined || after(value.after));
-  if (!common) return false;
   switch (value.op) {
-    case "materializeState": return true;
+    case "materializeState": return stateCommon;
     case "stateStatus": return value.limit === undefined && value.after === undefined;
-    case "recallState": return (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
+    case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
         && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)
       && (value.source === undefined || isScopedBodySourceRef(value.source) && sourceRefWithinViewBounds(value.source, value.view))
       && (value.level === undefined || value.level === "episode" || value.level === "resource" || value.level === "state");
+    case "materializeRollup": return value.after === undefined
+      && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob);
+    case "rollupStatus": return value.limit === undefined && value.after === undefined;
+    case "recallRollup": return (positive(value.generation) || rollupHandle(value.handle))
+      && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page)
+      && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0 && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)
+      && (value.nodeId === undefined || typeof value.nodeId === "string" && /^[a-f0-9]{64}$/u.test(value.nodeId))
+      && (value.path === undefined || Array.isArray(value.path) && value.path.length <= EPISODE_STATE_LIMITS.rollupTreeLevels
+        && value.path.every(item => typeof item === "string" && /^[a-f0-9]{64}$/u.test(item)))
+      && (value.level === undefined || value.level === "root" || value.level === "child" || value.level === "episode" || value.level === "source")
+      && (value.generation === undefined || positive(value.generation)) && (value.after === undefined || rollupAfter(value.after))
+      && (value.handle === undefined || rollupHandle(value.handle) && value.handle.branchKey === value.view.branchKey && value.handle.eventCut <= value.view.eventCut)
+      && (value.generation === undefined || value.handle === undefined || value.generation === value.handle.rollupGeneration)
+      && (value.after === undefined || value.generation === undefined || value.after.generation === value.generation);
     default: return false;
   }
 }

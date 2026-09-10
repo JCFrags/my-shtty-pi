@@ -477,11 +477,134 @@ function status(request: Extract<EpisodeStateRequest, { op: "stateStatus" }>, st
     metadata: { afterEventSeq: num(head, "metadataAfterEventSeq"), complete: num(head, "metadataComplete") === 1 }, metrics: { sqliteStatements: store.statements } };
 }
 
+export interface EpisodeRollupInputCursor {
+  readonly episodeStartEventSeq: number;
+  readonly episodeStartDescriptor: number;
+  readonly episodeKey: string;
+  readonly memberEventSeq: number;
+  readonly memberDescriptor: number;
+  readonly memberSourceKey: string;
+  readonly episodeComplete: boolean;
+  readonly fragmentIndex: number;
+}
+export interface EpisodeRollupProtectedInput {
+  readonly stableKey: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly authority: string;
+  readonly confidence: string;
+  readonly evidence: unknown;
+}
+export interface EpisodeRollupMetadataInput {
+  readonly stableKey: string;
+  readonly kind: "memory" | "retention-hint";
+  readonly effectiveAuthority: "ordinary-memory";
+  readonly effectiveConfidence: "advisory";
+  readonly data: unknown;
+  readonly evidence: unknown;
+}
+export interface EpisodeRollupMemberInput {
+  readonly eventSeq: number;
+  readonly descriptor: number;
+  readonly sourceKey: string;
+  readonly source: ScopedBodySourceRef | ScopedRawSourceRef;
+  readonly cue: string;
+  readonly exactBody?: string;
+  readonly exactBodyOmitted?: "bounded-source";
+}
+export interface EpisodeRollupInputPage {
+  readonly stateGeneration: number;
+  readonly knownThroughCut: number;
+  readonly complete: boolean;
+  readonly next?: EpisodeRollupInputCursor;
+  readonly episode?: {
+    readonly episodeKey: string;
+    readonly start: { readonly eventSeq: number; readonly descriptor: number };
+    readonly end: { readonly eventSeq: number; readonly descriptor: number };
+    /** This is only a closed chronological interval, never inferred task completion. */
+    readonly closure: "next-episode-boundary";
+    readonly memberCount: number;
+    readonly objective: string;
+    readonly objectiveEvidence: unknown;
+    readonly fragmentIndex: number;
+    readonly episodeFragment: boolean;
+    readonly members: readonly EpisodeRollupMemberInput[];
+    readonly protected: readonly EpisodeRollupProtectedInput[];
+    readonly omittedProtectedCount: number;
+    readonly metadata: readonly EpisodeRollupMetadataInput[];
+    readonly omittedMetadataCount: number;
+  };
+}
+
+/** Bounded read-only export for M08. It never creates or mutates state-v2.sqlite. */
+export async function readEpisodeRollupInputPage(request: EpisodeStateRequest, cursor: EpisodeRollupInputCursor | undefined,
+  options: EpisodeStateExecutionOptions = {}, budget: { bytes: number } = { bytes: 0 }): Promise<EpisodeRollupInputPage> {
+  let db: CatalogSqlite | undefined;
+  try {
+    prepareDirectory(request.searchDirectory);
+    const path = join(request.searchDirectory, "state-v2.sqlite");
+    db = CatalogSqlite.open(path, candidate => new Store(candidate, request).validate(false));
+    const store = new Store(db, request), line = lineage(request), head = store.get("SELECT * FROM heads WHERE lineage=?", line);
+    if (!head || num(head, "complete") !== 1 || num(head, "metadataComplete") !== 1) fail("search-v3-rollup-state-not-ready");
+    const indexed = JSON.parse(str(head!, "view")) as EpisodeStateRequest["view"];
+    if (!extendsView(indexed, request.view)) fail("search-v3-rollup-state-not-ready");
+    const stateGeneration = num(head!, "generation"), knownThroughCut = Math.min(request.view.eventCut, indexed.eventCut);
+    const same = cursor && !cursor.episodeComplete;
+    const episode = same
+      ? store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.episodeKey=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=?) AND e.open=0 AND e.endEventSeq<=?", line, cursor!.episodeKey, stateGeneration, knownThroughCut)
+      : store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=?) AND e.open=0 AND e.endEventSeq<=? AND (e.startEventSeq>? OR (e.startEventSeq=? AND (e.startDescriptor>? OR (e.startDescriptor=? AND e.episodeKey>?)))) ORDER BY e.startEventSeq,e.startDescriptor,e.episodeKey LIMIT 1", line, stateGeneration, knownThroughCut,
+        cursor?.episodeStartEventSeq ?? 0, cursor?.episodeStartEventSeq ?? 0, cursor?.episodeStartDescriptor ?? 0,
+        cursor?.episodeStartDescriptor ?? 0, cursor?.episodeKey ?? "");
+    if (!episode) return { stateGeneration, knownThroughCut, complete: true };
+    const episodeKey = str(episode, "episodeKey"), afterEvent = same ? cursor!.memberEventSeq : 0,
+      afterDescriptor = same ? cursor!.memberDescriptor : 0, afterSource = same ? cursor!.memberSourceKey : "";
+    const rows = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND eventSeq<=? AND (eventSeq>? OR (eventSeq=? AND (descriptor>? OR (descriptor=? AND sourceKey>?)))) ORDER BY eventSeq,descriptor,sourceKey LIMIT ?",
+      EPISODE_STATE_LIMITS.rollupLeafMembers + 1, line, episodeKey, stateGeneration, knownThroughCut, afterEvent, afterEvent, afterDescriptor, afterDescriptor, afterSource,
+      EPISODE_STATE_LIMITS.rollupLeafMembers + 1);
+    const selected = rows.slice(0, EPISODE_STATE_LIMITS.rollupLeafMembers), members: EpisodeRollupMemberInput[] = [];
+    for (const row of selected) {
+      const source = JSON.parse(str(row, "source")) as ScopedBodySourceRef | ScopedRawSourceRef;
+      if (source.coordinateKind === "decoded-body") {
+        const exact = await body(request, { source } as ReducerEnvelope, options.capsuleExecutor ?? executeCapsuleRequest, budget);
+        members.push({ eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"), source,
+          cue: visibleMemberCue(store, row, stateGeneration, knownThroughCut), ...(exact === undefined ? { exactBodyOmitted: "bounded-source" as const } : { exactBody: exact }) });
+      } else members.push({ eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"), source,
+        cue: visibleMemberCue(store, row, stateGeneration, knownThroughCut) });
+    }
+    const protectedRows = store.rows("SELECT stableKey,kind,status,authority,confidence,evidence FROM state_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? AND kind IN ('restriction','blocker','openwork') ORDER BY eventSeq,descriptor,stableKey LIMIT ?",
+      EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1);
+    const memoryRows = store.rows("SELECT stableKey,'memory' AS kind,text AS data,evidence FROM memory_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,stableKey LIMIT ?",
+      EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1);
+    const retentionRows = store.rows("SELECT stableKey,'retention-hint' AS kind,data,evidence FROM retention_hints WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,stableKey LIMIT ?",
+      EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1);
+    const metadataRows = [...memoryRows, ...retentionRows].sort((a, b) => str(a, "stableKey").localeCompare(str(b, "stableKey")));
+    const last = selected.at(-1), episodeComplete = rows.length <= EPISODE_STATE_LIMITS.rollupLeafMembers;
+    const next = last ? { episodeStartEventSeq: num(episode, "startEventSeq"), episodeStartDescriptor: num(episode, "startDescriptor"), episodeKey,
+      memberEventSeq: num(last, "eventSeq"), memberDescriptor: num(last, "descriptor"), memberSourceKey: str(last, "sourceKey"), episodeComplete,
+      fragmentIndex: same ? cursor!.fragmentIndex + 1 : 0 } : undefined;
+    return { stateGeneration, knownThroughCut, complete: false, ...(next ? { next } : {}), episode: { episodeKey,
+      start: { eventSeq: num(episode, "startEventSeq"), descriptor: num(episode, "startDescriptor") },
+      end: { eventSeq: num(episode, "endEventSeq"), descriptor: num(episode, "endDescriptor") }, closure: "next-episode-boundary",
+      memberCount: num(episode, "memberCount"), objective: str(episode, "objective"), objectiveEvidence: JSON.parse(str(episode, "objectiveEvidence")),
+      fragmentIndex: same ? cursor!.fragmentIndex + 1 : 0,
+      episodeFragment: !episodeComplete || Boolean(same), members,
+      protected: protectedRows.slice(0, EPISODE_STATE_LIMITS.rollupProtectedPerNode).map(row => ({ stableKey: str(row, "stableKey"), kind: str(row, "kind"), status: str(row, "status"), authority: str(row, "authority"), confidence: str(row, "confidence"), evidence: JSON.parse(str(row, "evidence")) })),
+      omittedProtectedCount: Math.max(0, protectedRows.length - EPISODE_STATE_LIMITS.rollupProtectedPerNode),
+      metadata: metadataRows.slice(0, EPISODE_STATE_LIMITS.rollupMetadataPerNode).map(row => ({ stableKey: str(row, "stableKey"), kind: str(row, "kind") as "memory" | "retention-hint", effectiveAuthority: "ordinary-memory", effectiveConfidence: "advisory", data: str(row, "kind") === "retention-hint" ? JSON.parse(str(row, "data")) : str(row, "data"), evidence: JSON.parse(str(row, "evidence")) })),
+      omittedMetadataCount: Math.max(0, metadataRows.length - EPISODE_STATE_LIMITS.rollupMetadataPerNode) } };
+  } finally { try { db?.close(); } catch { /* read-only close */ } }
+}
+
 /** Direct executor for tests and the existing contained search-v3 worker. */
 export async function executeEpisodeStateRequest(value: unknown, options: EpisodeStateExecutionOptions = {}): Promise<EpisodeStateResponse> {
   if (!isEpisodeStateRequest(value)) return { v: 1, ok: false, code: "search-v3-state-request-invalid", sourceBytes: 0,
     sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes, resumable: false };
-  const request = value, create = request.op === "materializeState"; let db: CatalogSqlite | undefined; const budget = { bytes: 0 };
+  const request = value;
+  if (request.op === "materializeRollup" || request.op === "rollupStatus" || request.op === "recallRollup") {
+    const { executeEpisodeRollupRequest } = await import("./episode-rollup-store.js");
+    return executeEpisodeRollupRequest(request, options);
+  }
+  const create = request.op === "materializeState"; let db: CatalogSqlite | undefined; const budget = { bytes: 0 };
   try {
     prepareDirectory(request.searchDirectory);
     // Authorize this exact view and current physical source even for read-only memory.

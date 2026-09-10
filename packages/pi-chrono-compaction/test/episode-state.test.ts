@@ -83,9 +83,11 @@ test("lifecycle identity requires an explicit same-proposition transition and tr
 test("persisted metadata lifecycle, historical pin, and episode-source recall remain source exact", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-state-metadata-"));
   const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
-  const sourcePath = join(directory, "main.jsonl"), oldStore = join(searchDirectory, "state-v1.sqlite");
+  const sourcePath = join(directory, "main.jsonl"), oldStore = join(searchDirectory, "state-v1.sqlite"),
+    oldRollup = join(searchDirectory, "rollup-v0.sqlite");
   mkdirSync(searchDirectory, { mode: 0o700 });
   writeFileSync(oldStore, "legacy-state-v1-must-remain", { mode: 0o600 });
+  writeFileSync(oldRollup, "legacy-rollup-v0-must-remain", { mode: 0o600 });
   const remembered = createMemoryEvent([], { action: "remember", memoryId: "mem-1", timestamp: "2026-09-09T00:00:00.000Z", turn: 1,
     sourceRef: "memory-tool:remember", scope: "project", authority: "ordinary", confidence: 0.8, text: "Preserve the parser evidence." });
   const forgotten = createMemoryEvent([remembered], { action: "forget", memoryId: "mem-1", timestamp: "2026-09-09T00:01:00.000Z", turn: 2,
@@ -93,7 +95,8 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
   const hint = { currentUnresolvedWork: "Finish parser identity", preserveExact: "Keep the raw producer event" };
   writeFileSync(sourcePath, message("u1", null, "user", "Implement /Repo/Parser.ts without deployment.")
     + custom("m1", "u1", "chrono-memory-v2-event", remembered)
-    + custom("h1", "m1", "chrono-compact-retention-hint", hint), { mode: 0o600 });
+    + custom("h1", "m1", "chrono-compact-retention-hint", hint)
+    + message("u2", "h1", "user", "Continue parser checks without deployment."), { mode: 0o600 });
   const sessionKey = "state-metadata";
   const catalog = async (extra: Record<string, unknown>): Promise<Record<string, any>> => {
     const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
@@ -101,7 +104,7 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
   };
   try {
     await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
-    const oldView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "h1" } })).view as CapsuleCatalogView;
+    const oldView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "u2" } })).view as CapsuleCatalogView;
     const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation,
       derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
       reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: createHash("sha256").update("state-capsules").digest("hex") };
@@ -139,7 +142,38 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     if (episodePage.ok) assert.ok((episodePage.result as any).items.some((item: any) => item.member.source.coordinateKind === "raw-json"),
       "a source handle resolves the episode and pages all members");
 
-    appendFileSync(sourcePath, custom("m2", "h1", "chrono-memory-v2-event", forgotten));
+    const materializeRollup = async (view: CapsuleCatalogView): Promise<any> => {
+      for (let page = 0; page < 20; page++) {
+        const response = await run(view, { op: "materializeRollup", limit: 1 });
+        assert.equal(response.ok, true, JSON.stringify(response));
+        if (response.ok && (response.result as any).complete) return response.result;
+      }
+      assert.fail("rollup materialization did not complete");
+    };
+    const oldRollupResult = await materializeRollup(oldView);
+    assert.equal(oldRollupResult.closedIntervalsOnly, true);
+    assert.equal(oldRollupResult.excludedOpenTail, true, "the current open episode is outside closed-interval coverage");
+    const root = await run(oldView, { op: "recallRollup", level: "root", limit: 1, handle: oldRollupResult.handle });
+    assert.equal(root.ok, true, JSON.stringify(root));
+    if (root.ok) assert.equal((root.result as any).items.length, 1, "root expansion obeys the request page cap");
+    const episodeRollup = await run(oldView, { op: "recallRollup", level: "episode", query: "parser", limit: 1,
+      handle: oldRollupResult.handle });
+    assert.equal(episodeRollup.ok, true, JSON.stringify(episodeRollup)); if (!episodeRollup.ok) return;
+    const episodeReference = (episodeRollup.result as any).items[0].reference;
+    assert.equal(episodeReference.closure, "next-episode-boundary", "a closed interval is not reported as task completion");
+    const sourceRollup = await run(oldView, { op: "recallRollup", level: "source", nodeId: episodeReference.nodeId,
+      path: episodeReference.path, limit: 1, handle: oldRollupResult.handle });
+    assert.equal(sourceRollup.ok, true, JSON.stringify(sourceRollup));
+    if (sourceRollup.ok) {
+      assert.equal((sourceRollup.result as any).items.length, 1, "exact sources page individually");
+      assert.ok((sourceRollup.result as any).items[0].source.coordinateKind);
+    }
+    const missing = await run(oldView, { op: "recallRollup", level: "child", nodeId: "f".repeat(64),
+      path: [oldRollupResult.handle.rootNodeId, "f".repeat(64)], limit: 1, handle: oldRollupResult.handle });
+    assert.equal(missing.ok, false);
+    if (!missing.ok) assert.equal(missing.code, "search-v3-rollup-path-invalid", "foreign nodes are refused under the pinned root");
+
+    appendFileSync(sourcePath, custom("m2", "u2", "chrono-memory-v2-event", forgotten));
     await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
     const newView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "m2" } })).view as CapsuleCatalogView;
     await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, newView); await materializeAll(newView);
@@ -154,6 +188,9 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
       assert.equal(item.memoryId, "mem-1");
       assert.equal("resolutionEvidence" in item, false, "future transition references do not leak into a historical pin");
     }
+    const pinnedRollup = await run(newView, { op: "recallRollup", level: "root", limit: 1, handle: oldRollupResult.handle });
+    assert.equal(pinnedRollup.ok, true, JSON.stringify(pinnedRollup));
     assert.equal(readFileSync(oldStore, "utf8"), "legacy-state-v1-must-remain");
+    assert.equal(readFileSync(oldRollup, "utf8"), "legacy-rollup-v0-must-remain");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
