@@ -2,8 +2,8 @@ import { isCapsuleCatalogView, isScopedBodySourceRef, sourceRefWithinViewBounds,
 import { isSearchV3Identity } from "./search-v3-contract.js";
 /** Pure M07 protocol. Importing this module performs no I/O and loads no worker. */
 export const EPISODE_STATE_PROTOCOL_VERSION = 1;
-export const EPISODE_STATE_SCHEMA_VERSION = 1;
-export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v1";
+export const EPISODE_STATE_SCHEMA_VERSION = 2;
+export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v2";
 export const EPISODE_STATE_LIMITS = Object.freeze({
     requestBytes: 48 * 1024,
     responseBytes: 96 * 1024,

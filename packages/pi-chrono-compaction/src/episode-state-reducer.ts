@@ -17,6 +17,10 @@ export interface ExactStateEvidence {
 }
 export interface ReducedStateItem {
   readonly stableKey: string;
+  /** Exact normalized proposition identity; paths alone never identify an obligation. */
+  readonly propositionKey: string;
+  /** Exact source-span identity prevents two claims at one path from collapsing. */
+  readonly spanKey: string;
   readonly subject: string;
   readonly revision: string;
   readonly kind: EpisodeStateKind;
@@ -24,7 +28,7 @@ export interface ReducedStateItem {
   readonly confidence: EpisodeStateConfidence;
   readonly status: "current" | "unresolved";
   readonly evidence: ExactStateEvidence;
-  readonly explicitResolution: boolean;
+  readonly transition?: { readonly action: "revoke" | "replace"; readonly targetPropositionKey: string };
 }
 export interface ReducedResourceObservation {
   readonly stableKey: string;
@@ -36,6 +40,7 @@ export interface ReducedResourceObservation {
   readonly currentRevision: "known" | "unknown";
   readonly knownThrough: number;
   readonly failed: boolean | null;
+  readonly executionOutcome: "failed" | "cancelled" | "completed-without-reported-error" | "unknown";
   readonly evidence: ExactStateEvidence;
 }
 export interface VerifiedEventStructuralFacts {
@@ -43,6 +48,7 @@ export interface VerifiedEventStructuralFacts {
   readonly toolName?: { readonly value: string; readonly source: ScopedRawSourceRef };
   readonly exitCode?: { readonly value: number; readonly source: ScopedRawSourceRef };
   readonly isError?: { readonly value: boolean; readonly source: ScopedRawSourceRef };
+  readonly cancelled?: { readonly value: boolean; readonly source: ScopedRawSourceRef };
 }
 export interface ReducedEpisodeEvent {
   readonly source: ScopedBodySourceRef;
@@ -52,6 +58,8 @@ export interface ReducedEpisodeEvent {
   readonly boundaryKind: "user-request" | "compaction-continuation" | "none";
   readonly objective?: ExactStateEvidence;
   readonly states: readonly ReducedStateItem[];
+  /** Existing bounded capsule action/outcome text, retained in chronology for episode recall. */
+  readonly capsuleCue: string;
   readonly resources: readonly ReducedResourceObservation[];
   readonly partial: boolean;
 }
@@ -99,6 +107,19 @@ function subjectOf(text: string, context = text): string {
     !["the", "and", "that", "this", "with", "must", "should", "please", "only", "not", "from", "into"].includes(word)).slice(0, 8) ?? [];
   return `topic:${words.join(":") || sha(text).slice(0, 16)}`;
 }
+function propositionOf(kind: EpisodeStateKind, text: string): string {
+  const normalizedText = normalized(text).replace(/^./u, character => character.toLowerCase())
+    .replace(/^(?:explicitly\s+)?(?:revoke|revoked|remove|removed|replace|replaced|supersede|superseded)\s+(?:the\s+)?(?:restriction|requirement|obligation)?\s*(?:that|to|:)?\s*/u, "")
+    .replace(/\s*[.;]+$/u, "");
+  return sha(`${kind}\n${normalizedText}`);
+}
+function transitionOf(kind: EpisodeStateKind, text: string): ReducedStateItem["transition"] {
+  if (kind !== "restriction" || /(?:^|\s)[>"'`]\s*(?:never|must not|do not)/iu.test(text)) return undefined;
+  const match = text.match(/^\s*(?:explicitly\s+)?(revoke|revoked|remove|removed|replace|replaced|supersede|superseded)\s+(?:the\s+)?(?:restriction|requirement|obligation)?\s*(?:that|to|:)?\s*(.+?)\s*$/iu);
+  if (!match || /\b(?:if|when|unless|would|may|might|quoted|says?)\b/iu.test(text)) return undefined;
+  const action = /replace|supersed/iu.test(match[1]!) ? "replace" : "revoke";
+  return { action, targetPropositionKey: propositionOf("restriction", match[2]!) };
+}
 function revisionOf(text: string): string {
   const explicit = text.match(/\b(?:revision|rev|commit|version|sha(?:256)?)\s*[:=#]?\s*([A-Za-z0-9_.+-]{3,128})\b/iu)?.[1]
     ?? text.match(/\b[a-f0-9]{40,64}\b/iu)?.[0];
@@ -120,18 +141,24 @@ function classifyAssistant(text: string): EpisodeStateKind | undefined {
   if (/\b(?:remaining|next action|still need|todo|unresolved)\b/iu.test(text)) return "openwork";
   return undefined;
 }
-function toolFailure(envelope: ReducerEnvelope, verified?: VerifiedEventStructuralFacts): boolean | null {
-  const isError = structural(envelope, "isError", verified)?.value;
-  if (typeof isError === "boolean") return isError;
+function toolOutcome(envelope: ReducerEnvelope, verified?: VerifiedEventStructuralFacts): ReducedResourceObservation["executionOutcome"] {
   const exit = structural(envelope, "exitCode", verified)?.value;
-  if (typeof exit === "number") return exit !== 0;
+  if (typeof exit === "number" && exit !== 0) return "failed";
+  const cancelled = structural(envelope, "cancelled", verified)?.value;
+  if (cancelled === true) return "cancelled";
   for (const alternative of envelope.alternatives) {
-    if (alternative.outcome.status === "supported") {
-      if (alternative.outcome.value === "failure" || alternative.outcome.value === "cancelled") return true;
-      if (alternative.outcome.value === "success") return false;
-    }
+    if (alternative.outcome.status !== "supported") continue;
+    if (alternative.outcome.value === "failure") return "failed";
+    if (alternative.outcome.value === "cancelled") return "cancelled";
   }
-  return null;
+  const isError = structural(envelope, "isError", verified)?.value;
+  if (isError === true) return "failed";
+  if ((typeof exit === "number" && exit === 0) || isError === false) return "completed-without-reported-error";
+  return "unknown";
+}
+function toolFailure(envelope: ReducerEnvelope, verified?: VerifiedEventStructuralFacts): boolean | null {
+  const outcome = toolOutcome(envelope, verified);
+  return outcome === "failed" || outcome === "cancelled" ? true : outcome === "completed-without-reported-error" ? false : null;
 }
 function resource(text: string, envelope: ReducerEnvelope, ev: ExactStateEvidence, verified?: VerifiedEventStructuralFacts): ReducedResourceObservation | undefined {
   const toolName = String(structural(envelope, "toolName", verified)?.value ?? "");
@@ -148,7 +175,7 @@ function resource(text: string, envelope: ReducerEnvelope, ev: ExactStateEvidenc
   const basis = declared !== "unspecified" ? "declared" : "unknown";
   return { stableKey: sha(`${key}\n${envelope.source.eventSeq}\n${envelope.source.descriptor}`).slice(0, 32), resourceKind, resourceKey: key,
     relation, revision, revisionBasis: basis, currentRevision: "unknown", knownThrough: envelope.source.eventSeq,
-    failed: toolFailure(envelope, verified), evidence: ev };
+    failed: toolFailure(envelope, verified), executionOutcome: toolOutcome(envelope, verified), evidence: ev };
 }
 
 /** Extract only source-local, bounded claims. Lifecycle transitions are store-owned. */
@@ -168,19 +195,21 @@ export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: str
     else if (role === "custom" && original) { kind = classifyUser(clause.text) ?? classifyAssistant(clause.text); authority = "ordinary-memory"; confidence = "advisory"; }
     else if (role === "assistant" && original) { kind = classifyAssistant(clause.text); }
     else if ((role === "toolresult" || role === "tool" || structural(envelope, "toolName", verified)) && original) {
-      const failed = toolFailure(envelope, verified);
-      if (failed !== null) { kind = failed ? "blocker" : "observedverification"; authority = "verified-tool"; confidence = "verified"; }
+      // Tool execution success is not task or resource verification. Only explicit failure/cancellation creates state.
+      const outcome = toolOutcome(envelope, verified);
+      if (outcome === "failed" || outcome === "cancelled") { kind = "blocker"; authority = "verified-tool"; confidence = "verified"; }
     }
     if (!kind) continue;
     // Quoted/mixed/generated text never grants approval. Original provenance alone is not user authority.
     if (kind === "approval" && (!startsEpisode || /^\s*(?:>|["'`])/u.test(clause.text))) continue;
     const subject = subjectOf(clause.text, text), clauseRevision = revisionOf(clause.text), contextualRevision = revisionOf(text);
     const revision = clauseRevision !== "unspecified" ? clauseRevision : contextualRevision;
-    const explicitResolution = /\b(?:fixed|resolved|corrected|supersedes?|instead|no longer|replaces?|passed|verified|success)\b/iu.test(clause.text)
-      && (authority !== "verified-tool" || revision !== "unspecified");
-    states.push({ stableKey: sha(`${kind}\n${subject}\n${revision}\n${envelope.source.eventSeq}\n${envelope.source.descriptor}`).slice(0, 32),
-      subject, revision, kind, authority, confidence, status: kind === "blocker" || kind === "openwork" ? "unresolved" : "current",
-      evidence: evidence(envelope.source, roleFact?.source, text, clause), explicitResolution });
+    const propositionKey = propositionOf(kind, clause.text);
+    const spanKey = sha(`${JSON.stringify(envelope.source)}\n${clause.start}\n${clause.end}`);
+    const transition = transitionOf(kind, clause.text), effectiveKind: EpisodeStateKind = transition ? "decision" : kind;
+    states.push({ stableKey: sha(`${propositionKey}\n${spanKey}`).slice(0, 32), propositionKey, spanKey,
+      subject, revision, kind: effectiveKind, authority, confidence, status: effectiveKind === "blocker" || effectiveKind === "openwork" ? "unresolved" : "current",
+      evidence: evidence(envelope.source, roleFact?.source, text, clause), ...(transition ? { transition } : {}) });
   }
   const wholeEvidence = complete ? evidence(envelope.source, roleFact?.source, text, { text, start: 0, end: text.length }) : undefined;
   const objectiveClause = startsEpisode ? neighborhoods(text)[0] : undefined;
@@ -188,8 +217,9 @@ export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: str
   const resourceClause = clauses.find(clause => /(?:[A-Za-z]:[\\/]|\.?\.?[\\/]|\/|https?:\/\/|\brevision\b)/u.test(clause.text)) ?? clauses[0];
   const resourceEvidence = resourceClause ? evidence(envelope.source, roleFact?.source, text, resourceClause) : wholeEvidence;
   const observed = resourceEvidence ? resource(text, envelope, resourceEvidence, verified) : undefined;
+  const capsuleCue = envelope.alternatives.map(alternative => alternative.text).filter(Boolean).join("\n").slice(0, 2048);
   return { source: envelope.source, role, original, startsEpisode, boundaryKind: startsEpisode ? "user-request" : compaction ? "compaction-continuation" : "none",
-    ...(objective ? { objective } : {}), states, resources: observed ? [observed] : [], partial: !complete || !role || clauses.length >= 32 };
+    ...(objective ? { objective } : {}), states, capsuleCue, resources: observed ? [observed] : [], partial: !complete || !role || clauses.length >= 32 };
 }
 
 export function episodeStateRulesetIdentity(): string { return EPISODE_STATE_RULESET_VERSION; }

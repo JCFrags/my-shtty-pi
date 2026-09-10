@@ -9,8 +9,8 @@ import { isSearchV3Identity, type SearchV3Identity, type SearchV3Response } from
 
 /** Pure M07 protocol. Importing this module performs no I/O and loads no worker. */
 export const EPISODE_STATE_PROTOCOL_VERSION = 1 as const;
-export const EPISODE_STATE_SCHEMA_VERSION = 1 as const;
-export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v1" as const;
+export const EPISODE_STATE_SCHEMA_VERSION = 2 as const;
+export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v2" as const;
 export const EPISODE_STATE_LIMITS = Object.freeze({
   requestBytes: 48 * 1024,
   responseBytes: 96 * 1024,
@@ -26,7 +26,7 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
 
 export type EpisodeStateLevel = "episode" | "resource" | "state";
 export type EpisodeStateKind = "restriction" | "goal" | "openwork" | "blocker" | "decision" | "approval"
-  | "reportedimplementation" | "observedverification" | "deployment";
+  | "reportedimplementation" | "observedverification" | "deployment" | "memory" | "retentionhint";
 export type EpisodeStateAuthority = "user" | "verified-tool" | "assistant-report" | "ordinary-memory" | "verified-configured-source";
 export type EpisodeStateConfidence = "verified" | "supported" | "qualified" | "advisory";
 

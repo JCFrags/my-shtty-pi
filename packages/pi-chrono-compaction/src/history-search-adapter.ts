@@ -3,13 +3,13 @@ import { join } from "node:path";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { estimateTokensFromText } from "./utils.js";
 import { resolveCatalogHistory, readCatalogHistoryPage, type CatalogHistoryExecutor, type CatalogHistoryScope } from "./catalog-history.js";
-import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, isCapsuleReadiness, isScopedBodySourceRef, sourceRefWithinViewBounds, type ScopedBodySourceRef, type CapsuleCatalogView, type DerivedStoreIdentity } from "./capsule-contract.js";
+import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, isCapsuleReadiness, isScopedBodySourceRef, isScopedRawSourceRef, sourceRefWithinViewBounds, type ScopedRawSourceRef, type ScopedBodySourceRef, type CapsuleCatalogView, type DerivedStoreIdentity } from "./capsule-contract.js";
 import { canonicalJson } from "./capsule-segment.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
 import { runCapsuleWorker } from "./capsule-worker-client.js";
 import { runSearchV3Worker } from "./search-v3-worker-client.js";
 import { isSearchV3Handle, type SearchV3Handle, type SearchV3Request } from "./search-v3-contract.js";
-import type { EpisodeStateAfter, EpisodeStateLevel } from "./episode-state-contract.js";
+import { EPISODE_STATE_RULESET_VERSION, type EpisodeStateAfter, type EpisodeStateLevel } from "./episode-state-contract.js";
 import { SearchLifecycleScheduler, type SearchLifecycleTarget, type SearchLifecycleProgress } from "./search-lifecycle.js";
 
 type Target = Extract<SearchV3Request, { op: "ingestPage" }>;
@@ -17,13 +17,15 @@ const hash = (text: string): string => createHash("sha256").update(text).digest(
 const uuid = (text: string): string => { const h = hash(text); return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`; };
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 const prefix = "chrono-v3:";
-interface Reference { v: 1; view: CapsuleCatalogView; handle?: SearchV3Handle; source?: ScopedBodySourceRef; memory?: { level: EpisodeStateLevel; query?: string; source?: ScopedBodySourceRef; after: EpisodeStateAfter }; cursor?: string; range?: { start: string; end: string; after: number; byte?: number } }
+interface Reference { v: 1; view: CapsuleCatalogView; handle?: SearchV3Handle; source?: ScopedBodySourceRef; rawSource?: ScopedRawSourceRef; memory?: { ruleset?: string; level: EpisodeStateLevel; query?: string; source?: ScopedBodySourceRef; after: EpisodeStateAfter }; cursor?: string; range?: { start: string; end: string; after: number; byte?: number } }
 const encode = (value: Reference): string => prefix + deflateRawSync(Buffer.from(JSON.stringify(value))).toString("base64url");
 function decode(text: string): Reference {
   if (!text.startsWith(prefix) || text.length > 16_384) return fail("search-v3-reference-invalid");
   let r: Reference; try { r = JSON.parse(inflateRawSync(Buffer.from(text.slice(prefix.length), "base64url"), { maxOutputLength: 16384 }).toString("utf8")); } catch { return fail("search-v3-reference-invalid"); }
   if (r.v !== 1 || !isCapsuleCatalogView(r.view) || (r.handle !== undefined && !isSearchV3Handle(r.handle)) || (r.cursor !== undefined && (typeof r.cursor !== "string" || r.cursor.length > 4096))) return fail("search-v3-reference-invalid");
   if (r.source !== undefined && (!isScopedBodySourceRef(r.source) || !sourceRefWithinViewBounds(r.source, r.view))) return fail("search-v3-reference-invalid");
+  if (r.rawSource !== undefined && (!isScopedRawSourceRef(r.rawSource) || !sourceRefWithinViewBounds(r.rawSource, r.view)
+    || r.rawSource.raw.end - r.rawSource.raw.start > 65536)) return fail("search-v3-reference-invalid");
   if (r.memory && (!["episode", "resource", "state"].includes(r.memory.level) || !r.memory.after || !Number.isSafeInteger(r.memory.after.eventSeq)
     || !Number.isSafeInteger(r.memory.after.descriptor) || r.memory.after.eventSeq < 1 || r.memory.after.descriptor < 0
     || (r.memory.query !== undefined && (typeof r.memory.query !== "string" || r.memory.query.length > 256))
@@ -106,7 +108,8 @@ export class HistorySearchAdapter {
       this.memory = response.ok
         ? { state: response.result.complete === true ? "ready" : "lagging", complete: response.result.complete === true,
           knownThroughCut: response.result.knownThroughCut ?? null, partial: response.result.partial === true,
-          stateGeneration: response.result.stateGeneration ?? null }
+          stateGeneration: response.result.stateGeneration ?? null,
+          metadata: response.result.metadata ?? { complete: false, afterEventSeq: 0 } }
         : { ...this.memory, state: "error", lastSafeError: response.code };
     } else if (!searchComplete) await this.searchStep(t, signal);
     const memory = this.memory.state === "error" ? "error" : this.readyValidated && this.lastReady
@@ -273,6 +276,7 @@ export class HistorySearchAdapter {
       if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 120 || tokenBudget > 2000) return fail("search-v3-query-invalid");
       const reference = isSearchReference(query) ? decode(query) : undefined;
       if (reference?.memory && reference.memory.level !== level) return fail("search-v3-reference-invalid");
+      if (reference?.memory && reference.memory.ruleset !== EPISODE_STATE_RULESET_VERSION) return fail("search-v3-state-version-mismatch");
       const target = this.scoped(reference);
       const source = reference?.memory?.source ?? reference?.source ?? reference?.handle?.source;
       const terms = reference?.memory?.query ?? (reference ? undefined : query.trim() || undefined);
@@ -289,6 +293,9 @@ export class HistorySearchAdapter {
           if (key === "source" && isScopedBodySourceRef(child)) {
             output.recovery = encode({ v: 1, view: target.view, source: child });
             output.entryId = child.entryId; output.eventSeq = child.eventSeq; output.descriptor = child.descriptor;
+          } else if (key === "source" && isScopedRawSourceRef(child)) {
+            output.recovery = encode({ v: 1, view: target.view, rawSource: child });
+            output.eventSeq = child.eventSeq; output.descriptor = child.descriptor;
           } else if (key === "structuralSource") continue; // retained in the stored record; recovery rechecks raw authority
           else if (typeof child === "string" && child.length > 240) {
             output[key] = child.slice(0, 240); output[`${key}OmittedUtf16`] = child.length - 240;
@@ -298,7 +305,7 @@ export class HistorySearchAdapter {
       };
       const { metrics: _metrics, workerObservation: _observation, next, ...value } = response.result;
       return result({ status: "ok", ...display(value) as Record<string, unknown>,
-        ...(next ? { nextCursor: encode({ v: 1, view: target.view, memory: { level, ...(terms ? { query: terms } : {}),
+        ...(next ? { nextCursor: encode({ v: 1, view: target.view, memory: { ruleset: EPISODE_STATE_RULESET_VERSION, level, ...(terms ? { query: terms } : {}),
           ...(source ? { source } : {}), after: next as EpisodeStateAfter } }) } : {}),
         evidence: "Source-backed derived memory, known through this branch cut only. Not authority or proof of later absence. Use nextCursor as query to continue." }, tokenBudget);
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
@@ -307,6 +314,26 @@ export class HistorySearchAdapter {
     try {
       const reference = decode(handle);
       const target = this.scoped(reference);
+      if (reference.rawSource) {
+        const source = reference.rawSource, length = source.raw.end - source.raw.start;
+        if (length < 1 || length > 65536) return fail("search-v3-reference-invalid");
+        const page = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: target.catalogDirectory,
+          sessionKey: target.view.sessionKey, view: { ...target.view, segments: target.view.segments.map(item => ({ ...item })) }, after: source.eventSeq - 1, limit: 1 }, { ...this.options, signal });
+        if (!page.ok) return result({ status: "unavailable", code: page.code });
+        const event = (page.result.events as Record<string, unknown>[] | undefined)?.[0];
+        if (!event || event.seq !== source.eventSeq || event.shardKey !== source.shardKey || event.ordinal !== source.ordinal
+          || Number(event.rawStart) > source.raw.start || Number(event.rawEnd) < source.raw.end) return fail("search-v3-reference-invalid");
+        const raw = await runCatalogWorker({ v: 1, op: "raw", catalogDirectory: target.catalogDirectory,
+          sessionKey: target.view.sessionKey, view: { ...target.view, segments: target.view.segments.map(item => ({ ...item })) }, eventSeq: source.eventSeq, offset: source.raw.start, length }, { ...this.options, signal });
+        if (!raw.ok) return result({ status: "unavailable", code: raw.code });
+        const bytes = Buffer.from(String(raw.result.data), "base64");
+        if (bytes.length !== length || createHash("sha256").update(bytes).digest("hex") !== source.rawHash) return fail("search-v3-reference-invalid");
+        const whole = bytes.toString("utf8"), start = startChar ?? 0;
+        if (!Number.isSafeInteger(start) || start < 0 || start > whole.length) return fail("search-v3-reference-invalid");
+        const text = whole.slice(start, start + Math.min(8192, maxChars ?? 2048));
+        return result({ status: "ok", source, text, startChar: start, nextChar: start + text.length,
+          complete: start + text.length === whole.length, evidence: "Exact hash-verified source JSONL; metadata authority remains advisory." }, tokenBudget);
+      }
       if (reference.source) {
         const source = reference.source;
         const start = startChar ?? source.decodedUtf16.start;

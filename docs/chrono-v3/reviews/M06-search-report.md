@@ -167,3 +167,47 @@ members rather than returning an unlimited narrative. Existing editable-memory
 and retention tools remain intact, but their custom metadata mirrors are not yet
 materialized by this body-capsule path. Large-archive qualification and full live
 catch-up remain outstanding. These are not claims of M07 acceptance.
+
+## Consolidated M07 completion and M08 authority
+
+The directing assistant keeps M07 open at deployed `3ef58e7` (2.0.10).
+Both exact-head push and PR checks passed all ten statuses. Actual development
+use returned an episode, qualified unresolved assistant-report state, and a
+resource observation with unknown revision/freshness. Exact episode-source page,
+complete state block and complete resource-entry recovery succeeded. Manual
+handle transcription failures were preserved; they were not successful recovery.
+The observed coverage was search 3,252 / 14,172 and memory through 148, not a
+whole-archive result. Source, previous stores and scoped 2.0.9 rollback remain.
+
+The completion batch corrects proposition identity, tool outcome fidelity,
+explicit restriction transitions and historical-record visibility. It integrates
+the actual custom-event writers and enclosing-episode expansion. Changed M07
+semantics use a new derivation identity; catalog, capsule and search progress
+must not reset. Old memory pagination must refuse a ruleset mismatch rather than
+silently apply the old generation to a new store. Metadata recovery uses bounded
+catalog-selected, hash-verified raw source references. Runtime check results and
+final artifact qualification will be recorded with the substantive completion.
+
+M08 implementation is now authorized directly after corrected pushed M07 and
+relevant focused checks, on a stacked branch and draft PR. Both PRs remain
+unmerged for directing-assistant review. This does not accept M07 or authorize
+M09 activation. No authoritative compaction change, full backfill claim, new
+model, review-only agent or scale campaign is part of this completion batch.
+
+Completion checks (2.0.11 source batch): the lifecycle/identity fixture passed
+1/1 (95.5 ms invocation); the persisted metadata/historical-cut/episode fixture
+passed 1/1 (882.2 ms invocation). These are the two authorized local runtime
+checks; no third invocation or broad suite ran. Parent integration added explicit
+cut filters, held metadata behind the fully processed body frontier, corrected
+FTS keyset aliases and suppressed future transition fields. It also preserved
+ordinary-memory demotion through touch, refused non-writer-shaped metadata and
+prevented duplicate mirrors from rewinding the hash chain. These subsequent
+small corrections compile; routine CI supplies their runtime verification.
+
+The metadata path accepts only ordinary writer contracts. Custom type, sourceRef
+and hash-chain consistency are not producer authentication and never establish
+user/project authority. Unsupported protected-authority mirrors remain partial,
+not promoted to instructions. Episode cues for inactive metadata omit its derived
+text while retaining exact archived recovery. Missing/oversized metadata remains
+partial. The candidate uses `state-v2.sqlite` and ruleset v2 alongside preserved
+v1; search and capsule identities are unchanged.

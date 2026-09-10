@@ -1,20 +1,37 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   CAPSULE_REDUCER_PIPELINE_VERSION, CAPSULE_SCHEMA_VERSION, CHUNK_SCHEMA_VERSION, DERIVED_SCHEMA_VERSION,
-  type CapsuleCatalogView, type DerivedStoreIdentity,
+  type CapsuleCatalogView, type DerivedStoreIdentity, type ReducerEnvelope, type ScopedBodySourceRef, type ScopedRawSourceRef,
 } from "../src/capsule-contract.js";
 import { executeCatalogStoreRequest } from "../src/catalog-store.js";
 import { executeCapsuleRequest } from "../src/capsule-store.js";
+import { reduceEpisodeStateEnvelope } from "../src/episode-state-reducer.js";
 import { executeEpisodeStateRequest } from "../src/episode-state-store.js";
+import { createMemoryEvent } from "../src/memory-store.js";
 import type { SearchV3Identity } from "../src/search-v3-contract.js";
 
 const message = (id: string, parentId: string | null, role: string, text: string, extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ type: "message", id, parentId, message: { role, ...extra, content: [{ type: "text", text }] } }) + "\n";
+const custom = (id: string, parentId: string, customType: string, data: unknown): string =>
+  JSON.stringify({ type: "custom", id, parentId, customType, data }) + "\n";
+
+function bodySource(eventSeq = 1, descriptor = 1): ScopedBodySourceRef {
+  return { catalogStoreKey: randomUUID(), sessionKey: "reducer", catalogGeneration: 1, shardKey: "s", segment: 1,
+    eventSeq, ordinal: eventSeq, descriptor, field: "text", raw: { start: 0, end: 1 }, coordinateKind: "decoded-body",
+    decodedUtf16: { start: 0, end: 4096 }, bodyHashAlgorithm: "chrono-utf16le-chain-sha256-v1", bodyHash: "a".repeat(64) };
+}
+function rawSource(source: ScopedBodySourceRef, field: string): ScopedRawSourceRef {
+  return { ...source, field, coordinateKind: "raw-json", rawHashAlgorithm: "sha256-bytes-v1", rawHash: "b".repeat(64) };
+}
+function envelope(source: ScopedBodySourceRef, role: string): ReducerEnvelope {
+  return { v: 1, source, family: "generic", familyVersion: "test", reducerSetVersion: "test", configHash: "c".repeat(64),
+    provenance: "original", alternatives: [], omissions: [], metrics: { inputUnits: 0, outputUnits: 0, windows: 1 } } as unknown as ReducerEnvelope;
+}
 
 async function deriveAll(capsuleDirectory: string, catalogDirectory: string, identity: DerivedStoreIdentity, view: CapsuleCatalogView): Promise<void> {
   let cursor: unknown;
@@ -29,92 +46,114 @@ async function deriveAll(capsuleDirectory: string, catalogDirectory: string, ide
   assert.fail("capsule derivation did not complete");
 }
 
-test("actual catalog facts drive bounded episodes/state across append restart and fork-pinned recall", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "chrono-state-"));
+test("lifecycle identity requires an explicit same-proposition transition and treats execution conservatively", () => {
+  const source = bodySource();
+  const restrictions = reduceEpisodeStateEnvelope(envelope(source, "user"),
+    "Never deploy /Repo/Foo.ts.\nOnly inspect /Repo/Foo.ts.\nInstead, tests passed for /Repo/Foo.ts.",
+    { role: { value: "user", source: rawSource(source, "role") } });
+  assert.equal(restrictions.states.filter(item => item.kind === "restriction").length, 2);
+  assert.equal(new Set(restrictions.states.map(item => item.propositionKey)).size, restrictions.states.length,
+    "same-path claims retain proposition identity");
+  assert.equal(new Set(restrictions.states.map(item => item.spanKey)).size, restrictions.states.length,
+    "source spans remain distinct");
+  assert.equal(restrictions.states.some(item => item.transition), false, "instead/passed never supersede merely by sharing a path");
+
+  const revocation = reduceEpisodeStateEnvelope(envelope(bodySource(2), "user"), "Revoke the restriction: never deploy /Repo/Foo.ts.",
+    { role: { value: "user", source: rawSource(bodySource(2), "role") } });
+  assert.equal(revocation.states[0]?.transition?.action, "revoke");
+  assert.equal(revocation.states[0]?.transition?.targetPropositionKey, restrictions.states[0]?.propositionKey);
+  const conditional = reduceEpisodeStateEnvelope(envelope(bodySource(3), "user"), "If approved, revoke the restriction: never deploy /Repo/Foo.ts.",
+    { role: { value: "user", source: rawSource(bodySource(3), "role") } });
+  assert.equal(conditional.states.some(item => item.transition), false, "conditional revocation preserves both claims");
+
+  const failed = reduceEpisodeStateEnvelope(envelope(bodySource(4), "toolResult"), "Command completed for /Repo/Foo.ts.", {
+    role: { value: "toolResult", source: rawSource(bodySource(4), "role") }, toolName: { value: "bash", source: rawSource(bodySource(4), "toolName") },
+    exitCode: { value: 2, source: rawSource(bodySource(4), "exitCode") }, isError: { value: false, source: rawSource(bodySource(4), "isError") },
+  });
+  assert.equal(failed.resources[0]?.executionOutcome, "failed", "nonzero exit overrides isError=false");
+  assert.equal(failed.states[0]?.kind, "blocker");
+  const succeeded = reduceEpisodeStateEnvelope(envelope(bodySource(5), "toolResult"), "Tests passed for /Repo/Foo.ts.", {
+    role: { value: "toolResult", source: rawSource(bodySource(5), "role") }, toolName: { value: "bash", source: rawSource(bodySource(5), "toolName") },
+    exitCode: { value: 0, source: rawSource(bodySource(5), "exitCode") }, isError: { value: false, source: rawSource(bodySource(5), "isError") },
+  });
+  assert.equal(succeeded.resources[0]?.executionOutcome, "completed-without-reported-error");
+  assert.equal(succeeded.states.some(item => item.kind === "observedverification"), false, "execution success is not task verification");
+});
+
+test("persisted metadata lifecycle, historical pin, and episode-source recall remain source exact", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-state-metadata-"));
   const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
-  const rootPath = join(directory, "root.jsonl"), mainPath = join(directory, "main.jsonl"), forkPath = join(directory, "fork.jsonl");
+  const sourcePath = join(directory, "main.jsonl"), oldStore = join(searchDirectory, "state-v1.sqlite");
   mkdirSync(searchDirectory, { mode: 0o700 });
-  writeFileSync(rootPath, message("u1", null, "user", "Goal: implement /Repo/Foo.ts revision abc123. Do not deploy it unless approved. This is not approved."), { mode: 0o600 });
-  writeFileSync(mainPath,
-    message("t1", "u1", "toolResult", "Failure for /Repo/Foo.ts revision abc123: tests failed.", { toolName: "bash", isError: true, exitCode: 1 })
-    + message("a1", "t1", "assistant", "Implemented /Repo/Foo.ts, but this is only a report." )
-    + message("u2", "a1", "user", "I approve deployment of /Repo/Foo.ts revision abc123." )
-    + message("t2", "u2", "toolResult", "Verified success for /Repo/Foo.ts revision abc123; tests passed.", { toolName: "bash", isError: false, exitCode: 0 }), { mode: 0o600 });
-  writeFileSync(forkPath, message("f1", "u1", "user", "Only inspect /Repo/Fork.ts; never deploy it."), { mode: 0o600 });
-  const sessionKey = "state-real-catalog";
+  writeFileSync(oldStore, "legacy-state-v1-must-remain", { mode: 0o600 });
+  const remembered = createMemoryEvent([], { action: "remember", memoryId: "mem-1", timestamp: "2026-09-09T00:00:00.000Z", turn: 1,
+    sourceRef: "memory-tool:remember", scope: "project", authority: "ordinary", confidence: 0.8, text: "Preserve the parser evidence." });
+  const forgotten = createMemoryEvent([remembered], { action: "forget", memoryId: "mem-1", timestamp: "2026-09-09T00:01:00.000Z", turn: 2,
+    sourceRef: "memory-tool:forget", authority: "ordinary", confidence: 0.8, reason: "not active" });
+  const hint = { currentUnresolvedWork: "Finish parser identity", preserveExact: "Keep the raw producer event" };
+  writeFileSync(sourcePath, message("u1", null, "user", "Implement /Repo/Parser.ts without deployment.")
+    + custom("m1", "u1", "chrono-memory-v2-event", remembered)
+    + custom("h1", "m1", "chrono-compact-retention-hint", hint), { mode: 0o600 });
+  const sessionKey = "state-metadata";
   const catalog = async (extra: Record<string, unknown>): Promise<Record<string, any>> => {
     const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
     assert.equal(response.ok, true, JSON.stringify(response)); return response.ok ? response.result : {};
   };
-  const ingest = (shardKey: string, sourcePath: string, branchKey: string, shardOrdinal: number, parent?: Record<string, string>) =>
-    catalog({ op: "ingestStep", shardKey, sourcePath, branchKey, shardOrdinal, ...(parent ? { parent } : {}) });
-  const pin = async (branchKey: string, shardKey: string, eventId: string): Promise<CapsuleCatalogView> =>
-    (await catalog({ op: "pin", branchKey, leaf: { shardKey, eventId } })).view;
   try {
-    await ingest("root", rootPath, "root", 0); await ingest("main", mainPath, "main", 1, { shardKey: "root", eventId: "u1" });
-    const oldMain = await pin("main", "main", "t2");
-    const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: oldMain.storeKey, catalogGeneration: oldMain.generation,
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const oldView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "h1" } })).view as CapsuleCatalogView;
+    const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation,
       derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
       reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: createHash("sha256").update("state-capsules").digest("hex") };
     const identity: SearchV3Identity = { storeKey: randomUUID(), capsule: capsuleIdentity, schemaVersion: 1,
       configHash: createHash("sha256").update("state-search").digest("hex") };
     const run = (view: CapsuleCatalogView, extra: Record<string, unknown>) => executeEpisodeStateRequest({ v: 1, catalogDirectory, capsuleDirectory,
       searchDirectory, identity, view, ...extra });
-    const materializeAll = async (view: CapsuleCatalogView): Promise<Record<string, any>> => {
+    const materializeAll = async (view: CapsuleCatalogView): Promise<any> => {
       for (let page = 0; page < 100; page++) {
         const response = await run(view, { op: "materializeState", limit: 3 });
         assert.equal(response.ok, true, JSON.stringify(response));
-        if (response.ok && (response.result as any).complete) return response.result as Record<string, any>;
+        if (response.ok && (response.result as any).complete) return response.result;
       }
-      return assert.fail("state materialization did not complete");
+      assert.fail("state materialization did not complete");
     };
-    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, oldMain);
-    const partialPage = await run(oldMain, { op: "materializeState", limit: 1 });
-    assert.equal(partialPage.ok, true, JSON.stringify(partialPage));
-    const partialRecall = await run(oldMain, { op: "recallState", level: "state", limit: 1 });
-    assert.equal(partialRecall.ok, true, JSON.stringify(partialRecall));
-    if (partialPage.ok && partialRecall.ok) {
-      assert.equal(partialRecall.result.knownThrough, partialPage.result.knownThroughCut, "recall must not certify the partially processed event");
-      assert.equal(partialRecall.result.partial, true);
-    }
-    const oldReady = await materializeAll(oldMain);
-    assert.equal(oldReady.knownThroughCut, oldMain.eventCut);
-    const oldEpisodes = await run(oldMain, { op: "recallState", level: "episode", query: "implement", limit: 1 });
-    assert.equal(oldEpisodes.ok, true, JSON.stringify(oldEpisodes)); if (!oldEpisodes.ok) return;
-    const firstEpisode = (oldEpisodes.result as any).items[0];
-    assert.equal(firstEpisode.member.source.entryId, "u1");
-    assert.equal(firstEpisode.episode.open, false, "next original user request closes span, not assistant prose");
-    assert.equal(typeof (oldEpisodes.result as any).next?.generation, "number");
-    const states = await run(oldMain, { op: "recallState", level: "state", limit: 12 });
-    assert.equal(states.ok, true, JSON.stringify(states)); if (!states.ok) return;
-    const stateItems = (states.result as any).items;
-    assert.ok(stateItems.some((item: any) => item.kind === "restriction" && item.authority === "user"));
-    assert.equal(stateItems.filter((item: any) => item.kind === "approval").length, 1, "negated approval is not authority");
-    assert.ok(stateItems.some((item: any) => item.kind === "reportedimplementation" && item.authority === "assistant-report"));
-    assert.ok(stateItems.some((item: any) => item.kind === "observedverification" && item.authority === "verified-tool"));
-    const resources = await run(oldMain, { op: "recallState", level: "resource", query: "Repo Foo", limit: 12 });
-    assert.equal(resources.ok, true, JSON.stringify(resources)); if (resources.ok) {
-      assert.ok((resources.result as any).items.every((item: any) => item.resourceKey.includes("/Repo/Foo.ts")));
-      assert.ok((resources.result as any).items.some((item: any) => item.revisionBasis === "declared" && item.revision === "abc123"));
-      assert.ok((resources.result as any).items.some((item: any) => item.evidence.source.entryId === "a1" && item.revisionBasis === "unknown" && item.revision === null), "an implementation report without a revision stays unknown");
-    }
-    const pinGeneration = (oldEpisodes.result as any).stateGeneration;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, oldView);
+    const oldReady = await materializeAll(oldView);
+    assert.equal(oldReady.metadata.complete, true);
+    assert.equal(oldReady.metadata.acceptedMemoryEvents + oldReady.metadata.acceptedRetentionHints > 0, true);
+    const oldGeneration = oldReady.stateGeneration;
+    const oldState = await run(oldView, { op: "recallState", level: "state", limit: 12 });
+    assert.equal(oldState.ok, true, JSON.stringify(oldState)); if (!oldState.ok) return;
+    const activeMemory = (oldState.result as any).items.find((item: any) => item.metadataKind === "memory");
+    const activeHint = (oldState.result as any).items.find((item: any) => item.metadataKind === "retention-hint");
+    assert.equal(activeMemory.memoryId, "mem-1");
+    assert.equal(activeMemory.authority, "ordinary-memory", "authority-like source strings never grant instruction authority");
+    assert.equal(activeMemory.evidence.source.coordinateKind, "raw-json");
+    assert.deepEqual(activeHint.hint, hint);
 
-    appendFileSync(mainPath, message("u3", "t2", "user", "Instead, only inspect /Repo/Foo.ts revision abc123; do not deploy it."));
-    await ingest("main", mainPath, "main", 1, { shardKey: "root", eventId: "u1" });
-    await ingest("fork", forkPath, "fork", 2, { shardKey: "root", eventId: "u1" });
-    const newMain = await pin("main", "main", "u3"), fork = await pin("fork", "fork", "f1");
-    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, newMain); await materializeAll(newMain);
-    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, fork); await materializeAll(fork);
-    const pinned = await run(oldMain, { op: "recallState", level: "episode", query: "implement", limit: 1,
-      after: { eventSeq: 1, descriptor: 0, stableKey: "", generation: pinGeneration } });
-    assert.equal(pinned.ok, true, JSON.stringify(pinned));
-    if (pinned.ok && (pinned.result as any).items[0]) assert.equal((pinned.result as any).items[0].episode.end.eventSeq <= oldMain.eventCut, true);
-    const forkState = await run(fork, { op: "recallState", level: "state", query: "Fork", limit: 12 });
-    assert.equal(forkState.ok, true, JSON.stringify(forkState));
-    if (forkState.ok) assert.ok((forkState.result as any).items.every((item: any) => item.evidence.source.entryId !== "u3"), "fork cannot see main append");
-    const exactEpisode = await run(newMain, { op: "recallState", level: "episode", source: firstEpisode.member.source, limit: 1 });
-    assert.equal(exactEpisode.ok, true, JSON.stringify(exactEpisode));
-    if (exactEpisode.ok) assert.equal((exactEpisode.result as any).items[0].member.source.bodyHash, firstEpisode.member.source.bodyHash);
+    const episodes = await run(oldView, { op: "recallState", level: "episode", query: "parser identity", limit: 12 });
+    assert.equal(episodes.ok, true, JSON.stringify(episodes)); if (!episodes.ok) return;
+    const bodyMember = (episodes.result as any).items.find((item: any) => item.member.source.coordinateKind === "decoded-body");
+    const episodePage = await run(oldView, { op: "recallState", level: "episode", source: bodyMember.member.source, limit: 12 });
+    assert.equal(episodePage.ok, true, JSON.stringify(episodePage));
+    if (episodePage.ok) assert.ok((episodePage.result as any).items.some((item: any) => item.member.source.coordinateKind === "raw-json"),
+      "a source handle resolves the episode and pages all members");
+
+    appendFileSync(sourcePath, custom("m2", "h1", "chrono-memory-v2-event", forgotten));
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const newView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "m2" } })).view as CapsuleCatalogView;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, newView); await materializeAll(newView);
+    const current = await run(newView, { op: "recallState", level: "state", query: "parser evidence", limit: 12 });
+    assert.equal(current.ok, true, JSON.stringify(current));
+    if (current.ok) assert.equal((current.result as any).items.some((item: any) => item.metadataKind === "memory"), false, "forget changes visibility, not archive");
+    const historical = await run(oldView, { op: "recallState", level: "state", limit: 12,
+      after: { eventSeq: 1, descriptor: 0, stableKey: "", generation: oldGeneration } });
+    assert.equal(historical.ok, true, JSON.stringify(historical));
+    if (historical.ok) {
+      const item = (historical.result as any).items.find((candidate: any) => candidate.metadataKind === "memory");
+      assert.equal(item.memoryId, "mem-1");
+      assert.equal("resolutionEvidence" in item, false, "future transition references do not leak into a historical pin");
+    }
+    assert.equal(readFileSync(oldStore, "utf8"), "legacy-state-v1-must-remain");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
