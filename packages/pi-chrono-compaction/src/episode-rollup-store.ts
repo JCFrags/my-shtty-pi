@@ -104,6 +104,22 @@ function nodeWithIdentity(node: RollupNode): StoredNode {
   const contentHash = sha(canonicalJson(node));
   return { ...node, nodeId: contentHash, contentHash };
 }
+function nodeBytes(node: StoredNode): number { return Buffer.byteLength(canonicalJson(node)); }
+/** Keep structural recovery routes intact. If optional material does not fit,
+ * remove it deterministically and make every protected/metadata gap explicit. */
+function boundedNode(node: RollupNode): StoredNode {
+  const summary = [...node.summary], protectedReferences = [...node.protectedReferences], metadataHints = [...node.metadataHints];
+  let omittedProtectedCount = node.omittedProtectedCount, omittedMetadataCount = node.omittedMetadataCount;
+  while (true) {
+    const candidate = nodeWithIdentity({ ...node, summary, protectedReferences, omittedProtectedCount,
+      metadataHints, omittedMetadataCount } as RollupNode);
+    if (nodeBytes(candidate) <= EPISODE_STATE_LIMITS.rollupNodeUtf8Bytes) return candidate;
+    if (summary.length) { summary.pop(); continue; }
+    if (metadataHints.length) { metadataHints.pop(); omittedMetadataCount++; continue; }
+    if (protectedReferences.length) { protectedReferences.pop(); omittedProtectedCount++; continue; }
+    return fail("search-v3-rollup-node-limit");
+  }
+}
 function nodeText(node: StoredNode): string {
   const text = canonicalJson(node);
   if (Buffer.byteLength(text) > EPISODE_STATE_LIMITS.rollupNodeUtf8Bytes) fail("search-v3-rollup-node-limit");
@@ -149,7 +165,7 @@ function leafFrom(page: NonNullable<EpisodeRollupInputPage["episode"]>): StoredN
     remainingDetail: "reachable-through-sources", episodeCount: page.fragmentIndex === 0 ? 1 : 0, memberCount: page.members.length,
     episodeKey: page.episodeKey, fragmentIndex: page.fragmentIndex, episodeFragment: page.episodeFragment,
     closure: page.closure, objective: page.objective, objectiveEvidence: page.objectiveEvidence, sources };
-  return nodeWithIdentity(base);
+  return boundedNode(base);
 }
 function parentFrom(children: readonly StoredNode[]): StoredNode {
   if (!children.length || children.length > EPISODE_STATE_LIMITS.rollupFanout) fail("search-v3-rollup-frontier-invalid");
@@ -166,7 +182,7 @@ function parentFrom(children: readonly StoredNode[]): StoredNode {
     omittedMetadataCount: children.reduce((sum, child) => sum + child.omittedMetadataCount, 0) + metadataSelected.omitted,
     remainingDetail: "reachable-through-children", episodeCount: children.reduce((sum, child) => sum + child.episodeCount, 0),
     memberCount: children.reduce((sum, child) => sum + child.memberCount, 0) };
-  return nodeWithIdentity(base);
+  return boundedNode(base);
 }
 function frontier(store: Store, line: string): Map<number, string[]> {
   return new Map(store.rows("SELECT level,nodeIds FROM frontier WHERE lineage=? ORDER BY level", EPISODE_STATE_LIMITS.rollupTreeLevels, line)
@@ -371,7 +387,9 @@ function recall(request: Extract<EpisodeStateRequest, { op: "recallRollup" }>, s
     .flatMap(item => item.node.sources.map(source => ({ reference: { kind: "exact-source", parentReference: episodeItem(h, item.node, item.path).reference,
       sourceKey: source.sourceKey }, source: source.source, exactBodyHash: source.exactBodyHash, exactBodyOmitted: source.exactBodyOmitted })))
     .slice(0, EPISODE_STATE_LIMITS.rollupNodesPerRecall);
-  const selected = allItems.slice(start, start + limit), more = start + selected.length < allItems.length;
+  const selected = allItems.slice(start, start + limit);
+  const build = (): Record<string, unknown> => {
+  const more = start + selected.length < allItems.length;
   const partialReasons = [...(more ? ["pagination"] : []), ...(traversalLimited ? ["bounded-node-traversal"] : [])];
   return { handle: h, parentReference: { ...nodeReference(h, target, route.path), requestedLevel: level, query: request.query },
     level, node: { summary: target.summary, episodeCount: target.episodeCount, memberCount: target.memberCount,
@@ -380,6 +398,11 @@ function recall(request: Extract<EpisodeStateRequest, { op: "recallRollup" }>, s
     items: selected, ...(more ? { next: { nodeId: target.nodeId, itemIndex: start + selected.length, generation: h.rollupGeneration,
       level, queryHash } satisfies EpisodeRollupAfter } : {}), partial: partialReasons.length > 0, partialReasons,
     metrics: { nodesVisited: visited, nodeLimit: EPISODE_STATE_LIMITS.rollupNodesPerRecall, sqliteStatements: store.statements } };
+  };
+  // A legal count can still exceed the byte envelope. Preserve exact pagination
+  // instead of refusing a page containing several individually valid large nodes.
+  while (selected.length > 1 && Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.responseBytes - 4096) selected.pop();
+  return build();
 }
 function status(request: Extract<EpisodeStateRequest, { op: "rollupStatus" }>, store: Store): Record<string, unknown> {
   const head = store.get("SELECT * FROM heads WHERE lineage=?", lineage(request));

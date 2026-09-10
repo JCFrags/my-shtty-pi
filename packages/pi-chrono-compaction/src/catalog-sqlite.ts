@@ -23,9 +23,21 @@ export class CatalogSqliteError extends Error {
     super(code); this.name = "CatalogSqliteError";
   }
 }
-function sanitized(error: unknown): CatalogSqliteError {
+const SAFE_APPLICATION_ERROR_CODES = new Set([
+  "search-v3-rollup-frontier-invalid",
+  "search-v3-rollup-input-invalid",
+  "search-v3-rollup-job-node-limit",
+  "search-v3-rollup-node-corrupt",
+  "search-v3-rollup-node-limit",
+  "search-v3-rollup-node-missing",
+  "search-v3-rollup-store-mismatch",
+  "search-v3-rollup-tree-limit",
+  "search-v3-rollup-version-mismatch",
+]);
+function sanitized(error: unknown): Error & { readonly code: string } {
   if (error instanceof CatalogSqliteError) return error;
   const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && SAFE_APPLICATION_ERROR_CODES.has(code)) return Object.assign(new Error(code), { code });
   return new CatalogSqliteError(code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" ? "catalog-sqlite-busy" :
     code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB" ? "catalog-sqlite-corrupt" :
     code === "SQLITE_NOMEM" || code === "SQLITE_TOOBIG" || code === "SQLITE_FULL" ? "catalog-sqlite-limit" : "catalog-sqlite-failed");
