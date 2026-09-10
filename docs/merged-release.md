@@ -27,7 +27,8 @@ separate operation, not authorized by COMMAND 8 deployment coordination.
 
 The lead reports required promotion CI passed in run `34507293291`; the optional
 upstream pixel baseline remains separately disclosed. Resulting-main CI
-`34508739599` was still running at this handoff. These are provenance and
+`34508739599` also passed its required jobs, as reported by the browser lead.
+These are provenance and
 promotion checks, not proof of installed or per-session runtime parity.
 
 Coordination references are board entries
