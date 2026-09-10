@@ -114,17 +114,23 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     const run = (view: CapsuleCatalogView, extra: Record<string, unknown>) => executeEpisodeStateRequest({ v: 1, catalogDirectory, capsuleDirectory,
       searchDirectory, identity, view, ...extra });
     const materializeAll = async (view: CapsuleCatalogView): Promise<any> => {
+      let acceptedMetadata = 0;
       for (let page = 0; page < 100; page++) {
         const response = await run(view, { op: "materializeState", limit: 3 });
         assert.equal(response.ok, true, JSON.stringify(response));
-        if (response.ok && (response.result as any).complete) return response.result;
+        if (response.ok) {
+          const result = response.result as any;
+          // These are per-job metrics, not lifetime counts on the final page.
+          acceptedMetadata += result.metadata.acceptedMemoryEvents + result.metadata.acceptedRetentionHints;
+          if (result.complete) return { ...result, acceptedMetadata };
+        }
       }
       assert.fail("state materialization did not complete");
     };
     await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, oldView);
     const oldReady = await materializeAll(oldView);
     assert.equal(oldReady.metadata.complete, true);
-    assert.equal(oldReady.metadata.acceptedMemoryEvents + oldReady.metadata.acceptedRetentionHints > 0, true);
+    assert.equal(oldReady.acceptedMetadata > 0, true);
     const oldGeneration = oldReady.stateGeneration;
     const oldState = await run(oldView, { op: "recallState", level: "state", limit: 12 });
     assert.equal(oldState.ok, true, JSON.stringify(oldState)); if (!oldState.ok) return;

@@ -206,18 +206,45 @@ function compatibleView(current, old) {
     return current.branchKey === old.branchKey && current.eventCut >= old.eventCut && current.segments.length >= old.segments.length
         && old.segments.every((item, index) => current.segments[index]?.segment === item.segment && current.segments[index].cut >= item.cut);
 }
+function withoutSnapshot(cursor) {
+    if (!cursor)
+        return undefined;
+    const { snapshot: ignored, ...position } = cursor;
+    return position;
+}
+function remainingWork(requestedCut, processedCut, exhausted, addedLeaves) {
+    if (!exhausted)
+        return "eligible-episodes";
+    if (processedCut < requestedCut)
+        return "state-catch-up";
+    return addedLeaves === 0 ? "no-eligible-episode" : "none";
+}
 async function materialize(request, store, options, budget) {
     const line = lineage(request), head = store.get("SELECT * FROM heads WHERE lineage=?", line);
     if (head && !compatibleView(request.view, JSON.parse(str(head, "view"))))
         fail("search-v3-rollup-view-incompatible");
     let cursor = head?.cursor ? JSON.parse(str(head, "cursor")) : undefined;
+    // A completed cycle retains its chronological position but deliberately repins state and source view for appended work.
+    if (head && num(head, "complete") === 1)
+        cursor = withoutSnapshot(cursor);
+    else if (head && cursor && !cursor.snapshot) {
+        // Continue pre-correction rollup-v1 progress without rewriting its frontier or immutable nodes.
+        const oldView = JSON.parse(str(head, "view"));
+        const oldPublication = store.get("SELECT eventCut FROM publications WHERE lineage=? AND generation=?", line, num(head, "generation"));
+        const oldProcessedCut = oldPublication ? num(oldPublication, "eventCut") : 0;
+        cursor = { ...cursor, snapshot: { stateGeneration: num(head, "stateGeneration"), requestedCut: oldView.eventCut,
+                processedCut: oldProcessedCut, processedMemoryCut: oldProcessedCut, sourceView: oldView } };
+    }
     const maximum = request.limit ?? EPISODE_STATE_LIMITS.rollupLeavesPerJob, pages = [];
-    let exhausted = false, stateGeneration = head ? num(head, "stateGeneration") : 0, knownThroughCut = 0;
+    let exhausted = false, stateGeneration = head ? num(head, "stateGeneration") : 0, requestedCut = request.view.eventCut, processedCut = 0, processedMemoryCut = 0;
     for (let count = 0; count < maximum; count++) {
         const page = await readEpisodeRollupInputPage(request, cursor, options, budget);
         stateGeneration = page.stateGeneration;
-        knownThroughCut = page.knownThroughCut;
+        requestedCut = page.requestedCut;
+        processedCut = page.processedCut;
+        processedMemoryCut = page.processedMemoryCut;
         if (!page.episode) {
+            cursor = page.next;
             exhausted = true;
             break;
         }
@@ -245,12 +272,15 @@ async function materialize(request, store, options, budget) {
         store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
         store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?)", line, canonicalJson(request.view), stateGeneration, cursor ? canonicalJson(cursor) : null, exhausted ? 1 : 0, root?.nodeId ?? null, generation);
         if (root)
-            store.run("INSERT INTO publications VALUES(?,?,?,?,?,?,?)", generation, line, request.view.branchKey, knownThroughCut, stateGeneration, root.nodeId, exhausted ? 1 : 0);
+            store.run("INSERT INTO publications VALUES(?,?,?,?,?,?,?)", generation, line, request.view.branchKey, processedCut, stateGeneration, root.nodeId, exhausted ? 1 : 0);
     });
     const publication = root ? store.get("SELECT * FROM publications WHERE generation=?", generation) : undefined;
+    const pending = remainingWork(requestedCut, processedCut, exhausted, pages.length);
+    const representedClosedRange = root ? root.range : null;
     return { readiness: root ? exhausted ? "ready" : "partial" : "missing", rollupGeneration: generation, stateGeneration,
-        branchKey: request.view.branchKey, knownThroughCut, complete: exhausted, closedIntervalsOnly: true,
-        closedThroughCut: root?.range.end.eventSeq ?? 0, excludedOpenTail: Boolean(root),
+        branchKey: request.view.branchKey, requestedCut, processedCut, processedMemoryCut, knownThroughCut: processedCut, complete: exhausted,
+        closedIntervalsOnly: true, representedClosedRange, closedThroughCut: root?.range.end.eventSeq ?? 0, excludedOpenTail: Boolean(root),
+        remainingWork: pending, noEligibleEpisode: pages.length === 0,
         ...(publication ? { handle: handle(request, publication), rootReference: { kind: "rollup-node", handle: handle(request, publication), nodeId: root.nodeId, path: [root.nodeId] } } : {}),
         next: cursor, metrics: { leafPages: pages.length, nodesCreated: created.count, sqliteStatements: store.statements } };
 }
@@ -375,22 +405,39 @@ function recall(request, store) {
 }
 function status(request, store) {
     const head = store.get("SELECT * FROM heads WHERE lineage=?", lineage(request));
-    if (!head || !head.rootNodeId)
+    if (!head)
         return { readiness: "missing", rollupGeneration: num(store.get("SELECT generation FROM meta WHERE singleton=1"), "generation"),
-            branchKey: request.view.branchKey, knownThroughCut: 0, complete: false, closedIntervalsOnly: true, metrics: { sqliteStatements: store.statements } };
+            branchKey: request.view.branchKey, requestedCut: request.view.eventCut, processedCut: 0, processedMemoryCut: 0, knownThroughCut: 0,
+            complete: false, closedIntervalsOnly: true, representedClosedRange: null, remainingWork: "state-catch-up", noEligibleEpisode: true,
+            metrics: { sqliteStatements: store.statements } };
+    const cursor = head.cursor ? JSON.parse(str(head, "cursor")) : undefined;
+    const snapshot = cursor?.snapshot;
+    if (!head.rootNodeId) {
+        const processedCut = snapshot?.processedCut ?? 0, processedMemoryCut = snapshot?.processedMemoryCut ?? processedCut;
+        const complete = num(head, "complete") === 1;
+        return { readiness: "missing", rollupGeneration: num(head, "generation"), stateGeneration: num(head, "stateGeneration"),
+            branchKey: request.view.branchKey, requestedCut: request.view.eventCut, processedCut, processedMemoryCut, knownThroughCut: processedCut,
+            complete, closedIntervalsOnly: true, representedClosedRange: null,
+            remainingWork: remainingWork(request.view.eventCut, processedCut, complete, 0), noEligibleEpisode: true, cursor,
+            metrics: { sqliteStatements: store.statements } };
+    }
     const publication = store.get("SELECT * FROM publications WHERE generation=?", num(head, "generation"));
-    if (!publication)
-        fail("search-v3-rollup-publication-missing");
-    if (str(publication, "branchKey") !== request.view.branchKey || num(publication, "eventCut") > request.view.eventCut)
-        return { readiness: "incompatible", rollupGeneration: num(publication, "generation"), branchKey: request.view.branchKey,
-            knownThroughCut: 0, complete: false, closedIntervalsOnly: true, metrics: { sqliteStatements: store.statements } };
-    const h = handle(request, publication);
-    return { readiness: num(head, "complete") === 1 ? "ready" : "partial", rollupGeneration: h.rollupGeneration,
-        stateGeneration: h.stateGeneration, branchKey: h.branchKey, knownThroughCut: h.eventCut, complete: num(head, "complete") === 1,
-        closedIntervalsOnly: true, closedThroughCut: loadNode(store, h.rootNodeId).range.end.eventSeq,
-        excludedOpenTail: true,
+    const publicationRow = publication ?? fail("search-v3-rollup-publication-missing");
+    if (str(publicationRow, "branchKey") !== request.view.branchKey || num(publicationRow, "eventCut") > request.view.eventCut)
+        return { readiness: "incompatible", rollupGeneration: num(publicationRow, "generation"), branchKey: request.view.branchKey,
+            requestedCut: request.view.eventCut, processedCut: 0, processedMemoryCut: 0, knownThroughCut: 0, complete: false,
+            closedIntervalsOnly: true, representedClosedRange: null, remainingWork: "state-catch-up", noEligibleEpisode: true,
+            metrics: { sqliteStatements: store.statements } };
+    const h = handle(request, publicationRow), root = loadNode(store, h.rootNodeId), complete = num(head, "complete") === 1;
+    const rootRow = store.get("SELECT createdGeneration FROM nodes WHERE nodeId=?", h.rootNodeId);
+    const noEligibleEpisode = complete && Boolean(rootRow) && num(rootRow, "createdGeneration") < h.rollupGeneration;
+    return { readiness: complete ? "ready" : "partial", rollupGeneration: h.rollupGeneration,
+        stateGeneration: h.stateGeneration, branchKey: h.branchKey, requestedCut: request.view.eventCut, processedCut: h.eventCut,
+        processedMemoryCut: snapshot?.processedMemoryCut ?? h.eventCut, knownThroughCut: h.eventCut, complete,
+        closedIntervalsOnly: true, representedClosedRange: root.range, closedThroughCut: root.range.end.eventSeq,
+        excludedOpenTail: true, remainingWork: remainingWork(request.view.eventCut, h.eventCut, complete, noEligibleEpisode ? 0 : 1), noEligibleEpisode,
         handle: h, rootReference: { kind: "rollup-node", handle: h, nodeId: h.rootNodeId, path: [h.rootNodeId] },
-        cursor: head.cursor ? JSON.parse(str(head, "cursor")) : undefined, metrics: { sqliteStatements: store.statements } };
+        cursor, metrics: { sqliteStatements: store.statements } };
 }
 export async function executeEpisodeRollupRequest(request, options = {}) {
     const create = request.op === "materializeRollup", budget = { bytes: 0 };

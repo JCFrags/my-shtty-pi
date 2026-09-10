@@ -108,8 +108,10 @@ export class HistorySearchAdapter {
     // ready, finish shadow deltas without making queries perform ingestion.
     const memoryPending = !!searchable && this.memory.state !== "error"
       && (this.memory.complete !== true || this.memory.knownThroughCut !== searchable.view.eventCut);
-    const rollupPending = !!searchable && this.rollup.state !== "error" && this.memory.complete === true && Number(this.memory.stateGeneration) > 0
-      && (this.rollup.complete !== true || this.rollup.stateGeneration !== this.memory.stateGeneration);
+    // The materializer establishes its own body+metadata-covered snapshot.
+    // A growing requested view must not starve already closed history.
+    const rollupPending = !!searchable && this.rollup.state !== "error" && Number(this.memory.knownThroughCut) > 0
+      && (this.rollup.complete !== true || Number(this.rollup.processedCut ?? 0) < Number(this.memory.knownThroughCut));
     if (searchable && (memoryPending || rollupPending) && (searchComplete || this.memoryTick++ % 8 === 0)) {
       const key = this.key;
       const rollupJob = rollupPending && (!memoryPending || this.rollupTurn);
@@ -126,7 +128,13 @@ export class HistorySearchAdapter {
         else this.rollup = response.ok
           ? { state: response.result.complete === true ? "ready" : "lagging", complete: response.result.complete === true,
             knownThroughCut: response.result.knownThroughCut ?? null, stateGeneration: response.result.stateGeneration ?? null,
-            rollupGeneration: response.result.rollupGeneration ?? null, closedIntervalsOnly: true }
+            rollupGeneration: response.result.rollupGeneration ?? null, closedIntervalsOnly: true,
+            requestedCut: response.result.requestedCut ?? searchable.view.eventCut,
+            processedCut: response.result.processedCut ?? response.result.knownThroughCut ?? 0,
+            processedMemoryCut: response.result.processedMemoryCut ?? null,
+            representedClosedRange: response.result.representedClosedRange ?? null,
+            remainingWork: response.result.remainingWork ?? "state-catch-up",
+            noEligibleEpisode: response.result.noEligibleEpisode === true }
           : { ...this.rollup, state: "error", lastSafeError: response.code };
       } else {
         this.memoryResumeChecked = true;
@@ -142,7 +150,7 @@ export class HistorySearchAdapter {
     const memory = this.memory.state === "error" ? "error" : this.readyValidated && this.lastReady
       && this.memory.complete === true && this.memory.knownThroughCut === this.lastReady.view.eventCut ? "ready" : "pending";
     const rollup = this.rollup.state === "error" || this.memory.state === "error" ? "error"
-      : this.rollup.complete === true && this.rollup.stateGeneration === this.memory.stateGeneration ? "ready" : "pending";
+      : this.rollup.complete === true && Number(this.rollup.processedCut ?? 0) >= Number(this.memory.knownThroughCut ?? 0) ? "ready" : "pending";
     return { ...this.progress, memory, rollup };
   }
   private async searchStep(t: SearchLifecycleTarget, signal: AbortSignal): Promise<SearchLifecycleProgress> {

@@ -256,3 +256,37 @@ Local root verification did not finish its all-ref privacy phase within the
 caller deadlines (30 s for an initial incorrectly unscoped invocation, then
 240 s for static-only). Neither run completed root verification; no package
 runtime suites were reached. Full root qualification remains a CI gate.
+
+## Accepted M07 and M08 pinned-prefix correction (2.0.13 candidate)
+
+The directing assistant accepted M07 at `5073892eac0208e6216c91b5cd83275767e1ae2c`.
+PR44 merged only into integration at `72dc8dea31b6bce846e2fc08b2f4aec5c8d135f3`.
+PR45 now targets integration; normal ancestry reconciliation preserves published
+history. PR45 remains unmerged. M09 implementation and same-session shadow
+preview are authorized, but authoritative compaction activation is blocked.
+
+The preceding 2.0.12 push and PR CI each passed all ten statuses. Installation,
+loader parity, scoped rollback and actual-session automatic enablement passed.
+Actual recall returned `search-v3-rollup-store-missing`: waiting for a complete
+memory head prevented useful closed-prefix publication during catch-up.
+
+The correction pins the common fully processed body/metadata cut, one state
+generation and a compatible full source view in the existing frontier cursor.
+Only closed episodes and members visible at that snapshot are exported. The
+first leaf fragment can publish immediately; continuation retains its pin even
+when the requested view grows. Completed cycles retain their position and repin
+without resetting any store. Empty eligible input persists an exhausted cursor
+and reports the condition without forcing an episode closed. Status separates
+requested cut, processed cut, represented closed range and remaining work.
+Immutable memory/retention hints are historical, not current instruction authority.
+The scheduler alternates bounded memory/rollup jobs while search continues; it
+compares processed cuts rather than complete-head or changing-generation gates.
+
+One local correction regression invocation failed after 3.03 s before rollup
+assertions: its expanded fixture incorrectly treated per-job accepted metadata
+counts on the final materialization page as lifetime counts. The fixture now
+accumulates those counts across its existing bounded loop. No local runtime
+rerun was performed; routine CI must validate the corrected fixture. Source and
+test TypeScript compilation passed. Active compaction, source archives, stores,
+automatic rollout, worker limits and rollback points are unchanged. Actual
+2.0.13 publication/use is not yet claimed.
