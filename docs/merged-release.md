@@ -4,6 +4,51 @@ This document defines the integration and deployment gates. It is not a claim
 that the merge, local cutover, or final user acceptance has happened. Record
 those identities and results on the release PR and immutable release checkpoint.
 
+## Coordinated external browser pin
+
+This is a proposed component pin for COMMAND 8, not an activated release or
+final integrated acceptance. The browser lead owns deployment and readiness.
+
+| Identity | Exact value |
+| --- | --- |
+| External repository | `JCFrags/my-shtty-pi-web` |
+| Reviewed artifact source | `3ac4ca2b02b8133d1843f62d6df41843c565548a` |
+| Staged immutable artifact | `d62924d931d306aa9624ff6e44f26d3bece4f1abda89d8e868db53d8d87ba0f4` |
+| History-preserving main promotion | `a89e0363c9904b7bf34ad9a35125d05ca4656285` ([PR #11](https://github.com/JCFrags/my-shtty-pi-web/pull/11)) |
+| Previously selected browser artifact | `e5acc00eee9bce5cd70a0d6f425f5f002767c45d8352ba82bc609c980215572c` |
+
+The browser lead reports that promotion preserves the reviewed source ancestry
+and changes only the release workflow and README relative to that source.
+Runtime/package inputs are unchanged. The staged artifact therefore retains
+`3ac4ca2b02b8133d1843f62d6df41843c565548a` as its source identity; do not relabel it
+as built from the promotion merge. Promotion removes automatic external
+publication/deployment on a main push. Explicit tag/manual publication is a
+separate operation, not authorized by COMMAND 8 deployment coordination.
+
+The lead reports required promotion CI passed in run `34507293291`; the optional
+upstream pixel baseline remains separately disclosed. Resulting-main CI
+`34508739599` also passed its required jobs, as reported by the browser lead.
+These are provenance and
+promotion checks, not proof of installed or per-session runtime parity.
+
+Coordination references are board entries
+`20260910T153009Z-command8-release-freeze-proposal` and
+`20260910T170517Z-browser-main-window-request`. The proposed window
+`browser-main-cutover-20260910-01` remains planning-only until explicit recovery
+approval and COMMAND 8/affected-owner start acknowledgements. No recovery,
+activation, browser launch, settings write, or reload is authorized by this pin.
+Require fresh process-level inventory, source/build/runtime checks, scoped
+rollback evidence and explicit window release from the browser owner. Multiple
+Pi processes can share a pane. A stopped process is not exited or safe to reload;
+its preserved conversation requires separate owner-approved handling.
+
+External WebX/research remains independently owned and unchanged. Chrono
+2.0.15 at `b5918dbf952423e86a50a71e03ae1996c4801ea5` remains the fixed installed
+nomination under review, not accepted, with unchanged enablement. This browser
+pin does not complete the remaining component manifest or select a replacement
+Chrono candidate. Later board/documentation-only commits do not require
+redeploying unchanged runtime inputs.
+
 ## Integration boundary
 
 - Accepted Glance V1.1: `5eb72bae6ff1cc1e174a4d6aec2ba86be2608efc`.
