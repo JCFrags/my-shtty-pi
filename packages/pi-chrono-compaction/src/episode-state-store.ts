@@ -486,6 +486,14 @@ export interface EpisodeRollupInputCursor {
   readonly memberSourceKey: string;
   readonly episodeComplete: boolean;
   readonly fragmentIndex: number;
+  /** One immutable state/source snapshot is retained across every leaf page in a publication cycle. */
+  readonly snapshot?: {
+    readonly stateGeneration: number;
+    readonly requestedCut: number;
+    readonly processedCut: number;
+    readonly processedMemoryCut: number;
+    readonly sourceView: EpisodeStateRequest["view"];
+  };
 }
 export interface EpisodeRollupProtectedInput {
   readonly stableKey: string;
@@ -500,6 +508,8 @@ export interface EpisodeRollupMetadataInput {
   readonly kind: "memory" | "retention-hint";
   readonly effectiveAuthority: "ordinary-memory";
   readonly effectiveConfidence: "advisory";
+  /** Historical records remain recoverable but are never presented as effective current hints. */
+  readonly temporalStatus: "current" | "historical";
   readonly data: unknown;
   readonly evidence: unknown;
 }
@@ -514,6 +524,10 @@ export interface EpisodeRollupMemberInput {
 }
 export interface EpisodeRollupInputPage {
   readonly stateGeneration: number;
+  readonly requestedCut: number;
+  readonly processedCut: number;
+  readonly processedMemoryCut: number;
+  /** Compatibility alias for processedCut. */
   readonly knownThroughCut: number;
   readonly complete: boolean;
   readonly next?: EpisodeRollupInputCursor;
@@ -545,34 +559,50 @@ export async function readEpisodeRollupInputPage(request: EpisodeStateRequest, c
     const path = join(request.searchDirectory, "state-v2.sqlite");
     db = CatalogSqlite.open(path, candidate => new Store(candidate, request).validate(false));
     const store = new Store(db, request), line = lineage(request), head = store.get("SELECT * FROM heads WHERE lineage=?", line);
-    if (!head || num(head, "complete") !== 1 || num(head, "metadataComplete") !== 1) fail("search-v3-rollup-state-not-ready");
-    const indexed = JSON.parse(str(head!, "view")) as EpisodeStateRequest["view"];
-    if (!extendsView(indexed, request.view)) fail("search-v3-rollup-state-not-ready");
-    const stateGeneration = num(head!, "generation"), knownThroughCut = Math.min(request.view.eventCut, indexed.eventCut);
-    const same = cursor && !cursor.episodeComplete;
+    const headRow = head ?? fail("search-v3-rollup-state-not-ready");
+    const indexed = JSON.parse(str(headRow, "view")) as EpisodeStateRequest["view"];
+    if (!extendsView(indexed, request.view) && !extendsView(request.view, indexed)) fail("search-v3-rollup-state-not-ready");
+    const priorSnapshot = cursor?.snapshot;
+    if (priorSnapshot && (!extendsView(request.view, priorSnapshot.sourceView) || priorSnapshot.requestedCut !== priorSnapshot.sourceView.eventCut
+      || priorSnapshot.processedCut > priorSnapshot.requestedCut || priorSnapshot.processedMemoryCut > priorSnapshot.requestedCut
+      || priorSnapshot.stateGeneration > num(headRow, "generation"))) fail("search-v3-rollup-state-snapshot-invalid");
+    const requestedCut = priorSnapshot?.requestedCut ?? request.view.eventCut;
+    const bodyCut = num(headRow, "complete") === 1 ? Math.min(requestedCut, indexed.eventCut)
+      : Math.max(0, Math.min(requestedCut, num(headRow, "afterEventSeq") - 1));
+    const processedMemoryCut = priorSnapshot?.processedMemoryCut
+      ?? Math.max(0, Math.min(requestedCut, num(headRow, "metadataAfterEventSeq")));
+    const processedCut = priorSnapshot?.processedCut ?? Math.min(bodyCut, processedMemoryCut);
+    const stateGeneration = priorSnapshot?.stateGeneration ?? num(headRow, "generation");
+    const sourceView = priorSnapshot?.sourceView ?? request.view;
+    const snapshot = { stateGeneration, requestedCut, processedCut, processedMemoryCut, sourceView };
+    const sourceRequest = { ...request, view: sourceView } as EpisodeStateRequest;
+    const same = Boolean(cursor && !cursor.episodeComplete);
     const episode = same
-      ? store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.episodeKey=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=?) AND e.open=0 AND e.endEventSeq<=?", line, cursor!.episodeKey, stateGeneration, knownThroughCut)
-      : store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=?) AND e.open=0 AND e.endEventSeq<=? AND (e.startEventSeq>? OR (e.startEventSeq=? AND (e.startDescriptor>? OR (e.startDescriptor=? AND e.episodeKey>?)))) ORDER BY e.startEventSeq,e.startDescriptor,e.episodeKey LIMIT 1", line, stateGeneration, knownThroughCut,
+      ? store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.episodeKey=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=?) AND e.open=0 AND e.endEventSeq<=?", line, cursor!.episodeKey, stateGeneration, processedCut)
+      : store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=?) AND e.open=0 AND e.endEventSeq<=? AND (e.startEventSeq>? OR (e.startEventSeq=? AND (e.startDescriptor>? OR (e.startDescriptor=? AND e.episodeKey>?)))) ORDER BY e.startEventSeq,e.startDescriptor,e.episodeKey LIMIT 1", line, stateGeneration, processedCut,
         cursor?.episodeStartEventSeq ?? 0, cursor?.episodeStartEventSeq ?? 0, cursor?.episodeStartDescriptor ?? 0,
         cursor?.episodeStartDescriptor ?? 0, cursor?.episodeKey ?? "");
-    if (!episode) return { stateGeneration, knownThroughCut, complete: true };
+    if (!episode) return { stateGeneration, requestedCut, processedCut, processedMemoryCut, knownThroughCut: processedCut, complete: true,
+      next: cursor ? { ...cursor, snapshot } : { episodeStartEventSeq: 0, episodeStartDescriptor: 0, episodeKey: "", memberEventSeq: 0,
+        memberDescriptor: 0, memberSourceKey: "", episodeComplete: true, fragmentIndex: 0, snapshot } };
     const episodeKey = str(episode, "episodeKey"), afterEvent = same ? cursor!.memberEventSeq : 0,
       afterDescriptor = same ? cursor!.memberDescriptor : 0, afterSource = same ? cursor!.memberSourceKey : "";
     const rows = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND eventSeq<=? AND (eventSeq>? OR (eventSeq=? AND (descriptor>? OR (descriptor=? AND sourceKey>?)))) ORDER BY eventSeq,descriptor,sourceKey LIMIT ?",
-      EPISODE_STATE_LIMITS.rollupLeafMembers + 1, line, episodeKey, stateGeneration, knownThroughCut, afterEvent, afterEvent, afterDescriptor, afterDescriptor, afterSource,
+      EPISODE_STATE_LIMITS.rollupLeafMembers + 1, line, episodeKey, stateGeneration, processedCut, afterEvent, afterEvent, afterDescriptor, afterDescriptor, afterSource,
       EPISODE_STATE_LIMITS.rollupLeafMembers + 1);
     const selected = rows.slice(0, EPISODE_STATE_LIMITS.rollupLeafMembers), members: EpisodeRollupMemberInput[] = [];
     for (const row of selected) {
       const source = JSON.parse(str(row, "source")) as ScopedBodySourceRef | ScopedRawSourceRef;
       if (source.coordinateKind === "decoded-body") {
-        const exact = await body(request, { source } as ReducerEnvelope, options.capsuleExecutor ?? executeCapsuleRequest, budget);
+        const exact = await body(sourceRequest, { source } as ReducerEnvelope, options.capsuleExecutor ?? executeCapsuleRequest, budget);
         members.push({ eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"), source,
-          cue: visibleMemberCue(store, row, stateGeneration, knownThroughCut), ...(exact === undefined ? { exactBodyOmitted: "bounded-source" as const } : { exactBody: exact }) });
+          cue: visibleMemberCue(store, row, stateGeneration, processedCut), ...(exact === undefined ? { exactBodyOmitted: "bounded-source" as const } : { exactBody: exact }) });
       } else members.push({ eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"), source,
-        cue: visibleMemberCue(store, row, stateGeneration, knownThroughCut) });
+        cue: visibleMemberCue(store, row, stateGeneration, processedCut) });
     }
-    const protectedRows = store.rows("SELECT stableKey,kind,status,authority,confidence,evidence FROM state_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? AND kind IN ('restriction','blocker','openwork') ORDER BY eventSeq,descriptor,stableKey LIMIT ?",
-      EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1);
+    if (!members.length) fail("search-v3-rollup-input-invalid");
+    const protectedRows = store.rows("SELECT stableKey,kind,status,authority,confidence,evidence FROM state_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? AND kind IN ('restriction','blocker','openwork') AND (supersededGeneration IS NULL OR supersededGeneration>? OR json_extract(resolutionEvidence,'$.source.eventSeq')>?) ORDER BY eventSeq,descriptor,stableKey LIMIT ?",
+      EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), stateGeneration, processedCut, EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1);
     const memoryRows = store.rows("SELECT stableKey,'memory' AS kind,text AS data,evidence FROM memory_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,stableKey LIMIT ?",
       EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1);
     const retentionRows = store.rows("SELECT stableKey,'retention-hint' AS kind,data,evidence FROM retention_hints WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,stableKey LIMIT ?",
@@ -581,16 +611,22 @@ export async function readEpisodeRollupInputPage(request: EpisodeStateRequest, c
     const last = selected.at(-1), episodeComplete = rows.length <= EPISODE_STATE_LIMITS.rollupLeafMembers;
     const next = last ? { episodeStartEventSeq: num(episode, "startEventSeq"), episodeStartDescriptor: num(episode, "startDescriptor"), episodeKey,
       memberEventSeq: num(last, "eventSeq"), memberDescriptor: num(last, "descriptor"), memberSourceKey: str(last, "sourceKey"), episodeComplete,
-      fragmentIndex: same ? cursor!.fragmentIndex + 1 : 0 } : undefined;
-    return { stateGeneration, knownThroughCut, complete: false, ...(next ? { next } : {}), episode: { episodeKey,
+      fragmentIndex: same ? cursor!.fragmentIndex + 1 : 0, snapshot } : undefined;
+    return { stateGeneration, requestedCut, processedCut, processedMemoryCut, knownThroughCut: processedCut, complete: false, ...(next ? { next } : {}), episode: { episodeKey,
       start: { eventSeq: num(episode, "startEventSeq"), descriptor: num(episode, "startDescriptor") },
       end: { eventSeq: num(episode, "endEventSeq"), descriptor: num(episode, "endDescriptor") }, closure: "next-episode-boundary",
       memberCount: num(episode, "memberCount"), objective: str(episode, "objective"), objectiveEvidence: JSON.parse(str(episode, "objectiveEvidence")),
       fragmentIndex: same ? cursor!.fragmentIndex + 1 : 0,
-      episodeFragment: !episodeComplete || Boolean(same), members,
+      episodeFragment: !episodeComplete || same, members,
       protected: protectedRows.slice(0, EPISODE_STATE_LIMITS.rollupProtectedPerNode).map(row => ({ stableKey: str(row, "stableKey"), kind: str(row, "kind"), status: str(row, "status"), authority: str(row, "authority"), confidence: str(row, "confidence"), evidence: JSON.parse(str(row, "evidence")) })),
       omittedProtectedCount: Math.max(0, protectedRows.length - EPISODE_STATE_LIMITS.rollupProtectedPerNode),
-      metadata: metadataRows.slice(0, EPISODE_STATE_LIMITS.rollupMetadataPerNode).map(row => ({ stableKey: str(row, "stableKey"), kind: str(row, "kind") as "memory" | "retention-hint", effectiveAuthority: "ordinary-memory", effectiveConfidence: "advisory", data: str(row, "kind") === "retention-hint" ? JSON.parse(str(row, "data")) : str(row, "data"), evidence: JSON.parse(str(row, "evidence")) })),
+      metadata: metadataRows.slice(0, EPISODE_STATE_LIMITS.rollupMetadataPerNode).map(row => {
+        const kind = str(row, "kind") as "memory" | "retention-hint";
+        // Immutable leaves can outlive later demotion/forget events, so their hints are always historical records.
+        return { stableKey: str(row, "stableKey"), kind, effectiveAuthority: "ordinary-memory" as const, effectiveConfidence: "advisory" as const,
+          temporalStatus: "historical" as const, data: kind === "retention-hint" ? JSON.parse(str(row, "data")) : str(row, "data"),
+          evidence: JSON.parse(str(row, "evidence")) };
+      }),
       omittedMetadataCount: Math.max(0, metadataRows.length - EPISODE_STATE_LIMITS.rollupMetadataPerNode) } };
   } finally { try { db?.close(); } catch { /* read-only close */ } }
 }

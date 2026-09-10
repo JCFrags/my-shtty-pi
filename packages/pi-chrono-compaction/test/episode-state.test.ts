@@ -96,7 +96,8 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
   writeFileSync(sourcePath, message("u1", null, "user", "Implement /Repo/Parser.ts without deployment.")
     + custom("m1", "u1", "chrono-memory-v2-event", remembered)
     + custom("h1", "m1", "chrono-compact-retention-hint", hint)
-    + message("u2", "h1", "user", "Continue parser checks without deployment."), { mode: 0o600 });
+    + Array.from({ length: 9 }, (_, index) => message(`a${index + 1}`, index === 0 ? "h1" : `a${index}`, "assistant", `Parser evidence detail ${index + 1}.`)).join("")
+    + message("u2", "a9", "user", "Continue parser checks without deployment."), { mode: 0o600 });
   const sessionKey = "state-metadata";
   const catalog = async (extra: Record<string, unknown>): Promise<Record<string, any>> => {
     const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
@@ -150,7 +151,21 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
       }
       assert.fail("rollup materialization did not complete");
     };
-    const oldRollupResult = await materializeRollup(oldView);
+    const firstRollup = await run(oldView, { op: "materializeRollup", limit: 1 });
+    assert.equal(firstRollup.ok, true, JSON.stringify(firstRollup)); if (!firstRollup.ok) return;
+    assert.equal((firstRollup.result as any).complete, false, "the first bounded fragment publishes without full fanout");
+    assert.ok((firstRollup.result as any).handle, "a partial frontier is an immutable publication");
+    const pinnedStateGeneration = (firstRollup.result as any).stateGeneration;
+    const pinnedProcessedCut = (firstRollup.result as any).processedCut;
+
+    appendFileSync(sourcePath, custom("m2", "u2", "chrono-memory-v2-event", forgotten));
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const newView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "m2" } })).view as CapsuleCatalogView;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, newView);
+    const oldRollupResult = await materializeRollup(newView);
+    assert.equal(oldRollupResult.stateGeneration, pinnedStateGeneration, "continuation remains on one state snapshot across append");
+    assert.equal(oldRollupResult.processedCut, pinnedProcessedCut, "later pending memory cannot move the publication cut");
+    assert.equal(oldRollupResult.requestedCut, oldView.eventCut, "the source view remains pinned across continuation");
     assert.equal(oldRollupResult.closedIntervalsOnly, true);
     assert.equal(oldRollupResult.excludedOpenTail, true, "the current open episode is outside closed-interval coverage");
     const root = await run(oldView, { op: "recallRollup", level: "root", limit: 1, handle: oldRollupResult.handle });
@@ -159,8 +174,11 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     const episodeRollup = await run(oldView, { op: "recallRollup", level: "episode", query: "parser", limit: 1,
       handle: oldRollupResult.handle });
     assert.equal(episodeRollup.ok, true, JSON.stringify(episodeRollup)); if (!episodeRollup.ok) return;
-    const episodeReference = (episodeRollup.result as any).items[0].reference;
+    const rolledEpisode = (episodeRollup.result as any).items[0];
+    const episodeReference = rolledEpisode.reference;
     assert.equal(episodeReference.closure, "next-episode-boundary", "a closed interval is not reported as task completion");
+    assert.ok(rolledEpisode.metadataHints.every((item: any) => item.temporalStatus === "historical"),
+      "immutable hints never claim current effect after later demotion or forgetting");
     const sourceRollup = await run(oldView, { op: "recallRollup", level: "source", nodeId: episodeReference.nodeId,
       path: episodeReference.path, limit: 1, handle: oldRollupResult.handle });
     assert.equal(sourceRollup.ok, true, JSON.stringify(sourceRollup));
@@ -173,10 +191,7 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     assert.equal(missing.ok, false);
     if (!missing.ok) assert.equal(missing.code, "search-v3-rollup-path-invalid", "foreign nodes are refused under the pinned root");
 
-    appendFileSync(sourcePath, custom("m2", "u2", "chrono-memory-v2-event", forgotten));
-    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
-    const newView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "m2" } })).view as CapsuleCatalogView;
-    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, newView); await materializeAll(newView);
+    await materializeAll(newView);
     const current = await run(newView, { op: "recallState", level: "state", query: "parser evidence", limit: 12 });
     assert.equal(current.ok, true, JSON.stringify(current));
     if (current.ok) assert.equal((current.result as any).items.some((item: any) => item.metadataKind === "memory"), false, "forget changes visibility, not archive");

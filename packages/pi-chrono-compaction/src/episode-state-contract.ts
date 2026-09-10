@@ -60,6 +60,7 @@ export interface EpisodeRollupHandle {
   readonly schemaVersion: 1;
   readonly ruleset: "episode-rollup-exact-v1";
   readonly branchKey: string;
+  /** Common body-plus-metadata cut represented by this immutable publication. */
   readonly eventCut: number;
   readonly stateGeneration: number;
   readonly rollupGeneration: number;
