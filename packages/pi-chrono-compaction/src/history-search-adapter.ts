@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { estimateTokensFromText } from "./utils.js";
-import { resolveCatalogHistory, readCatalogHistoryPage, type CatalogHistoryExecutor, type CatalogHistoryScope } from "./catalog-history.js";
+import { resolveCatalogHistory, resolveCompositionEntry, readCatalogHistoryPage, type CatalogHistoryExecutor, type CatalogHistoryScope } from "./catalog-history.js";
 import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, isCapsuleReadiness, isScopedBodySourceRef, isScopedRawSourceRef, sourceRefWithinViewBounds, type ScopedRawSourceRef, type ScopedBodySourceRef, type CapsuleCatalogView, type DerivedStoreIdentity } from "./capsule-contract.js";
 import { canonicalJson } from "./capsule-segment.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
@@ -108,6 +108,15 @@ export class HistorySearchAdapter {
     const view = response.result.view as CapsuleCatalogView;
     if (!isCapsuleCatalogView(view) || !this.within(view, current.view)) return fail("search-v3-view-incompatible");
     return structuredClone(this.makeTarget(source, view));
+  }
+  /** Resolve an explicit historical compaction through current catalog membership
+   * and bounded verified source bytes, including entries beyond discovery. */
+  async compositionEntry(entryId: string, expected?: import("./types.js").SessionEntryLike, signal?: AbortSignal): Promise<import("./types.js").SessionEntryLike> {
+    const key = this.key;
+    const { scope, execute } = this.catalogScope(signal);
+    const entry = await resolveCompositionEntry(scope, entryId, execute, expected);
+    if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
+    return entry;
   }
   /** One contained read from an existing state store. No ingestion or publication. */
   async compositionSelection(prefixLeafId: string, signal?: AbortSignal): Promise<EpisodeStateSelection> {

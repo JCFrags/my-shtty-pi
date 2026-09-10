@@ -927,6 +927,12 @@ export interface HistoryRuntimeAdapters {
    * identity and actual pinned M04 view; this callback must not ingest or read
    * source bodies. Requires an explicit isolated schedulerDirectory. */
   readonly capsuleShadowTarget?: (context: ExtensionContext) => CapsuleShadowTarget | undefined;
+  /** Synthetic hook fixture only. It requires schedulerDirectory and cannot enable
+   * the installed/runtime-configured path. */
+  readonly normalCompositionFixture?: {
+    readonly createPiSummary: typeof createPiRegularSummary;
+    readonly compose: typeof composeStoredCompactionForNormalReturn;
+  };
 }
 export default function chronoCompactExtension(pi: ExtensionAPI, adapters: HistoryRuntimeAdapters = {}): void {
   const userConfigPath = defaultUserConfigPath();
@@ -1469,6 +1475,74 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       if (preparedCutIndex < 0) throw new Error(`Pi prepared cut entry ${preparedFirstKeptEntryId} was not present on the active branch.`);
       const estimateTailTokens = createTailTokenEstimator(branchEntries);
       const preparedTailTokens = estimateTailTokens(branchEntries.slice(preparedCutIndex));
+      const normalFixture = adapters.schedulerDirectory ? adapters.normalCompositionFixture : undefined;
+      if (M09_AUTHORITATIVE_REPLACEMENT_ENABLED || normalFixture) {
+        const preparedEntry = branchEntries[preparedCutIndex];
+        const sourceCutEntryId = preparedCutIndex > 0 ? branchEntries[preparedCutIndex - 1]?.id : undefined;
+        const preparedTailSafe = isSafeCompactionCut(branchEntries, preparedCutIndex);
+        const availableSummaryTokens = HARD_COMBINED_CONTEXT_CAP_TOKENS - preparedTailTokens;
+        if (!preparedTailSafe || typeof sourceCutEntryId !== "string" || preparedEntry?.parentId !== sourceCutEntryId
+          || availableSummaryTokens < 512) {
+          if (ctx.hasUI) ctx.ui.notify("Stored composition refused Pi's prepared boundary; compaction was cancelled.", "warning");
+          return { cancel: true };
+        }
+        const sessionId = ctx.sessionManager.getSessionId(), epoch = rolloutEpoch;
+        const branchLeaf = ctx.sessionManager.getLeafId();
+        const identityChanged = () => epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId
+          || ctx.sessionManager.getLeafId() !== branchLeaf;
+        let regularPiSummary: Awaited<ReturnType<typeof createPiRegularSummary>>;
+        try {
+          regularPiSummary = await (normalFixture?.createPiSummary ?? createPiRegularSummary)(ctx, event.preparation, {
+            targetTokens: Math.min(settings.hybridSummaryTargetTokens, availableSummaryTokens),
+            customInstructions: event.customInstructions,
+            signal: event.signal,
+            previousSummary: event.preparation.previousSummary,
+          });
+        } catch (error) {
+          if (!event.signal?.aborted && ctx.hasUI) {
+            ctx.ui.notify(`Regular Pi summary failed; compaction was cancelled: ${safeErrorMessage(error)}`, "warning");
+          }
+          return { cancel: true };
+        }
+        if (!regularPiSummary || identityChanged() || event.signal?.aborted) {
+          return { cancel: true };
+        }
+        const summaryTokens = estimateTokensFromText(regularPiSummary.text);
+        const fallback = () => summaryTokens + preparedTailTokens <= HARD_COMBINED_CONTEXT_CAP_TOKENS
+          ? { compaction: { summary: regularPiSummary!.text, firstKeptEntryId: preparedFirstKeptEntryId, tokensBefore,
+              ...(regularPiSummary!.usage === undefined ? {} : { usage: regularPiSummary!.usage }),
+              details: { kind: "chrono-v3-pi-summary-tail-fallback", composition: {
+                sourceCutEntryId, firstKeptEntryId: preparedFirstKeptEntryId,
+                summaryHash: hashText(regularPiSummary!.text), renderedTokens: summaryTokens,
+                rawTailTokens: preparedTailTokens, combinedTokens: summaryTokens + preparedTailTokens,
+                validation: { safeTail: true, withinCombinedCeiling: true },
+              } } } }
+          : { cancel: true as const };
+        try {
+          const composed = await (normalFixture?.compose ?? composeStoredCompactionForNormalReturn)({
+            regularPiSummary: regularPiSummary.text, sourceCutEntryId,
+            firstKeptEntryId: preparedFirstKeptEntryId, rawTailTokens: preparedTailTokens, toolPairSafe: true,
+          }, {
+            getEntry: entryId => ctx.sessionManager.getEntry(entryId) as SessionEntryLike | undefined,
+            select: entryId => search.compositionSelection(entryId, event.signal),
+            pin: async entryId => (await search.compositionTarget(entryId, event.signal)).view,
+            recovery: encodeCompositionRecovery,
+          }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")),
+          HARD_COMBINED_CONTEXT_CAP_TOKENS);
+          if (identityChanged() || event.signal?.aborted) return { cancel: true };
+          return { compaction: { summary: composed.summary, firstKeptEntryId: composed.firstKeptEntryId, tokensBefore,
+            ...(regularPiSummary.usage === undefined ? {} : { usage: regularPiSummary.usage }),
+            details: { kind: "chrono-v3-composed-context", composition: composed.envelope } } };
+        } catch (error) {
+          if (event.signal?.aborted || identityChanged()) {
+            return { cancel: true };
+          }
+          if (ctx.hasUI) {
+            ctx.ui.notify(`Stored composition unavailable; using the bounded Pi summary and prepared tail: ${safeErrorMessage(error)}`, "warning");
+          }
+          return fallback();
+        }
+      }
       let tailSelection: RawTailSelection = {
         mode: "pi",
         actualTokens: preparedTailTokens,
@@ -1826,28 +1900,6 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
           },
         },
       };
-      // Deliberately disabled until the directing assistant accepts actual composed output.
-      // A future activation uses this same bounded stored-selection path, not a second planner.
-      if (M09_AUTHORITATIVE_REPLACEMENT_ENABLED && piSummary) {
-        const sessionId = ctx.sessionManager.getSessionId(), epoch = rolloutEpoch;
-        try {
-          const composed = await composeStoredCompactionForNormalReturn({ type: "compaction", id: "pending-v3",
-            parentId: ctx.sessionManager.getLeafId(), ...authoritativeResponse.compaction } as unknown as SessionEntryLike, {
-            getEntry: entryId => ctx.sessionManager.getEntry(entryId) as SessionEntryLike | undefined,
-            select: entryId => search.compositionSelection(entryId, event.signal),
-            pin: async entryId => (await search.compositionTarget(entryId, event.signal)).view,
-            recovery: encodeCompositionRecovery,
-          }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
-          if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || event.signal?.aborted) return { cancel: true };
-          return { compaction: { summary: composed.summary, firstKeptEntryId: composed.firstKeptEntryId, tokensBefore,
-            ...(piSummary.usage === undefined ? {} : { usage: piSummary.usage }),
-            details: { kind: "chrono-v3-composed-context", piSummary: piSummary.text, retainedTail: tailSelection,
-              composition: composed.envelope } } };
-        } catch {
-          // No incomplete mandatory selection can replace the existing authoritative result.
-          ctx.ui.notify("Stored composition unavailable; preserving the existing compaction result.", "warning");
-        }
-      }
       return returnAuthoritativeAfterShadowSchedule(authoritativeResponse, () => {
         if (settings.rollupShadowEnabled && sessionPath && typeof shadowBranchLeafId === "string") {
           scheduleRollupShadow({
@@ -1891,10 +1943,12 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       }
       const sessionId = ctx.sessionManager.getSessionId();
       const epoch = rolloutEpoch;
-      let id = ctx.sessionManager.getLeafId();
-      let selected: SessionEntryLike | undefined;
-      // Never enumerate the session or read its JSONL to discover a candidate.
-      for (let visited = 0; id && visited < 256; visited++) {
+      const branchLeaf = ctx.sessionManager.getLeafId();
+      let id = branchLeaf;
+      let selected = requested ? ctx.sessionManager.getEntry(requested) as SessionEntryLike | undefined : undefined;
+      // Only nearest-compaction discovery walks parents. An explicit target is
+      // authorized below through catalog membership and verified selected bytes.
+      for (let visited = 0; !requested && id && visited < 256; visited++) {
         const entry = ctx.sessionManager.getEntry(id);
         if (!entry) break;
         if (entry.type === "compaction" && (!requested || entry.id === requested)) {
@@ -1902,15 +1956,19 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         }
         id = entry.parentId;
       }
-      if (!selected) { ctx.ui.notify("No matching compaction within the bounded current-branch lookup.", "warning"); return; }
+      if (!selected && !requested) { ctx.ui.notify("No matching compaction within the bounded current-branch lookup.", "warning"); return; }
       try {
+        const targetId = requested || selected?.id;
+        if (!targetId) throw new Error("composition-target-id-missing");
+        selected = await search.compositionEntry(targetId, selected, ctx.signal);
+        if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== branchLeaf) return;
         const preview = await previewStoredCompaction(selected, {
           getEntry: entryId => ctx.sessionManager.getEntry(entryId) as SessionEntryLike | undefined,
           select: entryId => search.compositionSelection(entryId, ctx.signal),
           pin: async entryId => (await search.compositionTarget(entryId, ctx.signal)).view,
           recovery: encodeCompositionRecovery,
         }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
-        if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId) return;
+        if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== branchLeaf) return;
         // UI-only receipt: neither comparison prose nor a replacement context is appended.
         ctx.ui.notify(JSON.stringify({ artifactRef: preview.artifactRef, ...preview.envelope }), "info");
       } catch (error) {

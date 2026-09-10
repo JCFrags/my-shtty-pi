@@ -391,3 +391,90 @@ M09 stack. PR45 and PR46 remain unmerged. The prior 2.0.14 same-cut comparison
 showed severe historical lag and no rendered protected/open-work rows; it is not
 current acceptance evidence. Exact candidate CI, deployment with scoped rollback,
 and an updated private same-cut comparison remain required before completion.
+
+## M09 original-cut comparison and early normal path (2.0.16 proposal)
+
+Installed and loaded 2.0.15 at `b5918dbf952423e86a50a71e03ae1996c4801ea5`
+remains the fixed nomination under review, not an accepted release. The isolated
+2.0.16 source is a proposed replacement. No shared registration, configuration,
+reload, or authoritative composition change accompanies this proposal.
+
+Explicit historical IDs now use current-view catalog membership and verified
+selected bytes, including comparison with the loaded entry when available.
+Sibling targets refuse before raw reading. No-ID discovery still stops after
+256 parents. One selected record uses the existing catalog source-read budget
+and 32 KiB pages. The separate 512 KiB comparison-string and retained-tail limits
+are unchanged. Applying the comparison-string limit to the whole legacy record
+was an unpublished implementation error: unrelated legacy details made the
+actual record larger than its rendered comparison input.
+
+A private driver invoked frozen 2.0.15 `previewStoredCompaction` exactly once for
+the original compaction, summarized-prefix cut 15,307 and first-kept cut 15,308.
+This was not the installed slash command. Owner-observed `history_status`
+validated the current branch view at 15,969 before and after the operation.
+Catalog membership, selected recorded bytes, source file identity, original
+artifact hash, summary inputs, and retained-tail boundary were checked. New
+appends were not treated as selected historical input. Earlier driver gate
+failures remain preserved: full-file equality rejected normal append lag;
+a bounded append inspection refused; a copied materializer-only `limit` field
+failed the selection request contract. None invoked the composer. The corrected
+request passes the existing validator and does not change a worker limit.
+
+| Original-cut result | Earlier 2.0.14 preview | Frozen 2.0.15 preview |
+| --- | --- | --- |
+| Selected memory generation | 7,318 | 13,077 |
+| Memory processed through | 7,494 | 15,307 |
+| Memory lag at target | 7,813 | 0 |
+| Rendered summary tokens | 4,164 | 5,806 |
+| Identical retained-tail tokens | 5,883 | 5,883 |
+| Combined tokens | 10,047 | 11,689 |
+| Protected section tokens | 0 | 0 |
+| Open-work section tokens | 0 | 1,438 |
+| Recent section tokens | 1,410 | 1,457 |
+
+The unchanged original representation is 23,430 summary tokens plus the same
+5,883-token tail, totaling 29,313. Regular Pi summary input remains 2,500 tokens.
+Newer memory processing is a comparison variable, not identical conditions.
+The new output has seven open-work rows spanning events 14,592–15,203 and five
+ordered recent rows at 15,303–15,307. Recovery handles remain attached. No older
+or delta rows were rendered; no selected row was lost during rendering.
+
+This is **not activation-eligible**. Both mandatory coverage flags remain false.
+The seven open-work rows are tool failures or assistant progress text, not
+established user obligations. Recent rows show CI/worktree preparation rather
+than a complete request-to-correction experience. No protected restrictions
+were selected. Fully processed history at this old cut does not establish
+complete extraction or current-session completeness. These gaps are not waived.
+The synthetic eligible path must not be presented as actual producer eligibility.
+
+The normal hook now runs before legacy retention, memory reads, generation
+hashing, sidecars, and replay planning. It uses the actual Pi-prepared boundary,
+one independent Pi summary, the same stored composer, and private persistence.
+Success returns only the combined summary and minimal composition envelope,
+without duplicate Pi summary text or detailed plans. Invalid boundaries cancel.
+Selection failure uses the unchanged Pi summary and validated prepared tail only
+within 30,000 tokens, otherwise cancels. Session/leaf drift or abort cancels.
+The enabled new path never falls through to lifetime reconstruction. The
+replacement flag remains false and cannot be enabled by user configuration.
+
+The two authorized focused checks passed. The first covered a target beyond 300
+later events, sibling refusal before source reading, and mismatched/noncompaction
+refusal. The second exercised the actual early hook, real normal composer and
+private persistence with synthetic complete evidence. It preserved the separate
+summary, protected obligation, open work and safe tail while making legacy
+session-file access throw. It asserted the minimal details envelope and one
+summary/composer call (21.749 ms test body). No broad local suite or extra model
+call was used. Compilation passed; exact-head routine CI remains the release gate.
+
+At an ordinary observation boundary, memory and rollup processing reached 15,969,
+with rollup generation 234 and closed represented range 4–15,827. Earlier member
+cursor observation advanced beyond 15,789; this is continuing publication, not a
+stall inferred from generation counters. The remaining state was no eligible
+closed episode. Old publications and stores were preserved.
+
+A metadata-only inspection mistakenly emitted nested private row text into the
+local Pi conversation. No secrets were apparent and no private prose was sent to
+Git or a PR. The output boundary was breached; no deletion or history rewrite was
+attempted. Subsequent exports must explicitly project nested scalar fields,
+never print whole nested rows. Detailed artifacts and failure receipts remain
+owner-only. Public reports contain structural evidence only.

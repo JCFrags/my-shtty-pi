@@ -3,9 +3,11 @@ import test from "node:test";
 import { mkdtemp, chmod, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { M09_AUTHORITATIVE_REPLACEMENT_ENABLED, previewStoredCompaction, type CompositionPreviewReader } from "../src/composition-preview.js";
-import type { EpisodeStateSelection } from "../src/episode-state-contract.js";
+import { M09_AUTHORITATIVE_REPLACEMENT_ENABLED, composeStoredCompactionForNormalReturn, previewStoredCompaction, type CompositionPreviewReader } from "../src/composition-preview.js";
+import type { EpisodeStateSelection, EpisodeStateSelectionItem } from "../src/episode-state-contract.js";
 import type { CapsuleCatalogView } from "../src/capsule-contract.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import extension from "../src/pi-extension.js";
 import type { SessionEntryLike } from "../src/types.js";
 
 test("recorded same-cut preview persists privately and refuses an unsafe tool-pair tail before selection", async () => {
@@ -55,5 +57,68 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
     entries.push({ id: "orphan", parentId: "tail", type: "message", message: { role: "toolResult", toolCallId: "missing", content: [] } });
     await assert.rejects(previewStoredCompaction({ ...compaction, parentId: "orphan" }, reader, join(root, "artifacts"), 3000), /tool-pair/);
     assert.equal(reads, 1, "unsafe tail must refuse before contained selection");
+
+    const previousConfigPath = process.env.PI_CHRONO_CONFIG_PATH;
+    process.env.PI_CHRONO_CONFIG_PATH = join(root, "config.json");
+    try {
+      type Hook = (event: any, context: any) => Promise<any> | any;
+      const hooks = new Map<string, Hook>();
+      let summaryCalls = 0, composeCalls = 0;
+      const pi = { registerTool() {}, registerCommand() {}, appendEntry() {}, sendMessage() {},
+        on(name: string, handler: Hook) { hooks.set(name, handler); } };
+      extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(root, "runtime"),
+        normalCompositionFixture: {
+          createPiSummary: async (_ctx, preparation) => {
+            summaryCalls++;
+            assert.equal(preparation.firstKeptEntryId, "tail");
+            return { text: "Independent Pi summary.", tokens: 6, model: "fixture/model" };
+          },
+          compose: async input => {
+            composeCalls++;
+            assert.equal(input.sourceCutEntryId, "prefix");
+            assert.equal(input.firstKeptEntryId, "tail");
+            assert.equal(input.toolPairSafe, true);
+            const storeKey = "22222222-2222-4222-8222-222222222222";
+            const healthyView = { ...view, storeKey, segments: [{ segment: 1, cut: 1 }] };
+            const item = (kind: "restriction" | "openwork", text: string): EpisodeStateSelectionItem => ({
+              stableKey: kind, propositionKey: kind, spanKey: kind, subject: "topic:fixture", revision: "unspecified",
+              kind, authority: "user", confidence: "qualified", status: "current", effectiveAtCut: 1,
+              evidence: { source: { catalogStoreKey: storeKey, sessionKey: "session", catalogGeneration: 1,
+                shardKey: "shard", segment: 1, eventSeq: 1, ordinal: 1, descriptor: 1,
+                field: "message.content.0.text", raw: { start: 0, end: 200 }, coordinateKind: "decoded-body",
+                decodedUtf16: { start: 0, end: text.length }, bodyHashAlgorithm: "chrono-utf16le-chain-sha256-v1",
+                bodyHash: "a".repeat(64) }, decodedUtf16: { start: 0, end: text.length }, exactText: text, omissions: [] },
+            });
+            return composeStoredCompactionForNormalReturn(input, { ...reader,
+              select: async () => ({ ...selection, sourceView: healthyView, complete: true, partial: false,
+                coverage: { ...selection.coverage, qualifiedReducers: false },
+                protected: [item("restriction", "Protected obligation remains exact.")],
+                current: [item("openwork", "Open work remains unresolved.")] }),
+              pin: async () => ({ ...healthyView, eventCut: 2 }), recovery: () => "opaque:fixture",
+            }, join(root, "normal-artifacts"), 30000);
+          },
+        } });
+      const hook = hooks.get("session_before_compact");
+      assert.ok(hook);
+      const result = await hook({ branchEntries: entries.slice(0, 2), preparation: {
+        firstKeptEntryId: "tail", tokensBefore: 1000, previousSummary: "Prior Pi summary.",
+        messagesToSummarize: [], turnPrefixMessages: [], settings: { reserveTokens: 512 },
+      }, reason: "manual", willRetry: false, signal: new AbortController().signal }, {
+        hasUI: true, ui: { notify() {} },
+        sessionManager: { getSessionId: () => "fixture-session", getLeafId: () => "tail", getEntry: (id: string) => entries.find(entry => entry.id === id),
+          getSessionFile: () => { throw new Error("legacy reconstruction must not run"); } },
+      });
+      assert.equal(summaryCalls, 1);
+      assert.equal(composeCalls, 1);
+      assert.equal(result.compaction.firstKeptEntryId, "tail");
+      assert.match(result.compaction.summary, /Independent Pi summary[\s\S]*Protected obligation[\s\S]*Open work/);
+      assert.deepEqual(Object.keys(result.compaction.details).sort(), ["composition", "kind"]);
+      assert.equal(result.compaction.details.piSummary, undefined);
+      assert.deepEqual(result.compaction.details.composition.validation, { safeTail: true, withinCombinedCeiling: true,
+        protectedCoverageComplete: true, openWorkCoverageComplete: true });
+    } finally {
+      if (previousConfigPath === undefined) delete process.env.PI_CHRONO_CONFIG_PATH;
+      else process.env.PI_CHRONO_CONFIG_PATH = previousConfigPath;
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

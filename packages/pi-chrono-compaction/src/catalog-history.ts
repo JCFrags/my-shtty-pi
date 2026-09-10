@@ -1,4 +1,6 @@
-import type { CatalogRequest, CatalogView, CatalogEvent } from "./catalog-contract.js";
+import { CATALOG_LIMITS, type CatalogRequest, type CatalogView, type CatalogEvent } from "./catalog-contract.js";
+import type { SessionEntryLike } from "./types.js";
+import { canonicalJson } from "./capsule-segment.js";
 
 export type CatalogHistoryExecutor = (request: CatalogRequest) => Promise<Record<string, unknown>>;
 export interface CatalogHistoryScope { catalogDirectory: string; sessionKey: string; shardKey: string; view: CatalogView }
@@ -15,6 +17,29 @@ export async function resolveCatalogHistory(scope: CatalogHistoryScope, entryId:
   const event = (page.events as CatalogEvent[])?.[0];
   if (!event || event.seq !== view.eventCut || event.shardKey !== scope.shardKey) return fail("catalog-history-scope-mismatch");
   return event;
+}
+
+/** Explicit compaction lookup uses current-view catalog membership, not an
+ * unbounded parent walk or an unvalidated in-memory getEntry. The existing
+ * catalog source-read budget bounds one selected record. The preview's separate
+ * comparison-string ceiling must not be applied to unrelated legacy details. */
+export async function resolveCompositionEntry(scope: CatalogHistoryScope, entryId: string,
+  execute: CatalogHistoryExecutor, expected?: SessionEntryLike): Promise<SessionEntryLike> {
+  const event = await resolveCatalogHistory(scope, entryId, execute);
+  const length = event.endByte - event.rawStart;
+  if (length < 1 || length > CATALOG_LIMITS.sourceDelta) return fail("composition-target-byte-limit");
+  const chunks: Buffer[] = [];
+  for (let offset = event.rawStart; offset < event.endByte;) {
+    const page = await readCatalogHistoryPage(scope, event, execute, offset, 32768);
+    chunks.push(Buffer.from(String(page.data), "base64"));
+    offset += Number(page.length);
+  }
+  let entry: SessionEntryLike;
+  try { entry = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+  catch { return fail("composition-target-json-invalid"); }
+  if (entry?.id !== entryId || entry.type !== "compaction"
+    || expected && canonicalJson(entry) !== canonicalJson(expected)) return fail("composition-target-mismatch");
+  return entry;
 }
 
 /** Raw recovery is byte-paged, never a whole-record JSON parse. Base64 preserves

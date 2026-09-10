@@ -47,6 +47,22 @@ Every milestone report must state:
 
 For M00-R2, the normal final status is: `M00-R2 corrections complete; ready for directing-assistant project-lead re-review`. It is not an acceptance claim.
 
+## Shared release coordination
+
+Check the latest `main/message-board.md` at each handoff and before shared writes.
+Publish material decisions, blockers, and ownership or release changes through
+append-only, board-only protected PRs from current main. Preserve prior entries.
+Use existing direct agent messaging to contact the current owners; do not ask the
+user to relay coordination. Keep private operational evidence in its private channel.
+
+A nominated version is under review, not accepted. Keep the shared installed
+selection fixed during release coordination. Identify candidate-changing corrections
+as separate proposals. Shared deployment requires exact candidate agreement and
+an acknowledged scoped window with COMMAND 8. Do not infer a window or waiver
+from silence, passing checks, or a board proposal. Isolated implementation and
+staged execution can continue within the user's scope while replies are pending.
+Do not enable Chrono in another owner's session or interrupt their work.
+
 ## Deployment vocabulary and announcements
 
 The following states are separate and must not be conflated: **built**, **merged**, **deployed**, **enabled**, and **usable locally**.
