@@ -4,7 +4,8 @@ import { env } from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { HistorySearchAdapter, isSearchReference } from "./history-search-adapter.js";
+import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
+import { previewStoredCompaction } from "./composition-preview.js";
 import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
 import { startAuthorizedWorkerRuntime, startupAuthorizationPath } from "./worker-runtime-startup-client.js";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
@@ -1809,6 +1810,50 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         description: "Read bounded indexed-history readiness, requested/indexed cuts, lag and safe error. No ingestion or archive reads.",
         parameters: Type.Object({}),
         async execute() { const status = searchStatus(); return toolText(JSON.stringify(status), status); },
+    });
+    pi.registerCommand("chrono-composition-preview", {
+        description: "Save a bounded private shadow comparison for a recorded compaction ID, or the nearest compaction. Does not activate compaction.",
+        handler: async (args, ctx) => {
+            const requested = args.trim();
+            if (requested && !/^[a-f0-9]{8}$/.test(requested)) {
+                ctx.ui.notify("Usage: /chrono-composition-preview [compaction-entry-id]", "info");
+                return;
+            }
+            const sessionId = ctx.sessionManager.getSessionId();
+            const epoch = rolloutEpoch;
+            let id = ctx.sessionManager.getLeafId();
+            let selected;
+            // Never enumerate the session or read its JSONL to discover a candidate.
+            for (let visited = 0; id && visited < 256; visited++) {
+                const entry = ctx.sessionManager.getEntry(id);
+                if (!entry)
+                    break;
+                if (entry.type === "compaction" && (!requested || entry.id === requested)) {
+                    selected = entry;
+                    break;
+                }
+                id = entry.parentId;
+            }
+            if (!selected) {
+                ctx.ui.notify("No matching compaction within the bounded current-branch lookup.", "warning");
+                return;
+            }
+            try {
+                const preview = await previewStoredCompaction(selected, {
+                    getEntry: entryId => ctx.sessionManager.getEntry(entryId),
+                    select: entryId => search.compositionSelection(entryId, ctx.signal),
+                    pin: async (entryId) => (await search.compositionTarget(entryId, ctx.signal)).view,
+                    recovery: encodeCompositionRecovery,
+                }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
+                if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId)
+                    return;
+                // UI-only receipt: neither comparison prose nor a replacement context is appended.
+                ctx.ui.notify(JSON.stringify({ artifactRef: preview.artifactRef, ...preview.envelope }), "info");
+            }
+            catch (error) {
+                ctx.ui.notify(`Shadow preview unavailable: ${safeErrorMessage(error)}`, "warning");
+            }
+        },
     });
     pi.registerCommand("chrono-search-status", {
         description: "Read cached search readiness without ingestion or archive scans",

@@ -3,6 +3,8 @@ import { constants } from "node:fs";
 import { lstat, link, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { renderHybridCompaction } from "./pi-hybrid.js";
+import { isScopedBodySourceRef, sourceRefWithinViewBounds, type ScopedBodySourceRef, type ScopedRawSourceRef } from "./capsule-contract.js";
+import type { EpisodeStateSelection } from "./episode-state-contract.js";
 import { byteCount, estimateTokensFromText, stableStringify, truncateToTokens } from "./utils.js";
 
 export const SHADOW_COMPOSER_LIMITS = {
@@ -143,6 +145,50 @@ interface SectionRow {
   readonly renderedTokens: number;
 }
 
+/** Adapt one contained selection. Missing/lagging rollups and delta deliberately
+ * take the historical degradation path, never a synchronous reconstruction. */
+export function composeStoredSelection(
+  input: Pick<ShadowComposerInput, "regularPiSummary" | "combinedCeilingTokens" | "cut">,
+  selection: EpisodeStateSelection,
+  recovery: (source: ScopedBodySourceRef | ScopedRawSourceRef) => string,
+): ShadowCompositionResult {
+  if (selection.requestedCut !== input.cut.sourceCutSeq || selection.sourceView.eventCut !== selection.requestedCut
+    || selection.processedCut > selection.requestedCut || selection.processedMemoryCut < selection.processedCut) {
+    throw new Error("stored selection does not match the actual composition cut");
+  }
+  const protectedRows: ComposerSelectionRow[] = [], openWork: ComposerSelectionRow[] = [], recent: ComposerSelectionRow[] = [];
+  let unsupported = false;
+  for (const item of [...selection.protected, ...selection.current]) {
+    const evidence = item.evidence as { source?: unknown; exactText?: unknown; omissions?: unknown } | null;
+    if (!evidence || !isScopedBodySourceRef(evidence.source) || !sourceRefWithinViewBounds(evidence.source, selection.sourceView)
+      || evidence.source.eventSeq > selection.processedCut || typeof evidence.exactText !== "string" || !evidence.exactText
+      || !Array.isArray(evidence.omissions) || evidence.omissions.length) { unsupported = true; continue; }
+    const row: ComposerSelectionRow = { id: item.stableKey, text: evidence.exactText,
+      startSeq: evidence.source.eventSeq, endSeq: evidence.source.eventSeq, recovery: recovery(evidence.source),
+      kind: item.kind === "restriction" ? "restriction" : "open-work", authority: "exact", status: item.status, importance: 1 };
+    if (item.kind === "restriction") protectedRows.push(row);
+    else if (item.kind === "openwork" || item.kind === "blocker") openWork.push(row);
+    else recent.push({ ...row, kind: "capsule" });
+  }
+  for (const member of selection.recent) {
+    if (!member.cue) continue;
+    if (member.eventSeq > selection.processedCut || !sourceRefWithinViewBounds(member.source, selection.sourceView)) {
+      throw new Error("stored episode member exceeds the pinned selection");
+    }
+    recent.push({ id: member.sourceKey, text: member.cue, startSeq: member.eventSeq, endSeq: member.eventSeq,
+      recovery: recovery(member.source), kind: "episode", authority: "derived", status: "uncertain", importance: 0.7 });
+  }
+  const mandatoryComplete = !unsupported && selection.coverage.bodyComplete && selection.coverage.metadataComplete
+    && !selection.coverage.qualifiedReducers && !selection.omissions.protectedAtLeastOne && !selection.omissions.responseBudgetAtLeastOne;
+  return composeShadowContext({ ...input,
+    memory: { generation: String(selection.stateGeneration), representedStartSeq: 0,
+      representedEndSeq: selection.processedCut, committed: selection.stateGeneration > 0 },
+    mandatoryCoverage: { protectedComplete: mandatoryComplete, openWorkComplete: mandatoryComplete },
+    selected: { protected: protectedRows, openWork, recent, older: [] },
+    delta: { records: [], completeThroughCut: selection.processedCut === selection.requestedCut },
+  });
+}
+
 function assertInteger(name: string, value: number, minimum = 0): void {
   if (!Number.isSafeInteger(value) || value < minimum) throw new Error(`${name} must be a safe integer >= ${minimum}`);
 }
@@ -207,10 +253,13 @@ function chronological(rows: readonly ComposerSelectionRow[]): ComposerSelection
 
 function renderRow(section: SectionRow["section"], row: ComposerSelectionRow, pinnedSnapshot: boolean): SectionRow {
   const detailTokens = Math.max(48, Math.round(72 + row.importance * 184));
-  const body = truncateToTokens(row.text, detailTokens, "\n…[detail reduced; use recovery reference]…");
+  // Never shorten a mandatory proposition: its final condition or negation may
+  // change the obligation. A budget failure must take the explicit fallback.
+  const body = section === "protected" || section === "open-work" ? row.text
+    : truncateToTokens(row.text, detailTokens, "\n…[detail reduced; use recovery reference]…");
   const authority = row.authority === "exact" ? "exact source" : "derived memory; verify before relying on it as evidence";
-  const status = pinnedSnapshot && row.authority === "derived" && row.status === "current"
-    ? "current at pinned snapshot; not verified current at source cut"
+  const status = pinnedSnapshot
+    ? `${row.status} at historical snapshot; not verified current at source cut`
     : row.status;
   const text = [
     `- [${row.startSeq}${row.endSeq === row.startSeq ? "" : `–${row.endSeq}`}] ${row.kind}; ${status}; ${authority}`,
@@ -226,7 +275,9 @@ function degradationFor(input: ShadowComposerInput): { level: ShadowDegradationL
   if (!input.mandatoryCoverage.protectedComplete || !input.mandatoryCoverage.openWorkComplete) {
     if (!input.mandatoryCoverage.protectedComplete) reasons.push("protected-restriction coverage is incomplete");
     if (!input.mandatoryCoverage.openWorkComplete) reasons.push("open-work coverage is incomplete");
-    return { level: "pi-summary-and-tail", reasons };
+    // Preserve bounded supported history, but never label an incomplete
+    // snapshot a complete current contract. Pi's separate summary remains.
+    return { level: input.memory.committed ? "last-good-state-and-recent" : "pi-summary-and-tail", reasons };
   }
   if (!input.memory.committed) return { level: "pi-summary-and-tail", reasons: ["no compatible committed memory generation is available"] };
   const memoryLag = Math.max(0, input.cut.sourceCutSeq - input.memory.representedEndSeq);
@@ -277,8 +328,8 @@ function replayText(input: ShadowComposerInput, level: ShadowDegradationLevel, r
     `Retained raw tail begins at ${input.cut.firstKeptEntryId} (sequence ${input.cut.firstKeptSeq}); it is outside this text but included in the combined ceiling.`,
   ];
   const grouped: Array<[SectionRow["section"], string]> = [
-    ["protected", "PROTECTED CONTRACT"],
-    ["open-work", "CURRENT OPEN WORK"],
+    ["protected", level === "committed-plus-delta" ? "PROTECTED CONTRACT" : "KNOWN PROTECTED ITEMS AT HISTORICAL CUT (INCOMPLETE)"],
+    ["open-work", level === "committed-plus-delta" ? "CURRENT OPEN WORK" : "KNOWN WORK AT HISTORICAL CUT (INCOMPLETE)"],
     ["older", "OLDER SELECTED MEMORY (CHRONOLOGICAL)"],
     ["recent", "RECENT CHRONOLOGICAL MEMORY"],
     ["delta", "BOUNDED UNINDEXED DELTA (CHRONOLOGICAL)"],
@@ -359,8 +410,8 @@ export function composeShadowContext(input: ShadowComposerInput): ShadowComposit
   const validation = {
     safeTail: input.cut.toolPairSafe,
     withinCombinedCeiling: renderedTokens + input.cut.rawTailTokens <= input.combinedCeilingTokens,
-    protectedCoverageComplete: input.mandatoryCoverage.protectedComplete,
-    openWorkCoverageComplete: input.mandatoryCoverage.openWorkComplete,
+    protectedCoverageComplete: input.mandatoryCoverage.protectedComplete && input.selected.protected.every(item => rows.some(kept => kept.section === "protected" && kept.row.id === item.id)),
+    openWorkCoverageComplete: input.mandatoryCoverage.openWorkComplete && input.selected.openWork.every(item => rows.some(kept => kept.section === "open-work" && kept.row.id === item.id)),
   } as const;
   const artifactBase: Omit<ShadowCompositionArtifact, "validation"> & { readonly validation: ShadowCompositionArtifact["validation"] } = {
     schemaVersion: 1,
@@ -371,7 +422,9 @@ export function composeShadowContext(input: ShadowComposerInput): ShadowComposit
     memory: input.memory,
     ...(input.rollups ? { rollups: input.rollups } : {}),
     selectedRows: rows.map((item) => ({ section: item.section, row: item.row, renderedTokens: item.renderedTokens })),
-    omittedRowIds,
+    omittedRowIds: [...new Set([...omittedRowIds, ...[...input.selected.protected, ...input.selected.openWork,
+      ...input.selected.older, ...input.selected.recent, ...input.delta.records]
+      .filter(item => !rows.some(kept => kept.row.id === item.id)).map(item => item.id)])],
     validation,
   };
   const artifact: ShadowCompositionArtifact = artifactBase;

@@ -9,7 +9,7 @@ import { runCatalogWorker } from "./catalog-worker-client.js";
 import { runCapsuleWorker } from "./capsule-worker-client.js";
 import { runSearchV3Worker } from "./search-v3-worker-client.js";
 import { isSearchV3Handle, type SearchV3Handle, type SearchV3Request } from "./search-v3-contract.js";
-import { EPISODE_STATE_RULESET_VERSION, isEpisodeStateRequest, type EpisodeRollupHandle, type EpisodeRollupAfter, type EpisodeRollupRecallLevel, type EpisodeStateAfter, type EpisodeStateLevel } from "./episode-state-contract.js";
+import { EPISODE_STATE_RULESET_VERSION, isEpisodeStateRequest, type EpisodeRollupHandle, type EpisodeRollupAfter, type EpisodeRollupRecallLevel, type EpisodeStateAfter, type EpisodeStateLevel, type EpisodeStateSelection } from "./episode-state-contract.js";
 import { SearchLifecycleScheduler, type SearchLifecycleTarget, type SearchLifecycleProgress } from "./search-lifecycle.js";
 
 type Target = Extract<SearchV3Request, { op: "ingestPage" }>;
@@ -41,6 +41,13 @@ const result = (value: Record<string, unknown>, tokenBudget?: number): SearchToo
   return { content: [{ type: "text", text }], details: value };
 };
 export const isSearchReference = (value: string): boolean => value.startsWith(prefix);
+/** Shared exact recovery encoding for bounded shadow selections. */
+export function encodeCompositionRecovery(view: CapsuleCatalogView, source: ScopedBodySourceRef | ScopedRawSourceRef): string {
+  const reference: Reference = source.coordinateKind === "decoded-body" ? { v: 1, view, source } : { v: 1, view, rawSource: source };
+  const text = encode(reference);
+  decode(text); // Use the real public recovery validator, not a weaker composer copy.
+  return text;
+}
 
 /** Real lifecycle pipeline. Only contained workers inspect source or SQLite.
  * Identities are deterministic across append/restart; branch views remain pinned.
@@ -87,6 +94,33 @@ export class HistorySearchAdapter {
       rollup: { ...this.rollup, requestedCut, coverage: "Closed historical intervals only, not completed tasks. Later or open history may be absent." },
       requestedCut, indexedCut, lag: requestedCut !== null && indexedCut !== null ? Math.max(0, requestedCut - indexedCut) : null,
       servingLastReady: this.readyValidated && !!this.lastReady, requestedViewValidated: !!this.target, lastSafeError: state.errorCode ?? null };
+  }
+  /** Explicit shadow preview only. Pin the already-cataloged real compaction cut;
+   * never ingest or change the automatic scheduler from this read path. */
+  async compositionTarget(prefixLeafId: string, signal?: AbortSignal): Promise<Target> {
+    if (!this.enabled || !this.sourceTarget || !this.target || !this.readyValidated) return fail("search-v3-index-not-ready");
+    const key = this.key, source = this.sourceTarget, current = this.target;
+    const response = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: source.catalogDirectory,
+      sessionKey: source.sessionKey, branchKey: "pi-session", leaf: { shardKey: source.shardKey, eventId: prefixLeafId } },
+      { ...this.options, signal });
+    if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
+    if (!response.ok) return fail(response.code);
+    const view = response.result.view as CapsuleCatalogView;
+    if (!isCapsuleCatalogView(view) || !this.within(view, current.view)) return fail("search-v3-view-incompatible");
+    return structuredClone(this.makeTarget(source, view));
+  }
+  /** One contained read from an existing state store. No ingestion or publication. */
+  async compositionSelection(prefixLeafId: string, signal?: AbortSignal): Promise<EpisodeStateSelection> {
+    const key = this.key;
+    const target = await this.compositionTarget(prefixLeafId, signal);
+    const response = await runSearchV3Worker({ ...target, op: "composeStateSelection" }, { ...this.options, signal });
+    if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
+    if (!response.ok) return fail(response.code);
+    const selection = response.result as unknown as EpisodeStateSelection;
+    if (!isCapsuleCatalogView(selection.sourceView) || canonicalJson(selection.sourceView) !== canonicalJson(target.view)
+      || selection.requestedCut !== target.view.eventCut || selection.processedCut > selection.requestedCut
+      || selection.processedMemoryCut < selection.processedCut) return fail("search-v3-state-view-incompatible");
+    return selection;
   }
   private within(view: CapsuleCatalogView, current: CapsuleCatalogView): boolean {
     return view.storeKey === current.storeKey && view.generation === current.generation && view.sessionKey === current.sessionKey

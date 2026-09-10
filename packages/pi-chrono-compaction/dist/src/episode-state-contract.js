@@ -24,6 +24,10 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
     rollupNodesPerRecall: 24,
     rollupNodesPerJob: 64,
     rollupTreeLevels: 32,
+    composeProtected: 24,
+    composeState: 12,
+    composeRecentMembers: 12,
+    composeUtf8Bytes: 80 * 1024,
 });
 const object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 const integer = (x) => Number.isSafeInteger(x) && Number(x) >= 0;
@@ -67,6 +71,7 @@ export function isEpisodeStateRequest(value) {
     switch (value.op) {
         case "materializeState": return stateCommon;
         case "stateStatus": return value.limit === undefined && value.after === undefined;
+        case "composeStateSelection": return value.limit === undefined && value.after === undefined;
         case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
             && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)
             && (value.source === undefined || isScopedBodySourceRef(value.source) && sourceRefWithinViewBounds(value.source, value.view))

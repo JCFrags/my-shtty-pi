@@ -290,3 +290,47 @@ rerun was performed; routine CI must validate the corrected fixture. Source and
 test TypeScript compilation passed. Active compaction, source archives, stores,
 automatic rollout, worker limits and rollback points are unchanged. Actual
 2.0.13 publication/use is not yet claimed.
+
+## M08 actual publication and M09 shadow composition work
+
+The 2.0.13 exact deployment `52c0d55bd6828326f23115c37d1abf67acd1f20b`
+passed push and PR CI, ten statuses each. Scoped registration, candidate/installed
+loader parity and rollback to 2.0.12 passed. After the coordinated normal reload,
+automatic materialization published a closed range covering events 4–61 at
+processed body/metadata cut 5,343, state generation 5,706 and rollup generation 1.
+The requested cut was 15,135 and indexed cut 12,084. Remaining eligible episodes
+and later memory were explicitly pending. Root, child and source traversal then
+recovered 300 exact UTF-16 units from the selected event. Several agent handle
+transcription errors refused `search-v3-reference-invalid`; an entry-ID-only
+request required byte pagination. These failures did not change the stores.
+The final exact opaque source handle succeeded. Private source content is not
+included here. Closed coverage does not imply task completion or current authority.
+
+M09 work adds a bounded read-only state selection operation, a composition core,
+and an explicit recorded-compaction preview function. The adapter pins a compatible
+already-cataloged prefix and performs one contained selection without ingestion.
+The preview reuses the recorded separate Pi summary and baseline at the same cut,
+checks at most 256 retained entries within 512 KiB, and applies existing tool-pair
+cut validation. Missing boundary evidence refuses without reconstruction or a
+provider call. Detailed selection, rendered output, comparison and section totals
+are persisted outside Pi history in a private content-addressed artifact. This
+function does not register or replace an authoritative compaction hook.
+
+Mandatory propositions retain their full selected text. Incomplete coverage keeps
+supported historical items with explicit historical labels, never a complete current
+contract. Budget fallback reports omitted mandatory coverage. The first preview path
+has no synchronous delta reconstruction and no older-rollup selection, and therefore
+uses an explicit degradation path. The explicit `/chrono-composition-preview [compaction-entry-id]` command uses
+already-loaded entries and the contained adapter. Discovery is limited to 256
+current-branch entries. It saves the artifact under the private configuration sibling
+`chrono-compositions/<hashed-session-id>/` and emits only a UI receipt, not a Pi
+history entry. This is a preview command, not an activation command. The real
+same-cut preview remains pending. No M09 deployment or acceptance is claimed.
+
+Two focused local M09 checks passed: core composition, byte preservation, chronology,
+lag degradation and mandatory budget behavior (3.47 ms test body), then recorded-cut
+preview, private persistence and pre-selection unsafe-tail refusal (10.84 ms test
+body). Source/test compilation passed. This uses the two-check M09 allowance;
+remaining validation belongs to routine CI, not repeated local runtime checks.
+Active compaction, first tool-result delivery, model/provider settings, rollout,
+source stores and rollback remain unchanged.

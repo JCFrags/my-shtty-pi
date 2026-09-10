@@ -92,6 +92,20 @@ test("bounded shadow composition preserves Pi bytes and source order, then degra
   assert.match(lagged.text, /not presented as current/);
   assert.ok(lagged.envelope.combinedTokens <= fixture.combinedCeilingTokens);
 
+  const historical = composeShadowContext({ ...fixture,
+    mandatoryCoverage: { protectedComplete: false, openWorkComplete: false } });
+  assert.equal(historical.degradation, "last-good-state-and-recent");
+  assert.match(historical.text, /Never publish this preview/);
+  assert.match(historical.text, /KNOWN PROTECTED ITEMS AT HISTORICAL CUT/);
+  assert.equal(historical.envelope.validation.protectedCoverageComplete, false);
+  const obligation = "Keep this condition intact. ".repeat(80) + "Do not proceed unless approved.";
+  const exactObligation = composeShadowContext({ ...fixture, combinedCeilingTokens: 5000,
+    selected: { ...fixture.selected, protected: [row("long-obligation", obligation, 4, 0, "restriction", "exact", "current")] } });
+  assert.ok(exactObligation.text.includes(obligation), "mandatory prose must not lose a trailing condition to detail truncation");
+  const refused = composeShadowContext({ ...fixture, combinedCeilingTokens: 512,
+    selected: { ...fixture.selected, protected: [row("long-obligation", obligation, 4, 0, "restriction", "exact", "current")] } });
+  assert.equal(refused.envelope.validation.protectedCoverageComplete, false);
+  assert.ok(refused.artifact.omittedRowIds.includes("long-obligation"));
   assert.throws(
     () => composeShadowContext({
       ...fixture,
