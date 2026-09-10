@@ -33,6 +33,10 @@ const viewHash = (request: EpisodeStateRequest): string => sha(canonicalJson(req
 const schema = [
   "CREATE TABLE meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, identity TEXT NOT NULL, searchRoute TEXT NOT NULL, capsuleRoute TEXT NOT NULL, catalogRoute TEXT NOT NULL, ruleset TEXT NOT NULL, generation INTEGER NOT NULL)",
   "CREATE TABLE cuts (lineage TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(lineage,eventSeq,descriptor)) WITHOUT ROWID",
+  "CREATE TABLE coverage (lineage TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, generation INTEGER NOT NULL, restrictionGap INTEGER NOT NULL, openWorkGap INTEGER NOT NULL, optionalGap INTEGER NOT NULL, PRIMARY KEY(lineage,eventSeq,descriptor)) WITHOUT ROWID",
+  "CREATE INDEX coverage_restriction ON coverage(lineage,restrictionGap,eventSeq,generation)",
+  "CREATE INDEX coverage_work ON coverage(lineage,openWorkGap,eventSeq,generation)",
+  "CREATE INDEX coverage_optional ON coverage(lineage,optionalGap,eventSeq,generation)",
   "CREATE TABLE heads (lineage TEXT PRIMARY KEY, view TEXT NOT NULL, afterEventSeq INTEGER NOT NULL, afterDescriptor INTEGER NOT NULL, metadataAfterEventSeq INTEGER NOT NULL, generation INTEGER NOT NULL, complete INTEGER NOT NULL, metadataComplete INTEGER NOT NULL, partialCount INTEGER NOT NULL)",
   "CREATE TABLE episodes (lineage TEXT NOT NULL, episodeKey TEXT NOT NULL, startEventSeq INTEGER NOT NULL, startDescriptor INTEGER NOT NULL, endEventSeq INTEGER NOT NULL, endDescriptor INTEGER NOT NULL, open INTEGER NOT NULL, memberCount INTEGER NOT NULL, objective TEXT NOT NULL, objectiveEvidence TEXT NOT NULL, createdGeneration INTEGER NOT NULL, PRIMARY KEY(lineage,episodeKey,createdGeneration)) WITHOUT ROWID",
   "CREATE INDEX episodes_page ON episodes(lineage,createdGeneration,startEventSeq,startDescriptor,episodeKey)",
@@ -355,6 +359,8 @@ async function materialize(request: Extract<EpisodeStateRequest, { op: "material
     for (const [index, item] of reduced.entries()) {
       const itemGeneration = current + index + 1;
       insertReduced(store, request, item, itemGeneration);
+      store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, item.source.eventSeq, item.source.descriptor,
+        itemGeneration, item.coverage.restrictionGap ? 1 : 0, item.coverage.openWorkGap ? 1 : 0, item.partial ? 1 : 0);
       store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, item.source.eventSeq, item.source.descriptor, itemGeneration);
     }
     if (capsules.length) store.run("UPDATE meta SET generation=? WHERE singleton=1", bodyGeneration);
@@ -486,13 +492,26 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
   const stateGeneration = generationRow?.generation === null || generationRow?.generation === undefined ? 0 : num(generationRow, "generation");
   if (stateGeneration > num(head, "generation")) fail("search-v3-state-checkpoint-corrupt");
   const active = "createdGeneration<=? AND eventSeq<=? AND (supersededGeneration IS NULL OR supersededGeneration>? OR json_extract(resolutionEvidence,'$.source.eventSeq')>?)";
-  const protectedRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('restriction','openwork','blocker') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
-    EPISODE_STATE_LIMITS.composeProtected + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeProtected + 1);
-  const currentRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('goal','decision') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
+  // Partition before LIMIT. The combined retained mandatory cap remains 24.
+  const categoryRows = (condition: string, limit: number): SqlRow[] => store.rows(
+    `SELECT * FROM state_items WHERE lineage=? AND ${active} AND ${condition} ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
+    limit + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, limit + 1);
+  const restrictionRows = categoryRows("kind='restriction'", EPISODE_STATE_LIMITS.composeRestrictions);
+  // User goals and pending approvals outrank incidental execution failures.
+  const workRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active}
+    AND kind IN ('goal','openwork','blocker') ORDER BY CASE WHEN authority='user' THEN 0 WHEN authority='assistant-report' THEN 1 ELSE 2 END,
+    eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`, EPISODE_STATE_LIMITS.composeOpenWork + 1,
+    line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeOpenWork + 1);
+  const currentRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('decision','approval') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
     EPISODE_STATE_LIMITS.composeState + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeState + 1);
   // Select successive experience across boundaries, not only the latest episode.
-  const recentRows = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND createdGeneration<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT ?",
+  const latestEpisode = store.get("SELECT startEventSeq FROM episodes WHERE lineage=? AND createdGeneration<=? AND startEventSeq<=? ORDER BY startEventSeq DESC,createdGeneration DESC LIMIT 1", line, stateGeneration, processedCut);
+  const recentEnd = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND createdGeneration<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT ?",
     EPISODE_STATE_LIMITS.composeRecentMembers + 1, line, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeRecentMembers + 1);
+  const recentStartRows = latestEpisode ? store.rows("SELECT * FROM episode_membership WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,descriptor,sourceKey LIMIT 6",
+    6, line, stateGeneration, num(latestEpisode, "startEventSeq"), processedCut) : [];
+  const recentBySource = new Map([...recentStartRows, ...recentEnd.slice(0, 6)].map(row => [str(row, "sourceKey"), row]));
+  const recentRows = [...recentBySource.values()].sort((a, b) => num(b, "eventSeq") - num(a, "eventSeq") || num(b, "descriptor") - num(a, "descriptor"));
   const member = (row: SqlRow): EpisodeStateSelectionMember => {
     const episode = store.get("SELECT * FROM episodes WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND endEventSeq<=? ORDER BY createdGeneration DESC LIMIT 1",
       line, str(row, "episodeKey"), stateGeneration, processedCut) ?? fail("search-v3-state-checkpoint-corrupt");
@@ -502,7 +521,9 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
         end: { eventSeq: num(episode, "endEventSeq"), descriptor: num(episode, "endDescriptor") }, open: num(episode, "open") === 1,
         objective: str(episode, "objective"), objectiveEvidence: JSON.parse(str(episode, "objectiveEvidence")) } };
   };
-  const protectedItems = protectedRows.slice(0, EPISODE_STATE_LIMITS.composeProtected).reverse().map(row => selectionItem(row, processedCut));
+  const protectedItems = [...restrictionRows.slice(0, EPISODE_STATE_LIMITS.composeRestrictions),
+    ...workRows.slice(0, EPISODE_STATE_LIMITS.composeOpenWork)].map(row => selectionItem(row, processedCut));
+  protectedItems.sort((a, b) => (a.evidence as any).source.eventSeq - (b.evidence as any).source.eventSeq);
   const currentItems = currentRows.slice(0, EPISODE_STATE_LIMITS.composeState).reverse().map(row => selectionItem(row, processedCut));
   const recentItems = recentRows.slice(0, EPISODE_STATE_LIMITS.composeRecentMembers).reverse().map(member);
   // Older experience is selected through existing obligation-to-episode membership,
@@ -523,25 +544,32 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
     }
   }
   olderItems.sort((a, b) => a.eventSeq - b.eventSeq || a.descriptor - b.descriptor || a.sourceKey.localeCompare(b.sourceKey));
-  let protectedAtLeastOne = protectedRows.length > EPISODE_STATE_LIMITS.composeProtected;
+  let protectedAtLeastOne = restrictionRows.length > EPISODE_STATE_LIMITS.composeRestrictions;
+  let openWorkAtLeastOne = workRows.length > EPISODE_STATE_LIMITS.composeOpenWork;
   let currentAtLeastOne = currentRows.length > EPISODE_STATE_LIMITS.composeState;
-  let recentAtLeastOne = recentRows.length > EPISODE_STATE_LIMITS.composeRecentMembers;
+  let recentAtLeastOne = recentEnd.length > recentRows.length;
   let responseBudgetAtLeastOne = false;
   const bodyComplete = bodyCut >= requestedCut, metadataComplete = processedMemoryCut >= requestedCut;
   const partialMemory = !metadataComplete;
-  const qualifiedReducers = num(head, "partialCount") > 0;
+  const gap = (column: "restrictionGap" | "openWorkGap" | "optionalGap"): boolean => Boolean(store.get(
+    `SELECT eventSeq FROM coverage WHERE lineage=? AND ${column}=1 AND eventSeq<=? AND generation<=? LIMIT 1`, line, processedCut, stateGeneration));
+  const restrictionsComplete = bodyComplete && metadataComplete && !gap("restrictionGap");
+  const openWorkComplete = bodyComplete && metadataComplete && !gap("openWorkGap");
+  const qualifiedReducers = gap("optionalGap");
   const build = (): EpisodeStateSelection => {
-    const partial = !bodyComplete || !metadataComplete || qualifiedReducers || protectedAtLeastOne || currentAtLeastOne || recentAtLeastOne || responseBudgetAtLeastOne;
+    const partial = !bodyComplete || !metadataComplete || qualifiedReducers || protectedAtLeastOne || openWorkAtLeastOne || currentAtLeastOne || recentAtLeastOne || responseBudgetAtLeastOne;
     return { stateGeneration, branchKey: request.view.branchKey, sourceView: request.view, requestedCut, processedCut, processedMemoryCut, complete: !partial, partial,
-      coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers }, protected: protectedItems, current: currentItems, recent: recentItems, older: olderItems,
-      omissions: { protectedAtLeastOne, currentAtLeastOne, recentAtLeastOne, responseBudgetAtLeastOne }, metrics: { sqliteStatements: store.statements } };
+      coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers, restrictionsComplete, openWorkComplete }, protected: protectedItems, current: currentItems, recent: recentItems, older: olderItems,
+      omissions: { protectedAtLeastOne, openWorkAtLeastOne, currentAtLeastOne, recentAtLeastOne, responseBudgetAtLeastOne }, metrics: { sqliteStatements: store.statements } };
   };
-  while (Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
+  while (Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.composeUtf8Bytes * 0.6) {
     responseBudgetAtLeastOne = true;
     if (olderItems.length) { olderItems.shift(); continue; }
-    if (recentItems.length) { recentItems.shift(); recentAtLeastOne = true; continue; }
     if (currentItems.length) { currentItems.shift(); currentAtLeastOne = true; continue; }
-    if (protectedItems.length) { protectedItems.shift(); protectedAtLeastOne = true; continue; }
+    if (recentItems.length) { recentItems.splice(Math.floor(recentItems.length / 2), 1); recentAtLeastOne = true; continue; }
+    const workIndex = protectedItems.findIndex(item => item.kind !== "restriction");
+    if (workIndex >= 0) { protectedItems.splice(workIndex, 1); openWorkAtLeastOne = true; continue; }
+    if (protectedItems.length) { protectedItems.pop(); protectedAtLeastOne = true; continue; }
     fail("search-v3-state-response-limit");
   }
   return build();
@@ -565,12 +593,23 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
     if (text === undefined || Buffer.byteLength(text) > 16 * 1024) return item;
     if (text.slice(evidence.decodedUtf16.start - source.decodedUtf16.start, evidence.decodedUtf16.end - source.decodedUtf16.start) !== evidence.exactText)
       fail("search-v3-state-source-invalid");
-    return { ...item, evidence: { ...evidence, exactText: text, decodedUtf16: source.decodedUtf16,
+    const clauseStart = evidence.decodedUtf16.start - source.decodedUtf16.start;
+    const clauseEnd = evidence.decodedUtf16.end - source.decodedUtf16.start;
+    // Blank-line paragraphs retain wrapped conditions and exceptions as one unit.
+    // Never split a paragraph merely to fit the response budget.
+    const before = [...text.slice(0, clauseStart).matchAll(/\n[ \t]*\n/gu)].at(-1);
+    const after = /\n[ \t]*\n/u.exec(text.slice(clauseEnd));
+    const start = before ? before.index! + before[0].length : 0;
+    const end = after ? clauseEnd + after.index : text.length;
+    const context = text.slice(start, end);
+    return { ...item, evidence: { ...evidence, exactText: context,
+      decodedUtf16: { start: source.decodedUtf16.start + start, end: source.decodedUtf16.start + end },
       retainedClause: { exactText: evidence.exactText, decodedUtf16: evidence.decodedUtf16 },
-      omissions: [{ beforeUtf16: 0, afterUtf16: 0 }], contextComplete: true } };
+      omissions: [{ beforeUtf16: start, afterUtf16: text.length - end }], contextComplete: true } };
   };
   const result = { ...selection, protected: [...selection.protected], current: [...selection.current],
     delta: selection.delta ? { ...selection.delta, protected: [...selection.delta.protected], current: [...selection.delta.current] } : undefined };
+  result.protected.sort((a, b) => Number(b.kind === "restriction") - Number(a.kind === "restriction"));
   const groups = [result.protected, result.current, ...(result.delta ? [result.delta.protected, result.delta.current] : [])];
   for (const group of groups) for (let index = 0; index < group.length; index++) {
     const original = group[index]!;
@@ -741,13 +780,13 @@ export interface EpisodeRollupInputPage {
   };
 }
 
-/** Bounded read-only export for M08. It never creates or mutates state-v2.sqlite. */
+/** Bounded read-only export for M08. It never creates or mutates state-v3.sqlite. */
 export async function readEpisodeRollupInputPage(request: EpisodeStateRequest, cursor: EpisodeRollupInputCursor | undefined,
   options: EpisodeStateExecutionOptions = {}, budget: { bytes: number } = { bytes: 0 }): Promise<EpisodeRollupInputPage> {
   let db: CatalogSqlite | undefined;
   try {
     prepareDirectory(request.searchDirectory);
-    const path = join(request.searchDirectory, "state-v2.sqlite");
+    const path = join(request.searchDirectory, "state-v3.sqlite");
     db = CatalogSqlite.open(path, candidate => new Store(candidate, request).validate(false));
     const store = new Store(db, request), line = lineage(request), head = store.get("SELECT * FROM heads WHERE lineage=?", line);
     const headRow = head ?? fail("search-v3-rollup-state-not-ready");
@@ -837,7 +876,7 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
     // Authorize this exact view and current physical source even for read-only memory.
     await catalogCall(request, options.catalogExecutor ?? executeCatalogStoreRequest, budget, { op: "page", view: request.view, after: request.view.eventCut, limit: 1 });
     const action = async (): Promise<EpisodeStateResponse> => {
-      const path = join(request.searchDirectory, "state-v2.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
+      const path = join(request.searchDirectory, "state-v3.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
       if (request.op === "stateStatus" || request.op === "composeStateSelection") {
         try { lstatSync(path); } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("search-v3-state-store-missing");

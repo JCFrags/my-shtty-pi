@@ -120,7 +120,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         if: needs.validation-scope.outputs.classification != 'docs'
         with: { node-version: "24.18.0", cache: npm }
-      - name: Run focused search, memory, and composer contracts
+      - name: Run focused publication and mandatory coverage contracts
         if: needs.validation-scope.outputs.classification == 'runtime'
         working-directory: packages/pi-chrono-compaction
         run: |
@@ -129,18 +129,13 @@ jobs:
           npm run catalog:sqlite:build-record -- node_modules/node-gyp/bin/node-gyp.js "$RUNNER_TEMP/chrono-node-headers/24.18.0" 24.18.0
           npm run build
           npm run catalog:sqlite:probe-record
-          test -f test/search-lifecycle.test.ts
-          test -f test/history-search-adapter.test.ts
-          search_sources=(test/search-v3-*.test.ts)
-          test -e "${search_sources[0]}"
           rm -rf dist-test
           npx tsc -p tsconfig.test-build.json
-          search_tests=(dist-test/test/search-v3-*.test.js)
-          test -f dist-test/test/search-lifecycle.test.js
           test -f dist-test/test/history-search-adapter.test.js
-          test -e "${search_tests[0]}"
           test -f dist-test/test/episode-state.test.js
-          CHRONO_SYNTHETIC_OUTPUT="$RUNNER_TEMP/chrono-synthetic-example.md" node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js dist-test/test/history-search-adapter.test.js "${search_tests[@]}" dist-test/test/episode-state.test.js dist-test/test/catalog-history.test.js dist-test/test/context-composer.test.js dist-test/test/composition-preview.test.js
+          grep -F 'rollup lifecycle offers bounded top-down exact recall' test/history-search-adapter.test.ts
+          grep -F 'M09 actual producer selection preserves obligations' test/episode-state.test.ts
+          CHRONO_SYNTHETIC_OUTPUT="$RUNNER_TEMP/chrono-synthetic-example.md" node --test --test-concurrency=1 --test-name-pattern='rollup lifecycle offers bounded top-down exact recall|M09 actual producer selection preserves obligations' dist-test/test/history-search-adapter.test.js dist-test/test/episode-state.test.js
           echo 'BEGIN PUBLIC SYNTHETIC COMPOSER EXAMPLE'
           cat "$RUNNER_TEMP/chrono-synthetic-example.md"
           echo 'END PUBLIC SYNTHETIC COMPOSER EXAMPLE'

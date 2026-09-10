@@ -478,3 +478,53 @@ Git or a PR. The output boundary was breached; no deletion or history rewrite wa
 attempted. Subsequent exports must explicitly project nested scalar fields,
 never print whole nested rows. Detailed artifacts and failure receipts remain
 owner-only. Public reports contain structural evidence only.
+
+### M09 category coverage correction (2.0.17, staged only)
+
+The frozen installation remains 2.0.15. This candidate reserves 16 restriction
+rows and eight work rows before SQL limits, preserving the combined 24-row cap.
+User goals and pending approvals precede assistant reports and incidental tool
+failures. Restriction and work overflow flags are independent. Response trimming
+removes optional history and work before restrictions; all losses remain explicit.
+
+A bounded private trace at cut 15,307 found original user restrictions in stored
+extraction and selection, but their full-source context expansions did not fit the
+response budget. Rendering then refused the incomplete clauses. The shared quota
+also retained many later failure rows. No private source prose is included here.
+The corrected path reserves response space before enrichment and verifies whole
+blank-line paragraphs, preserving wrapped conditions and exceptions. A paragraph
+that cannot fit remains unsupported; exact copying does not establish authority.
+
+State schema/rules v3 records cut- and generation-bound restriction, work and
+optional extraction gaps. Indexed gap lookups replace cumulative partialCount in
+mandatory eligibility. Optional gaps remain reported but cannot invalidate an
+unrelated category or an earlier pin. This is supported syntactic/source coverage,
+not semantic completeness. Bounded reducers inspect the whole permitted body,
+then prioritize explicit obligations within the existing 32-proposition output
+bound. Truncation and unreadable relevant sources remain category gaps.
+
+The new state-v3.sqlite and rollup-v2.sqlite namespaces preserve prior databases
+and old-version identities. Existing state/rollup handles refuse version mismatch
+rather than silently binding to a new derivation. Source, catalog, capsules and
+search progress are unchanged. Only affected memory and dependent rollup work
+recomputes through existing bounded background operations. Selection retains the
+beginning and end of recent episode experience and obligation-linked older context.
+
+The old readiness fixture charged five cold layers against one ten-second wait.
+The corrected fixture keeps a finite ten-second bound per layer (at most fifty
+seconds), records stage progress, and does not reset deadlines on repeated ticks.
+Its local run exposed an append race: scheduler status retained earlier ready
+layers while the replacement was only scheduled. The fixture now observes the
+adapter's current layers, which reset on a changed target. The real publication,
+exact recovery, append, restart and sibling assertions remain. This final fixture
+correction awaits routine CI; no unchanged retry was used.
+
+The actual-producer focused check passed in 5.17 seconds. It exercises a conditional
+restriction after forty background lines, later failure overflow, category-isolated
+rendering, an oversized later user source, and an unchanged earlier generation/cut.
+The synthetic example retains the condition and exception and does not certify
+open-work overflow. There were two local focused invocations, no broad local suite.
+Runtime CI now selects these two named scenarios instead of accumulating all prior
+M06–M09 runtime scenarios. Full tests remain available for milestone qualification.
+Required status, native provenance, build and publication gates remain in place.
+Staged original-cut comparison and exact-head CI results are still pending.

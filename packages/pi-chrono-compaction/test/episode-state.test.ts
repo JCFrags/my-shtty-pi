@@ -263,7 +263,7 @@ test("M09 actual producer selection preserves obligations and successive experie
   const sourcePath = join(directory, "main.jsonl"), sessionKey = "composer-producer";
   mkdirSync(searchDirectory, { mode: 0o700 });
   const texts: [string, string][] = [
-    ["user", "Never deploy /Repo/Parser.ts without approval."],
+    ["user", Array.from({ length: 40 }, (_, i) => `Background observation ${i}.`).join("\n") + "\n\nIf approval is pending,\nnever deploy /Repo/Parser.ts unless the owner authorizes it."],
     ["assistant", "Next action: verify /Repo/Parser.ts before deployment."],
     ["assistant", "Inspect the parser input and preserve the failed attempt."],
     ["toolResult", "Parser check failed with exit code 2."],
@@ -279,22 +279,23 @@ test("M09 actual producer selection preserves obligations and successive experie
     ["assistant", "Inspect the recovered interval."],
     ["assistant", "Next action: preserve the unresolved verification."],
     ["user", "Continue without activation."],
+    ["toolResult", Array.from({ length: 32 }, (_, i) => `Failed incidental command ${i}.`).join("\n")],
   ];
   writeFileSync(sourcePath, texts.map(([role, text], i) => message(`e${i + 1}`, i ? `e${i}` : null, role, text,
-    role === "toolResult" ? { toolName: "bash", toolCallId: `call${i}`, isError: i === 3 } : {})).join(""), { mode: 0o600 });
+    role === "toolResult" ? { toolName: "bash", toolCallId: `call${i}`, isError: i === 3 || i === 16 } : {})).join(""), { mode: 0o600 });
   const catalog = async (extra: Record<string, unknown>): Promise<any> => {
     const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
     assert.equal(response.ok, true, JSON.stringify(response)); return response.ok ? response.result : {};
   };
   try {
     await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
-    const view = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "e16" } })).view as CapsuleCatalogView;
+    const view = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "e17" } })).view as CapsuleCatalogView;
     const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation,
       derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
       reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: createHash("sha256").update("composer-producer").digest("hex") };
     const identity: SearchV3Identity = { storeKey: randomUUID(), capsule: capsuleIdentity, schemaVersion: 1,
       configHash: createHash("sha256").update("composer-search").digest("hex") };
-    const run = (op: string) => executeEpisodeStateRequest({ v: 1, catalogDirectory, capsuleDirectory, searchDirectory, identity, view, op });
+    const run = (op: string, pinned = view) => executeEpisodeStateRequest({ v: 1, catalogDirectory, capsuleDirectory, searchDirectory, identity, view: pinned, op });
     await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, view);
     let settled = false;
     for (let page = 0; page < 24; page++) {
@@ -304,25 +305,47 @@ test("M09 actual producer selection preserves obligations and successive experie
     assert.ok(settled);
     const response = await run("composeStateSelection"); assert.equal(response.ok, true, JSON.stringify(response)); if (!response.ok) return;
     const selection = response.result as unknown as EpisodeStateSelection;
-    const restriction = selection.protected.find(item => item.kind === "restriction" && (item.evidence as any).exactText === texts[0]![1]);
+    const restriction = selection.protected.find(item => item.kind === "restriction" && (item.evidence as any).exactText.includes("never deploy /Repo/Parser.ts"));
     assert.ok(restriction, "real producer restriction survives stored selection");
-    assert.deepEqual((restriction.evidence as any).omissions, [{ beforeUtf16: 0, afterUtf16: 0 }]);
+    assert.ok((restriction.evidence as any).exactText.includes("If approval is pending,"));
+    assert.ok((restriction.evidence as any).exactText.includes("unless the owner authorizes it."));
+    assert.equal((restriction.evidence as any).contextComplete, true);
+    assert.equal(selection.omissions.protectedAtLeastOne, false);
+    assert.equal(selection.omissions.openWorkAtLeastOne, true, "later failures overflow only their own category");
     assert.equal(restriction.authority, "user");
     assert.ok(selection.protected.some(item => item.kind === "openwork"));
     assert.ok(new Set(selection.recent.map(item => item.episodeKey)).size > 1, "successive episodes remain readable");
     assert.ok(selection.older?.length, "older obligation-linked experience is selected");
     const result = composeStoredSelection({ regularPiSummary: "Parser work remains pending. Deployment requires approval.", combinedCeilingTokens: 30000,
-      cut: { sourceCutEntryId: "e16", sourceCutSeq: view.eventCut, firstKeptEntryId: "tail", firstKeptSeq: view.eventCut + 1,
+      cut: { sourceCutEntryId: "e17", sourceCutSeq: view.eventCut, firstKeptEntryId: "tail", firstKeptSeq: view.eventCut + 1,
         rawTailTokens: 100, toolPairSafe: true } }, selection, source => `synthetic-source:${source.eventSeq}:${source.descriptor}`);
-    assert.ok(result.text.includes(texts[0]![1]), "nonempty zero-omission evidence is not discarded");
+    assert.ok(result.text.includes("never deploy /Repo/Parser.ts unless the owner authorizes it."), "nonempty zero-omission evidence is not discarded");
     assert.ok(result.text.includes("Next action:"), "pending work survives rendering");
     assert.equal(result.envelope.validation.protectedCoverageComplete, true, "actual producer qualifies this synthetic cut, not the live session");
-    assert.equal(result.degradation, "committed-plus-delta", "older episodes do not require a current-cut rollup");
+    assert.equal(result.envelope.validation.openWorkCoverageComplete, false, "work overflow does not certify restrictions or work");
     const optional = result.artifact.selectedRows.filter(item => ["older", "recent", "delta"].includes(item.section));
     const mandatoryKeys = new Set(result.artifact.selectedRows.filter(item => ["protected", "open-work"].includes(item.section)).map(item => item.row.recovery));
     assert.ok(optional.every(item => !mandatoryKeys.has(item.row.recovery)), "optional detail does not repeat mandatory source events");
     assert.ok(result.envelope.combinedTokens <= 30000);
     assert.equal(result.envelope.combinedTokens, result.envelope.renderedTokens + 100, "tail is counted once");
+    // A later unprocessed/oversized user source must not contaminate this pin.
+    appendFileSync(sourcePath, message("e18", "e17", "user", "Never silently discard conditions. " + "z".repeat(32769)));
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const laterView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "e18" } })).view as CapsuleCatalogView;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, laterView);
+    for (let page = 0; page < 24; page++) {
+      const response = await run("materializeState", laterView);
+      assert.equal(response.ok, true, JSON.stringify(response));
+      if (response.ok && response.result.complete) break;
+      assert.ok(page < 23);
+    }
+    const historical = await run("composeStateSelection"), later = await run("composeStateSelection", laterView);
+    assert.ok(historical.ok && later.ok);
+    if (historical.ok && later.ok) {
+      assert.equal((historical.result as any).coverage.restrictionsComplete, true);
+      assert.equal((later.result as any).coverage.restrictionsComplete, false);
+      assert.equal((historical.result as any).stateGeneration, selection.stateGeneration);
+    }
     const artifactDir = join(directory, "artifacts");
     const stored = await persistPrivateCompositionArtifact(artifactDir, result.artifact);
     const persisted = JSON.parse(readFileSync(join(artifactDir, stored.artifactRef), "utf8"));

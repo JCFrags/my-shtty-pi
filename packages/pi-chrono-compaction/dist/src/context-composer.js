@@ -50,14 +50,14 @@ export function composeStoredSelection(input, selection, recovery) {
     };
     const addState = (item, maximumCut, delta) => {
         const row = exactRow(item, maximumCut);
-        const mandatory = item.kind === "restriction" || item.kind === "openwork" || item.kind === "blocker";
+        const mandatory = item.kind === "restriction" || item.kind === "openwork" || item.kind === "blocker" || item.kind === "goal";
         if (!row) {
             (item.kind === "restriction" ? unsupportedProtected : mandatory ? unsupportedOpenWork : unsupportedOptional).push(item.stableKey);
             return;
         }
         if (item.kind === "restriction")
             protectedRows.push(row);
-        else if (item.kind === "openwork" || item.kind === "blocker")
+        else if (item.kind === "openwork" || item.kind === "blocker" || item.kind === "goal")
             openWork.push(row);
         else
             (delta ? deltaRows : recent).push({ ...row, kind: "capsule" });
@@ -102,20 +102,21 @@ export function composeStoredSelection(input, selection, recovery) {
         && !selection.coverage.partialMemory && !selection.coverage.qualifiedReducers;
     const sourceCutCovered = selection.processedCut === selection.requestedCut
         || Boolean(verifiedDelta && delta?.throughCut === selection.requestedCut);
-    const protectedComplete = sourceCutCovered && extractionBaseComplete && unsupportedProtected.length === 0
-        && !selection.omissions.protectedAtLeastOne && !selection.omissions.responseBudgetAtLeastOne;
-    const openWorkComplete = sourceCutCovered && extractionBaseComplete && unsupportedOpenWork.length === 0
-        && !selection.omissions.currentAtLeastOne && !selection.omissions.responseBudgetAtLeastOne;
+    const protectedComplete = sourceCutCovered && (selection.coverage.restrictionsComplete ?? extractionBaseComplete) && unsupportedProtected.length === 0
+        && !selection.omissions.protectedAtLeastOne;
+    const openWorkComplete = sourceCutCovered && (selection.coverage.openWorkComplete ?? extractionBaseComplete) && unsupportedOpenWork.length === 0
+        && !(selection.omissions.openWorkAtLeastOne ?? selection.omissions.currentAtLeastOne);
     const unsupportedExtraction = [
         ...(!selection.coverage.bodyComplete ? ["body extraction coverage is incomplete"] : []),
         ...(!selection.coverage.metadataComplete ? ["metadata extraction coverage is incomplete"] : []),
         ...(selection.coverage.partialMemory ? ["memory extraction is partial"] : []),
-        ...(selection.coverage.qualifiedReducers ? ["qualified reducer output cannot establish complete mandatory coverage"] : []),
+        ...(selection.coverage.qualifiedReducers ? ["qualified reducer output has scoped extraction gaps; semantic completeness is not claimed"] : []),
         ...(unsupportedProtected.length ? [`${unsupportedProtected.length} protected item(s) have unsupported exact evidence`] : []),
         ...(unsupportedOpenWork.length ? [`${unsupportedOpenWork.length} open-work item(s) have unsupported exact evidence`] : []),
         ...(unsupportedOptional.length ? [`${unsupportedOptional.length} optional item(s) have unsupported exact evidence`] : []),
     ];
     const selectionLoss = [
+        ...(selection.omissions.openWorkAtLeastOne ? ["open-work selection omitted at least one item"] : []),
         ...(selection.omissions.protectedAtLeastOne ? ["protected selection omitted at least one item"] : []),
         ...(selection.omissions.currentAtLeastOne ? ["current-state selection omitted at least one item"] : []),
         ...(selection.omissions.recentAtLeastOne ? ["recent selection omitted at least one item"] : []),

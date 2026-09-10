@@ -24,8 +24,7 @@ function neighborhoods(text) {
         for (let at = 0; at < value.length; at += EPISODE_STATE_LIMITS.clauseUtf16Units) {
             const part = value.slice(at, at + EPISODE_STATE_LIMITS.clauseUtf16Units);
             output.push({ text: part, start: start + at, end: start + at + part.length });
-            if (output.length >= 32)
-                return output;
+            // Input remains bounded by wholeBodyUtf16Units; scan beyond the first 32 lines.
         }
     }
     return output;
@@ -68,10 +67,10 @@ function revisionOf(text) {
     return explicit?.toLowerCase() ?? "unspecified";
 }
 function classifyUser(text) {
-    if (/\b(?:do not|don't|must not|never|only|constraint|restriction|except|unless|required)\b/iu.test(text))
+    if (/\b(?:do not|don't|must|never|only|constraint|restriction|except|unless|required|preserve|keep)\b/iu.test(text))
         return "restriction";
     if (/\b(?:not|never|without|pending|request(?:ing|ed)?|need)\s+(?:\w+\s+){0,2}(?:approve|approved|authorization|permission)\b/iu.test(text))
-        return undefined;
+        return "openwork";
     if (!/\b(?:if|when|once|pending|would|may|request|quoted|says)\b/iu.test(text) && /^(?:I approve|I authorize|approved\b|authorized\b|permission (?:is )?granted)/iu.test(text.trim()))
         return "approval";
     if (/\b(?:decide|decided|decision|choose|selected|instead)\b/iu.test(text))
@@ -184,6 +183,21 @@ export function reduceEpisodeStateEnvelope(envelope, body, verified) {
             subject, revision, kind: effectiveKind, authority, confidence, status: effectiveKind === "blocker" || effectiveKind === "openwork" ? "unresolved" : "current",
             evidence: evidence(envelope.source, roleFact?.source, text, clause), ...(transition ? { transition } : {}) });
     }
+    // Reserve the existing 32 retained propositions for explicit obligations first.
+    // Overflow remains category-specific; failed tool text cannot displace restrictions.
+    const priority = (item) => item.kind === "restriction" ? 0
+        : item.authority === "user" ? 1 : item.kind === "openwork" ? 2 : 3;
+    const selectedStates = [...states].sort((a, b) => priority(a) - priority(b)
+        || a.evidence.decodedUtf16.start - b.evidence.decodedUtf16.start).slice(0, 32);
+    const selectedKeys = new Set(selectedStates.map(item => item.stableKey));
+    const lost = states.filter(item => !selectedKeys.has(item.stableKey));
+    const unknownOriginal = original && !role;
+    const coverage = {
+        restrictionGap: unknownOriginal || original && role === "user" && !complete || lost.some(item => item.kind === "restriction"),
+        openWorkGap: unknownOriginal || original && ["user", "assistant", "tool", "toolresult"].includes(role ?? "") && !complete
+            || lost.some(item => ["goal", "openwork", "blocker"].includes(item.kind)),
+    };
+    selectedStates.sort((a, b) => a.evidence.decodedUtf16.start - b.evidence.decodedUtf16.start);
     const wholeEvidence = complete ? evidence(envelope.source, roleFact?.source, text, { text, start: 0, end: text.length }) : undefined;
     const objectiveClause = startsEpisode ? neighborhoods(text)[0] : undefined;
     const objective = objectiveClause ? evidence(envelope.source, roleFact?.source, text, objectiveClause) : undefined;
@@ -192,7 +206,7 @@ export function reduceEpisodeStateEnvelope(envelope, body, verified) {
     const observed = resourceEvidence ? resource(text, envelope, resourceEvidence, verified) : undefined;
     const capsuleCue = envelope.alternatives.map(alternative => alternative.text).filter(Boolean).join("\n").slice(0, 2048);
     return { source: envelope.source, role, original, startsEpisode, boundaryKind: startsEpisode ? "user-request" : compaction ? "compaction-continuation" : "none",
-        ...(objective ? { objective } : {}), states, capsuleCue, resources: observed ? [observed] : [], partial: !complete || !role || clauses.length >= 32 };
+        ...(objective ? { objective } : {}), states: selectedStates, capsuleCue, resources: observed ? [observed] : [], coverage, partial: !complete || !role || lost.length > 0 };
 }
 export function episodeStateRulesetIdentity() { return EPISODE_STATE_RULESET_VERSION; }
 //# sourceMappingURL=episode-state-reducer.js.map
