@@ -110,6 +110,15 @@ export interface EpisodeStateSelection {
   readonly protected: readonly EpisodeStateSelectionItem[];
   readonly current: readonly EpisodeStateSelectionItem[];
   readonly recent: readonly EpisodeStateSelectionMember[];
+  readonly older?: readonly EpisodeStateSelectionMember[];
+  readonly delta?: {
+    readonly verified: boolean;
+    readonly throughCut: number;
+    readonly reason: string;
+    readonly protected: readonly EpisodeStateSelectionItem[];
+    readonly current: readonly EpisodeStateSelectionItem[];
+    readonly recent: readonly EpisodeStateSelectionMember[];
+  };
   readonly omissions: {
     readonly protectedAtLeastOne: boolean;
     readonly currentAtLeastOne: boolean;

@@ -17,6 +17,15 @@ export interface CompositionPreviewReader {
 
 export const COMPOSITION_PREVIEW_LIMITS = { tailEntries: 256, tailBytes: 512 * 1024, comparisonBytes: 512 * 1024 } as const;
 
+/** Authoritative replacement remains impossible to enable through runtime configuration. */
+export const M09_AUTHORITATIVE_REPLACEMENT_ENABLED: boolean = false;
+
+export interface NormalCompositionAdapterResult {
+  readonly summary: string;
+  readonly firstKeptEntryId: string;
+  readonly envelope: ShadowCompositionEnvelope & { readonly artifactRef: string };
+}
+
 /** Reuse one recorded compaction's exact Pi summary, original raw-tail cut and
  * baseline representation. A bounded lookup failure refuses, not reconstructs. */
 export async function previewStoredCompaction(
@@ -24,6 +33,8 @@ export async function previewStoredCompaction(
   reader: CompositionPreviewReader,
   artifactDirectory: string,
   combinedCeilingTokens: number,
+  requireCompleteMandatoryCoverage = false,
+  activeContextChanged = false,
 ): Promise<{ summary: string; envelope: ShadowCompositionEnvelope; artifactRef: string }> {
   if (compaction.type !== "compaction") throw new Error("preview requires an actual recorded compaction");
   // Match the existing authoritative ceiling; callers may request less, never more.
@@ -74,10 +85,15 @@ export async function previewStoredCompaction(
     cut: { sourceCutEntryId: prefixId, sourceCutSeq: selection.requestedCut, firstKeptEntryId,
       firstKeptSeq: firstView.eventCut, rawTailTokens: recordedTailTokens as number, toolPairSafe: true } },
     selection, source => reader.recovery(selection.sourceView, source));
+  if (requireCompleteMandatoryCoverage && (!result.envelope.validation.protectedCoverageComplete
+    || !result.envelope.validation.openWorkCoverageComplete || !result.envelope.validation.safeTail
+    || !result.envelope.validation.withinCombinedCeiling || result.status !== "composed")) {
+    throw new Error("normal composition requires complete mandatory coverage and a valid bounded result");
+  }
   // Comparison and actual selected prose remain private, not appended to Pi.
   const artifact = { ...result.artifact, preview: {
     compactionEntryId: compaction.id, regularPiSummary, baseline, composedSummary: result.text,
-    sameCut: true, sameSummaryInput: true, activeContextChanged: false,
+    sameCut: true, sameSummaryInput: true, activeContextChanged,
     baselineSummaryTokens: estimateTokensFromText(baseline), baselineCombinedTokens: estimateTokensFromText(baseline) + (recordedTailTokens as number),
     sectionTokens: Object.fromEntries(["protected", "open-work", "older", "recent", "delta"].map(section =>
       [section, result.artifact.selectedRows.filter(row => row.section === section).reduce((sum, row) => sum + row.renderedTokens, 0)])),
@@ -86,4 +102,18 @@ export async function previewStoredCompaction(
   } };
   const stored = await persistPrivateCompositionArtifact(artifactDirectory, artifact);
   return { summary: result.text, envelope: { ...result.envelope, artifactHash: stored.artifactHash }, artifactRef: stored.artifactRef };
+}
+
+/** Future normal-return adapter. The extension must additionally gate every call
+ * on M09_AUTHORITATIVE_REPLACEMENT_ENABLED. Only this minimal envelope is fit
+ * for Pi compaction details; the detailed comparison remains owner-only. */
+export async function composeStoredCompactionForNormalReturn(
+  compaction: SessionEntryLike,
+  reader: CompositionPreviewReader,
+  artifactDirectory: string,
+  combinedCeilingTokens: number,
+): Promise<NormalCompositionAdapterResult> {
+  const preview = await previewStoredCompaction(compaction, reader, artifactDirectory, combinedCeilingTokens, true, true);
+  return { summary: preview.summary, firstKeptEntryId: preview.envelope.firstKeptEntryId,
+    envelope: { ...preview.envelope, artifactRef: preview.artifactRef } };
 }

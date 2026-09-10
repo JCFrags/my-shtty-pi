@@ -537,18 +537,40 @@ function composeStateSelection(request, store) {
     const active = "createdGeneration<=? AND eventSeq<=? AND (supersededGeneration IS NULL OR supersededGeneration>? OR json_extract(resolutionEvidence,'$.source.eventSeq')>?)";
     const protectedRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('restriction','openwork','blocker') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`, EPISODE_STATE_LIMITS.composeProtected + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeProtected + 1);
     const currentRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('goal','decision') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`, EPISODE_STATE_LIMITS.composeState + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeState + 1);
-    const recentEpisode = store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.startEventSeq<=? AND e.endEventSeq<=? AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey AND v.createdGeneration<=? AND v.endEventSeq<=?) ORDER BY e.startEventSeq DESC,e.startDescriptor DESC,e.episodeKey DESC LIMIT 1", line, processedCut, processedCut, stateGeneration, processedCut);
-    const recentRows = recentEpisode ? store.rows("SELECT * FROM episode_membership WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT ?", EPISODE_STATE_LIMITS.composeRecentMembers + 1, line, str(recentEpisode, "episodeKey"), stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeRecentMembers + 1) : [];
+    // Select successive experience across boundaries, not only the latest episode.
+    const recentRows = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND createdGeneration<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT ?", EPISODE_STATE_LIMITS.composeRecentMembers + 1, line, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeRecentMembers + 1);
+    const member = (row) => {
+        const episode = store.get("SELECT * FROM episodes WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND endEventSeq<=? ORDER BY createdGeneration DESC LIMIT 1", line, str(row, "episodeKey"), stateGeneration, processedCut) ?? fail("search-v3-state-checkpoint-corrupt");
+        return { episodeKey: str(row, "episodeKey"), eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"),
+            source: JSON.parse(str(row, "source")), cue: visibleMemberCue(store, row, stateGeneration, processedCut), episode: {
+                start: { eventSeq: num(episode, "startEventSeq"), descriptor: num(episode, "startDescriptor") },
+                end: { eventSeq: num(episode, "endEventSeq"), descriptor: num(episode, "endDescriptor") }, open: num(episode, "open") === 1,
+                objective: str(episode, "objective"), objectiveEvidence: JSON.parse(str(episode, "objectiveEvidence"))
+            } };
+    };
     const protectedItems = protectedRows.slice(0, EPISODE_STATE_LIMITS.composeProtected).reverse().map(row => selectionItem(row, processedCut));
     const currentItems = currentRows.slice(0, EPISODE_STATE_LIMITS.composeState).reverse().map(row => selectionItem(row, processedCut));
-    const recentItems = recentEpisode ? recentRows.slice(0, EPISODE_STATE_LIMITS.composeRecentMembers).reverse().map(row => ({
-        episodeKey: str(row, "episodeKey"), eventSeq: num(row, "eventSeq"), descriptor: num(row, "descriptor"), sourceKey: str(row, "sourceKey"),
-        source: JSON.parse(str(row, "source")), cue: visibleMemberCue(store, row, stateGeneration, processedCut), episode: {
-            start: { eventSeq: num(recentEpisode, "startEventSeq"), descriptor: num(recentEpisode, "startDescriptor") },
-            end: { eventSeq: num(recentEpisode, "endEventSeq"), descriptor: num(recentEpisode, "endDescriptor") }, open: num(recentEpisode, "open") === 1,
-            objective: str(recentEpisode, "objective"), objectiveEvidence: JSON.parse(str(recentEpisode, "objectiveEvidence"))
-        }
-    })) : [];
+    const recentItems = recentRows.slice(0, EPISODE_STATE_LIMITS.composeRecentMembers).reverse().map(member);
+    // Older experience is selected through existing obligation-to-episode membership,
+    // not a new score. It stays historical and remains exactly recoverable.
+    const olderItems = [];
+    const seenSources = new Set(recentItems.map(item => item.sourceKey));
+    const recentStart = recentItems[0]?.eventSeq ?? processedCut + 1;
+    for (const item of protectedItems.slice(0, 3)) {
+        const evidence = item.evidence;
+        if (!evidence.source || evidence.source.eventSeq >= recentStart)
+            continue;
+        const enclosing = store.get("SELECT episodeKey FROM episode_membership WHERE lineage=? AND sourceKey=? AND createdGeneration<=? LIMIT 1", line, sourceKey(evidence.source), stateGeneration);
+        if (!enclosing)
+            continue;
+        const rows = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND eventSeq<? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT 4", 4, line, str(enclosing, "episodeKey"), stateGeneration, recentStart);
+        for (const row of rows.reverse())
+            if (!seenSources.has(str(row, "sourceKey"))) {
+                seenSources.add(str(row, "sourceKey"));
+                olderItems.push(member(row));
+            }
+    }
+    olderItems.sort((a, b) => a.eventSeq - b.eventSeq || a.descriptor - b.descriptor || a.sourceKey.localeCompare(b.sourceKey));
     let protectedAtLeastOne = protectedRows.length > EPISODE_STATE_LIMITS.composeProtected;
     let currentAtLeastOne = currentRows.length > EPISODE_STATE_LIMITS.composeState;
     let recentAtLeastOne = recentRows.length > EPISODE_STATE_LIMITS.composeRecentMembers;
@@ -559,11 +581,15 @@ function composeStateSelection(request, store) {
     const build = () => {
         const partial = !bodyComplete || !metadataComplete || qualifiedReducers || protectedAtLeastOne || currentAtLeastOne || recentAtLeastOne || responseBudgetAtLeastOne;
         return { stateGeneration, branchKey: request.view.branchKey, sourceView: request.view, requestedCut, processedCut, processedMemoryCut, complete: !partial, partial,
-            coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers }, protected: protectedItems, current: currentItems, recent: recentItems,
+            coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers }, protected: protectedItems, current: currentItems, recent: recentItems, older: olderItems,
             omissions: { protectedAtLeastOne, currentAtLeastOne, recentAtLeastOne, responseBudgetAtLeastOne }, metrics: { sqliteStatements: store.statements } };
     };
     while (Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
         responseBudgetAtLeastOne = true;
+        if (olderItems.length) {
+            olderItems.shift();
+            continue;
+        }
         if (recentItems.length) {
             recentItems.shift();
             recentAtLeastOne = true;
@@ -582,6 +608,125 @@ function composeStateSelection(request, store) {
         fail("search-v3-state-response-limit");
     }
     return build();
+}
+/** Resolve bounded surrounding context without changing stored evidence or its authority. */
+async function selectionContext(request, selection, options, budget) {
+    const cache = new Map();
+    const enrich = async (item) => {
+        const evidence = item.evidence;
+        const source = evidence?.source;
+        if (!source || source.coordinateKind !== "decoded-body" || !evidence.decodedUtf16 || typeof evidence.exactText !== "string")
+            return item;
+        if (evidence.decodedUtf16.start === source.decodedUtf16.start && evidence.decodedUtf16.end === source.decodedUtf16.end)
+            return item;
+        // A whole bounded source retains preceding conditions and following exceptions.
+        // Larger sources stay explicitly unsupported rather than certifying a guessed clause boundary.
+        if (source.decodedUtf16.end - source.decodedUtf16.start > 8192)
+            return item;
+        const key = sourceKey(source);
+        if (!cache.has(key))
+            cache.set(key, await body(request, { source }, options.capsuleExecutor ?? executeCapsuleRequest, budget));
+        const text = cache.get(key);
+        if (text === undefined || Buffer.byteLength(text) > 16 * 1024)
+            return item;
+        if (text.slice(evidence.decodedUtf16.start - source.decodedUtf16.start, evidence.decodedUtf16.end - source.decodedUtf16.start) !== evidence.exactText)
+            fail("search-v3-state-source-invalid");
+        return { ...item, evidence: { ...evidence, exactText: text, decodedUtf16: source.decodedUtf16,
+                retainedClause: { exactText: evidence.exactText, decodedUtf16: evidence.decodedUtf16 },
+                omissions: [{ beforeUtf16: 0, afterUtf16: 0 }], contextComplete: true } };
+    };
+    const result = { ...selection, protected: [...selection.protected], current: [...selection.current],
+        delta: selection.delta ? { ...selection.delta, protected: [...selection.delta.protected], current: [...selection.delta.current] } : undefined };
+    const groups = [result.protected, result.current, ...(result.delta ? [result.delta.protected, result.delta.current] : [])];
+    for (const group of groups)
+        for (let index = 0; index < group.length; index++) {
+            const original = group[index];
+            group[index] = await enrich(original);
+            // Keep each successful bounded expansion. A later large source must not
+            // undo previously verified context or displace a different obligation.
+            if (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes)
+                group[index] = original;
+        }
+    return result;
+}
+/** Read a small committed capsule delta, never derive missing capsules or replay lifetime state. */
+async function selectionDelta(request, selection, options, budget) {
+    const start = selection.processedCut, end = selection.requestedCut;
+    const empty = (reason) => ({ ...selection, delta: { verified: start === end, throughCut: start,
+            reason, protected: [], current: [], recent: [] } });
+    if (start === end)
+        return empty("already-processed");
+    const catalog = options.catalogExecutor ?? executeCatalogStoreRequest, capsules = options.capsuleExecutor ?? executeCapsuleRequest;
+    if (end - start > 64) {
+        // Independent recent experience can be useful despite an unbridgeable state lag.
+        // It does not certify or reconstruct the gap between memory and this suffix.
+        try {
+            const page = await capsuleCall(request, capsules, budget, { op: "capsulePage", view: request.view,
+                afterEventSeq: Math.max(start, end - EPISODE_STATE_LIMITS.composeRecentMembers), afterDescriptor: Number.MAX_SAFE_INTEGER, limit: 8 });
+            const recent = [];
+            for (const envelope of (page.capsules ?? [])) {
+                if (envelope.source.eventSeq <= start || envelope.source.eventSeq > end)
+                    fail("search-v3-state-source-invalid");
+                const reduced = reduceEpisodeStateEnvelope(envelope, undefined);
+                if (reduced.capsuleCue)
+                    recent.push({ episodeKey: `recent-capsule:${envelope.source.eventSeq}`, eventSeq: envelope.source.eventSeq,
+                        descriptor: envelope.source.descriptor, sourceKey: sourceKey(envelope.source), source: envelope.source, cue: reduced.capsuleCue,
+                        episode: { start: { eventSeq: envelope.source.eventSeq, descriptor: envelope.source.descriptor },
+                            end: { eventSeq: envelope.source.eventSeq, descriptor: envelope.source.descriptor }, open: true, objective: "", objectiveEvidence: null } });
+            }
+            const result = { ...selection, delta: { verified: false, throughCut: start, reason: "lag-exceeds-bounded-delta; recent-window-only",
+                    protected: [], current: [], recent } };
+            return Buffer.byteLength(JSON.stringify(result)) <= EPISODE_STATE_LIMITS.composeUtf8Bytes ? result : empty("recent-response-budget-exceeded");
+        }
+        catch (error) {
+            if (error.code === "search-v3-state-capsule-unavailable")
+                return empty("lag-exceeds-bounded-delta; recent-capsules-unavailable");
+            throw error;
+        }
+    }
+    const events = await catalogCall(request, catalog, budget, { op: "page", view: request.view, after: start, limit: 64 });
+    const metadata = (events.events ?? []);
+    // Metadata writers require their maintained reducer/checkpoint, not an ad-hoc overlay.
+    if (metadata.some(event => ["chrono-memory-v2-event", "chrono-compact-retention-hint"].includes(String(event.metadata?.customType))))
+        return empty("delta-requires-metadata-materialization");
+    const protectedItems = [], current = [], recent = [];
+    let afterEventSeq = start, afterDescriptor = Number.MAX_SAFE_INTEGER, complete = false, qualified = false;
+    for (let pageIndex = 0; pageIndex < 8 && !complete; pageIndex++) {
+        const page = await capsuleCall(request, capsules, budget, { op: "capsulePage", view: request.view, afterEventSeq, afterDescriptor, limit: 8 });
+        for (const envelope of (page.capsules ?? [])) {
+            if (envelope.source.eventSeq <= start || envelope.source.eventSeq > end)
+                fail("search-v3-state-source-invalid");
+            const reduced = reduceEpisodeStateEnvelope(envelope, await body(request, envelope, capsules, budget), await exactStructural(request, envelope, catalog, budget));
+            qualified ||= reduced.partial || reduced.states.some(item => !!item.transition);
+            for (const item of reduced.states) {
+                const selected = { ...item, effectiveAtCut: end };
+                if (["restriction", "openwork", "blocker"].includes(item.kind))
+                    protectedItems.push(selected);
+                else if (["goal", "decision"].includes(item.kind))
+                    current.push(selected);
+            }
+            if (reduced.capsuleCue)
+                recent.push({ episodeKey: `delta:${envelope.source.eventSeq}`, eventSeq: envelope.source.eventSeq,
+                    descriptor: envelope.source.descriptor, sourceKey: sourceKey(envelope.source), source: envelope.source, cue: reduced.capsuleCue,
+                    episode: { start: { eventSeq: envelope.source.eventSeq, descriptor: envelope.source.descriptor },
+                        end: { eventSeq: envelope.source.eventSeq, descriptor: envelope.source.descriptor }, open: true,
+                        objective: reduced.objective?.exactText ?? "", objectiveEvidence: reduced.objective ?? null } });
+        }
+        complete = page.complete === true;
+        if (!complete && (!page.next || (page.next.afterEventSeq === afterEventSeq && page.next.afterDescriptor === afterDescriptor)))
+            fail("search-v3-state-cursor-invalid");
+        afterEventSeq = Number(page.next?.afterEventSeq ?? afterEventSeq);
+        afterDescriptor = Number(page.next?.afterDescriptor ?? afterDescriptor);
+    }
+    if (protectedItems.length + current.length + recent.length > 64)
+        return empty("delta-row-budget-exceeded");
+    const delta = { verified: complete && !qualified && metadata.at(-1)?.seq === end, throughCut: complete ? end : start,
+        reason: !complete ? "delta-capsules-incomplete" : qualified ? "delta-extraction-qualified" : "bounded-committed-delta",
+        protected: protectedItems, current, recent };
+    const result = { ...selection, delta };
+    if (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes)
+        return empty("delta-response-budget-exceeded");
+    return result;
 }
 function status(request, store) {
     const generation = num(store.get("SELECT generation FROM meta WHERE singleton=1"), "generation"), head = store.get("SELECT * FROM heads WHERE lineage=?", lineage(request));
@@ -725,7 +870,7 @@ export async function executeEpisodeStateRequest(value, options = {}) {
                 store.validate(false);
             const result = request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest, options.catalogExecutor ?? executeCatalogStoreRequest, budget)
                 : request.op === "recallState" ? recall(request, store)
-                    : request.op === "composeStateSelection" ? composeStateSelection(request, store) : status(request, store);
+                    : request.op === "composeStateSelection" ? await selectionContext(request, await selectionDelta(request, composeStateSelection(request, store), options, budget), options, budget) : status(request, store);
             const response = { v: 1, ok: true, result: { ...result,
                     coverageScope: "Body capsules plus structurally validated ordinary writer metadata. Custom type and hash-chain checks are not producer authentication; no metadata gains instruction authority.",
                 }, sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };

@@ -334,3 +334,60 @@ body). Source/test compilation passed. This uses the two-check M09 allowance;
 remaining validation belongs to routine CI, not repeated local runtime checks.
 Active compaction, first tool-result delivery, model/provider settings, rollout,
 source stores and rollback remain unchanged.
+
+## M08/M09 continuing publication and producer completion (2.0.15 candidate)
+
+The authorized bounded diagnostic established `search-v3-rollup-node-limit`,
+not database corruption. The SQLite transaction boundary had sanitized that
+known application code. A nine-code exact allowlist now preserves code-only
+errors while unknown exception messages remain sanitized. Rollup fitting reduces
+optional summaries, metadata copies, and protected copies within the existing
+64 KiB limit. It preserves ordered children, source references, immutable nodes,
+and explicit omission counts. Recall also pages by response bytes, not only count.
+
+The corrected contained materializer published generation 2 at common cut 5,343,
+extending represented closed history from events 4–61 to 4–639. Generation 1
+and its handles remain preserved. Root/child/episode traversal recovered 300
+UTF-16 units from event 69 under its exact source hash. Further publication
+remains pending. These are bounded development-use results, not full backfill.
+
+The stored selection now includes successive recent episode members, bounded
+older obligation-linked episodes, and up to 64 committed delta records. Excess
+lag uses an independently pinned recent suffix without certifying the gap.
+Existing metadata writers still require maintained materialization. Exact
+zero-omission evidence is accepted. Nonzero surrounding omissions require
+verified complete bounded context. Conditions, negation, source coordinates,
+and speaker authority remain distinct from exact text fidelity. Oversized or
+unsupported clauses remain explicit coverage gaps, not absent obligations.
+
+The composer reserves known restrictions and pending work before optional
+history. It removes duplicate optional source representations without collapsing
+distinct mandatory text. Historical rollups do not have to reach the current
+cut; maintained older episodes are also eligible. Processing lag, unsupported
+extraction, selection omissions, and render-budget loss are reported separately.
+The regular Pi summary and safe tail remain unchanged, with the tail counted
+once under the 30,000-token combined ceiling. Composer-local serialization
+preserves shared validation objects and distinguishes payload and final artifact
+hashes. Shared hash contracts and old artifacts are unchanged.
+
+The normal-return adapter is connected to the same stored composition path but
+hard-disabled pending output review. It returns only summary, cut, minimal
+provenance, and a private artifact reference. It cannot replace authoritative
+context when mandatory coverage is incomplete. No active compaction, provider,
+first-result delivery, global configuration, or unrelated session changed.
+
+Exactly two local focused checks were used in this completion batch. The extended
+rollup fixture failed on a response-size limit after publication succeeded. The
+established recall paging cause and its fixture continuation were corrected;
+there was no local rerun. The actual M07 producer → stored selection → rendered
+and persisted composer fixture passed in 4.033 seconds. Subsequent deduplication,
+context-budget, and historical-rollup corrections await routine CI. CI now runs
+the existing composer tests alongside search/memory contracts and emits the
+public-safe synthetic rendered fixture to its log and job summary. No private
+history is exported. No broad local campaign or reviewer agent was added.
+
+This candidate includes the separable M08 source correction `734df6c` on the
+M09 stack. PR45 and PR46 remain unmerged. The prior 2.0.14 same-cut comparison
+showed severe historical lag and no rendered protected/open-work rows; it is not
+current acceptance evidence. Exact candidate CI, deployment with scoped rollback,
+and an updated private same-cut comparison remain required before completion.

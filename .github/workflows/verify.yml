@@ -120,7 +120,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         if: needs.validation-scope.outputs.classification != 'docs'
         with: { node-version: "24.18.0", cache: npm }
-      - name: Run focused M06 search contracts
+      - name: Run focused search, memory, and composer contracts
         if: needs.validation-scope.outputs.classification == 'runtime'
         working-directory: packages/pi-chrono-compaction
         run: |
@@ -140,7 +140,11 @@ jobs:
           test -f dist-test/test/history-search-adapter.test.js
           test -e "${search_tests[0]}"
           test -f dist-test/test/episode-state.test.js
-          node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js dist-test/test/history-search-adapter.test.js "${search_tests[@]}" dist-test/test/episode-state.test.js
+          CHRONO_SYNTHETIC_OUTPUT="$RUNNER_TEMP/chrono-synthetic-example.md" node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js dist-test/test/history-search-adapter.test.js "${search_tests[@]}" dist-test/test/episode-state.test.js dist-test/test/context-composer.test.js dist-test/test/composition-preview.test.js
+          echo 'BEGIN PUBLIC SYNTHETIC COMPOSER EXAMPLE'
+          cat "$RUNNER_TEMP/chrono-synthetic-example.md"
+          echo 'END PUBLIC SYNTHETIC COMPOSER EXAMPLE'
+          cat "$RUNNER_TEMP/chrono-synthetic-example.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Build and run complete unit/integration tests
         if: needs.validation-scope.outputs.classification == 'milestone'
         working-directory: packages/pi-chrono-compaction
@@ -156,7 +160,7 @@ jobs:
         run: echo 'Unit/integration tests are not applicable to this documentation-only diff; no runtime result is claimed.'
       - name: Record routine campaign boundary
         if: needs.validation-scope.outputs.classification == 'runtime'
-        run: echo 'Focused M06 search contracts ran; the complete unit/integration campaign did not run and is not claimed.'
+        run: echo 'Focused search, memory, and composer contracts ran; the complete unit/integration campaign did not run and is not claimed.'
 
   determinism:
     needs: validation-scope

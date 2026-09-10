@@ -9,10 +9,13 @@ import {
   type CapsuleCatalogView, type DerivedStoreIdentity, type ReducerEnvelope, type ScopedBodySourceRef, type ScopedRawSourceRef,
 } from "../src/capsule-contract.js";
 import { executeCatalogStoreRequest } from "../src/catalog-store.js";
+import { CatalogSqlite, CatalogSqliteError } from "../src/catalog-sqlite.js";
 import { executeCapsuleRequest } from "../src/capsule-store.js";
 import { reduceEpisodeStateEnvelope } from "../src/episode-state-reducer.js";
 import { executeEpisodeStateRequest } from "../src/episode-state-store.js";
 import { createMemoryEvent } from "../src/memory-store.js";
+import { composeStoredSelection, persistPrivateCompositionArtifact } from "../src/context-composer.js";
+import type { EpisodeStateSelection } from "../src/episode-state-contract.js";
 import type { SearchV3Identity } from "../src/search-v3-contract.js";
 
 const message = (id: string, parentId: string | null, role: string, text: string, extra: Record<string, unknown> = {}): string =>
@@ -211,7 +214,120 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     }
     const pinnedRollup = await run(newView, { op: "recallRollup", level: "root", limit: 1, handle: oldRollupResult.handle });
     assert.equal(pinnedRollup.ok, true, JSON.stringify(pinnedRollup));
+
+    const capacityRestrictions = Array.from({ length: 32 }, (_, index) =>
+      `Never deploy /Repo/Capacity-${index}.ts without approval. ${"x".repeat(700)}`).join("\n");
+    appendFileSync(sourcePath, message("u3", "m2", "user", capacityRestrictions)
+      + message("u4", "u3", "user", "Continue after preserving every capacity restriction."));
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const capacityView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "u4" } })).view as CapsuleCatalogView;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, capacityView);
+    await materializeAll(capacityView);
+    const capacityRollup = await materializeRollup(capacityView);
+    assert.ok(capacityRollup.rollupGeneration > oldRollupResult.rollupGeneration, "a completed frontier continues into a later generation");
+    assert.equal(capacityRollup.complete, true);
+    let boundedEpisode: any, capacityAfter: unknown;
+    for (let page = 0; page < 4 && !boundedEpisode; page++) {
+      const capacityEpisodes = await run(capacityView, { op: "recallRollup", level: "episode", limit: 12,
+        handle: capacityRollup.handle, ...(capacityAfter ? { after: capacityAfter } : {}) });
+      assert.equal(capacityEpisodes.ok, true, JSON.stringify(capacityEpisodes)); if (!capacityEpisodes.ok) return;
+      boundedEpisode = (capacityEpisodes.result as any).items.find((item: any) => item.omittedProtectedCount > 0);
+      capacityAfter = (capacityEpisodes.result as any).next;
+      if (!capacityAfter) break;
+    }
+    assert.ok(boundedEpisode, "oversized optional protected copies become an explicit omission instead of blocking publication");
+    assert.equal(boundedEpisode.remainingDetail, "reachable-through-sources");
+    const boundedSources = await run(capacityView, { op: "recallRollup", level: "source", nodeId: boundedEpisode.reference.nodeId,
+      path: boundedEpisode.reference.path, limit: 12, handle: capacityRollup.handle });
+    assert.equal(boundedSources.ok, true, JSON.stringify(boundedSources));
+    if (boundedSources.ok) assert.ok((boundedSources.result as any).items.length > 0, "capacity reduction preserves exact source recovery");
+
+    const errorDb = CatalogSqlite.create(join(searchDirectory, "rollup-error-sanitization.sqlite"));
+    try {
+      assert.throws(() => errorDb.transaction(() => { throw Object.assign(new Error("private semantic detail"),
+        { code: "search-v3-rollup-node-limit" }); }), error => (error as Error & { code?: string }).code === "search-v3-rollup-node-limit"
+          && (error as Error).message === "search-v3-rollup-node-limit", "an allowlisted rollback preserves only its safe semantic code");
+      assert.throws(() => errorDb.transaction(() => { throw Object.assign(new Error("private unknown detail"),
+        { code: "search-v3-rollup-unrecognized" }); }), error => error instanceof CatalogSqliteError
+          && error.code === "catalog-sqlite-failed" && error.message === "catalog-sqlite-failed",
+      "an unknown rollback error cannot expose its code or message");
+    } finally { errorDb.close(); }
     assert.equal(readFileSync(oldStore, "utf8"), "legacy-state-v1-must-remain");
     assert.equal(readFileSync(oldRollup, "utf8"), "legacy-rollup-v0-must-remain");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("M09 actual producer selection preserves obligations and successive experience in private output", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-composer-producer-"));
+  const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
+  const sourcePath = join(directory, "main.jsonl"), sessionKey = "composer-producer";
+  mkdirSync(searchDirectory, { mode: 0o700 });
+  const texts: [string, string][] = [
+    ["user", "Never deploy /Repo/Parser.ts without approval."],
+    ["assistant", "Next action: verify /Repo/Parser.ts before deployment."],
+    ["assistant", "Inspect the parser input and preserve the failed attempt."],
+    ["toolResult", "Parser check failed with exit code 2."],
+    ["assistant", "Adjust the parser boundary check; verification remains unresolved."],
+    ["user", "Continue the parser investigation."],
+    ["assistant", "Read the boundary evidence."],
+    ["assistant", "Attempt the smaller correction."],
+    ["toolResult", "The narrow check completed without an execution error."],
+    ["assistant", "Next action: review the result; do not claim deployment."],
+    ["user", "Keep the pending parser work visible."],
+    ["assistant", "The task still needs output review."],
+    ["user", "Continue with source recovery."],
+    ["assistant", "Inspect the recovered interval."],
+    ["assistant", "Next action: preserve the unresolved verification."],
+    ["user", "Continue without activation."],
+  ];
+  writeFileSync(sourcePath, texts.map(([role, text], i) => message(`e${i + 1}`, i ? `e${i}` : null, role, text,
+    role === "toolResult" ? { toolName: "bash", toolCallId: `call${i}`, isError: i === 3 } : {})).join(""), { mode: 0o600 });
+  const catalog = async (extra: Record<string, unknown>): Promise<any> => {
+    const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
+    assert.equal(response.ok, true, JSON.stringify(response)); return response.ok ? response.result : {};
+  };
+  try {
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const view = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "e16" } })).view as CapsuleCatalogView;
+    const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: view.storeKey, catalogGeneration: view.generation,
+      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
+      reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: createHash("sha256").update("composer-producer").digest("hex") };
+    const identity: SearchV3Identity = { storeKey: randomUUID(), capsule: capsuleIdentity, schemaVersion: 1,
+      configHash: createHash("sha256").update("composer-search").digest("hex") };
+    const run = (op: string) => executeEpisodeStateRequest({ v: 1, catalogDirectory, capsuleDirectory, searchDirectory, identity, view, op });
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, view);
+    let settled = false;
+    for (let page = 0; page < 24; page++) {
+      const result = await run("materializeState"); assert.equal(result.ok, true, JSON.stringify(result));
+      if (result.ok && result.result.complete) { settled = true; break; }
+    }
+    assert.ok(settled);
+    const response = await run("composeStateSelection"); assert.equal(response.ok, true, JSON.stringify(response)); if (!response.ok) return;
+    const selection = response.result as unknown as EpisodeStateSelection;
+    const restriction = selection.protected.find(item => item.kind === "restriction" && (item.evidence as any).exactText === texts[0]![1]);
+    assert.ok(restriction, "real producer restriction survives stored selection");
+    assert.deepEqual((restriction.evidence as any).omissions, [{ beforeUtf16: 0, afterUtf16: 0 }]);
+    assert.equal(restriction.authority, "user");
+    assert.ok(selection.protected.some(item => item.kind === "openwork"));
+    assert.ok(new Set(selection.recent.map(item => item.episodeKey)).size > 1, "successive episodes remain readable");
+    assert.ok(selection.older?.length, "older obligation-linked experience is selected");
+    const result = composeStoredSelection({ regularPiSummary: "Parser work remains pending. Deployment requires approval.", combinedCeilingTokens: 30000,
+      cut: { sourceCutEntryId: "e16", sourceCutSeq: view.eventCut, firstKeptEntryId: "tail", firstKeptSeq: view.eventCut + 1,
+        rawTailTokens: 100, toolPairSafe: true } }, selection, source => `synthetic-source:${source.eventSeq}:${source.descriptor}`);
+    assert.ok(result.text.includes(texts[0]![1]), "nonempty zero-omission evidence is not discarded");
+    assert.ok(result.text.includes("Next action:"), "pending work survives rendering");
+    assert.equal(result.envelope.validation.protectedCoverageComplete, true, "actual producer qualifies this synthetic cut, not the live session");
+    assert.equal(result.degradation, "committed-plus-delta", "older episodes do not require a current-cut rollup");
+    const optional = result.artifact.selectedRows.filter(item => ["older", "recent", "delta"].includes(item.section));
+    const mandatoryKeys = new Set(result.artifact.selectedRows.filter(item => ["protected", "open-work"].includes(item.section)).map(item => item.row.recovery));
+    assert.ok(optional.every(item => !mandatoryKeys.has(item.row.recovery)), "optional detail does not repeat mandatory source events");
+    assert.ok(result.envelope.combinedTokens <= 30000);
+    assert.equal(result.envelope.combinedTokens, result.envelope.renderedTokens + 100, "tail is counted once");
+    const artifactDir = join(directory, "artifacts");
+    const stored = await persistPrivateCompositionArtifact(artifactDir, result.artifact);
+    const persisted = JSON.parse(readFileSync(join(artifactDir, stored.artifactRef), "utf8"));
+    assert.equal(typeof persisted.validation, "object", "shared validation references must not serialize as Circular");
+    assert.ok(!JSON.stringify(persisted).includes("[Circular]"));
+    if (process.env.CHRONO_SYNTHETIC_OUTPUT) writeFileSync(process.env.CHRONO_SYNTHETIC_OUTPUT, result.text + "\n", { mode: 0o600 });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

@@ -3,12 +3,13 @@ import test from "node:test";
 import { mkdtemp, chmod, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { previewStoredCompaction, type CompositionPreviewReader } from "../src/composition-preview.js";
+import { M09_AUTHORITATIVE_REPLACEMENT_ENABLED, previewStoredCompaction, type CompositionPreviewReader } from "../src/composition-preview.js";
 import type { EpisodeStateSelection } from "../src/episode-state-contract.js";
 import type { CapsuleCatalogView } from "../src/capsule-contract.js";
 import type { SessionEntryLike } from "../src/types.js";
 
 test("recorded same-cut preview persists privately and refuses an unsafe tool-pair tail before selection", async () => {
+  assert.equal(M09_AUTHORITATIVE_REPLACEMENT_ENABLED, false);
   const root = await mkdtemp(join(tmpdir(), "chrono-preview-"));
   await chmod(root, 0o700);
   try {
@@ -37,12 +38,19 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
     assert.equal(preview.envelope.validation.protectedCoverageComplete, false);
     assert.equal(preview.envelope.firstKeptEntryId, "tail");
     const path = join(root, "artifacts", preview.artifactRef);
-    const artifact = JSON.parse(await readFile(path, "utf8"));
+    const serialized = await readFile(path, "utf8");
+    assert.doesNotMatch(serialized, /\[Circular\]/, "shared validation and envelope references are values, not cycles");
+    const artifact = JSON.parse(serialized);
     assert.equal(artifact.preview.sameCut, true);
     assert.equal(artifact.preview.sameSummaryInput, true);
     assert.equal(artifact.preview.activeContextChanged, false);
     assert.equal(artifact.preview.baseline, compaction.summary);
     assert.equal(artifact.preview.composedSummary, preview.summary);
+    assert.equal(artifact.preview.envelope.payloadHash, preview.envelope.payloadHash);
+    assert.equal(artifact.preview.envelope.artifactHash, preview.envelope.payloadHash,
+      "the embedded composition envelope identifies the pre-comparison payload");
+    assert.notEqual(preview.envelope.artifactHash, preview.envelope.payloadHash,
+      "the returned envelope identifies the final persisted comparison artifact separately");
     assert.equal((await stat(path)).mode & 0o777, 0o600);
     entries.push({ id: "orphan", parentId: "tail", type: "message", message: { role: "toolResult", toolCallId: "missing", content: [] } });
     await assert.rejects(previewStoredCompaction({ ...compaction, parentId: "orphan" }, reader, join(root, "artifacts"), 3000), /tool-pair/);

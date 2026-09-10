@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
-import { previewStoredCompaction } from "./composition-preview.js";
+import { previewStoredCompaction, composeStoredCompactionForNormalReturn, M09_AUTHORITATIVE_REPLACEMENT_ENABLED } from "./composition-preview.js";
 import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
 import { startAuthorizedWorkerRuntime, startupAuthorizationPath, type WorkerStartupStatus } from "./worker-runtime-startup-client.js";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
@@ -1826,6 +1826,28 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
           },
         },
       };
+      // Deliberately disabled until the directing assistant accepts actual composed output.
+      // A future activation uses this same bounded stored-selection path, not a second planner.
+      if (M09_AUTHORITATIVE_REPLACEMENT_ENABLED && piSummary) {
+        const sessionId = ctx.sessionManager.getSessionId(), epoch = rolloutEpoch;
+        try {
+          const composed = await composeStoredCompactionForNormalReturn({ type: "compaction", id: "pending-v3",
+            parentId: ctx.sessionManager.getLeafId(), ...authoritativeResponse.compaction } as unknown as SessionEntryLike, {
+            getEntry: entryId => ctx.sessionManager.getEntry(entryId) as SessionEntryLike | undefined,
+            select: entryId => search.compositionSelection(entryId, event.signal),
+            pin: async entryId => (await search.compositionTarget(entryId, event.signal)).view,
+            recovery: encodeCompositionRecovery,
+          }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
+          if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || event.signal?.aborted) return { cancel: true };
+          return { compaction: { summary: composed.summary, firstKeptEntryId: composed.firstKeptEntryId, tokensBefore,
+            ...(piSummary.usage === undefined ? {} : { usage: piSummary.usage }),
+            details: { kind: "chrono-v3-composed-context", piSummary: piSummary.text, retainedTail: tailSelection,
+              composition: composed.envelope } } };
+        } catch {
+          // No incomplete mandatory selection can replace the existing authoritative result.
+          ctx.ui.notify("Stored composition unavailable; preserving the existing compaction result.", "warning");
+        }
+      }
       return returnAuthoritativeAfterShadowSchedule(authoritativeResponse, () => {
         if (settings.rollupShadowEnabled && sessionPath && typeof shadowBranchLeafId === "string") {
           scheduleRollupShadow({

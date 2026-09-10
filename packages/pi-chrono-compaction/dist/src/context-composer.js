@@ -21,43 +21,138 @@ export function composeStoredSelection(input, selection, recovery) {
         || selection.processedCut > selection.requestedCut || selection.processedMemoryCut < selection.processedCut) {
         throw new Error("stored selection does not match the actual composition cut");
     }
-    const protectedRows = [], openWork = [], recent = [];
-    let unsupported = false;
-    for (const item of [...selection.protected, ...selection.current]) {
+    const extended = selection;
+    const protectedRows = [], openWork = [];
+    const recent = [], older = [], deltaRows = [];
+    const unsupportedProtected = [], unsupportedOpenWork = [], unsupportedOptional = [];
+    const exactRow = (item, maximumCut) => {
         const evidence = item.evidence;
+        const decoded = evidence?.decodedUtf16;
+        const omissions = Array.isArray(evidence?.omissions) ? evidence.omissions : undefined;
+        const omission = omissions?.length === 1
+            ? omissions[0] : undefined;
         if (!evidence || !isScopedBodySourceRef(evidence.source) || !sourceRefWithinViewBounds(evidence.source, selection.sourceView)
-            || evidence.source.eventSeq > selection.processedCut || typeof evidence.exactText !== "string" || !evidence.exactText
-            || !Array.isArray(evidence.omissions) || evidence.omissions.length) {
-            unsupported = true;
-            continue;
+            || evidence.source.eventSeq > maximumCut || typeof evidence.exactText !== "string" || !evidence.exactText
+            || !decoded || !Number.isSafeInteger(decoded.start) || !Number.isSafeInteger(decoded.end)
+            || decoded.end - decoded.start !== evidence.exactText.length
+            || decoded.start < evidence.source.decodedUtf16.start || decoded.end > evidence.source.decodedUtf16.end
+            || !omissions || omissions.length > 1
+            || omissions.length === 0 && (decoded.start !== evidence.source.decodedUtf16.start
+                || decoded.end !== evidence.source.decodedUtf16.end)
+            || omissions.length === 1 && (!omission || !Number.isSafeInteger(omission.beforeUtf16) || !Number.isSafeInteger(omission.afterUtf16)
+                || omission.beforeUtf16 !== decoded.start - evidence.source.decodedUtf16.start
+                || omission.afterUtf16 !== evidence.source.decodedUtf16.end - decoded.end
+                || (omission.beforeUtf16 > 0 || omission.afterUtf16 > 0) && evidence.contextComplete !== true))
+            return undefined;
+        return { id: item.stableKey, text: evidence.exactText, startSeq: evidence.source.eventSeq, endSeq: evidence.source.eventSeq,
+            recovery: recovery(evidence.source), kind: item.kind === "restriction" ? "restriction" : "open-work",
+            authority: "exact", sourceAuthority: item.authority, status: item.status, importance: 1 };
+    };
+    const addState = (item, maximumCut, delta) => {
+        const row = exactRow(item, maximumCut);
+        const mandatory = item.kind === "restriction" || item.kind === "openwork" || item.kind === "blocker";
+        if (!row) {
+            (item.kind === "restriction" ? unsupportedProtected : mandatory ? unsupportedOpenWork : unsupportedOptional).push(item.stableKey);
+            return;
         }
-        const row = { id: item.stableKey, text: evidence.exactText,
-            startSeq: evidence.source.eventSeq, endSeq: evidence.source.eventSeq, recovery: recovery(evidence.source),
-            kind: item.kind === "restriction" ? "restriction" : "open-work", authority: "exact", status: item.status, importance: 1 };
         if (item.kind === "restriction")
             protectedRows.push(row);
         else if (item.kind === "openwork" || item.kind === "blocker")
             openWork.push(row);
         else
-            recent.push({ ...row, kind: "capsule" });
-    }
-    for (const member of selection.recent) {
+            (delta ? deltaRows : recent).push({ ...row, kind: "capsule" });
+    };
+    const addMember = (member, maximumCut, target, kind) => {
         if (!member.cue)
-            continue;
-        if (member.eventSeq > selection.processedCut || !sourceRefWithinViewBounds(member.source, selection.sourceView)) {
+            return;
+        if (member.eventSeq > maximumCut || !sourceRefWithinViewBounds(member.source, selection.sourceView)) {
             throw new Error("stored episode member exceeds the pinned selection");
         }
-        recent.push({ id: member.sourceKey, text: member.cue, startSeq: member.eventSeq, endSeq: member.eventSeq,
-            recovery: recovery(member.source), kind: "episode", authority: "derived", status: "uncertain", importance: 0.7 });
+        target.push({ id: member.sourceKey, text: member.cue, startSeq: member.eventSeq, endSeq: member.eventSeq,
+            recovery: recovery(member.source), kind, authority: "derived", status: "uncertain", importance: kind === "rollup" ? 0.6 : 0.7 });
+    };
+    for (const item of selection.protected)
+        addState(item, selection.processedCut, false);
+    for (const item of selection.current)
+        addState(item, selection.processedCut, false);
+    for (const member of selection.recent)
+        addMember(member, selection.processedCut, recent, "episode");
+    for (const member of extended.older ?? [])
+        addMember(member, selection.processedCut, older, "episode");
+    const delta = extended.delta;
+    if (delta && delta.protected.length + delta.current.length + delta.recent.length > SHADOW_COMPOSER_LIMITS.maxDeltaRows) {
+        throw new Error(`bounded delta row count exceeds ${SHADOW_COMPOSER_LIMITS.maxDeltaRows}`);
     }
-    const mandatoryComplete = !unsupported && selection.coverage.bodyComplete && selection.coverage.metadataComplete
-        && !selection.coverage.qualifiedReducers && !selection.omissions.protectedAtLeastOne && !selection.omissions.responseBudgetAtLeastOne;
+    const verifiedDelta = delta?.verified === true && Number.isSafeInteger(delta.throughCut)
+        && delta.throughCut >= selection.processedCut && delta.throughCut <= selection.requestedCut;
+    if (delta && Number.isSafeInteger(delta.throughCut) && delta.throughCut >= selection.processedCut
+        && delta.throughCut <= selection.requestedCut) {
+        // Qualified or incomplete delta cannot close lag, but its individually
+        // source-validated obligations remain useful as explicitly incomplete state.
+        for (const item of delta.protected)
+            addState(item, delta.throughCut, verifiedDelta);
+        for (const item of delta.current)
+            addState(item, delta.throughCut, verifiedDelta);
+        // An unverified recent suffix is independently source-pinned through the requested cut;
+        // delta.throughCut continues to describe state/delta completeness only.
+        for (const member of delta.recent)
+            addMember(member, verifiedDelta ? delta.throughCut : selection.requestedCut, verifiedDelta ? deltaRows : recent, "episode");
+    }
+    const extractionBaseComplete = selection.coverage.bodyComplete && selection.coverage.metadataComplete
+        && !selection.coverage.partialMemory && !selection.coverage.qualifiedReducers;
+    const sourceCutCovered = selection.processedCut === selection.requestedCut
+        || Boolean(verifiedDelta && delta?.throughCut === selection.requestedCut);
+    const protectedComplete = sourceCutCovered && extractionBaseComplete && unsupportedProtected.length === 0
+        && !selection.omissions.protectedAtLeastOne && !selection.omissions.responseBudgetAtLeastOne;
+    const openWorkComplete = sourceCutCovered && extractionBaseComplete && unsupportedOpenWork.length === 0
+        && !selection.omissions.currentAtLeastOne && !selection.omissions.responseBudgetAtLeastOne;
+    const unsupportedExtraction = [
+        ...(!selection.coverage.bodyComplete ? ["body extraction coverage is incomplete"] : []),
+        ...(!selection.coverage.metadataComplete ? ["metadata extraction coverage is incomplete"] : []),
+        ...(selection.coverage.partialMemory ? ["memory extraction is partial"] : []),
+        ...(selection.coverage.qualifiedReducers ? ["qualified reducer output cannot establish complete mandatory coverage"] : []),
+        ...(unsupportedProtected.length ? [`${unsupportedProtected.length} protected item(s) have unsupported exact evidence`] : []),
+        ...(unsupportedOpenWork.length ? [`${unsupportedOpenWork.length} open-work item(s) have unsupported exact evidence`] : []),
+        ...(unsupportedOptional.length ? [`${unsupportedOptional.length} optional item(s) have unsupported exact evidence`] : []),
+    ];
+    const selectionLoss = [
+        ...(selection.omissions.protectedAtLeastOne ? ["protected selection omitted at least one item"] : []),
+        ...(selection.omissions.currentAtLeastOne ? ["current-state selection omitted at least one item"] : []),
+        ...(selection.omissions.recentAtLeastOne ? ["recent selection omitted at least one item"] : []),
+        ...(selection.omissions.responseBudgetAtLeastOne ? ["selection response budget omitted at least one item"] : []),
+    ];
+    const lag = selection.processedCut < selection.requestedCut && !verifiedDelta
+        ? [delta?.reason || `memory snapshot lags the source cut by ${selection.requestedCut - selection.processedCut} sequence(s)`] : [];
+    const dedupeRows = (rows) => {
+        const seen = new Set();
+        return rows.filter(row => {
+            const key = `${row.startSeq}\n${row.recovery}\n${row.sourceAuthority}\n${row.text}`;
+            if (seen.has(key))
+                return false;
+            seen.add(key);
+            return true;
+        });
+    };
+    // Mandatory source text is represented once. Optional upgrades must not repeat
+    // that same event, and a source selected as older cannot also become recent/delta.
+    const selectedProtected = dedupeRows(protectedRows), selectedOpenWork = dedupeRows(openWork);
+    const represented = new Set([...selectedProtected, ...selectedOpenWork].map(row => `${row.startSeq}\n${row.recovery}`));
+    const uniqueOptional = (rows) => rows.filter(row => {
+        const key = `${row.startSeq}\n${row.recovery}`;
+        if (represented.has(key))
+            return false;
+        represented.add(key);
+        return true;
+    });
+    const selectedRecent = uniqueOptional(recent), selectedOlder = uniqueOptional(older), selectedDelta = uniqueOptional(deltaRows);
     return composeShadowContext({ ...input,
         memory: { generation: String(selection.stateGeneration), representedStartSeq: 0,
             representedEndSeq: selection.processedCut, committed: selection.stateGeneration > 0 },
-        mandatoryCoverage: { protectedComplete: mandatoryComplete, openWorkComplete: mandatoryComplete },
-        selected: { protected: protectedRows, openWork, recent, older: [] },
-        delta: { records: [], completeThroughCut: selection.processedCut === selection.requestedCut },
+        mandatoryCoverage: { protectedComplete, openWorkComplete },
+        selected: { protected: selectedProtected, openWork: selectedOpenWork, recent: selectedRecent, older: selectedOlder },
+        delta: { records: selectedDelta, completeThroughCut: selection.processedCut === selection.requestedCut
+                || Boolean(verifiedDelta && delta?.throughCut === selection.requestedCut && unsupportedProtected.length === 0 && unsupportedOpenWork.length === 0) },
+        limitations: { unsupportedExtraction, selectionLoss, lag },
     });
 }
 function assertInteger(name, value, minimum = 0) {
@@ -141,21 +236,26 @@ function renderRow(section, row, pinnedSnapshot) {
     // change the obligation. A budget failure must take the explicit fallback.
     const body = section === "protected" || section === "open-work" ? row.text
         : truncateToTokens(row.text, detailTokens, "\n…[detail reduced; use recovery reference]…");
-    const authority = row.authority === "exact" ? "exact source" : "derived memory; verify before relying on it as evidence";
+    const fidelity = row.authority === "exact" ? "exact copied source words" : "derived memory; verify against exact source";
+    const semanticAuthority = row.sourceAuthority ? `source authority: ${row.sourceAuthority}` : "source authority: not asserted";
     const status = pinnedSnapshot
         ? `${row.status} at historical snapshot; not verified current at source cut`
         : row.status;
     const text = [
-        `- [${row.startSeq}${row.endSeq === row.startSeq ? "" : `–${row.endSeq}`}] ${row.kind}; ${status}; ${authority}`,
+        `- [${row.startSeq}${row.endSeq === row.startSeq ? "" : `–${row.endSeq}`}] ${row.kind}; ${status}; ${fidelity}; ${semanticAuthority}`,
         `  ${body.replaceAll("\n", "\n  ")}`,
         `  Recovery: ${row.recovery}`,
     ].join("\n");
     return { section, row, text, renderedTokens: estimateTokensFromText(text) };
 }
 function degradationFor(input) {
-    const reasons = [];
+    const reasons = [
+        ...(input.limitations?.unsupportedExtraction ?? []).map(reason => `unsupported extraction: ${reason}`),
+        ...(input.limitations?.selectionLoss ?? []).map(reason => `selection loss: ${reason}`),
+        ...(input.limitations?.lag ?? []).map(reason => `snapshot lag: ${reason}`),
+    ];
     if (!input.cut.toolPairSafe)
-        return { level: "pi-default-required", reasons: ["the supplied retained-tail cut failed tool-pair validation"] };
+        return { level: "pi-default-required", reasons: [...reasons, "the supplied retained-tail cut failed tool-pair validation"] };
     if (!input.mandatoryCoverage.protectedComplete || !input.mandatoryCoverage.openWorkComplete) {
         if (!input.mandatoryCoverage.protectedComplete)
             reasons.push("protected-restriction coverage is incomplete");
@@ -166,19 +266,16 @@ function degradationFor(input) {
         return { level: input.memory.committed ? "last-good-state-and-recent" : "pi-summary-and-tail", reasons };
     }
     if (!input.memory.committed)
-        return { level: "pi-summary-and-tail", reasons: ["no compatible committed memory generation is available"] };
+        return { level: "pi-summary-and-tail", reasons: [...reasons, "no compatible committed memory generation is available"] };
     const memoryLag = Math.max(0, input.cut.sourceCutSeq - input.memory.representedEndSeq);
     if (memoryLag > 0 && !input.delta.completeThroughCut) {
-        return { level: "committed-without-delta", reasons: [`bounded delta does not completely cover the ${memoryLag}-sequence memory lag`] };
+        return { level: "committed-without-delta", reasons: [...reasons, `bounded delta does not completely cover the ${memoryLag}-sequence memory lag`] };
     }
-    if (!input.rollups || !input.rollups.complete) {
-        return { level: "last-good-state-and-recent", reasons: [input.rollups ? "rollup coverage is incomplete" : "no compatible rollup range is available"] };
-    }
-    if (input.rollups.representedEndSeq < input.memory.representedEndSeq) {
-        return {
-            level: "last-good-state-and-recent",
-            reasons: [`rollups lag committed memory by ${input.memory.representedEndSeq - input.rollups.representedEndSeq} sequence(s)`],
-        };
+    // Historical rollups need not cover the current cut. Source-linked older
+    // episodes are also a supported historical selection, independent of state coverage.
+    const hasOlderEpisodes = input.selected.older.some(row => row.kind === "episode");
+    if ((!input.rollups || !input.rollups.complete) && !hasOlderEpisodes) {
+        return { level: "last-good-state-and-recent", reasons: [...reasons, input.rollups ? "rollup coverage is incomplete" : "no compatible rollup range or older episode selection is available"] };
     }
     return { level: "committed-plus-delta", reasons };
 }
@@ -186,14 +283,19 @@ function sectionsFor(input, level) {
     if (level === "pi-summary-and-tail" || level === "pi-default-required")
         return [];
     const rows = [];
-    const pinnedSnapshot = level !== "committed-plus-delta";
-    rows.push(...chronological(input.selected.protected).map((row) => renderRow("protected", row, pinnedSnapshot)));
-    rows.push(...chronological(input.selected.openWork).map((row) => renderRow("open-work", row, pinnedSnapshot)));
+    const snapshotLags = input.memory.representedEndSeq < input.cut.sourceCutSeq && !input.delta.completeThroughCut;
+    rows.push(...chronological(input.selected.protected).map((row) => renderRow("protected", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
+    rows.push(...chronological(input.selected.openWork).map((row) => renderRow("open-work", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
     if (level !== "last-good-state-summary-tail") {
-        rows.push(...chronological(input.selected.recent).map((row) => renderRow("recent", row, pinnedSnapshot)));
+        rows.push(...chronological(input.selected.recent).map((row) => renderRow("recent", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
     }
     if (level === "committed-plus-delta" || level === "committed-without-delta") {
-        rows.push(...chronological(input.selected.older).map((row) => renderRow("older", row, pinnedSnapshot)));
+        rows.push(...chronological(input.selected.older).map((row) => renderRow("older", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
+    }
+    else if (level === "last-good-state-and-recent") {
+        // Bounded source-linked episode members do not require a rollup publication.
+        rows.push(...chronological(input.selected.older).filter(row => row.kind === "episode")
+            .map((row) => renderRow("older", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
     }
     if (level === "committed-plus-delta") {
         rows.push(...chronological(input.delta.records).map((row) => renderRow("delta", row, false)));
@@ -214,8 +316,8 @@ function replayText(input, level, reasons, rows) {
         `Retained raw tail begins at ${input.cut.firstKeptEntryId} (sequence ${input.cut.firstKeptSeq}); it is outside this text but included in the combined ceiling.`,
     ];
     const grouped = [
-        ["protected", level === "committed-plus-delta" ? "PROTECTED CONTRACT" : "KNOWN PROTECTED ITEMS AT HISTORICAL CUT (INCOMPLETE)"],
-        ["open-work", level === "committed-plus-delta" ? "CURRENT OPEN WORK" : "KNOWN WORK AT HISTORICAL CUT (INCOMPLETE)"],
+        ["protected", input.mandatoryCoverage.protectedComplete ? "PROTECTED CONTRACT" : "KNOWN PROTECTED ITEMS (INCOMPLETE COVERAGE)"],
+        ["open-work", input.mandatoryCoverage.openWorkComplete ? "CURRENT OPEN WORK" : "KNOWN OPEN WORK (INCOMPLETE COVERAGE)"],
         ["older", "OLDER SELECTED MEMORY (CHRONOLOGICAL)"],
         ["recent", "RECENT CHRONOLOGICAL MEMORY"],
         ["delta", "BOUNDED UNINDEXED DELTA (CHRONOLOGICAL)"],
@@ -257,14 +359,14 @@ export function composeShadowContext(input) {
         renderedTokens = estimateTokensFromText(text);
     }
     if (omittedRowIds.length > 0) {
-        reasons = [...reasons, `hard ceiling omitted ${omittedRowIds.length} optional row(s), selected by importance without reordering retained rows`];
+        reasons = [...reasons, `render loss: hard ceiling omitted ${omittedRowIds.length} optional row(s), selected by importance without reordering retained rows`];
         replay = replayText(input, level, reasons, rows);
         text = hybridPreservingSummary(input.regularPiSummary, replay);
         renderedTokens = estimateTokensFromText(text);
     }
     if (level !== "pi-default-required" && renderedTokens + input.cut.rawTailTokens > input.combinedCeilingTokens && rows.length > 0) {
         level = "last-good-state-summary-tail";
-        reasons = [...reasons, "recent and historical selections do not fit with mandatory state under the hard combined ceiling"];
+        reasons = [...reasons, "render loss: recent and historical selections do not fit with mandatory state under the hard combined ceiling"];
         const priorRows = rows;
         rows = sectionsFor(input, level);
         omittedRowIds.push(...priorRows.filter((item) => !rows.some((kept) => kept.row.id === item.row.id)).map((item) => item.row.id));
@@ -274,7 +376,7 @@ export function composeShadowContext(input) {
     }
     if (level !== "pi-default-required" && renderedTokens + input.cut.rawTailTokens > input.combinedCeilingTokens && rows.length > 0) {
         level = "pi-summary-and-tail";
-        reasons = [...reasons, "mandatory rows and rendered overhead do not fit the hard combined ceiling; partial mandatory state was withheld"];
+        reasons = [...reasons, "render loss: mandatory rows and rendered overhead do not fit the hard combined ceiling; partial mandatory state was withheld"];
         omittedRowIds.push(...rows.map((item) => item.row.id));
         rows = [];
         replay = replayText(input, level, reasons, rows);
@@ -329,6 +431,7 @@ export function composeShadowContext(input) {
         rawTailTokens: input.cut.rawTailTokens,
         combinedTokens: renderedTokens + input.cut.rawTailTokens,
         validation,
+        payloadHash: artifactHash,
         artifactHash,
     };
     return {
@@ -362,11 +465,34 @@ async function validatePrivateDirectory(directory) {
         throw new Error("artifact directory must be owner-only (0700)");
     }
 }
+function artifactStringify(value, space = 0) {
+    const ancestors = new WeakSet();
+    const normalize = (input) => {
+        if (input === null || typeof input !== "object")
+            return input;
+        if (ancestors.has(input))
+            return "[Circular]";
+        ancestors.add(input);
+        try {
+            if (Array.isArray(input))
+                return input.map(normalize);
+            const record = input, result = {};
+            for (const key of Object.keys(record).sort())
+                result[key] = normalize(record[key]);
+            return result;
+        }
+        finally {
+            ancestors.delete(input);
+        }
+    };
+    return JSON.stringify(normalize(value), null, space);
+}
 export async function persistPrivateCompositionArtifact(directory, artifact) {
-    const serialized = `${stableStringify(artifact, 2)}\n`;
+    const canonical = artifactStringify(artifact);
+    const serialized = `${artifactStringify(artifact, 2)}\n`;
     if (byteCount(serialized) > SHADOW_COMPOSER_LIMITS.maxInputBytes)
         throw new Error("composition artifact exceeds its persistence byte cap");
-    const artifactHash = createHash("sha256").update(stableStringify(artifact)).digest("hex");
+    const artifactHash = createHash("sha256").update(canonical).digest("hex");
     const fileName = `composition-${artifactHash}.json`;
     await validatePrivateDirectory(dirname(directory));
     try {
