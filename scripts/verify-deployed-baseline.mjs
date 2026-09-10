@@ -51,6 +51,38 @@ const m01MutableHistoricalTests = new Set([
   "packages/pi-chrono-compaction/test/source-ledger.test.ts",
 ]);
 const correctionArtifactPaths = new Set([
+  "packages/pi-chrono-compaction/src/catalog-history.ts",
+  "packages/pi-chrono-compaction/src/history-search-adapter.ts",
+  "packages/pi-chrono-compaction/src/search-lifecycle.ts",
+  "packages/pi-chrono-compaction/src/search-v3-contract.ts",
+  "packages/pi-chrono-compaction/src/search-v3-store.ts",
+  "packages/pi-chrono-compaction/src/search-v3-worker-client.ts",
+  "packages/pi-chrono-compaction/src/search-v3-worker-entry.ts",
+  "packages/pi-chrono-compaction/dist/src/catalog-history.js",
+  "packages/pi-chrono-compaction/dist/src/history-search-adapter.js",
+  "packages/pi-chrono-compaction/dist/src/search-lifecycle.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-contract.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-store.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-worker-client.js",
+  "packages/pi-chrono-compaction/dist/src/search-v3-worker-entry.js",
+  "packages/pi-chrono-compaction/test/catalog-history.test.ts",
+  "packages/pi-chrono-compaction/test/history-search-adapter.test.ts",
+  "packages/pi-chrono-compaction/test/search-lifecycle.test.ts",
+  "packages/pi-chrono-compaction/test/search-v3-recovery.test.ts",
+  "packages/pi-chrono-compaction/src/session-rollout.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup-entry.ts",
+  "packages/pi-chrono-compaction/src/worker-runtime-startup-client.ts",
+  "packages/pi-chrono-compaction/dist/src/session-rollout.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup-entry.js",
+  "packages/pi-chrono-compaction/dist/src/worker-runtime-startup-client.js",
+  "packages/pi-chrono-compaction/test/worker-runtime-startup.test.ts",
+  "docs/chrono-v3/reviews/M06-search-report.md",
+  "docs/chrono-v3/reviews/m04-recovery/production-checksum-relationship.json",
+  "docs/chrono-v3/reviews/m04-recovery/production-derivative-diff.patch",
+  "scripts/chrono-validation-scope.mjs",
+  "scripts/test/chrono-validation-scope.test.mjs",
   "docs/chrono-v3/reviews/m04-recovery/ORIGINAL-SHA256SUMS",
   "docs/chrono-v3/reviews/m04-recovery/README.md",
   "docs/chrono-v3/reviews/m04-recovery/SHA256SUMS",
@@ -286,6 +318,12 @@ const m05AuthorizedHistoricalHashChanges = new Map([
   ["dist/src/catalog-parser.js", "8f8bd54e46f7ad2ab63e4c3e5d8826dfb7d39dc4ca604adde213196b00ab013d"],
   ["dist/src/pi-extension.js", "42a25258b76bea32a68600ebf25a885b3e7c2a416d89b13cb55db49754967eb4"],
 ]);
+const m06AuthorizedHistoricalHashChanges = new Map([
+  ["package.json", "24b43f4ea7c1ec1ea898abdde834018426d14bac28d8421ad539d5ef8e584afd"],
+  ["dist/src/pi-extension.js", "d059190f64cf12126da96785881d53541c756f6d52c50ea5b4e21655106d7c31"],
+  ["dist/src/user-config.js", "fc4e3a512a147192328f57aada22219469c16ec65c27b9ee019d1a57aa6f03c0"],
+  ["dist/src/catalog-parser.js", "51f8410be3bf31b6a842e836d990c31c289a2073801a83999216ef35dd0e7f91"],
+]);
 const m05CompiledAdditions = new Set([
   "dist/src/capsule-compatibility.js",
   "dist/src/capsule-contract.js",
@@ -300,8 +338,22 @@ const m05CompiledAdditions = new Set([
   "dist/src/capsule-worker-entry.js",
   "dist/src/json-string-decoder.js",
 ]);
-const m05ChronoManifestRows = 108;
-const m05ChronoCompiledFiles = 107;
+const m06CompiledAdditions = new Set([
+  "dist/src/catalog-history.js",
+  "dist/src/history-search-adapter.js",
+  "dist/src/search-lifecycle.js",
+  "dist/src/search-v3-contract.js",
+  "dist/src/search-v3-store.js",
+  "dist/src/search-v3-worker-client.js",
+  "dist/src/search-v3-worker-entry.js",
+  "dist/src/session-rollout.js",
+  "dist/src/worker-runtime-startup.js",
+  "dist/src/worker-runtime-startup-entry.js",
+  "dist/src/worker-runtime-startup-client.js",
+]);
+const currentCompiledAdditions = new Set([...m05CompiledAdditions, ...m06CompiledAdditions]);
+const m06ChronoManifestRows = 119;
+const m06ChronoCompiledFiles = 118;
 const m05RuntimeGraphRoots = ["dist/src/capsule-worker-entry.js"];
 // This API is intentionally prepared for synthetic tests/integration only. It
 // is graph-checked here but does not become an active production entrypoint.
@@ -473,12 +525,12 @@ const workflows = walk(join(root, ".github/workflows")).map((path) => relative(j
 if (!jsonEqual(workflows, ["verify.yml"])) throw new Error("exactly one verify workflow is required");
 const workflow = readFileSync(join(root, ".github/workflows/verify.yml"), "utf8");
 function verifyWorkflowBoundary() {
-  if (!workflow.includes("pull_request:") || !workflow.includes("push:") || !workflow.includes("schedule:") || !workflow.includes("workflow_dispatch:")) {
+  if (!workflow.includes("pull_request:") || !workflow.includes("push:") || !workflow.includes("workflow_dispatch:")) {
     throw new Error("verify workflow trigger set is incomplete");
   }
   const allBranchTriggers = (workflow.match(/branches:\s*\n\s*-\s*"\*\*"/gu) ?? []).length;
   if (allBranchTriggers !== 2 || workflow.includes("- main")) throw new Error("verify workflow must cover all push and pull-request branches");
-  if (!workflow.includes('cron: "17 3 * * 1"')) throw new Error("verify workflow schedule is not weekly");
+  if (workflow.includes("schedule:") || !workflow.includes("validation_scope:") || !workflow.includes("expected_head:")) throw new Error("broad validation requires explicit exact-head milestone dispatch");
   if (!workflow.includes("fetch-depth: 0") || !workflow.includes("fetch-tags: true") || !workflow.includes("ref: ${{ github.sha }}")) {
     throw new Error("verify workflow lacks explicit full-ref checkout");
   }
@@ -487,15 +539,15 @@ function verifyWorkflowBoundary() {
     throw new Error("verify workflow lacks explicit all-ref fetch");
   }
   const actionPins = workflow.match(/uses:\s+actions\/(?:checkout|setup-node)@[0-9a-f]{40}(?:\s|$)/gu) ?? [];
-  if (actionPins.length !== 14 || /uses:\s+actions\/(?:checkout|setup-node)@v/iu.test(workflow)) throw new Error("verify workflow actions are not pinned");
+  if (actionPins.length !== 16 || /uses:\s+actions\/(?:checkout|setup-node)@v/iu.test(workflow)) throw new Error("verify workflow actions are not pinned");
   for (const required of ["--self-test", "--event-scope", "--event-name", "$GITHUB_EVENT_NAME", "--require-public-review", "--repository", "--ci-event", "$GITHUB_EVENT_PATH"]) {
     if (!workflow.includes(required)) throw new Error(`verify workflow lacks event-scope scan argument ${required}`);
   }
   if (!workflow.includes('--repository "JCFrags/my-shtty-pi"') || workflow.includes('--repository "$GITHUB_REPOSITORY"')) {
     throw new Error("verify workflow must bind public review to the canonical repository identity");
   }
-  if (!workflow.includes("Verify public repository content boundary")) throw new Error("verify workflow uses a noncanonical boundary label");
-  if (!workflow.includes("Verify complete repository root and ignored dependency-tree fixture") || !workflow.includes("npm run verify")) throw new Error("verify workflow lacks the complete root verifier");
+  if (!workflow.includes("Verify scoped public repository content boundary")) throw new Error("verify workflow uses a noncanonical boundary label");
+  if (!workflow.includes("Verify complete repository root at milestone checkpoint") || !workflow.includes("npm run verify")) throw new Error("verify workflow lacks the complete root verifier");
   if (!workflow.includes("permissions:\n  contents: read")) throw new Error("verify workflow permissions are not read-only");
   if (!workflow.includes("timeout-minutes: 25") || !workflow.includes("cancel-in-progress: true") || !workflow.includes("group: verify-")) {
     throw new Error("verify workflow lacks bounded cancellation and timeout");
@@ -632,7 +684,7 @@ verifyCorrectionScope();
 const governance = verifyGovernanceArtifacts();
 const publicationScan = runPhase("privacy", "root", verifyPublicationScanner);
 const scriptFiles = walk(join(root, "scripts")).map((path) => relative(join(root, "scripts"), path)).sort();
-if (!jsonEqual(scriptFiles, ["test/verify-chrono-v3-baseline.test.mjs", "test/verify-chrono-v3-privacy.test.mjs", "verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers and their tests are allowed under scripts/");
+if (!jsonEqual(scriptFiles, ["chrono-validation-scope.mjs", "test/chrono-validation-scope.test.mjs", "test/verify-chrono-v3-baseline.test.mjs", "test/verify-chrono-v3-privacy.test.mjs", "verify-chrono-v3-baseline.mjs", "verify-chrono-v3-privacy.mjs", "verify-deployed-baseline.mjs"])) throw new Error("only the root baseline verifiers and their tests are allowed under scripts/");
 if (!jsonEqual(packageJson.scripts, { verify: "node scripts/verify-deployed-baseline.mjs" })) throw new Error("root package scripts must contain only verify");
 
 // Exact deployed records. Corrected repository metadata is checked against the immutable baseline commit.
@@ -652,8 +704,7 @@ for (const product of active) {
   for (const [rel, expected] of historicalDeployed) {
     const current = deployed.get(rel);
     const authorized = product.slug === "pi-chrono-compaction"
-      && m05AuthorizedHistoricalHashChanges.has(rel)
-      && m05AuthorizedHistoricalHashChanges.get(rel) === current;
+      && (m06AuthorizedHistoricalHashChanges.get(rel) ?? m05AuthorizedHistoricalHashChanges.get(rel)) === current;
     if (current !== expected && !authorized) throw new Error(`${product.slug}: historical deployed record changed: ${rel}`);
   }
   deployedByProduct.set(product.slug, deployed);
@@ -677,10 +728,10 @@ for (const product of active) {
     if (!existsSync(join(packageRoot, entry))) throw new Error(`${product.slug}: missing entrypoint ${entry}`);
   }
   if (product.slug === "pi-chrono-compaction") {
-    if (product.compiledCount !== m05ChronoCompiledFiles) throw new Error(`${product.slug}: M05 compiled count changed`);
-    const additions = [...deployed.keys()].filter((path) => m05CompiledAdditions.has(path)).sort();
-    if (deployed.size !== m05ChronoManifestRows) throw new Error(`${product.slug}: deployed manifest rows ${deployed.size}; expected ${m05ChronoManifestRows}`);
-    if (!jsonEqual(additions, [...m05CompiledAdditions].sort())) throw new Error(`${product.slug}: exact M05 compiled additions are incomplete`);
+    if (product.compiledCount !== m06ChronoCompiledFiles) throw new Error(`${product.slug}: M06 compiled count changed`);
+    const additions = [...deployed.keys()].filter((path) => currentCompiledAdditions.has(path)).sort();
+    if (deployed.size !== m06ChronoManifestRows) throw new Error(`${product.slug}: deployed manifest rows ${deployed.size}; expected ${m06ChronoManifestRows}`);
+    if (!jsonEqual(additions, [...currentCompiledAdditions].sort())) throw new Error(`${product.slug}: exact M05/M06 compiled additions are incomplete`);
   }
   if (product.compiledCount !== undefined) {
     const committed = walk(join(packageRoot, "dist")).filter((path) => path.endsWith(".js"));
@@ -690,10 +741,10 @@ for (const product of active) {
     if (!jsonEqual(committedRel, declared.sort())) throw new Error(`${product.slug}: unexpected committed compiled output`);
   }
 }
-const m05DeployedAdditionCount = m05CompiledAdditions.size;
-const historicalDeployedHashCount = hashCount - m05DeployedAdditionCount;
-if (historicalDeployedHashCount !== historicalCanonicalDeployedFiles || hashCount !== historicalCanonicalDeployedFiles + m05DeployedAdditionCount) {
-  throw new Error(`deployed hash count ${historicalDeployedHashCount}+${m05DeployedAdditionCount}; expected ${historicalCanonicalDeployedFiles}+${m05CompiledAdditions.size}`);
+const currentDeployedAdditionCount = currentCompiledAdditions.size;
+const historicalDeployedHashCount = hashCount - currentDeployedAdditionCount;
+if (historicalDeployedHashCount !== historicalCanonicalDeployedFiles || hashCount !== historicalCanonicalDeployedFiles + currentDeployedAdditionCount) {
+  throw new Error(`deployed hash count ${historicalDeployedHashCount}+${currentDeployedAdditionCount}; expected ${historicalCanonicalDeployedFiles}+${currentCompiledAdditions.size}`);
 }
 for (const product of inactive) {
   if (existsSync(join(root, "packages", product.slug, "DEPLOYED.sha256"))) throw new Error(`${product.slug}: inactive product must not have an active deployed manifest`);
@@ -872,13 +923,13 @@ for (const product of products) {
     if (product.status !== "inactive") activeRuntimeGraph.add(path);
   }
   if (product.slug === "pi-chrono-compaction") {
-    for (const path of graphClosure(m05RuntimeGraphRoots.map((entry) => join(packageRoot, entry)), false)) activeRuntimeGraph.add(path);
+    for (const path of graphClosure([...m05RuntimeGraphRoots, "dist/src/search-v3-worker-entry.js", "dist/src/worker-runtime-startup-entry.js"].map((entry) => join(packageRoot, entry)), false)) activeRuntimeGraph.add(path);
     for (const path of graphClosure(m05PreparedIntegrationGraphRoots.map((entry) => join(packageRoot, entry)), false)) preparedIntegrationGraph.add(path);
   }
   if (product.compiledCount !== undefined) {
     if (!Array.isArray(product.sourceEntrypoints) || product.sourceEntrypoints.length === 0) throw new Error(`${product.slug}: compiled source entrypoints are required`);
     const sourceEntrypoints = product.slug === "pi-chrono-compaction"
-      ? [...product.sourceEntrypoints, ...m05SourceGraphRoots]
+      ? [...product.sourceEntrypoints, ...m05SourceGraphRoots, "src/search-v3-worker-entry.ts", "src/worker-runtime-startup-entry.ts"]
       : product.sourceEntrypoints;
     const sourceClosure = graphClosure(sourceEntrypoints.map((entry) => join(packageRoot, entry)), true);
     for (const path of sourceClosure) sourceBuildGraph.add(path);
@@ -1218,9 +1269,9 @@ console.log(JSON.stringify({
   activeEntrypoints: activeEntrypoints.length,
   inactiveProducts: inactive.length,
   stage1RuntimeRecords: "272/272",
-  deployedHashesVerified: `${hashCount}/${historicalCanonicalDeployedFiles + m05DeployedAdditionCount}`,
+  deployedHashesVerified: `${hashCount}/${historicalCanonicalDeployedFiles + currentDeployedAdditionCount}`,
   historicalCanonicalDeployedFiles: `${historicalDeployedHashCount}/${historicalCanonicalDeployedFiles}`,
-  m05DeployedAdditions: `${m05DeployedAdditionCount}/${m05CompiledAdditions.size}`,
+  milestoneDeployedAdditions: `${currentDeployedAdditionCount}/${currentCompiledAdditions.size}`,
   historicalMetadataHashes,
   compiledCounts: Object.fromEntries(products.filter((product) => product.compiledCount !== undefined).map((product) => [product.slug, `${product.compiledCount}/${product.compiledCount}`])),
   buildResults: Object.fromEntries(Object.entries(buildResults).map(([slug, count]) => [slug, `${count}/${products.find((product) => product.slug === slug).compiledCount}`])),

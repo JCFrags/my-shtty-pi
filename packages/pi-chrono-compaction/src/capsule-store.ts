@@ -476,6 +476,39 @@ async function execute(request: CapsuleWorkerRequest, store: Store, options: Cap
     const cursor = JSON.parse(string(row, "cursor")) as DeriveCursor;
     return { readiness: readiness(request, request.view, cursor, rowCounts(row)), metrics: { sqliteStatements: store.statements } };
   }
+  if (request.op === "chunkSourcePage") {
+    // Catalog chronology is the membership authority: scope is applied before
+    // the result limit, including chunk-ready sources with no capsule.
+    let afterEventSeq = request.afterEventSeq ?? 0, afterDescriptor = request.afterDescriptor ?? 0;
+    const limit = request.limit ?? CAPSULE_LIMITS.page, maximum = request.maxDescriptors ?? CAPSULE_LIMITS.deriveDescriptors;
+    const sources: Array<{ source: ScopedBodySourceRef; provenance: "original" | "generated" | "mixed"; capsule?: ReducerEnvelope }> = [];
+    let scanned = 0, visitedEvents = 0, complete = false;
+    while (sources.length < limit && scanned < maximum && visitedEvents < CAPSULE_LIMITS.deriveEvents) {
+      const page = await catalogCall(request, executor, budget, { op: "page", view: request.view,
+        after: afterDescriptor > 0 ? Math.max(0, afterEventSeq - 1) : afterEventSeq, limit: 1 });
+      const event = page.events?.[0] as CatalogEventShape | undefined;
+      if (!event) { complete = true; break; }
+      if (afterDescriptor > 0 && event.seq !== afterEventSeq) fail("capsule-cursor-invalid");
+      const blockResult = await catalogCall(request, executor, budget, { op: "blocks", view: request.view, eventSeq: event.seq, after: afterDescriptor, limit: 1 });
+      const block = blockResult.blocks?.[0] as CatalogBlockShape | undefined;
+      if (!block) { afterEventSeq = event.seq; afterDescriptor = 0; visitedEvents++; continue; }
+      scanned++; afterEventSeq = event.seq; afterDescriptor = block.index + 1;
+      const source = bodySource(request.identity, request.view, event, block);
+      if (!source || store.get("SELECT state FROM markers WHERE eventSeq=? AND descriptor=? AND layer='chunks'", event.seq, block.index)?.state !== "ready") continue;
+      const item: { source: ScopedBodySourceRef; provenance: "original" | "generated" | "mixed"; capsule?: ReducerEnvelope } = { source, provenance: provenance(block) };
+      const capsuleRow = store.get("SELECT * FROM artifacts WHERE layer='capsules' AND eventSeq=? AND descriptor=? AND chunkIndex=0", event.seq, block.index);
+      if (capsuleRow && string(capsuleRow, "source") === canonicalJson(source)) {
+        verifyArtifactManifest(request, store, capsuleRow);
+        const bytes = readVerifiedImmutable(join(request.derivedDirectory, "segments/capsules", string(capsuleRow, "segmentHash")), string(capsuleRow, "segmentHash"), number(capsuleRow, "segmentBytes"));
+        const capsule = decodeCapsuleSegment(bytes);
+        if (canonicalJson(capsule) !== string(capsuleRow, "record") || canonicalJson(capsule.source) !== canonicalJson(source)) fail("capsule-content-corrupt");
+        if (Buffer.byteLength(JSON.stringify({ sources: [...sources, { ...item, capsule }] })) <= CAPSULE_LIMITS.responseBytes - 4096) item.capsule = capsule;
+      }
+      sources.push(item);
+    }
+    return { sources, next: { afterEventSeq, afterDescriptor }, complete,
+      readiness: { chunks: complete ? "ready" : "partial", scannedDescriptors: scanned, visitedEvents }, metrics: { sqliteStatements: store.statements } };
+  }
   if (request.op === "capsulePage") {
     // Authorize the exact pinned view before touching the derived ancestry index.
     await catalogCall(request, executor, budget, { op: "page", view: request.view, after: request.view.eventCut, limit: 1 });

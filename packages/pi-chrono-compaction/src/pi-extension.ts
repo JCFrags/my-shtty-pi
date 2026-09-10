@@ -5,6 +5,9 @@ import { env } from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { HistorySearchAdapter, isSearchReference } from "./history-search-adapter.js";
+import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
+import { startAuthorizedWorkerRuntime, startupAuthorizationPath, type WorkerStartupStatus } from "./worker-runtime-startup-client.js";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
 import { createContainedCapsuleShadow } from "./capsule-shadow-worker.js";
 import type { CapsuleShadowTarget } from "./capsule-shadow.js";
@@ -130,6 +133,7 @@ export interface RuntimeSettings {
   readonly isolatedWorkerEnabled: boolean;
   readonly rollupShadowEnabled: boolean;
   readonly catalogShadowEnabled: boolean;
+  readonly searchIndexEnabled: boolean;
   readonly hostWorkerSlots: number;
   readonly workerTimeoutSeconds: number;
   readonly workerNiceLevel: number;
@@ -231,6 +235,7 @@ export function resolveExtensionSettings(overrides: UserConfig = {}): RuntimeSet
     incrementalPrecomputeEnabled: booleanSetting("PI_CHRONO_INCREMENTAL_PRECOMPUTE", false, overrides.incrementalPrecomputeEnabled),
     isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
     rollupShadowEnabled: booleanSetting("PI_CHRONO_ROLLUP_SHADOW", false, overrides.rollupShadowEnabled),
+    searchIndexEnabled: booleanSetting("PI_CHRONO_SEARCH_INDEX", false, overrides.searchIndexEnabled),
     catalogShadowEnabled: booleanSetting("PI_CHRONO_CATALOG_SHADOW", false, overrides.catalogShadowEnabled),
     hostWorkerSlots: numberSetting("PI_CHRONO_HOST_WORKER_SLOTS", 1, 1, 4, overrides.hostWorkerSlots),
     workerTimeoutSeconds: numberSetting("PI_CHRONO_WORKER_TIMEOUT_SECONDS", 900, 30, 3_600, overrides.workerTimeoutSeconds),
@@ -593,13 +598,15 @@ function registerHistoryTools(
   availableLedger: (ctx: ExtensionContext) => Promise<{ sessionPath: string; ledger: SourceLedger } | undefined>,
   transport: HistoryWorkerTransport | undefined,
   reserveFeedback: () => boolean,
+  search: HistorySearchAdapter,
 ): void {
   pi.registerTool({
     name: "history_get",
     label: "Get Exact History",
     description: "Return an exact immutable Pi JSONL entry or one exact content block, with nearby context.",
     parameters: Type.Object({
-      entryId: Type.String({ description: "Pi session entry ID" }),
+      entryId: Type.String({ description: "Pi session entry ID or indexed source handle" }),
+      startByte: Type.Optional(Type.Number({ minimum: 0, description: "Continue exact raw byte recovery at nextByte" })),
       blockIndex: Type.Optional(Type.Number({ minimum: 0 })),
       contextBefore: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
       contextAfter: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
@@ -607,6 +614,17 @@ function registerHistoryTools(
       maxChars: Type.Optional(Type.Number({ minimum: 1, maximum: 12_000 })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (settings().searchIndexEnabled) {
+        if (isSearchReference(params.entryId)) {
+          if (params.blockIndex !== undefined || params.contextBefore || params.contextAfter || params.startByte !== undefined) return toolText("A source handle already selects a decoded block; byte offsets and neighbors are not supported here.", { status: "unavailable", code: "search-v3-option-unsupported" });
+          return search.recall(params.entryId, params.startChar, params.maxChars, _signal);
+        }
+        if (params.blockIndex !== undefined) {
+          if (params.contextBefore || params.contextAfter || params.startByte !== undefined) return toolText("Indexed block recovery uses decoded character coordinates without neighbors.", { status: "unavailable", code: "search-v3-option-unsupported" });
+          return search.getBlock(params.entryId, params.blockIndex, params.startChar, params.maxChars, _signal);
+        }
+        return search.getRaw(params.entryId, params, _signal);
+      }
       const options = {
         blockIndex: params.blockIndex,
         contextBefore: params.contextBefore,
@@ -636,7 +654,7 @@ function registerHistoryTools(
   pi.registerTool({
     name: "history_search",
     label: "Search History",
-    description: "Search normalized immutable history with deterministic BM25, exact or regex matching, filters, fuzzy paths, diversity, and bounded exact snippets.",
+    description: "Search source-linked history with bounded relevance, exact or supported regex matching, filters, practical path matching, and bounded snippets. Indexed pages may be smaller than limit to fit tokenBudget; use continuation and reported coverage.",
     parameters: Type.Object({
       query: Type.String({ description: "Terms, literal text, source ID, path, or regular expression" }),
       mode: Type.Optional(Type.Union([Type.Literal("ranked"), Type.Literal("exact"), Type.Literal("regex")])),
@@ -653,10 +671,12 @@ function registerHistoryTools(
       error: Type.Optional(Type.Boolean()),
       unresolved: Type.Optional(Type.Boolean()),
       currentState: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("superseded"), Type.Literal("any")])),
+      scan: Type.Optional(Type.Boolean({ description: "Explicit bounded resumable lexical or supported regex scan; inspect coverage limits" })),
       startMatch: Type.Optional(Type.Number({ minimum: 0, description: "Legacy exact-scan cursor" })),
       contextChars: Type.Optional(Type.Number({ minimum: 40, maximum: 200, description: "Legacy exact-scan context" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (settings().searchIndexEnabled) return search.search(params, _signal);
       if (!reserveFeedback()) return historyWorkerToolResult({ status: "refused", code: "history-feedback-memory-limit" });
       const selectedMode = params.regex ? "regex" : params.mode;
       const indexed = settings().rankedSearchEnabled || selectedMode !== undefined;
@@ -696,6 +716,11 @@ function registerHistoryTools(
       tokenBudget: Type.Optional(Type.Number({ minimum: 120, maximum: 2_000 })),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+      if (settings().searchIndexEnabled) {
+        if (params.level === "episode" || params.level === "resource") return toolText("Indexed recall supports cues and source blocks; episode and resource expansion are not available.", { status: "unavailable", code: "search-v3-option-unsupported" });
+        if (isSearchReference(params.query)) return search.recall(params.query, undefined, Math.min(2048, (params.tokenBudget ?? 1000) * 2), _signal, params.tokenBudget ?? 2000);
+        return search.search({ query: params.query, limit: params.limit, tokenBudget: params.tokenBudget, stage: params.level === "cue" ? "cues" : "snippets" }, _signal);
+      }
       if (!reserveFeedback()) return historyWorkerToolResult({ status: "refused", code: "history-feedback-memory-limit" });
       const path = ctx.sessionManager.getSessionFile();
       const response = await dispatchHistoryWorker(path, {
@@ -718,8 +743,10 @@ function registerHistoryTools(
       startEntryId: Type.String(),
       endEntryId: Type.String(),
       maxEntries: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
+      cursor: Type.Optional(Type.String({ description: "Pinned indexed range continuation" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (settings().searchIndexEnabled) return search.range(params.startEntryId, params.endEntryId, params.maxEntries, params.cursor, _signal);
       const options = { maxEntries: params.maxEntries };
       const ledger = await availableLedger(ctx);
       let text: string;
@@ -889,6 +916,8 @@ function registerRetentionHintTool(pi: ExtensionAPI): void {
 
 export interface HistoryRuntimeAdapters {
   readonly historyTransport?: HistoryWorkerTransport;
+  /** Owner-only rollout sidecars; explicit override for isolated integration. */
+  readonly sessionRolloutDirectory?: string;
   /** Explicit isolated namespace for synthetic integration callers only. */
   readonly schedulerDirectory?: string;
   /** Synthetic-only, synchronous prepared target. Caller retains the physical
@@ -901,6 +930,47 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   const loadedUserConfig = loadUserConfig(userConfigPath);
   let userConfig = loadedUserConfig.config;
   let userConfigWarning = loadedUserConfig.warning;
+  const search = new HistorySearchAdapter({ schedulerDirectory: adapters.schedulerDirectory, slots: resolveExtensionSettings(userConfig).hostWorkerSlots });
+  // Only an exact session/source sidecar can opt this session in persistently.
+  // Ordinary extension loading reads it; history queries never read or write it.
+  const sessionRolloutDirectory = adapters.sessionRolloutDirectory ?? join(dirname(userConfigPath), "chrono-session-rollouts");
+  let sessionSearchOverride: boolean | undefined;
+  let rolloutEpoch = 0;
+  let rolloutError: string | undefined;
+  let startupStatus: WorkerStartupStatus = { state: adapters.schedulerDirectory ? "ready" : "pending" };
+  let startupContext: ExtensionContext | undefined;
+  const searchSettings = (): ReturnType<typeof resolveExtensionSettings> => {
+    const settings = resolveExtensionSettings(userConfig);
+    // An explicit environment/config disable takes precedence over rollout.
+    const explicit = configuredValue("PI_CHRONO_SEARCH_INDEX", userConfig.searchIndexEnabled);
+    const disabled = explicit !== undefined && !booleanSetting("PI_CHRONO_SEARCH_INDEX", false, userConfig.searchIndexEnabled);
+    return { ...settings, searchIndexEnabled: disabled ? false : (sessionSearchOverride ?? settings.searchIndexEnabled) };
+  };
+  const searchStatus = (): Record<string, unknown> => ({ ...search.status(),
+    enabled: searchSettings().searchIndexEnabled,
+    rollout: { persisted: sessionSearchOverride !== undefined, enabled: searchSettings().searchIndexEnabled },
+    startup: { ...startupStatus },
+    ...((rolloutError ?? startupStatus.errorCode) ? { lastSafeError: rolloutError ?? startupStatus.errorCode } : {}) });
+  const scheduleSearch = (ctx: ExtensionContext): void => {
+    if (!searchSettings().searchIndexEnabled) { search.disable(); return; }
+    if (startupStatus.state !== "ready") { search.cancel(); return; }
+    const sourcePath = ctx.sessionManager.getSessionFile();
+    const leafId = ctx.sessionManager.getLeafId?.();
+    if (!sourcePath || !leafId) { search.cancel(); return; }
+    const sessionKey = createHash("sha256").update("pi-session-v1\0").update(ctx.sessionManager.getSessionId()).digest("hex");
+    const shardKey = createHash("sha256").update("pi-jsonl-v1\0").update(sourcePath).digest("hex");
+    search.schedule({ sourcePath, sessionKey, shardKey, leafId, catalogDirectory: join(dirname(sourcePath), ".chrono-catalog", sessionKey) });
+  };
+  const beginStartup = (ctx: ExtensionContext): void => {
+    startupContext = ctx;
+    if (startupStatus.state !== "pending") return;
+    startupStatus = { state: "running" };
+    // Do not await this from a Pi hook: the child has its own bounded deadline.
+    void startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath)).then(status => {
+      startupStatus = status;
+      if (status.state === "ready" && startupContext) scheduleSearch(startupContext);
+    });
+  };
   const capsuleShadow = createContainedCapsuleShadow({ schedulerDirectory: adapters.schedulerDirectory });
   let capsuleTargetRefused = false;
   const scheduleCapsuleShadow = (ctx: ExtensionContext): void => {
@@ -911,7 +981,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       if (target) capsuleShadow.schedule(target, true);
       else capsuleShadow.cancel();
     } catch {
-      capsuleShadow.cancel();
+      search.cancel();
+    capsuleShadow.cancel();
       capsuleTargetRefused = true;
     }
   };
@@ -933,7 +1004,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
   const scheduleCatalogShadow = (ctx: ExtensionContext): void => {
     const settings = resolveExtensionSettings(userConfig);
-    if (!settings.catalogShadowEnabled) { catalogShadow.disable(); return; }
+    if (searchSettings().searchIndexEnabled || !settings.catalogShadowEnabled) { catalogShadow.disable(); return; }
     const sourcePath = ctx.sessionManager.getSessionFile();
     if (!sourcePath) { catalogShadow.cancel(); return; }
     const sessionId = ctx.sessionManager.getSessionId();
@@ -984,7 +1055,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       return historyLedger = { sessionPath, ledger };
     } catch { return undefined; }
   };
-  registerHistoryTools(pi, () => resolveExtensionSettings(userConfig), retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve);
+  registerHistoryTools(pi, searchSettings, retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve, search);
   registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
   registerRetentionHintTool(pi);
 
@@ -1226,11 +1297,28 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     }
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    const epoch = ++rolloutEpoch;
+    const nextSearchSessionId = ctx.sessionManager.getSessionId();
+    const sourcePath = ctx.sessionManager.getSessionFile();
+    sessionSearchOverride = undefined;
+    rolloutError = undefined;
+    search.cancel();
+    try {
+      const enabled = sourcePath ? await readSessionRollout(sessionRolloutDirectory, { sessionId: nextSearchSessionId, sourcePath }) : undefined;
+      if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId) return;
+      sessionSearchOverride = enabled;
+    } catch {
+      if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId) return;
+      sessionSearchOverride = false;
+      rolloutError = "search-v3-rollout-unsafe";
+    }
+    beginStartup(ctx);
     capsuleShadow.cancel();
     scheduleCapsuleShadow(ctx);
     catalogShadow.cancel();
     scheduleCatalogShadow(ctx);
+    scheduleSearch(ctx);
     cancelIncrementalWork(true);
     cancelShadowWork();
     cancelValueWorker();
@@ -1244,6 +1332,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_switch", () => {
+    startupContext = undefined;
+    rolloutEpoch++;
+    search.cancel();
     capsuleShadow.cancel();
     catalogShadow.cancel();
     cancelIncrementalWork(true);
@@ -1254,6 +1345,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_before_fork", () => {
+    startupContext = undefined;
+    rolloutEpoch++;
+    search.cancel();
     capsuleShadow.cancel();
     catalogShadow.cancel();
     cancelIncrementalWork(true);
@@ -1264,6 +1358,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("session_shutdown", () => {
+    startupContext = undefined;
+    rolloutEpoch++;
+    search.dispose();
     capsuleShadow.dispose();
     catalogShadow.dispose();
     retrievalFeedback.clear();
@@ -1305,6 +1402,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   pi.on("agent_settled", (_event, ctx) => {
     scheduleCapsuleShadow(ctx);
     scheduleCatalogShadow(ctx);
+    scheduleSearch(ctx);
     scheduleIncrementalWork(ctx);
     const usage = ctx.getContextUsage();
     if (forcedCompactionReason) {
@@ -1753,6 +1851,34 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     }
   });
 
+  pi.registerTool({
+    name: "history_status", label: "History status",
+    description: "Read bounded indexed-history readiness, requested/indexed cuts, lag and safe error. No ingestion or archive reads.",
+    parameters: Type.Object({}),
+    async execute() { const status = searchStatus(); return toolText(JSON.stringify(status), status); },
+  });
+  pi.registerCommand("chrono-search-status", {
+    description: "Read cached search readiness without ingestion or archive scans",
+    handler: async (_args, ctx) => { ctx.ui.notify(JSON.stringify(searchStatus()), "info"); },
+  });
+  pi.registerCommand("chrono-search", {
+    description: "Persistently enable or disable indexed history for only this session: on|off. Normal startup needs no command.",
+    handler: async (args, ctx) => {
+      if (args !== "on" && args !== "off") { ctx.ui.notify("Usage: /chrono-search on|off. This changes only this session's persistent rollout.", "info"); return; }
+      const sourcePath = ctx.sessionManager.getSessionFile();
+      if (!sourcePath) { ctx.ui.notify("Search rollout requires a saved session.", "warning"); return; }
+      const epoch = rolloutEpoch, sessionId = ctx.sessionManager.getSessionId();
+      try { await writeSessionRollout(sessionRolloutDirectory, { sessionId, sourcePath }, args === "on"); }
+      catch { ctx.ui.notify("Search rollout was not changed: unsafe sidecar state.", "warning"); return; }
+      if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId) return;
+      rolloutError = undefined;
+      sessionSearchOverride = args === "on";
+      scheduleCatalogShadow(ctx);
+      scheduleSearch(ctx);
+      ctx.ui.notify(JSON.stringify(searchStatus()), "info");
+    },
+  });
+
   pi.registerCommand("chrono-worker-status", {
     description: "Show bounded isolated-worker and scheduler status",
     handler: async (_args, ctx) => {
@@ -1897,6 +2023,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         saveUserConfig(selected, userConfigPath);
         userConfig = selected;
         scheduleCatalogShadow(ctx);
+    scheduleSearch(ctx);
         userConfigWarning = undefined;
         lastTriggerAttemptTokens = undefined;
         cancelIncrementalWork(true);
@@ -1920,6 +2047,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
             `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
             `Source catalog shadow: ${settings.catalogShadowEnabled ? catalogShadow.status().state : "disabled"}; ingestion only, pending storage review`,
             capsuleStatusText(),
+            `Indexed history: ${JSON.stringify(search.scheduler.status())}`,
             `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
             `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,
             `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,

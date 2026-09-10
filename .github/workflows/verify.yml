@@ -7,9 +7,18 @@ on:
   push:
     branches:
       - "**"
-  schedule:
-    - cron: "17 3 * * 1"
   workflow_dispatch:
+    inputs:
+      validation_scope:
+        description: Broad validation requires an explicit milestone checkpoint
+        required: true
+        type: choice
+        options:
+          - milestone
+      expected_head:
+        description: Exact 40-character commit checked out and validated
+        required: true
+        type: string
 
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,9 +28,13 @@ permissions:
   contents: read
 
 jobs:
-  publication-scan:
+  validation-scope:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      classification: ${{ steps.scope.outputs.classification }}
+      broad: ${{ steps.scope.outputs.broad }}
+      reason: ${{ steps.scope.outputs.reason }}
     steps:
       - name: Checkout exact event revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -30,15 +43,35 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
-      - name: Fetch all repository refs
-        run: git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*' '+refs/pull/*/head:refs/remotes/origin/pr/*'
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "24.18.0"
-          cache: npm
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Verify public repository content boundary
+        with: { node-version: "24.18.0" }
+      - name: Classify exact event scope
+        id: scope
+        run: >-
+          node scripts/chrono-validation-scope.mjs
+          --event "$GITHUB_EVENT_PATH"
+          --event-name "$GITHUB_EVENT_NAME"
+          --sha "$GITHUB_SHA"
+          --output "$GITHUB_OUTPUT"
+
+  publication-scan:
+    needs: validation-scope
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require a known validation scope
+        env: { SCOPE_RESULT: "${{ needs.validation-scope.result }}", SCOPE: "${{ needs.validation-scope.outputs.classification }}" }
+        run: test "$SCOPE_RESULT" = success && test "$SCOPE" != unknown && test -n "$SCOPE"
+      - name: Checkout exact event revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
+      - name: Fetch all repository refs
+        run: git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*' '+refs/pull/*/head:refs/remotes/origin/pr/*'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: "24.18.0" }
+      - name: Verify scoped public repository content boundary
         run: >-
           node scripts/verify-chrono-v3-privacy.mjs
           --self-test --event-scope --require-public-review
@@ -47,59 +80,112 @@ jobs:
           --event-name "$GITHUB_EVENT_NAME"
 
   typecheck:
+    needs: validation-scope
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require a known validation scope
+        env: { SCOPE_RESULT: "${{ needs.validation-scope.result }}", SCOPE: "${{ needs.validation-scope.outputs.classification }}" }
+        run: test "$SCOPE_RESULT" = success && test "$SCOPE" != unknown && test -n "$SCOPE"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: needs.validation-scope.outputs.classification != 'docs'
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: needs.validation-scope.outputs.classification != 'docs'
         with: { node-version: "24.18.0", cache: npm }
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install ChronoCompact dependencies
-        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+      - if: needs.validation-scope.outputs.classification != 'docs'
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Typecheck ChronoCompact
-        run: npm --prefix packages/pi-chrono-compaction run typecheck
+        if: needs.validation-scope.outputs.classification != 'docs'
+        run: |
+          npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+          npm --prefix packages/pi-chrono-compaction run typecheck
+      - name: Record documentation-only applicability
+        if: needs.validation-scope.outputs.classification == 'docs'
+        run: echo 'Typecheck is not applicable to this documentation-only diff; no runtime result is claimed.'
 
   unit-integration:
+    needs: validation-scope
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require a known validation scope
+        env: { SCOPE_RESULT: "${{ needs.validation-scope.result }}", SCOPE: "${{ needs.validation-scope.outputs.classification }}" }
+        run: test "$SCOPE_RESULT" = success && test "$SCOPE" != unknown && test -n "$SCOPE"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: needs.validation-scope.outputs.classification != 'docs'
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: needs.validation-scope.outputs.classification != 'docs'
         with: { node-version: "24.18.0", cache: npm }
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install ChronoCompact dependencies
-        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
-      - name: Build and verify controlled catalog SQLite (no release prebuild)
+      - name: Run focused M06 search contracts
+        if: needs.validation-scope.outputs.classification == 'runtime'
         working-directory: packages/pi-chrono-compaction
         run: |
+          npm ci --ignore-scripts --no-audit --no-fund
           node node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
           npm run catalog:sqlite:build-record -- node_modules/node-gyp/bin/node-gyp.js "$RUNNER_TEMP/chrono-node-headers/24.18.0" 24.18.0
           npm run build
           npm run catalog:sqlite:probe-record
-      - name: Unit and integration tests
-        run: npm --prefix packages/pi-chrono-compaction test
+          test -f test/search-lifecycle.test.ts
+          test -f test/history-search-adapter.test.ts
+          search_sources=(test/search-v3-*.test.ts)
+          test -e "${search_sources[0]}"
+          rm -rf dist-test
+          npx tsc -p tsconfig.test-build.json
+          search_tests=(dist-test/test/search-v3-*.test.js)
+          test -f dist-test/test/search-lifecycle.test.js
+          test -f dist-test/test/history-search-adapter.test.js
+          test -e "${search_tests[0]}"
+          node --test --test-concurrency=1 dist-test/test/search-lifecycle.test.js dist-test/test/history-search-adapter.test.js "${search_tests[@]}"
+      - name: Build and run complete unit/integration tests
+        if: needs.validation-scope.outputs.classification == 'milestone'
+        working-directory: packages/pi-chrono-compaction
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
+          npm run catalog:sqlite:build-record -- node_modules/node-gyp/bin/node-gyp.js "$RUNNER_TEMP/chrono-node-headers/24.18.0" 24.18.0
+          npm run build
+          npm run catalog:sqlite:probe-record
+          npm test
+      - name: Record documentation-only applicability
+        if: needs.validation-scope.outputs.classification == 'docs'
+        run: echo 'Unit/integration tests are not applicable to this documentation-only diff; no runtime result is claimed.'
+      - name: Record routine campaign boundary
+        if: needs.validation-scope.outputs.classification == 'runtime'
+        run: echo 'Focused M06 search contracts ran; the complete unit/integration campaign did not run and is not claimed.'
 
   determinism:
+    needs: validation-scope
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require a known validation scope
+        env: { SCOPE_RESULT: "${{ needs.validation-scope.result }}", SCOPE: "${{ needs.validation-scope.outputs.classification }}" }
+        run: test "$SCOPE_RESULT" = success && test "$SCOPE" != unknown && test -n "$SCOPE"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: needs.validation-scope.outputs.classification == 'milestone'
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: needs.validation-scope.outputs.classification == 'milestone'
         with: { node-version: "24.18.0", cache: npm }
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install ChronoCompact dependencies
-        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
       - name: Deterministic generator and report schema
+        if: needs.validation-scope.outputs.classification == 'milestone'
         working-directory: packages/pi-chrono-compaction
         run: |
+          npm ci --ignore-scripts --no-audit --no-fund
           rm -rf dist-test
           npx tsc -p tsconfig.test-build.json
           node --test --test-concurrency=1 dist-test/test/synthetic-session.test.js dist-test/test/benchmark-harness.test.js
+      - if: needs.validation-scope.outputs.classification != 'milestone'
+        run: echo 'Determinism campaign is not applicable outside an explicit milestone checkpoint; no runtime result is claimed.'
 
   fixed-heap:
+    needs: validation-scope
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -107,73 +193,122 @@ jobs:
       matrix:
         heap: [512, 1024]
     steps:
+      - name: Require a known validation scope
+        env: { SCOPE_RESULT: "${{ needs.validation-scope.result }}", SCOPE: "${{ needs.validation-scope.outputs.classification }}" }
+        run: test "$SCOPE_RESULT" = success && test "$SCOPE" != unknown && test -n "$SCOPE"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: needs.validation-scope.outputs.classification == 'milestone'
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: needs.validation-scope.outputs.classification == 'milestone'
         with: { node-version: "24.18.0", cache: npm }
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install ChronoCompact dependencies
-        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
-      - name: Build and verify controlled catalog SQLite (no release prebuild)
+      - name: Fixed-heap scale and fault safety
+        if: needs.validation-scope.outputs.classification == 'milestone'
         working-directory: packages/pi-chrono-compaction
         run: |
+          npm ci --ignore-scripts --no-audit --no-fund
           node node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
           npm run catalog:sqlite:build-record -- node_modules/node-gyp/bin/node-gyp.js "$RUNNER_TEMP/chrono-node-headers/24.18.0" 24.18.0
           npm run build
           npm run catalog:sqlite:probe-record
-      - name: Fixed-heap scale and fault safety
-        run: npm --prefix packages/pi-chrono-compaction run test:fixed-heap -- --heaps ${{ matrix.heap }}
+          npm run test:fixed-heap -- --heaps ${{ matrix.heap }}
+      - if: needs.validation-scope.outputs.classification != 'milestone'
+        run: echo 'Fixed-heap campaign is not applicable outside an explicit milestone checkpoint; no runtime result is claimed.'
 
   build-consistency:
+    needs: validation-scope
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require a known validation scope
+        env: { SCOPE_RESULT: "${{ needs.validation-scope.result }}", SCOPE: "${{ needs.validation-scope.outputs.classification }}" }
+        run: test "$SCOPE_RESULT" = success && test "$SCOPE" != unknown && test -n "$SCOPE"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: needs.validation-scope.outputs.classification != 'docs'
+        with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: needs.validation-scope.outputs.classification != 'docs'
+        with: { node-version: "24.18.0", cache: npm }
+      - name: Generated build consistency
+        if: needs.validation-scope.outputs.classification != 'docs'
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+          npm --prefix packages/pi-chrono-compaction run build
+          git diff --exit-code -- packages/pi-chrono-compaction/dist
+      - if: needs.validation-scope.outputs.classification == 'docs'
+        run: echo 'Generated build consistency is not applicable to this documentation-only diff; no runtime result is claimed.'
+
+  root-verification:
+    needs: [validation-scope, publication-scan, typecheck, unit-integration, determinism, fixed-heap, build-consistency]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Require successful applicable gates
+        env:
+          SCOPE_RESULT: "${{ needs.validation-scope.result }}"
+          PUBLICATION_RESULT: "${{ needs.publication-scan.result }}"
+          TYPECHECK_RESULT: "${{ needs.typecheck.result }}"
+          UNIT_RESULT: "${{ needs.unit-integration.result }}"
+          DETERMINISM_RESULT: "${{ needs.determinism.result }}"
+          HEAP_RESULT: "${{ needs.fixed-heap.result }}"
+          BUILD_RESULT: "${{ needs.build-consistency.result }}"
+        run: |
+          test "$SCOPE_RESULT" = success
+          for result in "$PUBLICATION_RESULT" "$TYPECHECK_RESULT" "$UNIT_RESULT" "$DETERMINISM_RESULT" "$HEAP_RESULT" "$BUILD_RESULT"; do test "$result" = success; done
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { ref: "${{ github.sha }}", fetch-depth: 0, fetch-tags: true, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: "24.18.0", cache: npm }
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install ChronoCompact dependencies
-        run: npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
-      - name: Generated build consistency
-        run: |
-          npm --prefix packages/pi-chrono-compaction run build
-          git diff --exit-code -- packages/pi-chrono-compaction/dist
-
-  root-verification:
-    needs: [publication-scan, typecheck, unit-integration, determinism, fixed-heap, build-consistency]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - name: Checkout exact event revision
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          fetch-tags: true
-          persist-credentials: false
-      - name: Fetch all repository refs
-        run: git fetch --force --prune --tags origin '+refs/heads/*:refs/remotes/origin/*' '+refs/pull/*/head:refs/remotes/origin/pr/*'
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "24.18.0"
-          cache: npm
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Prepare exact headers for isolated catalog source rebuild
+      - name: Verify cadence classification
+        run: node --test scripts/test/chrono-validation-scope.test.mjs
+      - name: Prepare exact headers for routine static baseline verification
+        if: needs.validation-scope.outputs.classification != 'milestone'
         run: |
           npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
           node packages/pi-chrono-compaction/node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
           echo "CHRONO_CATALOG_NODE_HEADERS=$RUNNER_TEMP/chrono-node-headers/24.18.0" >> "$GITHUB_ENV"
-      - name: Verify frozen ChronoCompact baseline
+      - name: Verify frozen static baseline on routine changes
+        if: needs.validation-scope.outputs.classification != 'milestone'
         run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
-      - name: Verify correction verifier tests
-        run: node --test --test-concurrency=1 scripts/test/verify-chrono-v3-baseline.test.mjs scripts/test/verify-chrono-v3-privacy.test.mjs
-      - name: Verify complete repository root and ignored dependency-tree fixture
+      - name: Verify complete repository root at milestone checkpoint
+        if: needs.validation-scope.outputs.classification == 'milestone'
         run: |
+          npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+          node packages/pi-chrono-compaction/node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
+          export CHRONO_CATALOG_NODE_HEADERS="$RUNNER_TEMP/chrono-node-headers/24.18.0"
+          node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
+          node --test --test-concurrency=1 scripts/test/verify-chrono-v3-baseline.test.mjs scripts/test/verify-chrono-v3-privacy.test.mjs
           fixture=packages/files-ui/node_modules/verifier-regression
           trap 'rm -rf "$fixture"' EXIT
           mkdir -p "$fixture"
           printf '{"name":"ignored-verifier-regression"}\n' > "$fixture/package.json"
           printf '{"compilerOptions":{}}\n' > "$fixture/tsconfig.json"
           npm run verify
+      - name: Record routine root applicability
+        if: needs.validation-scope.outputs.classification != 'milestone'
+        run: echo 'Static baseline identity and inventory protections ran; the complete root/runtime campaign did not run and is not claimed.'
+
+  verify:
+    needs: [validation-scope, root-verification]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Preserve the required aggregate status with honest scope
+        env:
+          SCOPE_RESULT: "${{ needs.validation-scope.result }}"
+          ROOT_RESULT: "${{ needs.root-verification.result }}"
+          SCOPE: "${{ needs.validation-scope.outputs.classification }}"
+          REASON: "${{ needs.validation-scope.outputs.reason }}"
+        run: |
+          test "$SCOPE_RESULT" = success
+          test "$ROOT_RESULT" = success
+          test -n "$SCOPE" && test "$SCOPE" != unknown
+          printf 'verify accepted scope=%s reason=%s\n' "$SCOPE" "$REASON"
+          if test "$SCOPE" != milestone; then
+            echo 'This required status covers only the applicable routine gates; it does not claim broad runtime validation.'
+          fi

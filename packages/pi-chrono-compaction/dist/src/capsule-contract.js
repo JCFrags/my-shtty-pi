@@ -394,6 +394,9 @@ export function isCapsuleWorkerRequest(value) {
             && (value.maxDescriptors === undefined || positive(value.maxDescriptors) && value.maxDescriptors <= CAPSULE_LIMITS.deriveDescriptors);
         case "capsulePage": return matches(value.view) && (value.afterEventSeq === undefined || integer(value.afterEventSeq) && value.afterEventSeq <= value.view.eventCut)
             && (value.afterDescriptor === undefined || integer(value.afterDescriptor)) && (value.limit === undefined || positive(value.limit) && value.limit <= CAPSULE_LIMITS.page);
+        case "chunkSourcePage": return matches(value.view) && (value.afterEventSeq === undefined || integer(value.afterEventSeq) && value.afterEventSeq <= value.view.eventCut)
+            && (value.afterDescriptor === undefined || integer(value.afterDescriptor)) && (value.limit === undefined || positive(value.limit) && value.limit <= CAPSULE_LIMITS.page)
+            && (value.maxDescriptors === undefined || positive(value.maxDescriptors) && value.maxDescriptors <= CAPSULE_LIMITS.deriveDescriptors);
         case "chunkRange": return matches(value.view) && isScopedBodySourceRef(value.source) && sourceRefWithinViewBounds(value.source, value.view)
             && integer(value.decodedStart) && positive(value.decodedLength) && value.decodedLength <= CAPSULE_LIMITS.decodedChunkUnits
             && value.decodedStart >= value.source.decodedUtf16.start && value.decodedStart + value.decodedLength <= value.source.decodedUtf16.end
