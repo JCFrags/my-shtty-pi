@@ -69,6 +69,14 @@ test("actual catalog facts drive bounded episodes/state across append restart an
       return assert.fail("state materialization did not complete");
     };
     await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, oldMain);
+    const partialPage = await run(oldMain, { op: "materializeState", limit: 1 });
+    assert.equal(partialPage.ok, true, JSON.stringify(partialPage));
+    const partialRecall = await run(oldMain, { op: "recallState", level: "state", limit: 1 });
+    assert.equal(partialRecall.ok, true, JSON.stringify(partialRecall));
+    if (partialPage.ok && partialRecall.ok) {
+      assert.equal(partialRecall.result.knownThrough, partialPage.result.knownThroughCut, "recall must not certify the partially processed event");
+      assert.equal(partialRecall.result.partial, true);
+    }
     const oldReady = await materializeAll(oldMain);
     assert.equal(oldReady.knownThroughCut, oldMain.eventCut);
     const oldEpisodes = await run(oldMain, { op: "recallState", level: "episode", query: "implement", limit: 1 });

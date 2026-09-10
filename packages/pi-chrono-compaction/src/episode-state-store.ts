@@ -282,8 +282,15 @@ function recall(request: Extract<EpisodeStateRequest, { op: "recallState" }>, st
   while (items.length > 1 && Buffer.byteLength(JSON.stringify(items)) > EPISODE_STATE_LIMITS.recallUtf8Bytes) items.pop();
   const selected = rows.slice(0, items.length), last = selected.at(-1), eventColumn = "eventSeq", descriptorColumn = "descriptor",
     keyColumn = level === "episode" ? "sourceKey" : "stableKey";
-  const head = store.get("SELECT * FROM heads WHERE lineage=?", line), knownThrough = head ? Math.min(request.view.eventCut, num(head, "afterEventSeq")) : 0;
-  return { stateGeneration: generation, branchKey: request.view.branchKey, knownThrough, partial: !head || num(head, "complete") !== 1 || knownThrough < request.view.eventCut || num(head, "partialCount") > 0,
+  const head = store.get("SELECT * FROM heads WHERE lineage=?", line);
+  // A cursor can stop inside an event, or pin an earlier materialization generation.
+  // Only a completed head visible to that generation certifies its whole view.
+  const visibleCut = store.get("SELECT eventSeq FROM cuts WHERE lineage=? AND generation<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC LIMIT 1", line, generation, request.view.eventCut);
+  const completedView = head && num(head, "complete") === 1 && generation >= num(head, "generation")
+    ? JSON.parse(str(head, "view")) as EpisodeStateRequest["view"] : undefined;
+  const knownThrough = completedView ? Math.min(request.view.eventCut, completedView.eventCut)
+    : Math.max(0, (visibleCut ? num(visibleCut, "eventSeq") : 0) - 1);
+  return { stateGeneration: generation, branchKey: request.view.branchKey, knownThrough, partial: !head || !completedView || knownThrough < request.view.eventCut || num(head, "partialCount") > 0,
     level, items, ...(rows.length > items.length && last ? { next: { eventSeq: num(last, eventColumn), descriptor: num(last, descriptorColumn), stableKey: str(last, keyColumn), generation } } : {}),
     metrics: { sqliteStatements: store.statements } };
 }
@@ -318,7 +325,9 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
       const result = request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest,
         options.catalogExecutor ?? executeCatalogStoreRequest, budget)
         : request.op === "recallState" ? recall(request, store) : status(request, store);
-      const response: EpisodeStateResponse = { v: 1, ok: true, result, sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };
+      const response: EpisodeStateResponse = { v: 1, ok: true, result: { ...result,
+        coverageScope: "Body capsules only; custom editable-memory and retention metadata are not materialized.",
+      }, sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };
       if (Buffer.byteLength(JSON.stringify(response)) > EPISODE_STATE_LIMITS.responseBytes) fail("search-v3-state-response-limit");
       try { db.checkpoint(); } catch { /* committed WAL remains authoritative */ }
       return response;

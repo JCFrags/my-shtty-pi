@@ -144,13 +144,22 @@ Two local runtime invocations were used, with failures preserved:
    branch isolation. The engine fixture failed because it required every resource
    observation to have a declared revision, including an assistant report with
    none. Its assertion now requires that report to retain a null/unknown revision.
-   This assertion correction awaits routine CI; no third local invocation ran.
+   This assertion correction passed PR routine CI at `647e369`; no third local invocation ran.
 
 Final source and test-build compilation passed. Parent integration also corrected
 source-exact lookup, cut-bound generations, path punctuation, conditional approval
-handling, and conservative resource freshness. Routine CI and deployment remain
-pending at this checkpoint. No startup suite, full local suite or scale campaign
-was repeated. Live 2.0.9, automatic rollout, source stores and rollback are unchanged.
+handling, and conservative resource freshness. PR run `34430157110` passed all ten
+applicable statuses at `647e369`. The initial new-branch push was refused by the
+existing zero-before-SHA classifier; it was not rerun or reported as successful.
+
+A subsequent read-path correction keeps recall coverage conservative when a page
+stops inside an event or a cursor pins an older generation. Recall must use the
+visible committed cut, not the latest head's event counter. The existing engine
+fixture now compares partial materialization and recall coverage. Responses also
+state that custom metadata is outside body-capsule coverage. Source/test compilation
+passed; routine CI must verify this correction. No additional local runtime test,
+startup suite, full local suite or scale campaign ran. Deployment is pending;
+live 2.0.9, automatic rollout, source stores and rollback are unchanged.
 
 Remaining limits: extraction is deterministic and conservative, not semantic task
 understanding. Compound prose can omit secondary claims; episode retrieval pages
