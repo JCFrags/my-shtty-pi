@@ -611,6 +611,12 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
     await catalogCall(request, options.catalogExecutor ?? executeCatalogStoreRequest, budget, { op: "page", view: request.view, after: request.view.eventCut, limit: 1 });
     const action = async (): Promise<EpisodeStateResponse> => {
       const path = join(request.searchDirectory, "state-v2.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
+      if (request.op === "stateStatus") {
+        try { lstatSync(path); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("search-v3-state-store-missing");
+          throw error;
+        }
+      }
       db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
       const store = new Store(db, request); if (create) store.initialize(); else store.validate(false);
       const result = request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest,

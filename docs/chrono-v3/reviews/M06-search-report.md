@@ -211,3 +211,48 @@ not promoted to instructions. Episode cues for inactive metadata omit its derive
 text while retaining exact archived recovery. Missing/oversized metadata remains
 partial. The candidate uses `state-v2.sqlite` and ruleset v2 alongside preserved
 v1; search and capsule identities are unchanged.
+
+## First M08 bounded rollup increment
+
+Corrected M07 2.0.11 (`5073892`) was installed and normally reloaded after
+both focused checks and both ten-status CI runs passed. Actual development
+use recovered an episode and an exact source page; state recall returned
+qualified source-backed unresolved work. At the observed work boundary,
+search covered 6,964 of 14,464 events, and corrected memory covered 456.
+Metadata ingestion was progressing, but that prefix had no accepted custom
+memory/retention events. Actual metadata recovery is not claimed. PR44 is
+unmerged and M07 is not self-accepted.
+
+The stacked M08 increment adds a separate `rollup-v1.sqlite` store. Immutable
+closed episode fragments feed an eight-way frontier. Jobs admit at most eight
+leaf pages, eight members per leaf, 64 created nodes and 8 MiB source reads.
+Nodes are limited to 64 KiB. Publication handles pin branch, cut, state
+and rollup generation. Descendant expansion verifies an ordered path from
+the pinned root. Recall visits at most 24 nodes and pages exact sources
+individually. Closed intervals are not completed tasks. Protected and advisory
+metadata omissions remain explicit; children and exact source references
+retain the detail. Bounded query traversal reports its limitation and offers
+root browsing. This is outside authoritative compaction; M09 is inactive.
+
+The adapter exposes `history_recall` with `level="rollup"` and cached rollup
+status. Automatic shadow work waits for a completed memory prefix, then
+alternates bounded rollup and memory work without changing search limits.
+Read-only resume checks reuse existing publications. A missing store receives
+a distinct status error; unsafe occupied paths are not treated as missing.
+
+Local M08 runtime allowance is exhausted (two invocations). The first check
+found a 15-placeholder insert into a 14-column node table. That was corrected.
+The second invocation passed the persisted rollup/source/pin fixture (1.24 s)
+but failed adapter readiness (6.09 s). Inspection identified that SQLite's
+missing-path open reports an unsafe-path error, preventing fresh automatic
+materialization. Status now distinguishes ENOENT before open; creation still
+performs the existing safety validation. Build and test compilation pass.
+The corrected adapter path awaits routine CI, not another local runtime run.
+No M08 deployment or actual rollup use is claimed yet. Existing deployment,
+rollback chain, source history and older stores are unchanged.
+
+Artifact verification: the static Chrono source/dist/manifest check passed.
+Local root verification did not finish its all-ref privacy phase within the
+caller deadlines (30 s for an initial incorrectly unscoped invocation, then
+240 s for static-only). Neither run completed root verification; no package
+runtime suites were reached. Full root qualification remains a CI gate.

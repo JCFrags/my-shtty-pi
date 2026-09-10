@@ -27,7 +27,7 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values pin the 2.0.11 M07 repository candidate, not a deployment.
+// These values pin the 2.0.12 M08 repository candidate, not a deployment.
 // This verifies repository and optional live byte identity; it does not assert activation.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
@@ -35,21 +35,23 @@ const EXPECTED = Object.freeze({
   m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
-  sourceFiles: 122,
-  sourceTreeHash: "778134d7923285fba0c3074d3b2dfc7587cac68d4da4cef9a9f6829f8cef9617",
-  distFiles: 121,
-  distTreeHash: "b42109f5a0769512a6732080a948a03278e20b6885fc21f4db005f35ed18d9af",
-  entrypointHash: "dd27d1ff030925cd66c6c2564854bb28fe675a607a300584f863eb566a38401d",
-  m01PackageHash: "cb55f668bfbd8f4c3ba05b67e1bf2e32f712a63791c27cf37f287477d3e451ce",
-  m01LockHash: "5a75814d5b7947721b40f28b237dbef46343f66c8c5708be38dea7cfaf4eb6e8",
-  livePackageHash: "cb55f668bfbd8f4c3ba05b67e1bf2e32f712a63791c27cf37f287477d3e451ce",
-  deployedPackageHash: "cb55f668bfbd8f4c3ba05b67e1bf2e32f712a63791c27cf37f287477d3e451ce",
+  sourceFiles: 123,
+  sourceTreeHash: "524910e5386aa3ac02d1dbba8d4b315f54f9f81333b306e570e7f5f083101340",
+  distFiles: 122,
+  distTreeHash: "ce6180d050c323d30b748a034bf759343f4293b3e0e141889fe1360541f65375",
+  entrypointHash: "3f510b493227b0d5736570b9e3a9c8f2f25f8892b3e0d81708679866ee10bc06",
+  m01PackageHash: "f6b28fdf4ef68266fbc9052ee10b56bf577cb1d9ef6a78e23ff3fafbee77c08c",
+  m01LockHash: "42ad34b4ba90acfc4dc9064c917ed418bec55bd9d96c582ae7b8b3691fb5be89",
+  livePackageHash: "f6b28fdf4ef68266fbc9052ee10b56bf577cb1d9ef6a78e23ff3fafbee77c08c",
+  deployedPackageHash: "f6b28fdf4ef68266fbc9052ee10b56bf577cb1d9ef6a78e23ff3fafbee77c08c",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
   canonicalDeployedFiles: 291,
 });
 
 const correctionPaths = new Set([
+  "packages/pi-chrono-compaction/src/episode-rollup-store.ts",
+  "packages/pi-chrono-compaction/dist/src/episode-rollup-store.js",
   "packages/pi-chrono-compaction/src/episode-state-contract.ts",
   "packages/pi-chrono-compaction/src/episode-state-reducer.ts",
   "packages/pi-chrono-compaction/src/episode-state-store.ts",
@@ -578,7 +580,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.11") fail("package-version-changed");
+  if (packageJson.version !== "2.0.12") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { lstatSync } from "node:fs";
 import { canonicalJson } from "./capsule-segment.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
 import { CatalogSqlite, type SqlRow, type SqlValue } from "./catalog-sqlite.js";
@@ -111,7 +112,7 @@ function nodeText(node: StoredNode): string {
 function writeNode(store: Store, node: StoredNode, generation: number): boolean {
   const text = nodeText(node), old = store.get("SELECT body FROM nodes WHERE nodeId=?", node.nodeId);
   if (old) { if (str(old, "body") !== text) fail("search-v3-rollup-node-corrupt"); return false; }
-  store.run("INSERT INTO nodes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", node.nodeId, node.contentHash, node.nodeType, node.level,
+  store.run("INSERT INTO nodes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", node.nodeId, node.contentHash, node.nodeType, node.level,
     canonicalJson(node.orderedChildren), node.sourceCoverageHash, node.range.start.eventSeq, node.range.start.descriptor,
     node.range.end.eventSeq, node.range.end.descriptor, node.nodeType === "episode-fragment" ? node.episodeKey : null,
     node.nodeType === "episode-fragment" ? node.fragmentIndex : null, text, generation);
@@ -382,6 +383,12 @@ export async function executeEpisodeRollupRequest(request: Extract<EpisodeStateR
     if (!catalog.ok) fail(catalog.code === "catalog-source-changed" ? "search-v3-rollup-source-changed" : "search-v3-rollup-catalog-unavailable");
     const action = async (): Promise<EpisodeStateResponse> => {
       const path = join(request.searchDirectory, "rollup-v1.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
+      if (request.op === "rollupStatus") {
+        try { lstatSync(path); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("search-v3-rollup-store-missing");
+          throw error;
+        }
+      }
       db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
       const store = new Store(db, request); if (create) store.initialize(); else store.validate(false);
       const result = request.op === "materializeRollup" ? await materialize(request, store, options, budget)

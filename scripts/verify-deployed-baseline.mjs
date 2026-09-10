@@ -51,6 +51,8 @@ const m01MutableHistoricalTests = new Set([
   "packages/pi-chrono-compaction/test/source-ledger.test.ts",
 ]);
 const correctionArtifactPaths = new Set([
+  "packages/pi-chrono-compaction/src/episode-rollup-store.ts",
+  "packages/pi-chrono-compaction/dist/src/episode-rollup-store.js",
   "packages/pi-chrono-compaction/src/episode-state-contract.ts",
   "packages/pi-chrono-compaction/src/episode-state-reducer.ts",
   "packages/pi-chrono-compaction/src/episode-state-store.ts",

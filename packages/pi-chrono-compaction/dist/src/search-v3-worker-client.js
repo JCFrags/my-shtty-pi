@@ -43,7 +43,7 @@ export async function runSearchV3Worker(request, options = {}) {
             identity: { schemaVersion: 1, kind: `search-v3-${request.op.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, sessionKey },
             caps: { deadlineMs: Date.now() + SEARCH_V3_WORKER_CAPS.timeoutMs, sourceBytes: SEARCH_V3_WORKER_CAPS.sourceBytes,
                 responseBytes: SEARCH_V3_WORKER_CAPS.responseBytes, memoryBytes: SEARCH_V3_WORKER_CAPS.memoryBytes, heapMiB: SEARCH_V3_WORKER_CAPS.heapMiB },
-            signal: options.signal, slots: options.slots, schedulerDirectory: options.schedulerDirectory, priority: request.op === "ingestPage" || request.op === "materializeState" ? "low" : "high",
+            signal: options.signal, slots: options.slots, schedulerDirectory: options.schedulerDirectory, priority: request.op === "ingestPage" || request.op === "materializeState" || request.op === "materializeRollup" ? "low" : "high",
             validateRequest, validateResponse: validateSearchV3Response,
         });
         return value;

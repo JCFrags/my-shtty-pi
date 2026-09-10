@@ -124,6 +124,51 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
   }
 });
 
+test("rollup lifecycle offers bounded top-down exact recall across append restart and branch isolation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-rollup-")), sourcePath = join(directory, "source.jsonl"), schedulerDirectory = join(directory, "scheduler");
+  mkdirSync(schedulerDirectory, { mode: 0o700 });
+  const first = "Do not edit /project/amber.ts. Keep the unresolved amber task open.";
+  writeFileSync(sourcePath, line("a", null, first) + line("b", "a", "Inspection is reported, not verification.", "assistant")
+    + line("c", "b", "Next request; earlier obligation remains."), { mode: 0o600 });
+  let adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
+  const schedule = (leafId: string) => adapter.schedule({ sourcePath, catalogDirectory: join(directory, "catalog"), sessionKey: hash("rollup-session"), shardKey: hash("rollup-shard"), leafId });
+  try {
+    schedule("c"); await ready(adapter);
+    assert.equal((adapter.status().rollup as Record<string, unknown>).state, "ready", JSON.stringify(adapter.status()));
+    const root = await adapter.recallRollup("");
+    assert.equal(root.details.status, "ok", JSON.stringify(root.details));
+    assert.equal(root.details.partial, true);
+    const expand = (root.details.items as { expand: string }[])[0]!.expand;
+    assert.ok(expand);
+    let page = await adapter.recallRollup(expand);
+    for (let depth = 0; depth < 4 && !(page.details.items as { recovery?: string }[])[0]?.recovery; depth++) {
+      assert.equal(page.details.status, "ok", JSON.stringify(page.details));
+      page = await adapter.recallRollup((page.details.items as { expand: string }[])[0]!.expand);
+    }
+    assert.equal(page.details.status, "ok", JSON.stringify(page.details));
+    const exact = (page.details.items as { recovery: string }[])[0]!.recovery;
+    assert.ok(exact, JSON.stringify(page.details));
+    assert.equal((await adapter.recall(exact)).details.text, first);
+    const pinned = page.details;
+    const before = adapter.status();
+    assert.deepEqual(adapter.status(), before, "status is a cached read, not ingestion");
+    appendFileSync(sourcePath, line("d", "c", "Later independent request."));
+    schedule("d"); await ready(adapter);
+    const old = await adapter.recallRollup(expand);
+    assert.equal(old.details.knownThroughCut, root.details.knownThroughCut);
+    const generation = (adapter.status().rollup as Record<string, unknown>).rollupGeneration;
+    adapter.dispose(); await adapter.scheduler.drain();
+    adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
+    schedule("d"); await ready(adapter);
+    assert.equal((adapter.status().rollup as Record<string, unknown>).rollupGeneration, generation, "resume must reuse its completed rollup publication");
+    assert.equal((await adapter.recall(exact)).details.text, first);
+    assert.ok(Number(pinned.knownThroughCut) <= Number(adapter.status().indexedCut));
+    appendFileSync(sourcePath, line("fork", "a", "Sibling request."));
+    schedule("fork"); await ready(adapter);
+    assert.equal((await adapter.recallRollup(expand)).details.status, "unavailable");
+  } finally { adapter.dispose(); await adapter.scheduler.drain(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("bounded initial catch-up serves a searchable committed prefix before the full requested view", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-prefix-"));
   const sourcePath = join(directory, "source.jsonl");

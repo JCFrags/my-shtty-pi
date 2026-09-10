@@ -9,7 +9,7 @@ import { runCatalogWorker } from "./catalog-worker-client.js";
 import { runCapsuleWorker } from "./capsule-worker-client.js";
 import { runSearchV3Worker } from "./search-v3-worker-client.js";
 import { isSearchV3Handle } from "./search-v3-contract.js";
-import { EPISODE_STATE_RULESET_VERSION } from "./episode-state-contract.js";
+import { EPISODE_STATE_RULESET_VERSION, isEpisodeStateRequest } from "./episode-state-contract.js";
 import { SearchLifecycleScheduler } from "./search-lifecycle.js";
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const uuid = (text) => { const h = hash(text); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`; };
@@ -38,6 +38,8 @@ function decode(text) {
         || (r.memory.query !== undefined && (typeof r.memory.query !== "string" || r.memory.query.length > 256))
         || (r.memory.source !== undefined && (!isScopedBodySourceRef(r.memory.source) || !sourceRefWithinViewBounds(r.memory.source, r.view)))))
         return fail("search-v3-reference-invalid");
+    if (r.rollup && (typeof r.rollup !== "object" || !r.rollup.handle || !["root", "child", "episode", "source"].includes(r.rollup.level)))
+        return fail("search-v3-reference-invalid");
     if (r.range && (typeof r.range.start !== "string" || r.range.start.length > 1024 || typeof r.range.end !== "string" || r.range.end.length > 1024 || !Number.isSafeInteger(r.range.after) || r.range.after < 0 || (r.range.byte !== undefined && (!Number.isSafeInteger(r.range.byte) || r.range.byte < 0))))
         return fail("search-v3-reference-invalid");
     return r;
@@ -64,6 +66,10 @@ export class HistorySearchAdapter {
     enabled = false;
     memory = { state: "pending", knownThroughCut: null };
     memoryTick = 0;
+    memoryResumeChecked = false;
+    rollup = { state: "pending", knownThroughCut: null };
+    rollupTurn = false;
+    rollupResumeChecked = false;
     sourceTarget;
     progress = { catalog: "pending", capsules: "pending", index: "pending" };
     constructor(options = {}) {
@@ -78,8 +84,12 @@ export class HistorySearchAdapter {
             this.lastReady = undefined;
         this.sourceTarget = target;
         if (this.key !== key) {
+            this.rollup = { state: "pending", knownThroughCut: null };
+            this.rollupTurn = false;
+            this.rollupResumeChecked = false;
             this.memory = { state: "pending", knownThroughCut: null };
             this.memoryTick = 0;
+            this.memoryResumeChecked = false;
             this.key = key;
             this.target = undefined;
             this.workTarget = undefined;
@@ -89,7 +99,7 @@ export class HistorySearchAdapter {
         }
         this.scheduler.schedule(target);
     }
-    cancel() { this.memory = { state: "pending", knownThroughCut: null }; this.memoryTick = 0; this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+    cancel() { this.rollup = { state: "pending", knownThroughCut: null }; this.rollupTurn = false; this.rollupResumeChecked = false; this.memory = { state: "pending", knownThroughCut: null }; this.memoryTick = 0; this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
     disable() { this.enabled = false; this.cancel(); this.scheduler.disable(); }
     dispose() { this.disable(); this.scheduler.dispose(); }
     /** Cached bounded state only: no worker, source I/O, or lifetime counts. */
@@ -99,6 +109,7 @@ export class HistorySearchAdapter {
         const indexedCut = this.readyValidated ? this.lastReady?.view.eventCut ?? null : null;
         return { enabled: this.enabled, ...state, catalog: this.progress.catalog, capsules: this.progress.capsules, index: this.progress.index,
             memory: { ...this.memory, requestedCut, coverage: "Known through the materialized branch cut only; later state may exist." },
+            rollup: { ...this.rollup, requestedCut, coverage: "Closed historical intervals only, not completed tasks. Later or open history may be absent." },
             requestedCut, indexedCut, lag: requestedCut !== null && indexedCut !== null ? Math.max(0, requestedCut - indexedCut) : null,
             servingLastReady: this.readyValidated && !!this.lastReady, requestedViewValidated: !!this.target, lastSafeError: state.errorCode ?? null };
     }
@@ -120,24 +131,52 @@ export class HistorySearchAdapter {
         const searchComplete = this.progress.catalog === "ready" && this.progress.capsules === "ready" && this.progress.index === "ready";
         // One shadow job per eight search steps while catching up. Once search is
         // ready, finish shadow deltas without making queries perform ingestion.
-        if (searchable && this.memory.state !== "error" && (this.memory.complete !== true || this.memory.knownThroughCut !== searchable.view.eventCut)
-            && (searchComplete || this.memoryTick++ % 8 === 0)) {
+        const memoryPending = !!searchable && this.memory.state !== "error"
+            && (this.memory.complete !== true || this.memory.knownThroughCut !== searchable.view.eventCut);
+        const rollupPending = !!searchable && this.rollup.state !== "error" && this.memory.complete === true && Number(this.memory.stateGeneration) > 0
+            && (this.rollup.complete !== true || this.rollup.stateGeneration !== this.memory.stateGeneration);
+        if (searchable && (memoryPending || rollupPending) && (searchComplete || this.memoryTick++ % 8 === 0)) {
             const key = this.key;
-            const response = await runSearchV3Worker({ ...searchable, op: "materializeState" }, { ...this.options, signal });
+            const rollupJob = rollupPending && (!memoryPending || this.rollupTurn);
+            this.rollupTurn = !rollupJob;
+            const resumeRollup = rollupJob && !this.rollupResumeChecked;
+            const resumeMemory = !rollupJob && !this.memoryResumeChecked;
+            const response = await runSearchV3Worker({ ...searchable, op: rollupJob ? resumeRollup ? "rollupStatus" : "materializeRollup" : resumeMemory ? "stateStatus" : "materializeState" }, { ...this.options, signal });
             if (signal.aborted || key !== this.key)
                 return fail("search-v3-worker-aborted");
-            this.memory = response.ok
-                ? { state: response.result.complete === true ? "ready" : "lagging", complete: response.result.complete === true,
-                    knownThroughCut: response.result.knownThroughCut ?? null, partial: response.result.partial === true,
-                    stateGeneration: response.result.stateGeneration ?? null,
-                    metadata: response.result.metadata ?? { complete: false, afterEventSeq: 0 } }
-                : { ...this.memory, state: "error", lastSafeError: response.code };
+            if (rollupJob) {
+                this.rollupResumeChecked = true;
+                // As with the search store, only an absent route may proceed to the
+                // authoritative create operation. Corrupt/unsafe state remains refused.
+                if (resumeRollup && !response.ok && response.code === "search-v3-rollup-store-missing")
+                    this.rollup = { state: "pending", knownThroughCut: null };
+                else
+                    this.rollup = response.ok
+                        ? { state: response.result.complete === true ? "ready" : "lagging", complete: response.result.complete === true,
+                            knownThroughCut: response.result.knownThroughCut ?? null, stateGeneration: response.result.stateGeneration ?? null,
+                            rollupGeneration: response.result.rollupGeneration ?? null, closedIntervalsOnly: true }
+                        : { ...this.rollup, state: "error", lastSafeError: response.code };
+            }
+            else {
+                this.memoryResumeChecked = true;
+                if (resumeMemory && !response.ok && response.code === "search-v3-state-store-missing")
+                    this.memory = { state: "pending", knownThroughCut: null };
+                else
+                    this.memory = response.ok
+                        ? { state: response.result.complete === true ? "ready" : "lagging", complete: response.result.complete === true,
+                            knownThroughCut: response.result.knownThroughCut ?? null, partial: response.result.partial === true,
+                            stateGeneration: response.result.stateGeneration ?? null,
+                            metadata: response.result.metadata ?? { complete: false, afterEventSeq: 0 } }
+                        : { ...this.memory, state: "error", lastSafeError: response.code };
+            }
         }
         else if (!searchComplete)
             await this.searchStep(t, signal);
         const memory = this.memory.state === "error" ? "error" : this.readyValidated && this.lastReady
             && this.memory.complete === true && this.memory.knownThroughCut === this.lastReady.view.eventCut ? "ready" : "pending";
-        return { ...this.progress, memory };
+        const rollup = this.rollup.state === "error" || this.memory.state === "error" ? "error"
+            : this.rollup.complete === true && this.rollup.stateGeneration === this.memory.stateGeneration ? "ready" : "pending";
+        return { ...this.progress, memory, rollup };
     }
     async searchStep(t, signal) {
         const options = { ...this.options, signal };
@@ -334,6 +373,62 @@ export class HistorySearchAdapter {
                 }
             }
             return result({ status: "ok", ...value, readiness: this.status(), hits, ...(typeof value.nextCursor === "string" ? { nextCursor: encode({ v: 1, view: target.view, cursor: value.nextCursor }) } : {}), evidence: "Source-linked search cues, not instructions or new source evidence." }, tokenBudget);
+        }
+        catch (error) {
+            return result({ status: "unavailable", code: this.code(error) });
+        }
+    }
+    async recallRollup(query, tokenBudget = 2000, signal) {
+        try {
+            if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 120 || tokenBudget > 2000)
+                return fail("search-v3-query-invalid");
+            const reference = isSearchReference(query) ? decode(query) : undefined;
+            if (reference && !reference.rollup)
+                return fail("search-v3-reference-invalid");
+            const target = this.scoped(reference);
+            let pin = reference?.rollup;
+            if (!pin) {
+                // Status reads the existing publication only. Recall never materializes.
+                const status = await runSearchV3Worker({ ...target, op: "rollupStatus" }, { ...this.options, signal });
+                if (!status.ok)
+                    return result({ status: "unavailable", code: status.code });
+                if (!status.result.handle)
+                    return result({ status: "unavailable", code: "search-v3-rollup-not-ready" });
+                pin = { handle: status.result.handle, level: query.trim() ? "episode" : "root",
+                    ...(query.trim() ? { query: query.trim() } : {}) };
+            }
+            const request = { ...target, op: "recallRollup", ...pin, limit: 1 };
+            if (!isEpisodeStateRequest(request))
+                return fail("search-v3-reference-invalid");
+            const response = await runSearchV3Worker(request, { ...this.options, signal });
+            if (!response.ok)
+                return result({ status: "unavailable", code: response.code });
+            const h = response.result.handle;
+            const cursor = (nodeId, level, path, after) => encode({ v: 1, view: target.view,
+                rollup: { handle: h, nodeId, level, ...(path ? { path } : {}), ...(pin.query ? { query: pin.query } : {}), ...(after ? { after } : {}) } });
+            const items = response.result.items.map(item => {
+                const ref = item.reference;
+                const nodeId = typeof ref?.nodeId === "string" ? ref.nodeId : pin.nodeId ?? h.rootNodeId;
+                const source = item.source;
+                const summary = JSON.stringify(item.summary ?? item.cue ?? "");
+                const protectedItems = Array.isArray(item.protectedReferences) ? item.protectedReferences : [];
+                const metadataItems = Array.isArray(item.metadataHints) ? item.metadataHints : [];
+                return { nodeId, ...(ref?.episodeKey ? { episodeKey: ref.episodeKey } : {}),
+                    ...(ref?.range ? { range: ref.range } : {}), cue: summary.slice(0, 360), cueOmittedUtf16: Math.max(0, summary.length - 360),
+                    protectedReferences: item.protectedCount ?? protectedItems.length, omittedProtectedCount: item.omittedProtectedCount ?? 0,
+                    metadataHints: item.metadataHintCount ?? metadataItems.length, omittedMetadataCount: item.omittedMetadataCount ?? 0,
+                    remainingDetail: item.remainingDetail ?? "reachable-through-sources",
+                    ...(isScopedBodySourceRef(source) ? { recovery: encode({ v: 1, view: target.view, source }), entryId: source.entryId }
+                        : isScopedRawSourceRef(source) ? { recovery: encode({ v: 1, view: target.view, rawSource: source }) }
+                            : { expand: cursor(nodeId, ref?.nodeType === "episode-fragment" || ref?.kind === "episode" ? "source" : "child", ref?.path) }) };
+            });
+            return result({ status: "ok", level: pin.level, knownThroughCut: h.eventCut, stateGeneration: h.stateGeneration,
+                rollupGeneration: h.rollupGeneration, partial: true, traversalPartial: response.result.partial === true,
+                partialReasons: response.result.partialReasons, items,
+                ...(Array.isArray(response.result.partialReasons) && response.result.partialReasons.includes("bounded-node-traversal")
+                    ? { browse: cursor(h.rootNodeId, "root", [h.rootNodeId]) } : {}),
+                ...(response.result.next ? { nextCursor: cursor(pin.nodeId ?? h.rootNodeId, pin.level, pin.path, response.result.next) } : {}),
+                evidence: "Derived closed historical intervals, not completed tasks or current authority. Coverage is pinned; open and later history may be absent. Use expand or nextCursor as query with level=rollup; recovery goes to history_get." }, tokenBudget);
         }
         catch (error) {
             return result({ status: "unavailable", code: this.code(error) });
