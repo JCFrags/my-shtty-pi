@@ -710,7 +710,6 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
   };
   const counts = { restriction: new Set<string>(), work: new Set<string>() };
   const represented = { restriction: new Map<string, number>(), work: new Map<string, number>() };
-  const representedOriginal = new Map<string, EpisodeStateSelectionItem>();
   const selectedSources = { restriction: new Set<string>(), work: new Set<string>() };
   const proposition = (item: EpisodeStateSelectionItem, representationKey: string) => ({ representationKey, stableKey: item.stableKey,
     propositionKey: item.propositionKey, spanKey: item.spanKey, subject: item.subject, revision: item.revision, kind: item.kind,
@@ -739,13 +738,15 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
     }
     const representedAt = represented[category].get(key);
     if (representedAt !== undefined) {
-      const existing = result.protected[representedAt]!, first = representedOriginal.get(key) ?? fail("search-v3-state-checkpoint-corrupt");
+      const existing = result.protected[representedAt]!;
+      // The primary item already carries the first proposition. Store only the
+      // additional clauses so their exact evidence is not serialized twice.
       result.protected[representedAt] = { ...existing,
-        coveredPropositions: [...(existing.coveredPropositions ?? [proposition(first, key)]), proposition(original, key)] };
+        coveredPropositions: [...(existing.coveredPropositions ?? []), proposition(original, key)] };
       continue;
     }
     counts[category].add(key); if (sourceId) selectedSources[category].add(sourceId);
-    represented[category].set(key, result.protected.length); representedOriginal.set(key, original);
+    represented[category].set(key, result.protected.length);
     result.protected.push({ ...item, representationKey: key });
   }
   result.protected.sort((a, b) => {

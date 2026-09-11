@@ -389,8 +389,10 @@ test("M09 actual producer selection preserves obligations and successive experie
     assert.equal((restriction.evidence as any).contextComplete, true);
     const packed = selection.protected.find(item => item.kind === "restriction"
       && (item.evidence as any).exactText.includes("/Repo/Parser-"));
-    assert.equal(packed?.coveredPropositions?.length, 20,
-      "one exact paragraph representation retains all covered propositions and source coordinates");
+    assert.equal(packed?.coveredPropositions?.length, 19,
+      "one exact paragraph representation retains each additional proposition and source coordinates once");
+    assert.ok(packed?.coveredPropositions?.every(item => item.stableKey !== packed.stableKey),
+      "the primary proposition is not repeated in covered proposition provenance");
     assert.match(packed?.representationKey ?? "", /^[a-f0-9]{64}$/u);
     assert.ok(packed?.coveredPropositions?.every(item => item.representationKey === packed.representationKey));
     assert.ok(packed?.coveredPropositions?.every(item => {
