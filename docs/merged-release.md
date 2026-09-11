@@ -6,55 +6,46 @@ those identities and results on the release PR and immutable release checkpoint.
 
 ## Coordinated external browser pin
 
-This is the fixed component pin for COMMAND 8. Approved recovery and selection
-are complete. The browser lead verified its loaded parent and daemon, but final
-in-scope session convergence remains a separate gate. This is not final
-integrated acceptance. The browser lead owns deployment and readiness.
+The final browser release is integrated and active. This component record does
+not certify unrelated Glance or Chrono releases.
 
 | Identity | Exact value |
 | --- | --- |
 | External repository | `JCFrags/my-shtty-pi-web` |
-| Reviewed artifact source | `3ac4ca2b02b8133d1843f62d6df41843c565548a` |
-| Selected immutable artifact | `d62924d931d306aa9624ff6e44f26d3bece4f1abda89d8e868db53d8d87ba0f4` |
-| History-preserving main promotion | `a89e0363c9904b7bf34ad9a35125d05ca4656285` ([PR #11](https://github.com/JCFrags/my-shtty-pi-web/pull/11)) |
-| Previously selected browser artifact | `e5acc00eee9bce5cd70a0d6f425f5f002767c45d8352ba82bc609c980215572c` |
+| Artifact source | `573db991b6bc6a97d49bf770e6ab4066c8e5dbb0` |
+| Selected immutable artifact | `20268790b4f1bcfbc0a5687c7715f88adaedb0216a5998b955b88d6e54ed4ea3` |
+| Accepted main | `19c33769a33edddd066b3bac291ce371d2c1aba9` ([PR #12](https://github.com/JCFrags/my-shtty-pi-web/pull/12)) |
+| Retained rollback artifact | `d62924d931d306aa9624ff6e44f26d3bece4f1abda89d8e868db53d8d87ba0f4` |
 
-The browser lead reports that promotion preserves the reviewed source ancestry
-and changes only the release workflow and README relative to that source.
-Runtime/package inputs are unchanged. The selected artifact therefore retains
-`3ac4ca2b02b8133d1843f62d6df41843c565548a` as its source identity; do not relabel it
-as built from the promotion merge. Promotion removes automatic external
-publication/deployment on a main push. Explicit tag/manual publication is a
-separate operation, not authorized by COMMAND 8 deployment coordination.
+The artifact source tree matches accepted main. The immutable artifact retains
+its true source identity. Required PR CI `34572716825` and resulting-main CI
+`34573668929` passed. One focused independent review completed and its concrete
+finding was fixed. The two known optional terminal baseline failures remain
+separate from the required checks.
 
-The lead reports required promotion CI passed in run `34507293291`; the optional
-upstream pixel baseline remains separately disclosed. Resulting-main CI
-`34508739599` also passed its required jobs, as reported by the browser lead.
-These are provenance and
-promotion checks, not proof of installed or per-session runtime parity.
+The receipt-count defect is fixed by complete enumeration with bounded record
+reads and conservative process/reload classification. Final inspection covered
+151 receipts: three live and 148 historical, with no invalid, unreadable or
+incomplete records. All three remaining live Pi processes match the selected
+artifact. The former integration parent exited after its verified adoption.
+Completed workers were retired by their owners. Unassigned or explicitly
+excluded sessions were not modified. The CLI, Pi registration, Herdr plugin
+selection use the final release. The exercised daemon matched it before the
+disposable test companion was closed during cleanup.
 
-Coordination references are board entries
-`20260910T153009Z-command8-release-freeze-proposal` and
-`20260910T170517Z-browser-main-window-request`. Approved window
-`browser-main-cutover-20260910-01` completed guarded recovery and scoped browser
-selection, then was explicitly released. Board entry
-`20260911T021000Z-browser-recovery-selected` records that result. The separate
-`browser-parent-verify-01` window also completed and was released. The browser
-owner verified a loaded parent, matching daemon, companion reuse, semantic and
-visual observation, a native click, and manual pause/resume. The companion was
-left paused. These checks do not prove that every older session has converged.
-No further write, reload, or automatic resume is authorized by this document.
-Require fresh process-level inventory and exact safe handoffs for remaining
-reloads. Multiple Pi processes can share a pane. A stopped process is not exited
-or safe to reload. Preserve its conversation. Also wait for managed shell jobs
-to settle normally: Pi reload can terminate them even when the editor is idle.
+Managed native-tool verification passed companion open/reuse, semantic and
+visual observation, slow-natural input, cross-origin embedded submission,
+pause/resume and two-owner isolation. No uncertain side effect was replayed.
+The exact retired custom PinchTab bridge was removed. Tauri remains absent;
+upstream CLI functionality, research, profiles and rollback assets are retained.
+Closed shadow controls and transformed/CSS-zoom frame owners retain the tested
+limits documented in the browser README. Mixed-DPI hardware was not tested.
 
-External WebX/research remains independently owned and unchanged. Chrono
-2.0.15 at `b5918dbf952423e86a50a71e03ae1996c4801ea5` remains the fixed installed
-nomination under review, not accepted, with unchanged enablement. This browser
-pin does not complete the remaining component manifest or select a replacement
-Chrono candidate. Later board/documentation-only commits do not require
-redeploying unchanged runtime inputs.
+All browser windows are released. No browser reload or activation is pending.
+The disposable test companion was closed without resuming input; release
+documentation does not authorize opening another companion. Future reloads still require
+fresh identity, idle-editor and job checks. External WebX/research remains
+independently owned. No external package publication is part of this closeout.
 
 ## Integration boundary
 
