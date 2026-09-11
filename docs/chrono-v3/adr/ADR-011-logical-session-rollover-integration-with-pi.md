@@ -1,0 +1,66 @@
+# ADR-011 — Logical-session rollover integration with Pi
+
+Status: proposed first M10 manual integration. It does not authorize activation or automatic rollover.
+Scope: owner-only logical manifests, continuation validation, manual session replacement, recovery, rollback, and ancestor routing.
+
+## Context
+
+A physical Pi JSONL file cannot remain the lifetime container for V3. M10 must preserve each old file while a logical branch continues in a new physical session. The installed global Pi is 0.85.1, but this package pins `@earendil-works/pi-coding-agent` 0.84.2 and declares a peer range below 0.85.0. The decision therefore uses the actual 0.84.2 declarations and implementation.
+
+Pi 0.84.2 exposes session replacement only on `ExtensionCommandContext`. `newSession()` accepts `parentSession`, `setup(SessionManager)`, and `withSession(ReplacedSessionContext)`. `switchSession()` accepts `withSession`. These calls are not available in ordinary event handlers because replacement can deadlock there. In the pinned implementation, Pi checks `session_before_switch`, creates the replacement manager, shuts down the old runtime, applies the new runtime, runs `setup`, rebinds extensions, and then runs `withSession`. Captured old session objects are stale after replacement.
+
+## Decision
+
+M10 starts with an explicit extension command adapter. There is no automatic rollover.
+
+The logical-session core is separate from `pi-extension.ts` and from the existing search adapter. The command adapter supplies only:
+
+- a settled-state snapshot with persisted-session, streaming, pending-message, compaction, session-switch, active-tool-pair, complete-tail, catalog-catch-up, and source-leaf facts;
+- one source- and branch-bound M09 continuation candidate;
+- the pinned `newSession()` and `switchSession()` command methods;
+- the replacement `SessionManager` passed by `setup` and `withSession`.
+
+The coordinator performs this recoverable sequence:
+
+1. Validate that the command runs at a settled boundary and that the catalog is complete through the exact source leaf.
+2. Validate that the continuation has complete protected and open-work counts, no omitted mandatory row, a safe tool-pair tail, and no combined-context overflow.
+3. Require the continuation coverage list to equal every ancestor shard route in order. Each earlier shard must match its immutable final catalog cut. The current shard must match the continuation source cut. A new shard cannot hide an old missing obligation.
+4. Publish a `close-prepared` manifest intent and mark the current shard `closing`.
+5. Call `newSession({ parentSession })`.
+6. In `setup`, verify Pi's parent header, append one source-linked continuation custom message, and bind the replacement session ID and file in the manifest. The old shard becomes closed but remains untouched.
+7. In `withSession`, use only the replacement context, verify its identity, and publish the active rollover receipt.
+
+A crash before binding leaves `close-prepared`; reopening the old session can remove that intent. A crash after the continuation append but before binding leaves an unbound replacement file, which cannot become a logical shard. A crash after binding leaves `new-shard-bound`; the replacement identity can finish activation. No step deletes or rewrites an old shard.
+
+Exact rollback uses `switchSession(oldPath, { withSession })`, verifies the reopened Pi session ID and file, and changes the logical active pointer only after the supported switch succeeds. Rollback is allowed only while the replacement contains its injected continuation and no user work. The replacement shard remains closed and intact.
+
+The manifest is schema-versioned, integrity-hashed, revision-checked, atomically replaced, and stored in owner-only directories and files. It contains private source routes and is never a public diagnostic payload.
+
+Search integration receives ordered `LogicalShardRoute` values from the logical core. Routes include only the selected branch and its ancestors through each fork point. The search adapter keeps ownership of existing per-shard search, recall, and exact-store calls. Logical pagination binds the cursor to the logical session, manifest revision and hash, branch, route index, and existing store cursor. Sibling branches and stale manifests refuse.
+
+## Alternatives considered
+
+- Use the current global 0.85.1 API. Rejected because the package runtime is pinned to 0.84.2.
+- Call `SessionManager.newSession()` directly from an event handler. Rejected because this bypasses runtime teardown, extension rebind, switch cancellation, and fresh-context rules.
+- Use an automatic `agent_settled` handler. Deferred. The first useful M10 is manual and cannot change sessions outside a command context.
+- Spawn a new Pi process or use a provider handoff. Rejected because this adds another runtime and can cause an unauthorized provider call.
+- Copy the complete active branch with `fork()` or `clone`. Rejected because it preserves the physical lifetime-size problem.
+- Store one logical archive by rewriting or joining old JSONL. Rejected because exact shards are immutable authority.
+
+## Consequences
+
+Rollover has a short interval in which Pi has already applied the replacement runtime while the manifest still records a pending operation. The explicit phases and identity checks make this interval recoverable, but the future extension adapter must reconcile pending state on `session_start` and show only safe codes.
+
+The continuation custom message participates in the new shard context. Its summary is derived memory, not exact evidence. Its metadata retains source and recovery bindings. No provider call is made solely for rollover; the command consumes an already valid M09 composition.
+
+Cross-shard search can issue bounded calls to more than one existing store. It remains bounded by the requested result limit and cursor. It does not scan source JSONL or build an index.
+
+## Migration
+
+An explicit adoption adapter creates a new logical manifest with the current persisted session as shard ordinal 0. Adoption does not ingest, compact, switch, or modify that session. The first rollover remains unavailable until the catalog and mandatory continuation requirements pass.
+
+Fork integration creates a branch with an explicit parent branch and ancestor cutoff shard. No sibling route is inherited. Full command wiring and disposable canary execution remain parent-owned integration work.
+
+## Reversal path
+
+Do not register the manual command, or remove its integration while retaining the owner-only manifest and every source shard. A pending pre-bind intent can reopen the old shard. An unused bound replacement can roll back through pinned `switchSession()`. Existing single-shard search and compaction paths remain unchanged. This ADR does not authorize deployment, provider calls, automatic rollover, Pi core changes, package version changes, publication, or old-shard deletion.
