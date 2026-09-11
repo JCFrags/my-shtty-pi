@@ -47,6 +47,13 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 	const end = Date.now() + timeoutMs;
 	while (!predicate()) { if (Date.now() >= end) throw new Error("timed out waiting for condition"); await new Promise((resolve) => setTimeout(resolve, 10)); }
 }
+async function startAfterInitialPoll(coordinator: SharedQuotaCoordinator): Promise<void> {
+	// Watcher publication can precede startup tick settlement and lock release.
+	const tick = coordinator.tick.bind(coordinator); let startupTick: Promise<void> | undefined;
+	coordinator.tick = () => { const pending = tick(); startupTick ??= pending; return pending; };
+	try { await coordinator.start(); assert.ok(startupTick); await startupTick; }
+	finally { coordinator.tick = tick; }
+}
 function cacheWith(snapshot: UsageSnapshot, display?: unknown): QuotaCache {
 	return { version: 1, accountKey: "test", history: [snapshot], ...(display ? { preferences: { pollIntervalMs: 180_000, historyLimit: 64, display, updatedAt: 1, revision: 1 } } : {}) };
 }
@@ -259,7 +266,7 @@ test("active coordinator publication is awaited and suppresses sparse raw fallba
 test("partial headers preserve unreported families and field freshness without deferring polls", async (t) => {
 	const cacheRoot = await mkdtemp(join(tmpdir(), "codex-quota-partial-")); const identity = resolveAccountIdentity(tokenFor("partial-account"))!; let now = 1_000_000; let latest: QuotaCache | undefined; let requests = 0;
 	const coordinator = new SharedQuotaCoordinator({ accountKey: identity.accountKey, cacheRoot, resolveAuth: async () => identity, now: () => now, scanIntervalMs: 1_000_000, fetch: async (input) => { if (input === RESET_CREDITS_URL) return new Response(JSON.stringify({ available_count: 0, credits: [] }), { status: 200 }); requests += 1; return new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: 20 + requests, limit_window_seconds: 604_800, reset_at: resetAt } }, additional_rate_limits: [{ limit_name: "Spark", metered_feature: "codex_spark", rate_limit: { primary_window: { used_percent: 5, limit_window_seconds: 18_000, reset_at: resetAt + 1 } } }] }), { status: 200 }); }, onUpdate: (value) => { latest = value; } }); t.after(() => coordinator.stop());
-	await coordinator.start(); await waitFor(() => latest?.history.length === 1); const pollSuccess = latest!.lastSuccessAt; now += 50;
+	await startAfterInitialPoll(coordinator); await waitFor(() => latest?.history.length === 1); const pollSuccess = latest!.lastSuccessAt; now += 50;
 	await coordinator.publishHeaders({ "x-codex-primary-used-percent": "22" }); const merged = latest!.history.at(-1)!; const standard = normalizedFamilies(merged).find((family) => family.kind === "standard")!; const spark = normalizedFamilies(merged).find((family) => family.kind === "spark")!;
 	assert.equal(spark.windows[0]?.usedPercent, 5); assert.equal(standard.windows[0]?.windowSeconds, 604_800); assert.equal(standard.windows[0]?.fieldObservedAt?.usage, now); assert.equal(standard.windows[0]?.fieldObservedAt?.duration, pollSuccess); assert.equal(latest?.lastSuccessAt, pollSuccess, "headers do not claim a poll success"); assert.match(formatUsageDetails(latest, now, "UTC"), /duration from/); assert.match(formatCachedStatus(latest, now, "UTC", applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "spark.fiveHourUsage", "on")), /\[stale\]/);
 	now = pollSuccess! + 180_001; await coordinator.tick(); assert.equal(requests, 2, "partial headers do not defer the full poll");
@@ -288,11 +295,7 @@ test("stale lock recovery and failed polling preserve last good history", async 
 	const cacheRoot = await mkdtemp(join(tmpdir(), "codex-quota-recovery-")); const identity = resolveAccountIdentity(tokenFor("recovery-account"))!; let now = 1_000_000; let latest: QuotaCache | undefined; let fail = false; let requests = 0;
 	const coordinator = new SharedQuotaCoordinator({ accountKey: identity.accountKey, cacheRoot, resolveAuth: async () => identity, now: () => now, pollIntervalMs: 100, lockStaleMs: 50, scanIntervalMs: 1_000_000, fetch: async (input) => { if (input === RESET_CREDITS_URL) return new Response(JSON.stringify({ available_count: 0, credits: [] }), { status: 200 }); requests += 1; return fail ? new Response("no", { status: 503 }) : new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: 9, limit_window_seconds: 604800 } } }), { status: 200 }); }, onUpdate: (cache) => { latest = cache; } }); t.after(() => coordinator.stop());
 	const lockPath = join(cacheRoot, `${identity.accountKey}.poll.lock`); await mkdir(lockPath); await utimes(lockPath, new Date(0), new Date(0));
-	// A watcher can publish the cache before the startup tick releases its locks.
-	// Wait for that tick itself before advancing time and requesting another poll.
-	const tick = coordinator.tick.bind(coordinator); let startupTick: Promise<void> | undefined;
-	coordinator.tick = () => { const pending = tick(); startupTick ??= pending; return pending; };
-	await coordinator.start(); assert.ok(startupTick); await startupTick; coordinator.tick = tick;
+	await startAfterInitialPoll(coordinator);
 	await waitFor(() => latest?.history.length === 1 && latest.bankedDetailsLastSuccessAt === now); const good = latest!.history[0]; fail = true; now += 101; await coordinator.tick(); await waitFor(() => latest?.lastErrorAt === now); assert.deepEqual(latest?.history, [good]); await coordinator.tick(); assert.equal(requests, 2); assert.match(formatCachedStatus(latest, now + 200_000), /stale/);
 });
 
