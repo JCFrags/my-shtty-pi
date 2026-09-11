@@ -252,6 +252,9 @@ export class ManualLogicalRollover {
                     return fail("logical-session-active-shard-mismatch");
                 }
                 await this.abortPrepared(operation.operationId);
+                // Pi starts the reopened runtime before withSession. Reload only after the
+                // manifest is restored so startup validates the committed old-shard state.
+                await context.reload();
             } });
         return result;
     }
@@ -285,6 +288,9 @@ export class ManualLogicalRollover {
                         shards: current.shards.map(value => value.shardId === old.shardId ? { ...value, state: "active", closedAt: undefined, finalCut: undefined }
                             : value.shardId === replacement.shardId ? { ...value, branchId: archivedBranchId, ordinal: 0 } : value) };
                 });
+                // Pi starts the reopened runtime before withSession. Reload only after the
+                // rollback manifest is committed so adoption can activate the old shard.
+                await context.reload();
             } });
         return result;
     }

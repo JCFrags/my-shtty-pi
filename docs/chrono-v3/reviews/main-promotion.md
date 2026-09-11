@@ -39,6 +39,8 @@ The second short check invoked the compiled factory's `history_status` tool. It 
 
 Strict native source build and probe passed on Node 24.18.0 with native SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`. The probe confirmed allocation refusal. Typecheck, generated build and root static verification passed. The root static gate ran its existing 18 indexed-input/integrity checks. No broad local runtime or scale campaign ran. Promotion CI 34567753311 failed on nine legacy mocks without the required `getSessionId()` method and one obsolete 2.0.3 diagnostic assertion. The correction supplies explicit synthetic session identities and checks the package version. Runtime artifacts and coverage guards remain unchanged. Existing behavior assertions remain in place. The corrected head requires fresh CI; no unchanged workflow retry or broad local rerun is used.
 
+Generate `DEPLOYED.sha256` with bytewise `LC_ALL=C` path sorting. Locale-aware sorting can reorder names that differ near punctuation and change the manifest bytes without changing artifact bytes. Inspect the manifest diff and require unchanged rows to retain their prior order.
+
 The integrated 2.0.24 package has 422 indexed files, Git tree `52d5b2e6fdaeed68f30da79cc9c8ce646c4559c3`, and 37 declared differences from the preserved M10 upstream package tree. The root verifier records every changed path and both available digests. New M11, M10 completion, and M12 files are tracked in the exact inventory.
 
 | Artifact | SHA-256 |
