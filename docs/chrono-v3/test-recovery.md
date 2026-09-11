@@ -15,4 +15,10 @@ The complete per-file blob inventory is [`historical-test-inventory.md`](./histo
 
 `npm run test` builds to ignored `dist-test/` and runs the 54-file suite serially with `--test-concurrency=1` against temporary synthetic data; the recorded result is 294 passed, 0 failed, and 0 skipped. Serialization is test-harness containment only. It does not prove cross-agent runtime safety, fix the worker scheduler, or authorize runtime deployment. Targeted concurrent runtime regressions remain a later M01 scope.
 
+## Focused checks outside the checkout
+
+For a private staged check, compile to `$STAGE/dist` with `tsconfig.test-build.json`. Put the matching package metadata and a link to the candidate's installed `node_modules` at `$STAGE` before execution. Node resolves package imports from the compiled file location, not the shell working directory. The real Pi lifecycle fixture also resolves `dist/src/pi-extension.js` relative to its compiled test, so keep this directory layout intact.
+
+Before a contained catalog check, run the supported native SQLite build and probe for the candidate's Node ABI. A dependency install alone does not supply the controlled native binding. Reuse a binding only after its package version, ABI, and recorded hash match. Missing dependencies or a missing binding are setup failures, not workload evidence.
+
 The selected affected session is never used by these tests. Timing, memory, and source-boundary details remain aggregate and owner-only. The R2 worker timing changes use a bounded synthetic readiness marker and a cleanup-safe scheduler barrier; they do not change runtime source or compiled output.

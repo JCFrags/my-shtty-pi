@@ -292,16 +292,15 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
   }
 });
 
-test("normal fresh Pi loading resumes persisted rollout without activation commands", async () => {
+test("normal fresh Pi loading adopts and resumes V3 without activation commands", async () => {
   const root = mkdtempSync(join(tmpdir(), "chrono-auto-resume-"));
   const agent = join(root, "agent"), sessions = join(root, "sessions"), scheduler = join(root, "scheduler");
   for (const directory of [agent, sessions, scheduler]) mkdirSync(directory, { mode: 0o700 });
   const sessionId = randomUUID(), sourcePath = join(sessions, "resume.jsonl"), phrase = "amber automatic resume evidence";
   writeFileSync(sourcePath, JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: "2026-01-01T00:00:00.000Z", cwd: root }) + "\n" + line("a", null, phrase), { mode: 0o600 });
   const rolloutDirectory = join(agent, "chrono-session-rollouts");
-  await writeSessionRollout(rolloutDirectory, { sessionId, sourcePath }, true);
   assert.equal(await readSessionRollout(rolloutDirectory, { sessionId: randomUUID(), sourcePath }), undefined);
-  writeFileSync(join(agent, "chrono.json"), "{}\n", { mode: 0o600 });
+  writeFileSync(join(agent, "chrono.json"), JSON.stringify({ memoryEngineEnabled: true }), { mode: 0o600 });
   const bridge = join(root, "bridge.mjs");
   writeFileSync(bridge, `import chrono from ${JSON.stringify(new URL("../../dist/src/pi-extension.js", import.meta.url).href)};
 export default function(pi) {
@@ -315,7 +314,7 @@ export default function(pi) {
   if(found.status!=='ok'||!found.hits?.[0])throw Error('resume-search-failed');
   const recall=(await call('history_recall',{query:found.hits[0].handle,tokenBudget:2000})).details;
   const exact=(await call('history_get',{entryId:'a',blockIndex:0})).details;
-  ctx.ui.notify('RESUME_RESULT:'+JSON.stringify({enabled:status.enabled,persisted:status.rollout.persisted,search:true,recall:recall.text===${JSON.stringify(phrase)},exact:exact.text===${JSON.stringify(phrase)}}),'info');
+  ctx.ui.notify('RESUME_RESULT:'+JSON.stringify({enabled:status.enabled,persisted:status.rollout.persisted,logical:status.logical?.routes===1,adoptions:ctx.sessionManager.getBranch().filter(e=>e.type==='custom'&&e.customType==='chrono-logical-adoption').length,search:true,recall:recall.text===${JSON.stringify(phrase)},exact:exact.text===${JSON.stringify(phrase)}}),'info');
  }});
  pi.registerCommand('resume-quit',{handler:async(_args,ctx)=>ctx.shutdown()});
 }
@@ -353,7 +352,7 @@ export default function(pi) {
     try {
       await send("get_commands");
       await send("prompt", { message: "/resume-probe" });
-      assert.deepEqual(receipt, { enabled: true, persisted: true, search: true, recall: true, exact: true });
+      assert.deepEqual(receipt, { enabled: true, persisted: false, logical: true, adoptions: 1, search: true, recall: true, exact: true });
       await send("prompt", { message: "/resume-quit" });
       assert.equal(await closed, 0);
     } finally {
