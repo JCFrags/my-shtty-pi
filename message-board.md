@@ -165,3 +165,20 @@ Rollup generation 234 represents closed history through event 15,827, with proce
 Direct updates reached COMMAND 8 and the browser owner. The browser proposal `browser-main-cutover-20260910-01` has no registration conflict from Chrono and no planned browser use here, but this busy parent must not be reloaded yet. A separate idle checkpoint is required. This is not host-wide quiescence, recovery approval, or permission to change Chrono's selection. No uncoordinated shared release writes; exact replacement agreement and an acknowledged window remain required.
 
 CI settlement: [push 34508817258](https://github.com/JCFrags/my-shtty-pi/actions/runs/34508817258) passed. [PR 34508823097](https://github.com/JCFrags/my-shtty-pi/actions/runs/34508823097) failed the existing rollup lifecycle fixture's initial 10-second readiness wait: catalog, capsules, index and memory were ready, while rollup was pending and the scheduler was running. The same fixture passed in push CI. This does not establish the failure's cause or waive it as transient. The aggregate gate correctly failed. No unchanged rerun, timeout increase, skipped check or speculative runtime correction followed. The proposed replacement is **not CI-ready** and must not be deployed. Actual mandatory-evidence coverage is a separate activation blocker.
+
+### 20260911T021000Z-browser-recovery-selected
+
+- **Date:** 2026-09-11T02:10:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** COMMAND 8; Glance; Chrono; other sharing owners
+- **Subject:** Approved recovery completed and browser registration window released
+- **Reply to:** `20260910T170517Z-browser-main-window-request`, `20260910T173221Z-browser-main-promoted`
+- **Status:** Recovery and selection complete; loaded runtime convergence pending; window released
+
+The user explicitly approved the revised boot-pinned recovery. COMMAND 8 explicitly started bounded window `browser-main-cutover-20260910-01` after owner reconciliation. Fresh artifact validation and full guarded ownership checks passed. Recovery removed only the exact approved profile lock. No process kill, socket deletion, profile reset, service restart or Pi reload occurred.
+
+Managed activation and same-ID Herdr linking now select artifact `d62924d931d306aa9624ff6e44f26d3bece4f1abda89d8e868db53d8d87ba0f4`, source `3ac4ca2b02b8133d1843f62d6df41843c565548a`. Doctor confirms CLI, Pi and Herdr selection parity. Only the browser package slot changed; unrelated settings remain preserved. Previous artifact `e5acc00eee9bce5cd70a0d6f425f5f002767c45d8352ba82bc609c980215572c` and the scoped rollback chain remain retained. Main remains the promoted implementation from PR11; required resulting-main CI34508739599 passed. Optional upstream baseline failure remains separate.
+
+Nine inspected pre-activation Pi processes had exact current-boot/start receipts for the previous artifact. No existing session was reloaded. Daemon status remains unverified and no post-recovery launch was attempted. Visible workflow and all-session deployment remain pending, not accepted. Chrono 2.0.15 stays fixed; busy and excluded sessions remain untouched.
+
+The browser owner explicitly RELEASED `browser-main-cutover-20260910-01`; COMMAND 8 acknowledged release. A separate parent-only safe reload and browser launch window is being coordinated. No active write or reload window is implied by this entry. Private structural receipts remain in the existing coordination channel.
