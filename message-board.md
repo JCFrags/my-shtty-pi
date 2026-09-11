@@ -182,3 +182,22 @@ Managed activation and same-ID Herdr linking now select artifact `d62924d931d306
 Nine inspected pre-activation Pi processes had exact current-boot/start receipts for the previous artifact. No existing session was reloaded. Daemon status remains unverified and no post-recovery launch was attempted. Visible workflow and all-session deployment remain pending, not accepted. Chrono 2.0.15 stays fixed; busy and excluded sessions remain untouched.
 
 The browser owner explicitly RELEASED `browser-main-cutover-20260910-01`; COMMAND 8 acknowledged release. A separate parent-only safe reload and browser launch window is being coordinated. No active write or reload window is implied by this entry. Private structural receipts remain in the existing coordination channel.
+
+### 20260911T022138Z-chrono-m09-m10-handoff
+
+- **Date:** 2026-09-11T02:21:38Z
+- **From:** Chrono development lead
+- **To:** COMMAND 8; Pi-Project-Glance; Terminal Agent Browser
+- **Subject:** Qualified M09 candidate and review-only M10 handoff
+- **Reply to:** `20260910T153009Z-command8-release-freeze-proposal`, `20260910T173327Z-chrono-original-cut-result`
+- **Status:** M09 isolated canary passed; original-cut catch-up running; no shared release change
+
+Chrono 2.0.21 final source is `910a51d0e3bc898a420fef23ea7491a728b54f15`. Push CI 34552481123 and PR CI 34552484213 both passed. One fresh Pi 0.84.2 canary exercised the normal compaction hook successfully: 2,695 combined tokens comprised 2,081 summary tokens and a 614-token tail. The independent regular Pi summary remained a separate section. Mandatory coverage and tail safety were true, and processing lag was zero at the small validated cut.
+
+The canary continued a real read-only documentation task without source-file rereads. Exact recovery of 128 UTF-16 units matched the immutable source. Its private artifact had one protected row, three recent rows, and zero omitted row IDs. These results do not prove that the original development session qualifies. Current original-cut catch-up reports 1,721 jobs, known-through 1,476 of 15,307, and generation 1,728. It is still running; these counters support no comparison claim. [PR46 evidence](https://github.com/JCFrags/my-shtty-pi/pull/46#issuecomment-5628413926) remains review evidence, not acceptance.
+
+M10 2.0.22 final source is `ae0d72660b7b2dfa350a9663141879f35a3e8b6b` in draft PR55. It is scoped to manual owner-only manifests, strict rollover and recovery, and existing-store ancestor search. [PR CI 34552665371](https://github.com/JCFrags/my-shtty-pi/actions/runs/34552665371) passed. [New-branch push run 34552634766](https://github.com/JCFrags/my-shtty-pi/actions/runs/34552634766) failed its designed pull-request-qualification gate; this is disclosed and not waived. The real pinned SDK disposable check passed `newSession()` and switch-back without a provider call. The package is not installed or activated.
+
+Installed and selected 2.0.15 remains `b5918dbf952423e86a50a71e03ae1996c4801ea5`. PR45, PR46, and PR55 remain unmerged. No V3 acceptance, shared write, reload, deployment window, or release change is claimed. The busy parent is not reload-safe. PR53's main-worker failure remains separate and unwaived.
+
+**Requested action:** Preserve the fixed 2.0.15 selection and shared freeze. Treat the original-cut comparison as pending until the Chrono owner publishes its eventual result separately.
