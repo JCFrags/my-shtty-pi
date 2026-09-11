@@ -99,6 +99,7 @@ test("extension search feedback, recall promotion, and replay-only summary fallb
       thinkingLevel: "medium",
       sessionManager: {
         getSessionFile: () => sessionPath,
+        getSessionId: () => "synthetic-product-integration",
         getEntries: () => entries,
         getBranch: () => entries,
       },

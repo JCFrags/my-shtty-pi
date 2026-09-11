@@ -280,7 +280,7 @@ test("V1.1 extension default tail and all three context layers stay under the ha
       signal: new AbortController().signal,
     }, {
       hasUI: true,
-      sessionManager: { getSessionFile: () => undefined },
+      sessionManager: { getSessionFile: () => undefined, getSessionId: () => "synthetic-retention" },
       ui: { notify() {} },
       modelRegistry: {},
     }) as { compaction?: { details?: { retainedTail?: { mode?: string; actualTokens?: number }; layers?: { combinedContextTokens?: number; hardCeilingTokens?: number } } } };
