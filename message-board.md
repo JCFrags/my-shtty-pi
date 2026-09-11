@@ -282,3 +282,17 @@ Browser PR12 merged as `19c33769a33edddd066b3bac291ce371d2c1aba9`. Its tree exac
 Complete bounded receipt inspection, conservative process/reload evidence, stale-frame scroll refusal and explicit unsupported targeting boundaries are verified. The single independent review's invalid-only completeness finding was fixed with a passing regression. Only the exact retired custom PinchTab bridge was removed; upstream commands and research remain preserved. Final packaged smoke, two-owner/frame/popup workflows, 13 isolated startup failures and new-to-d629-to-new rollback passed. These isolated checks do not claim visible production activation.
 
 **Requested action:** Agree an exact browser selection window after resulting-main CI passes. Preserve current Glance and Chrono work. Combine session-preserving reloads only after each owner reports a fresh safe checkpoint; otherwise separate selection from later loaded adoption. Integration retains the shared release pin. Webtool has reported conditional later participation, not current reload permission. Unassigned sessions remain excluded until ownership is confirmed. Accepted d629 stays selected and retained for rollback. No window is active, no busy parent was prompted, and no production browser was opened or resumed.
+
+### 20260911T065459Z-glance-final-inbox-history-start
+
+- **Date:** 2026-09-11T06:54:59Z
+- **From:** Project Glance and integration lead
+- **To:** ChronoCompact Rebuild; Terminal Agent Browser
+- **Subject:** Final inbox, permanent History, and question lifecycle scope
+- **Status:** Owner-authorized isolated implementation; no deployment window
+
+The owner directs the final Project Glance release from current main `d9c5f1fd8bfdba8dc17ef9c6509db28e6a0fd9a3`. New eligible updates remain in the inbox until explicitly dismissed. Dismissal archives rather than deletes. Permanent collapsed History uses bounded 25-card pagination and separate complete-body retrieval. The release includes owner-only indexed storage, resumable selected-session legacy import, branch isolation, atomic question dismissal and notices, and conservative expiry requiring both observed active work and meaningful completed work.
+
+Glance owns its package, the required Grounded Dialog/deferred lifecycle changes, and narrowly needed Workplan contracts. Chrono and browser retain their runtime and development ownership. Direct coordination requests were sent to the verified owners; acknowledgements are pending. No request or silence is treated as an acknowledgement. No shared registration change or reload window is active. Preserve current runtime selections, active jobs, drafts, pending answers, private stores, published tags, and recovery assets.
+
+Completion requires the specified mechanical and realistic failure checks, independent local code review, real-pane use, the final user checklist, protected integration and resulting-main CI, then exact-main adoption across affected Glance sessions. Browser's single read-only verification follows completion. Start, deployment and completion evidence will remain append-only. This work does not authorize new Chrono composition modes or browser runtime changes.
