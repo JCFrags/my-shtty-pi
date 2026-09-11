@@ -14,12 +14,12 @@ test("M11 supplemental harness binds one exact revision and isolated output path
   assert.throws(() => parseArgs(["run", "--candidate-sha", SHA, "--root", "/tmp/chrono-synthetic-root", "--output", "/tmp/chrono-synthetic-root/result.json"]), /output-inside-root/);
 });
 
-test("M11 supplemental limits use one host-wide slot and bounded disposable resources", () => {
-  assert.equal(LIMITS.slots, 1);
+test("M11 supplemental contract separates fault-worker caps from post-run acceptance checks", () => {
+  assert.equal(LIMITS.requestedHostWideSlots, 1);
   assert.equal(LIMITS.repeatedDeaths, 3);
-  assert.ok(LIMITS.memoryBytes <= 256 * 1024 * 1024);
-  assert.ok(LIMITS.heapMiB <= 128);
-  assert.ok(LIMITS.sourceBytes <= 8 * 1024 * 1024);
-  assert.ok(LIMITS.diskBytes <= 128 * 1024 * 1024);
-  assert.ok(LIMITS.wallMs <= 2 * 60_000);
+  assert.ok(LIMITS.faultWorkerMemoryBytes <= 256 * 1024 * 1024);
+  assert.ok(LIMITS.faultWorkerHeapMiB <= 128);
+  assert.ok(LIMITS.faultWorkerSourceBytes <= 8 * 1024 * 1024);
+  assert.ok(LIMITS.postRunDiskAcceptanceBytes <= 128 * 1024 * 1024);
+  assert.ok(LIMITS.postRunWallAcceptanceMs <= 2 * 60_000);
 });

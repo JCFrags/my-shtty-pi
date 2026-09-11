@@ -12,15 +12,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const MiB = 1024 * 1024;
 const SCHEMA_VERSION = 1;
 const LIMITS = Object.freeze({
-  slots: 1,
+  requestedHostWideSlots: 1,
   repeatedDeaths: 3,
-  sourceBytes: 8 * MiB,
-  responseBytes: 256 * 1024,
-  memoryBytes: 256 * MiB,
-  heapMiB: 128,
-  deadlineMs: 30_000,
-  diskBytes: 128 * MiB,
-  wallMs: 2 * 60_000,
+  faultWorkerSourceBytes: 8 * MiB,
+  faultWorkerResponseBytes: 256 * 1024,
+  faultWorkerMemoryBytes: 256 * MiB,
+  faultWorkerHeapMiB: 128,
+  faultWorkerDeadlineMs: 30_000,
+  postRunDiskAcceptanceBytes: 128 * MiB,
+  postRunWallAcceptanceMs: 2 * 60_000,
 });
 const HELP = `Usage:
   node scripts/m11-supplemental-faults.mjs run --candidate-sha <40-hex> --root <absolute-new-directory> --output <absolute-json>`;
@@ -88,8 +88,8 @@ function workerOptions(root, modules, workerPath, request) {
     entryPath: workerPath,
     request,
     identity: { schemaVersion: 1, kind: "synthetic", sessionKey: sha(`m11-supplemental-${request.id}`) },
-    caps: { deadlineMs: Date.now() + LIMITS.deadlineMs, sourceBytes: LIMITS.sourceBytes, responseBytes: LIMITS.responseBytes, memoryBytes: LIMITS.memoryBytes, heapMiB: LIMITS.heapMiB },
-    slots: LIMITS.slots,
+    caps: { deadlineMs: Date.now() + LIMITS.faultWorkerDeadlineMs, sourceBytes: LIMITS.faultWorkerSourceBytes, responseBytes: LIMITS.faultWorkerResponseBytes, memoryBytes: LIMITS.faultWorkerMemoryBytes, heapMiB: LIMITS.faultWorkerHeapMiB },
+    slots: LIMITS.requestedHostWideSlots,
     priority: "low",
     validateRequest: validateHarnessRequest,
     validateResponse: validateHarnessResponse,
@@ -110,7 +110,7 @@ async function runRepeatedDeaths(root, modules, workerPath) {
   return { passed: true, attempts };
 }
 async function catalogCall(modules, request) {
-  const response = await modules.catalog.runCatalogWorker(request, { slots: LIMITS.slots });
+  const response = await modules.catalog.runCatalogWorker(request, { slots: LIMITS.requestedHostWideSlots });
   assert.equal(response.ok, true, JSON.stringify(response)); return response.result;
 }
 async function physicalCatalogDirectory(catalogDirectory) {
@@ -140,14 +140,14 @@ async function runTransactionKill(root, modules, workerPath) {
 async function deriveToEnd(modules, request) {
   let cursor;
   for (let page = 0; page < 32; page++) {
-    const response = await modules.capsule.runCapsuleWorker({ ...request, ...(cursor ? { cursor } : {}) }, { slots: LIMITS.slots });
+    const response = await modules.capsule.runCapsuleWorker({ ...request, ...(cursor ? { cursor } : {}) }, { slots: LIMITS.requestedHostWideSlots });
     assert.equal(response.ok, true, JSON.stringify(response)); if (response.result.complete) return; cursor = response.result.cursor;
   }
   assert.fail("capsule derivation did not complete");
 }
 async function searchToEnd(modules, request) {
   for (let page = 0; page < 32; page++) {
-    const response = await modules.search.runSearchV3Worker(request, { slots: LIMITS.slots });
+    const response = await modules.search.runSearchV3Worker(request, { slots: LIMITS.requestedHostWideSlots });
     assert.equal(response.ok, true, JSON.stringify(response)); if (response.result.complete) return;
   }
   assert.fail("search ingestion did not complete");
@@ -167,16 +167,16 @@ async function runAbandonedSibling(root, modules) {
   const capsuleBase = { v: 1, catalogDirectory, derivedDirectory, identity, op: "derivePage" };
   await deriveToEnd(modules, { ...capsuleBase, view: abandonedView });
   await deriveToEnd(modules, { ...capsuleBase, view: activeView });
-  const abandonedPage = await modules.capsule.runCapsuleWorker({ v: 1, catalogDirectory, derivedDirectory, identity, op: "capsulePage", view: abandonedView, limit: 8 }, { slots: LIMITS.slots });
-  const activePage = await modules.capsule.runCapsuleWorker({ v: 1, catalogDirectory, derivedDirectory, identity, op: "capsulePage", view: activeView, limit: 8 }, { slots: LIMITS.slots });
+  const abandonedPage = await modules.capsule.runCapsuleWorker({ v: 1, catalogDirectory, derivedDirectory, identity, op: "capsulePage", view: abandonedView, limit: 8 }, { slots: LIMITS.requestedHostWideSlots });
+  const activePage = await modules.capsule.runCapsuleWorker({ v: 1, catalogDirectory, derivedDirectory, identity, op: "capsulePage", view: activeView, limit: 8 }, { slots: LIMITS.requestedHostWideSlots });
   assert.equal(abandonedPage.ok, true, JSON.stringify(abandonedPage)); assert.equal(activePage.ok, true, JSON.stringify(activePage));
   const abandonedSeqs = abandonedPage.result.capsules.map(item => item.source.eventSeq), activeSeqs = activePage.result.capsules.map(item => item.source.eventSeq);
   assert.deepEqual(abandonedSeqs, [1, 2]); assert.deepEqual(activeSeqs, [1, 3]);
   const searchIdentity = { storeKey: randomUUID(), capsule: identity, schemaVersion: 1, configHash: sha("m11-supplemental-search") };
   const searchBase = { v: 1, searchDirectory, capsuleDirectory: derivedDirectory, catalogDirectory, identity: searchIdentity, view: activeView };
   await searchToEnd(modules, { ...searchBase, op: "ingestPage", maxSources: 4, maxChunks: 8 });
-  const selected = await modules.search.runSearchV3Worker({ ...searchBase, op: "query", query: "m11 selected active marker", mode: "literal", limit: 4 }, { slots: LIMITS.slots });
-  const excluded = await modules.search.runSearchV3Worker({ ...searchBase, op: "query", query: "m11 abandoned sibling marker", mode: "literal", limit: 4 }, { slots: LIMITS.slots });
+  const selected = await modules.search.runSearchV3Worker({ ...searchBase, op: "query", query: "m11 selected active marker", mode: "literal", limit: 4 }, { slots: LIMITS.requestedHostWideSlots });
+  const excluded = await modules.search.runSearchV3Worker({ ...searchBase, op: "query", query: "m11 abandoned sibling marker", mode: "literal", limit: 4 }, { slots: LIMITS.requestedHostWideSlots });
   assert.equal(selected.ok, true, JSON.stringify(selected)); assert.equal(excluded.ok, true, JSON.stringify(excluded)); assert.ok(selected.result.hits.length > 0); assert.equal(excluded.result.hits.length, 0);
   const activeCatalogPage = await catalogCall(modules, { ...catalogBase, op: "page", view: activeView, limit: 8 });
   const abandonedCatalogPage = await catalogCall(modules, { ...catalogBase, op: "page", view: abandonedView, limit: 8 });
@@ -196,11 +196,11 @@ async function run(args) {
     const repeatedWorkerDeath = await runRepeatedDeaths(args.root, modules, workerPath);
     const transactionKill = await runTransactionKill(args.root, modules, workerPath);
     const abandonedSiblingIsolation = await runAbandonedSibling(args.root, modules);
-    const diskBytes = await directoryBytes(args.root); assert.ok(diskBytes <= LIMITS.diskBytes, "supplemental disk ceiling");
-    assert.ok(Date.now() - started <= LIMITS.wallMs, "supplemental wall ceiling");
+    const diskBytes = await directoryBytes(args.root); assert.ok(diskBytes <= LIMITS.postRunDiskAcceptanceBytes, "supplemental post-run disk acceptance threshold");
+    assert.ok(Date.now() - started <= LIMITS.postRunWallAcceptanceMs, "supplemental post-run wall acceptance threshold");
     passed = true;
     report = { schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-supplemental-faults", status: "completed", qualificationStatus: "bounded-supplemental-evidence", candidateSha: args.candidateSha,
-      limits: LIMITS, actual: { wallMs: Date.now() - started, diskBytes, requestedHostWideSlots: LIMITS.slots }, hashes: { harnessSha256: await hashFile(harnessPath), faultWorkerSha256: await hashFile(workerPath) },
+      limits: { ...LIMITS, publicClientCaps: "inherited from each existing catalog, capsule, and search worker client" }, actual: { wallMs: Date.now() - started, diskBytes, requestedHostWideSlots: LIMITS.requestedHostWideSlots }, hashes: { harnessSha256: await hashFile(harnessPath), faultWorkerSha256: await hashFile(workerPath) },
       scenarios: { repeatedWorkerDeath, transactionKill, abandonedSiblingIsolation },
       unavailable: { systemRestart: "not run; process death is not a system reboot", mainPiRss: "unavailable; no Pi process participated", segmentBytesRead: "not measured or inferred", coverage: "this supplemental harness qualifies only the three named fault rows" },
       limitations: ["The abandoned leaf is a synthetic sibling designated abandoned by the harness. The catalog does not store a branch-lifecycle state.", "Source SHA-256 values cover the complete disposable synthetic files before and after each applicable scenario.", "Every contained call omitted schedulerDirectory and requested one slot, so it used the existing production host-wide admission. No independent capacity pool was created.", "Worker failure is classified from the public bounded-worker result. No live agent or provider participated."] };

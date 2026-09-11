@@ -8,7 +8,7 @@ The harness used real disposable synthetic JSONL files and task-owned catalog, c
 
 Only harness-created contained children received `SIGKILL`. No shared owner, daemon, live agent, provider, active campaign, service, or machine state was changed. The root and result stayed owner-only outside the repository. The successful root remains retained; it contains only synthetic task data.
 
-Limits were one admitted worker, three repeated deaths, 128 MiB V8 heap, 256 MiB worker memory, 256 KiB response, 30-second per-worker deadline, 128 MiB total task disk, and two-minute task wall time. The custom killed worker had an 8 MiB source-read cap. Public catalog workers retained their existing 16 MiB worker allowance and 8 MiB response-accounted source-read ceiling. Actual task disk was 374,301 bytes and actual wall time was 25,931 ms.
+The harness requested one host-wide slot and three repeated deaths. The custom fault worker enforced a 128 MiB V8 heap, 256 MiB worker memory, 256 KiB response, 30-second deadline, and 8 MiB source-read cap. Public catalog, capsule, and search workers inherited their existing client caps instead of these custom fault-worker caps. The 128 MiB disk and two-minute wall values were post-run acceptance thresholds, not hard runtime ceilings. The completed run used 374,301 bytes and 25,931 ms, so both post-run checks passed.
 
 ## Exercised facts
 
@@ -46,8 +46,10 @@ The catalog has no branch-lifecycle field. “Abandoned” is therefore the harn
 One focused compile/contract command passed 2/2 tests. One supplemental execution completed all three scenarios. No broad suite or full-scale campaign ran.
 
 - Safe aggregate result SHA-256: `069e6fcebcfbf1685c6ce645f35c6156a8905f5d60a1a9dce73e756136e034e4`.
-- Harness SHA-256: `8f2a95de800e78f7315577b39d1290dfc3cbd6c81b4b54b4112328e87d0758c9`.
-- Contract test SHA-256: `f25f365576ebe4c8d6944a338b52782f73dba48613a1d74c43cc9f82ed3cc98d`.
+- Exercised pre-correction harness SHA-256: `8f2a95de800e78f7315577b39d1290dfc3cbd6c81b4b54b4112328e87d0758c9`.
+- Exercised pre-correction contract test SHA-256: `f25f365576ebe4c8d6944a338b52782f73dba48613a1d74c43cc9f82ed3cc98d`.
+
+The later field-name correction distinguishes post-run acceptance checks from enforced custom-worker caps and preserves the aggregate result above as pre-correction evidence. The scenarios were not rerun for this reporting-only correction.
 - Generated fault worker SHA-256: `b2f36761aa3cacf4abb6af9843ae70be7b43468366d950880f80c232752f52fb`.
 - Reused `better-sqlite3@12.9.0` native binding SHA-256: `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`.
 
