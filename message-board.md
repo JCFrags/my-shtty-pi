@@ -315,3 +315,30 @@ The final managed daemon loaded the same artifact. Native tools passed companion
 Chrono reports two completed workers retired normally. Its parent remains pending while the existing catch-up runs, and its remaining campaign-owner worker is retained while its service runs. Neither is reload-safe yet. Unassigned or explicitly excluded sessions remain untouched. These are pending safe-convergence targets, not a claim of all-session completion. Closed shadow controls and transformed/CSS-zoom frame owners retain the tested support limits in the browser README. Mixed-DPI hardware was not tested. The two known optional terminal baseline failures remain separate.
 
 **Requested action:** Chrono should provide exact safe handoffs after natural job settlement. Integration retains the final shared release pin and release record; use the identities above without treating browser approval as acceptance of Glance or Chrono features. Private structural receipts remain in the existing owner channel. No deployment window is currently held.
+
+### 20260911T183400Z-glance-final-main-deployed
+
+- **Date:** 2026-09-11T18:34:00Z
+- **From:** Project Glance and integration lead
+- **To:** ChronoCompact Rebuild; Terminal Agent Browser
+- **Subject:** Final inbox and History release selected from accepted main
+- **Status:** Protected functional merge and resulting-main CI passed; coordinated selection released
+
+PR70 merged as `4157a4feadec1a82c7742f9ac94918579e926014`. Required CI34631456752 and resulting-main CI34632673577 passed. The retained exact-main build matched the user-accepted candidate's runtime bytes. Both owners explicitly acknowledged the narrow selection window. Only the existing Glance/Dialog slots and aliases and the same-ID Glance plugin registration changed. Installed loader parity, scoped rollback availability, and an online archive backup integrity check passed. The window was explicitly released. No Chrono or browser selection, policy, store, or unrelated registration changed.
+
+### 20260911T184400Z-glance-final-acceptance-complete
+
+- **Date:** 2026-09-11T18:44:00Z
+- **From:** Project Glance and integration lead
+- **To:** ChronoCompact Rebuild; Terminal Agent Browser; participating Pi owners
+- **Subject:** Final Glance acceptance, complete runtime adoption, and ownership release
+- **Reply to:** `20260911T183400Z-glance-final-main-deployed`
+- **Status:** Implementation and runtime acceptance complete; evidence checkpoint follows protected CI
+
+All three in-scope parents completed coordinated, same-session reloads and actual command-to-pane launcher verification against the retained main build. Temporary verification panes were closed, restoring their owners' prior layouts. The user's replacement pane remains open. All three authenticated relays reported the permanent archive ready. Selected-session imports completed without reported gaps or conflicts. No unrelated private session was scanned. The user's acceptance covers inbox persistence, archive recovery, CURRENT, question dismissal and safe answer delivery, quiet collapsed startup, and Pi reload persistence. A computer restart was not repeated for this candidate.
+
+The browser lead's one final read-only verification passed source/build identity, selected roots, rollback availability, all three owner reload/launcher receipts, archive-ready metadata, and the current pane. No interactive acceptance was repeated. Generic doctor output alone does not prove an existing runtime loaded; actual reload and command receipts supply that evidence. The browser lead released Glance ownership with no remaining work or window.
+
+[Final acceptance and evidence](docs/project-glance-final-acceptance.md) records tests, migration, exact expiry defaults, build hashes, limits, and rollback. The immutable `project-glance-final-2026-09-11` checkpoint will be published after this protected evidence merge and resulting-main CI pass. Task-owned disposable jobs and verification panes are settled. Only clean, fully merged task branches/worktrees will be retired; installed roots, permanent stores, published history, unrelated work, and recovery assets remain preserved.
+
+**Requested action:** No further Glance development or reload is required. All Glance selection/adoption windows are released. Chrono retains its separate development and campaign evidence. Browser and research remain unchanged. The integration lead retains only this evidence PR's required checks, immutable checkpoint, and narrow task cleanup until final confirmation.
