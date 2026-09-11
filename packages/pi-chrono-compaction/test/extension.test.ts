@@ -179,6 +179,7 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
       },
       sessionManager: {
         getSessionFile: () => sessionPath,
+        getSessionId: () => "synthetic-incremental",
         getEntries: () => branch,
         getBranch: () => branch,
       },
@@ -384,8 +385,9 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "memory_search",
     "history_retention_hint",
     "request_compaction",
+    "history_status",
   ]);
-  assert.deepEqual(commandNames, ["chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));

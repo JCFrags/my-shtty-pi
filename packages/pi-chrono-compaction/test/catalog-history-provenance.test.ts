@@ -8,7 +8,7 @@ import ts from "typescript";
 import { createCatalogParserState, parseCatalogChunk, type CatalogRecordMetadata } from "../src/catalog-parser.js";
 import { executeCatalogRequest } from "../src/catalog-engine.js";
 
-const registeredNames = ["history_get", "history_search", "history_recall", "history_range"];
+const registeredNames = ["history_get", "history_search", "history_recall", "history_range", "history_status"];
 // This history-prefixed tool records advisory metadata; it does not retrieve history.
 const nonRetrievalNames = ["history_retention_hint"];
 const compatibilityAliases = ["history_read"];

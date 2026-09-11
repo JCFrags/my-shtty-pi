@@ -30,7 +30,7 @@ test("synthetic prepared capsule shadow exposes cached status without model chan
   };
   const ctx = {
     hasUI: true, getContextUsage: () => ({ tokens: 0, contextWindow: 100_000, percent: 0 }),
-    sessionManager: { getSessionFile: () => fixture.sourcePath, getEntries: () => [], getBranch: () => [] },
+    sessionManager: { getSessionFile: () => fixture.sourcePath, getSessionId: () => "synthetic-capsule", getEntries: () => [], getBranch: () => [] },
     ui: { notify(message: string) { notifications.push(message); } }, modelRegistry: {},
     compact() { modelMutations++; },
   };

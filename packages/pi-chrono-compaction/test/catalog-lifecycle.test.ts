@@ -8,7 +8,7 @@ import extension from "../src/pi-extension.js";
 const pause = () => new Promise(resolve => setTimeout(resolve, 30));
 for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in" : "default-off"} is nonblocking and isolated`, async () => {
   const root = mkdtempSync(join(tmpdir(), "chrono-catalog-lifecycle-"));
-  const keys = ["PI_CHRONO_CONFIG_PATH", "PI_CHRONO_CATALOG_SHADOW", "PI_CHRONO_INCREMENTAL_PRECOMPUTE", "PI_CHRONO_ROLLUP_SHADOW"];
+  const keys = ["PI_CHRONO_CONFIG_PATH", "PI_CHRONO_CATALOG_SHADOW", "PI_CHRONO_SEARCH_INDEX", "PI_CHRONO_INCREMENTAL_PRECOMPUTE", "PI_CHRONO_ROLLUP_SHADOW"];
   const previous = keys.map(key => process.env[key]);
   const hooks = new Map<string, (...args: any[]) => any>();
   const commands = new Map<string, { handler: (...args: any[]) => any }>();
@@ -18,7 +18,7 @@ for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in
   let status = "";
   let completed = false;
   const context = { hasUI: true, getContextUsage: () => undefined, isIdle: () => true,
-    sessionManager: { getSessionFile: () => source, getSessionId: () => { assert.ok(enabled, "default-off must not even resolve catalog identity"); return "synthetic"; }, getEntries: () => { throw new Error("unexpected-whole-session-read"); }, getBranch: () => { throw new Error("unexpected-whole-branch-read"); } },
+    sessionManager: { getSessionFile: () => source, getSessionId: () => "synthetic", getEntries: () => { throw new Error("unexpected-whole-session-read"); }, getBranch: () => { throw new Error("unexpected-whole-branch-read"); } },
     ui: { notify: (message: string) => { status = message; } },
   };
   async function waitReady() {
@@ -34,10 +34,11 @@ for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in
   try {
     process.env.PI_CHRONO_CONFIG_PATH = join(root, "config.json");
     if (enabled) process.env.PI_CHRONO_CATALOG_SHADOW = "true"; else delete process.env.PI_CHRONO_CATALOG_SHADOW;
+    process.env.PI_CHRONO_SEARCH_INDEX = "false";
     process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE = "false";
     process.env.PI_CHRONO_ROLLUP_SHADOW = "false";
     extension({ registerTool() {}, registerCommand(name: string, command: any) { commands.set(name, command); }, on(name: string, hook: any) { assert.ok(!hooks.has(name)); hooks.set(name, hook); }, appendEntry() {}, sendMessage() {} } as unknown as ExtensionAPI, { schedulerDirectory: join(root, "scheduler") });
-    hooks.get("session_start")!({}, context);
+    await hooks.get("session_start")!({}, context);
     assert.equal(existsSync(join(root, ".chrono-catalog")), false, "scheduling stack does no catalog filesystem work");
     if (enabled) {
       await waitReady();

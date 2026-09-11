@@ -7,25 +7,36 @@ The current integration nominates ChronoCompact **2.0.15** from commit
 `fe3c1df802214b6eba96f39fc36912817058d0d3`.
 
 The integration imported only `packages/pi-chrono-compaction/`. It did not merge
-the Chrono development branch. The imported package has one intentional test-only
-difference from the upstream tree:
+the Chrono development branch. The imported package has five intentional
+test-only differences from the upstream tree:
 
 | Test-only difference | Upstream SHA-256 | Integrated SHA-256 |
 | --- | --- | --- |
+| `test/capsule-extension.test.ts` | `6070fcea5f49f22632d37d2853b6538b3c3daf41ff28608de002dda6b31d9902` | `d0dd28fb1f7dbe71f945f52174284a5102730c1631228cb7d64230478bd3e37d` |
+| `test/catalog-history-provenance.test.ts` | `37a10d10a33c1ad7bebfb082d1e3396782331924fae9ecbd76dcefd09a0e4bbb` | `bdbd323f06ff4be86695c40e503c9dcc8d126950d53f6d6c52f3db1b545e1abd` |
+| `test/catalog-lifecycle.test.ts` | `ad0ac9d641c5453c181fd954776062dd156b3ed208f8fa447c6e2872f1a2d8c4` | `90d33f69ddd8a7f93b0e8113d283207bdb2814fef73fc3f6c45f35d7efa7632d` |
+| `test/extension.test.ts` | `1d0247207b0dc2fc30e3b219c277d0f8ad4ffdf12e7be9d7f5ac11f782675c06` | `b2c1439fc352ff4bb9fdf7b24cdc7bafaf6e97e330ed66105a4e9161ae2afc8d` |
 | `test/worker-runtime.test.ts` | `d55227e12c9ce45e42b4703daf30b2966f95d1352cd442319ae01fd8fbf7fee0` | `54ed55886810e4dbaf14625efc8a84aacc39a6f88009a71c1e7ea20821046b3b` |
 
-The changed fixture records every original cgroup member by PID and process start
+The capsule and incremental fixtures provide the session identity that the
+current asynchronous `session_start` rollout interface requires. The catalog
+lifecycle fixture awaits that interface and explicitly disables the mutually
+exclusive search index before it checks catalog opt-in behavior. The extension
+registration fixture covers the current tool and command sets. The provenance
+fixture covers `history_status` as a registered retrieval-provenance tool.
+
+The worker fixture records every original cgroup member by PID and process start
 identity. After abrupt client death and replacement execution, it requires every
 original identity to be absent. It does not require immediate removal of the
 fixed, reusable systemd slot pathname. This corrects a race with asynchronous
 cgroup filesystem cleanup without changing runtime behavior or weakening old
 process-tree detection.
 
-All other 397 package files are byte-for-byte copies from the upstream package.
+All other 393 package files are byte-for-byte copies from the upstream package.
 This includes all `src/`, `dist/`, policy, manifest, lock, and package documentation
 bytes. The integrated package is therefore not the exact upstream package tree.
 Its complete pinned identity is 398 indexed files and Git tree
-`9c6694b9073f23a0ed6e0c7677e701a128d59ae7`.
+`eb53a6a18c63cd15cc6108bcc94243ec2c4116f7`.
 
 | Boundary | SHA-256 |
 | --- | --- |
@@ -84,8 +95,8 @@ synthetic extension check before activation.
 ## Root verifier integration
 
 The self-contained root gate pins the complete integrated 398-file package tree.
-It reports both the upstream commit/tree and the one declared test-only
-difference. It independently checks the Git index and working files against the
+It reports the upstream commit/tree and all five declared test-only differences.
+It independently checks the Git index and working files against the
 integrated tree. The upstream commit object does not need to remain available in
 a shallow CI checkout.
 
