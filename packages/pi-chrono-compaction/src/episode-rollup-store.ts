@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants as F, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync, type Stats } from "node:fs";
+import { closeSync, constants as F, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeSync, type Stats } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { canonicalJson } from "./capsule-segment.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
@@ -65,8 +65,11 @@ function safeRecord<T>(path: string, valid: (value: any) => value is T): T | und
   const fd = openSync(path, F.O_RDONLY | F.O_NOFOLLOW);
   try {
     const opened = fstatSync(fd); if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size) fail("search-v3-rollup-pointer-changed");
-    const value = JSON.parse(readFileSync(fd, "utf8"));
-    if (!valid(value) || fstatSync(fd).size !== opened.size) fail("search-v3-rollup-pointer-invalid");
+    const bytes = Buffer.allocUnsafe(stat.size + 1), count = readSync(fd, bytes, 0, bytes.length, 0), final = fstatSync(fd);
+    if (count !== stat.size || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size)
+      fail("search-v3-rollup-pointer-changed");
+    const value = JSON.parse(bytes.subarray(0, count).toString("utf8"));
+    if (!valid(value)) fail("search-v3-rollup-pointer-invalid");
     return value;
   } catch (error) { if (error instanceof SyntaxError) fail("search-v3-rollup-pointer-invalid"); throw error; }
   finally { closeSync(fd); }
@@ -556,15 +559,16 @@ function status(request: Extract<EpisodeStateRequest, { op: "rollupStatus" }>, s
       closedIntervalsOnly: true, representedClosedRange: null, remainingWork: "state-catch-up", noEligibleEpisode: true,
       metrics: { sqliteStatements: store.statements } };
   const h = handle(request, publicationRow, store), root = loadNode(store, h.rootNodeId), complete = num(publicationRow, "complete") === 1;
+  const selectedIsHead = num(publicationRow, "generation") === num(head, "generation");
   const rootRow = store.get("SELECT createdGeneration FROM nodes WHERE nodeId=?", h.rootNodeId);
   const noEligibleEpisode = complete && Boolean(rootRow) && num(rootRow!, "createdGeneration") < h.rollupGeneration;
   return { readiness: complete ? "ready" : "partial", rollupGeneration: h.rollupGeneration,
     stateGeneration: h.stateGeneration, branchKey: h.branchKey, requestedCut: request.view.eventCut, processedCut: h.eventCut,
-    processedMemoryCut: snapshot?.processedMemoryCut ?? h.eventCut, knownThroughCut: h.eventCut, complete,
+    processedMemoryCut: selectedIsHead ? snapshot?.processedMemoryCut ?? h.eventCut : h.eventCut, knownThroughCut: h.eventCut, complete,
     closedIntervalsOnly: true, representedClosedRange: root.range, closedThroughCut: root.range.end.eventSeq,
     excludedOpenTail: true, remainingWork: remainingWork(request.view.eventCut, h.eventCut, complete, noEligibleEpisode ? 0 : 1), noEligibleEpisode,
     handle: h, rootReference: { kind: "rollup-node", handle: h, nodeId: h.rootNodeId, path: [h.rootNodeId] },
-    cursor, metrics: { sqliteStatements: store.statements } };
+    ...(selectedIsHead ? { cursor } : {}), metrics: { sqliteStatements: store.statements } };
 }
 
 function activeStoreId(searchDirectory: string): string | null {

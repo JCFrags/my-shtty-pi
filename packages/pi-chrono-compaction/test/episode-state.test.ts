@@ -116,6 +116,9 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
       configHash: createHash("sha256").update("state-search").digest("hex") };
     const run = (view: CapsuleCatalogView, extra: Record<string, unknown>) => executeEpisodeStateRequest({ v: 1, catalogDirectory, capsuleDirectory,
       searchDirectory, identity, view, ...extra });
+    const invalidRepairAction = await run(oldView, { op: "repairRollup", action: "arbitrary", repairId: "invalid-action" });
+    assert.equal(invalidRepairAction.ok, false);
+    if (!invalidRepairAction.ok) assert.equal(invalidRepairAction.code, "search-v3-state-request-invalid");
     const materializeAll = async (view: CapsuleCatalogView): Promise<any> => {
       let acceptedMetadata = 0;
       for (let page = 0; page < 100; page++) {
@@ -286,6 +289,13 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     const capacityRollup = await materializeRollup(capacityView);
     assert.ok(capacityRollup.rollupGeneration > oldRollupResult.rollupGeneration, "a completed frontier continues into a later generation");
     assert.equal(capacityRollup.complete, true);
+    const historicalIndexedStatus = await run(oldView, { op: "rollupStatus" });
+    assert.equal(historicalIndexedStatus.ok, true, JSON.stringify(historicalIndexedStatus));
+    if (historicalIndexedStatus.ok) {
+      assert.equal((historicalIndexedStatus.result as any).processedMemoryCut, (historicalIndexedStatus.result as any).handle.eventCut,
+        "historical indexed status does not borrow the current head metadata cut");
+      assert.equal("cursor" in historicalIndexedStatus.result, false, "historical indexed status omits the current head cursor");
+    }
     const pinnedComposition = await run(capacityView, { op: "composeRollupSelection", query: "parser",
       beforeEventSeq: oldView.eventCut + 1, limit: 1, handle: oldRollupResult.handle });
     assert.equal(pinnedComposition.ok, true, JSON.stringify(pinnedComposition));

@@ -282,7 +282,8 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
     case "materializeRollup": return value.after === undefined
       && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob);
     case "rollupStatus": return value.limit === undefined && value.after === undefined;
-    case "repairRollup": return typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
+    case "repairRollup": return (value.action === "start" || value.action === "step" || value.action === "status" || value.action === "publish")
+      && typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
       && (value.action === "step" ? value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob : value.limit === undefined)
       && (value.action === "publish" ? value.expectedActiveStoreId === null || typeof value.expectedActiveStoreId === "string" && /^[a-f0-9]{64}$/u.test(value.expectedActiveStoreId) : value.expectedActiveStoreId === undefined);
     case "composeRollupSelection": return rollupHandle(value.handle) && value.handle.branchKey === value.view.branchKey
