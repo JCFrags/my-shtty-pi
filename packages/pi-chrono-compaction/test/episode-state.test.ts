@@ -327,6 +327,10 @@ test("M09 actual producer selection preserves obligations and successive experie
     assert.equal(selection.omissions.protectedAtLeastOne, false);
     assert.equal(selection.omissions.openWorkAtLeastOne, true, "later failures overflow only their own category");
     assert.equal(restriction.authority, "user");
+    assert.ok(selection.protected.some(item => item.kind === "goal" && item.authority === "user"),
+      "user work retains the first work reservation");
+    assert.ok(selection.protected.some(item => item.kind === "openwork" && item.authority === "assistant-report"),
+      "assistant unresolved work survives lower-authority tool-failure shedding");
     assert.ok(selection.protected.some(item => item.kind === "openwork"));
     assert.ok(new Set(selection.recent.map(item => item.episodeKey)).size > 1, "successive episodes remain readable");
     assert.ok(selection.older?.length, "older obligation-linked experience is selected");

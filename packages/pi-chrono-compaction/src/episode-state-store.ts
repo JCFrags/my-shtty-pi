@@ -610,8 +610,8 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
         end: { eventSeq: num(episode, "endEventSeq"), descriptor: num(episode, "endDescriptor") }, open: num(episode, "open") === 1,
         objective: str(episode, "objective"), objectiveEvidence: JSON.parse(str(episode, "objectiveEvidence")) } };
   };
+  // Keep query authority order through representation reservation. Chronology is restored only after packing.
   const protectedItems = [...restrictionRows, ...workRows].map(row => selectionItem(row, processedCut));
-  protectedItems.sort((a, b) => (a.evidence as any).source.eventSeq - (b.evidence as any).source.eventSeq);
   const currentItems = currentRows.slice(0, EPISODE_STATE_LIMITS.composeState).reverse().map(row => selectionItem(row, processedCut));
   const recentItems = recentRows.slice(0, EPISODE_STATE_LIMITS.composeRecentMembers).reverse().map(member);
   // Older experience is selected through existing obligation-to-episode membership,
@@ -694,8 +694,10 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
       retainedClause: { exactText: evidence.exactText, decodedUtf16: evidence.decodedUtf16 },
       omissions: [{ beforeUtf16: absoluteStart - source.decodedUtf16.start, afterUtf16: source.decodedUtf16.end - absoluteEnd }], contextComplete: true } };
   };
-  const result = { ...selection, protected: [] as EpisodeStateSelectionItem[], current: [...selection.current],
-    recent: [...selection.recent], older: [...(selection.older ?? [])], omissions: { ...selection.omissions },
+  const optionalCurrent = [...selection.current], optionalRecent = [...selection.recent], optionalOlder = [...(selection.older ?? [])];
+  // Pack mandatory rows first. Bounded optional candidates are refilled only after the final mandatory size is known.
+  const result = { ...selection, protected: [] as EpisodeStateSelectionItem[], current: [] as EpisodeStateSelectionItem[],
+    recent: [] as EpisodeStateSelectionMember[], older: [] as EpisodeStateSelectionMember[], omissions: { ...selection.omissions },
     coverage: { ...selection.coverage },
     delta: selection.delta ? { ...selection.delta, protected: [...selection.delta.protected], current: [...selection.delta.current] } : undefined };
   const representationKey = (item: EpisodeStateSelectionItem): string => {
@@ -713,7 +715,11 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
   const proposition = (item: EpisodeStateSelectionItem, representationKey: string) => ({ representationKey, stableKey: item.stableKey,
     propositionKey: item.propositionKey, spanKey: item.spanKey, subject: item.subject, revision: item.revision, kind: item.kind,
     authority: item.authority, confidence: item.confidence, status: item.status, effectiveAtCut: item.effectiveAtCut, evidence: item.evidence });
-  const ordered = [...selection.protected].sort((a, b) => Number(b.kind === "restriction") - Number(a.kind === "restriction"));
+  const workPriority = (item: EpisodeStateSelectionItem): number => item.authority === "user" ? 0
+    : item.authority === "assistant-report" && item.kind === "openwork" ? 1
+    : item.authority === "assistant-report" ? 2 : item.authority === "verified-tool" ? 4 : 3;
+  const ordered = [...selection.protected].sort((a, b) => Number(b.kind === "restriction") - Number(a.kind === "restriction")
+    || (a.kind === "restriction" ? 0 : workPriority(a) - workPriority(b)));
   for (const original of ordered) {
     const category = original.kind === "restriction" ? "restriction" : "work";
     const source = (original.evidence as { source?: ScopedBodySourceRef }).source;
@@ -746,7 +752,7 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
     const left = (a.evidence as any).source, right = (b.evidence as any).source;
     return Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0) || Number(left?.descriptor ?? 0) - Number(right?.descriptor ?? 0);
   });
-  for (let index = 0; index < result.current.length; index++) result.current[index] = await enrich(result.current[index]!);
+  for (let index = 0; index < optionalCurrent.length; index++) optionalCurrent[index] = await enrich(optionalCurrent[index]!);
   if (result.delta) {
     for (let index = 0; index < result.delta.protected.length; index++) result.delta.protected[index] = await enrich(result.delta.protected[index]!);
     for (let index = 0; index < result.delta.current.length; index++) result.delta.current[index] = await enrich(result.delta.current[index]!);
@@ -755,12 +761,38 @@ async function selectionContext(request: EpisodeStateRequest, selection: Episode
   result.coverage.openWorkScanComplete = !result.omissions.openWorkExhausted;
   while (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
     result.omissions.responseBudgetAtLeastOne = true; result.omissions.renderedOverflowAtLeastOne = true;
+    const removableWork = result.protected.reduce((selected, item, index, all) => {
+      if (item.kind === "restriction") return selected;
+      if (selected < 0 || workPriority(item) > workPriority(all[selected]!)) return index;
+      if (workPriority(item) === workPriority(all[selected]!)
+        && Buffer.byteLength(JSON.stringify(item)) > Buffer.byteLength(JSON.stringify(all[selected]!))) return index;
+      return selected;
+    }, -1);
+    if (removableWork >= 0) { result.protected.splice(removableWork, 1); result.omissions.openWorkAtLeastOne = true; continue; }
+    if (result.protected.length) { result.protected.pop(); result.omissions.protectedAtLeastOne = true; continue; }
+    fail("search-v3-state-response-limit");
+  }
+  const refill = <T>(candidates: readonly T[], target: T[], omission: "currentAtLeastOne" | "recentAtLeastOne"): void => {
+    for (const candidate of candidates) {
+      target.push(candidate);
+      if (Buffer.byteLength(JSON.stringify(result)) <= EPISODE_STATE_LIMITS.composeUtf8Bytes) continue;
+      target.pop(); result.omissions[omission] = true;
+      result.omissions.responseBudgetAtLeastOne = true; result.omissions.renderedOverflowAtLeastOne = true;
+    }
+  };
+  // This is the inverse of the former shedding priority: recent chronology, then current state, then older context.
+  refill(optionalRecent, result.recent, "recentAtLeastOne");
+  refill(optionalCurrent, result.current, "currentAtLeastOne");
+  for (const candidate of optionalOlder) {
+    result.older.push(candidate);
+    if (Buffer.byteLength(JSON.stringify(result)) <= EPISODE_STATE_LIMITS.composeUtf8Bytes) continue;
+    result.older.pop(); result.omissions.responseBudgetAtLeastOne = true; result.omissions.renderedOverflowAtLeastOne = true;
+  }
+  // Omission flags also consume bytes. If the first new flag crosses the boundary, remove only already-refilled optional detail.
+  while (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
     if (result.older.length) { result.older.pop(); continue; }
     if (result.current.length) { result.current.pop(); result.omissions.currentAtLeastOne = true; continue; }
-    if (result.recent.length) { result.recent.splice(Math.floor(result.recent.length / 2), 1); result.omissions.recentAtLeastOne = true; continue; }
-    const work = result.protected.findIndex(item => item.kind !== "restriction");
-    if (work >= 0) { result.protected.splice(work, 1); result.omissions.openWorkAtLeastOne = true; continue; }
-    if (result.protected.length) { result.protected.pop(); result.omissions.protectedAtLeastOne = true; continue; }
+    if (result.recent.length) { result.recent.pop(); result.omissions.recentAtLeastOne = true; continue; }
     fail("search-v3-state-response-limit");
   }
   const loss = Object.values(result.omissions).some(Boolean);
