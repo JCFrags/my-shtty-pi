@@ -17,6 +17,8 @@ Two local checks ran after implementation:
 
 The focused test result was one pass, zero failures, in approximately 9.1 seconds. No broad suite, campaign, package build, push, deployment, or live-store operation ran.
 
+Exact-head CI run `34584977436` passed 671 of 672 Chrono tests. The only failure was the normal extension-hook fixture's exact command-registration array, which omitted the implemented `chrono-rollup-repair` command. The correction adds that command in its actual registration order and preserves the full-array equality and deterministic replay assertions. Run this fixture from the package directory because its synthetic fixture path is package-relative. An initial repository-root invocation stopped before the fixture with `ENOENT`; the corrected package-directory invocation ran the one selected fixture and passed. No broad suite was repeated.
+
 ## Limits
 
 This is synthetic persisted-fixture evidence, not live repair evidence. Routine continuous integration, integration review, packaging, deployment, and any live repair remain parent-controlled. Failed targets are preserved and no cleanup command is provided. The active pointer supports compare-and-swap publication, but this candidate does not expose a general rollback command.

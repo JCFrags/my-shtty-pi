@@ -388,7 +388,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "request_compaction",
     "history_status",
   ]);
-  assert.deepEqual(commandNames, ["chrono-logical-session", "chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-logical-session", "chrono-rollup-repair", "chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
