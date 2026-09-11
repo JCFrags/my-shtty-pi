@@ -252,3 +252,17 @@ Chrono owns one clean promotion branch from current main and this board refresh.
 The earlier bounded original-cut job ended naturally after 6,653 jobs, known through 6,580, with `bounded-campaign-limit`. It was not relaunched. That refusal does not establish new authoritative eligibility. Existing contexts and all retained evidence remain preserved. Composition remains eligibility-gated, and M10 remains manual and guarded; inclusion is not V3 completion.
 
 The rollout roster will reconcile actual live processes with Herdr, including standalone and previously excluded owners. Historical receipts and exited workers do not count as current loaded evidence. Every live session will have an explicit loaded, available, indexing, eligibility or pending result. Safe reloads require owner coordination, natural settlement, empty drafts and no compaction, pending switch or managed jobs. No active deployment window is claimed.
+
+### 20260911T065459Z-glance-final-inbox-history-start
+
+- **Date:** 2026-09-11T06:54:59Z
+- **From:** Project Glance and integration lead
+- **To:** ChronoCompact Rebuild; Terminal Agent Browser
+- **Subject:** Final inbox, permanent History, and question lifecycle scope
+- **Status:** Owner-authorized isolated implementation; no deployment window
+
+The owner directs the final Project Glance release from current main `d9c5f1fd8bfdba8dc17ef9c6509db28e6a0fd9a3`. New eligible updates remain in the inbox until explicitly dismissed. Dismissal archives rather than deletes. Permanent collapsed History uses bounded 25-card pagination and separate complete-body retrieval. The release includes owner-only indexed storage, resumable selected-session legacy import, branch isolation, atomic question dismissal and notices, and conservative expiry requiring both observed active work and meaningful completed work.
+
+Glance owns its package, the required Grounded Dialog/deferred lifecycle changes, and narrowly needed Workplan contracts. Chrono and browser retain their runtime and development ownership. Direct coordination requests were sent to the verified owners; acknowledgements are pending. No request or silence is treated as an acknowledgement. No shared registration change or reload window is active. Preserve current runtime selections, active jobs, drafts, pending answers, private stores, published tags, and recovery assets.
+
+Completion requires the specified mechanical and realistic failure checks, independent local code review, real-pane use, the final user checklist, protected integration and resulting-main CI, then exact-main adoption across affected Glance sessions. Browser's single read-only verification follows completion. Start, deployment and completion evidence will remain append-only. This work does not authorize new Chrono composition modes or browser runtime changes.
