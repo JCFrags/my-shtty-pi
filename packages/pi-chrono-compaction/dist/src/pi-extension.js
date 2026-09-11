@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
+import { persistNewShardBootstrap } from "./logical-session-persistence.js";
 import { previewStoredCompaction, composeStoredCompactionForNormalReturn } from "./composition-preview.js";
 import { SessionCanary } from "./session-canary.js";
 import { sessionMigrationStatus } from "./session-migration.js";
@@ -535,16 +536,24 @@ function validLogicalCommandId(value) {
     return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 }
 function commandSessionPort(ctx) {
-    const setup = (manager) => manager;
+    const identity = (manager) => ({
+        getSessionId: () => manager.getSessionId(),
+        getSessionFile: () => manager.getSessionFile(),
+        getHeader: () => manager.getHeader() ?? {},
+    });
+    const setup = (manager) => ({ ...identity(manager),
+        appendCustomMessageEntry: (customType, content, display, details) => manager.appendCustomMessageEntry(customType, content, display, details),
+        persistNewShardBootstrap: (expectedParentSession, continuationEntryId) => persistNewShardBootstrap(manager, expectedParentSession, continuationEntryId),
+    });
     return {
-        sessionManager: setup(ctx.sessionManager),
+        sessionManager: identity(ctx.sessionManager),
         newSession: async (options) => {
             const clearProvisional = markProvisionalLogicalReplacement(options.parentSession);
             try {
                 return await ctx.newSession({ parentSession: options.parentSession,
                     setup: manager => options.setup(setup(manager)),
                     withSession: replacement => options.withSession({
-                        sessionManager: setup(replacement.sessionManager),
+                        sessionManager: identity(replacement.sessionManager),
                         reload: () => replacement.reload(),
                     }) });
             }
@@ -554,7 +563,7 @@ function commandSessionPort(ctx) {
         },
         switchSession: (path, options) => ctx.switchSession(path, {
             withSession: replacement => options.withSession({
-                sessionManager: setup(replacement.sessionManager),
+                sessionManager: identity(replacement.sessionManager),
                 reload: () => replacement.reload(),
             }),
         }),

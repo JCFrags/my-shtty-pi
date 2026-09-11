@@ -170,10 +170,11 @@ export class ManualLogicalRollover {
         if (!sourcePath || manager.getHeader().parentSession !== old.sourcePath)
             return fail("logical-session-parent-mismatch");
         const continuationHash = logicalContinuationHash(operation.continuation);
-        manager.appendCustomMessageEntry("chrono-logical-continuation", operation.continuation.summary, true, { schemaVersion: 1, operationId, logicalSessionId: manifest.logicalSessionId, branchId: operation.branchId, fromShardId: old.shardId,
+        const continuationEntryId = manager.appendCustomMessageEntry("chrono-logical-continuation", operation.continuation.summary, true, { schemaVersion: 1, operationId, logicalSessionId: manifest.logicalSessionId, branchId: operation.branchId, fromShardId: old.shardId,
             toShardId: operation.newShardId, continuationHash, summaryHash: operation.continuation.summaryHash,
             source: operation.continuation.source, coveredShards: operation.continuation.coveredShards,
             composition: operation.continuation.composition });
+        await manager.persistNewShardBootstrap(old.sourcePath, continuationEntryId);
         await this.bindRecordedNewShard(operationId, manager, continuationHash);
     }
     /** Recover setup after the continuation was appended but manifest binding did not finish. */
