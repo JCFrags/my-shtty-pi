@@ -29,6 +29,25 @@ export function consumeProvisionalLogicalReplacement(parentSession) {
     replacements.delete(parentSession);
     return true;
 }
+export function logicalAdoptionBinding(manifest, branchId) {
+    const branch = manifest.branches.find(value => value.branchId === branchId);
+    const shard = branch && manifest.shards.find(value => value.shardId === branch.activeShardId);
+    if (!branch || branch.parent || branch.shardIds.length !== 1 || !shard || shard.ordinal !== 0 || shard.state !== "active") {
+        throw new Error("logical-session-adoption-invalid");
+    }
+    return { schemaVersion: 1, logicalSessionId: manifest.logicalSessionId, branchId, shardId: shard.shardId };
+}
+/** Read the one non-model adoption marker persisted in shard zero. */
+export function recordedLogicalAdoptionBinding(entries) {
+    const matches = entries.filter(entry => entry.type === "custom" && entry.customType === "chrono-logical-adoption");
+    if (matches.length !== 1)
+        return undefined;
+    const data = record(matches[0].data);
+    if (!data || data.schemaVersion !== 1 || !validUuid(data.logicalSessionId) || typeof data.branchId !== "string"
+        || !validUuid(data.shardId))
+        return undefined;
+    return { schemaVersion: 1, logicalSessionId: data.logicalSessionId, branchId: data.branchId, shardId: data.shardId };
+}
 /** Accept only the one model-visible continuation whose content and manifest binding agree exactly. */
 export function recordedLogicalBinding(entries) {
     const matches = entries.filter(entry => entry.type === "custom_message" && entry.customType === "chrono-logical-continuation");
@@ -44,6 +63,9 @@ export function recordedLogicalBinding(entries) {
     return { schemaVersion: 1, operationId: details.operationId, logicalSessionId: details.logicalSessionId,
         branchId: details.branchId, fromShardId: details.fromShardId, shardId: details.toShardId, continuationHash: details.continuationHash,
         summaryHash: details.summaryHash };
+}
+export function replacementContainsOnlyBootstrap(entries) {
+    return entries.every(entry => ["model_change", "thinking_level_change", "session_info"].includes(entry.type));
 }
 export function replacementContainsOnlyContinuation(entries, binding) {
     let continuationCount = 0;
