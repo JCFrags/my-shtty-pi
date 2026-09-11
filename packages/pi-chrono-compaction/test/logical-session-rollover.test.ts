@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isLogicalSessionManifest } from "../src/logical-session-contract.js";
+import { persistNewShardBootstrap } from "../src/logical-session-persistence.js";
 import { composeStoredSelection } from "../src/context-composer.js";
 import type { EpisodeStateSelection } from "../src/episode-state-contract.js";
 import { buildManualContinuationCandidate, consumeProvisionalLogicalReplacement, logicalAdoptionBinding, markProvisionalLogicalReplacement, recordedLogicalAdoptionBinding, replacementContainsOnlyBootstrap } from "../src/logical-session-integration.js";
@@ -29,6 +31,10 @@ class FakeSession implements SessionSetupPort {
   getHeader(): { parentSession?: string } { return this.parentSession ? { parentSession: this.parentSession } : {}; }
   appendCustomMessageEntry(type: string, content: string, _display: boolean, details?: unknown): string {
     this.entries.push({ type, content, details }); return "continuation-entry";
+  }
+  async persistNewShardBootstrap(expectedParentSession: string, continuationEntryId: string): Promise<void> {
+    assert.equal(expectedParentSession, this.parentSession);
+    assert.equal(continuationEntryId, "continuation-entry");
   }
 }
 class FakeCommands implements SessionCommandPort {
@@ -62,6 +68,48 @@ class FakeCommands implements SessionCommandPort {
 
 const cut = (entryId: string) => ({ catalogStoreKey: "11111111-1111-4111-8111-111111111111", catalogGeneration: 1,
   sessionKey: "catalog-session", branchKey: "pi-session", eventCut: 7, entryId });
+
+test("actual Pi manager keeps an exact durable continuation prefix through its first assistant append", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-pi-persist-"));
+  const sessions = join(temporary, "sessions"), oldPath = join(temporary, "old.jsonl");
+  await mkdir(sessions, { mode: 0o700 }); await chmod(sessions, 0o700);
+  const oldBytes = "old-source-must-remain-untouched\n";
+  await writeFile(oldPath, oldBytes, { mode: 0o600, flag: "wx" });
+  const manager = SessionManager.create(temporary, sessions, { parentSession: oldPath });
+  manager.appendThinkingLevelChange("off");
+  const continuationId = manager.appendCustomMessageEntry("chrono-logical-continuation", "Exact bounded continuation.", true,
+    { schemaVersion: 1, operationId: randomUUID() });
+  const sourcePath = manager.getSessionFile()!;
+  await assert.rejects(stat(sourcePath), (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    "Pi 0.85.1 defers a continuation-only source");
+  const expected = [manager.getHeader(), ...manager.getEntries()];
+  const expectedBytes = `${expected.map(value => JSON.stringify(value)).join("\n")}\n`;
+  await persistNewShardBootstrap(manager, oldPath, continuationId);
+  assert.equal(await readFile(sourcePath, "utf8"), expectedBytes, "the public manager objects use Pi's exact JSONL encoding");
+  assert.equal(manager.getSessionId(), (expected[0] as { id: string }).id);
+  assert.equal(manager.getHeader()?.parentSession, oldPath);
+  await persistNewShardBootstrap(manager, oldPath, continuationId);
+  const prefix = await readFile(sourcePath, "utf8");
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Later normal assistant record." }],
+    api: "fixture", provider: "fixture", model: "fixture", usage, stopReason: "stop", timestamp: Date.now() });
+  assert.equal((await readFile(sourcePath, "utf8")).startsWith(prefix), true,
+    "Pi appends its first assistant record without rewriting the durable prefix");
+  const reopened = SessionManager.open(sourcePath, sessions);
+  assert.equal(reopened.getSessionId(), manager.getSessionId());
+  assert.equal(reopened.getHeader()?.parentSession, oldPath);
+
+  const occupied = SessionManager.create(temporary, sessions, { parentSession: oldPath });
+  const occupiedId = occupied.appendCustomMessageEntry("chrono-logical-continuation", "Other continuation.", true,
+    { schemaVersion: 1, operationId: randomUUID() });
+  const occupiedPath = occupied.getSessionFile()!;
+  await writeFile(occupiedPath, "occupied-source\n", { mode: 0o600, flag: "wx" });
+  await assert.rejects(() => persistNewShardBootstrap(occupied, oldPath, occupiedId),
+    (error: any) => error.code === "logical-session-source-persistence-invalid");
+  assert.equal(await readFile(occupiedPath, "utf8"), "occupied-source\n", "an existing mismatch is never overwritten");
+  assert.equal(await readFile(oldPath, "utf8"), oldBytes, "the old source is never opened for writing");
+});
 
 test("fractional-importance producer artifact reaches a manual continuation with the composer hash", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-fractional-"));

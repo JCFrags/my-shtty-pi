@@ -53,18 +53,21 @@ export interface LogicalForkRequest {
   readonly targetBranchId: string;
 }
 
-export interface SessionSetupPort {
+export interface SessionIdentityPort {
   getSessionId(): string;
   getSessionFile(): string | undefined;
   getHeader(): { parentSession?: string };
+}
+export interface SessionSetupPort extends SessionIdentityPort {
   appendCustomMessageEntry(customType: string, content: string, display: boolean, details?: unknown): string;
+  persistNewShardBootstrap(expectedParentSession: string, continuationEntryId: string): Promise<void>;
 }
 export interface ReplacementContextPort {
-  readonly sessionManager: SessionSetupPort;
+  readonly sessionManager: SessionIdentityPort;
   reload(): Promise<void>;
 }
 export interface SessionCommandPort {
-  readonly sessionManager: SessionSetupPort;
+  readonly sessionManager: SessionIdentityPort;
   newSession(options: { parentSession: string; setup: (manager: SessionSetupPort) => Promise<void>; withSession: (ctx: ReplacementContextPort) => Promise<void> }): Promise<{ cancelled: boolean }>;
   switchSession(path: string, options: { withSession: (ctx: ReplacementContextPort) => Promise<void> }): Promise<{ cancelled: boolean }>;
 }
@@ -235,16 +238,17 @@ export class ManualLogicalRollover {
     const sourcePath = manager.getSessionFile();
     if (!sourcePath || manager.getHeader().parentSession !== old.sourcePath) return fail("logical-session-parent-mismatch");
     const continuationHash = logicalContinuationHash(operation.continuation);
-    manager.appendCustomMessageEntry("chrono-logical-continuation", operation.continuation.summary, true,
+    const continuationEntryId = manager.appendCustomMessageEntry("chrono-logical-continuation", operation.continuation.summary, true,
       { schemaVersion: 1, operationId, logicalSessionId: manifest.logicalSessionId, branchId: operation.branchId, fromShardId: old.shardId,
         toShardId: operation.newShardId, continuationHash, summaryHash: operation.continuation.summaryHash,
         source: operation.continuation.source, coveredShards: operation.continuation.coveredShards,
         composition: operation.continuation.composition });
+    await manager.persistNewShardBootstrap(old.sourcePath, continuationEntryId);
     await this.bindRecordedNewShard(operationId, manager, continuationHash);
   }
 
   /** Recover setup after the continuation was appended but manifest binding did not finish. */
-  async bindRecordedNewShard(operationId: string, manager: SessionSetupPort, continuationHash: string): Promise<void> {
+  async bindRecordedNewShard(operationId: string, manager: SessionIdentityPort, continuationHash: string): Promise<void> {
     const manifest = await this.store.read() ?? fail("logical-session-manifest-missing");
     const operation = manifest.pendingRollover;
     if (!operation || operation.operationId !== operationId || operation.phase !== "close-prepared"
@@ -274,7 +278,7 @@ export class ManualLogicalRollover {
     });
   }
 
-  async activateNewShard(operationId: string, manager: SessionSetupPort): Promise<void> {
+  async activateNewShard(operationId: string, manager: SessionIdentityPort): Promise<void> {
     const manifest = await this.store.read() ?? fail("logical-session-manifest-missing");
     const operation = manifest.pendingRollover;
     if (!operation || operation.operationId !== operationId || operation.phase !== "new-shard-bound" || !operation.newShardId) return fail("logical-session-operation-mismatch");

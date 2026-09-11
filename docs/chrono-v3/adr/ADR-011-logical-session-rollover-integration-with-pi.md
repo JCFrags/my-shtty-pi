@@ -1,6 +1,6 @@
 # ADR-011 — Logical-session rollover integration with Pi
 
-Status: implemented through the post-2.0.23 M10 completion candidate. Consolidated approval and deployment verification remain pending. Automatic rollover remains disabled.
+Status: implemented through package 2.0.25. A follow-up new-shard durability correction is prepared after the installed Pi qualification exposed lazy session-file creation. Consolidated approval and deployment verification remain pending. Automatic rollover remains disabled.
 Scope: owner-only logical manifests, existing-session adoption, continuation validation, manual session replacement, logical forks, recovery, rollback, threshold status, and ancestor routing.
 
 ## Context
@@ -8,6 +8,8 @@ Scope: owner-only logical manifests, existing-session adoption, continuation val
 A physical Pi JSONL file cannot remain the lifetime container for V3. M10 must preserve each old file while a logical branch continues in a new physical session. The initial 2.0.22 package pinned Pi 0.84.2. The main-promotion candidate targets the actually installed Pi 0.85.1 and declares peers `>=0.85.1 <0.86.0`.
 
 Pi 0.85.1 exposes session replacement only on `ExtensionCommandContext`. `newSession()` accepts `parentSession`, `setup(SessionManager)`, and `withSession(ReplacedSessionContext)`. `switchSession()` accepts `withSession`. Replacement context also exposes `reload()`. These calls are not available in ordinary event handlers because replacement can deadlock there. The installed `agent-session-runtime.js` creates the replacement manager, shuts down the old runtime, applies the new runtime and emits its `session_start`, then runs `setup`, rebinds the host UI and runs `withSession`. Thus replacement extensions start before continuation metadata exists. Captured old session objects are stale after replacement.
+
+Pi 0.85.1's public `SessionManager` has no flush method. It assigns a new source path immediately but defers file creation until the first normal assistant message. A continuation-only replacement therefore remained memory-only while the logical manifest retained its source. Adding a fabricated assistant message would violate continuation-only rollback and source semantics.
 
 ## Decision
 
@@ -27,11 +29,11 @@ The coordinator performs this recoverable sequence:
 3. Require the continuation coverage list to equal every ancestor shard route in order. Each earlier shard must match its immutable final catalog cut. The current shard must match the continuation source cut. A new shard cannot hide an old missing obligation.
 4. Publish a `close-prepared` manifest intent and mark the current shard `closing`.
 5. Call `newSession({ parentSession })`.
-6. In `setup`, verify Pi's parent header, append one source-linked continuation custom message, and bind the replacement session ID and file in the manifest. The old shard becomes closed but remains untouched.
+6. In `setup`, verify Pi's parent header and append one source-linked continuation custom message. Before manifest binding, the Pi adapter serializes the public manager's exact version-3 header and ordered continuation-only entries with Pi's JSONL newline encoding. It bounds the entry count and bytes, publishes only the manager-generated new path through an exclusive owner-only temporary file and no-overwrite hard link, fsyncs the file and directory, then calls public `setSessionFile()` on the same path. This reload preserves the session ID, header, parent, entries, and source while synchronizing Pi's later append state. An exact existing source is accepted only after owner, mode, link-count, size, and byte equality checks. The old shard is never opened for writing. The manifest then binds the durable replacement session ID and file; the old shard becomes closed but remains untouched.
 7. In `withSession`, use only the replacement context, verify its identity, and publish the active rollover receipt.
 8. Reload the replacement through its supported command context, then return without using stale context. Startup can now bind the completed manifest and continuation. The provisional logical replacement must not schedule work or initialize admission before setup.
 
-A crash before binding leaves `close-prepared`; reopening the old session can remove that intent. An empty replacement that has only Pi bootstrap metadata can switch to the exact parent and remove the intent after the reopened identity matches. If the continuation was appended before the failure, the replacement can finish binding only when its one recorded operation ID, continuation hash, summary hash, parent path, session ID, and source path match the pending manifest. A crash after binding leaves `new-shard-bound`; the replacement identity can finish activation. No step deletes or rewrites an old shard.
+A crash before durable source creation leaves `close-prepared`; reopening the empty replacement can switch to the exact parent and remove that intent after the reopened identity matches. A crash after durable creation but before manifest binding leaves an exact continuation-only source. Reopening that source can finish binding only when its one recorded operation ID, continuation hash, summary hash, parent path, session ID, and source path match the pending manifest. A crash after binding leaves `new-shard-bound`; the replacement identity can finish activation. Recovery does not delete an orphan source, and no step deletes or rewrites an old shard.
 
 Exact rollback uses `switchSession(oldPath, { withSession })`, verifies the reopened Pi session ID and file, and changes the logical active pointer only after the supported switch succeeds. Rollback is allowed only while the replacement contains its injected continuation and no user work. The replacement shard remains intact on an isolated rollback branch, so later continuation of the restored branch does not route through an unpinned abandoned shard.
 

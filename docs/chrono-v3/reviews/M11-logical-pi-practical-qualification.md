@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.25 qualification blocked after its first successful rollover and immediate successful rollback because Pi did not persist the bootstrap-only replacement source referenced by the retained rollback branch.
+Status: package 2.0.25 qualification blocked after its first successful rollover and immediate successful rollback because Pi did not persist the bootstrap-only replacement source referenced by the retained rollback branch. A minimal runtime correction is prepared for a separately packaged candidate; no qualification retry has run against it.
 
 ## Scope
 
@@ -83,7 +83,13 @@ The initial indexed search, recall, and exact recovery probe passed. The first a
 
 Pi 0.85.1 defers creation of a new session file until the session contains a normal assistant message. The logical continuation is a `custom_message`, while rollback eligibility correctly requires the replacement to contain only bootstrap records and that continuation. A focused harness-sequencing diagnostic confirmed that adding normal fixture messages creates the source but makes the real rollback gate refuse `logical-session-rollback-ineligible`. The harness cannot satisfy both conditions without fabricating a source or bypassing the gate.
 
-Scalar result: one rollover command passed, one immediate rollback command passed, one retained manifest source was absent, zero providers were called, and no qualification result JSON was emitted. Three failed owner-only synthetic roots are retained. The remaining ten-rollover, fork, reopen, ancestor recovery, bounded-shard, and no-source-deletion checks are unqualified. This requires parent runtime direction; it is not an ordinary harness correction.
+Scalar result: one rollover command passed, one immediate rollback command passed, one retained manifest source was absent, zero providers were called, and no qualification result JSON was emitted. Three failed owner-only synthetic roots are retained. The remaining ten-rollover, fork, reopen, ancestor recovery, bounded-shard, and no-source-deletion checks are unqualified. This requires a corrected packaged runtime; it is not an ordinary harness correction.
+
+## Prepared durability correction
+
+The Pi command adapter now creates only the exact new continuation-only shard before manifest binding. It validates the public manager's generated path, version-3 header, session ID, canonical working and session directories, exact parent source, bounded ordered bootstrap chain, continuation identity, and serialized size. It publishes the actual public header and entries with Pi's newline encoding through an owner-only exclusive temporary file and no-overwrite hard link, fsyncs the file and directory, and reloads the same path through public `SessionManager.setSessionFile()`. It never opens an old shard for writing. An existing target is accepted only when its owner, mode, link count, size, and bytes match exactly.
+
+One focused test uses the actual Pi 0.85.1 `SessionManager`. It proves that Pi initially leaves the continuation-only source absent, the adapter persists exact public header and entry bytes, exact replay is idempotent, a later normal assistant append retains the complete prefix and source identity, reopening retains the exact session and parent IDs, a conflicting existing target refuses without overwrite, and the old source bytes do not change. The full installed-Pi qualification remains pending a new frozen candidate.
 
 ## Result fields
 
