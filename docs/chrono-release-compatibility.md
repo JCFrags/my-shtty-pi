@@ -43,13 +43,16 @@ compiled distribution.
 
 ## Dependencies and checks
 
-Prepare dependencies from the package-local lock:
+Prepare dependencies from the package-local lock. The strict local route requires
+the exact Node 24.18.0 runtime and its already prepared, verified header root:
 
 ```sh
 cd packages/pi-chrono-compaction
 npm ci --ignore-scripts --no-audit --no-fund
+npm run catalog:sqlite:build -- node_modules/node-gyp/bin/node-gyp.js <verified-node-24.18.0-headers-root> 24.18.0
 npm run typecheck
 npm run build
+npm run catalog:sqlite:probe
 sha256sum -c DEPLOYED.sha256
 npm run test:normal
 npm run test:fixed-heap
@@ -57,10 +60,13 @@ node scripts/independent-client-soak.mjs --package-root "$PWD" --expected-versio
 ```
 
 Build before tests that load `dist`. Do not rebuild while a suite or worker is
-running. The package lock includes the pinned `better-sqlite3` dependency and its
-build tooling. Use only the package's explicit native build/probe procedures when
-a catalog check requires them. Do not weaken install isolation or execute an
-unreviewed dependency script to make a gate pass.
+running. The package lock pins `better-sqlite3` 12.9.0 and node-gyp 12.3.0.
+`npm ci --ignore-scripts` deliberately leaves the native addon unbuilt. Use the
+explicit native source build and allocation-refusal probe after the last package
+reinstall and before tests. The build command verifies the source tree, node-gyp,
+target, and header tree. It has no prebuild or header-download fallback. Do not
+weaken install isolation or execute an unreviewed dependency script to make a
+gate pass.
 
 Normal, fixed-heap, and independent-client checks use synthetic sources. Worker
 tests require Linux user systemd and cgroup support. Use isolated temporary HOME,
@@ -90,11 +96,25 @@ node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
 ```
 
 The command reports `live.state: not-checked`. It does not discover or read live
-activation state. Root supported verification copies indexed inputs to a
-disposable snapshot, installs locked dependencies, rebuilds the package, compares
-all 124 tracked distribution JavaScript files byte-for-byte, validates generated
-output and source-map bindings, and removes only proven generated files before
-checking the exact integrated tree.
+activation state. Root supported verification copies indexed inputs to a disposable snapshot,
+installs locked dependencies, performs a controlled source build of the native
+addon, probes the recorded addon and its effective heap limit, rebuilds the
+package, compares all 124 tracked distribution JavaScript files byte-for-byte,
+validates generated output and source-map bindings, and removes only proven
+generated files before checking the exact integrated tree. Root verification
+requires Node 24.18.0 and an explicit `CHRONO_CATALOG_NODE_HEADERS` path. The
+header tree must be the verified Node 24.18.0 tree. For example:
+
+```sh
+CHRONO_CATALOG_NODE_HEADERS="$HOME/.cache/node-gyp/24.18.0" npm run verify
+```
+
+CI pins Node 24.18.0, prepares that header tree separately with locked node-gyp
+12.3.0, and passes the path to the disposable verifier. The verifier uses the
+package's `catalog:sqlite:build-record` and `catalog:sqlite:probe-record` route so
+Ubuntu compiler output is recorded and checked without weakening the immutable
+Fedora reference hashes. Header preparation is the only network-enabled step in
+this sequence. The controlled native build cannot download headers or a prebuild.
 
 The root privacy scanner admits only the reviewable synthetic fixture
 `test/fixtures/session.jsonl`, SHA-256

@@ -15,6 +15,7 @@ const output = (command, args, cwd) => run(command, args, cwd, { encoding: 'utf8
 const within = (root, path) => path === root || path.startsWith(root + sep);
 const codeFile = path => /\.(?:[cm]?[jt]sx?)$/.test(path);
 const changedProducts = new Set(['pi-project-glance', 'pi-herdr-orchestrator']);
+const chronoNativeTarget = '24.18.0';
 
 export function walk(root) {
   return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
@@ -321,8 +322,17 @@ export function executeProducts(root, files, state, selected) {
     const committedDist = files.filter(path => path.startsWith(`packages/${product.slug}/dist/`));
     const expected = new Map(committedDist.map(path => [path, readFileSync(join(root, path))]));
     if (manifest.scripts?.build) rmSync(join(dir, 'dist'), { recursive: true, force: true });
+    if (product.slug === 'pi-chrono-compaction') {
+      const headers = process.env.CHRONO_CATALOG_NODE_HEADERS;
+      if (process.versions.node !== chronoNativeTarget) throw new Error(`chrono: native verification requires Node ${chronoNativeTarget}`);
+      if (!headers) throw new Error('chrono: set CHRONO_CATALOG_NODE_HEADERS to the verified Node 24.18.0 headers root');
+      run('npm', ['run', '--ignore-scripts', 'catalog:sqlite:build-record', '--', 'node_modules/node-gyp/bin/node-gyp.js', headers, chronoNativeTarget], dir, { env: scriptEnv });
+    }
     for (const script of ['typecheck', 'syntax', 'build', 'test']) {
       if (manifest.scripts?.[script]) run('npm', ['run', '--ignore-scripts', script], dir, { env: scriptEnv });
+      if (product.slug === 'pi-chrono-compaction' && script === 'build') {
+        run('npm', ['run', '--ignore-scripts', 'catalog:sqlite:probe-record'], dir, { env: scriptEnv });
+      }
     }
     if (manifest.scripts?.build && !changedProducts.has(product.slug)) {
       for (const [path, bytes] of expected) if (!existsSync(join(root, path)) || !readFileSync(join(root, path)).equals(bytes)) throw new Error(`${path}: tracked compiled output differs from build`);
