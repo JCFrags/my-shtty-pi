@@ -14,3 +14,11 @@ Rollback rule:
 6. Never restore or edit session JSONL as part of rollback.
 
 The M00 backup has not been used for a live switch. M01 and later must create their own deployment record; this document is not deployment authorization.
+
+## Current V3 candidate boundary
+
+Logical-session recovery and package rollback are separate operations. `/chrono-logical-session recover` and `/chrono-logical-session rollback` repair or reverse one logical rollover while preserving every shard. They do not switch the installed ChronoCompact package. See [`recovery.md`](./recovery.md) for the current state-dependent procedures.
+
+For an installed-package rollback, preserve the source archive, logical manifests, rollout exclusions, catalogs, and derived stores. Restore only the previous Chrono package source slot, alias, compatible Chrono-owned configuration, and startup authorization. Do not restore a whole settings snapshot that can overwrite unrelated package selections. Verify the loaded package in every intended Pi process after a safe reload.
+
+At source revision `30668f7586781410e9958fc56d8f677d08bc7d4e`, final-candidate deployment rollback remains unexercised. The earlier `2.0.25` installed-Pi scenario performed one immediate logical rollover rollback before it found the missing continuation-only source. The persistence correction is implemented, but the ten-shard installed-Pi retry remains pending. Neither result is a default-activation or package-rollback pass.
