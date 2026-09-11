@@ -1,4 +1,4 @@
-import { MAX_ANSWER_BYTES, MAX_PENDING_QUESTIONS, MAX_QUESTION_BYTES, type ProjectGlanceQuestion, type ProjectGlanceQuestionAction, type ProjectGlanceQuestionAnswer } from "../questions/model.js";
+import { MAX_ANSWER_BYTES, MAX_PENDING_QUESTIONS, MAX_QUESTION_BYTES, type ProjectGlanceQuestionAttention, type ProjectGlanceQuestion, type ProjectGlanceQuestionAction, type ProjectGlanceQuestionAnswer } from "../questions/model.js";
 
 function fail(): never { throw new Error("INVALID_QUESTION"); }
 function object(value: unknown): Record<string, unknown> {
@@ -32,17 +32,31 @@ export function validateQuestionAnswer(value: unknown): ProjectGlanceQuestionAns
 }
 export function validateQuestionAction(value: unknown): ProjectGlanceQuestionAction {
   const source = object(value);
-  if (!["question_answer", "question_cancel", "question_retry"].includes(String(source.type))) fail();
+  if (!["question_answer", "question_dismiss", "question_cancel", "question_hide", "question_retry"].includes(String(source.type))) fail();
   keys(source, ["type", "questionId", "expectedRevision", ...(source.type === "question_answer" ? ["answer"] : [])]);
   const common = { questionId: id(source.questionId), expectedRevision: revision(source.expectedRevision) };
   if (source.type === "question_answer") return { type: "question_answer", ...common, answer: validateQuestionAnswer(source.answer) };
-  return { type: source.type as "question_cancel" | "question_retry", ...common };
+  return { type: source.type as "question_dismiss" | "question_cancel" | "question_hide" | "question_retry", ...common };
 }
+export function validateQuestionAttention(value: unknown): ProjectGlanceQuestionAttention[] {
+  if (!Array.isArray(value) || value.length > MAX_PENDING_QUESTIONS) fail();
+  const result = value.map((entry): ProjectGlanceQuestionAttention => {
+    const source = object(entry);
+    keys(source, ["questionId", "displayId", "revision", "state", "retryAvailable", "message"]);
+    if (typeof source.displayId !== "string" || !/^Q-[1-9][0-9]*$/.test(source.displayId) || source.displayId.length > 32) fail();
+    if (source.state !== "submitted" && source.state !== "delivery_failed") fail();
+    if (typeof source.retryAvailable !== "boolean") fail();
+    return { questionId: id(source.questionId), displayId: source.displayId, revision: revision(source.revision), state: source.state, retryAvailable: source.retryAvailable, message: text(source.message, 2048) };
+  });
+  if (new Set(result.map((entry) => entry.questionId)).size !== result.length) fail();
+  return result;
+}
+
 export function validateQuestions(value: unknown): ProjectGlanceQuestion[] {
   if (!Array.isArray(value) || value.length > MAX_PENDING_QUESTIONS) fail();
   const result = value.map((entry): ProjectGlanceQuestion => {
     const source = object(entry);
-    keys(source, ["id", "displayId", "revision", "state", "question", "reason", "response"], ["recommendation", "recommendedOptionIds", "recommendedText", "temporaryDefault", "expiresAt", "answer", "failure"]);
+    keys(source, ["id", "displayId", "revision", "state", "question", "reason", "response"], ["recommendation", "recommendedOptionIds", "recommendedText", "temporaryDefault", "answer", "failure"]);
     if (Buffer.byteLength(JSON.stringify(source)) > MAX_QUESTION_BYTES + MAX_ANSWER_BYTES + 2048) fail();
     if (typeof source.displayId !== "string" || !/^Q-[1-9][0-9]*$/.test(source.displayId) || source.displayId.length > 32) fail();
     if (!["pending", "submitted", "delivery_failed"].includes(String(source.state))) fail();
@@ -62,10 +76,6 @@ export function validateQuestions(value: unknown): ProjectGlanceQuestion[] {
     if (source.temporaryDefault !== undefined) {
       const temp = object(source.temporaryDefault); keys(temp, ["optionIds", "disclosure"]);
       question.temporaryDefault = { optionIds: optionIds(temp.optionIds), disclosure: text(temp.disclosure, 4000) };
-    }
-    if (source.expiresAt !== undefined) {
-      if (typeof source.expiresAt !== "string" || source.expiresAt.length > 64 || !Number.isFinite(Date.parse(source.expiresAt))) fail();
-      question.expiresAt = source.expiresAt;
     }
     if (source.answer !== undefined) question.answer = validateQuestionAnswer(source.answer);
     return question;

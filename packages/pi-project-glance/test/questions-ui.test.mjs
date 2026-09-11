@@ -96,27 +96,27 @@ test("selecting an option explicitly replaces alternative text", async () => {
   assert.deepEqual(actions[0].answer, { optionIds: ["b"] });
 });
 
-test("Cancel is an explicit action; escape and feed keys do not cancel", async () => {
+test("Dismiss without answering is explicit; escape and feed keys do not dismiss", async () => {
   const { region, actions } = setup();
   region.focused = true;
   for (const key of ["q", "j", "k", "\x1b"]) assert.equal(region.handleInput(key), true);
   await tick();
   assert.equal(actions.length, 0);
-  click(region, "[Cancel]");
+  click(region, "[Dismiss without answering]");
   await tick();
-  assert.deepEqual(actions[0], { type: "question_cancel", questionId: "q-one", expectedRevision: 1 });
-  assert.match(plain(region).join("\n"), /Cancelled/);
+  assert.deepEqual(actions[0], { type: "question_dismiss", questionId: "q-one", expectedRevision: 1 });
+  assert.match(plain(region).join("\n"), /Dismissed/);
 });
 
-test("delivery_failed shows answer and explicit Retry; submitted is read-only", async () => {
+test("delivery_failed shows answer and explicit Retry delivery; submitted is read-only", async () => {
   const { region, actions } = setup(question("text", { state: "delivery_failed", answer: { optionIds: [], text: "kept answer" }, failure: "Delivery failed" }));
   assert.match(plain(region).join("\n"), /kept answer/);
-  click(region, "[Retry]");
+  click(region, "[Retry delivery]");
   await tick();
   assert.deepEqual(actions[0], { type: "question_retry", questionId: "q-one", expectedRevision: 1 });
   region.update([question("text", { revision: 2, state: "submitted" })], "session:branch-A");
   assert.match(plain(region).join("\n"), /submitted/);
-  assert.doesNotMatch(plain(region).join("\n"), /\[(Retry|Submit|Cancel)\]/);
+  assert.doesNotMatch(plain(region).join("\n"), /\[(Retry delivery|Submit|Dismiss)\]/);
   assert.equal(region.isEditing, false);
 });
 
@@ -219,7 +219,7 @@ test("authoritative delivery failure replaces optimistic Submitted even at the s
   edit(region, "draft"); click(region, "[Submit]"); await tick();
   region.update([question("text", { state: "delivery_failed", answer: { optionIds: [], text: "draft" } })], "session:branch-A");
   assert.doesNotMatch(plain(region).join("\n"), /Submitted/);
-  click(region, "[Retry]"); await tick();
+  click(region, "[Retry delivery]"); await tick();
   assert.equal(actions[1].type, "question_retry");
 });
 

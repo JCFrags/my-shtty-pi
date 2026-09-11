@@ -35,3 +35,28 @@ jobs:
         run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
       - name: Verify separate historical capture
         run: npm run verify:history
+
+  browser-copy:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: pnpm
+          cache-dependency-path: vendor/terminal-browser/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify locked browser-copy provenance
+        run: node scripts/verify-browser-copy.mjs
+      - name: Install locked browser-copy workspace
+        run: pnpm --dir vendor/terminal-browser install --frozen-lockfile --ignore-scripts
+      - name: Build browser-copy workspace
+        run: pnpm --dir vendor/terminal-browser -r build
+      - name: Typecheck browser-copy integration packages
+        run: pnpm --dir vendor/terminal-browser --filter terminal-browser --filter terminal-browser-cli --filter pi-terminal-browser run typecheck
+      - name: Test browser-copy integration packages
+        run: pnpm --dir vendor/terminal-browser --filter terminal-browser --filter terminal-browser-cli --filter pixel-store --filter pi-terminal-browser run test

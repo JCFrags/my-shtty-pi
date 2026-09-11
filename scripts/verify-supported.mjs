@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { CHRONO_BASELINE, verifyChronoBuildMaps, verifyChronoFiles, verifyChronoIndex, verifyFrozenChrono } from './verify-chrono-v3-baseline.mjs';
+import { verifyBrowserCopy } from './verify-browser-copy.mjs';
 import { builtinModules } from 'node:module';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -208,7 +209,11 @@ function generatedTarget(manifest, spec) {
 export function validateManifests(root, files) {
   const rootLock = json(join(root, 'package-lock.json'));
   const workspaces = json(join(root, 'package.json')).workspaces ?? [];
-  const manifests = files.filter(path => path.endsWith('/package.json') || path === 'package.json').map(path => ({
+  // The vendored browser is an independently locked pnpm workspace. Its exact
+  // inventory, manifests, workspace boundary, and lock importers are checked by
+  // verifyBrowserCopy instead of being treated as root npm packages.
+  const manifests = files.filter(path => (path.endsWith('/package.json') || path === 'package.json')
+    && !path.startsWith('vendor/terminal-browser/')).map(path => ({
     path, dir: dirname(join(root, path)), data: json(join(root, path)),
   }));
   const local = new Map();
@@ -273,6 +278,7 @@ export function verifyStatic(root, files) {
   if (JSON.stringify(dirs) !== JSON.stringify(products.map(p => p.slug).sort())) throw new Error('package directories differ from supported registry');
   if (products.some(p => ['pi-signal-board', 'temporary-orchestrator-cancel-isolation'].includes(p.slug))) throw new Error('retired product remains registered');
   if (products.find(p => p.slug === 'pi-project-glance')?.status !== 'active') throw new Error('Project Glance must be active');
+  verifyBrowserCopy(root, files);
   const manifests = validateManifests(root, files);
   if (products.some(product => product.slug === 'pi-chrono-compaction')) verifyChronoFiles(join(root, CHRONO_BASELINE.package));
   for (const product of products) {

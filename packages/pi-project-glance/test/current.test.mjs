@@ -350,7 +350,7 @@ test("controller retries finite requests when a provider becomes available late"
 
 test("runtime publication failure leaves relay state unchanged and retries exactly once", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-publication-"));
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   const bus = new EventBus();
   let requests = 0;
   bus.on(TODO_SUMMARY_REQUEST_EVENT, (request) => {
@@ -397,7 +397,7 @@ test("runtime publication failure leaves relay state unchanged and retries exact
 
 test("live runtime starts empty, publishes bounded current state, and resets on branch changes", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-current-"));
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   const bus = new EventBus();
   respondWithCurrent(bus, 20);
   const runtime = new ProjectGlanceRelayRuntime(environment, bus);
@@ -422,7 +422,9 @@ test("live runtime starts empty, publishes bounded current state, and resets on 
     const cleared = await probeProjectGlanceRelay(descriptorPath);
     assert.deepEqual(cleared.current, {});
     assert.deepEqual(cleared.feed, []);
-    assert.equal(cleared.revision, 4);
+    assert.equal(cleared.revision, 5, "CURRENT clear and the explicit storage diagnostic each publish once");
+    assert.equal(cleared.archive.state, "error", "The partial synthetic manager cannot provide persisted entries");
+    assert.equal(cleared.archive.errorCode, "history_storage_failed");
 
     await waitFor(() => runtime.current.focus === "Focus");
     await runtime.restart("2026-09-03T00:00:01.000Z");

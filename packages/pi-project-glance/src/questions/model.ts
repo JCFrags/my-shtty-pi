@@ -21,6 +21,15 @@ export interface ProjectGlanceQuestionAnswer {
   text?: string;
 }
 
+export interface ProjectGlanceQuestionAttention {
+  questionId: string;
+  displayId: string;
+  revision: number;
+  state: "submitted" | "delivery_failed";
+  retryAvailable: boolean;
+  message: string;
+}
+
 export interface ProjectGlanceQuestion {
   id: string;
   displayId: string;
@@ -33,12 +42,12 @@ export interface ProjectGlanceQuestion {
   recommendedOptionIds?: string[];
   recommendedText?: string;
   temporaryDefault?: { optionIds: string[]; disclosure: string };
-  expiresAt?: string;
   answer?: ProjectGlanceQuestionAnswer;
   failure?: string;
 }
 
 export type ProjectGlanceQuestionAction =
   | { type: "question_answer"; questionId: string; expectedRevision: number; answer: ProjectGlanceQuestionAnswer }
-  | { type: "question_cancel"; questionId: string; expectedRevision: number }
+  | { type: "question_dismiss" | "question_cancel"; questionId: string; expectedRevision: number }
+  | { type: "question_hide"; questionId: string; expectedRevision: number }
   | { type: "question_retry"; questionId: string; expectedRevision: number };

@@ -48,8 +48,14 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
     process.env,
     pi.events,
     (data) => pi.appendEntry(`${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`, data),
-    (count, pending) => activeContext?.ui.setStatus(PROJECT_GLANCE_COMMAND, count + pending > 0 ? `● Glance ${count}${pending ? ` · ${pending} question${pending === 1 ? "" : "s"}` : ""}` : undefined),
-    { questions: () => questions.questions, applyAction: (action, actionId) => questions.applyAction(action, actionId) },
+    (count, pending, storageError) => activeContext?.ui.setStatus(PROJECT_GLANCE_COMMAND, count + pending > 0 || storageError ? `Glance ${count}${pending ? ` · ${pending} question${pending === 1 ? "" : "s"}` : ""}${storageError ? " · storage error" : ""}` : undefined),
+    {
+      questions: () => questions.questions,
+      hiddenAttention: () => questions.hiddenAttention,
+      applyAction: (action, actionId) => questions.applyAction(action, actionId),
+      setEditing: (owner, value) => questions.setEditing(owner, value),
+      releaseEditing: (owner) => questions.releaseEditing(owner),
+    },
   );
   let disposed = false;
   const dispose = async (): Promise<void> => {
@@ -91,6 +97,7 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   });
   pi.on("session_tree", async (_event, ctx) => {
     activeContext = ctx;
+    questions.sessionTree(ctx);
     questions.sync();
     await runtime.onSessionTree(ctx);
   });
@@ -99,20 +106,29 @@ export default async function projectGlanceExtension(pi: ExtensionAPI): Promise<
   });
   // message_end runs before persistence and later handlers can await work.
   // These ordered boundaries run after preceding messages have been saved.
-  pi.on("tool_execution_start", async (_event, ctx) => {
+  pi.on("agent_start", (_event, ctx) => {
     activeContext = ctx;
+    questions.agentStart(ctx);
+  });
+  pi.on("ui_prompt_start", (_event, ctx) => questions.uiPromptStart(ctx));
+  pi.on("ui_prompt_end", (_event, ctx) => questions.uiPromptEnd(ctx));
+  pi.on("tool_execution_end", (event, ctx) => questions.toolEnd(event, ctx));
+  pi.on("tool_execution_start", async (event, ctx) => {
+    activeContext = ctx;
+    questions.toolStart(event, ctx);
     questions.sync();
     await runtime.syncFeed(ctx);
   });
   pi.on("turn_end", async (_event, ctx) => {
     await runtime.syncFeed(ctx);
   });
-  pi.on("agent_end", async (_event, ctx) => {
+  pi.on("agent_end", async (event, ctx) => {
+    questions.agentEnd(event, ctx);
     await runtime.syncFeed(ctx);
   });
   pi.on("agent_settled", async (_event, ctx) => {
     activeContext = ctx;
-    questions.sync();
+    questions.agentSettled(ctx);
     await runtime.syncFeed(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {

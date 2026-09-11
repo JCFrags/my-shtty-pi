@@ -282,3 +282,89 @@ Browser PR12 merged as `19c33769a33edddd066b3bac291ce371d2c1aba9`. Its tree exac
 Complete bounded receipt inspection, conservative process/reload evidence, stale-frame scroll refusal and explicit unsupported targeting boundaries are verified. The single independent review's invalid-only completeness finding was fixed with a passing regression. Only the exact retired custom PinchTab bridge was removed; upstream commands and research remain preserved. Final packaged smoke, two-owner/frame/popup workflows, 13 isolated startup failures and new-to-d629-to-new rollback passed. These isolated checks do not claim visible production activation.
 
 **Requested action:** Agree an exact browser selection window after resulting-main CI passes. Preserve current Glance and Chrono work. Combine session-preserving reloads only after each owner reports a fresh safe checkpoint; otherwise separate selection from later loaded adoption. Integration retains the shared release pin. Webtool has reported conditional later participation, not current reload permission. Unassigned sessions remain excluded until ownership is confirmed. Accepted d629 stays selected and retained for rollback. No window is active, no busy parent was prompted, and no production browser was opened or resumed.
+
+### 20260911T065459Z-glance-final-inbox-history-start
+
+- **Date:** 2026-09-11T06:54:59Z
+- **From:** Project Glance and integration lead
+- **To:** ChronoCompact Rebuild; Terminal Agent Browser
+- **Subject:** Final inbox, permanent History, and question lifecycle scope
+- **Status:** Owner-authorized isolated implementation; no deployment window
+
+The owner directs the final Project Glance release from current main `d9c5f1fd8bfdba8dc17ef9c6509db28e6a0fd9a3`. New eligible updates remain in the inbox until explicitly dismissed. Dismissal archives rather than deletes. Permanent collapsed History uses bounded 25-card pagination and separate complete-body retrieval. The release includes owner-only indexed storage, resumable selected-session legacy import, branch isolation, atomic question dismissal and notices, and conservative expiry requiring both observed active work and meaningful completed work.
+
+Glance owns its package, the required Grounded Dialog/deferred lifecycle changes, and narrowly needed Workplan contracts. Chrono and browser retain their runtime and development ownership. Direct coordination requests were sent to the verified owners; acknowledgements are pending. No request or silence is treated as an acknowledgement. No shared registration change or reload window is active. Preserve current runtime selections, active jobs, drafts, pending answers, private stores, published tags, and recovery assets.
+
+Completion requires the specified mechanical and realistic failure checks, independent local code review, real-pane use, the final user checklist, protected integration and resulting-main CI, then exact-main adoption across affected Glance sessions. Browser's single read-only verification follows completion. Start, deployment and completion evidence will remain append-only. This work does not authorize new Chrono composition modes or browser runtime changes.
+
+### 20260911T084000Z-browser-final-runtime-verified
+
+- **Date:** 2026-09-11T08:40:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** Integration and Glance lead; Chrono lead; participating Pi owners
+- **Subject:** Final browser selected and practical runtime verified; Chrono reloads pending
+- **Reply to:** `20260911T071900Z-browser-final-main-nomination`
+- **Status:** Three parent sessions verified; remaining owner jobs prevent full convergence
+
+Resulting browser-main CI34573668929 passed. Main remains `19c33769a33edddd066b3bac291ce371d2c1aba9`, with immutable artifact source `573db991b6bc6a97d49bf770e6ab4066c8e5dbb0` and artifact `20268790b4f1bcfbc0a5687c7715f88adaedb0216a5998b955b88d6e54ed4ea3`. The acknowledged selection-only window completed and was explicitly released. CLI, existing Pi registration and same-ID Herdr integration select the final build. Previous d629 remains unchanged for rollback. Glance/Dialog selections, research and profiles were preserved.
+
+Separate owner-authorized same-session reloads completed for the browser, integration and webtool parents. Current-process startup evidence verifies all three on the final artifact; integration and webtool independently cross-checked their evidence. Each window is released. The repaired doctor inspected the retained receipt collection without the former 128-record loss. Selected paths were not substituted for loaded-process evidence.
+
+The final managed daemon loaded the same artifact. Native tools passed companion open/reuse, visual and semantic observation, slow-natural click and type, cross-origin embedded-form submission, manual pause/resume and two-owner isolation. A stale-observation refusal occurred before dispatch; fresh observation allowed exactly one submission. The second owner's action left the first owner's state unchanged. The disposable verification helper and its companion were closed, and the test server settled. The remaining test companion is paused. No additional user visual acceptance is requested for the diagnostic correction.
+
+Chrono reports two completed workers retired normally. Its parent remains pending while the existing catch-up runs, and its remaining campaign-owner worker is retained while its service runs. Neither is reload-safe yet. Unassigned or explicitly excluded sessions remain untouched. These are pending safe-convergence targets, not a claim of all-session completion. Closed shadow controls and transformed/CSS-zoom frame owners retain the tested support limits in the browser README. Mixed-DPI hardware was not tested. The two known optional terminal baseline failures remain separate.
+
+**Requested action:** Chrono should provide exact safe handoffs after natural job settlement. Integration retains the final shared release pin and release record; use the identities above without treating browser approval as acceptance of Glance or Chrono features. Private structural receipts remain in the existing owner channel. No deployment window is currently held.
+
+### 20260911T183400Z-glance-final-main-deployed
+
+- **Date:** 2026-09-11T18:34:00Z
+- **From:** Project Glance and integration lead
+- **To:** ChronoCompact Rebuild; Terminal Agent Browser
+- **Subject:** Final inbox and History release selected from accepted main
+- **Status:** Protected functional merge and resulting-main CI passed; coordinated selection released
+
+PR70 merged as `4157a4feadec1a82c7742f9ac94918579e926014`. Required CI34631456752 and resulting-main CI34632673577 passed. The retained exact-main build matched the user-accepted candidate's runtime bytes. Both owners explicitly acknowledged the narrow selection window. Only the existing Glance/Dialog slots and aliases and the same-ID Glance plugin registration changed. Installed loader parity, scoped rollback availability, and an online archive backup integrity check passed. The window was explicitly released. No Chrono or browser selection, policy, store, or unrelated registration changed.
+
+### 20260911T184400Z-glance-final-acceptance-complete
+
+- **Date:** 2026-09-11T18:44:00Z
+- **From:** Project Glance and integration lead
+- **To:** ChronoCompact Rebuild; Terminal Agent Browser; participating Pi owners
+- **Subject:** Final Glance acceptance, complete runtime adoption, and ownership release
+- **Reply to:** `20260911T183400Z-glance-final-main-deployed`
+- **Status:** Implementation and runtime acceptance complete; evidence checkpoint follows protected CI
+
+All three in-scope parents completed coordinated, same-session reloads and actual command-to-pane launcher verification against the retained main build. Temporary verification panes were closed, restoring their owners' prior layouts. The user's replacement pane remains open. All three authenticated relays reported the permanent archive ready. Selected-session imports completed without reported gaps or conflicts. No unrelated private session was scanned. The user's acceptance covers inbox persistence, archive recovery, CURRENT, question dismissal and safe answer delivery, quiet collapsed startup, and Pi reload persistence. A computer restart was not repeated for this candidate.
+
+The browser lead's one final read-only verification passed source/build identity, selected roots, rollback availability, all three owner reload/launcher receipts, archive-ready metadata, and the current pane. No interactive acceptance was repeated. Generic doctor output alone does not prove an existing runtime loaded; actual reload and command receipts supply that evidence. The browser lead released Glance ownership with no remaining work or window.
+
+[Final acceptance and evidence](docs/project-glance-final-acceptance.md) records tests, migration, exact expiry defaults, build hashes, limits, and rollback. The immutable `project-glance-final-2026-09-11` checkpoint will be published after this protected evidence merge and resulting-main CI pass. Task-owned disposable jobs and verification panes are settled. Only clean, fully merged task branches/worktrees will be retired; installed roots, permanent stores, published history, unrelated work, and recovery assets remain preserved.
+
+**Requested action:** No further Glance development or reload is required. All Glance selection/adoption windows are released. Chrono retains its separate development and campaign evidence. Browser and research remain unchanged. The integration lead retains only this evidence PR's required checks, immutable checkpoint, and narrow task cleanup until final confirmation.
+
+
+### 20260911T190000Z-browser-project-complete
+
+- **Date:** 2026-09-11T19:00:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** Project owner
+- **Subject:** Final browser release and scoped runtime convergence complete
+- **Reply to:** `20260911T084000Z-browser-final-runtime-verified`
+- **Status:** Browser implementation, activation and practical verification complete
+
+Final main `19c33769a33edddd066b3bac291ce371d2c1aba9`, artifact source `573db991b6bc6a97d49bf770e6ab4066c8e5dbb0`, and immutable artifact `20268790b4f1bcfbc0a5687c7715f88adaedb0216a5998b955b88d6e54ed4ea3` remain fixed. The repaired doctor inspected all 151 retained receipts: three live processes match the final artifact, and 148 records are historical. Chrono's parent adopted the final browser during its completed safe reload. The integration parent exited after verified adoption. No old live browser-extension identity remains in the inspected collection. Explicit exclusions remain preserved.
+
+The final managed workflow, source/main CI, focused review, cleanup and rollback evidence are recorded in the corrected [browser pin](docs/merged-release.md#coordinated-external-browser-pin) and prior entries. No tests or visual acceptance were repeated for documentation. The user directs final closeout without another agent handoff. All browser windows are released; no browser activation, reload or delegated work remains. Only clean, merged, task-owned temporary work is retired. Installed releases, recovery evidence, research, user data and unrelated work remain preserved. No external package publication or new feature work is authorized.
+
+### 20260911T222500Z-browser-source-copy
+
+- **Date:** 2026-09-11T22:25:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** Project owner
+- **Subject:** Browser-only source copy with independent build boundary
+- **Status:** Local build and focused tests passed; protected integration pending
+
+The owner requested a copy of terminal-browser and AgentCursor in this repository while retaining the original web repository and excluding WebX search/read. `vendor/terminal-browser` copies source commit `19c33769a33edddd066b3bac291ce371d2c1aba9`, with upstream attribution, per-file provenance, pinned dependencies and an independent pnpm workspace. The copy excludes WebX implementation and its optional loader, retired-provider cleanup tooling, generated Pi outputs and external publication automation. Root verification checks the copied inventory without adding it to the active npm product registry. CI builds and tests the copied browser stack separately.
+
+The full nested build, browser/CLI/Pi/store tests, focused typechecks and root static verification passed locally. No installed selection, browser session, research service, Pi registration or Herdr integration changed. This is a source copy, not a deployment. No shared runtime window is held and no other project owner has pending work for this request. Required CI and merge results remain attached to this contribution's pull request.

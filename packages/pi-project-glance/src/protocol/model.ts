@@ -1,4 +1,5 @@
-import type { ProjectGlanceQuestion, ProjectGlanceQuestionAction } from "../questions/model.js";
+import type { ProjectGlanceQuestion, ProjectGlanceQuestionAction, ProjectGlanceQuestionAttention } from "../questions/model.js";
+import type { PageResult, BodyResult, HistoryView } from "../history/contracts.js";
 
 export const PROJECT_GLANCE_PRODUCT = "Pi Project Glance" as const;
 export const PROJECT_GLANCE_PACKAGE = "pi-project-glance" as const;
@@ -81,6 +82,14 @@ export interface ProjectGlanceSnapshot {
   uiState?: ProjectGlanceUiState;
   focusSerial?: number;
   questions?: ProjectGlanceQuestion[];
+  questionAttention?: ProjectGlanceQuestionAttention[];
+  archive?: {
+    inboxCount: number;
+    historyCount: number;
+    commitSeq: number;
+    state: "ready" | "importing" | "error";
+    errorCode?: string;
+  };
 }
 
 export interface ProjectGlanceHelloRequest {
@@ -117,7 +126,42 @@ export interface ProjectGlanceActionRequest {
   action: ProjectGlanceAction;
 }
 
-export type ProjectGlanceClientFrame = ProjectGlanceHelloRequest | ProjectGlancePingRequest | ProjectGlanceSnapshotRequest | ProjectGlanceActionRequest;
+export interface ProjectGlanceReadIdentity {
+  version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
+  requestId: string;
+  sessionKey: string;
+  generation: string;
+  branchId: string;
+}
+export interface ProjectGlancePageRequest extends ProjectGlanceReadIdentity {
+  type: "page_request";
+  view: HistoryView;
+  cursor?: string;
+}
+export interface ProjectGlanceBodyRequest extends ProjectGlanceReadIdentity {
+  type: "body_request";
+  itemId: string;
+  offset: number;
+}
+export interface ProjectGlanceEditingRequest extends ProjectGlanceReadIdentity {
+  type: "question_editing";
+  questionId: string;
+  revision: number;
+  active: boolean;
+}
+export type ProjectGlanceClientFrame = ProjectGlanceHelloRequest | ProjectGlancePingRequest | ProjectGlanceSnapshotRequest | ProjectGlanceActionRequest | ProjectGlancePageRequest | ProjectGlanceBodyRequest | ProjectGlanceEditingRequest;
+
+export interface ProjectGlancePageFrame extends PageResult {
+  version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
+  type: "page";
+  requestId: string;
+}
+export interface ProjectGlanceBodyFrame extends BodyResult {
+  version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
+  type: "body";
+  requestId: string;
+  branchId: string;
+}
 
 export interface ProjectGlanceHelloResponse {
   version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;
@@ -179,6 +223,8 @@ export type ProjectGlanceServerFrame =
   | ProjectGlancePongResponse
   | ProjectGlanceSnapshotChangedFrame
   | ProjectGlanceActionResponse
+  | ProjectGlancePageFrame
+  | ProjectGlanceBodyFrame
   | ProjectGlanceErrorFrame;
 
 export type ProjectGlanceFrame =
