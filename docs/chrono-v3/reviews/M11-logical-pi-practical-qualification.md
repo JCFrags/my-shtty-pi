@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.24 qualification blocked at the first rollover by a reproduced continuation-hash defect. A minimal source correction and focused regression are prepared for parent integration. Qualification must be retried against a distinct packaged candidate.
+Status: package 2.0.24 qualification blocked at the first rollover by a reproduced continuation-hash defect. The parent accepted the minimal source correction and focused regression. Qualification now awaits a distinct packaged 2.0.25 candidate and parent authorization.
 
 ## Scope
 
@@ -20,13 +20,13 @@ The scenario checks:
 - an actual RPC `switch_session` back to the main active shard;
 - a maximum of six non-header entries in each physical source file;
 - unchanged hashes for all source shards present before restart, all source files still present, and zero source deletions;
-- Pi 0.85.1, package 2.0.24, candidate SHA, built distribution, and native `better-sqlite3` prerequisites.
+- Pi 0.85.1, package 2.0.25, candidate SHA, built distribution, and native `better-sqlite3` prerequisites.
 
-The synthetic setup appends one user entry and one Pi compaction entry per new shard through the installed SessionManager API. The compaction contains a regular Pi summary because a model call is prohibited. These entries are producer input only. The harness does not assert producer coverage. A successful rollover is the coverage assertion because the packaged command derives and validates the selection itself.
+The synthetic setup appends completed user and assistant turns around one Pi compaction entry per new shard through the installed SessionManager API. The assistant records are fixed fixture data and do not call a model or provider. The compaction contains a regular Pi summary because a model call is prohibited. These entries are producer input only. The harness does not assert producer coverage. A successful rollover is the coverage assertion because the packaged command derives and validates the selection itself.
 
 ## Execution boundary
 
-Run this scenario once after the project lead supplies the final integrated 2.0.24 candidate. Do not treat a plan invocation, an earlier package version, or the mock ten-route fixture as qualification evidence.
+Run this scenario once after the project lead supplies and authorizes the corrected packaged 2.0.25 candidate. Do not treat a plan invocation, the blocked 2.0.24 run, or the mock ten-route fixture as qualification evidence.
 
 Prerequisites:
 
@@ -41,7 +41,7 @@ Generic commands:
 
 ```sh
 cd packages/pi-chrono-compaction
-RUNTIME_SHA=932365908d7ca43c587f489517f4dfbb69c9652e
+RUNTIME_SHA="${CORRECTED_CANDIDATE_SHA:?set corrected 2.0.25 candidate SHA}"
 npm ci
 npm run catalog:sqlite:probe
 npm run build
@@ -54,14 +54,14 @@ node scripts/m11-logical-pi-qualification.mjs run \
   --output /path/to/new-safe-result.json
 ```
 
-The run records the runtime candidate and harness commits independently. It requires the runtime candidate to be an ancestor of the harness and refuses any runtime source, distribution, lockfile, or package metadata difference between them. It also refuses a package version other than 2.0.24, an installed Pi version other than 0.85.1, a missing distribution, a missing native SQLite binding, a reused output file, or an output path inside the synthetic root. Pi receives an environment without provider credentials and runs with `--offline` and no built-in tools.
+The run records the runtime candidate and harness commits independently. It requires the runtime candidate to be an ancestor of the harness and refuses any runtime source, distribution, lockfile, or package metadata difference between them. It also refuses a package version other than 2.0.25, an installed Pi version other than 0.85.1, a missing distribution, a missing native SQLite binding, a reused output file, or an output path inside the synthetic root. Pi receives an environment without provider credentials and runs with `--offline` and no built-in tools.
 
 ## Prepared checks
 
 Preparation checks:
 
 - `node --check scripts/m11-logical-pi-qualification.mjs` passed.
-- The pre-candidate `plan` passed and reported ten rollover operations, eleven main physical shards, one child shard, Pi 0.85.1, package 2.0.24, and zero provider calls.
+- The earlier 2.0.24 `plan` passed and reported ten rollover operations, eleven main physical shards, one child shard, Pi 0.85.1, and zero provider calls. The 2.0.25 binding has syntax validation only until that package exists.
 - `git diff --check` passed.
 - Runtime candidate `932365908d7ca43c587f489517f4dfbb69c9652e` was supplied with package 2.0.24, Pi 0.85.1, Node 24.18.0 ABI 137, `better-sqlite3` 12.9.0, native binding SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`, and 134 verified package-manifest records.
 
@@ -71,7 +71,7 @@ The installed-Pi run against unchanged runtime candidate `932365908d7ca43c587f48
 
 Focused diagnosis through the same actual indexed selection reproduced `capsule-canonical-invalid` in `buildManualContinuationCandidate`. The composer produced valid episode rows with fractional `importance: 0.7`. `buildManualContinuationCandidate` then tried to rehash the artifact with capsule `canonicalJson`, which intentionally accepts only nonnegative safe integers. The composer contract already defines `envelope.artifactHash` as the SHA-256 hash of its stable artifact serialization.
 
-The approved correction reuses `composed.envelope.artifactHash`. It does not loosen `canonicalJson`, alter producer importance, rebuild the frozen 2.0.24 candidate, or change other continuation validation. One focused regression sends an actual fractional-importance episode row through the composer and continuation builder, then verifies that the continuation preserves the composer artifact hash.
+The accepted correction reuses `composed.envelope.artifactHash`. It does not loosen `canonicalJson`, alter producer importance, rebuild the frozen 2.0.24 candidate, or change other continuation validation. One focused regression sends an actual fractional-importance episode row through the composer and continuation builder, then verifies that the continuation preserves the composer artifact hash.
 
 All failed synthetic roots remain owner-only and retained for diagnosis. The 10-rollover, fork, reopen, recovery, bounded-shard, and no-deletion acceptance checks remain unqualified until the parent supplies a separately packaged corrected candidate.
 

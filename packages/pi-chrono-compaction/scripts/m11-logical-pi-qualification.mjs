@@ -10,7 +10,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const EXPECTED_PI_VERSION = "0.85.1";
-const EXPECTED_PACKAGE_VERSION = "2.0.24";
+const EXPECTED_PACKAGE_VERSION = "2.0.25";
 const MAIN_ROLLOVERS = 10;
 const HELP = `Usage:
   node scripts/m11-logical-pi-qualification.mjs plan --runtime-sha <40-hex>
@@ -47,6 +47,13 @@ function assertRuntimeIdentity(runtimeSha) {
 function installedPiVersion() { return execFileSync("pi", ["--version"], { encoding: "utf8", env: { PATH: process.env.PATH, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0" } }).trim(); }
 function line(id, parentId, text) {
   return JSON.stringify({ type: "message", id, parentId, timestamp: new Date().toISOString(), message: { role: "user", content: text, timestamp: Date.now() } }) + "\n";
+}
+function assistantLine(id, parentId, text) {
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  return JSON.stringify({ type: "message", id, parentId, timestamp: new Date().toISOString(), message: { role: "assistant",
+    content: [{ type: "text", text }], api: "qualification-no-provider", provider: "qualification", model: "synthetic",
+    usage, stopReason: "stop", timestamp: Date.now() } }) + "\n";
 }
 async function fileHash(path) { return sha(await readFile(path)); }
 async function safeWrite(path, content) { await writeFile(path, content, { mode: 0o600, flag: "wx" }); await chmod(path, 0o600); }
@@ -174,9 +181,12 @@ async function run(input) {
   const firstId = "qual-root";
   const header = JSON.stringify({ type: "session", version: 3, id: initialSessionId, timestamp: new Date().toISOString(), cwd: input.root }) + "\n";
   const user = line(firstId, null, `Exact marker ${initialMarker}. Do not delete protected qualification artifact zero. Keep qualification task zero open until exact recovery.`);
-  const compaction = JSON.stringify({ type: "compaction", id: "qual-summary", parentId: firstId, timestamp: new Date().toISOString(),
+  const answer = assistantLine("qual-answer", firstId, "Recorded synthetic qualification state without a provider call.");
+  const compaction = JSON.stringify({ type: "compaction", id: "qual-summary", parentId: "qual-answer", timestamp: new Date().toISOString(),
     summary: "Qualification regular summary zero.", firstKeptEntryId: firstId, tokensBefore: 64, details: { piSummary: "Qualification regular summary zero." } }) + "\n";
-  await safeWrite(initialPath, header + user + compaction);
+  const tail = line("qual-tail", "qual-summary", "Continue the bounded qualification scenario.")
+    + assistantLine("qual-tail-answer", "qual-tail", "Ready for the next bounded qualification operation.");
+  await safeWrite(initialPath, header + user + answer + compaction + tail);
 
   const bridgePath = join(agent, "qualification-bridge.mjs");
   const chronoUrl = pathToFileURL(join(packageRoot, "dist", "src", "pi-extension.js")).href;
@@ -197,8 +207,14 @@ export default function qualificationBridge(pi) {
     if (!Number.isSafeInteger(ordinal) || !marker) throw Error("qualification-seed-input");
     const parent = ctx.sessionManager.getLeafId();
     const userId = ctx.sessionManager.appendMessage({ role: "user", content: "Exact marker " + marker + ". Do not delete protected qualification artifact " + ordinal + ". Keep qualification task " + ordinal + " open until exact recovery.", timestamp: Date.now() });
-    ctx.sessionManager.appendCompaction("Qualification regular summary " + ordinal + ".", userId, 64, { piSummary: "Qualification regular summary " + ordinal + ".", qualificationParent: parent });
-    ctx.ui.notify("QUALIFICATION_SEED:" + ordinal + ":" + JSON.stringify({ entries: ctx.sessionManager.getEntries().length, entryId: userId }), "info");
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    const answerId = ctx.sessionManager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Recorded synthetic qualification state without a provider call." }],
+      api: "qualification-no-provider", provider: "qualification", model: "synthetic", usage, stopReason: "stop", timestamp: Date.now() });
+    const summaryId = ctx.sessionManager.appendCompaction("Qualification regular summary " + ordinal + ".", userId, 64, { piSummary: "Qualification regular summary " + ordinal + ".", qualificationParent: parent, answerId });
+    ctx.sessionManager.appendMessage({ role: "user", content: "Continue the bounded qualification scenario.", timestamp: Date.now() });
+    ctx.sessionManager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Ready for the next bounded qualification operation." }],
+      api: "qualification-no-provider", provider: "qualification", model: "synthetic", usage, stopReason: "stop", timestamp: Date.now() });
+    ctx.ui.notify("QUALIFICATION_SEED:" + ordinal + ":" + JSON.stringify({ entries: ctx.sessionManager.getEntries().length, entryId: userId, summaryId }), "info");
   }});
   pi.registerCommand("qualification-probe", { handler: async (args, ctx) => {
     const [marker, routesText, entryId] = args.trim().split(/\\s+/); const routes = Number(routesText); const status = await waitReady(ctx, routes);
