@@ -229,8 +229,51 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
       assert.equal(item.memoryId, "mem-1");
       assert.equal("resolutionEvidence" in item, false, "future transition references do not leak into a historical pin");
     }
+    const sourceBeforeRepair = createHash("sha256").update(readFileSync(sourcePath)).digest("hex");
+    const repairId = "m08-resumable-repair";
+    const repairStart = await run(oldView, { op: "repairRollup", action: "start", repairId });
+    assert.equal(repairStart.ok, true, JSON.stringify(repairStart)); if (!repairStart.ok) return;
+    assert.equal((repairStart.result as any).expectedActiveStoreId, null);
+    const repairPartial = await run(oldView, { op: "repairRollup", action: "step", repairId, limit: 1 });
+    assert.equal(repairPartial.ok, true, JSON.stringify(repairPartial)); if (!repairPartial.ok) return;
+    assert.equal((repairPartial.result as any).complete, false, "one finite repair step persists a partial target");
+    const repairRestart = await run(oldView, { op: "repairRollup", action: "start", repairId });
+    assert.equal(repairRestart.ok, true, JSON.stringify(repairRestart));
+    const repairResumed = await run(oldView, { op: "repairRollup", action: "status", repairId });
+    assert.equal(repairResumed.ok, true, JSON.stringify(repairResumed));
+    if (repairResumed.ok) assert.equal((repairResumed.result as any).rollupGeneration,
+      (repairPartial.result as any).rollupGeneration, "a start retry validates and resumes rather than resetting its target");
+    const incompletePublish = await run(oldView, { op: "repairRollup", action: "publish", repairId, expectedActiveStoreId: null });
+    assert.equal(incompletePublish.ok, false);
+    if (!incompletePublish.ok) assert.equal(incompletePublish.code, "search-v3-rollup-repair-incomplete");
+    let repaired: any = repairPartial.result;
+    for (let page = 0; page < 20 && !repaired.complete; page++) {
+      const response = await run(oldView, { op: "repairRollup", action: "step", repairId, limit: 1 });
+      assert.equal(response.ok, true, JSON.stringify(response)); if (!response.ok) return;
+      repaired = response.result;
+    }
+    assert.equal(repaired.complete, true, "bounded repair steps reach a complete validated replacement");
+
+    const corruptId = "m08-corrupt-target";
+    const corruptStart = await run(oldView, { op: "repairRollup", action: "start", repairId: corruptId });
+    assert.equal(corruptStart.ok, true, JSON.stringify(corruptStart)); if (!corruptStart.ok) return;
+    const corruptStore = join(searchDirectory, "rollup-repair-v1", "stores", `rollup-${(corruptStart.result as any).targetStoreId}.sqlite`);
+    writeFileSync(corruptStore, "corrupt-target", { mode: 0o600 });
+    const corruptPublish = await run(oldView, { op: "repairRollup", action: "publish", repairId: corruptId, expectedActiveStoreId: null });
+    assert.equal(corruptPublish.ok, false, "a corrupt replacement cannot change the active route");
+
+    const repairPublish = await run(oldView, { op: "repairRollup", action: "publish", repairId, expectedActiveStoreId: null });
+    assert.equal(repairPublish.ok, true, JSON.stringify(repairPublish)); if (!repairPublish.ok) return;
+    assert.equal((repairPublish.result as any).handle.storeId, (repairStart.result as any).targetStoreId);
+    const routedStatus = await run(oldView, { op: "rollupStatus" });
+    assert.equal(routedStatus.ok, true, JSON.stringify(routedStatus));
+    if (routedStatus.ok) assert.equal((routedStatus.result as any).handle.storeId, (repairStart.result as any).targetStoreId);
     const pinnedRollup = await run(newView, { op: "recallRollup", level: "root", limit: 1, handle: oldRollupResult.handle });
     assert.equal(pinnedRollup.ok, true, JSON.stringify(pinnedRollup));
+    if (pinnedRollup.ok) assert.equal((pinnedRollup.result as any).handle.storeId, undefined,
+      "a legacy handle remains bound to rollup-v3.sqlite after route publication");
+    assert.equal(createHash("sha256").update(readFileSync(sourcePath)).digest("hex"), sourceBeforeRepair,
+      "repair and publication do not mutate the source archive");
 
     const capacityRestrictions = Array.from({ length: 32 }, (_, index) =>
       `Never deploy /Repo/Capacity-${index}.ts without approval. ${"x".repeat(700)}`).join("\n");

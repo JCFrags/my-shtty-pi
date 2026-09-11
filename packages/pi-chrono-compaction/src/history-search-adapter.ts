@@ -226,6 +226,18 @@ export class HistorySearchAdapter {
       selectionPartial: rollup.result.selectionPartial === true,
       partialReasons: Array.isArray(rollup.result.partialReasons) ? rollup.result.partialReasons.map(String) : [], items } };
   }
+  /** One finite repair transition. The caller repeats `step`; this method never loops. */
+  async repairRollup(prefixLeafId: string, action: "start" | "step" | "status" | "publish", repairId: string,
+    expectedActiveStoreId?: string | null, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const key = this.key, target = await this.compositionTarget(prefixLeafId, signal);
+    const request = { ...target, op: "repairRollup" as const, action, repairId,
+      ...(action === "step" ? { limit: 1 } : {}), ...(action === "publish" ? { expectedActiveStoreId: expectedActiveStoreId ?? null } : {}) };
+    if (!isEpisodeStateRequest(request)) return fail("search-v3-reference-invalid");
+    const response = await runSearchV3Worker(request, { ...this.options, signal });
+    if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
+    if (!response.ok) return fail(response.code);
+    return response.result;
+  }
   private within(view: CapsuleCatalogView, current: CapsuleCatalogView): boolean {
     return view.storeKey === current.storeKey && view.generation === current.generation && view.sessionKey === current.sessionKey
       && view.branchKey === current.branchKey && view.eventCut <= current.eventCut

@@ -199,6 +199,8 @@ export interface EpisodeStateSelection {
 
 export interface EpisodeRollupHandle {
   readonly schemaVersion: 1;
+  /** Absent handles remain bound to the immutable legacy rollup-v3.sqlite store. */
+  readonly storeId?: string;
   readonly ruleset: "episode-rollup-exact-v3";
   readonly branchKey: string;
   /** Common body-plus-metadata cut represented by this immutable publication. */
@@ -224,6 +226,8 @@ export type EpisodeStateRequest = Base & (
       readonly level?: EpisodeStateLevel; readonly limit?: number; readonly after?: EpisodeStateAfter }
   | { readonly op: "materializeRollup"; readonly limit?: number }
   | { readonly op: "rollupStatus" }
+  | { readonly op: "repairRollup"; readonly action: "start" | "step" | "status" | "publish";
+      readonly repairId: string; readonly limit?: number; readonly expectedActiveStoreId?: string | null }
   | { readonly op: "composeRollupSelection"; readonly query: string; readonly beforeEventSeq: number;
       readonly limit?: number; readonly handle: EpisodeRollupHandle }
   | { readonly op: "recallRollup"; readonly query?: string; readonly nodeId?: string; readonly path?: readonly string[];
@@ -254,6 +258,7 @@ function rollupAfter(value: unknown): value is EpisodeRollupAfter {
 }
 function rollupHandle(value: unknown): value is EpisodeRollupHandle {
   return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v3"
+    && (value.storeId === undefined || typeof value.storeId === "string" && /^[a-f0-9]{64}$/u.test(value.storeId))
     && typeof value.branchKey === "string" && value.branchKey.length > 0 && value.branchKey.length <= 256
     && integer(value.eventCut) && positive(value.stateGeneration) && positive(value.rollupGeneration)
     && typeof value.rootNodeId === "string" && /^[a-f0-9]{64}$/u.test(value.rootNodeId);
@@ -277,6 +282,9 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
     case "materializeRollup": return value.after === undefined
       && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob);
     case "rollupStatus": return value.limit === undefined && value.after === undefined;
+    case "repairRollup": return typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
+      && (value.action === "step" ? value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob : value.limit === undefined)
+      && (value.action === "publish" ? value.expectedActiveStoreId === null || typeof value.expectedActiveStoreId === "string" && /^[a-f0-9]{64}$/u.test(value.expectedActiveStoreId) : value.expectedActiveStoreId === undefined);
     case "composeRollupSelection": return rollupHandle(value.handle) && value.handle.branchKey === value.view.branchKey
       && value.handle.eventCut <= value.view.eventCut && typeof value.query === "string" && value.query.trim().length > 0
       && value.query.length <= EPISODE_STATE_LIMITS.queryUnits && positive(value.beforeEventSeq)

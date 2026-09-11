@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { lstatSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, constants as F, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync, type Stats } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { canonicalJson } from "./capsule-segment.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
 import { CatalogSqlite, type SqlRow, type SqlValue } from "./catalog-sqlite.js";
@@ -35,6 +35,68 @@ const schema = [
   "CREATE TABLE publications (generation INTEGER PRIMARY KEY, lineage TEXT NOT NULL, branchKey TEXT NOT NULL, eventCut INTEGER NOT NULL, stateGeneration INTEGER NOT NULL, rootNodeId TEXT NOT NULL, complete INTEGER NOT NULL) WITHOUT ROWID",
   "CREATE INDEX publications_lineage ON publications(lineage,generation)",
 ];
+const repairedPublicationIndex = "CREATE INDEX publications_cut ON publications(lineage,eventCut DESC,generation DESC)";
+const REPAIR_ROOT = "rollup-repair-v1";
+
+interface RepairActive { readonly v: 1; readonly storeId: string }
+interface RepairStage extends RepairActive { readonly repairId: string; readonly expectedActiveStoreId: string | null; readonly viewHash: string; readonly identityHash: string;
+  readonly stateGeneration: number; readonly processedCut: number; readonly processedMemoryCut: number }
+const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code === "ENOENT";
+const storeIdValid = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+const activeValid = (value: any): value is RepairActive => value?.v === 1 && storeIdValid(value.storeId);
+const stageValid = (value: any): value is RepairStage => value?.v === 1 && storeIdValid(value.storeId) && typeof value.repairId === "string"
+  && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId) && (value.expectedActiveStoreId === null || storeIdValid(value.expectedActiveStoreId))
+  && storeIdValid(value.viewHash) && storeIdValid(value.identityHash) && Number.isSafeInteger(value.stateGeneration) && value.stateGeneration > 0
+  && Number.isSafeInteger(value.processedCut) && value.processedCut >= 0 && Number.isSafeInteger(value.processedMemoryCut) && value.processedMemoryCut >= value.processedCut;
+function privateDir(path: string, create = false): Stats {
+  if (resolve(path) !== path || path === "/") fail("search-v3-rollup-storage-unsafe");
+  try { if (create) mkdirSync(path, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o7777) !== 0o700)
+    fail("search-v3-rollup-storage-unsafe");
+  return stat;
+}
+function syncDir(path: string): void { const fd = openSync(path, F.O_RDONLY | F.O_DIRECTORY | F.O_NOFOLLOW); try { fsyncSync(fd); } finally { closeSync(fd); } }
+function safeRecord<T>(path: string, valid: (value: any) => value is T): T | undefined {
+  privateDir(dirname(path)); let stat: Stats;
+  try { stat = lstatSync(path); } catch (error) { if (missing(error)) return undefined; throw error; }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o7777) !== 0o600
+    || stat.nlink !== 1 || stat.size < 2 || stat.size > 4096) fail("search-v3-rollup-pointer-unsafe");
+  const fd = openSync(path, F.O_RDONLY | F.O_NOFOLLOW);
+  try {
+    const opened = fstatSync(fd); if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size) fail("search-v3-rollup-pointer-changed");
+    const value = JSON.parse(readFileSync(fd, "utf8"));
+    if (!valid(value) || fstatSync(fd).size !== opened.size) fail("search-v3-rollup-pointer-invalid");
+    return value;
+  } catch (error) { if (error instanceof SyntaxError) fail("search-v3-rollup-pointer-invalid"); throw error; }
+  finally { closeSync(fd); }
+}
+function atomicRecord(path: string, value: unknown): void {
+  const parent = privateDir(dirname(path)), bytes = Buffer.from(JSON.stringify(value));
+  if (bytes.length > 4096) fail("search-v3-rollup-pointer-limit");
+  const temporary = join(dirname(path), `.pending-${randomUUID()}`); let fd: number | undefined;
+  try {
+    fd = openSync(temporary, F.O_WRONLY | F.O_CREAT | F.O_EXCL | F.O_NOFOLLOW, 0o600);
+    let offset = 0; while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset);
+    fsyncSync(fd); const made = fstatSync(fd);
+    if (!made.isFile() || made.uid !== process.getuid?.() || (made.mode & 0o7777) !== 0o600 || made.nlink !== 1) fail("search-v3-rollup-pointer-unsafe");
+    const now = privateDir(dirname(path)); if (now.dev !== parent.dev || now.ino !== parent.ino) fail("search-v3-rollup-pointer-changed");
+    renameSync(temporary, path); syncDir(dirname(path));
+  } finally { if (fd !== undefined) closeSync(fd); try { unlinkSync(temporary); } catch (error) { if (!missing(error)) throw error; } }
+}
+function repairPaths(searchDirectory: string): { root: string; stores: string; stages: string; active: string } {
+  const root = join(searchDirectory, REPAIR_ROOT); return { root, stores: join(root, "stores"), stages: join(root, "stages"), active: join(root, "active.json") };
+}
+function prepareRepairPaths(searchDirectory: string): ReturnType<typeof repairPaths> {
+  const paths = repairPaths(searchDirectory); privateDir(searchDirectory); privateDir(paths.root, true); privateDir(paths.stores, true); privateDir(paths.stages, true); return paths;
+}
+function repairStorePath(searchDirectory: string, storeId: string): string {
+  if (!storeIdValid(storeId)) fail("search-v3-rollup-store-mismatch"); return join(repairPaths(searchDirectory).stores, `rollup-${storeId}.sqlite`);
+}
+function safeStoreFile(path: string): void {
+  const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.()
+    || (stat.mode & 0o7777) !== 0o600 || stat.nlink !== 1) fail("search-v3-rollup-storage-unsafe");
+}
 
 interface RollupRange { start: { eventSeq: number; descriptor: number }; end: { eventSeq: number; descriptor: number } }
 interface RollupNodeBase {
@@ -70,7 +132,8 @@ type StoredNode = RollupNode & { readonly nodeId: string; readonly contentHash: 
 
 class Store {
   statements = 0;
-  constructor(readonly db: CatalogSqlite, readonly request: EpisodeStateRequest) {}
+  constructor(readonly db: CatalogSqlite, readonly request: EpisodeStateRequest,
+    readonly storeId?: string, readonly indexedCut = false) {}
   get(sql: string, ...values: SqlValue[]): SqlRow | undefined { this.statements++; return this.db.prepare(sql).get(...values); }
   run(sql: string, ...values: SqlValue[]): void { this.statements++; this.db.prepare(sql).run(...values); }
   rows(sql: string, maximum: number, ...values: SqlValue[]): SqlRow[] { this.statements++; return [...this.db.prepare(sql).iterate(maximum, ...values)]; }
@@ -87,12 +150,15 @@ class Store {
       const parts = sql.split(" "), name = parts[1] === "INDEX" ? parts[2]! : parts[2]!;
       if (this.get("SELECT sql FROM sqlite_master WHERE name=?", name)?.sql !== sql) fail("search-v3-rollup-version-mismatch");
     }
+    if (this.indexedCut && this.get("SELECT sql FROM sqlite_master WHERE name='publications_cut'")?.sql !== repairedPublicationIndex)
+      fail("search-v3-rollup-version-mismatch");
   }
   initialize(): void {
     this.transaction(() => {
       this.validate(true);
       if (!this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'")) {
         for (const sql of schema) this.run(sql);
+        if (this.indexedCut) this.run(repairedPublicationIndex);
         this.run("INSERT INTO meta VALUES(1,?,?,?,?,?,?,0)", EPISODE_ROLLUP_SCHEMA_VERSION, canonicalJson(this.request.identity),
           this.request.searchDirectory, this.request.capsuleDirectory, this.request.catalogDirectory, EPISODE_ROLLUP_RULESET_VERSION);
       }
@@ -228,8 +294,8 @@ function buildRoot(store: Store, value: Map<number, string[]>, generation: numbe
   }
   return nodes[0];
 }
-function handle(request: EpisodeStateRequest, row: SqlRow): EpisodeRollupHandle {
-  return { schemaVersion: 1, ruleset: EPISODE_ROLLUP_RULESET_VERSION, branchKey: request.view.branchKey, eventCut: num(row, "eventCut"),
+function handle(request: EpisodeStateRequest, row: SqlRow, store?: Store): EpisodeRollupHandle {
+  return { schemaVersion: 1, ...(store?.storeId ? { storeId: store.storeId } : {}), ruleset: EPISODE_ROLLUP_RULESET_VERSION, branchKey: request.view.branchKey, eventCut: num(row, "eventCut"),
     stateGeneration: num(row, "stateGeneration"), rollupGeneration: num(row, "generation"), rootNodeId: str(row, "rootNodeId") };
 }
 function compatibleView(current: EpisodeStateRequest["view"], old: EpisodeStateRequest["view"]): boolean {
@@ -299,7 +365,7 @@ async function materialize(request: Extract<EpisodeStateRequest, { op: "material
     branchKey: request.view.branchKey, requestedCut, processedCut, processedMemoryCut, knownThroughCut: processedCut, complete: exhausted,
     closedIntervalsOnly: true, representedClosedRange, closedThroughCut: root?.range.end.eventSeq ?? 0, excludedOpenTail: Boolean(root),
     remainingWork: pending, noEligibleEpisode: pages.length === 0,
-    ...(publication ? { handle: handle(request, publication), rootReference: { kind: "rollup-node", handle: handle(request, publication), nodeId: root!.nodeId, path: [root!.nodeId] } } : {}),
+    ...(publication ? { handle: handle(request, publication, store), rootReference: { kind: "rollup-node", handle: handle(request, publication, store), nodeId: root!.nodeId, path: [root!.nodeId] } } : {}),
     next: cursor, metrics: { leafPages: pages.length, nodesCreated: created.count, sqliteStatements: store.statements } };
 }
 function publicationFor(request: Extract<EpisodeStateRequest, { op: "recallRollup" | "composeRollupSelection" }>, store: Store): SqlRow {
@@ -351,7 +417,7 @@ function episodeItem(h: EpisodeRollupHandle, node: EpisodeLeafNode & { readonly 
 /** Select relevant historical nodes top-down. Selected nodes stop descent, so
  * query work is bounded by actual node reads rather than history size. */
 function composeRollupSelection(request: Extract<EpisodeStateRequest, { op: "composeRollupSelection" }>, store: Store): Record<string, unknown> {
-  const publication = publicationFor(request, store), h = handle(request, publication);
+  const publication = publicationFor(request, store), h = handle(request, publication, store);
   let nodesRead = 0;
   const readNode = (nodeId: string): StoredNode => {
     if (nodesRead >= EPISODE_STATE_LIMITS.rollupNodesPerRecall) fail("search-v3-rollup-node-limit");
@@ -402,7 +468,7 @@ function composeRollupSelection(request: Extract<EpisodeStateRequest, { op: "com
 }
 
 function recall(request: Extract<EpisodeStateRequest, { op: "recallRollup" }>, store: Store): Record<string, unknown> {
-  const publication = publicationFor(request, store), h = handle(request, publication), rootId = str(publication, "rootNodeId");
+  const publication = publicationFor(request, store), h = handle(request, publication, store), rootId = str(publication, "rootNodeId");
   const targetId = request.nodeId ?? rootId, route = verifiedPath(store, rootId, targetId, request.path);
   const target = loadNode(store, targetId), level = request.level ?? "root", limit = request.limit ?? EPISODE_STATE_LIMITS.page;
   const queryHash = sha(canonicalJson({ query: request.query?.trim() ?? "", level, nodeId: targetId, path: route.path,
@@ -480,14 +546,16 @@ function status(request: Extract<EpisodeStateRequest, { op: "rollupStatus" }>, s
       remainingWork: remainingWork(request.view.eventCut, processedCut, complete, 0), noEligibleEpisode: true, cursor,
       metrics: { sqliteStatements: store.statements } };
   }
-  const publication = store.get("SELECT * FROM publications WHERE generation=?", num(head, "generation"));
+  const publication = store.indexedCut
+    ? store.get("SELECT * FROM publications WHERE lineage=? AND eventCut<=? ORDER BY eventCut DESC,generation DESC LIMIT 1", lineage(request), request.view.eventCut)
+    : store.get("SELECT * FROM publications WHERE generation=?", num(head, "generation"));
   const publicationRow = publication ?? fail("search-v3-rollup-publication-missing");
   if (str(publicationRow, "branchKey") !== request.view.branchKey || num(publicationRow, "eventCut") > request.view.eventCut)
     return { readiness: "incompatible", rollupGeneration: num(publicationRow, "generation"), branchKey: request.view.branchKey,
       requestedCut: request.view.eventCut, processedCut: 0, processedMemoryCut: 0, knownThroughCut: 0, complete: false,
       closedIntervalsOnly: true, representedClosedRange: null, remainingWork: "state-catch-up", noEligibleEpisode: true,
       metrics: { sqliteStatements: store.statements } };
-  const h = handle(request, publicationRow), root = loadNode(store, h.rootNodeId), complete = num(head, "complete") === 1;
+  const h = handle(request, publicationRow, store), root = loadNode(store, h.rootNodeId), complete = num(publicationRow, "complete") === 1;
   const rootRow = store.get("SELECT createdGeneration FROM nodes WHERE nodeId=?", h.rootNodeId);
   const noEligibleEpisode = complete && Boolean(rootRow) && num(rootRow!, "createdGeneration") < h.rollupGeneration;
   return { readiness: complete ? "ready" : "partial", rollupGeneration: h.rollupGeneration,
@@ -499,35 +567,122 @@ function status(request: Extract<EpisodeStateRequest, { op: "rollupStatus" }>, s
     cursor, metrics: { sqliteStatements: store.statements } };
 }
 
-export async function executeEpisodeRollupRequest(request: Extract<EpisodeStateRequest, { op: "materializeRollup" | "rollupStatus" | "composeRollupSelection" | "recallRollup" }>,
+function activeStoreId(searchDirectory: string): string | null {
+  const paths = repairPaths(searchDirectory);
+  try { lstatSync(paths.root); } catch (error) { if (missing(error)) return null; throw error; }
+  privateDir(paths.root); privateDir(paths.stores); privateDir(paths.stages);
+  return safeRecord(paths.active, activeValid)?.storeId ?? null;
+}
+function repairStage(request: Extract<EpisodeStateRequest, { op: "repairRollup" }>, create: boolean,
+  snapshot?: Pick<EpisodeRollupInputPage, "stateGeneration" | "processedCut" | "processedMemoryCut">): { paths: ReturnType<typeof repairPaths>; stage: RepairStage } {
+  const paths = create ? prepareRepairPaths(request.searchDirectory) : repairPaths(request.searchDirectory);
+  if (!create) { privateDir(paths.root); privateDir(paths.stores); privateDir(paths.stages); }
+  const path = join(paths.stages, `${sha(request.repairId)}.json`);
+  const identityHash = sha(canonicalJson(request.identity)), viewHash = sha(canonicalJson(request.view));
+  let stage = safeRecord(path, stageValid);
+  if (!stage && create) {
+    if (!snapshot) fail("search-v3-rollup-state-not-ready");
+    const selectedSnapshot = snapshot as Pick<EpisodeRollupInputPage, "stateGeneration" | "processedCut" | "processedMemoryCut">;
+    const expectedActiveStoreId = safeRecord(paths.active, activeValid)?.storeId ?? null;
+    stage = { v: 1, repairId: request.repairId,
+      storeId: sha(canonicalJson({ repairId: request.repairId, identityHash, viewHash, stateGeneration: selectedSnapshot.stateGeneration,
+        processedCut: selectedSnapshot.processedCut, processedMemoryCut: selectedSnapshot.processedMemoryCut, ruleset: EPISODE_ROLLUP_RULESET_VERSION })),
+      expectedActiveStoreId, viewHash, identityHash, stateGeneration: selectedSnapshot.stateGeneration,
+      processedCut: selectedSnapshot.processedCut, processedMemoryCut: selectedSnapshot.processedMemoryCut };
+    atomicRecord(path, stage);
+  }
+  if (!stage) fail("search-v3-rollup-repair-missing");
+  const selected = stage as RepairStage;
+  if (selected.repairId !== request.repairId || selected.identityHash !== identityHash || selected.viewHash !== viewHash)
+    fail("search-v3-rollup-repair-mismatch");
+  return { paths, stage: selected };
+}
+async function repair(request: Extract<EpisodeStateRequest, { op: "repairRollup" }>, options: EpisodeStateExecutionOptions,
+  budget: { bytes: number }): Promise<Record<string, unknown>> {
+  const snapshot = request.action === "start" ? await readEpisodeRollupInputPage(request, undefined, options, budget) : undefined;
+  const { paths, stage } = repairStage(request, request.action === "start", snapshot), path = repairStorePath(request.searchDirectory, stage.storeId);
+  const openStore = (create: boolean): { db: CatalogSqlite; store: Store } => {
+    if (!create) safeStoreFile(path);
+    const validate = (candidate: CatalogSqlite): void => new Store(candidate, request, stage.storeId, true).validate(create);
+    const db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
+    const store = new Store(db, request, stage.storeId, true); if (create) {
+      store.initialize();
+      if (!store.get("SELECT lineage FROM heads WHERE lineage=?", lineage(request))) {
+        const cursor: EpisodeRollupInputCursor = { episodeStartEventSeq: 0, episodeStartDescriptor: 0, episodeKey: "", memberEventSeq: 0,
+          memberDescriptor: 0, memberSourceKey: "", episodeComplete: true, fragmentIndex: 0,
+          snapshot: { stateGeneration: stage.stateGeneration, requestedCut: request.view.eventCut, processedCut: stage.processedCut,
+            processedMemoryCut: stage.processedMemoryCut, sourceView: request.view } };
+        store.run("INSERT INTO heads VALUES(?,?,?,?,?,?,?)", lineage(request), canonicalJson(request.view), stage.stateGeneration,
+          canonicalJson(cursor), 0, null, 0);
+      }
+    } else store.validate(false);
+    safeStoreFile(path); return { db, store };
+  };
+  if (request.action === "start") {
+    const { db, store } = openStore(true);
+    try { db.checkpoint(); return { action: "start", repairId: request.repairId, targetStoreId: stage.storeId,
+      expectedActiveStoreId: stage.expectedActiveStoreId, stateGeneration: stage.stateGeneration,
+      processedCut: stage.processedCut, resumable: true, metrics: { sqliteStatements: store.statements } }; }
+    finally { db.close(); }
+  }
+  const { db, store } = openStore(false);
+  try {
+    if (request.action === "step") {
+      const value = await materialize({ ...request, op: "materializeRollup", limit: request.limit }, store, options, budget);
+      try { db.checkpoint(); } catch { /* committed WAL remains authoritative */ }
+      return { action: "step", repairId: request.repairId, targetStoreId: stage.storeId, resumable: value.complete !== true, ...value };
+    }
+    const value = status({ ...request, op: "rollupStatus" }, store);
+    if (request.action === "status") return { action: "status", repairId: request.repairId, targetStoreId: stage.storeId,
+      expectedActiveStoreId: stage.expectedActiveStoreId, ...value };
+    if (request.expectedActiveStoreId !== stage.expectedActiveStoreId) fail("search-v3-rollup-publication-conflict");
+    const h = value.handle as EpisodeRollupHandle | undefined;
+    if (value.complete !== true || !h || h.storeId !== stage.storeId || h.eventCut !== request.view.eventCut
+      || h.stateGeneration !== stage.stateGeneration || h.branchKey !== request.view.branchKey
+      || h.ruleset !== EPISODE_ROLLUP_RULESET_VERSION) fail("search-v3-rollup-repair-incomplete");
+    const validHandle = h as EpisodeRollupHandle;
+    loadNode(store, validHandle.rootNodeId); db.checkpoint(); safeStoreFile(path);
+    const current = safeRecord(paths.active, activeValid)?.storeId ?? null;
+    if (current !== stage.expectedActiveStoreId && current !== stage.storeId) fail("search-v3-rollup-publication-conflict");
+    if (current !== stage.storeId) atomicRecord(paths.active, { v: 1, storeId: stage.storeId } satisfies RepairActive);
+    return { action: "publish", repairId: request.repairId, targetStoreId: stage.storeId, published: true, handle: validHandle };
+  } finally { db.close(); }
+}
+
+export async function executeEpisodeRollupRequest(request: Extract<EpisodeStateRequest, { op: "materializeRollup" | "rollupStatus" | "repairRollup" | "composeRollupSelection" | "recallRollup" }>,
   options: EpisodeStateExecutionOptions = {}): Promise<EpisodeStateResponse> {
-  const create = request.op === "materializeRollup", budget = { bytes: 0 }; let db: CatalogSqlite | undefined;
+  const budget = { bytes: 0 }; let db: CatalogSqlite | undefined;
   try {
     const catalog = await (options.catalogExecutor ?? executeCatalogStoreRequest)({ v: 1, catalogDirectory: request.catalogDirectory,
       sessionKey: request.identity.capsule.sessionKey, op: "page", view: request.view, after: request.view.eventCut, limit: 1 });
     budget.bytes += catalog.sourceBytes;
     if (!catalog.ok) fail(catalog.code === "catalog-source-changed" ? "search-v3-rollup-source-changed" : "search-v3-rollup-catalog-unavailable");
     const action = async (): Promise<EpisodeStateResponse> => {
-      const path = join(request.searchDirectory, "rollup-v3.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
-      if (request.op === "rollupStatus") {
-        try { lstatSync(path); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("search-v3-rollup-store-missing");
-          throw error;
-        }
+      let result: Record<string, unknown>;
+      if (request.op === "repairRollup") result = await repair(request, options, budget);
+      else {
+        const explicitHandle = request.op === "recallRollup" || request.op === "composeRollupSelection" ? request.handle : undefined;
+        // A handle without storeId always means the legacy file, even after route publication.
+        const storeId = explicitHandle ? explicitHandle.storeId ?? null : activeStoreId(request.searchDirectory);
+        const path = storeId ? repairStorePath(request.searchDirectory, storeId) : join(request.searchDirectory, "rollup-v3.sqlite");
+        const indexedCut = storeId !== null, createStore = request.op === "materializeRollup" && !storeId;
+        if (!createStore) { try { safeStoreFile(path); } catch (error) { if (missing(error)) fail("search-v3-rollup-store-missing"); throw error; } }
+        const validate = (candidate: CatalogSqlite): void => new Store(candidate, request, storeId ?? undefined, indexedCut).validate(createStore);
+        db = createStore ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
+        const store = new Store(db, request, storeId ?? undefined, indexedCut); if (createStore) store.initialize(); else store.validate(false);
+        result = request.op === "materializeRollup" ? await materialize(request, store, options, budget)
+          : request.op === "recallRollup" ? recall(request, store)
+          : request.op === "composeRollupSelection" ? composeRollupSelection(request, store) : status(request, store);
+        if (createStore) try { db.checkpoint(); } catch { /* committed WAL remains authoritative */ }
       }
-      db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
-      const store = new Store(db, request); if (create) store.initialize(); else store.validate(false);
-      const result = request.op === "materializeRollup" ? await materialize(request, store, options, budget)
-        : request.op === "recallRollup" ? recall(request, store)
-        : request.op === "composeRollupSelection" ? composeRollupSelection(request, store) : status(request, store);
       const response: EpisodeStateResponse = { v: 1, ok: true, result: { ...result,
         coverageScope: "Closed episode intervals and exact M07 source references. Interval closure is not task completion. Protected omissions stay explicit and detail remains reachable through children or exact sources." },
         sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };
       if (Buffer.byteLength(JSON.stringify(response)) > EPISODE_STATE_LIMITS.responseBytes) fail("search-v3-rollup-response-limit");
-      if (create) try { db.checkpoint(); } catch { /* committed WAL remains authoritative */ }
       return response;
     };
-    return create ? await withRuntimeMutex(join(request.searchDirectory, "rollup-publication.lock"), action) : await action();
+    const writes = request.op === "materializeRollup" || request.op === "repairRollup";
+    return writes ? await withRuntimeMutex(join(request.searchDirectory, "rollup-publication.lock"), action) : await action();
   } catch (error) {
     const candidate = (error as { code?: string }).code;
     const mapped: Record<string, string> = { "catalog-storage-unsafe": "search-v3-rollup-storage-unsafe", "catalog-sqlite-busy": "search-v3-rollup-store-busy",
