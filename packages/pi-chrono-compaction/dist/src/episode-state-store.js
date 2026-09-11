@@ -761,16 +761,17 @@ async function selectionContext(request, selection, options, budget) {
         const evidence = item.evidence;
         const category = item.kind === "restriction" ? "restriction" : "work";
         if (evidence.source && evidence.decodedUtf16 && typeof evidence.exactText === "string")
-            return canonicalJson({ category, authority: item.authority, status: item.status, source: sourceKey(evidence.source),
-                decodedUtf16: evidence.decodedUtf16, exactText: evidence.exactText });
-        return canonicalJson({ category, authority: item.authority, status: item.status, subject: item.subject, revision: item.revision, evidence: item.evidence });
+            return sha(canonicalJson({ category, authority: item.authority, status: item.status, source: sourceKey(evidence.source),
+                decodedUtf16: evidence.decodedUtf16, exactText: evidence.exactText }));
+        return sha(canonicalJson({ category, authority: item.authority, status: item.status, subject: item.subject, revision: item.revision, evidence: item.evidence }));
     };
     const counts = { restriction: new Set(), work: new Set() };
     const represented = { restriction: new Map(), work: new Map() };
+    const representedOriginal = new Map();
     const selectedSources = { restriction: new Set(), work: new Set() };
-    const proposition = (item) => ({ stableKey: item.stableKey, propositionKey: item.propositionKey,
-        spanKey: item.spanKey, subject: item.subject, revision: item.revision, kind: item.kind, authority: item.authority,
-        confidence: item.confidence, status: item.status, effectiveAtCut: item.effectiveAtCut, evidence: item.evidence });
+    const proposition = (item, representationKey) => ({ representationKey, stableKey: item.stableKey,
+        propositionKey: item.propositionKey, spanKey: item.spanKey, subject: item.subject, revision: item.revision, kind: item.kind,
+        authority: item.authority, confidence: item.confidence, status: item.status, effectiveAtCut: item.effectiveAtCut, evidence: item.evidence });
     const ordered = [...selection.protected].sort((a, b) => Number(b.kind === "restriction") - Number(a.kind === "restriction"));
     for (const original of ordered) {
         const category = original.kind === "restriction" ? "restriction" : "work";
@@ -795,16 +796,17 @@ async function selectionContext(request, selection, options, budget) {
         }
         const representedAt = represented[category].get(key);
         if (representedAt !== undefined) {
-            const existing = result.protected[representedAt];
+            const existing = result.protected[representedAt], first = representedOriginal.get(key) ?? fail("search-v3-state-checkpoint-corrupt");
             result.protected[representedAt] = { ...existing,
-                coveredPropositions: [...(existing.coveredPropositions ?? [proposition(existing)]), proposition(item)] };
+                coveredPropositions: [...(existing.coveredPropositions ?? [proposition(first, key)]), proposition(original, key)] };
             continue;
         }
         counts[category].add(key);
         if (sourceId)
             selectedSources[category].add(sourceId);
         represented[category].set(key, result.protected.length);
-        result.protected.push(item);
+        representedOriginal.set(key, original);
+        result.protected.push({ ...item, representationKey: key });
     }
     result.protected.sort((a, b) => {
         const left = a.evidence.source, right = b.evidence.source;

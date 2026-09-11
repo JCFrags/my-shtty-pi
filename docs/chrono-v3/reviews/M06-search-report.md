@@ -590,3 +590,19 @@ The routine workflow explicitly selects the real preview test and canary binding
 alongside the two relevant coverage/publication scenarios. No broad local suite
 ran. Exact-head CI, actual canary continuation, and updated original-cut evidence
 are pending, not claimed by this implementation report.
+
+
+### Shared paragraph payload correction (2.0.20)
+
+Both 2.0.19 CI runs failed the producer fixture because open work was absent.
+The other three focused scenarios passed. Consolidation still copied each full
+expanded paragraph into every covered proposition. The response budget then
+removed work. Patch 2.0.20 retains one paragraph representation, identified by a
+SHA-256 key. Covered propositions retain their original exact clauses and source
+coordinates and refer to that representation. No proposition, condition or
+authority is removed. The original open-work assertion remains unchanged.
+Typecheck and diff validation passed. No additional local runtime invocation ran.
+The correction requires fresh routine CI. State-v4 and rollup-v3 derivation
+identities remain valid because this changes response packing, not stored state.
+The failed 2.0.19 evidence remains preserved. No canary or shared deployment has
+run, and the fixed installed selection remains 2.0.15.

@@ -27,7 +27,7 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values pin the 2.0.19 M09 repository candidate, not a deployment.
+// These values pin the 2.0.20 M09 repository candidate, not a deployment.
 // This verifies repository and optional live byte identity; it does not assert activation.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
@@ -36,14 +36,14 @@ const EXPECTED = Object.freeze({
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
   sourceFiles: 126,
-  sourceTreeHash: "7c05e199ecce7c5f21a0477d57741af7139d24a4c05487550d52114316008d69",
+  sourceTreeHash: "bf7e3336d59500f925ad597c44efba5ab77631caba4e3788639f802cc7e2fb82",
   distFiles: 125,
-  distTreeHash: "cad3be1f56eb3fe0374ac3a522d57732daa1da868ac6fcbb634f44cfae42fa79",
+  distTreeHash: "9762b2dd34758cf4de5debcfb62a340826171ba3802f6f3afcdda6fb73d371cb",
   entrypointHash: "d9e01740781cf50daf086012e4a6bfe1faac18f4a5b5bdbe3f590d69638a9afc",
-  m01PackageHash: "91fbc20af1656ec2d0d3d605acf5403addd3247ed9e1a634059cc8cb3ecb14fe",
-  m01LockHash: "94d486340586b9c35c2b16e0e92554d98e6a274297a138993e8dc936a9822599",
-  livePackageHash: "91fbc20af1656ec2d0d3d605acf5403addd3247ed9e1a634059cc8cb3ecb14fe",
-  deployedPackageHash: "91fbc20af1656ec2d0d3d605acf5403addd3247ed9e1a634059cc8cb3ecb14fe",
+  m01PackageHash: "4948a2e7227ab38e7e9ecab3e6b721b7491788f79a99fb42a88a141aa9a8ab45",
+  m01LockHash: "0cb9d1eae8c82e84fc5adb161b3ab6767bfc4619ebcc73a700c38f79824307ae",
+  livePackageHash: "4948a2e7227ab38e7e9ecab3e6b721b7491788f79a99fb42a88a141aa9a8ab45",
+  deployedPackageHash: "4948a2e7227ab38e7e9ecab3e6b721b7491788f79a99fb42a88a141aa9a8ab45",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
   canonicalDeployedFiles: 291,
@@ -589,7 +589,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.19") fail("package-version-changed");
+  if (packageJson.version !== "2.0.20") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");

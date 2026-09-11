@@ -316,6 +316,14 @@ test("M09 actual producer selection preserves obligations and successive experie
       && (item.evidence as any).exactText.includes("/Repo/Parser-"));
     assert.equal(packed?.coveredPropositions?.length, 20,
       "one exact paragraph representation retains all covered propositions and source coordinates");
+    assert.match(packed?.representationKey ?? "", /^[a-f0-9]{64}$/u);
+    assert.ok(packed?.coveredPropositions?.every(item => item.representationKey === packed.representationKey));
+    assert.ok(packed?.coveredPropositions?.every(item => {
+      const evidence = item.evidence as any;
+      return evidence.exactText.includes("/Repo/Parser-") && !evidence.contextComplete
+        && evidence.decodedUtf16.end - evidence.decodedUtf16.start === evidence.exactText.length
+        && evidence.source.coordinateKind === "decoded-body";
+    }), "packed proposition records keep original clauses and coordinates instead of repeating the shared paragraph");
     assert.equal(selection.omissions.protectedAtLeastOne, false);
     assert.equal(selection.omissions.openWorkAtLeastOne, true, "later failures overflow only their own category");
     assert.equal(restriction.authority, "user");

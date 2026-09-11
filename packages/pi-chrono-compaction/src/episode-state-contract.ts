@@ -69,6 +69,8 @@ export interface EpisodeRollupAfter {
 }
 
 export interface EpisodeStateSelectionProposition {
+  /** Opaque hash of the one shared exact context representation. */
+  readonly representationKey: string;
   readonly stableKey: string;
   readonly propositionKey: string;
   readonly spanKey: string;
@@ -94,6 +96,8 @@ export interface EpisodeStateSelectionItem {
   readonly status: "current" | "unresolved";
   readonly effectiveAtCut: number;
   readonly evidence: unknown;
+  /** Opaque hash shared by the primary context and its exact proposition clauses. */
+  readonly representationKey?: string;
   /** Exact propositions consolidated only when one verified representation covers them. */
   readonly coveredPropositions?: readonly EpisodeStateSelectionProposition[];
 }
