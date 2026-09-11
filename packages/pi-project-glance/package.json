@@ -9,7 +9,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "description": "Pi Project Glance bounded current-state projection and private local pane relay.",
+  "description": "Pi Project Glance current state, durable update inbox and History, and deferred questions.",
   "license": "MIT",
   "keywords": [
     "pi-package",
@@ -30,6 +30,7 @@
     "dist",
     "herdr-plugin.toml",
     "README.md",
+    "docs",
     "package.json",
     "package-lock.json"
   ],

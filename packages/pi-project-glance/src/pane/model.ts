@@ -4,6 +4,10 @@ import {
   validateSnapshot,
 } from "../protocol/validation.js";
 import type { ProjectGlanceSnapshot } from "../protocol/model.js";
+import {
+  ProjectGlanceArchiveModel,
+  type ProjectGlanceArchiveSummary,
+} from "./archive.js";
 
 export type ProjectGlancePaneState =
   | "connecting"
@@ -30,6 +34,7 @@ export class ProjectGlancePaneModel {
   #focusSerial = 0;
   #focusRequested = false;
   #focusBaseline = true;
+  readonly archive = new ProjectGlanceArchiveModel();
 
   constructor(expectedSessionKey?: string, expectedGeneration?: string) {
     this.#expectedSessionKey =
@@ -85,7 +90,25 @@ export class ProjectGlancePaneModel {
 
   toggleExpanded(id: string): void {
     if (this.#expanded.has(id)) this.#expanded.delete(id);
-    else this.#expanded.add(id);
+    else {
+      this.#expanded.add(id);
+      if (this.#expanded.size > 8) this.#expanded.delete(this.#expanded.values().next().value as string);
+    }
+  }
+
+  get selectableIds(): string[] {
+    const inbox = this.archive.hasActivePage("inbox")
+      ? this.archive.activeItems("inbox").map((item) => item.itemId)
+      : this.visibleFeed.map((item) => item.id);
+    const history = this.archive.historyExpanded
+      ? this.archive.activeItems("history").map((item) => item.itemId)
+      : [];
+    return [...inbox, ...history];
+  }
+
+  reconcileSelection(): void {
+    const ids = this.selectableIds;
+    if (!this.#selectedId || !ids.includes(this.#selectedId)) this.#selectedId = ids[0];
   }
 
   consumeFocusRequest(): boolean {
@@ -95,19 +118,26 @@ export class ProjectGlancePaneModel {
   }
 
   focusOldestUnread(): string | undefined {
-    const read = new Set(this.#snapshot?.uiState?.readIds ?? []);
-    const feed = this.visibleFeed;
-    this.#selectedId = feed.find((item) => !read.has(item.id))?.id ??
-      (feed.some((item) => item.id === this.#selectedId) ? this.#selectedId : feed[0]?.id);
+    if (!this.archive.summary) {
+      const read = new Set(this.#snapshot?.uiState?.readIds ?? []);
+      const feed = this.visibleFeed;
+      this.#selectedId = feed.find((item) => !read.has(item.id))?.id ??
+        (feed.some((item) => item.id === this.#selectedId) ? this.#selectedId : feed[0]?.id);
+      return this.#selectedId;
+    }
+    const inbox = this.archive.hasActivePage("inbox")
+      ? this.archive.activeItems("inbox").map((item) => item.itemId)
+      : this.visibleFeed.map((item) => item.id);
+    this.#selectedId = inbox.includes(this.#selectedId ?? "") ? this.#selectedId : inbox[0];
     return this.#selectedId;
   }
 
   selectRelative(delta: number): void {
-    const feed = this.visibleFeed;
-    if (feed.length === 0) return;
-    const selectedIndex = Math.max(0, feed.findIndex((item) => item.id === this.#selectedId));
-    const nextIndex = Math.max(0, Math.min(feed.length - 1, selectedIndex + delta));
-    this.#selectedId = feed[nextIndex]?.id;
+    const ids = this.selectableIds;
+    if (ids.length === 0) return;
+    const selectedIndex = Math.max(0, ids.indexOf(this.#selectedId ?? ""));
+    const nextIndex = Math.max(0, Math.min(ids.length - 1, selectedIndex + delta));
+    this.#selectedId = ids[nextIndex];
   }
 
   setExpectedSessionKey(sessionKey: string): void {
@@ -119,6 +149,7 @@ export class ProjectGlancePaneModel {
     this.#selectedId = undefined;
     this.#expanded.clear();
     this.#snapshot = undefined;
+    this.archive.sync(undefined);
     this.#revision = 0;
     this.#awaitingGenerationSnapshot = this.#expectedGeneration !== undefined;
     this.#state = "connecting";
@@ -195,8 +226,8 @@ export class ProjectGlancePaneModel {
       this.#focusRequested = false;
     }
     this.#snapshot = next;
-    const retained = new Set(next.feed.map((item) => item.id));
-    for (const id of this.#expanded) if (!retained.has(id)) this.#expanded.delete(id);
+    const archive = (next as ProjectGlanceSnapshot & { archive?: ProjectGlanceArchiveSummary }).archive;
+    this.archive.sync(next.branchId, archive);
     this.#revision = next.revision;
     if (!this.#focusBaseline && !branchChanged && (next.focusSerial ?? 0) > this.#focusSerial) {
       this.#focusRequested = true;
@@ -205,7 +236,7 @@ export class ProjectGlancePaneModel {
     this.#focusBaseline = false;
     this.#awaitingGenerationSnapshot = false;
     this.#state = "connected";
-    if (!this.#selectedId || !this.visibleFeed.some((item) => item.id === this.#selectedId)) this.focusOldestUnread();
+    if (!this.#selectedId || !this.selectableIds.includes(this.#selectedId)) this.focusOldestUnread();
     return "applied";
   }
 }

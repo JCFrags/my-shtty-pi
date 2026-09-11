@@ -2,9 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   MAX_ANSWER_BYTES, MAX_PENDING_QUESTIONS, QUESTION_ANSWER_MESSAGE_TYPE, QUESTION_ENTRY_TYPE,
-  type ProjectGlanceQuestion, type ProjectGlanceQuestionAction, type ProjectGlanceQuestionAnswer,
+  type ProjectGlanceQuestion, type ProjectGlanceQuestionAction, type ProjectGlanceQuestionAnswer, type ProjectGlanceQuestionAttention,
 } from "./model.js";
-import { readCurrentReceipts, type DiskReceipts } from "./receipts.js";
+import {
+  QUESTION_ACTIVE_WORK_MS, QUESTION_MEANINGFUL_RUNS, QuestionActivityTracker, questionActiveMs,
+  type QuestionActivityAggregate, type QuestionAgentEndEvent, type QuestionToolEndEvent, type QuestionToolStartEvent,
+} from "./activity.js";
+import { fsyncCurrentSessionFile, readCurrentReceipts, type DiskReceipts } from "./receipts.js";
 import { canonical, CORRELATION, digest, keys, parseRequest, record, REQUEST_EVENT, RESPONSE_EVENT, text, type AskRequest } from "./wire.js";
 
 export interface QuestionServiceOptions {
@@ -15,6 +19,7 @@ export interface QuestionServiceOptions {
   sendMessage: (message: { customType: string; content: string; display: boolean; details: unknown }) => void;
   onChange: () => void;
   now?: () => number;
+  monotonicNow?: () => number;
 }
 type Context = NonNullable<ReturnType<QuestionServiceOptions["getContext"]>>;
 type Entry = ReturnType<Context["sessionManager"]["getEntries"]>[number];
@@ -25,14 +30,18 @@ type Delta = Base & (
   | { kind: "CREATED"; displayId: string; request: AskRequest; receipt: ProviderReceipt }
   | { kind: "ANSWER"; answer: ProjectGlanceQuestionAnswer; action: ActionReceipt }
   | { kind: "CANCEL"; action?: ActionReceipt; receipt?: ProviderReceipt; notifyModel: boolean }
-  | { kind: "EXPIRE" }
+  | { kind: "DISMISS"; action: ActionReceipt; cause: "manual_user" | "rejected_cleanup"; notifyModel: boolean }
+  | { kind: "HIDE"; action: ActionReceipt }
+  | { kind: "EXPIRE"; cause: "continued_work"; notifyModel: true }
+  | { kind: "ACTIVITY"; runId: string; originEntryId: string; activeMs: number; meaningful: boolean; eligibleSuccesses: number; sourceToolCallIds: string[] }
   | { kind: "DELIVERY"; sourceId: string; status: "delivered" | "failed" | "retry"; deliveryId: string; payloadDigest: string; messageEntryId?: string; action?: ActionReceipt }
 );
 type OwnEntry = { entryId: string; data: Delta };
 type Row = {
   created: OwnEntry; latest: OwnEntry; entries: OwnEntry[]; revision: number;
   state: "pending" | "submitted" | "cancelled" | "expired" | "delivered" | "delivery_failed";
-  answer?: ProjectGlanceQuestionAnswer; source?: OwnEntry; durable: boolean; failure?: string;
+  answer?: ProjectGlanceQuestionAnswer; source?: OwnEntry; durable: boolean; failure?: string; hidden: boolean;
+  activeMs: number; meaningfulRuns: Set<string>;
 };
 const PERSIST_FAILURE = "Question state is not confirmed in the current session file. Retry after session persistence is restored.";
 const DELIVERY_FAILURE = "Answer delivery is not confirmed in the current session file. Retry to reconcile; no new turn will be started.";
@@ -43,13 +52,17 @@ function decode(entry: Entry): OwnEntry | undefined {
   if (entry.type !== "custom" || entry.customType !== QUESTION_ENTRY_TYPE || !record(entry.data)) return undefined;
   const d = entry.data;
   if (d.version !== 1 || typeof d.deltaId !== "string" || typeof d.sessionId !== "string" || typeof d.questionId !== "string" || !Number.isSafeInteger(d.revision) || Number(d.revision) < 1 || !Number.isFinite(d.at)) return undefined;
-  if (!["CREATED", "ANSWER", "CANCEL", "EXPIRE", "DELIVERY"].includes(String(d.kind))) return undefined;
+  if (!["CREATED", "ANSWER", "CANCEL", "DISMISS", "HIDE", "EXPIRE", "ACTIVITY", "DELIVERY"].includes(String(d.kind))) return undefined;
   if (d.kind === "CREATED") {
-    const request = parseRequest(d.request);
-    if (!request || request.operation !== "ask" || typeof d.displayId !== "string" || !/^Q-[1-9][0-9]*$/u.test(d.displayId) || d.questionId !== request.correlationId.replace(/^ask_/u, "qst_") || !record(d.receipt) || d.receipt.fingerprint !== digest(request) || d.receipt.correlationId !== request.correlationId || d.receipt.operation !== "ask" || d.receipt.revision !== 1 || d.revision !== 1) return undefined;
+    const request = parseRequest(d.request, { allowLegacyExpiresAt: true });
+    if (!request || request.operation !== "ask" || typeof d.displayId !== "string" || !/^Q-[1-9][0-9]*$/u.test(d.displayId) || d.questionId !== request.correlationId.replace(/^ask_/u, "qst_") || !record(d.receipt) || d.receipt.fingerprint !== digest(d.request) || d.receipt.correlationId !== request.correlationId || d.receipt.operation !== "ask" || d.receipt.revision !== 1 || d.revision !== 1) return undefined;
   }
   if (d.kind === "ANSWER" && (!record(d.answer) || !Array.isArray(d.answer.optionIds) || !record(d.action))) return undefined;
   if (d.kind === "CANCEL" && typeof d.notifyModel !== "boolean") return undefined;
+  if (d.kind === "DISMISS" && (!record(d.action) || !["manual_user", "rejected_cleanup"].includes(String(d.cause)) || typeof d.notifyModel !== "boolean")) return undefined;
+  if (d.kind === "HIDE" && !record(d.action)) return undefined;
+  if (d.kind === "EXPIRE" && (d.cause !== "continued_work" || d.notifyModel !== true)) return undefined;
+  if (d.kind === "ACTIVITY" && (typeof d.runId !== "string" || typeof d.originEntryId !== "string" || !Number.isSafeInteger(d.activeMs) || Number(d.activeMs) < 0 || typeof d.meaningful !== "boolean" || !Number.isSafeInteger(d.eligibleSuccesses) || !Array.isArray(d.sourceToolCallIds) || d.sourceToolCallIds.length > 64 || !d.sourceToolCallIds.every((id) => text(id, 240)))) return undefined;
   if (d.kind === "DELIVERY" && (typeof d.sourceId !== "string" || typeof d.deliveryId !== "string" || typeof d.payloadDigest !== "string" || !["delivered", "failed", "retry"].includes(String(d.status)))) return undefined;
   if (d.action !== undefined && (!record(d.action) || !text(d.action.id, 240) || typeof d.action.fingerprint !== "string" || !Number.isSafeInteger(d.action.expectedRevision))) return undefined;
   if (d.receipt !== undefined && (!record(d.receipt) || typeof d.receipt.correlationId !== "string" || !CORRELATION.test(d.receipt.correlationId) || typeof d.receipt.fingerprint !== "string" || !Number.isSafeInteger(d.receipt.revision) || !["ask", "cancel"].includes(String(d.receipt.operation)))) return undefined;
@@ -76,7 +89,6 @@ function normalizeAnswer(value: unknown, request: AskRequest): ProjectGlanceQues
 
 export class ProjectGlanceQuestionService {
   private unsubscribe: (() => void) | undefined;
-  private timer: ReturnType<typeof setTimeout> | undefined;
   private epoch = 0;
   private active = false;
   private running = false;
@@ -87,8 +99,14 @@ export class ProjectGlanceQuestionService {
   private lastLeafId: string | null | undefined;
   private volatileFailures = new Map<string, string>();
   private pendingReceiptIds = new Map<string, string>();
+  private suppressedVolatileIds = new Set<string>();
+  private editing = new Map<object, { questionId: string; expectedRevision: number }>();
   private readonly now: () => number;
-  constructor(private readonly options: QuestionServiceOptions) { this.now = options.now ?? Date.now; }
+  private readonly activity: QuestionActivityTracker;
+  constructor(private readonly options: QuestionServiceOptions) {
+    this.now = options.now ?? Date.now;
+    this.activity = new QuestionActivityTracker((aggregate, ctx) => this.recordActivity(aggregate, ctx), options.monotonicNow);
+  }
 
   private context(): Context | undefined {
     try {
@@ -112,8 +130,9 @@ export class ProjectGlanceQuestionService {
     this.epoch++;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
+    this.activity.stop();
+    this.editing.clear();
+    this.suppressedVolatileIds.clear();
     this.rows.clear();
     this.disk = undefined;
     this.volatileFailures.clear();
@@ -124,7 +143,7 @@ export class ProjectGlanceQuestionService {
   get questions(): ProjectGlanceQuestion[] {
     return [...this.rows.values()].flatMap((row) => {
       const failure = this.volatileFailures.get(row.created.data.questionId) ?? (!row.durable ? PERSIST_FAILURE : row.failure);
-      if (["cancelled", "expired", "delivered"].includes(row.state) && !failure) return [];
+      if (row.hidden || this.suppressedVolatileIds.has(row.created.data.questionId) || (["cancelled", "expired", "delivered"].includes(row.state) && !failure)) return [];
       const data = row.created.data;
       if (data.kind !== "CREATED") return [];
       const q = data.request;
@@ -135,19 +154,53 @@ export class ProjectGlanceQuestionService {
         recommendedOptionIds: [...q.recommendedOptionIds],
         ...(q.recommendedText !== undefined ? { recommendedText: q.recommendedText } : {}),
         ...(q.temporaryDefault !== undefined ? { temporaryDefault: structuredClone(q.temporaryDefault) } : {}),
-        ...(q.expiresAt !== undefined ? { expiresAt: q.expiresAt } : {}),
         ...(row.answer ? { answer: structuredClone(row.answer) } : {}), ...(failure ? { failure } : {}),
       }];
     });
   }
   get pendingCount(): number { return this.questions.length; }
+  get hiddenAttention(): ProjectGlanceQuestionAttention[] {
+    return [...this.rows.values()].flatMap((row) => {
+      if (!row.hidden || (row.state !== "submitted" && row.state !== "delivery_failed") || row.created.data.kind !== "CREATED") return [];
+      const failure = this.volatileFailures.get(row.created.data.questionId) ?? row.failure;
+      return [{ questionId: row.created.data.questionId, displayId: row.created.data.displayId, revision: row.revision,
+        state: failure ? "delivery_failed" as const : row.state, retryAvailable: !!failure || row.state === "delivery_failed",
+        message: failure ?? (row.state === "delivery_failed" ? DELIVERY_FAILURE : "Answer is saved and awaiting safe-idle delivery.") }];
+    });
+  }
+  get hiddenAttentionCount(): number { return this.hiddenAttention.length; }
   private capacityCount(): number {
     // A hidden cancellation notice still owns an outbox slot until insertion succeeds.
     // Otherwise four new questions plus its delivery failure could exceed the projection cap.
-    return [...this.rows.values()].filter((row) => ["pending", "submitted", "delivery_failed"].includes(row.state) || !row.durable || this.volatileFailures.has(row.created.data.questionId) || (row.state === "cancelled" && row.source?.data.kind === "CANCEL" && row.source.data.notifyModel)).length;
+    return [...this.rows.values()].filter((row) => !this.suppressedVolatileIds.has(row.created.data.questionId) && (["pending", "submitted", "delivery_failed"].includes(row.state) || !row.durable || this.volatileFailures.has(row.created.data.questionId) || (row.state === "cancelled" && !!row.source && "notifyModel" in row.source.data && row.source.data.notifyModel))).length;
   }
 
-  /** Restore active ancestry, expire pending questions, then perform idle history insertion. */
+  agentStart(ctx: Context): void { this.activity.agentStart(ctx); }
+  toolStart(event: QuestionToolStartEvent, ctx: Context): void { this.activity.toolStart(event, ctx); }
+  toolEnd(event: QuestionToolEndEvent, ctx: Context): void { this.activity.toolEnd(event, ctx); }
+  uiPromptStart(ctx: Context): void { this.activity.uiPromptStart(ctx); }
+  uiPromptEnd(ctx: Context): void { this.activity.uiPromptEnd(ctx); }
+  agentEnd(event: QuestionAgentEndEvent, ctx: Context): void { this.activity.agentEnd(event, ctx); }
+  agentSettled(ctx: Context): void { this.activity.agentSettled(ctx); this.sync(); }
+  sessionTree(_ctx?: Context): void { this.activity.sessionTree(); this.editing.clear(); }
+
+  setEditing(owner: object, value: { questionId: string; expectedRevision: number; active: boolean }): boolean {
+    if (!owner || !record(value) || typeof value.questionId !== "string" || !Number.isSafeInteger(value.expectedRevision)) return false;
+    if (!value.active) { this.editing.delete(owner); this.sync(); return true; }
+    const ctx = this.context();
+    if (!ctx) return false;
+    this.restore(ctx);
+    const row = this.rows.get(value.questionId);
+    if (!row || row.state !== "pending" || row.revision !== value.expectedRevision || !row.durable) return false;
+    this.editing.set(owner, { questionId: value.questionId, expectedRevision: value.expectedRevision });
+    return true;
+  }
+  releaseEditing(owner: object): void { if (this.editing.delete(owner)) this.sync(); }
+  private isEditing(row: Row): boolean {
+    return [...this.editing.values()].some((value) => value.questionId === row.created.data.questionId && value.expectedRevision === row.revision);
+  }
+
+  /** Restore active ancestry, apply qualified expiry, then perform idle history insertion. */
   sync(): void {
     if (!this.active || this.running) return;
     this.running = true;
@@ -156,19 +209,28 @@ export class ProjectGlanceQuestionService {
       const ctx = this.context();
       if (!ctx) { this.rows.clear(); return; }
       this.restore(ctx);
+      // If creation became durable after its provider acknowledgement failed, a user
+      // dismissal first hides the unusable slot and this pass retires it durably.
+      for (const questionId of [...this.suppressedVolatileIds]) {
+        const row = this.rows.get(questionId);
+        if (!row || row.state !== "pending") { this.suppressedVolatileIds.delete(questionId); continue; }
+        if (!row.durable) continue;
+        if (this.persist(ctx, { ...this.base(ctx, row), kind: "CANCEL", notifyModel: false })) this.suppressedVolatileIds.delete(questionId);
+        if (!this.active || this.epoch !== epoch) return;
+        this.restore(ctx);
+      }
+      if (ctx.isIdle()) for (const row of [...this.rows.values()]) {
+        if (row.state !== "pending" || !row.durable || row.activeMs < QUESTION_ACTIVE_WORK_MS || row.meaningfulRuns.size < QUESTION_MEANINGFUL_RUNS || this.isEditing(row)) continue;
+        this.persist(ctx, { ...this.base(ctx, row), kind: "EXPIRE", cause: "continued_work", notifyModel: true });
+        if (!this.active || this.epoch !== epoch) return;
+        this.restore(ctx);
+      }
       for (const row of [...this.rows.values()]) {
-        const created = row.created.data;
-        if (created.kind !== "CREATED" || row.state !== "pending" || !row.durable || !created.request.expiresAt || Date.parse(created.request.expiresAt) > this.now()) continue;
-        this.persist(ctx, { ...this.base(ctx, row), kind: "EXPIRE" });
+        const sourceNotifies = row.source && "notifyModel" in row.source.data && row.source.data.notifyModel;
+        if (row.durable && row.source && (row.state === "submitted" || ((row.state === "cancelled" || row.state === "expired") && sourceNotifies))) this.deliver(ctx, row);
         if (!this.active || this.epoch !== epoch) return;
       }
       this.restore(ctx);
-      for (const row of [...this.rows.values()]) {
-        if (row.durable && row.source && (row.state === "submitted" || (row.state === "cancelled" && row.source.data.kind === "CANCEL" && row.source.data.notifyModel))) this.deliver(ctx, row);
-        if (!this.active || this.epoch !== epoch) return;
-      }
-      this.restore(ctx);
-      this.schedule();
     } catch {
       for (const row of this.rows.values()) row.failure = PERSIST_FAILURE;
     } finally {
@@ -177,12 +239,43 @@ export class ProjectGlanceQuestionService {
     }
   }
 
+  private recordActivity(aggregate: QuestionActivityAggregate, ctx: Pick<ExtensionContext, "sessionManager">): void {
+    if (!this.active || this.running || this.context()?.sessionManager !== ctx.sessionManager) return;
+    const current = this.context();
+    if (!current) return;
+    this.restore(current);
+    const branch = current.sessionManager.getBranch();
+    const position = new Map(branch.map((entry, index) => [entry.id, index]));
+    for (const row of [...this.rows.values()]) {
+      const createdAt = position.get(row.created.entryId);
+      if (row.state !== "pending" || !row.durable || createdAt === undefined || this.isEditing(row)) continue;
+      const spans = aggregate.spans.filter((span) => {
+        const anchorAt = span.startAnchorId === null ? undefined : position.get(span.startAnchorId);
+        if (anchorAt === undefined || anchorAt < createdAt) return false;
+        return branch.some((entry, index) => index > createdAt && entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === span.toolCallId && !entry.message.isError);
+      });
+      const sourceToolCallIds = [...new Set(spans.map((span) => span.toolCallId))];
+      if (!sourceToolCallIds.length) continue;
+      const activeMs = questionActiveMs(spans);
+      const meaningful = spans.some((span) => span.strong) || sourceToolCallIds.length >= 3;
+      const deltaId = `activity_${digest([row.created.data.questionId, row.created.entryId, aggregate.runId])}`;
+      if (row.entries.some((entry) => entry.data.deltaId === deltaId)) continue;
+      this.persist(current, {
+        version: 1, deltaId, sessionId: row.created.data.sessionId, questionId: row.created.data.questionId,
+        revision: row.revision, at: this.now(), kind: "ACTIVITY", runId: aggregate.runId,
+        originEntryId: row.created.entryId, activeMs, meaningful,
+        eligibleSuccesses: sourceToolCallIds.length, sourceToolCallIds,
+      });
+      this.restore(current);
+    }
+  }
+
   applyAction(action: ProjectGlanceQuestionAction, actionId: string): boolean {
     try { return this.applyVerifiedAction(action, actionId); }
     catch { this.changed(); return false; }
   }
   private applyVerifiedAction(action: ProjectGlanceQuestionAction, actionId: string): boolean {
-    if (!this.active || this.running || !text(actionId, 240) || !record(action) || !["question_answer", "question_cancel", "question_retry"].includes(String(action.type)) || !Number.isSafeInteger(action.expectedRevision) || action.expectedRevision < 1) return false;
+    if (!this.active || this.running || !text(actionId, 240) || !record(action) || !["question_answer", "question_cancel", "question_dismiss", "question_hide", "question_retry"].includes(String(action.type)) || !Number.isSafeInteger(action.expectedRevision) || action.expectedRevision < 1) return false;
     const allowed = action.type === "question_answer" ? ["type", "questionId", "expectedRevision", "answer"] : ["type", "questionId", "expectedRevision"];
     if (!keys(action, allowed)) return false;
     const ctx = this.context();
@@ -197,17 +290,25 @@ export class ProjectGlanceQuestionService {
     if (previous.length) {
       return row.durable && previous.length === 1 && actionOf(previous[0]!.data)?.fingerprint === fingerprint && previous[0]!.data.questionId === action.questionId && this.onBranch(ctx, previous[0]!) && this.confirmed(previous[0]!);
     }
-    if (row.revision !== action.expectedRevision || (!row.durable && action.type !== "question_retry")) return false;
+    if (row.revision !== action.expectedRevision) return false;
+    if (!row.durable) {
+      if (action.type === "question_dismiss" || action.type === "question_cancel") {
+        this.suppressedVolatileIds.add(action.questionId); this.changed(); return true;
+      }
+      return false;
+    }
     const receipt = { id: actionId, fingerprint, expectedRevision: action.expectedRevision };
     let delta: Delta;
     if (action.type === "question_answer") {
-      if (row.state !== "pending" || (row.created.data.request.expiresAt && Date.parse(row.created.data.request.expiresAt) <= this.now())) { this.sync(); return false; }
-      delta = { ...this.base(ctx, row), kind: "ANSWER", answer: answer!, action: receipt };
-    } else if (action.type === "question_cancel") {
       if (row.state !== "pending") return false;
-      delta = { ...this.base(ctx, row), kind: "CANCEL", action: receipt, notifyModel: true };
+      delta = { ...this.base(ctx, row), kind: "ANSWER", answer: answer!, action: receipt };
+    } else if (action.type === "question_dismiss" || action.type === "question_cancel") {
+      if (row.state !== "pending") return false;
+      delta = { ...this.base(ctx, row), kind: "DISMISS", action: receipt, cause: "manual_user", notifyModel: true };
+    } else if (action.type === "question_hide") {
+      if ((row.state !== "submitted" && row.state !== "delivery_failed") || !row.source || row.hidden) return false;
+      delta = { ...this.base(ctx, row), kind: "HIDE", action: receipt };
     } else {
-      if (!row.durable) { this.volatileFailures.set(action.questionId, PERSIST_FAILURE); this.changed(); return false; }
       if (row.state !== "delivery_failed" && !this.volatileFailures.has(action.questionId)) return false;
       const message = row.source ? this.message(row) : undefined;
       delta = { ...this.base(ctx, row), kind: "DELIVERY", status: "retry", sourceId: row.source?.data.deltaId ?? row.created.data.deltaId, deliveryId: message?.details.deliveryId ?? "", payloadDigest: message?.details.payloadDigest ?? "", action: receipt };
@@ -250,7 +351,7 @@ export class ProjectGlanceQuestionService {
       let delta: Delta;
       let displayId: string;
       if (request.operation === "ask") {
-        if (this.capacityCount() >= MAX_PENDING_QUESTIONS || (request.expiresAt && Date.parse(request.expiresAt) <= this.now())) { reject("ASK_USER_INVALID_REQUEST", "Question capacity is full or the expiry is not in the future."); return; }
+        if (this.capacityCount() >= MAX_PENDING_QUESTIONS) { reject("ASK_USER_INVALID_REQUEST", "Question capacity is full."); return; }
         const questionId = request.correlationId.replace(/^ask_/u, "qst_");
         if (this.ownHistory(ctx).some((entry) => entry.data.questionId === questionId)) { reject("ASK_USER_CORRELATION_CONFLICT", "The question identity already exists."); return; }
         const maximum = this.ownHistory(ctx).reduce((max, entry) => entry.data.kind === "CREATED" ? Math.max(max, Number(entry.data.displayId.slice(2))) : max, 0);
@@ -280,7 +381,10 @@ export class ProjectGlanceQuestionService {
   private confirmed(entry: OwnEntry): boolean { return !this.diskError && this.disk?.entries.get(entry.entryId) === digest(entry.data); }
   private base(ctx: Context, row: Row): Base { return { version: 1, deltaId: randomUUID(), sessionId: ctx.sessionManager.getSessionId(), questionId: row.created.data.questionId, revision: row.revision + 1, at: this.now() }; }
   private refreshDisk(ctx: Context): void {
-    try { this.disk = readCurrentReceipts(ctx.sessionManager.getSessionFile(), ctx.sessionManager.getSessionId()); this.diskError = false; }
+    const branch = ctx.sessionManager.getBranch();
+    const entryIds = new Set(branch.flatMap((entry) => decode(entry) ? [entry.id] : []));
+    const messageEntryIds = new Set(branch.flatMap((entry) => entry.type === "custom_message" && entry.customType === QUESTION_ANSWER_MESSAGE_TYPE ? [entry.id] : []));
+    try { this.disk = readCurrentReceipts(ctx.sessionManager.getSessionFile(), ctx.sessionManager.getSessionId(), { entryIds, messageEntryIds }); this.diskError = false; }
     catch { this.disk = undefined; this.diskError = true; }
   }
   private restore(ctx: Context): void {
@@ -298,31 +402,46 @@ export class ProjectGlanceQuestionService {
       const d = entry.data;
       if (d.kind === "CREATED") {
         if (rows.has(d.questionId)) { rows.get(d.questionId)!.failure = SCOPE_FAILURE; continue; }
-        rows.set(d.questionId, { created: entry, latest: entry, entries: [entry], revision: 1, state: "pending", durable: this.confirmed(entry) });
+        rows.set(d.questionId, { created: entry, latest: entry, entries: [entry], revision: 1, state: "pending", durable: this.confirmed(entry), hidden: false, activeMs: 0, meaningfulRuns: new Set() });
         continue;
       }
       const row = rows.get(d.questionId);
       if (!row) continue;
+      if (d.kind === "ACTIVITY") {
+        if (d.revision !== row.revision || d.originEntryId !== row.created.entryId || row.meaningfulRuns.has(d.runId) || !this.confirmed(entry)) continue;
+        row.entries.push(entry);
+        row.activeMs = Math.min(Number.MAX_SAFE_INTEGER, row.activeMs + d.activeMs);
+        if (d.meaningful) row.meaningfulRuns.add(d.runId);
+        continue;
+      }
       if (d.revision !== row.revision + 1) { row.failure = SCOPE_FAILURE; continue; }
       row.entries.push(entry); row.latest = entry; row.revision = d.revision; row.durable &&= this.confirmed(entry);
       if (d.kind === "ANSWER") {
         if (row.state !== "pending" || row.created.data.kind !== "CREATED" || !normalizeAnswer(d.answer, row.created.data.request)) { row.failure = SCOPE_FAILURE; continue; }
         row.answer = d.answer; row.source = entry; row.state = "submitted";
-      } else if (d.kind === "CANCEL") {
+      } else if (d.kind === "CANCEL" || d.kind === "DISMISS") {
         if (row.state !== "pending") { row.failure = SCOPE_FAILURE; continue; }
         row.state = "cancelled"; if (d.notifyModel) row.source = entry;
       } else if (d.kind === "EXPIRE") {
         if (row.state !== "pending") { row.failure = SCOPE_FAILURE; continue; }
-        row.state = "expired";
-      } else if (!row.source && d.status === "retry" && d.sourceId === row.created.data.deltaId && row.state === "pending") {
-        delete row.failure;
-      } else if (row.source?.data.deltaId === d.sourceId) {
-        if (d.status === "delivered") { row.state = "delivered"; delete row.failure; }
-        if (d.status === "failed") { row.state = "delivery_failed"; row.failure = DELIVERY_FAILURE; }
-        if (d.status === "retry") { row.state = "submitted"; delete row.failure; }
-      } else row.failure = SCOPE_FAILURE;
+        row.state = "expired"; row.source = entry;
+      } else if (d.kind === "HIDE") {
+        if ((row.state !== "submitted" && row.state !== "delivery_failed") || !row.source) { row.failure = SCOPE_FAILURE; continue; }
+        row.hidden = true;
+      } else if (d.kind === "DELIVERY") {
+        if (!row.source && d.status === "retry" && d.sourceId === row.created.data.deltaId && row.state === "pending") delete row.failure;
+        else if (row.source?.data.deltaId === d.sourceId) {
+          if (d.status === "delivered") { row.state = "delivered"; delete row.failure; }
+          if (d.status === "failed") { row.state = "delivery_failed"; row.failure = DELIVERY_FAILURE; }
+          if (d.status === "retry") { row.state = "submitted"; delete row.failure; }
+        } else row.failure = SCOPE_FAILURE;
+      }
     }
     this.rows = rows;
+    for (const [owner, value] of this.editing) {
+      const row = rows.get(value.questionId);
+      if (!row || row.state !== "pending" || row.revision !== value.expectedRevision) this.editing.delete(owner);
+    }
     for (const [id, row] of rows) {
       const waiting = this.pendingReceiptIds.get(id);
       if (row.durable && waiting && row.entries.some((entry) => entry.data.deltaId === waiting)) {
@@ -340,11 +459,20 @@ export class ProjectGlanceQuestionService {
     const epoch = this.epoch;
     const row = this.rows.get(data.questionId);
     if (ctx.sessionManager.getSessionId() !== data.sessionId || !this.sameContext(ctx, row?.latest.entryId)) return false;
-    try { this.options.appendEntry(data); } catch { /* Memory may already be ahead of disk; verify, never append again here. */ }
+    const entryData = (entry: Entry): unknown => "data" in entry ? entry.data : undefined;
+    const matches = () => ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === QUESTION_ENTRY_TYPE && record(entry.data) && entry.data.deltaId === data.deltaId);
+    let existing = matches();
+    if (existing.length > 1 || (existing.length === 1 && digest(entryData(existing[0]!)) !== digest(data))) return false;
+    if (existing.length === 0) {
+      try { this.options.appendEntry(data); } catch { /* Memory may already be ahead of disk; reconcile by deterministic deltaId. */ }
+    }
     if (epoch !== this.epoch || ctx.sessionManager.getSessionId() !== data.sessionId || !this.sameContext(ctx)) return false;
+    let flushed = true;
+    try { fsyncCurrentSessionFile(ctx.sessionManager.getSessionFile()); } catch { flushed = false; }
     this.refreshDisk(ctx);
-    const found = ctx.sessionManager.getBranch().find((entry) => entry.type === "custom" && entry.customType === QUESTION_ENTRY_TYPE && record(entry.data) && entry.data.deltaId === data.deltaId && digest(entry.data) === digest(data));
-    const success = !!found && this.disk?.entries.get(found.id) === digest(data);
+    existing = matches();
+    const found = existing.length === 1 && digest(entryData(existing[0]!)) === digest(data) ? existing[0] : undefined;
+    const success = flushed && !!found && this.disk?.entries.get(found.id) === digest(data);
     if (!success) {
       this.volatileFailures.set(data.questionId, PERSIST_FAILURE);
       this.pendingReceiptIds.set(data.questionId, data.deltaId);
@@ -358,7 +486,9 @@ export class ProjectGlanceQuestionService {
     const created = row.created.data;
     if (created.kind !== "CREATED" || !row.source) throw new Error("Missing question source.");
     const source = row.source.data;
-    const payload = source.kind === "CANCEL" ? { questionId: created.questionId, displayId: created.displayId, question: created.request.question, outcome: "cancelled_by_user" } : { questionId: created.questionId, displayId: created.displayId, question: created.request.question, outcome: "answered", answer: row.answer, selectedOptions: created.request.response.options?.filter((option) => row.answer?.optionIds.includes(option.id)) ?? [] };
+    const payload = source.kind === "ANSWER"
+      ? { questionId: created.questionId, displayId: created.displayId, question: created.request.question, outcome: "answered", answer: row.answer, selectedOptions: created.request.response.options?.filter((option) => row.answer?.optionIds.includes(option.id)) ?? [] }
+      : { questionId: created.questionId, displayId: created.displayId, question: created.request.question, outcome: source.kind === "EXPIRE" ? "expired unanswered after continued work" : "dismissed unanswered by user" };
     const content = `Deferred question update (inserted while idle; no new turn requested):\n${canonical(payload)}`;
     const deliveryId = `glance_${digest({ sessionId: created.sessionId, questionId: created.questionId, sourceId: source.deltaId })}`;
     return { customType: QUESTION_ANSWER_MESSAGE_TYPE, content, display: true, details: { version: 1, sessionId: created.sessionId, questionId: created.questionId, sourceId: source.deltaId, originEntryId: row.created.entryId, deliveryId, payloadDigest: digest(content) } };
@@ -368,30 +498,24 @@ export class ProjectGlanceQuestionService {
     const message = this.message(row);
     const markers = (): Entry[] => ctx.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.customType === QUESTION_ANSWER_MESSAGE_TYPE && record(entry.details) && entry.details.deliveryId === message.details.deliveryId);
     let found = markers();
+    let flushed = true;
     if (!found.length) {
       // Final scope/idle check and send are synchronous. The adapter cannot trigger a run.
       if (!ctx.isIdle() || !this.sameContext(ctx, row.source.entryId)) return;
       try { this.options.sendMessage(message); } catch { /* Reconcile even if a host listener threw after append. */ }
+      try { fsyncCurrentSessionFile(ctx.sessionManager.getSessionFile()); } catch { flushed = false; }
       found = markers();
     }
+    try { fsyncCurrentSessionFile(ctx.sessionManager.getSessionFile()); } catch { flushed = false; }
     if (!this.sameContext(ctx, row.source.entryId)) return;
     this.refreshDisk(ctx);
     const entry = found.length === 1 ? found[0] : undefined;
     const onBranch = !!entry && ctx.sessionManager.getBranch().some((item) => item.id === entry.id);
     const exact = entry?.type === "custom_message" && digest(entry.content) === message.details.payloadDigest && digest(entry.details) === digest(message.details);
     const disk = entry ? this.disk?.messages.get(entry.id) : undefined;
-    const delivered = onBranch && exact && disk?.deliveryId === message.details.deliveryId && disk.payloadDigest === message.details.payloadDigest && disk.contentDigest === message.details.payloadDigest && disk.detailsDigest === digest(message.details);
+    const delivered = flushed && onBranch && exact && disk?.deliveryId === message.details.deliveryId && disk.payloadDigest === message.details.payloadDigest && disk.contentDigest === message.details.payloadDigest && disk.detailsDigest === digest(message.details);
     const data: Delta = { ...this.base(ctx, row), kind: "DELIVERY", sourceId: row.source.data.deltaId, status: delivered ? "delivered" : "failed", deliveryId: message.details.deliveryId, payloadDigest: message.details.payloadDigest, ...(delivered && entry ? { messageEntryId: entry.id } : {}) };
     this.persist(ctx, data);
     if (found.length && (!onBranch || !exact)) this.volatileFailures.set(row.created.data.questionId, SCOPE_FAILURE);
-  }
-  private schedule(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
-    const expiry = Math.min(...[...this.rows.values()].flatMap((row) => row.state === "pending" && row.durable && row.created.data.kind === "CREATED" && row.created.data.request.expiresAt ? [Date.parse(row.created.data.request.expiresAt)] : []));
-    if (!Number.isFinite(expiry)) return;
-    const epoch = this.epoch;
-    this.timer = setTimeout(() => { if (this.active && this.epoch === epoch) this.sync(); }, Math.max(1, Math.min(2147483647, expiry - this.now())));
-    this.timer.unref();
   }
 }

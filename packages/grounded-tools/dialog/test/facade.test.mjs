@@ -275,6 +275,9 @@ test("V1.1 allows only next-natural-turn delivery and no automatic escalation", 
   assert.equal(Value.Check(ASK_USER_PARAMETERS_V1, escalating), false);
   await assert.rejects(f.execute(escalating), /Omit escalationPolicy or use never/);
   assert.equal(requests.length, 0);
+  const wallClockExpiry = { ...ask(), expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  assert.equal(Value.Check(ASK_USER_PARAMETERS_V1, wallClockExpiry), false);
+  await assert.rejects(f.execute(wallClockExpiry), /schema|invalid|failed/iu);
   const supported = { ...ask(), deliveryMode: "nextTurn", escalationPolicy: "never" };
   assert.equal(Value.Check(ASK_USER_PARAMETERS_V1, supported), true);
   await f.execute(supported, "explicit-timing");
