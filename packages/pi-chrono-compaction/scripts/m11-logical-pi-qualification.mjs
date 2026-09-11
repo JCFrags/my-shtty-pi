@@ -267,6 +267,8 @@ export default function qualificationBridge(pi) {
     const shape = entries.map(entry => ({ type: entry.type, role: entry.message?.role ?? null, customType: entry.customType ?? null,
       id: entry.id, parentId: entry.parentId ?? null }));
     ctx.ui.notify("QUALIFICATION_SEED:" + ordinal + ":" + JSON.stringify({ entries: entries.length, entryId: userId, summaryId, shape }), "info");
+    await ctx.reload();
+    return;
   }});
   pi.registerCommand("qualification-probe", { handler: async (args, ctx) => {
     const [marker, routesText, entryId] = args.trim().split(/\\s+/); const routes = Number(routesText); let status;

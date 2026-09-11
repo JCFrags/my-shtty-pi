@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.29 passed exact-head CI and its one authorized installed-Pi run passed post-rollback readiness, then stopped at a strict harness seed-shape assertion. The retained source establishes one bounded Pi lifecycle entry before the logical continuation and five seed rows. A fixture-only harness correction is prepared. No full M10 or M11 pass is claimed.
+Status: package 2.0.29 passed exact-head CI. Its first authorized installed-Pi run established the bounded seven-entry seed shape. The one authorized corrected-harness run passed that shape and then stopped at the first main-loop probe because the fixture had not refreshed lifecycle scheduling after its direct seed appends. A fixture-only terminal reload correction is prepared. No full M10 or M11 pass is claimed.
 
 ## Scope
 
@@ -130,6 +130,18 @@ The run passed adoption, initial search, recall, and exact recovery, the first r
 The retained active source had eight physical rows: its header, one `thinking_level_change` lifecycle entry, one `chrono-logical-continuation`, and the five linked seed entries. The lifecycle correction in package 2.0.29 reloads Pi after committing rollback state, so Pi records its bounded thinking-level startup entry before the continuation. The earlier coarse six-entry limit did not describe that established lifecycle shape.
 
 The corrected harness requires exactly seven non-header entries for every seeded shard. It validates the lifecycle and continuation order, all five seed row types and roles, the complete parent chain, the returned seed and summary identifiers, nonempty unique identifiers, and the unchanged seven-entry ceiling. It rejects an unknown lifecycle row, a duplicate identifier, or any extra row. The final all-shard ceiling remains strict at seven. One focused shape check accepted the observed shape and rejected separate unknown-row, duplicate-identifier, and extra-row fixtures. This correction does not change runtime code, production guards, package version, readiness predicates, rollover behavior, providers, or source retention. Packaging and exact-head CI are still required before one affected run. The ten-rollover, fork, restart, and final source-preservation results remain unqualified.
+
+## Corrected-harness package 2.0.29 result
+
+Exact-head pull-request CI run `34594672847` passed for candidate `a7a931c52c604a50e6c70cebc646fb979847ceda`. The one authorized installed-Pi run used package tree `6bebbf41e8872e16910187e58c4244f2039a2a0e`, harness SHA-256 `91865b5369ac1c7cdd5bbc690c48822cb240fe86d690aedc19b83ecac7eef3ca`, Pi 0.85.1, Node 24.18.0 ABI 137, `better-sqlite3` 12.9.0, and the unchanged native binding.
+
+The run passed adoption, initial search, recall, and exact recovery, first rollover, exact rollback, abandoned-branch retention, post-rollback search, recall, and exact recovery, the next rollover command, and the corrected seven-entry seed assertion. The first main-loop probe then emitted no payload and reached its unchanged 180-second outer bound. The run stopped after 207 seconds. It emitted no result JSON and was not repeated. The owner-only scalar evidence has SHA-256 `62e005959a50d6e1d5d4275a0dcc64d8142f35a2716f450efb4e7fcadda1b73d`.
+
+The active source contained eight rows and 8,728 bytes: the header, the bounded thinking-level lifecycle row, the logical continuation, and five seed rows. Its catalog had observed and committed all eight events. Its matching search head remained at event 3 with one document and one membership. `complete: true` described that stale requested cut, not coverage of the current source at event 8.
+
+The qualification seed command writes five entries directly through `SessionManager`. Pi extension slash commands do not run an agent turn and do not emit `agent_settled`. Chrono schedules search at `session_start`, session transitions, and `agent_settled`, so no scheduling boundary followed those direct fixture appends. The subsequent readiness call saw the already-complete event-3 request. A later search miss or search error escaped the probe handler because only the readiness wait has a notification-producing catch. Pi 0.85.1 converts a thrown extension command handler error into an extension error and reports the slash command as handled, so the RPC prompt completed while the harness waited for a notification that could not arrive.
+
+The fixture correction sends the seed-shape receipt, then calls the supported `ctx.reload()` as its terminal action. Reload emits a fresh `session_start` against the same current source, which schedules the search target at the new leaf before the separate probe command. The correction does not reinterpret readiness, force an index state, change the 150-second inner wait or 180-second outer bound, change worker admission, or alter runtime scheduling. It changes only the qualification fixture and this report. The full ten-rollover, fork, restart, and final source-preservation sequence remains unqualified until a separately packaged candidate passes exact-head CI and one authorized affected run.
 
 ## Result fields
 
