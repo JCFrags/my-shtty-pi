@@ -287,7 +287,7 @@ export function verifyStatic(root, files) {
 }
 
 // Explicitly requested candidate cleanup only: exact index + complete working
-// package proof, all 83 regular maps bound to retained sources, then map-only
+// package proof, all expected regular maps bound to retained sources, then map-only
 // unlink. Unlike finishChronoBuild, this helper can operate on a candidate Git
 // checkout. It never removes dist-test, dependencies, or indexed package files.
 export function removeChronoBuildMaps(root) {

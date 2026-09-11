@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { runBoundedWorker, canonicalWorkerJson, runtimeHostStatus, type BoundedWorkerOptions } from "../src/worker-runtime.js";
 import { runtimeUnitName, runtimeUnitState } from "../src/worker-runtime-systemd.js";
+import { withVerifiedLegacyAdmission } from "../src/worker-runtime-legacy-gate.js";
 import { rendezvousDirectory } from "../src/worker-runtime-rendezvous.js";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -41,6 +42,14 @@ setTimeout(()=>send(),q.ms);});\n`, { mode: 0o600 });
   return { directory, entryPath, schedulerDirectory, options, cleanup: async () => { await rm(directory, { recursive: true, force: true }); const rv = await rendezvousDirectory(schedulerDirectory); await rm(rv, { recursive: true, force: true }); } };
 }
 async function marker(path: string): Promise<Response> { for (let n = 0; n < 500; n++) { try { return JSON.parse(await readFile(path, "utf8")); } catch { await pause(10); } } throw new Error("marker-timeout"); }
+function processStartIdentity(stat: string): string {
+  const fields = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/), start = fields[19];
+  assert.match(start ?? "", /^\d+$/); return start!;
+}
+async function processIdentity(pid: number): Promise<string | undefined> {
+  try { return processStartIdentity(await readFile(`/proc/${pid}/stat`, "utf8")); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+}
 const runtimePath = fileURLToPath(new URL("../src/worker-runtime.js", import.meta.url));
 function independent(options: BoundedWorkerOptions<Request, Response>, repeats = 1): { child: ChildProcess; result: Promise<Response[]> } {
   const { validateRequest: _a, validateResponse: _b, signal: _s, ...settings } = options;
@@ -128,22 +137,29 @@ test("abrupt client death leaves kernel occupancy until the old tree stops; next
     const owner = independent({ ...options, caps: { ...options.caps, deadlineMs: Date.now() + 2000 } });
     void owner.result.catch(() => {});
     const old = await marker((options.request as Request).marker);
+    const oldProcesses = await Promise.all((await readFile(`/sys/fs/cgroup${old.group}/cgroup.procs`, "utf8")).trim().split("\n").map(async value => {
+      const pid = Number(value); return { pid, identity: await processIdentity(pid) };
+    }));
+    assert.ok(oldProcesses.some(process => process.pid === old.pid));
+    assert.ok(oldProcesses.every(process => process.identity !== undefined));
     owner.child.kill("SIGKILL");
     const next = await runBoundedWorker(f.options("restart", "wait", 100));
     assert.notEqual(next.value.pid, old.pid);
     assert.ok(next.value.started >= old.started);
-    await assert.rejects(readFile(`/sys/fs/cgroup${old.group}/cgroup.procs`), { code: "ENOENT" });
+    for (const process of oldProcesses) assert.notEqual(await processIdentity(process.pid), process.identity);
     assert.equal((await readdir(f.schedulerDirectory)).filter(n => n.startsWith("slot-")).length, 0);
   } finally { await f.cleanup(); }
 });
 
-test("stdio entries share the bounded transport; malformed canonical identities and default mixed-version admission refuse", async () => {
+test("stdio entries share the bounded transport; malformed canonical identities and ungated mixed-version admission refuse", async () => {
   const f = await fixture();
   try {
     const entryPath = join(f.directory, "stdio.mjs");
     await writeFile(entryPath, `import {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);process.stdout.write(JSON.stringify({id:q.id,pid:process.pid,group:'stdio',started:1,ended:2})+'\\n');});`);
     const result = await runBoundedWorker({ ...f.options("stdio"), entryPath, entryTransport: "stdio" }); assert.equal(result.value.id, "stdio");
-    await assert.rejects(runBoundedWorker({ ...f.options(), schedulerDirectory: undefined }), /worker-legacy-transition-required/);
+    // Never route this fixture through the real production namespace: its gate
+    // may validly be installed on a deployed workstation.
+    await assert.rejects(withVerifiedLegacyAdmission(f.schedulerDirectory, async () => { throw new Error("unexpected-start"); }, join(f.directory, "ungated-legacy")), /worker-legacy-transition-required/);
     assert.throws(() => canonicalWorkerJson({ n: Infinity }), /worker-protocol-error/);
     const cycle: Record<string, unknown> = {}; cycle.self = cycle; assert.throws(() => canonicalWorkerJson(cycle), /worker-protocol-error/);
     const mismatch = f.options("mismatch"); await assert.rejects(runBoundedWorker({ ...mismatch, slots: 2 }), /scheduler-policy-mismatch/);
