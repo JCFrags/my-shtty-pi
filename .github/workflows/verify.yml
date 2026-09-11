@@ -135,7 +135,7 @@ jobs:
           test -f dist-test/test/episode-state.test.js
           grep -F 'rollup lifecycle offers bounded top-down exact recall' test/history-search-adapter.test.ts
           grep -F 'M09 actual producer selection preserves obligations' test/episode-state.test.ts
-          CHRONO_SYNTHETIC_OUTPUT="$RUNNER_TEMP/chrono-synthetic-example.md" node --test --test-concurrency=1 --test-name-pattern='rollup lifecycle offers bounded top-down exact recall|M09 actual producer selection preserves obligations' dist-test/test/history-search-adapter.test.js dist-test/test/episode-state.test.js
+          CHRONO_SYNTHETIC_OUTPUT="$RUNNER_TEMP/chrono-synthetic-example.md" node --test --test-concurrency=1 --test-name-pattern='rollup lifecycle offers bounded top-down exact recall|M09 actual producer selection preserves obligations|session canary binds|recorded same-cut preview' dist-test/test/history-search-adapter.test.js dist-test/test/episode-state.test.js dist-test/test/session-canary.test.js dist-test/test/composition-preview.test.js
           echo 'BEGIN PUBLIC SYNTHETIC COMPOSER EXAMPLE'
           cat "$RUNNER_TEMP/chrono-synthetic-example.md"
           echo 'END PUBLIC SYNTHETIC COMPOSER EXAMPLE'

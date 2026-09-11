@@ -64,6 +64,7 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
       type Hook = (event: any, context: any) => Promise<any> | any;
       const hooks = new Map<string, Hook>();
       let summaryCalls = 0, composeCalls = 0;
+      let refuseComposition = false;
       const pi = { registerTool() {}, registerCommand() {}, appendEntry() {}, sendMessage() {},
         on(name: string, handler: Hook) { hooks.set(name, handler); } };
       extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(root, "runtime"),
@@ -75,6 +76,7 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
           },
           compose: async input => {
             composeCalls++;
+            if (refuseComposition) throw new Error("mandatory coverage incomplete");
             assert.equal(input.sourceCutEntryId, "prefix");
             assert.equal(input.firstKeptEntryId, "tail");
             assert.equal(input.toolPairSafe, true);
@@ -100,14 +102,16 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
         } });
       const hook = hooks.get("session_before_compact");
       assert.ok(hook);
-      const result = await hook({ branchEntries: entries.slice(0, 2), preparation: {
+      const compactEvent = { branchEntries: entries.slice(0, 2), preparation: {
         firstKeptEntryId: "tail", tokensBefore: 1000, previousSummary: "Prior Pi summary.",
         messagesToSummarize: [], turnPrefixMessages: [], settings: { reserveTokens: 512 },
-      }, reason: "manual", willRetry: false, signal: new AbortController().signal }, {
+      }, reason: "manual", willRetry: false, signal: new AbortController().signal };
+      const compactContext = {
         hasUI: true, ui: { notify() {} },
         sessionManager: { getSessionId: () => "fixture-session", getLeafId: () => "tail", getEntry: (id: string) => entries.find(entry => entry.id === id),
           getSessionFile: () => { throw new Error("legacy reconstruction must not run"); } },
-      });
+      };
+      const result = await hook(compactEvent, compactContext);
       assert.equal(summaryCalls, 1);
       assert.equal(composeCalls, 1);
       assert.equal(result.compaction.firstKeptEntryId, "tail");
@@ -116,6 +120,9 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
       assert.equal(result.compaction.details.piSummary, undefined);
       assert.deepEqual(result.compaction.details.composition.validation, { safeTail: true, withinCombinedCeiling: true,
         protectedCoverageComplete: true, openWorkCoverageComplete: true });
+      refuseComposition = true;
+      assert.deepEqual(await hook(compactEvent, compactContext), { cancel: true },
+        "coverage refusal must preserve context, not publish a summary-only success");
     } finally {
       if (previousConfigPath === undefined) delete process.env.PI_CHRONO_CONFIG_PATH;
       else process.env.PI_CHRONO_CONFIG_PATH = previousConfigPath;

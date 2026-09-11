@@ -2,7 +2,7 @@ import { composeStoredSelection, persistPrivateCompositionArtifact } from "./con
 import { isSafeCompactionCut } from "./tail-selection.js";
 import { byteCount, estimateTokensFromText, getRecord, getString, stableStringify } from "./utils.js";
 export const COMPOSITION_PREVIEW_LIMITS = { tailEntries: 256, tailBytes: 512 * 1024, comparisonBytes: 512 * 1024 };
-/** Authoritative replacement remains impossible to enable through runtime configuration. */
+/** Global activation is not supported. The extension uses an exact fresh-session canary control. */
 export const M09_AUTHORITATIVE_REPLACEMENT_ENABLED = false;
 /** Reuse one recorded compaction's exact Pi summary, original raw-tail cut and
  * baseline representation. A bounded lookup failure refuses, not reconstructs. */
@@ -83,7 +83,7 @@ export async function previewStoredCompaction(compaction, reader, artifactDirect
 }
 /** Compose the current Pi-prepared boundary directly. Unlike preview, this path
  * has no recorded compaction or comparison baseline. The extension must gate
- * every call on M09_AUTHORITATIVE_REPLACEMENT_ENABLED. */
+ * every production call on explicit fresh-session canary authorization. */
 export async function composeStoredCompactionForNormalReturn(input, reader, artifactDirectory, combinedCeilingTokens) {
     if (!input.regularPiSummary || !input.sourceCutEntryId || !input.firstKeptEntryId) {
         throw new Error("normal composition requires the actual Pi summary and prepared boundary");

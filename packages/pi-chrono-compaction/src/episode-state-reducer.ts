@@ -44,11 +44,12 @@ export interface ReducedResourceObservation {
   readonly evidence: ExactStateEvidence;
 }
 export interface VerifiedEventStructuralFacts {
-  readonly role?: { readonly value: string; readonly source: ScopedRawSourceRef };
-  readonly toolName?: { readonly value: string; readonly source: ScopedRawSourceRef };
-  readonly exitCode?: { readonly value: number; readonly source: ScopedRawSourceRef };
-  readonly isError?: { readonly value: boolean; readonly source: ScopedRawSourceRef };
-  readonly cancelled?: { readonly value: boolean; readonly source: ScopedRawSourceRef };
+  /** Catalog metadata is structurally verified but does not invent a raw coordinate. */
+  readonly role?: { readonly value: string; readonly source?: ScopedRawSourceRef };
+  readonly toolName?: { readonly value: string; readonly source?: ScopedRawSourceRef };
+  readonly exitCode?: { readonly value: number; readonly source?: ScopedRawSourceRef };
+  readonly isError?: { readonly value: boolean; readonly source?: ScopedRawSourceRef };
+  readonly cancelled?: { readonly value: boolean; readonly source?: ScopedRawSourceRef };
 }
 export interface ReducedEpisodeEvent {
   readonly source: ScopedBodySourceRef;
@@ -91,11 +92,11 @@ function neighborhoods(text: string): { text: string; start: number; end: number
   }
   return output;
 }
-function evidence(source: ScopedBodySourceRef, structuralSource: ScopedRawSourceRef | undefined, whole: string,
-  clause: { text: string; start: number; end: number }): ExactStateEvidence {
-  return { source, decodedUtf16: { start: source.decodedUtf16.start + clause.start, end: source.decodedUtf16.start + clause.end },
-    ...(structuralSource ? { structuralSource } : {}), exactText: clause.text,
-    omissions: [{ beforeUtf16: clause.start, afterUtf16: Math.max(0, whole.length - clause.end) }] };
+function evidence(source: ScopedBodySourceRef, structuralSource: ScopedRawSourceRef | undefined, text: string,
+  clause: { text: string; start: number; end: number }, decodedStart = source.decodedUtf16.start): ExactStateEvidence {
+  const start = decodedStart + clause.start, end = decodedStart + clause.end;
+  return { source, decodedUtf16: { start, end }, ...(structuralSource ? { structuralSource } : {}), exactText: clause.text,
+    omissions: [{ beforeUtf16: start - source.decodedUtf16.start, afterUtf16: Math.max(0, source.decodedUtf16.end - end) }] };
 }
 function subjectOf(text: string, context = text): string {
   const pattern = /(?:[A-Za-z]:[\\/]|\.?\.?[\\/]|\/)[\w@.+\-~]+(?:[\\/][\w@.+\-~]+)+/gu;
@@ -180,13 +181,18 @@ function resource(text: string, envelope: ReducerEnvelope, ev: ExactStateEvidenc
 }
 
 /** Extract only source-local, bounded claims. Lifecycle transitions are store-owned. */
-export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: string, verified?: VerifiedEventStructuralFacts): ReducedEpisodeEvent {
+export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: string, verified?: VerifiedEventStructuralFacts,
+  window?: { readonly decodedStart: number; readonly final: boolean }): ReducedEpisodeEvent {
   const roleFact = structural(envelope, "role", verified), role = typeof roleFact?.value === "string" ? roleFact.value.toLowerCase() : null;
   const original = envelope.provenance === "original";
-  const complete = body !== undefined && body.length <= EPISODE_STATE_LIMITS.wholeBodyUtf16Units;
-  const text = complete ? body! : "";
-  const clauses = complete ? neighborhoods(text) : [];
-  const startsEpisode = original && role === "user" && (envelope.source.blockIndex === undefined || envelope.source.blockIndex === 0);
+  const decodedStart = window?.decodedStart ?? envelope.source.decodedUtf16.start;
+  const analyzable = body !== undefined && body.length <= EPISODE_STATE_LIMITS.wholeBodyUtf16Units;
+  const sourceComplete = analyzable && decodedStart === envelope.source.decodedUtf16.start
+    && decodedStart + body!.length === envelope.source.decodedUtf16.end;
+  const text = analyzable ? body! : "";
+  const clauses = analyzable ? neighborhoods(text) : [];
+  const startsEpisode = original && role === "user" && decodedStart === envelope.source.decodedUtf16.start
+    && (envelope.source.blockIndex === undefined || envelope.source.blockIndex === 0);
   const compaction = role === "assistant" && /compaction|branch-summary/iu.test(envelope.family);
   const states: ReducedStateItem[] = [];
   for (const clause of clauses) {
@@ -210,7 +216,7 @@ export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: str
     const transition = transitionOf(kind, clause.text), effectiveKind: EpisodeStateKind = transition ? "decision" : kind;
     states.push({ stableKey: sha(`${propositionKey}\n${spanKey}`).slice(0, 32), propositionKey, spanKey,
       subject, revision, kind: effectiveKind, authority, confidence, status: effectiveKind === "blocker" || effectiveKind === "openwork" ? "unresolved" : "current",
-      evidence: evidence(envelope.source, roleFact?.source, text, clause), ...(transition ? { transition } : {}) });
+      evidence: evidence(envelope.source, roleFact?.source, text, clause, decodedStart), ...(transition ? { transition } : {}) });
   }
   // Reserve the existing 32 retained propositions for explicit obligations first.
   // Overflow remains category-specific; failed tool text cannot displace restrictions.
@@ -222,20 +228,21 @@ export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: str
   const lost = states.filter(item => !selectedKeys.has(item.stableKey));
   const unknownOriginal = original && !role;
   const coverage = {
-    restrictionGap: unknownOriginal || original && role === "user" && !complete || lost.some(item => item.kind === "restriction"),
-    openWorkGap: unknownOriginal || original && ["user", "assistant", "tool", "toolresult"].includes(role ?? "") && !complete
+    restrictionGap: unknownOriginal || original && role === "user" && !analyzable || lost.some(item => item.kind === "restriction"),
+    openWorkGap: unknownOriginal || original && ["user", "assistant", "tool", "toolresult"].includes(role ?? "") && !analyzable
       || lost.some(item => ["goal", "openwork", "blocker"].includes(item.kind)),
   };
   selectedStates.sort((a, b) => a.evidence.decodedUtf16.start - b.evidence.decodedUtf16.start);
-  const wholeEvidence = complete ? evidence(envelope.source, roleFact?.source, text, { text, start: 0, end: text.length }) : undefined;
+  const wholeEvidence = sourceComplete ? evidence(envelope.source, roleFact?.source, text, { text, start: 0, end: text.length }, decodedStart) : undefined;
   const objectiveClause = startsEpisode ? neighborhoods(text)[0] : undefined;
-  const objective = objectiveClause ? evidence(envelope.source, roleFact?.source, text, objectiveClause) : undefined;
+  const objective = objectiveClause ? evidence(envelope.source, roleFact?.source, text, objectiveClause, decodedStart) : undefined;
   const resourceClause = clauses.find(clause => /(?:[A-Za-z]:[\\/]|\.?\.?[\\/]|\/|https?:\/\/|\brevision\b)/u.test(clause.text)) ?? clauses[0];
-  const resourceEvidence = resourceClause ? evidence(envelope.source, roleFact?.source, text, resourceClause) : wholeEvidence;
+  const resourceEvidence = resourceClause ? evidence(envelope.source, roleFact?.source, text, resourceClause, decodedStart) : wholeEvidence;
   const observed = resourceEvidence ? resource(text, envelope, resourceEvidence, verified) : undefined;
   const capsuleCue = envelope.alternatives.map(alternative => alternative.text).filter(Boolean).join("\n").slice(0, 2048);
   return { source: envelope.source, role, original, startsEpisode, boundaryKind: startsEpisode ? "user-request" : compaction ? "compaction-continuation" : "none",
-    ...(objective ? { objective } : {}), states: selectedStates, capsuleCue, resources: observed ? [observed] : [], coverage, partial: !complete || !role || lost.length > 0 };
+    ...(objective ? { objective } : {}), states: selectedStates, capsuleCue, resources: observed ? [observed] : [], coverage,
+    partial: !analyzable || !role || lost.length > 0 };
 }
 
 export function episodeStateRulesetIdentity(): string { return EPISODE_STATE_RULESET_VERSION; }

@@ -5,7 +5,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
-import { previewStoredCompaction, composeStoredCompactionForNormalReturn, M09_AUTHORITATIVE_REPLACEMENT_ENABLED } from "./composition-preview.js";
+import { previewStoredCompaction, composeStoredCompactionForNormalReturn } from "./composition-preview.js";
+import { SessionCanary } from "./session-canary.js";
 import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
 import { startAuthorizedWorkerRuntime, startupAuthorizationPath } from "./worker-runtime-startup-client.js";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
@@ -13,6 +14,7 @@ import { createContainedCapsuleShadow } from "./capsule-shadow-worker.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
 import { createHistoryRuntimeTransport } from "./history-runtime-transport.js";
 import { runtimeHostStatus } from "./worker-runtime.js";
+import { verifyLegacyAdmissionGate } from "./worker-runtime-legacy-gate.js";
 import { cachePathForSession, hashCompactionConfig, nextCacheGeneration, readCompactionCache, writeCompactionCache, } from "./cache.js";
 import { compactEntries, CompactionValidationError, computeGenerationHash, computeSummaryBudget, HARD_REPLAY_CAP_TOKENS, resolveCompactorConfig, selectReplayTarget, } from "./compactor.js";
 import { parseHistoricalBlocks } from "./blocks.js";
@@ -844,6 +846,10 @@ function registerRetentionHintTool(pi) {
     });
 }
 export default function chronoCompactExtension(pi, adapters = {}) {
+    pi.registerFlag?.("chrono-canary-session", { type: "string", description: "Authorize guarded composition only in this exact fresh session ID. No inherited activation." });
+    // CLI flag values are assigned after extension factories finish loading.
+    let canary = new SessionCanary(undefined);
+    let canaryControlInitialized = false;
     const userConfigPath = defaultUserConfigPath();
     const loadedUserConfig = loadUserConfig(userConfigPath);
     let userConfig = loadedUserConfig.config;
@@ -866,6 +872,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     };
     const searchStatus = () => ({ ...search.status(),
         enabled: searchSettings().searchIndexEnabled,
+        canary: { active: startupContext ? canary.active(startupContext.sessionManager.getSessionId(), startupContext.sessionManager.getSessionFile()) : false, refusal: canary.refusal },
         rollout: { persisted: sessionSearchOverride !== undefined, enabled: searchSettings().searchIndexEnabled },
         startup: { ...startupStatus },
         ...((rolloutError ?? startupStatus.errorCode) ? { lastSafeError: rolloutError ?? startupStatus.errorCode } : {}) });
@@ -894,7 +901,14 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             return;
         startupStatus = { state: "running" };
         // Do not await this from a Pi hook: the child has its own bounded deadline.
-        void startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath)).then(status => {
+        // An isolated canary can use an existing host policy, never initialize a
+        // second pool or recover admission state as a side effect of loading.
+        const startup = canary.requested(ctx.sessionManager.getSessionId())
+            ? verifyLegacyAdmissionGate().then(ready => ready
+                ? { state: "ready", changed: false }
+                : { state: "unavailable", errorCode: "worker-legacy-transition-required" })
+            : startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath));
+        void startup.then(status => {
             startupStatus = status;
             if (status.state === "ready" && startupContext)
                 scheduleSearch(startupContext);
@@ -1281,6 +1295,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         const epoch = ++rolloutEpoch;
         const nextSearchSessionId = ctx.sessionManager.getSessionId();
         const sourcePath = ctx.sessionManager.getSessionFile();
+        if (!canaryControlInitialized) {
+            canary = new SessionCanary(pi.getFlag?.("chrono-canary-session"));
+            canaryControlInitialized = true;
+        }
+        canary.start(nextSearchSessionId, sourcePath, canary.requested(nextSearchSessionId) ? asEntries(ctx.sessionManager.getBranch()) : []);
         sessionSearchOverride = undefined;
         rolloutError = undefined;
         search.cancel();
@@ -1288,7 +1307,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             const enabled = sourcePath ? await readSessionRollout(sessionRolloutDirectory, { sessionId: nextSearchSessionId, sourcePath }) : undefined;
             if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId)
                 return;
-            sessionSearchOverride = enabled;
+            sessionSearchOverride = enabled ?? (canary.active(nextSearchSessionId, sourcePath) ? true : undefined);
         }
         catch {
             if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId)
@@ -1320,6 +1339,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         scheduleIncrementalWork(ctx);
     });
     pi.on("session_before_switch", () => {
+        canary.stop();
         startupContext = undefined;
         rolloutEpoch++;
         search.cancel();
@@ -1332,6 +1352,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_before_fork", () => {
+        canary.stop();
         startupContext = undefined;
         rolloutEpoch++;
         search.cancel();
@@ -1449,7 +1470,10 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             const estimateTailTokens = createTailTokenEstimator(branchEntries);
             const preparedTailTokens = estimateTailTokens(branchEntries.slice(preparedCutIndex));
             const normalFixture = adapters.schedulerDirectory ? adapters.normalCompositionFixture : undefined;
-            if (M09_AUTHORITATIVE_REPLACEMENT_ENABLED || normalFixture) {
+            const canaryRequested = canary.requested(ctx.sessionManager.getSessionId());
+            if (canaryRequested && !canary.active(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile()))
+                return canary.refuse("session-ineligible");
+            if (canaryRequested || normalFixture) {
                 const preparedEntry = branchEntries[preparedCutIndex];
                 const sourceCutEntryId = preparedCutIndex > 0 ? branchEntries[preparedCutIndex - 1]?.id : undefined;
                 const preparedTailSafe = isSafeCompactionCut(branchEntries, preparedCutIndex);
@@ -1464,6 +1488,21 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 const branchLeaf = ctx.sessionManager.getLeafId();
                 const identityChanged = () => epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId
                     || ctx.sessionManager.getLeafId() !== branchLeaf;
+                let pinnedSelection;
+                if (!normalFixture) {
+                    try {
+                        pinnedSelection = await search.compositionSelection(sourceCutEntryId, event.signal);
+                        if (!pinnedSelection.coverage.restrictionsComplete || !pinnedSelection.coverage.openWorkComplete
+                            || pinnedSelection.omissions.protectedAtLeastOne || pinnedSelection.omissions.openWorkAtLeastOne
+                            || identityChanged() || event.signal?.aborted)
+                            return canary.refuse("mandatory-coverage-incomplete");
+                    }
+                    catch {
+                        if (ctx.hasUI)
+                            ctx.ui.notify("Stored composition coverage is unavailable; current context is unchanged.", "warning");
+                        return canary.refuse("selection-unavailable");
+                    }
+                }
                 let regularPiSummary;
                 try {
                     regularPiSummary = await (normalFixture?.createPiSummary ?? createPiRegularSummary)(ctx, event.preparation, {
@@ -1477,29 +1516,18 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     if (!event.signal?.aborted && ctx.hasUI) {
                         ctx.ui.notify(`Regular Pi summary failed; compaction was cancelled: ${safeErrorMessage(error)}`, "warning");
                     }
-                    return { cancel: true };
+                    return canary.refuse("summary-unavailable");
                 }
                 if (!regularPiSummary || identityChanged() || event.signal?.aborted) {
-                    return { cancel: true };
+                    return canary.refuse("summary-unavailable");
                 }
-                const summaryTokens = estimateTokensFromText(regularPiSummary.text);
-                const fallback = () => summaryTokens + preparedTailTokens <= HARD_COMBINED_CONTEXT_CAP_TOKENS
-                    ? { compaction: { summary: regularPiSummary.text, firstKeptEntryId: preparedFirstKeptEntryId, tokensBefore,
-                            ...(regularPiSummary.usage === undefined ? {} : { usage: regularPiSummary.usage }),
-                            details: { kind: "chrono-v3-pi-summary-tail-fallback", composition: {
-                                    sourceCutEntryId, firstKeptEntryId: preparedFirstKeptEntryId,
-                                    summaryHash: hashText(regularPiSummary.text), renderedTokens: summaryTokens,
-                                    rawTailTokens: preparedTailTokens, combinedTokens: summaryTokens + preparedTailTokens,
-                                    validation: { safeTail: true, withinCombinedCeiling: true },
-                                } } } }
-                    : { cancel: true };
                 try {
                     const composed = await (normalFixture?.compose ?? composeStoredCompactionForNormalReturn)({
                         regularPiSummary: regularPiSummary.text, sourceCutEntryId,
                         firstKeptEntryId: preparedFirstKeptEntryId, rawTailTokens: preparedTailTokens, toolPairSafe: true,
                     }, {
                         getEntry: entryId => ctx.sessionManager.getEntry(entryId),
-                        select: entryId => search.compositionSelection(entryId, event.signal),
+                        select: entryId => pinnedSelection && entryId === sourceCutEntryId ? Promise.resolve(pinnedSelection) : search.compositionSelection(entryId, event.signal),
                         pin: async (entryId) => (await search.compositionTarget(entryId, event.signal)).view,
                         recovery: encodeCompositionRecovery,
                     }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
@@ -1514,9 +1542,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                         return { cancel: true };
                     }
                     if (ctx.hasUI) {
-                        ctx.ui.notify(`Stored composition unavailable; using the bounded Pi summary and prepared tail: ${safeErrorMessage(error)}`, "warning");
+                        ctx.ui.notify(`Stored composition refused; current context is unchanged: ${safeErrorMessage(error)}`, "warning");
                     }
-                    return fallback();
+                    return canary.refuse("composition-refused");
                 }
             }
             let tailSelection = {
@@ -1865,6 +1893,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             });
         }
         catch (error) {
+            if (canary.requested(ctx.sessionManager.getSessionId())) {
+                if (ctx.hasUI)
+                    ctx.ui.notify("Guarded composition failed; current context is unchanged.", "warning");
+                return canary.refuse("operation-failed");
+            }
             const noSavings = error instanceof CompactionValidationError && error.report.issues.some((issue) => issue.code === "no-net-savings");
             if (noSavings && event.reason === "manual") {
                 ctx.ui.notify("ChronoCompact stopped because it would not reduce the selected historical prefix.", "info");
