@@ -636,3 +636,67 @@ synthetic fixture input; the 2.0.21 runtime and schemas are byte-identical.
 Replacement routine CI is pending. The shared installation, configuration,
 source archives, state-v3/state-v4 stores, rollup-v2/rollup-v3 stores and
 rollback points remain unchanged.
+
+## M10 logical-session sharding candidate (2.0.22)
+
+M10 preserves the M09 history and normally merges corrected 2.0.21 runtime head
+`6ee8743d80634d866b35940ae2c5ebcf7d2dbf80` and fixture/report-only correction
+`910a51d0e3bc898a420fef23ea7491a728b54f15`. The candidate adds an owner-only,
+revisioned logical-session manifest and an explicit command adapter. Adoption
+records the current persisted session without ingestion or rewriting. Manual
+rollover validates the exact source leaf, branch, catalog cut, tail, regular Pi
+summary, rendered composition, complete mandatory coverage and all ancestor
+final cuts before replacement.
+
+The recoverable sequence records `close-prepared`, creates a child session with
+the pinned Pi command API, binds one exact continuation in `setup`, then activates
+only after runtime rebind in `withSession`. Startup reconciliation accepts only
+the recorded operation, continuation hash, source route and replacement identity.
+Rollback uses the supported switch API and refuses after user work. Old shards
+remain immutable.
+
+Logical activation does not inherit the composer canary. A replacement or an
+explicit disposable canary can only reuse an already admitted host through the
+read-only legacy admission check. Search uses a manifest-bound logical grant and
+queries existing shard stores newest to oldest. Recall follows its pinned view.
+Ancestor exact entry, block and range calls require the explicit shard route.
+Cursors bind the operation, logical session, branch, manifest revision and hash,
+route index, cuts and underlying store cursor. Missing, stale or sibling routes
+refuse without source ingestion.
+
+State-v4 shared representations are certified at proposition granularity. The
+continuation builder expands the primary item and every `coveredPropositions`
+member, validates one shared representation key, deduplicates exact proposition
+keys, and credits them only when the shared representation was rendered in a
+mandatory section. Incomplete scans, exhausted work, any protected/open-work
+omission, response-budget loss or rendered overflow refuse rollover. The
+corrected M09 producer scenario remains in routine CI beside both focused M10
+fixtures.
+
+The initial core fixture passed and covered owner-only persistence, revision
+conflicts, strict eligibility, recoverable phases, rollback and ancestor routing.
+A second check used the actual pinned Pi 0.84.2 SDK and passed real
+`newSession()` setup, extension rebind before `withSession`, and `switchSession()`
+without a provider call. No further local runtime invocation ran for packaging.
+Final source typecheck and the generated build passed before the fixture/report-only
+M09 merge. They were not repeated because that merge changed no runtime source or
+artifact. Manifest verification, the dirty-tree static baseline, and worktree/index
+publication privacy passed after the final merge. Routine native build/probe,
+recorded provenance, event-scoped publication privacy and exact-head CI remain
+pending; they are not claimed here.
+
+The artifact has 131 source files, 130 compiled JavaScript files and 131 manifest
+rows. Source tree SHA-256 is
+`e3bb1494873273c5cdfff3421cb7cd31e43159f9245a9cbe9acf0c8f8a1359be`.
+Compiled tree SHA-256 is
+`b289f971e74faf3d5b87d9fdcd8809baa90c590d886b263a562f5205a7d3c060`.
+Entrypoint SHA-256 is
+`fd73ff49e06a2e3da1899b62bed11a2e90aac0a98f6b4b6dba4d6f7af728ac7c`.
+Package and lock SHA-256 values are respectively
+`18e98ac6afc84a504df0c3bee20690941c2a60390f74b0d413603b0b2cf717e4`
+and `42024d0876d7a367509bb86b11601c3ede4cebb7282cfb14b803d42ce60114d9`.
+
+This is a review candidate, not an installed release. Automatic rollover, fork
+creation, shared switching, provider handoff, broker restart, Pi core replacement,
+inherited canary activation and old-shard cleanup remain outside scope. Existing
+stores and rollback points are unchanged. PR45 and PR46 remain unmerged.

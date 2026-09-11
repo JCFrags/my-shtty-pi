@@ -125,7 +125,7 @@ test("broad validation is selected only by exact-head milestone dispatch", () =>
   }
 }));
 
-test("root inventory permits only the exact M07 and M08 compiled-count changes", () => withFixture((root) => {
+test("root inventory permits only the exact M07 through M10 compiled-count changes", () => withFixture((root) => {
   const manifest = { piConsolidation: { products: [{ slug: "pi-chrono-compaction", compiledCount: 118 }] } };
   const before = commit(root, "package.json", JSON.stringify(manifest));
   manifest.piConsolidation.products[0].compiledCount = 121;
@@ -134,7 +134,13 @@ test("root inventory permits only the exact M07 and M08 compiled-count changes",
   manifest.piConsolidation.products[0].compiledCount = 122;
   const rollup = commit(root, "package.json", JSON.stringify(manifest));
   assert.equal(run(root, "push", { before: after, after: rollup }, rollup).status, 0);
+  manifest.piConsolidation.products[0].compiledCount = 124;
+  const composer = commit(root, "package.json", JSON.stringify(manifest));
+  assert.equal(run(root, "push", { before: rollup, after: composer }, composer).status, 0);
+  manifest.piConsolidation.products[0].compiledCount = 130;
+  const sharding = commit(root, "package.json", JSON.stringify(manifest));
+  assert.equal(run(root, "push", { before: composer, after: sharding }, sharding).status, 0);
   manifest.unrelated = true;
   const unrelated = commit(root, "package.json", JSON.stringify(manifest));
-  assert.equal(run(root, "push", { before: after, after: unrelated }, unrelated).json.reason, "unsupported-root-metadata-change");
+  assert.equal(run(root, "push", { before: composer, after: unrelated }, unrelated).json.reason, "unsupported-root-metadata-change");
 }));

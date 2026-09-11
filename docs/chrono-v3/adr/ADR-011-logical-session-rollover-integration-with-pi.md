@@ -1,6 +1,6 @@
 # ADR-011 — Logical-session rollover integration with Pi
 
-Status: proposed first M10 manual integration. It does not authorize activation or automatic rollover.
+Status: implemented in the 2.0.22 M10 repository candidate. It does not authorize deployment, shared activation, or automatic rollover.
 Scope: owner-only logical manifests, continuation validation, manual session replacement, recovery, rollback, and ancestor routing.
 
 ## Context
@@ -38,6 +38,18 @@ The manifest is schema-versioned, integrity-hashed, revision-checked, atomically
 
 Search integration receives ordered `LogicalShardRoute` values from the logical core. Routes include only the selected branch and its ancestors through each fork point. `scheduleLogical(grant)` is available only after the active session ID, source path, continuation hash, and manifest active shard match. It reuses the existing per-shard lifecycle and contained stores for each immutable final cut. Search runs newest-to-oldest in pages of at most eight shard routes. Recall routes by its pinned view. Exact entry and range calls require an explicit shard ID when they target an ancestor. Logical pagination binds the cursor to the logical session, manifest revision and hash, branch, route index, and existing store cursor. Sibling branches and stale manifests refuse.
 
+## Implemented candidate and verification
+
+The 2.0.22 candidate implements the versioned manifest, owner-only store, strict continuation validator, recoverable manual rollover coordinator, exact rollback, logical activation grant, startup reconciliation, and existing-store ancestor routing. The `/chrono-logical-session` command supports adoption, status, rollover, recovery, and rollback. A valid logical grant enables only the exact replacement session. It does not inherit the M09 composer canary. Startup for both logical replacements and requested disposable canaries is read-only and requires an already admitted worker host.
+
+State-v4 packed representations are counted at proposition granularity. The candidate expands the primary item and all `coveredPropositions`, validates their shared `representationKey`, deduplicates by proposition `stableKey`, and credits the group only when the exact shared representation appears in the rendered mandatory artifact. Incomplete scans, exhausted restriction or open-work selection, omissions, response-budget loss, rendered overflow, source mismatch, or unsafe tool pairing refuse rollover.
+
+The initial focused core fixture passed once. It exercised owner-only files, exact manifest revisions, coverage refusal, recoverable phases, rollback rules, and ancestor route isolation. A separate disposable check used the real pinned Pi 0.84.2 SDK. It exercised `newSession()` setup, runtime rebind before `withSession`, and `switchSession()` without a provider call. Package typecheck passed after both M09 merges. No further local runtime invocation ran during 2.0.22 packaging. The routine workflow selects these two existing M10 fixtures and the corrected M09 producer fixture. Its result belongs to the pushed candidate receipt.
+
+## Limitations
+
+Rollover remains an explicit owner command. Automatic rollover, fork creation, shared-session switching, inherited canary activation, provider handoff, broker restart, and Pi core replacement are not implemented or authorized. Ancestor routing requires every old store and immutable final cut to exist and validate; it refuses missing history instead of ingesting or reconstructing it. Old physical shards remain immutable. The candidate is packaged for review only and is not installed or active.
+
 ## Alternatives considered
 
 - Use the current global 0.85.1 API. Rejected because the package runtime is pinned to 0.84.2.
@@ -63,4 +75,4 @@ Fork integration creates a branch with an explicit parent branch and ancestor cu
 
 ## Reversal path
 
-Do not register the manual command, or remove its integration while retaining the owner-only manifest and every source shard. A pending pre-bind intent can reopen the old shard. An unused bound replacement can roll back through pinned `switchSession()`. A disposable SDK check against pinned Pi 0.84.2 exercises real `newSession()` setup, runtime rebind before `withSession`, and `switchSession()` without a provider request. Existing single-shard search and compaction paths remain unchanged. This ADR does not authorize deployment, provider calls, automatic rollover, Pi core changes, package version changes, publication, or old-shard deletion.
+Do not register the manual command, or remove its integration while retaining the owner-only manifest and every source shard. A pending pre-bind intent can reopen the old shard. An unused bound replacement can roll back through pinned `switchSession()`. A disposable SDK check against pinned Pi 0.84.2 exercises real `newSession()` setup, runtime rebind before `withSession`, and `switchSession()` without a provider request. Existing single-shard search and compaction paths remain unchanged. Packaging and a draft review request do not authorize deployment, provider calls, automatic rollover, Pi core changes, shared activation, or old-shard deletion.

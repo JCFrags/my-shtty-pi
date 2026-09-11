@@ -27,7 +27,7 @@ const packageRelative = `packages/${packageSlug}`;
 const entrypointRelative = "dist/src/pi-extension.js";
 const deployedManifestRelative = `${packageRelative}/DEPLOYED.sha256`;
 
-// These values pin the 2.0.21 M09 repository candidate, not a deployment.
+// These values pin the 2.0.22 M10 repository candidate, not a deployment.
 // This verifies repository and optional live byte identity; it does not assert activation.
 // A later runtime milestone must update every affected value explicitly.
 const EXPECTED = Object.freeze({
@@ -35,21 +35,34 @@ const EXPECTED = Object.freeze({
   m00Commit: "1887c77b39c42fb0b5d35b38baac94aff13465e9",
   runtimeBaselineCommit: "eb9742c318a76eeaf753e87a620fae83ca9048d1",
   deployedBaselineCommit: "049b6390fba7a7908d01908a7953dd2f50fa15df",
-  sourceFiles: 126,
-  sourceTreeHash: "abe9cb2a9dda7eb5d9c3dc55c5bbf59fff87871827941734876c241490477986",
-  distFiles: 125,
-  distTreeHash: "971693a75ca925f7546a1791dda3590cdf8d5f383a927fcf315eec82204f98c2",
-  entrypointHash: "d9e01740781cf50daf086012e4a6bfe1faac18f4a5b5bdbe3f590d69638a9afc",
-  m01PackageHash: "ba885e8c4d3356b0bf611d5c083ca81a074ec0693ac7fa522ab77f074aeb04db",
-  m01LockHash: "e9b1c6250fe3f7d3fa057172cd72239f984eb5ac60e7dfde085e9ccbb733620d",
-  livePackageHash: "ba885e8c4d3356b0bf611d5c083ca81a074ec0693ac7fa522ab77f074aeb04db",
-  deployedPackageHash: "ba885e8c4d3356b0bf611d5c083ca81a074ec0693ac7fa522ab77f074aeb04db",
+  sourceFiles: 131,
+  sourceTreeHash: "e3bb1494873273c5cdfff3421cb7cd31e43159f9245a9cbe9acf0c8f8a1359be",
+  distFiles: 130,
+  distTreeHash: "b289f971e74faf3d5b87d9fdcd8809baa90c590d886b263a562f5205a7d3c060",
+  entrypointHash: "fd73ff49e06a2e3da1899b62bed11a2e90aac0a98f6b4b6dba4d6f7af728ac7c",
+  m01PackageHash: "18e98ac6afc84a504df0c3bee20690941c2a60390f74b0d413603b0b2cf717e4",
+  m01LockHash: "42024d0876d7a367509bb86b11601c3ede4cebb7282cfb14b803d42ce60114d9",
+  livePackageHash: "18e98ac6afc84a504df0c3bee20690941c2a60390f74b0d413603b0b2cf717e4",
+  deployedPackageHash: "18e98ac6afc84a504df0c3bee20690941c2a60390f74b0d413603b0b2cf717e4",
   northStarHash: "7bdf3f9b1a2bc1ec7ab6c9983da1a8d2e723ca96a8fb5672d18893d57996fa9f",
   stage1RuntimeRecords: 272,
   canonicalDeployedFiles: 291,
 });
 
 const correctionPaths = new Set([
+  "packages/pi-chrono-compaction/src/logical-session-contract.ts",
+  "packages/pi-chrono-compaction/src/logical-session-integration.ts",
+  "packages/pi-chrono-compaction/src/logical-session-rollover.ts",
+  "packages/pi-chrono-compaction/src/logical-session-routing.ts",
+  "packages/pi-chrono-compaction/src/logical-session-store.ts",
+  "packages/pi-chrono-compaction/dist/src/logical-session-contract.js",
+  "packages/pi-chrono-compaction/dist/src/logical-session-integration.js",
+  "packages/pi-chrono-compaction/dist/src/logical-session-rollover.js",
+  "packages/pi-chrono-compaction/dist/src/logical-session-routing.js",
+  "packages/pi-chrono-compaction/dist/src/logical-session-store.js",
+  "packages/pi-chrono-compaction/test/logical-session-rollover.test.ts",
+  "packages/pi-chrono-compaction/test/pinned-session-replacement.test.ts",
+  "docs/chrono-v3/adr/ADR-011-logical-session-rollover-integration-with-pi.md",
   "packages/pi-chrono-compaction/src/session-canary.ts",
   "packages/pi-chrono-compaction/dist/src/session-canary.js",
   "packages/pi-chrono-compaction/test/session-canary.test.ts",
@@ -589,7 +602,7 @@ function verifyRepositoryFiles() {
   }
   if (fileHash(join(packageRoot, "package.json")) !== manifest.get("package.json")) fail("deployed-metadata-record-changed");
   const packageJson = readJson(join(packageRoot, "package.json"));
-  if (packageJson.version !== "2.0.21") fail("package-version-changed");
+  if (packageJson.version !== "2.0.22") fail("package-version-changed");
   const rootPackage = readJson(join(repoRoot, "package.json"));
   if (rootPackage.piConsolidation?.stage1RuntimeRecords !== EXPECTED.stage1RuntimeRecords) fail("stage1-record-count-changed");
   if (rootPackage.piConsolidation?.canonicalDeployedFiles !== EXPECTED.canonicalDeployedFiles) fail("canonical-deployed-count-changed");

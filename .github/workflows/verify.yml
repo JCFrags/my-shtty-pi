@@ -120,7 +120,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         if: needs.validation-scope.outputs.classification != 'docs'
         with: { node-version: "24.18.0", cache: npm }
-      - name: Run focused publication and mandatory coverage contracts
+      - name: Run focused mandatory coverage and logical-session contracts
         if: needs.validation-scope.outputs.classification == 'runtime'
         working-directory: packages/pi-chrono-compaction
         run: |
@@ -131,11 +131,13 @@ jobs:
           npm run catalog:sqlite:probe-record
           rm -rf dist-test
           npx tsc -p tsconfig.test-build.json
-          test -f dist-test/test/history-search-adapter.test.js
           test -f dist-test/test/episode-state.test.js
-          grep -F 'rollup lifecycle offers bounded top-down exact recall' test/history-search-adapter.test.ts
+          test -f dist-test/test/logical-session-rollover.test.js
+          test -f dist-test/test/pinned-session-replacement.test.js
           grep -F 'M09 actual producer selection preserves obligations' test/episode-state.test.ts
-          CHRONO_SYNTHETIC_OUTPUT="$RUNNER_TEMP/chrono-synthetic-example.md" node --test --test-concurrency=1 --test-name-pattern='rollup lifecycle offers bounded top-down exact recall|M09 actual producer selection preserves obligations|session canary binds|recorded same-cut preview' dist-test/test/history-search-adapter.test.js dist-test/test/episode-state.test.js dist-test/test/session-canary.test.js dist-test/test/composition-preview.test.js
+          grep -F 'manual logical rollover is owner-only, coverage-gated, recoverable, and ancestor-routed' test/logical-session-rollover.test.ts
+          grep -F 'pinned Pi 0.84.2 replaces, rebinds, runs withSession, and switches back without a provider call' test/pinned-session-replacement.test.ts
+          CHRONO_SYNTHETIC_OUTPUT="$RUNNER_TEMP/chrono-synthetic-example.md" node --test --test-concurrency=1 --test-name-pattern='M09 actual producer selection preserves obligations|manual logical rollover is owner-only|pinned Pi 0.84.2 replaces' dist-test/test/episode-state.test.js dist-test/test/logical-session-rollover.test.js dist-test/test/pinned-session-replacement.test.js
           echo 'BEGIN PUBLIC SYNTHETIC COMPOSER EXAMPLE'
           cat "$RUNNER_TEMP/chrono-synthetic-example.md"
           echo 'END PUBLIC SYNTHETIC COMPOSER EXAMPLE'
@@ -155,7 +157,7 @@ jobs:
         run: echo 'Unit/integration tests are not applicable to this documentation-only diff; no runtime result is claimed.'
       - name: Record routine campaign boundary
         if: needs.validation-scope.outputs.classification == 'runtime'
-        run: echo 'Focused search, memory, and composer contracts ran; the complete unit/integration campaign did not run and is not claimed.'
+        run: echo 'Focused mandatory-coverage and logical-session contracts ran; the complete M06-M09 or unit/integration campaigns did not run and are not claimed.'
 
   determinism:
     needs: validation-scope

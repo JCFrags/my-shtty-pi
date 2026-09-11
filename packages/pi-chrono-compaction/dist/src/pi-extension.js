@@ -1,7 +1,7 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { env } from "node:process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
@@ -42,6 +42,10 @@ import { replayWorkerDiagnosticPath, runCompactionWorker } from "./compaction-wo
 import { defaultSchedulerDirectory, schedulerArtifactCounts } from "./host-worker-scheduler.js";
 import { getRollupShadowStatus } from "./history-rollup-shadow.js";
 import { returnAuthoritativeAfterShadowSchedule } from "./post-result-shadow.js";
+import { LogicalSessionStore } from "./logical-session-store.js";
+import { ManualLogicalRollover, createInitialLogicalManifest } from "./logical-session-rollover.js";
+import { resolveLogicalActivation } from "./logical-session-routing.js";
+import { buildManualContinuationCandidate, recordedLogicalBinding, replacementContainsOnlyContinuation } from "./logical-session-integration.js";
 const EXTENSION_VERSION = "2.0.3";
 export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
 const MAX_RAW_TAIL_WITH_HISTORY_TOKENS = 27_000;
@@ -496,6 +500,47 @@ function createTailTokenEstimator(entries) {
         return startIndex >= 0 && startIndex <= entries.length ? (suffixTokens[startIndex] ?? 0) : estimateEntryTokens(tail);
     };
 }
+function unmatchedToolCallCount(entries) {
+    const pending = new Set();
+    for (const entry of entries) {
+        if (entry.type !== "message" || !entry.message || typeof entry.message !== "object")
+            continue;
+        const message = entry.message;
+        if (message.role === "toolResult" && typeof message.toolCallId === "string")
+            pending.delete(message.toolCallId);
+        const content = Array.isArray(message.content) ? message.content : [];
+        for (const block of content) {
+            if (!block || typeof block !== "object")
+                continue;
+            const value = block;
+            if (value.type === "toolCall" && typeof value.id === "string")
+                pending.add(value.id);
+        }
+    }
+    return pending.size;
+}
+function logicalErrorCode(error) {
+    const candidate = error?.code ?? error?.message;
+    if (typeof candidate === "string" && candidate.startsWith("Usage: /chrono-logical-session "))
+        return candidate;
+    return typeof candidate === "string" && /^(logical-session|search-v3|source-changed)[a-z0-9-]*$/.test(candidate)
+        ? candidate : "logical-session-unavailable";
+}
+function validLogicalCommandId(value) {
+    return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+function commandSessionPort(ctx) {
+    const setup = (manager) => manager;
+    return {
+        sessionManager: setup(ctx.sessionManager),
+        newSession: options => ctx.newSession({ parentSession: options.parentSession,
+            setup: manager => options.setup(setup(manager)),
+            withSession: replacement => options.withSession({ sessionManager: setup(replacement.sessionManager) }) }),
+        switchSession: (path, options) => ctx.switchSession(path, {
+            withSession: replacement => options.withSession({ sessionManager: setup(replacement.sessionManager) }),
+        }),
+    };
+}
 async function historySourceState(path) {
     const value = await stat(path);
     if (!value.isFile())
@@ -527,6 +572,7 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
         description: "Return an exact immutable Pi JSONL entry or one exact content block, with nearby context.",
         parameters: Type.Object({
             entryId: Type.String({ description: "Pi session entry ID or indexed source handle" }),
+            shardId: Type.Optional(Type.String({ description: "Logical shard ID reported by logical history search" })),
             startByte: Type.Optional(Type.Number({ minimum: 0, description: "Continue exact raw byte recovery at nextByte" })),
             blockIndex: Type.Optional(Type.Number({ minimum: 0 })),
             contextBefore: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
@@ -544,9 +590,9 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
                 if (params.blockIndex !== undefined) {
                     if (params.contextBefore || params.contextAfter || params.startByte !== undefined)
                         return toolText("Indexed block recovery uses decoded character coordinates without neighbors.", { status: "unavailable", code: "search-v3-option-unsupported" });
-                    return search.getBlock(params.entryId, params.blockIndex, params.startChar, params.maxChars, _signal);
+                    return search.getBlock(params.entryId, params.blockIndex, params.startChar, params.maxChars, _signal, params.shardId);
                 }
-                return search.getRaw(params.entryId, params, _signal);
+                return search.getRaw(params.entryId, params, _signal, params.shardId);
             }
             const options = {
                 blockIndex: params.blockIndex,
@@ -681,10 +727,11 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             endEntryId: Type.String(),
             maxEntries: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
             cursor: Type.Optional(Type.String({ description: "Pinned indexed range continuation" })),
+            shardId: Type.Optional(Type.String({ description: "Exact logical shard ID; ranges never cross shard boundaries" })),
         }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             if (settings().searchIndexEnabled)
-                return search.range(params.startEntryId, params.endEntryId, params.maxEntries, params.cursor, _signal);
+                return search.range(params.startEntryId, params.endEntryId, params.maxEntries, params.cursor, _signal, params.shardId);
             const options = { maxEntries: params.maxEntries };
             const ledger = await availableLedger(ctx);
             let text;
@@ -858,6 +905,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     // Only an exact session/source sidecar can opt this session in persistently.
     // Ordinary extension loading reads it; history queries never read or write it.
     const sessionRolloutDirectory = adapters.sessionRolloutDirectory ?? join(dirname(userConfigPath), "chrono-session-rollouts");
+    const logicalSessionRoot = join(dirname(userConfigPath), "chrono-logical-sessions");
+    let logicalGrant;
+    let logicalSwitchActive = false;
     let sessionSearchOverride;
     let rolloutEpoch = 0;
     let rolloutError;
@@ -894,20 +944,23 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         const sessionKey = createHash("sha256").update("pi-session-v1\0").update(ctx.sessionManager.getSessionId()).digest("hex");
         const shardKey = createHash("sha256").update("pi-jsonl-v1\0").update(sourcePath).digest("hex");
         search.schedule({ sourcePath, sessionKey, shardKey, leafId, catalogDirectory: join(dirname(sourcePath), ".chrono-catalog", sessionKey) });
+        if (logicalGrant)
+            search.scheduleLogical(logicalGrant);
     };
     const beginStartup = (ctx) => {
         startupContext = ctx;
         if (startupStatus.state !== "pending")
             return;
         startupStatus = { state: "running" };
-        // Do not await this from a Pi hook: the child has its own bounded deadline.
-        // An isolated canary can use an existing host policy, never initialize a
-        // second pool or recover admission state as a side effect of loading.
-        const startup = canary.requested(ctx.sessionManager.getSessionId())
+        // A logical replacement or isolated canary can reuse an existing host policy.
+        // Neither path initializes a second pool or recovers admission state as a load side effect.
+        const readOnlyStartup = !!logicalGrant || canary.requested(ctx.sessionManager.getSessionId());
+        const startup = readOnlyStartup
             ? verifyLegacyAdmissionGate().then(ready => ready
                 ? { state: "ready", changed: false }
                 : { state: "unavailable", errorCode: "worker-legacy-transition-required" })
             : startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath));
+        // Do not await this from a Pi hook: the child has its own bounded deadline.
         void startup.then(status => {
             startupStatus = status;
             if (status.state === "ready" && startupContext)
@@ -1291,6 +1344,35 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             return undefined;
         }
     });
+    const resolveStartedLogicalSession = async (ctx) => {
+        const entries = asEntries(ctx.sessionManager.getBranch());
+        const binding = recordedLogicalBinding(entries);
+        const sourcePath = ctx.sessionManager.getSessionFile();
+        if (!binding || !sourcePath)
+            return undefined;
+        const store = new LogicalSessionStore(logicalSessionRoot, binding.logicalSessionId);
+        const rollover = new ManualLogicalRollover(store);
+        let manifest = await store.read();
+        if (!manifest)
+            throw new Error("logical-session-manifest-missing");
+        if (manifest.pendingRollover?.operationId === binding.operationId) {
+            if (binding.logicalSessionId !== manifest.logicalSessionId || binding.branchId !== manifest.pendingRollover.branchId
+                || binding.fromShardId !== manifest.pendingRollover.oldShardId || binding.shardId !== manifest.pendingRollover.newShardId) {
+                throw new Error("logical-session-recovery-binding-mismatch");
+            }
+            if (manifest.pendingRollover.phase === "close-prepared") {
+                await rollover.bindRecordedNewShard(binding.operationId, ctx.sessionManager, binding.continuationHash);
+            }
+            manifest = await store.read();
+            if (manifest?.pendingRollover?.operationId === binding.operationId && manifest.pendingRollover.phase === "new-shard-bound") {
+                await rollover.activateNewShard(binding.operationId, ctx.sessionManager);
+            }
+            manifest = await store.read();
+        }
+        if (!manifest)
+            throw new Error("logical-session-manifest-missing");
+        return resolveLogicalActivation(manifest, { piSessionId: ctx.sessionManager.getSessionId(), sourcePath }, binding);
+    };
     pi.on("session_start", async (_event, ctx) => {
         const epoch = ++rolloutEpoch;
         const nextSearchSessionId = ctx.sessionManager.getSessionId();
@@ -1301,13 +1383,15 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
         canary.start(nextSearchSessionId, sourcePath, canary.requested(nextSearchSessionId) ? asEntries(ctx.sessionManager.getBranch()) : []);
         sessionSearchOverride = undefined;
+        logicalGrant = undefined;
         rolloutError = undefined;
         search.cancel();
         try {
+            logicalGrant = await resolveStartedLogicalSession(ctx);
             const enabled = sourcePath ? await readSessionRollout(sessionRolloutDirectory, { sessionId: nextSearchSessionId, sourcePath }) : undefined;
             if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId)
                 return;
-            sessionSearchOverride = enabled ?? (canary.active(nextSearchSessionId, sourcePath) ? true : undefined);
+            sessionSearchOverride = logicalGrant ? true : enabled ?? (canary.active(nextSearchSessionId, sourcePath) ? true : undefined);
         }
         catch {
             if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId)
@@ -1341,6 +1425,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("session_before_switch", () => {
         canary.stop();
         startupContext = undefined;
+        logicalGrant = undefined;
         rolloutEpoch++;
         search.cancel();
         capsuleShadow.cancel();
@@ -1354,6 +1439,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("session_before_fork", () => {
         canary.stop();
         startupContext = undefined;
+        logicalGrant = undefined;
         rolloutEpoch++;
         search.cancel();
         capsuleShadow.cancel();
@@ -1366,6 +1452,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     });
     pi.on("session_shutdown", () => {
         startupContext = undefined;
+        logicalGrant = undefined;
         rolloutEpoch++;
         search.dispose();
         capsuleShadow.dispose();
@@ -1914,6 +2001,112 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         description: "Read bounded indexed-history readiness, requested/indexed cuts, lag and safe error. No ingestion or archive reads.",
         parameters: Type.Object({}),
         async execute() { const status = searchStatus(); return toolText(JSON.stringify(status), status); },
+    });
+    pi.registerCommand("chrono-logical-session", {
+        description: "Manually adopt, inspect, roll over, recover, or roll back one owner-only logical session",
+        handler: async (args, ctx) => {
+            const parts = args.trim().split(/\s+/).filter(Boolean);
+            const action = parts[0];
+            const sourcePath = ctx.sessionManager.getSessionFile();
+            try {
+                if (action === "adopt") {
+                    const branchId = parts[1] ?? "main";
+                    if (!sourcePath || parts.length > 2)
+                        throw new Error("Usage: /chrono-logical-session adopt [branch-id]");
+                    const initial = createInitialLogicalManifest({ ownerKey: randomBytes(32).toString("hex"), branchId,
+                        piSessionId: ctx.sessionManager.getSessionId(), sourcePath });
+                    const store = new LogicalSessionStore(logicalSessionRoot, initial.logicalSessionId);
+                    const manifest = await store.create(initial);
+                    ctx.ui.notify(`Logical session adopted: ${manifest.logicalSessionId} on branch ${branchId}. No rollover occurred.`, "info");
+                    return;
+                }
+                if (!sourcePath || !validLogicalCommandId(parts[1]))
+                    throw new Error("Usage: /chrono-logical-session status|rollover|recover|rollback <logical-session-id> [branch-id]");
+                const store = new LogicalSessionStore(logicalSessionRoot, parts[1]);
+                const rollover = new ManualLogicalRollover(store);
+                const manifest = await store.read();
+                if (!manifest)
+                    throw new Error("logical-session-manifest-missing");
+                if (action === "status") {
+                    const branch = manifest.branches.find(value => value.activeShardId && manifest.shards.some(shard => shard.shardId === value.activeShardId && shard.piSessionId === ctx.sessionManager.getSessionId() && shard.sourcePath === sourcePath));
+                    ctx.ui.notify(JSON.stringify({ logicalSessionId: manifest.logicalSessionId, revision: manifest.revision,
+                        activeBranch: branch?.branchId ?? null, pendingPhase: manifest.pendingRollover?.phase ?? null,
+                        shards: manifest.shards.length, composerCanaryInherited: false }), "info");
+                    return;
+                }
+                if (action === "recover") {
+                    const pending = manifest.pendingRollover;
+                    if (!pending)
+                        throw new Error("logical-session-recovery-unavailable");
+                    const old = manifest.shards.find(value => value.shardId === pending.oldShardId);
+                    if (pending.phase === "close-prepared" && old?.piSessionId === ctx.sessionManager.getSessionId() && old.sourcePath === sourcePath) {
+                        await rollover.abortPrepared(pending.operationId);
+                        ctx.ui.notify("Prepared rollover was reopened. No shard was deleted.", "info");
+                        return;
+                    }
+                    const binding = recordedLogicalBinding(asEntries(ctx.sessionManager.getBranch()));
+                    if (!binding || binding.operationId !== pending.operationId || binding.logicalSessionId !== manifest.logicalSessionId
+                        || binding.branchId !== pending.branchId || binding.fromShardId !== pending.oldShardId || binding.shardId !== pending.newShardId) {
+                        throw new Error("logical-session-recovery-binding-missing");
+                    }
+                    if (pending.phase === "close-prepared")
+                        await rollover.bindRecordedNewShard(pending.operationId, ctx.sessionManager, binding.continuationHash);
+                    await rollover.activateNewShard(pending.operationId, ctx.sessionManager);
+                    return;
+                }
+                if (action === "rollback") {
+                    const binding = recordedLogicalBinding(asEntries(ctx.sessionManager.getBranch()));
+                    if (!binding || binding.logicalSessionId !== manifest.logicalSessionId)
+                        throw new Error("logical-session-rollback-ineligible");
+                    logicalSwitchActive = true;
+                    try {
+                        await rollover.rollbackLast(commandSessionPort(ctx), replacementContainsOnlyContinuation(asEntries(ctx.sessionManager.getBranch()), binding));
+                    }
+                    finally {
+                        logicalSwitchActive = false;
+                    }
+                    return;
+                }
+                if (action !== "rollover" || !parts[2] || parts.length !== 3)
+                    throw new Error("Usage: /chrono-logical-session rollover <logical-session-id> <branch-id>");
+                const branchEntries = asEntries(ctx.sessionManager.getBranch());
+                const leafId = ctx.sessionManager.getLeafId?.();
+                if (!leafId || !ctx.isIdle())
+                    throw new Error("logical-session-rollover-ineligible");
+                const before = await historySourceState(sourcePath);
+                const pinned = await search.compositionTarget(leafId);
+                const selection = await search.compositionSelection(leafId);
+                const regularPiSummary = previousRegularPiSummary(branchEntries, undefined);
+                if (!regularPiSummary || pinned.view.eventCut !== selection.requestedCut || pinned.view.eventCut !== selection.sourceView.eventCut
+                    || pinned.view.storeKey !== selection.sourceView.storeKey || pinned.view.generation !== selection.sourceView.generation) {
+                    throw new Error("logical-session-continuation-evidence-invalid");
+                }
+                const unmatched = unmatchedToolCallCount(branchEntries);
+                const candidate = buildManualContinuationCandidate({ manifest, branchId: parts[2], sourceLeafEntryId: leafId,
+                    regularPiSummary, selection, recover: encodeCompositionRecovery,
+                    combinedCeilingTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS, toolPairSafe: unmatched === 0 });
+                const after = await historySourceState(sourcePath);
+                if (stableStringify(before) !== stableStringify(after) || ctx.sessionManager.getSessionFile() !== sourcePath
+                    || ctx.sessionManager.getLeafId?.() !== leafId)
+                    throw new Error("source-changed");
+                const idle = ctx.isIdle();
+                const eligibility = { persisted: true, idle, streaming: !idle,
+                    activeToolCalls: idle ? 0 : unmatched, unmatchedToolPairs: unmatched, pendingMessages: hasUnresolvedTurn(branchEntries),
+                    compactionActive: triggerPending || valueWorkerCompactionGate, sessionSwitchActive: logicalSwitchActive,
+                    // Both reads above require the lifecycle to be caught up to this exact leaf. A partial JSONL tail cannot produce that pin.
+                    catalogCaughtUp: true, incompleteSourceTail: false, sourceLeafEntryId: leafId, trigger: "manual" };
+                logicalSwitchActive = true;
+                try {
+                    await rollover.rollover(candidate, eligibility, commandSessionPort(ctx));
+                }
+                finally {
+                    logicalSwitchActive = false;
+                }
+            }
+            catch (error) {
+                ctx.ui.notify(`Logical session command refused: ${logicalErrorCode(error)}`, "warning");
+            }
+        },
     });
     pi.registerCommand("chrono-composition-preview", {
         description: "Save a bounded private shadow comparison for a recorded compaction ID, or the nearest compaction. Does not activate compaction.",
