@@ -44,11 +44,12 @@ export interface ReducedResourceObservation {
   readonly evidence: ExactStateEvidence;
 }
 export interface VerifiedEventStructuralFacts {
-  readonly role?: { readonly value: string; readonly source: ScopedRawSourceRef };
-  readonly toolName?: { readonly value: string; readonly source: ScopedRawSourceRef };
-  readonly exitCode?: { readonly value: number; readonly source: ScopedRawSourceRef };
-  readonly isError?: { readonly value: boolean; readonly source: ScopedRawSourceRef };
-  readonly cancelled?: { readonly value: boolean; readonly source: ScopedRawSourceRef };
+  /** Catalog metadata is structurally verified but does not invent a raw coordinate. */
+  readonly role?: { readonly value: string; readonly source?: ScopedRawSourceRef };
+  readonly toolName?: { readonly value: string; readonly source?: ScopedRawSourceRef };
+  readonly exitCode?: { readonly value: number; readonly source?: ScopedRawSourceRef };
+  readonly isError?: { readonly value: boolean; readonly source?: ScopedRawSourceRef };
+  readonly cancelled?: { readonly value: boolean; readonly source?: ScopedRawSourceRef };
 }
 export interface ReducedEpisodeEvent {
   readonly source: ScopedBodySourceRef;
@@ -62,6 +63,7 @@ export interface ReducedEpisodeEvent {
   readonly capsuleCue: string;
   readonly resources: readonly ReducedResourceObservation[];
   readonly partial: boolean;
+  readonly coverage: { readonly restrictionGap: boolean; readonly openWorkGap: boolean };
 }
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -85,16 +87,16 @@ function neighborhoods(text: string): { text: string; start: number; end: number
     for (let at = 0; at < value.length; at += EPISODE_STATE_LIMITS.clauseUtf16Units) {
       const part = value.slice(at, at + EPISODE_STATE_LIMITS.clauseUtf16Units);
       output.push({ text: part, start: start + at, end: start + at + part.length });
-      if (output.length >= 32) return output;
+      // Input remains bounded by wholeBodyUtf16Units; scan beyond the first 32 lines.
     }
   }
   return output;
 }
-function evidence(source: ScopedBodySourceRef, structuralSource: ScopedRawSourceRef | undefined, whole: string,
-  clause: { text: string; start: number; end: number }): ExactStateEvidence {
-  return { source, decodedUtf16: { start: source.decodedUtf16.start + clause.start, end: source.decodedUtf16.start + clause.end },
-    ...(structuralSource ? { structuralSource } : {}), exactText: clause.text,
-    omissions: [{ beforeUtf16: clause.start, afterUtf16: Math.max(0, whole.length - clause.end) }] };
+function evidence(source: ScopedBodySourceRef, structuralSource: ScopedRawSourceRef | undefined, text: string,
+  clause: { text: string; start: number; end: number }, decodedStart = source.decodedUtf16.start): ExactStateEvidence {
+  const start = decodedStart + clause.start, end = decodedStart + clause.end;
+  return { source, decodedUtf16: { start, end }, ...(structuralSource ? { structuralSource } : {}), exactText: clause.text,
+    omissions: [{ beforeUtf16: start - source.decodedUtf16.start, afterUtf16: Math.max(0, source.decodedUtf16.end - end) }] };
 }
 function subjectOf(text: string, context = text): string {
   const pattern = /(?:[A-Za-z]:[\\/]|\.?\.?[\\/]|\/)[\w@.+\-~]+(?:[\\/][\w@.+\-~]+)+/gu;
@@ -126,8 +128,8 @@ function revisionOf(text: string): string {
   return explicit?.toLowerCase() ?? "unspecified";
 }
 function classifyUser(text: string): EpisodeStateKind | undefined {
-  if (/\b(?:do not|don't|must not|never|only|constraint|restriction|except|unless|required)\b/iu.test(text)) return "restriction";
-  if (/\b(?:not|never|without|pending|request(?:ing|ed)?|need)\s+(?:\w+\s+){0,2}(?:approve|approved|authorization|permission)\b/iu.test(text)) return undefined;
+  if (/\b(?:do not|don't|must|never|only|constraint|restriction|except|unless|required|preserve|keep)\b/iu.test(text)) return "restriction";
+  if (/\b(?:not|never|without|pending|request(?:ing|ed)?|need)\s+(?:\w+\s+){0,2}(?:approve|approved|authorization|permission)\b/iu.test(text)) return "openwork";
   if (!/\b(?:if|when|once|pending|would|may|request|quoted|says)\b/iu.test(text) && /^(?:I approve|I authorize|approved\b|authorized\b|permission (?:is )?granted)/iu.test(text.trim())) return "approval";
   if (/\b(?:decide|decided|decision|choose|selected|instead)\b/iu.test(text)) return "decision";
   if (/\b(?:blocked|blocker|cannot continue|can't continue|waiting for)\b/iu.test(text)) return "blocker";
@@ -179,13 +181,18 @@ function resource(text: string, envelope: ReducerEnvelope, ev: ExactStateEvidenc
 }
 
 /** Extract only source-local, bounded claims. Lifecycle transitions are store-owned. */
-export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: string, verified?: VerifiedEventStructuralFacts): ReducedEpisodeEvent {
+export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: string, verified?: VerifiedEventStructuralFacts,
+  window?: { readonly decodedStart: number; readonly final: boolean }): ReducedEpisodeEvent {
   const roleFact = structural(envelope, "role", verified), role = typeof roleFact?.value === "string" ? roleFact.value.toLowerCase() : null;
   const original = envelope.provenance === "original";
-  const complete = body !== undefined && body.length <= EPISODE_STATE_LIMITS.wholeBodyUtf16Units;
-  const text = complete ? body! : "";
-  const clauses = complete ? neighborhoods(text) : [];
-  const startsEpisode = original && role === "user" && (envelope.source.blockIndex === undefined || envelope.source.blockIndex === 0);
+  const decodedStart = window?.decodedStart ?? envelope.source.decodedUtf16.start;
+  const analyzable = body !== undefined && body.length <= EPISODE_STATE_LIMITS.wholeBodyUtf16Units;
+  const sourceComplete = analyzable && decodedStart === envelope.source.decodedUtf16.start
+    && decodedStart + body!.length === envelope.source.decodedUtf16.end;
+  const text = analyzable ? body! : "";
+  const clauses = analyzable ? neighborhoods(text) : [];
+  const startsEpisode = original && role === "user" && decodedStart === envelope.source.decodedUtf16.start
+    && (envelope.source.blockIndex === undefined || envelope.source.blockIndex === 0);
   const compaction = role === "assistant" && /compaction|branch-summary/iu.test(envelope.family);
   const states: ReducedStateItem[] = [];
   for (const clause of clauses) {
@@ -209,17 +216,33 @@ export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: str
     const transition = transitionOf(kind, clause.text), effectiveKind: EpisodeStateKind = transition ? "decision" : kind;
     states.push({ stableKey: sha(`${propositionKey}\n${spanKey}`).slice(0, 32), propositionKey, spanKey,
       subject, revision, kind: effectiveKind, authority, confidence, status: effectiveKind === "blocker" || effectiveKind === "openwork" ? "unresolved" : "current",
-      evidence: evidence(envelope.source, roleFact?.source, text, clause), ...(transition ? { transition } : {}) });
+      evidence: evidence(envelope.source, roleFact?.source, text, clause, decodedStart), ...(transition ? { transition } : {}) });
   }
-  const wholeEvidence = complete ? evidence(envelope.source, roleFact?.source, text, { text, start: 0, end: text.length }) : undefined;
+  // Reserve the existing 32 retained propositions for explicit obligations first.
+  // Overflow remains category-specific; failed tool text cannot displace restrictions.
+  const priority = (item: ReducedStateItem): number => item.kind === "restriction" ? 0
+    : item.authority === "user" ? 1 : item.kind === "openwork" ? 2 : 3;
+  const selectedStates = [...states].sort((a, b) => priority(a) - priority(b)
+    || a.evidence.decodedUtf16.start - b.evidence.decodedUtf16.start).slice(0, 32);
+  const selectedKeys = new Set(selectedStates.map(item => item.stableKey));
+  const lost = states.filter(item => !selectedKeys.has(item.stableKey));
+  const unknownOriginal = original && !role;
+  const coverage = {
+    restrictionGap: unknownOriginal || original && role === "user" && !analyzable || lost.some(item => item.kind === "restriction"),
+    openWorkGap: unknownOriginal || original && ["user", "assistant", "tool", "toolresult"].includes(role ?? "") && !analyzable
+      || lost.some(item => ["goal", "openwork", "blocker"].includes(item.kind)),
+  };
+  selectedStates.sort((a, b) => a.evidence.decodedUtf16.start - b.evidence.decodedUtf16.start);
+  const wholeEvidence = sourceComplete ? evidence(envelope.source, roleFact?.source, text, { text, start: 0, end: text.length }, decodedStart) : undefined;
   const objectiveClause = startsEpisode ? neighborhoods(text)[0] : undefined;
-  const objective = objectiveClause ? evidence(envelope.source, roleFact?.source, text, objectiveClause) : undefined;
+  const objective = objectiveClause ? evidence(envelope.source, roleFact?.source, text, objectiveClause, decodedStart) : undefined;
   const resourceClause = clauses.find(clause => /(?:[A-Za-z]:[\\/]|\.?\.?[\\/]|\/|https?:\/\/|\brevision\b)/u.test(clause.text)) ?? clauses[0];
-  const resourceEvidence = resourceClause ? evidence(envelope.source, roleFact?.source, text, resourceClause) : wholeEvidence;
+  const resourceEvidence = resourceClause ? evidence(envelope.source, roleFact?.source, text, resourceClause, decodedStart) : wholeEvidence;
   const observed = resourceEvidence ? resource(text, envelope, resourceEvidence, verified) : undefined;
   const capsuleCue = envelope.alternatives.map(alternative => alternative.text).filter(Boolean).join("\n").slice(0, 2048);
   return { source: envelope.source, role, original, startsEpisode, boundaryKind: startsEpisode ? "user-request" : compaction ? "compaction-continuation" : "none",
-    ...(objective ? { objective } : {}), states, capsuleCue, resources: observed ? [observed] : [], partial: !complete || !role || clauses.length >= 32 };
+    ...(objective ? { objective } : {}), states: selectedStates, capsuleCue, resources: observed ? [observed] : [], coverage,
+    partial: !analyzable || !role || lost.length > 0 };
 }
 
 export function episodeStateRulesetIdentity(): string { return EPISODE_STATE_RULESET_VERSION; }

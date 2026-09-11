@@ -26,6 +26,38 @@ async function ready(adapter: HistorySearchAdapter, timeoutMs = 10_000): Promise
   assert.fail(`lifecycle did not settle: ${JSON.stringify(adapter.scheduler.status())}`);
 }
 
+/** Each cold layer has the existing finite 10-second settlement bound. A
+ * completed earlier layer is not charged against a later layer's startup.
+ * Never reset on repeated running/lagging ticks. Five stages cap total waiting.
+ */
+async function readyLayers(adapter: HistorySearchAdapter): Promise<void> {
+  const stages = ["catalog", "capsules", "index", "memory", "rollup"] as const;
+  const started = Date.now();
+  const observed: { stage: string; elapsedMs: number }[] = [];
+  for (const stage of stages) {
+    const deadline = Date.now() + 10_000;
+    const layerState = (): unknown => {
+      const value = adapter.status()[stage];
+      return typeof value === "object" && value !== null ? (value as { state?: string }).state : value;
+    };
+    // Prefix restoration may make a layer ready before append catch-up finishes.
+    // The final stage must also settle the whole scheduled target, within this
+    // same deadline, rather than accepting an intermediate cached publication.
+    while (layerState() !== "ready" || stage === "rollup" && adapter.scheduler.status().state !== "ready") {
+      const status = adapter.scheduler.status();
+      assert.notEqual(status.state, "error", JSON.stringify({ stage, status, observed }));
+      assert.notEqual(status[stage], "error", JSON.stringify({ stage, status, observed }));
+      assert.ok(Date.now() < deadline, JSON.stringify({ code: "layer-did-not-settle", stage, status, observed }));
+      // drain is only one active job, not full readiness. Race it with a short
+      // poll so the finite stage deadline still applies to a stuck worker.
+      await Promise.race([adapter.scheduler.drain(), new Promise(resolve => setTimeout(resolve, 20))]);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    observed.push({ stage, elapsedMs: Date.now() - started });
+  }
+  assert.equal(adapter.scheduler.status().state, "ready");
+}
+
 test("real lifecycle search, decoded block and exact raw range survive append with branch isolation", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-"));
   const sourcePath = join(directory, "source.jsonl");
@@ -133,7 +165,7 @@ test("rollup lifecycle offers bounded top-down exact recall across append restar
   let adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
   const schedule = (leafId: string) => adapter.schedule({ sourcePath, catalogDirectory: join(directory, "catalog"), sessionKey: hash("rollup-session"), shardKey: hash("rollup-shard"), leafId });
   try {
-    schedule("c"); await ready(adapter);
+    schedule("c"); await readyLayers(adapter);
     assert.equal((adapter.status().rollup as Record<string, unknown>).state, "ready", JSON.stringify(adapter.status()));
     const root = await adapter.recallRollup("");
     assert.equal(root.details.status, "ok", JSON.stringify(root.details));
@@ -153,18 +185,18 @@ test("rollup lifecycle offers bounded top-down exact recall across append restar
     const before = adapter.status();
     assert.deepEqual(adapter.status(), before, "status is a cached read, not ingestion");
     appendFileSync(sourcePath, line("d", "c", "Later independent request."));
-    schedule("d"); await ready(adapter);
+    schedule("d"); await readyLayers(adapter);
     const old = await adapter.recallRollup(expand);
     assert.equal(old.details.knownThroughCut, root.details.knownThroughCut);
     const generation = (adapter.status().rollup as Record<string, unknown>).rollupGeneration;
     adapter.dispose(); await adapter.scheduler.drain();
     adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
-    schedule("d"); await ready(adapter);
+    schedule("d"); await readyLayers(adapter);
     assert.equal((adapter.status().rollup as Record<string, unknown>).rollupGeneration, generation, "resume must reuse its completed rollup publication");
     assert.equal((await adapter.recall(exact)).details.text, first);
     assert.ok(Number(pinned.knownThroughCut) <= Number(adapter.status().indexedCut));
     appendFileSync(sourcePath, line("fork", "a", "Sibling request."));
-    schedule("fork"); await ready(adapter);
+    schedule("fork"); await readyLayers(adapter);
     assert.equal((await adapter.recallRollup(expand)).details.status, "unavailable");
   } finally { adapter.dispose(); await adapter.scheduler.drain(); rmSync(directory, { recursive: true, force: true }); }
 });

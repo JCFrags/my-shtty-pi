@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "relationship": "mechanical production-mode derivative of reviewed M04 preparation assets",
+  "acceptedCommit": "dcd91924dbcfc0c02489e04c3e163b33e2b08e86",
+  "reviewedPreparation": {
+    "helperSha256": "4e1fe3f490306dd5c0c34290945e6c8c8b017964cd59e7a49646d8733ceae75d",
+    "profileSha256": "2c0b48e15d817a6d1333eaa4855cbb8cd41a32d3ba0c6be41479e6e6022507b9"
+  },
+  "productionDerivative": {
+    "helperSha256": "a3b9c1dd6ace663bc23f8f152ab59e6b81fd46f82af7223e2ed34581381e4bd5",
+    "profileSha256": "a7b3d8483c022a8fab9a3a01ff340a6cf2621fb5521a7a7a0cc453ffe792e744",
+    "exactPrivateDiffSha256": "64c88df8c4f94187dc7e8c4c28db73470501204fe6eb806a15d98aa0be96c2bf",
+    "publicSafeDiffSha256": "17353e099b2fecf7b6723ea7e7c7fc7f224f02784e3858e63579b36555470689",
+    "pinsProofSha256": "96ba962e9d8243a02cafebd1d8a2a5b5871716aeb1ee1991709c9744de4f7493",
+    "sanitizedSyntheticReceiptSha256": "59d1b3691a53043061c0024411c93260922bc49ca64bac81dccc1cca44558e56"
+  },
+  "publicSafeDiffContainsPrivatePaths": false,
+  "publicSafeDiffIsExecutableProfile": false
+}

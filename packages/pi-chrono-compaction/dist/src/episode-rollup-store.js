@@ -8,7 +8,7 @@ import { EPISODE_STATE_LIMITS, } from "./episode-state-contract.js";
 import { readEpisodeRollupInputPage, } from "./episode-state-store.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
 export const EPISODE_ROLLUP_SCHEMA_VERSION = 1;
-export const EPISODE_ROLLUP_RULESET_VERSION = "episode-rollup-exact-v1";
+export const EPISODE_ROLLUP_RULESET_VERSION = "episode-rollup-exact-v3";
 const fail = (code) => { throw Object.assign(new Error(code), { code }); };
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 const num = (row, key) => Number(row[key]);
@@ -485,7 +485,7 @@ export async function executeEpisodeRollupRequest(request, options = {}) {
         if (!catalog.ok)
             fail(catalog.code === "catalog-source-changed" ? "search-v3-rollup-source-changed" : "search-v3-rollup-catalog-unavailable");
         const action = async () => {
-            const path = join(request.searchDirectory, "rollup-v1.sqlite"), validate = (candidate) => new Store(candidate, request).validate(create);
+            const path = join(request.searchDirectory, "rollup-v3.sqlite"), validate = (candidate) => new Store(candidate, request).validate(create);
             if (request.op === "rollupStatus") {
                 try {
                     lstatSync(path);

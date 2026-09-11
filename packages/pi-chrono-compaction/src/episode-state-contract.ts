@@ -10,8 +10,8 @@ import { isSearchV3Identity, type SearchV3Identity, type SearchV3Response } from
 
 /** Pure M07 protocol. Importing this module performs no I/O and loads no worker. */
 export const EPISODE_STATE_PROTOCOL_VERSION = 1 as const;
-export const EPISODE_STATE_SCHEMA_VERSION = 2 as const;
-export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v2" as const;
+export const EPISODE_STATE_SCHEMA_VERSION = 4 as const;
+export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v4" as const;
 export const EPISODE_STATE_LIMITS = Object.freeze({
   requestBytes: 48 * 1024,
   responseBytes: 96 * 1024,
@@ -33,6 +33,13 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
   rollupNodesPerJob: 64,
   rollupTreeLevels: 32,
   composeProtected: 24,
+  composeRestrictions: 16,
+  composeOpenWork: 8,
+  composeScanPage: 32,
+  composeScanPages: 8,
+  composeScannedPerCategory: 256,
+  largeBodyOverlapUnits: 8 * 1024,
+  contextSideUnits: 8 * 1024,
   composeState: 12,
   composeRecentMembers: 12,
   composeUtf8Bytes: 80 * 1024,
@@ -61,6 +68,22 @@ export interface EpisodeRollupAfter {
   readonly queryHash: string;
 }
 
+export interface EpisodeStateSelectionProposition {
+  /** Opaque hash of the one shared exact context representation. */
+  readonly representationKey: string;
+  readonly stableKey: string;
+  readonly propositionKey: string;
+  readonly spanKey: string;
+  readonly subject: string;
+  readonly revision: string;
+  readonly kind: EpisodeStateKind;
+  readonly authority: EpisodeStateAuthority;
+  readonly confidence: EpisodeStateConfidence;
+  readonly status: "current" | "unresolved";
+  readonly effectiveAtCut: number;
+  readonly evidence: unknown;
+}
+
 export interface EpisodeStateSelectionItem {
   readonly stableKey: string;
   readonly propositionKey: string;
@@ -73,6 +96,10 @@ export interface EpisodeStateSelectionItem {
   readonly status: "current" | "unresolved";
   readonly effectiveAtCut: number;
   readonly evidence: unknown;
+  /** Opaque hash shared by the primary context and its exact proposition clauses. */
+  readonly representationKey?: string;
+  /** Exact propositions consolidated only when one verified representation covers them. */
+  readonly coveredPropositions?: readonly EpisodeStateSelectionProposition[];
 }
 
 export interface EpisodeStateSelectionMember {
@@ -106,6 +133,12 @@ export interface EpisodeStateSelection {
     readonly metadataComplete: boolean;
     readonly partialMemory: boolean;
     readonly qualifiedReducers: boolean;
+    /** Syntactic/source coverage only, never a semantic completeness claim. */
+    readonly restrictionsComplete?: boolean;
+    readonly openWorkComplete?: boolean;
+    /** False when the bounded indexed category scan stopped before exhaustion. */
+    readonly restrictionsScanComplete?: boolean;
+    readonly openWorkScanComplete?: boolean;
   };
   readonly protected: readonly EpisodeStateSelectionItem[];
   readonly current: readonly EpisodeStateSelectionItem[];
@@ -121,16 +154,28 @@ export interface EpisodeStateSelection {
   };
   readonly omissions: {
     readonly protectedAtLeastOne: boolean;
+    readonly openWorkAtLeastOne?: boolean;
     readonly currentAtLeastOne: boolean;
     readonly recentAtLeastOne: boolean;
     readonly responseBudgetAtLeastOne: boolean;
+    /** Selection work stopped at an explicit indexed scan or representation bound. */
+    readonly restrictionWorkExhausted?: boolean;
+    readonly openWorkExhausted?: boolean;
+    /** Selected evidence existed but could not fit the serialized response. */
+    readonly renderedOverflowAtLeastOne?: boolean;
   };
-  readonly metrics: { readonly sqliteStatements: number };
+  readonly metrics: {
+    readonly sqliteStatements: number;
+    readonly mandatoryRowsScanned?: number;
+    readonly mandatoryRowsScanLimit?: number;
+    readonly mandatoryScanPageLimit?: number;
+    readonly outputUtf8ByteLimit?: number;
+  };
 }
 
 export interface EpisodeRollupHandle {
   readonly schemaVersion: 1;
-  readonly ruleset: "episode-rollup-exact-v1";
+  readonly ruleset: "episode-rollup-exact-v3";
   readonly branchKey: string;
   /** Common body-plus-metadata cut represented by this immutable publication. */
   readonly eventCut: number;
@@ -182,7 +227,7 @@ function rollupAfter(value: unknown): value is EpisodeRollupAfter {
     && typeof value.queryHash === "string" && /^[a-f0-9]{64}$/u.test(value.queryHash);
 }
 function rollupHandle(value: unknown): value is EpisodeRollupHandle {
-  return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v1"
+  return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v3"
     && typeof value.branchKey === "string" && value.branchKey.length > 0 && value.branchKey.length <= 256
     && integer(value.eventCut) && positive(value.stateGeneration) && positive(value.rollupGeneration)
     && typeof value.rootNodeId === "string" && /^[a-f0-9]{64}$/u.test(value.rootNodeId);

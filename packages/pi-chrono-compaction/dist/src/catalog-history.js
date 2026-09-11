@@ -1,3 +1,5 @@
+import { CATALOG_LIMITS } from "./catalog-contract.js";
+import { canonicalJson } from "./capsule-segment.js";
 const fail = (code) => { throw Object.assign(new Error(code), { code }); };
 /** Resolve one ID through the existing indexed catalog, then authorize it against
  * the current branch before reading bytes. A sibling pin never grants access. */
@@ -12,6 +14,33 @@ export async function resolveCatalogHistory(scope, entryId, execute) {
     if (!event || event.seq !== view.eventCut || event.shardKey !== scope.shardKey)
         return fail("catalog-history-scope-mismatch");
     return event;
+}
+/** Explicit compaction lookup uses current-view catalog membership, not an
+ * unbounded parent walk or an unvalidated in-memory getEntry. The existing
+ * catalog source-read budget bounds one selected record. The preview's separate
+ * comparison-string ceiling must not be applied to unrelated legacy details. */
+export async function resolveCompositionEntry(scope, entryId, execute, expected) {
+    const event = await resolveCatalogHistory(scope, entryId, execute);
+    const length = event.endByte - event.rawStart;
+    if (length < 1 || length > CATALOG_LIMITS.sourceDelta)
+        return fail("composition-target-byte-limit");
+    const chunks = [];
+    for (let offset = event.rawStart; offset < event.endByte;) {
+        const page = await readCatalogHistoryPage(scope, event, execute, offset, 32768);
+        chunks.push(Buffer.from(String(page.data), "base64"));
+        offset += Number(page.length);
+    }
+    let entry;
+    try {
+        entry = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    }
+    catch {
+        return fail("composition-target-json-invalid");
+    }
+    if (entry?.id !== entryId || entry.type !== "compaction"
+        || expected && canonicalJson(entry) !== canonicalJson(expected))
+        return fail("composition-target-mismatch");
+    return entry;
 }
 /** Raw recovery is byte-paged, never a whole-record JSON parse. Base64 preserves
  * exact bytes even when a page cuts a UTF-8 character or a JSON escape. */

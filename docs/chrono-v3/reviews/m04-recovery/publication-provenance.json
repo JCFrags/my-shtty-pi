@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Review-only transfer; no recovery execution",
+  "originalBundleSha256": "1de7b0563c3e73f743867a4814ac4f49b66aa685746f26d9235789020f5473ca",
+  "acceptedTarget": {
+    "sourceCommit": "dcd91924dbcfc0c02489e04c3e163b33e2b08e86",
+    "packageTree": "5c70e9c1826fe88c0da9f9e4f51b41aa62b2240c",
+    "packageName": "pi-chrono-compact",
+    "packageVersion": "2.0.5",
+    "runtimeManifestEntryCount": 96
+  },
+  "originalProfileTrustHashRetainedInHelper": true,
+  "redactedProfileWillFailOriginalHelperHashCheck": true,
+  "pinCountVerifiedAgainstAcceptedGit": 96,
+  "files": [
+    {
+      "originalFile": "boot-recovery-m04.mjs",
+      "publishedFile": "boot-recovery-m04.mjs",
+      "originalSha256": "4e1fe3f490306dd5c0c34290945e6c8c8b017964cd59e7a49646d8733ceae75d",
+      "publishedSha256": "4e1fe3f490306dd5c0c34290945e6c8c8b017964cd59e7a49646d8733ceae75d",
+      "byteIdentical": true,
+      "redactedCategories": []
+    },
+    {
+      "originalFile": "recovery-profile.json",
+      "publishedFile": "recovery-profile.json",
+      "originalSha256": "2c0b48e15d817a6d1333eaa4855cbb8cd41a32d3ba0c6be41479e6e6022507b9",
+      "publishedSha256": "19a08ca3f5bd38738a1ea09072c3c92de301d998c0804b06ed74b30963540e7f",
+      "byteIdentical": false,
+      "redactedCategories": [
+        "REDACTED_PRIVATE_PREPARATION_DIRECTORY",
+        "REDACTED_PRIVATE_CONFIGURATION_PATH"
+      ]
+    },
+    {
+      "originalFile": "helper-diff-vs-original.patch",
+      "publishedFile": "helper-diff-vs-original.patch",
+      "originalSha256": "9ab2ab630dfd5862e286c5f6a52a9927b0670690dfa9f33e6d15e1da2833afff",
+      "publishedSha256": "9ab2ab630dfd5862e286c5f6a52a9927b0670690dfa9f33e6d15e1da2833afff",
+      "byteIdentical": true,
+      "redactedCategories": []
+    },
+    {
+      "originalFile": "README.md",
+      "publishedFile": "preparation-README.md",
+      "originalSha256": "6d0f09fa4b7ec58e9880a5b64d58cc5d0ecd3ae6e675e98e6d224a6ea4ab7715",
+      "publishedSha256": "c29366b72e70370f816f97db1ac501e396b5ec0e14e8118092daaa2236ff6e11",
+      "byteIdentical": false,
+      "redactedCategories": [
+        "REDACTED_LOCAL_GIT_CHECKOUT"
+      ]
+    },
+    {
+      "originalFile": "SHA256SUMS",
+      "publishedFile": "ORIGINAL-SHA256SUMS",
+      "originalSha256": "e924558dce0f487db0aa20d0bb2b0de1b0008e921918e3c6409ed56b2b0be94e",
+      "publishedSha256": "e924558dce0f487db0aa20d0bb2b0de1b0008e921918e3c6409ed56b2b0be94e",
+      "byteIdentical": true,
+      "redactedCategories": []
+    },
+    {
+      "originalFile": "synthetic-checks.sh",
+      "publishedFile": "synthetic-checks.sh",
+      "originalSha256": "b154ec73f2502fdb92f5a0d487973a6ffc8d2a36127974324ab4382dab3d68a2",
+      "publishedSha256": "64697602802e60beff5da8dea90eab5e621bc89404be06571362a10b2b3db0c6",
+      "byteIdentical": false,
+      "redactedCategories": [
+        "REDACTED_PRIVATE_PREPARATION_DIRECTORY",
+        "REDACTED_LOCAL_GIT_CHECKOUT"
+      ]
+    },
+    {
+      "originalFile": "synthetic-check-results.json",
+      "publishedFile": "synthetic-check-results.json",
+      "originalSha256": "bfe2f7d11bf0ddb59d974947be255b58fa18c6cb930198c11b34a2baf3c1fa65",
+      "publishedSha256": "bfe2f7d11bf0ddb59d974947be255b58fa18c6cb930198c11b34a2baf3c1fa65",
+      "byteIdentical": true,
+      "redactedCategories": []
+    },
+    {
+      "originalFile": "receipts/synthetic-check-20260909T105702Z-3LuuzF2W.json",
+      "publishedFile": "receipts/synthetic-check-20260909T105702Z-3LuuzF2W.json",
+      "originalSha256": "c8197cf2fb621f7d5f9ac07c3bf162d7e776b727ef1a970db6d028fc7be35652",
+      "publishedSha256": "c8197cf2fb621f7d5f9ac07c3bf162d7e776b727ef1a970db6d028fc7be35652",
+      "byteIdentical": true,
+      "redactedCategories": []
+    }
+  ]
+}
