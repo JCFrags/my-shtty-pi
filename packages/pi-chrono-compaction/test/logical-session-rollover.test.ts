@@ -5,7 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { isLogicalSessionManifest } from "../src/logical-session-contract.js";
-import { consumeProvisionalLogicalReplacement, logicalAdoptionBinding, markProvisionalLogicalReplacement, recordedLogicalAdoptionBinding, replacementContainsOnlyBootstrap } from "../src/logical-session-integration.js";
+import { composeStoredSelection } from "../src/context-composer.js";
+import type { EpisodeStateSelection } from "../src/episode-state-contract.js";
+import { buildManualContinuationCandidate, consumeProvisionalLogicalReplacement, logicalAdoptionBinding, markProvisionalLogicalReplacement, recordedLogicalAdoptionBinding, replacementContainsOnlyBootstrap } from "../src/logical-session-integration.js";
 import { resolveAdoptedLogicalActivation, resolveExactLogicalRoute, resolveLogicalActivation, resolveLogicalShardRoutes, searchLogicalAncestors } from "../src/logical-session-routing.js";
 import { evaluateLogicalRolloverThresholds, logicalSessionStatus } from "../src/logical-session-status.js";
 import {
@@ -60,6 +62,43 @@ class FakeCommands implements SessionCommandPort {
 
 const cut = (entryId: string) => ({ catalogStoreKey: "11111111-1111-4111-8111-111111111111", catalogGeneration: 1,
   sessionKey: "catalog-session", branchKey: "pi-session", eventCut: 7, entryId });
+
+test("fractional-importance producer artifact reaches a manual continuation with the composer hash", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-fractional-"));
+  const logicalSessionId = randomUUID();
+  const store = new LogicalSessionStore(join(temporary, "logical"), logicalSessionId);
+  const manifest = await store.create(createInitialLogicalManifest({ logicalSessionId, ownerKey: "a".repeat(64), branchId: "main",
+    piSessionId: "pi-old", sourcePath: join(temporary, "old.jsonl") }));
+  const storeKey = "22222222-2222-4222-8222-222222222222";
+  const source = { catalogStoreKey: storeKey, sessionKey: "session", catalogGeneration: 1, shardKey: "shard",
+    segment: 1, eventSeq: 7, ordinal: 7, descriptor: 7, field: "message.content.0.text", raw: { start: 0, end: 200 },
+    coordinateKind: "decoded-body" as const, decodedUtf16: { start: 0, end: 32 },
+    bodyHashAlgorithm: "chrono-utf16le-chain-sha256-v1" as const, bodyHash: "b".repeat(64) };
+  const selection: EpisodeStateSelection = {
+    sourceView: { storeKey, generation: 1, branchKey: "branch", sessionKey: "session", eventCut: 7,
+      segments: [{ segment: 1, cut: 7 }] }, stateGeneration: 1, branchKey: "branch", requestedCut: 7,
+    processedCut: 7, processedMemoryCut: 7, complete: true, partial: false,
+    coverage: { bodyComplete: true, metadataComplete: true, partialMemory: false, qualifiedReducers: true,
+      restrictionsComplete: true, openWorkComplete: true, restrictionsScanComplete: true, openWorkScanComplete: true },
+    protected: [], current: [], recent: [{ episodeKey: "episode", eventSeq: 7, descriptor: 7, sourceKey: "source", source,
+      cue: "Actual producer cue with fractional importance.", episode: { start: { eventSeq: 7, descriptor: 7 },
+        end: { eventSeq: 7, descriptor: 7 }, open: false, objective: "Exercise continuation hashing.", objectiveEvidence: null } }],
+    older: [], omissions: { protectedAtLeastOne: false, openWorkAtLeastOne: false, currentAtLeastOne: false,
+      recentAtLeastOne: false, responseBudgetAtLeastOne: false, restrictionWorkExhausted: false,
+      openWorkExhausted: false, renderedOverflowAtLeastOne: false }, metrics: { sqliteStatements: 1 } };
+  const cutInput = { sourceCutEntryId: "leaf-7", sourceCutSeq: 7, firstKeptEntryId: "chrono-logical-new-shard",
+    firstKeptSeq: 8, rawTailTokens: 0, toolPairSafe: true };
+  const composed = composeStoredSelection({ regularPiSummary: "Bounded regular Pi summary.", combinedCeilingTokens: 2_000,
+    cut: cutInput }, selection, value => `recover:${value.eventSeq}`);
+  assert.equal(composed.artifact.selectedRows[0]?.row.importance, 0.7,
+    "the actual episode-row producer preserves its fractional importance in the artifact");
+  const candidate = buildManualContinuationCandidate({ manifest, branchId: "main", sourceLeafEntryId: "leaf-7",
+    regularPiSummary: "Bounded regular Pi summary.", selection,
+    recover: (_view, value) => `recover:${value.eventSeq}`, combinedCeilingTokens: 2_000, toolPairSafe: true });
+  assert.equal(candidate.composition.artifactHash, composed.envelope.artifactHash,
+    "continuation reuses the composer contract hash for the validated artifact");
+  assert.match(candidate.composition.artifactHash, /^[a-f0-9]{64}$/u);
+});
 
 test("manual logical rollover is owner-only, coverage-gated, recoverable, and ancestor-routed", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-test-"));
