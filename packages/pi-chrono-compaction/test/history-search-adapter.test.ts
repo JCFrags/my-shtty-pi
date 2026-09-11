@@ -72,7 +72,7 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
   // The public scheduler target deliberately contains no worker configuration.
   const schedule = (leafId: string) => adapter.schedule({ sourcePath: target.sourcePath, catalogDirectory: target.catalogDirectory, sessionKey: target.sessionKey, shardKey: target.shardKey, leafId });
   try {
-    schedule("b"); await ready(adapter);
+    schedule("b"); await readyLayers(adapter);
     assert.equal(adapter.status().enabled, true);
     assert.equal(adapter.status().lag, 0);
     assert.equal(adapter.status().requestedCut, adapter.status().indexedCut);
@@ -129,7 +129,7 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
     assert.equal(catchingUp.servingLastReady, true);
     assert.ok(Number(catchingUp.lag) > 0, JSON.stringify(catchingUp));
     assert.equal((await adapter.recall(handle)).details.status, "ok", "validated old view remains available during append catch-up");
-    await ready(adapter);
+    await readyLayers(adapter);
     assert.equal(adapter.status().lag, 0);
     const continued = await adapter.range("a", "b", 1, cursor);
     assert.equal(continued.details.status, "ok", JSON.stringify(continued.details));
@@ -139,13 +139,13 @@ test("real lifecycle search, decoded block and exact raw range survive append wi
     const beforeRestart = (adapter.status().memory as Record<string, unknown>).stateGeneration;
     adapter.dispose(); await adapter.scheduler.drain();
     adapter = new HistorySearchAdapter({ schedulerDirectory, slots: 1 });
-    schedule("c"); await ready(adapter);
+    schedule("c"); await readyLayers(adapter);
     assert.equal((adapter.status().memory as Record<string, unknown>).stateGeneration, beforeRestart, "restart must not reprocess completed deltas");
     assert.equal((await adapter.recall(memoryHandle)).details.status, "ok");
     appendFileSync(sourcePath, line("fork", "a", "sibling source"));
     schedule("fork");
     assert.equal(adapter.status().servingLastReady, false, "unvalidated branch cannot expose old view");
-    await ready(adapter);
+    await readyLayers(adapter);
     const refused = await adapter.recall(handle);
     assert.equal(refused.details.status, "unavailable");
     const sibling = await adapter.getRaw("b", {});

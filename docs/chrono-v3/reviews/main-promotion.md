@@ -1,6 +1,6 @@
 # Chrono main promotion and local adoption
 
-Status: integration candidate, not yet approved, merged or deployed.
+Status: PR63 approved and merged as `d9c5f1fd8bfdba8dc17ef9c6509db28e6a0fd9a3`. Local rollout and remaining V3 work are authorized. Deployment remains pending resulting-main CI correction.
 
 ## Source reconciliation
 
@@ -39,7 +39,7 @@ The second short check invoked the compiled factory's `history_status` tool. It 
 
 Strict native source build and probe passed on Node 24.18.0 with native SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`. The probe confirmed allocation refusal. Typecheck, generated build and root static verification passed. The root static gate ran its existing 18 indexed-input/integrity checks. No broad local runtime or scale campaign ran. Promotion CI 34567753311 failed on nine legacy mocks without the required `getSessionId()` method and one obsolete 2.0.3 diagnostic assertion. The correction supplies explicit synthetic session identities and checks the package version. Runtime artifacts and coverage guards remain unchanged. Existing behavior assertions remain in place. The corrected head requires fresh CI; no unchanged workflow retry or broad local rerun is used.
 
-The integrated package has 415 indexed files, Git tree `928e8575fbd6d9f225673c02f680af0ec51fac6b`, and 20 declared differences from the M10 upstream package tree. The current root verifier records every changed path and both available digests, rather than calling the runtime changes test-only.
+The integrated package has 415 indexed files, Git tree `617dd5703364f3b78afa24cc35c5b5a333dca4ab`, and 21 declared differences from the M10 upstream package tree. The current root verifier records every changed path and both available digests, rather than calling the runtime changes test-only.
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -71,3 +71,7 @@ Keep the exact roster private. Reconcile process-table and Herdr identities, inc
 Every reload requires a fresh owner handoff, natural settlement, empty editor, no active tool operation, compaction, pending switch or managed job, followed by exact reload confirmation and unchanged session identity. A reload can terminate managed jobs. Busy sessions remain pending until their safe checkpoint. Do not restart Herdr or its broker.
 
 Final merge, installed identity and N-of-N adoption evidence are pending. The final roster must distinguish loaded, automatically available, indexing/catching up, composer authorization/coverage blocks and reload pending. Publish only safe owner-level counts and exceptions. Release all coordination windows after the verified handoff.
+
+## Resulting-main readiness correction
+
+PR63 required CI 34568765799 passed. Resulting-main CI 34571201308 failed the existing lifecycle fixture after its aggregate 10-second wait: catalog, capsules, index and memory were ready, while rollup was still running. The fixture now reuses `readyLayers()` at its four lifecycle boundaries. Each cold layer retains the existing finite 10-second deadline; repeated running ticks cannot extend it. Existing search, state, exact recovery, append, restart and branch-isolation assertions remain intact. Runtime artifacts and configuration are unchanged. The affected named fixture passed locally in 43.28 seconds across all four boundaries. No unchanged CI retry or broad local rerun is used.
