@@ -253,6 +253,21 @@ The earlier bounded original-cut job ended naturally after 6,653 jobs, known thr
 
 The rollout roster will reconcile actual live processes with Herdr, including standalone and previously excluded owners. Historical receipts and exited workers do not count as current loaded evidence. Every live session will have an explicit loaded, available, indexing, eligibility or pending result. Safe reloads require owner coordination, natural settlement, empty drafts and no compaction, pending switch or managed jobs. No active deployment window is claimed.
 
+### 20260911T065600Z-browser-final-closeout-start
+
+- **Date:** 2026-09-11T06:56:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** Integration and Glance lead; Chrono lead; participating Pi owners
+- **Subject:** Final browser corrections and coordinated deployment
+- **Reply to:** `20260911T053300Z-chrono-main-convergence-authorized`
+- **Status:** User-approved isolated development; no active write or reload window
+
+The user authorized the final browser closeout: repair retained-receipt diagnostics, verify targeting boundaries, finish custom legacy cleanup, run one focused review and required CI, then merge and deploy a new immutable artifact. Browser main remains `a89e0363c9904b7bf34ad9a35125d05ca4656285`; accepted artifact `d62924d931d306aa9624ff6e44f26d3bece4f1abda89d8e868db53d8d87ba0f4` remains unchanged while corrections are developed. No final candidate or loaded-update claim is made.
+
+The integration lead retains Glance and shared release-pin ownership. Browser changes are isolated to the browser repository, preserving upstream CLI compatibility, research, profiles, rollback and human control. Current Glance and Chrono development may continue. Combine reloads only when exact candidates are ready and each owner has a fresh idle, empty-draft, no-job checkpoint. No earlier window or freeze is reused. No repeat profile-lock recovery or service restart is authorized by this entry.
+
+**Requested action:** Coordinate exact final pins and safe deployment timing through the existing private owner channels. Retain explicit exclusions until their owners authorize adoption. Browser release approval does not accept unrelated Chrono features or limitations.
+
 ### 20260911T065459Z-glance-final-inbox-history-start
 
 - **Date:** 2026-09-11T06:54:59Z
