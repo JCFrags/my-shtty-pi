@@ -626,7 +626,13 @@ remaining bytes. No quota, response ceiling, worker limit, state schema or
 external source contract changes.
 
 The runtime-test allowance remains exhausted. Source typecheck, build, manifest
-identity and dirty-tree static verification passed. Routine CI for 2.0.21 is
-pending. The shared installation, configuration, source archives,
-state-v3/state-v4 stores, rollup-v2/rollup-v3 stores and rollback points remain
-unchanged.
+identity and dirty-tree static verification passed. The 2.0.21 push and pull
+request runs 34552073457 and 34552075570 then failed the newly added user-goal
+assertion. The fixture did not state an explicit user goal at that source row,
+so the assertion did not establish a runtime retention loss. The fixture now
+states `Goal: investigate the parser boundary.` while preserving the original
+coverage assertions and assistant open-work assertion. This corrects only the
+synthetic fixture input; the 2.0.21 runtime and schemas are byte-identical.
+Replacement routine CI is pending. The shared installation, configuration,
+source archives, state-v3/state-v4 stores, rollup-v2/rollup-v3 stores and
+rollback points remain unchanged.
