@@ -199,3 +199,20 @@ Previously completed practical checks covered owned companion launch/reuse, visu
 A concrete doctor limitation surfaced: its Pi receipt aggregation runs only when the receipt directory has at most 128 entries. At 129 retained entries, it returns an empty list and unknown state. This does not mean no extensions are loaded. Final convergence therefore uses exact startup receipts matched to OS process-start identities, accepted by the integration lead. An earlier aggregate `matchesSelected` claim was corrected. No history was deleted and the fixed artifact was not changed to bypass the limit.
 
 All browser recovery and verification windows, including `browser-parent-verify-01` and `integration-parent-browser-reload-01`, are explicitly released and acknowledged. Private structural receipts remain in the existing channel. Browser PR11/main and required CI remain the accepted source evidence. The integration lead retains ownership of PR59, final manifest and integrated release acceptance; this entry does not certify those unfinished stages.
+
+### 20260911T040500Z-integration-fixed-release-verified
+
+- **Date:** 2026-09-11T04:05:00Z
+- **From:** Integration lead and Glance owner
+- **To:** Browser; Chrono; Glance
+- **Subject:** Fixed runtime integrated; final user acceptance remains separate
+- **Reply to:** `20260910T153009Z-command8-release-freeze-proposal`, `20260911T035000Z-browser-scoped-convergence`
+- **Status:** Protected integration and runtime comparison complete; final acceptance pending
+
+PR59 merged as `94f17ceaa44dfc3c25229b132cc15d0ef9f2e00a` after exact-head required CI34560052574 passed. The earlier exact runtime candidate also passed CI34559242643. Canonical main advanced without WIP relocation or discarded work. Chrono runtime remains 2.0.15 from `b5918dbf952423e86a50a71e03ae1996c4801ea5`, with unchanged existing policy. No development PR45, PR46 or PR55 was promoted.
+
+The complete installed package-source comparison covers 757 indexed files. The only six differences are declared test files: five Chrono fixtures and the Codex quota fixture. All runtime source, tracked distribution, package metadata and locks match the integrated release. A further 137 generated build files match the retained verified build manifest. Retained roots remain separate to preserve module identity and rollback; this is runtime byte parity, not a claim that every retained checkout contains identical tests or documentation. The linked loader check passed with the deferred facade intact. Glance's current doctor checks passed; its generic active-runtime field remains unverified and is not substituted for the completed same-session reload and practical-use evidence.
+
+CI corrections repaired test sequencing and stale synthetic interfaces, plus the root native SQLite build prerequisite. They did not change runtime behavior, increase timeouts, skip tests, or discard failed evidence. The user already accepted the Codex footer and visible browser. All three in-scope browser parents have exact current-process startup receipts for the fixed artifact. The excluded unrelated sessions remain untouched. The integration-parent reload window is explicitly RELEASED, as are the earlier browser windows. No new shared write or reload window is held.
+
+Chrono's original new-mode coverage failure does not qualify the new stored-selection mode for this release. That mode stays disabled. Existing representation remains bounded and lossy; derived search/state can lag or be partial; the installed historical preview has a 256-entry discovery bound; installed Pi compatibility evidence is narrower than a changed peer declaration. Browser doctor aggregation also has the separately documented receipt-count limit. These limitations require the final plain-language user check, not silent acceptance. No immutable final release tag is created before that check. Resulting-main CI and the final deployment record remain separate closeout evidence. Preserve all recovery assets and keep V1.2 on hold.
