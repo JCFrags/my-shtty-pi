@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.25 qualification blocked after its first successful rollover and immediate successful rollback because Pi did not persist the bootstrap-only replacement source referenced by the retained rollback branch. A minimal runtime correction is prepared for a separately packaged candidate; no qualification retry has run against it.
+Status: package 2.0.26 passed exact-head CI and preserved the continuation-only replacement through its first rollover and immediate rollback. Its one authorized installed-Pi qualification run then stopped safely because the harness issued the next rollover before the rebuilt search index became ready. A minimal harness readiness correction is prepared for the next separately packaged candidate; no corrected retry has run.
 
 ## Scope
 
@@ -20,13 +20,13 @@ The scenario checks:
 - an actual RPC `switch_session` back to the main active shard;
 - a maximum of six non-header entries in each physical source file;
 - unchanged hashes for all source shards present before restart, all source files still present, and zero source deletions;
-- Pi 0.85.1, package 2.0.25, candidate SHA, built distribution, and native `better-sqlite3` prerequisites.
+- Pi 0.85.1, the required candidate package version, candidate SHA, built distribution, and native `better-sqlite3` prerequisites.
 
 The synthetic setup appends completed user and assistant turns around one Pi compaction entry per new shard through the installed SessionManager API. The assistant records are fixed fixture data and do not call a model or provider. The compaction contains a regular Pi summary because a model call is prohibited. These entries are producer input only. The harness does not assert producer coverage. A successful rollover is the coverage assertion because the packaged command derives and validates the selection itself.
 
 ## Execution boundary
 
-Run this scenario once after the project lead supplies and authorizes the corrected packaged 2.0.25 candidate. Do not treat a plan invocation, the blocked 2.0.24 run, or the mock ten-route fixture as qualification evidence.
+Run this scenario once after the project lead supplies and authorizes the next corrected packaged candidate. Do not treat a plan invocation, any blocked prior run, or the mock ten-route fixture as qualification evidence.
 
 Prerequisites:
 
@@ -54,7 +54,7 @@ node scripts/m11-logical-pi-qualification.mjs run \
   --output /path/to/new-safe-result.json
 ```
 
-The run records the runtime candidate and harness commits independently. It requires the runtime candidate to be an ancestor of the harness and refuses any runtime source, distribution, lockfile, or package metadata difference between them. It also refuses a package version other than 2.0.25, an installed Pi version other than 0.85.1, a missing distribution, a missing native SQLite binding, a reused output file, or an output path inside the synthetic root. Pi receives an environment without provider credentials and runs with `--offline` and no built-in tools.
+The run records the runtime candidate and harness commits independently. It requires the runtime candidate to be an ancestor of the harness and refuses any runtime source, distribution, lockfile, or package metadata difference between them. It also refuses a package version other than the version bound in the harness, an installed Pi version other than 0.85.1, a missing distribution, a missing native SQLite binding, a reused output file, or an output path inside the synthetic root. Pi receives an environment without provider credentials and runs with `--offline` and no built-in tools.
 
 ## Prepared checks
 
@@ -89,7 +89,15 @@ Scalar result: one rollover command passed, one immediate rollback command passe
 
 The Pi command adapter now creates only the exact new continuation-only shard before manifest binding. It validates the public manager's generated path, version-3 header, session ID, canonical working and session directories, exact parent source, bounded ordered bootstrap chain, continuation identity, and serialized size. It publishes the actual public header and entries with Pi's newline encoding through an owner-only exclusive temporary file and no-overwrite hard link, fsyncs the file and directory, and reloads the same path through public `SessionManager.setSessionFile()`. It never opens an old shard for writing. An existing target is accepted only when its owner, mode, link count, size, and bytes match exactly.
 
-One focused test uses the actual Pi 0.85.1 `SessionManager`. It proves that Pi initially leaves the continuation-only source absent, the adapter persists exact public header and entry bytes, exact replay is idempotent, a later normal assistant append retains the complete prefix and source identity, reopening retains the exact session and parent IDs, a conflicting existing target refuses without overwrite, and the old source bytes do not change. The full installed-Pi qualification remains pending a new frozen candidate.
+One focused test uses the actual Pi 0.85.1 `SessionManager`. It proves that Pi initially leaves the continuation-only source absent, the adapter persists exact public header and entry bytes, exact replay is idempotent, a later normal assistant append retains the complete prefix and source identity, reopening retains the exact session and parent IDs, a conflicting existing target refuses without overwrite, and the old source bytes do not change.
+
+## Package 2.0.26 result
+
+Exact-head pull-request CI run `34581029129` passed for candidate `fac5d3566339b8ac51379c1703bcb1347e768d8b`. The authorized installed-Pi run used package tree `89c845a1309ea9e98095e1783eb4f9286ddf8eeb`, Pi 0.85.1, Node 24.18.0 ABI 137, `better-sqlite3` 12.9.0, and native binding SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`.
+
+The run passed adoption, the initial indexed search, recall, and exact recovery probe, the first rollover, exact rollback, abandoned-branch retention, and presence of the abandoned continuation source. It then issued the first rollover in the ten-rollover loop while the search index was rebuilding after the session switch. The command safely refused with `search-v3-index-not-ready`, and the harness assertion stopped the run after 19.788 seconds. Zero providers were called. No result JSON was emitted. The owner-only failure root and exact failure log remain preserved.
+
+The existing `probe()` command already waits for catalog, capsules, index, memory, rollup, and the expected logical route count for up to 150 seconds, then verifies search, recall, and exact recovery. The harness now calls that probe after it validates the rollback branch and before it starts the ten-rollover loop. This is a harness sequencing correction, not a runtime change. The ten-rollover, fork, restart, and final source-preservation assertions remain unqualified until one authorized run of the next frozen candidate completes. Package 2.0.26 does not establish a full M10 or M11 pass.
 
 ## Result fields
 

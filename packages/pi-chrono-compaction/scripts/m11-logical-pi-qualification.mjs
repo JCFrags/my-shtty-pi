@@ -269,6 +269,7 @@ export default function qualificationBridge(pi) {
       .find(value => value.type === "custom_message" && value.customType === "chrono-logical-continuation");
     assert.ok(abandonedEntry?.id, "abandoned replacement must retain its continuation entry");
     const abandonedEntryId = abandonedEntry.id;
+    await probe(client, initialMarker, 1, firstId);
 
     for (let operation = 1; operation <= MAIN_ROLLOVERS; operation++) {
       await promptCommand(client, `/chrono-logical-session rollover ${logicalSessionId} main`, 180_000);
