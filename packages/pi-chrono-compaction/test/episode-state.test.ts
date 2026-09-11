@@ -195,6 +195,22 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
       assert.equal((sourceRollup.result as any).items.length, 1, "exact sources page individually");
       assert.ok((sourceRollup.result as any).items[0].source.coordinateKind);
     }
+    const composedRollup = await run(oldView, { op: "composeRollupSelection", query: "parser",
+      beforeEventSeq: oldView.eventCut + 1, limit: 2, handle: oldRollupResult.handle });
+    assert.equal(composedRollup.ok, true, JSON.stringify(composedRollup));
+    if (composedRollup.ok) {
+      const selected = (composedRollup.result as any).items;
+      assert.ok(selected.length > 0, "query-time composition selects an actual older rollup node");
+      assert.ok(selected.every((item: any) => item.range.end.eventSeq < oldView.eventCut + 1));
+      assert.ok(selected.every((item: any) => item.reference.path[0] === oldRollupResult.handle.rootNodeId
+        && item.reference.path.at(-1) === item.nodeId), "selected nodes retain a verified pinned expansion path");
+      assert.ok((composedRollup.result as any).metrics.nodesVisited <= 24, "top-down selection keeps the existing node ceiling");
+    }
+    const noHit = await run(oldView, { op: "composeRollupSelection", query: "definitely-absent-term",
+      beforeEventSeq: oldView.eventCut + 1, limit: 2, handle: oldRollupResult.handle });
+    assert.equal(noHit.ok, true, JSON.stringify(noHit));
+    if (noHit.ok) assert.equal((noHit.result as any).noQueryHit, true, "no query hit is not a global coverage refusal");
+
     const missing = await run(oldView, { op: "recallRollup", level: "child", nodeId: "f".repeat(64),
       path: [oldRollupResult.handle.rootNodeId, "f".repeat(64)], limit: 1, handle: oldRollupResult.handle });
     assert.equal(missing.ok, false);
@@ -226,6 +242,15 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     const capacityRollup = await materializeRollup(capacityView);
     assert.ok(capacityRollup.rollupGeneration > oldRollupResult.rollupGeneration, "a completed frontier continues into a later generation");
     assert.equal(capacityRollup.complete, true);
+    const historicalStatus = await run(oldView, { op: "rollupStatus" });
+    assert.equal(historicalStatus.ok, true, JSON.stringify(historicalStatus));
+    if (historicalStatus.ok) assert.equal((historicalStatus.result as any).handle.rollupGeneration,
+      oldRollupResult.handle.rollupGeneration, "status resolves the newest publication compatible with the historical cut");
+    const pinnedComposition = await run(capacityView, { op: "composeRollupSelection", query: "parser",
+      beforeEventSeq: oldView.eventCut + 1, limit: 1, handle: oldRollupResult.handle });
+    assert.equal(pinnedComposition.ok, true, JSON.stringify(pinnedComposition));
+    if (pinnedComposition.ok) assert.equal((pinnedComposition.result as any).handle.rollupGeneration,
+      oldRollupResult.handle.rollupGeneration, "a newer publication does not invalidate an older valid composition pin");
     let boundedEpisode: any, capacityAfter: unknown;
     for (let page = 0; page < 4 && !boundedEpisode; page++) {
       const capacityEpisodes = await run(capacityView, { op: "recallRollup", level: "episode", limit: 12,

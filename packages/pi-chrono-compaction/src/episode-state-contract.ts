@@ -118,6 +118,29 @@ export interface EpisodeStateSelectionMember {
   };
 }
 
+export interface EpisodeRollupCompositionItem {
+  readonly nodeId: string;
+  readonly nodeType: "episode-fragment" | "rollup";
+  readonly path: readonly string[];
+  readonly range: {
+    readonly start: { readonly eventSeq: number; readonly descriptor: number };
+    readonly end: { readonly eventSeq: number; readonly descriptor: number };
+  };
+  readonly summary: readonly string[];
+  /** Adapter-encoded route for bounded child/source expansion and exact recovery. */
+  readonly recovery: string;
+}
+
+export interface EpisodeRollupCompositionSelection {
+  readonly handle: EpisodeRollupHandle;
+  readonly representedStartSeq: number;
+  readonly representedEndSeq: number;
+  readonly publicationComplete: boolean;
+  readonly selectionPartial: boolean;
+  readonly partialReasons: readonly string[];
+  readonly items: readonly EpisodeRollupCompositionItem[];
+}
+
 /** One bounded read-only M09 snapshot. Omission flags mean at least one more record exists. */
 export interface EpisodeStateSelection {
   readonly stateGeneration: number;
@@ -144,6 +167,7 @@ export interface EpisodeStateSelection {
   readonly current: readonly EpisodeStateSelectionItem[];
   readonly recent: readonly EpisodeStateSelectionMember[];
   readonly older?: readonly EpisodeStateSelectionMember[];
+  readonly rollups?: EpisodeRollupCompositionSelection;
   readonly delta?: {
     readonly verified: boolean;
     readonly throughCut: number;
@@ -200,6 +224,8 @@ export type EpisodeStateRequest = Base & (
       readonly level?: EpisodeStateLevel; readonly limit?: number; readonly after?: EpisodeStateAfter }
   | { readonly op: "materializeRollup"; readonly limit?: number }
   | { readonly op: "rollupStatus" }
+  | { readonly op: "composeRollupSelection"; readonly query: string; readonly beforeEventSeq: number;
+      readonly limit?: number; readonly handle: EpisodeRollupHandle }
   | { readonly op: "recallRollup"; readonly query?: string; readonly nodeId?: string; readonly path?: readonly string[];
       readonly level?: EpisodeRollupRecallLevel; readonly limit?: number; readonly generation?: number;
       readonly after?: EpisodeRollupAfter; readonly handle?: EpisodeRollupHandle }
@@ -251,6 +277,11 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
     case "materializeRollup": return value.after === undefined
       && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob);
     case "rollupStatus": return value.limit === undefined && value.after === undefined;
+    case "composeRollupSelection": return rollupHandle(value.handle) && value.handle.branchKey === value.view.branchKey
+      && value.handle.eventCut <= value.view.eventCut && typeof value.query === "string" && value.query.trim().length > 0
+      && value.query.length <= EPISODE_STATE_LIMITS.queryUnits && positive(value.beforeEventSeq)
+      && value.beforeEventSeq <= value.view.eventCut + 1
+      && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page);
     case "recallRollup": return (positive(value.generation) || rollupHandle(value.handle))
       && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page)
       && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0 && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)

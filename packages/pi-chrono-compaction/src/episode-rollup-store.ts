@@ -302,8 +302,9 @@ async function materialize(request: Extract<EpisodeStateRequest, { op: "material
     ...(publication ? { handle: handle(request, publication), rootReference: { kind: "rollup-node", handle: handle(request, publication), nodeId: root!.nodeId, path: [root!.nodeId] } } : {}),
     next: cursor, metrics: { leafPages: pages.length, nodesCreated: created.count, sqliteStatements: store.statements } };
 }
-function publicationFor(request: Extract<EpisodeStateRequest, { op: "recallRollup" }>, store: Store): SqlRow {
-  const line = lineage(request), generation = request.handle?.rollupGeneration ?? request.generation;
+function publicationFor(request: Extract<EpisodeStateRequest, { op: "recallRollup" | "composeRollupSelection" }>, store: Store): SqlRow {
+  const line = lineage(request), generation = request.handle?.rollupGeneration
+    ?? (request.op === "recallRollup" ? request.generation : undefined);
   if (!generation) fail("search-v3-rollup-generation-required");
   const row = store.get("SELECT * FROM publications WHERE lineage=? AND generation=?", line, generation!);
   if (!row || num(row, "eventCut") > request.view.eventCut || str(row, "branchKey") !== request.view.branchKey
@@ -316,6 +317,11 @@ function matches(node: StoredNode, query: string | undefined): boolean {
   const terms = query.toLowerCase().match(/[\p{L}\p{N}_./:+-]{2,}/gu) ?? [];
   const text = canonicalJson({ summary: node.summary, protected: node.protectedReferences, metadata: node.metadataHints }).toLowerCase();
   return terms.some(term => text.includes(term));
+}
+function matchScore(node: StoredNode, query: string): number {
+  const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_./:+-]{2,}/gu) ?? [])];
+  const text = canonicalJson({ summary: node.summary, protected: node.protectedReferences, metadata: node.metadataHints }).toLowerCase();
+  return terms.reduce((score, term) => score + Number(text.includes(term)), 0);
 }
 function nodeReference(h: EpisodeRollupHandle, node: StoredNode, path: readonly string[]): Record<string, unknown> {
   return { kind: "rollup-node", handle: h, nodeId: node.nodeId, path, nodeType: node.nodeType, level: node.level,
@@ -342,6 +348,55 @@ function episodeItem(h: EpisodeRollupHandle, node: EpisodeLeafNode & { readonly 
     omittedProtectedCount: node.omittedProtectedCount, metadataHints: node.metadataHints, omittedMetadataCount: node.omittedMetadataCount,
     remainingDetail: node.remainingDetail };
 }
+/** Select relevant historical nodes top-down. Selected nodes stop descent, so
+ * query work is bounded by the existing node-visit ceiling rather than history size. */
+function composeRollupSelection(request: Extract<EpisodeStateRequest, { op: "composeRollupSelection" }>, store: Store): Record<string, unknown> {
+  const publication = publicationFor(request, store), h = handle(request, publication), root = loadNode(store, h.rootNodeId);
+  const limit = request.limit ?? Math.min(4, EPISODE_STATE_LIMITS.page);
+  const queue: Array<{ node: StoredNode; path: string[]; score: number }> = [{ node: root, path: [root.nodeId], score: matchScore(root, request.query) }];
+  const selected: Array<{ node: StoredNode; path: string[] }> = [];
+  let visited = 0, traversalLimited = false;
+  while (queue.length && selected.length < limit) {
+    if (visited >= EPISODE_STATE_LIMITS.rollupNodesPerRecall) { traversalLimited = true; break; }
+    const current = queue.shift()!; visited++;
+    if (current.node.range.end.eventSeq < request.beforeEventSeq && current.score > 0) {
+      selected.push(current);
+      continue;
+    }
+    if (current.node.nodeType === "episode-fragment") continue;
+    const children: Array<{ node: StoredNode; path: string[]; score: number }> = [];
+    for (const id of current.node.orderedChildren) {
+      if (visited + queue.length + children.length >= EPISODE_STATE_LIMITS.rollupNodesPerRecall) {
+        traversalLimited = true; break;
+      }
+      const node = loadNode(store, id);
+      if (node.range.start.eventSeq >= request.beforeEventSeq) continue;
+      children.push({ node, path: [...current.path, id], score: matchScore(node, request.query) });
+    }
+    children.sort((a, b) => b.score - a.score || b.node.level - a.node.level
+      || a.node.range.start.eventSeq - b.node.range.start.eventSeq || a.node.nodeId.localeCompare(b.node.nodeId));
+    queue.push(...children);
+  }
+  if (queue.length && selected.length >= limit) traversalLimited = true;
+  selected.sort((a, b) => a.node.range.start.eventSeq - b.node.range.start.eventSeq
+    || a.node.range.end.eventSeq - b.node.range.end.eventSeq || a.node.nodeId.localeCompare(b.node.nodeId));
+  const items = selected.map(item => ({ reference: nodeReference(h, item.node, item.path), nodeId: item.node.nodeId,
+    nodeType: item.node.nodeType, path: item.path, range: item.node.range, summary: item.node.summary,
+    remainingDetail: item.node.remainingDetail }));
+  const partialReasons = traversalLimited ? ["bounded-node-traversal"] : [];
+  let responseLimited = false;
+  const build = (): Record<string, unknown> => ({ handle: h, representedRange: root.range,
+    publicationComplete: num(publication, "complete") === 1, selectionPartial: traversalLimited || responseLimited, partialReasons,
+    items, noQueryHit: items.length === 0,
+    metrics: { nodesVisited: visited, nodeLimit: EPISODE_STATE_LIMITS.rollupNodesPerRecall, selectedNodeLimit: limit,
+      sqliteStatements: store.statements } });
+  while (items.length > 1 && Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.responseBytes - 4096) {
+    items.pop(); responseLimited = true;
+    if (!partialReasons.includes("response-budget")) partialReasons.push("response-budget");
+  }
+  return build();
+}
+
 function recall(request: Extract<EpisodeStateRequest, { op: "recallRollup" }>, store: Store): Record<string, unknown> {
   const publication = publicationFor(request, store), h = handle(request, publication), rootId = str(publication, "rootNodeId");
   const targetId = request.nodeId ?? rootId, route = verifiedPath(store, rootId, targetId, request.path);
@@ -421,26 +476,26 @@ function status(request: Extract<EpisodeStateRequest, { op: "rollupStatus" }>, s
       remainingWork: remainingWork(request.view.eventCut, processedCut, complete, 0), noEligibleEpisode: true, cursor,
       metrics: { sqliteStatements: store.statements } };
   }
-  const publication = store.get("SELECT * FROM publications WHERE generation=?", num(head, "generation"));
+  // Select the newest publication compatible with this exact cut. A later head
+  // must not invalidate an immutable older publication used by a preview.
+  const publication = store.get("SELECT * FROM publications WHERE lineage=? AND eventCut<=? ORDER BY generation DESC LIMIT 1",
+    lineage(request), request.view.eventCut);
   const publicationRow = publication ?? fail("search-v3-rollup-publication-missing");
-  if (str(publicationRow, "branchKey") !== request.view.branchKey || num(publicationRow, "eventCut") > request.view.eventCut)
-    return { readiness: "incompatible", rollupGeneration: num(publicationRow, "generation"), branchKey: request.view.branchKey,
-      requestedCut: request.view.eventCut, processedCut: 0, processedMemoryCut: 0, knownThroughCut: 0, complete: false,
-      closedIntervalsOnly: true, representedClosedRange: null, remainingWork: "state-catch-up", noEligibleEpisode: true,
-      metrics: { sqliteStatements: store.statements } };
-  const h = handle(request, publicationRow), root = loadNode(store, h.rootNodeId), complete = num(head, "complete") === 1;
+  if (str(publicationRow, "branchKey") !== request.view.branchKey) fail("search-v3-rollup-publication-missing");
+  const h = handle(request, publicationRow), root = loadNode(store, h.rootNodeId), complete = num(publicationRow, "complete") === 1;
   const rootRow = store.get("SELECT createdGeneration FROM nodes WHERE nodeId=?", h.rootNodeId);
   const noEligibleEpisode = complete && Boolean(rootRow) && num(rootRow!, "createdGeneration") < h.rollupGeneration;
+  const currentHead = num(head, "generation") === h.rollupGeneration;
   return { readiness: complete ? "ready" : "partial", rollupGeneration: h.rollupGeneration,
     stateGeneration: h.stateGeneration, branchKey: h.branchKey, requestedCut: request.view.eventCut, processedCut: h.eventCut,
-    processedMemoryCut: snapshot?.processedMemoryCut ?? h.eventCut, knownThroughCut: h.eventCut, complete,
+    processedMemoryCut: currentHead ? snapshot?.processedMemoryCut ?? h.eventCut : h.eventCut, knownThroughCut: h.eventCut, complete,
     closedIntervalsOnly: true, representedClosedRange: root.range, closedThroughCut: root.range.end.eventSeq,
     excludedOpenTail: true, remainingWork: remainingWork(request.view.eventCut, h.eventCut, complete, noEligibleEpisode ? 0 : 1), noEligibleEpisode,
     handle: h, rootReference: { kind: "rollup-node", handle: h, nodeId: h.rootNodeId, path: [h.rootNodeId] },
-    cursor, metrics: { sqliteStatements: store.statements } };
+    ...(currentHead ? { cursor } : {}), metrics: { sqliteStatements: store.statements } };
 }
 
-export async function executeEpisodeRollupRequest(request: Extract<EpisodeStateRequest, { op: "materializeRollup" | "rollupStatus" | "recallRollup" }>,
+export async function executeEpisodeRollupRequest(request: Extract<EpisodeStateRequest, { op: "materializeRollup" | "rollupStatus" | "composeRollupSelection" | "recallRollup" }>,
   options: EpisodeStateExecutionOptions = {}): Promise<EpisodeStateResponse> {
   const create = request.op === "materializeRollup", budget = { bytes: 0 }; let db: CatalogSqlite | undefined;
   try {
@@ -459,7 +514,8 @@ export async function executeEpisodeRollupRequest(request: Extract<EpisodeStateR
       db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
       const store = new Store(db, request); if (create) store.initialize(); else store.validate(false);
       const result = request.op === "materializeRollup" ? await materialize(request, store, options, budget)
-        : request.op === "recallRollup" ? recall(request, store) : status(request, store);
+        : request.op === "recallRollup" ? recall(request, store)
+        : request.op === "composeRollupSelection" ? composeRollupSelection(request, store) : status(request, store);
       const response: EpisodeStateResponse = { v: 1, ok: true, result: { ...result,
         coverageScope: "Closed episode intervals and exact M07 source references. Interval closure is not task completion. Protected omissions stay explicit and detail remains reachable through children or exact sources." },
         sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };

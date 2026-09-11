@@ -1044,7 +1044,7 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
   if (!isEpisodeStateRequest(value)) return { v: 1, ok: false, code: "search-v3-state-request-invalid", sourceBytes: 0,
     sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes, resumable: false };
   const request = value;
-  if (request.op === "materializeRollup" || request.op === "rollupStatus" || request.op === "recallRollup") {
+  if (request.op === "materializeRollup" || request.op === "rollupStatus" || request.op === "composeRollupSelection" || request.op === "recallRollup") {
     const { executeEpisodeRollupRequest } = await import("./episode-rollup-store.js");
     return executeEpisodeRollupRequest(request, options);
   }

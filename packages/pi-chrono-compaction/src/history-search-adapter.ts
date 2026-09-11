@@ -9,7 +9,7 @@ import { runCatalogWorker } from "./catalog-worker-client.js";
 import { runCapsuleWorker } from "./capsule-worker-client.js";
 import { runSearchV3Worker } from "./search-v3-worker-client.js";
 import { isSearchV3Handle, type SearchV3Handle, type SearchV3Request } from "./search-v3-contract.js";
-import { EPISODE_STATE_RULESET_VERSION, isEpisodeStateRequest, type EpisodeRollupHandle, type EpisodeRollupAfter, type EpisodeRollupRecallLevel, type EpisodeStateAfter, type EpisodeStateLevel, type EpisodeStateSelection } from "./episode-state-contract.js";
+import { EPISODE_STATE_RULESET_VERSION, isEpisodeStateRequest, type EpisodeRollupCompositionItem, type EpisodeRollupHandle, type EpisodeRollupAfter, type EpisodeRollupRecallLevel, type EpisodeStateAfter, type EpisodeStateLevel, type EpisodeStateSelection } from "./episode-state-contract.js";
 import { SearchLifecycleScheduler, type SearchLifecycleTarget, type SearchLifecycleProgress } from "./search-lifecycle.js";
 import type { LogicalActivationGrant, LogicalShardRoute } from "./logical-session-routing.js";
 import type { LogicalCatalogCut } from "./logical-session-contract.js";
@@ -157,7 +157,7 @@ export class HistorySearchAdapter {
     if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
     return entry;
   }
-  /** One contained read from an existing state store. No ingestion or publication. */
+  /** Bounded reads from existing state and rollup stores. No ingestion or publication. */
   async compositionSelection(prefixLeafId: string, signal?: AbortSignal): Promise<EpisodeStateSelection> {
     const key = this.key;
     const target = await this.compositionTarget(prefixLeafId, signal);
@@ -168,7 +168,63 @@ export class HistorySearchAdapter {
     if (!isCapsuleCatalogView(selection.sourceView) || canonicalJson(selection.sourceView) !== canonicalJson(target.view)
       || selection.requestedCut !== target.view.eventCut || selection.processedCut > selection.requestedCut
       || selection.processedMemoryCut < selection.processedCut) return fail("search-v3-state-view-incompatible");
-    return selection;
+    const queryTerms: string[] = [], seenTerms = new Set<string>();
+    const queryItems = [...selection.protected, ...selection.current].sort((a, b) => {
+      const rank = (kind: string): number => { const value = ["goal", "openwork", "blocker", "restriction"].indexOf(kind); return value < 0 ? 4 : value; };
+      return rank(a.kind) - rank(b.kind) || b.effectiveAtCut - a.effectiveAtCut || a.stableKey.localeCompare(b.stableKey);
+    });
+    for (const item of queryItems) {
+      const evidence = item.evidence as { exactText?: unknown } | null;
+      const sourceText = `${item.subject} ${typeof evidence?.exactText === "string" ? evidence.exactText : ""}`;
+      let taken = 0;
+      for (const term of sourceText.match(/[\p{L}\p{N}_./:+-]{2,}/gu) ?? []) {
+        const normalized = term.toLowerCase();
+        if (seenTerms.has(normalized)) continue;
+        if (`${queryTerms.join(" ")} ${term}`.trim().length > 256 || queryTerms.length >= 12) break;
+        seenTerms.add(normalized); queryTerms.push(term); taken++;
+        if (taken === 2) break;
+      }
+      if (queryTerms.length >= 12) break;
+    }
+    if (!queryTerms.length) return selection;
+    const status = await runSearchV3Worker({ ...target, op: "rollupStatus" }, { ...this.options, signal });
+    if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
+    if (!status.ok) {
+      if (status.code === "search-v3-rollup-store-missing") return selection;
+      return fail(status.code);
+    }
+    const handle = status.result.handle as EpisodeRollupHandle | undefined;
+    if (!handle) return selection;
+    if (handle.ruleset !== "episode-rollup-exact-v3" || handle.branchKey !== selection.branchKey
+      || handle.eventCut > selection.processedCut) return fail("search-v3-rollup-publication-missing");
+    const beforeEventSeq = selection.recent[0]?.eventSeq ?? selection.processedCut + 1;
+    const rollupRequest = { ...target, op: "composeRollupSelection" as const, handle,
+      query: queryTerms.join(" "), beforeEventSeq, limit: 4 };
+    if (!isEpisodeStateRequest(rollupRequest)) return fail("search-v3-reference-invalid");
+    const rollup = await runSearchV3Worker(rollupRequest, { ...this.options, signal });
+    if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
+    if (!rollup.ok) return fail(rollup.code);
+    const pinned = rollup.result.handle as EpisodeRollupHandle;
+    const represented = rollup.result.representedRange as { start?: { eventSeq?: unknown }; end?: { eventSeq?: unknown } } | undefined;
+    if (canonicalJson(pinned) !== canonicalJson(handle) || !Number.isSafeInteger(represented?.start?.eventSeq)
+      || !Number.isSafeInteger(represented?.end?.eventSeq) || Number(represented!.end!.eventSeq) > handle.eventCut) {
+      return fail("search-v3-rollup-publication-missing");
+    }
+    const items = (rollup.result.items as Record<string, unknown>[]).map((item): EpisodeRollupCompositionItem => {
+      const reference = item.reference as { nodeId?: unknown; nodeType?: unknown; path?: unknown; range?: unknown };
+      if (typeof reference?.nodeId !== "string" || !["episode-fragment", "rollup"].includes(String(reference.nodeType))
+        || !Array.isArray(reference.path) || !reference.path.every(value => typeof value === "string")
+        || !item.range || !Array.isArray(item.summary)) return fail("search-v3-rollup-node-corrupt");
+      const level: EpisodeRollupRecallLevel = reference.nodeType === "episode-fragment" ? "source" : "child";
+      return { nodeId: reference.nodeId, nodeType: reference.nodeType as EpisodeRollupCompositionItem["nodeType"],
+        path: reference.path as string[], range: item.range as EpisodeRollupCompositionItem["range"],
+        summary: item.summary.map(String), recovery: encode({ v: 1, view: target.view,
+          rollup: { handle, nodeId: reference.nodeId, path: reference.path as string[], level } }) };
+    });
+    return { ...selection, rollups: { handle, representedStartSeq: Number(represented!.start!.eventSeq),
+      representedEndSeq: Number(represented!.end!.eventSeq), publicationComplete: rollup.result.publicationComplete === true,
+      selectionPartial: rollup.result.selectionPartial === true,
+      partialReasons: Array.isArray(rollup.result.partialReasons) ? rollup.result.partialReasons.map(String) : [], items } };
   }
   private within(view: CapsuleCatalogView, current: CapsuleCatalogView): boolean {
     return view.storeKey === current.storeKey && view.generation === current.generation && view.sessionKey === current.sessionKey

@@ -234,6 +234,22 @@ export function composeStoredSelection(
   for (const item of selection.current) addState(item, selection.processedCut, false);
   for (const member of selection.recent) addMember(member, selection.processedCut, recent, "episode");
   for (const member of extended.older ?? []) addMember(member, selection.processedCut, older, "episode");
+  if (selection.rollups) {
+    const rollups = selection.rollups, recentStart = selection.recent[0]?.eventSeq ?? selection.processedCut + 1;
+    if (rollups.handle.ruleset !== "episode-rollup-exact-v3" || rollups.handle.branchKey !== selection.branchKey
+      || rollups.handle.eventCut > selection.processedCut || rollups.representedEndSeq > rollups.handle.eventCut
+      || rollups.representedEndSeq < rollups.representedStartSeq) throw new Error("stored rollup selection exceeds the pinned memory view");
+    for (const item of rollups.items) {
+      if (!item.summary.length || !item.recovery || item.range.end.eventSeq >= recentStart
+        || item.range.start.eventSeq < rollups.representedStartSeq || item.range.end.eventSeq > rollups.representedEndSeq
+        || item.path[0] !== rollups.handle.rootNodeId || item.path.at(-1) !== item.nodeId) {
+        throw new Error("stored rollup node exceeds the pinned selection");
+      }
+      older.push({ id: item.nodeId, text: item.summary.join("\n"), startSeq: item.range.start.eventSeq,
+        endSeq: item.range.end.eventSeq, recovery: item.recovery, kind: "rollup", authority: "derived",
+        status: "uncertain", importance: 0.6 });
+    }
+  }
 
   const delta = extended.delta;
   if (delta && delta.protected.length + delta.current.length + delta.recent.length > SHADOW_COMPOSER_LIMITS.maxDeltaRows) {
@@ -276,6 +292,7 @@ export function composeStoredSelection(
     ...(selection.omissions.currentAtLeastOne ? ["current-state selection omitted at least one item"] : []),
     ...(selection.omissions.recentAtLeastOne ? ["recent selection omitted at least one item"] : []),
     ...(selection.omissions.responseBudgetAtLeastOne ? ["selection response budget omitted at least one item"] : []),
+    ...(selection.rollups?.selectionPartial ? [`older rollup selection is bounded: ${selection.rollups.partialReasons.join(", ") || "selection limit"}`] : []),
   ];
   const lag = selection.processedCut < selection.requestedCut && !verifiedDelta
     ? [delta?.reason || `memory snapshot lags the source cut by ${selection.requestedCut - selection.processedCut} sequence(s)`] : [];
@@ -301,6 +318,9 @@ export function composeStoredSelection(
   return composeShadowContext({ ...input,
     memory: { generation: String(selection.stateGeneration), representedStartSeq: 0,
       representedEndSeq: selection.processedCut, committed: selection.stateGeneration > 0 },
+    ...(selection.rollups ? { rollups: { generation: String(selection.rollups.handle.rollupGeneration),
+      representedStartSeq: selection.rollups.representedStartSeq, representedEndSeq: selection.rollups.representedEndSeq,
+      complete: selection.rollups.publicationComplete } } : {}),
     mandatoryCoverage: { protectedComplete, openWorkComplete },
     selected: { protected: selectedProtected, openWork: selectedOpenWork, recent: selectedRecent, older: selectedOlder },
     delta: { records: selectedDelta, completeThroughCut: selection.processedCut === selection.requestedCut
