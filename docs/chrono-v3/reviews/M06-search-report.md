@@ -606,3 +606,27 @@ The correction requires fresh routine CI. State-v4 and rollup-v3 derivation
 identities remain valid because this changes response packing, not stored state.
 The failed 2.0.19 evidence remains preserved. No canary or shared deployment has
 run, and the fixed installed selection remains 2.0.15.
+
+### Mandatory allocation correction (2.0.21 candidate)
+
+The 2.0.20 candidate at `b6d1b25` again failed the unchanged synthetic
+assertion that assistant open work must remain selected. Push run 34550886207
+retains that failure; the other three focused scenarios passed. The failed
+2.0.19 and 2.0.20 results are not passing evidence.
+
+The established defect was an authority-priority inversion after the bounded
+work query. A chronological sort replaced user/assistant/tool priority before
+representation reservation. Response overflow then removed the earliest small
+assistant rows before the later large incidental tool-failure representation.
+The correction preserves authority priority through packing, removes
+lower-authority and larger incidental work first, and records every loss through
+the existing category and rendered-overflow flags. It fits mandatory rows before
+refilling the already bounded recent, current and older candidates with actual
+remaining bytes. No quota, response ceiling, worker limit, state schema or
+external source contract changes.
+
+The runtime-test allowance remains exhausted. Source typecheck, build, manifest
+identity and dirty-tree static verification passed. Routine CI for 2.0.21 is
+pending. The shared installation, configuration, source archives,
+state-v3/state-v4 stores, rollup-v2/rollup-v3 stores and rollback points remain
+unchanged.
