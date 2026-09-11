@@ -15,7 +15,7 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "928e8575fbd6d9f225673c02f680af0ec51fac6b",
+  "tree": "617dd5703364f3b78afa24cc35c5b5a333dca4ab",
   "files": 415,
   "maps": 131,
   "package": "packages/pi-chrono-compaction",
@@ -95,6 +95,11 @@ export const CHRONO_BASELINE = Object.freeze({
       "path": "test/extension.test.ts",
       "upstreamSha256": "1d0247207b0dc2fc30e3b219c277d0f8ad4ffdf12e7be9d7f5ac11f782675c06",
       "integratedSha256": "8862483f884c9a21c8bad9df79b0c44c62d1d3104d6690f992110d8cec7f7526"
+    },
+    {
+      "path": "test/history-search-adapter.test.ts",
+      "upstreamSha256": "c025d07d72fd03778e3fe1b823a3d7519a977fac8d82670da1e6f51c95faf0f3",
+      "integratedSha256": "2ec24a9ebb2af97cb6ff0b09b84c4e364c0de3e3a25aef3cd302f6562a2f6f88"
     },
     {
       "path": "test/logical-session-rollover.test.ts",
