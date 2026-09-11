@@ -356,3 +356,15 @@ The browser lead's one final read-only verification passed source/build identity
 Final main `19c33769a33edddd066b3bac291ce371d2c1aba9`, artifact source `573db991b6bc6a97d49bf770e6ab4066c8e5dbb0`, and immutable artifact `20268790b4f1bcfbc0a5687c7715f88adaedb0216a5998b955b88d6e54ed4ea3` remain fixed. The repaired doctor inspected all 151 retained receipts: three live processes match the final artifact, and 148 records are historical. Chrono's parent adopted the final browser during its completed safe reload. The integration parent exited after verified adoption. No old live browser-extension identity remains in the inspected collection. Explicit exclusions remain preserved.
 
 The final managed workflow, source/main CI, focused review, cleanup and rollback evidence are recorded in the corrected [browser pin](docs/merged-release.md#coordinated-external-browser-pin) and prior entries. No tests or visual acceptance were repeated for documentation. The user directs final closeout without another agent handoff. All browser windows are released; no browser activation, reload or delegated work remains. Only clean, merged, task-owned temporary work is retired. Installed releases, recovery evidence, research, user data and unrelated work remain preserved. No external package publication or new feature work is authorized.
+
+### 20260911T222500Z-browser-source-copy
+
+- **Date:** 2026-09-11T22:25:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** Project owner
+- **Subject:** Browser-only source copy with independent build boundary
+- **Status:** Local build and focused tests passed; protected integration pending
+
+The owner requested a copy of terminal-browser and AgentCursor in this repository while retaining the original web repository and excluding WebX search/read. `vendor/terminal-browser` copies source commit `19c33769a33edddd066b3bac291ce371d2c1aba9`, with upstream attribution, per-file provenance, pinned dependencies and an independent pnpm workspace. The copy excludes WebX implementation and its optional loader, retired-provider cleanup tooling, generated Pi outputs and external publication automation. Root verification checks the copied inventory without adding it to the active npm product registry. CI builds and tests the copied browser stack separately.
+
+The full nested build, browser/CLI/Pi/store tests, focused typechecks and root static verification passed locally. No installed selection, browser session, research service, Pi registration or Herdr integration changed. This is a source copy, not a deployment. No shared runtime window is held and no other project owner has pending work for this request. Required CI and merge results remain attached to this contribution's pull request.

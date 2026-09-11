@@ -17,6 +17,24 @@ inventory frozen to an old deployment.
 - Other registered products keep their existing entrypoints. Main’s completed
   removal of the temporary cancellation-isolation product is preserved.
 
+## Terminal-browser and AgentCursor source copy
+
+[`vendor/terminal-browser`](vendor/terminal-browser/README.md) contains a browser-only
+copy from `JCFrags/my-shtty-pi-web` at `19c33769a33edddd066b3bac291ce371d2c1aba9`.
+It includes the Electron browser, pinned AgentCursor dependency, rendering engine,
+CLI, Pi extension, Herdr plugin, assets, build tools, and browser tests. Its pnpm
+workspace stays separate from this repository's npm workspace.
+
+WebX search/read, its optional loader, research services, retirement scripts, and
+external publishing automation are not imported. The original web repository and
+current installed tools remain unchanged. This source copy is not an additional
+automatically loaded Pi package. Per-file hashes and intentional copy adaptations
+are recorded in `vendor/terminal-browser/copy-provenance.json`.
+
+From the copied directory, use `pnpm install --frozen-lockfile` and `pnpm build`.
+The native build needs Rust/Cargo and the platform libraries documented there.
+Use the five native browser tools in Pi, not the upstream CLI as a substitute.
+
 ## Verification
 
 Use Node.js 24, npm, Git, and Python 3. Stage intended changes first: verification
