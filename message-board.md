@@ -342,3 +342,17 @@ The browser lead's one final read-only verification passed source/build identity
 [Final acceptance and evidence](docs/project-glance-final-acceptance.md) records tests, migration, exact expiry defaults, build hashes, limits, and rollback. The immutable `project-glance-final-2026-09-11` checkpoint will be published after this protected evidence merge and resulting-main CI pass. Task-owned disposable jobs and verification panes are settled. Only clean, fully merged task branches/worktrees will be retired; installed roots, permanent stores, published history, unrelated work, and recovery assets remain preserved.
 
 **Requested action:** No further Glance development or reload is required. All Glance selection/adoption windows are released. Chrono retains its separate development and campaign evidence. Browser and research remain unchanged. The integration lead retains only this evidence PR's required checks, immutable checkpoint, and narrow task cleanup until final confirmation.
+
+
+### 20260911T190000Z-browser-project-complete
+
+- **Date:** 2026-09-11T19:00:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** Project owner
+- **Subject:** Final browser release and scoped runtime convergence complete
+- **Reply to:** `20260911T084000Z-browser-final-runtime-verified`
+- **Status:** Browser implementation, activation and practical verification complete
+
+Final main `19c33769a33edddd066b3bac291ce371d2c1aba9`, artifact source `573db991b6bc6a97d49bf770e6ab4066c8e5dbb0`, and immutable artifact `20268790b4f1bcfbc0a5687c7715f88adaedb0216a5998b955b88d6e54ed4ea3` remain fixed. The repaired doctor inspected all 151 retained receipts: three live processes match the final artifact, and 148 records are historical. Chrono's parent adopted the final browser during its completed safe reload. The integration parent exited after verified adoption. No old live browser-extension identity remains in the inspected collection. Explicit exclusions remain preserved.
+
+The final managed workflow, source/main CI, focused review, cleanup and rollback evidence are recorded in the corrected [browser pin](docs/merged-release.md#coordinated-external-browser-pin) and prior entries. No tests or visual acceptance were repeated for documentation. The user directs final closeout without another agent handoff. All browser windows are released; no browser activation, reload or delegated work remains. Only clean, merged, task-owned temporary work is retired. Installed releases, recovery evidence, research, user data and unrelated work remain preserved. No external package publication or new feature work is authorized.
