@@ -2243,6 +2243,31 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             }
         },
     });
+    pi.registerCommand("chrono-rollup-repair", {
+        description: "Run one bounded rollup repair transition: start, step, status, or publish.",
+        handler: async (args, ctx) => {
+            const parts = args.trim().split(/\s+/u), action = parts[0], repairId = parts[1], expected = parts[2];
+            if (!action || !["start", "step", "status", "publish"].includes(action) || !repairId
+                || !/^[A-Za-z0-9_.:-]{1,64}$/u.test(repairId) || (action === "publish"
+                ? parts.length !== 3 || !expected || expected !== "legacy" && !/^[a-f0-9]{64}$/u.test(expected)
+                : parts.length !== 2)) {
+                ctx.ui.notify("Usage: /chrono-rollup-repair start|step|status <repairId> OR publish <repairId> <legacy|expected-store-id>", "info");
+                return;
+            }
+            const leaf = ctx.sessionManager.getLeafId();
+            if (!leaf) {
+                ctx.ui.notify("Rollup repair requires a persisted branch leaf.", "warning");
+                return;
+            }
+            try {
+                const value = await search.repairRollup(leaf, action, repairId, action === "publish" ? expected === "legacy" ? null : expected : undefined, ctx.signal);
+                ctx.ui.notify(`Rollup repair ${action}: ${JSON.stringify(value)}`, "info");
+            }
+            catch (error) {
+                ctx.ui.notify(`Rollup repair refused: ${logicalErrorCode(error)}`, "warning");
+            }
+        },
+    });
     pi.registerCommand("chrono-composition-preview", {
         description: "Save a bounded private shadow comparison for a recorded compaction ID, or the nearest compaction. Does not activate compaction.",
         handler: async (args, ctx) => {
