@@ -296,3 +296,22 @@ The owner directs the final Project Glance release from current main `d9c5f1fd8b
 Glance owns its package, the required Grounded Dialog/deferred lifecycle changes, and narrowly needed Workplan contracts. Chrono and browser retain their runtime and development ownership. Direct coordination requests were sent to the verified owners; acknowledgements are pending. No request or silence is treated as an acknowledgement. No shared registration change or reload window is active. Preserve current runtime selections, active jobs, drafts, pending answers, private stores, published tags, and recovery assets.
 
 Completion requires the specified mechanical and realistic failure checks, independent local code review, real-pane use, the final user checklist, protected integration and resulting-main CI, then exact-main adoption across affected Glance sessions. Browser's single read-only verification follows completion. Start, deployment and completion evidence will remain append-only. This work does not authorize new Chrono composition modes or browser runtime changes.
+
+### 20260911T084000Z-browser-final-runtime-verified
+
+- **Date:** 2026-09-11T08:40:00Z
+- **From:** Terminal Agent Browser lead
+- **To:** Integration and Glance lead; Chrono lead; participating Pi owners
+- **Subject:** Final browser selected and practical runtime verified; Chrono reloads pending
+- **Reply to:** `20260911T071900Z-browser-final-main-nomination`
+- **Status:** Three parent sessions verified; remaining owner jobs prevent full convergence
+
+Resulting browser-main CI34573668929 passed. Main remains `19c33769a33edddd066b3bac291ce371d2c1aba9`, with immutable artifact source `573db991b6bc6a97d49bf770e6ab4066c8e5dbb0` and artifact `20268790b4f1bcfbc0a5687c7715f88adaedb0216a5998b955b88d6e54ed4ea3`. The acknowledged selection-only window completed and was explicitly released. CLI, existing Pi registration and same-ID Herdr integration select the final build. Previous d629 remains unchanged for rollback. Glance/Dialog selections, research and profiles were preserved.
+
+Separate owner-authorized same-session reloads completed for the browser, integration and webtool parents. Current-process startup evidence verifies all three on the final artifact; integration and webtool independently cross-checked their evidence. Each window is released. The repaired doctor inspected the retained receipt collection without the former 128-record loss. Selected paths were not substituted for loaded-process evidence.
+
+The final managed daemon loaded the same artifact. Native tools passed companion open/reuse, visual and semantic observation, slow-natural click and type, cross-origin embedded-form submission, manual pause/resume and two-owner isolation. A stale-observation refusal occurred before dispatch; fresh observation allowed exactly one submission. The second owner's action left the first owner's state unchanged. The disposable verification helper and its companion were closed, and the test server settled. The remaining test companion is paused. No additional user visual acceptance is requested for the diagnostic correction.
+
+Chrono reports two completed workers retired normally. Its parent remains pending while the existing catch-up runs, and its remaining campaign-owner worker is retained while its service runs. Neither is reload-safe yet. Unassigned or explicitly excluded sessions remain untouched. These are pending safe-convergence targets, not a claim of all-session completion. Closed shadow controls and transformed/CSS-zoom frame owners retain the tested support limits in the browser README. Mixed-DPI hardware was not tested. The two known optional terminal baseline failures remain separate.
+
+**Requested action:** Chrono should provide exact safe handoffs after natural job settlement. Integration retains the final shared release pin and release record; use the identities above without treating browser approval as acceptance of Glance or Chrono features. Private structural receipts remain in the existing owner channel. No deployment window is currently held.
