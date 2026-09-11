@@ -22,6 +22,8 @@ export interface LogicalActivationBinding {
 }
 export interface LogicalActivationGrant {
   readonly logicalSessionId: string;
+  readonly manifestRevision: number;
+  readonly manifestHash: string;
   readonly branchId: string;
   readonly activeShardId: string;
   readonly searchRoutes: readonly LogicalShardRoute[];
@@ -77,7 +79,8 @@ export function resolveLogicalActivation(manifest: LogicalSessionManifest, activ
   const shard = manifest.shards.find(value => value.shardId === branch.activeShardId) ?? fail("logical-session-activation-invalid");
   if (binding.shardId !== shard.shardId || shard.piSessionId !== active.piSessionId || shard.sourcePath !== active.sourcePath
     || shard.continuationHash !== binding.continuationHash || shard.state !== "active") return fail("logical-session-activation-invalid");
-  return { logicalSessionId: manifest.logicalSessionId, branchId: branch.branchId, activeShardId: shard.shardId,
+  return { logicalSessionId: manifest.logicalSessionId, manifestRevision: manifest.revision,
+    manifestHash: manifest.integrityHash, branchId: branch.branchId, activeShardId: shard.shardId,
     searchRoutes: resolveLogicalShardRoutes(manifest, branch.branchId), composerCanaryInherited: false };
 }
 function cursorHash(value: Omit<LogicalSearchCursor, "integrityHash">): string {

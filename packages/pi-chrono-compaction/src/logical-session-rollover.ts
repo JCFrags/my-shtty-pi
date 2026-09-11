@@ -141,12 +141,14 @@ export class ManualLogicalRollover {
   }
 
   async rollover(candidate: ContinuationCandidate, eligibility: RolloverEligibility, command: SessionCommandPort): Promise<{ cancelled: boolean }> {
+    const current = await this.store.read() ?? fail("logical-session-manifest-missing");
+    const expected = currentShard(current, candidate.branchId);
+    if (command.sessionManager.getSessionId() !== expected.piSessionId || command.sessionManager.getSessionFile() !== expected.sourcePath) {
+      return fail("logical-session-active-shard-mismatch");
+    }
     const prepared = await this.prepare(candidate, eligibility);
     const operation = prepared.pendingRollover!;
     const oldShard = prepared.shards.find(value => value.shardId === operation.oldShardId)!;
-    if (command.sessionManager.getSessionId() !== oldShard.piSessionId || command.sessionManager.getSessionFile() !== oldShard.sourcePath) {
-      return fail("logical-session-active-shard-mismatch");
-    }
     const result = await command.newSession({ parentSession: oldShard.sourcePath,
       setup: manager => this.bindNewShard(operation.operationId, manager),
       withSession: context => this.activateNewShard(operation.operationId, context.sessionManager),
@@ -164,13 +166,26 @@ export class ManualLogicalRollover {
     if (!sourcePath || manager.getHeader().parentSession !== old.sourcePath) return fail("logical-session-parent-mismatch");
     const continuationHash = logicalContinuationHash(operation.continuation);
     manager.appendCustomMessageEntry("chrono-logical-continuation", operation.continuation.summary, true,
-      { schemaVersion: 1, logicalSessionId: manifest.logicalSessionId, branchId: operation.branchId, fromShardId: old.shardId,
-        toShardId: operation.newShardId, continuationHash, source: operation.continuation.source, coveredShards: operation.continuation.coveredShards,
+      { schemaVersion: 1, operationId, logicalSessionId: manifest.logicalSessionId, branchId: operation.branchId, fromShardId: old.shardId,
+        toShardId: operation.newShardId, continuationHash, summaryHash: operation.continuation.summaryHash,
+        source: operation.continuation.source, coveredShards: operation.continuation.coveredShards,
         composition: operation.continuation.composition });
+    await this.bindRecordedNewShard(operationId, manager, continuationHash);
+  }
+
+  /** Recover setup after the continuation was appended but manifest binding did not finish. */
+  async bindRecordedNewShard(operationId: string, manager: SessionSetupPort, continuationHash: string): Promise<void> {
+    const manifest = await this.store.read() ?? fail("logical-session-manifest-missing");
+    const operation = manifest.pendingRollover;
+    if (!operation || operation.operationId !== operationId || operation.phase !== "close-prepared"
+      || logicalContinuationHash(operation.continuation) !== continuationHash) return fail("logical-session-operation-mismatch");
+    const old = manifest.shards.find(value => value.shardId === operation.oldShardId) ?? fail("logical-session-shard-missing");
+    const sourcePath = manager.getSessionFile();
+    if (!sourcePath || manager.getHeader().parentSession !== old.sourcePath) return fail("logical-session-parent-mismatch");
     await this.store.update(manifest.revision, current => {
       if (current.pendingRollover?.operationId !== operationId) return fail("logical-session-operation-mismatch");
       const branch = current.branches.find(value => value.branchId === operation.branchId) ?? fail("logical-session-branch-scope-mismatch");
-      const next: LogicalShard = { shardId: operation.newShardId!, branchId: operation.branchId, ordinal: branch.shardIds.length + 1,
+      const next: LogicalShard = { shardId: operation.newShardId!, branchId: operation.branchId, ordinal: branch.shardIds.length,
         piSessionId: manager.getSessionId(), sourcePath, state: "active", openedAt: new Date().toISOString(), continuationHash };
       return { ...withoutIntegrity(current), branches: current.branches.map(value => value.branchId === branch.branchId
         ? { ...value, shardIds: [...value.shardIds, next.shardId], activeShardId: next.shardId } : value),
@@ -213,6 +228,9 @@ export class ManualLogicalRollover {
     const receipt = manifest.lastRollover;
     const old = manifest.shards.find(value => value.shardId === receipt.oldShardId) ?? fail("logical-session-shard-missing");
     const replacement = manifest.shards.find(value => value.shardId === receipt.newShardId) ?? fail("logical-session-shard-missing");
+    if (command.sessionManager.getSessionId() !== replacement.piSessionId || command.sessionManager.getSessionFile() !== replacement.sourcePath) {
+      return fail("logical-session-active-shard-mismatch");
+    }
     const result = await command.switchSession(old.sourcePath, { withSession: async context => {
       if (context.sessionManager.getSessionId() !== old.piSessionId || context.sessionManager.getSessionFile() !== old.sourcePath) return fail("logical-session-active-shard-mismatch");
       const latest = await this.store.read() ?? fail("logical-session-manifest-missing");

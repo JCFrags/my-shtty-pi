@@ -30,13 +30,13 @@ The coordinator performs this recoverable sequence:
 6. In `setup`, verify Pi's parent header, append one source-linked continuation custom message, and bind the replacement session ID and file in the manifest. The old shard becomes closed but remains untouched.
 7. In `withSession`, use only the replacement context, verify its identity, and publish the active rollover receipt.
 
-A crash before binding leaves `close-prepared`; reopening the old session can remove that intent. A crash after the continuation append but before binding leaves an unbound replacement file, which cannot become a logical shard. A crash after binding leaves `new-shard-bound`; the replacement identity can finish activation. No step deletes or rewrites an old shard.
+A crash before binding leaves `close-prepared`; reopening the old session can remove that intent. If the continuation was appended before the failure, the replacement can finish binding only when its one recorded operation ID, continuation hash, summary hash, parent path, session ID, and source path match the pending manifest. A crash after binding leaves `new-shard-bound`; the replacement identity can finish activation. No step deletes or rewrites an old shard.
 
 Exact rollback uses `switchSession(oldPath, { withSession })`, verifies the reopened Pi session ID and file, and changes the logical active pointer only after the supported switch succeeds. Rollback is allowed only while the replacement contains its injected continuation and no user work. The replacement shard remains closed and intact.
 
 The manifest is schema-versioned, integrity-hashed, revision-checked, atomically replaced, and stored in owner-only directories and files. It contains private source routes and is never a public diagnostic payload.
 
-Search integration receives ordered `LogicalShardRoute` values from the logical core. Routes include only the selected branch and its ancestors through each fork point. The search adapter keeps ownership of existing per-shard search, recall, and exact-store calls. Logical pagination binds the cursor to the logical session, manifest revision and hash, branch, route index, and existing store cursor. Sibling branches and stale manifests refuse.
+Search integration receives ordered `LogicalShardRoute` values from the logical core. Routes include only the selected branch and its ancestors through each fork point. `scheduleLogical(grant)` is available only after the active session ID, source path, continuation hash, and manifest active shard match. It reuses the existing per-shard lifecycle and contained stores for each immutable final cut. Search runs newest-to-oldest in pages of at most eight shard routes. Recall routes by its pinned view. Exact entry and range calls require an explicit shard ID when they target an ancestor. Logical pagination binds the cursor to the logical session, manifest revision and hash, branch, route index, and existing store cursor. Sibling branches and stale manifests refuse.
 
 ## Alternatives considered
 
@@ -51,7 +51,7 @@ Search integration receives ordered `LogicalShardRoute` values from the logical 
 
 Rollover has a short interval in which Pi has already applied the replacement runtime while the manifest still records a pending operation. The explicit phases and identity checks make this interval recoverable, but the future extension adapter must reconcile pending state on `session_start` and show only safe codes.
 
-The continuation custom message participates in the new shard context. Its summary is derived memory, not exact evidence. Its metadata retains source and recovery bindings. No provider call is made solely for rollover; the command consumes an already valid M09 composition.
+The continuation custom message participates in the new shard context. Its summary is derived memory, not exact evidence. Its metadata retains source and recovery bindings. No provider call is made solely for rollover. The command requires an existing regular Pi summary, then reads the M09 selection pinned to the current leaf. Eligible and covered mandatory counts come from those selected records and the rendered artifact. Missing source evidence, omissions, an unsafe tool-pair boundary, catalog lag, source change, or overflow refuses the switch.
 
 Cross-shard search can issue bounded calls to more than one existing store. It remains bounded by the requested result limit and cursor. It does not scan source JSONL or build an index.
 
@@ -59,8 +59,8 @@ Cross-shard search can issue bounded calls to more than one existing store. It r
 
 An explicit adoption adapter creates a new logical manifest with the current persisted session as shard ordinal 0. Adoption does not ingest, compact, switch, or modify that session. The first rollover remains unavailable until the catalog and mandatory continuation requirements pass.
 
-Fork integration creates a branch with an explicit parent branch and ancestor cutoff shard. No sibling route is inherited. Full command wiring and disposable canary execution remain parent-owned integration work.
+Fork integration creates a branch with an explicit parent branch and ancestor cutoff shard. No sibling route is inherited. It remains unimplemented. The manual command and startup reconciliation are wired for owned disposable sessions only; shared activation remains unapproved.
 
 ## Reversal path
 
-Do not register the manual command, or remove its integration while retaining the owner-only manifest and every source shard. A pending pre-bind intent can reopen the old shard. An unused bound replacement can roll back through pinned `switchSession()`. Existing single-shard search and compaction paths remain unchanged. This ADR does not authorize deployment, provider calls, automatic rollover, Pi core changes, package version changes, publication, or old-shard deletion.
+Do not register the manual command, or remove its integration while retaining the owner-only manifest and every source shard. A pending pre-bind intent can reopen the old shard. An unused bound replacement can roll back through pinned `switchSession()`. A disposable SDK check against pinned Pi 0.84.2 exercises real `newSession()` setup, runtime rebind before `withSession`, and `switchSession()` without a provider request. Existing single-shard search and compaction paths remain unchanged. This ADR does not authorize deployment, provider calls, automatic rollover, Pi core changes, package version changes, publication, or old-shard deletion.
