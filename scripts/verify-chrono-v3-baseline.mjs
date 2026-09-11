@@ -15,7 +15,7 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "09d7c3275e2ccaa0498a876b18fe95b1e9fb2393",
+  "tree": "6bebbf41e8872e16910187e58c4244f2039a2a0e",
   "files": 427,
   "maps": 134,
   "package": "packages/pi-chrono-compaction",
@@ -124,7 +124,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "scripts/m11-logical-pi-qualification.mjs",
       "upstreamSha256": null,
-      "integratedSha256": "97682c40442fb20c66b6c639d213fac1ad2340efa1fd7ab062dd0e165755384f"
+      "integratedSha256": "91865b5369ac1c7cdd5bbc690c48822cb240fe86d690aedc19b83ecac7eef3ca"
     },
     {
       "path": "scripts/m11-scale-campaign.mjs",
