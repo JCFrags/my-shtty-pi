@@ -61,6 +61,7 @@ class FakeCommands implements SessionCommandPort {
   }
   async switchSession(path: string, options: { withSession: (ctx: ReplacementContextPort) => Promise<void> }): Promise<{ cancelled: boolean }> {
     this.sessionManager = new FakeSession(path.includes("old.jsonl") ? "pi-old" : `pi-switched-${++this.sequence}`, path);
+    this.events.push("session_start");
     await options.withSession(this.context(this.sessionManager));
     return { cancelled: false };
   }
@@ -210,6 +211,8 @@ test("manual logical rollover is owner-only, coverage-gated, recoverable, and an
   assert.deepEqual(searched.items, [...manifest.branches[0]!.shardIds].reverse());
 
   assert.deepEqual(await rollover.rollbackLast(commands, true), { cancelled: false });
+  assert.deepEqual(commands.events.slice(-2), ["session_start", "reload"],
+    "rollback reloads only after the resumed runtime starts and the manifest commit completes");
   manifest = (await store.read())!;
   assert.equal(manifest.branches.find(branch => branch.branchId === "main")!.activeShardId, oldShardId);
   assert.equal(manifest.shards.find(shard => shard.shardId === oldShardId)!.state, "active");
@@ -273,6 +276,8 @@ test("prepared rollover can reopen from an empty replacement after a pre-setup c
   const commands = new FakeCommands(empty);
   assert.equal(replacementContainsOnlyBootstrap([{ type: "thinking_level_change" }]), true);
   assert.deepEqual(await rollover.reopenPreparedFromEmptyReplacement(commands, true), { cancelled: false });
+  assert.deepEqual(commands.events, ["session_start", "reload"],
+    "prepared recovery reloads after aborting the committed manifest intent");
   manifest = (await store.read())!;
   assert.equal(manifest.pendingRollover, undefined);
   assert.equal(manifest.shards[0]!.state, "active");

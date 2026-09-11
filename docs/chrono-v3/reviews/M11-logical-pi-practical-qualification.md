@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.27 passed exact-head CI and repeated the first rollover and immediate rollback, but its one authorized installed-Pi run exposed stale probe evidence in the qualification harness. The corrected harness is bound to package 2.0.28. No corrected retry has run, and no full M10 or M11 pass is claimed.
+Status: package 2.0.28 passed exact-head CI and its one authorized installed-Pi run produced fresh post-rollback failure evidence. The result establishes a runtime rebind defect after the rollback manifest commit. A focused correction is prepared for the next package. No full M10 or M11 pass is claimed.
 
 ## Scope
 
@@ -108,6 +108,18 @@ The run again passed adoption, the initial indexed search, recall, and exact rec
 The apparent successful post-rollback probe was stale harness evidence. `RpcClient.notify()` retained a notification after it delivered the notification to a waiter. The harness deliberately reused the initial marker after rollback, so the second probe selected the earlier pre-rollback success. Pi 0.85.1 awaits an extension slash-command handler, but reports the command as handled after converting a handler failure into an extension error. Thus the post-rollback command could exhaust its 150-second readiness bound without invalidating the stale payload that `probe()` later asserted. The elapsed time is consistent with that bounded wait followed by the safe rollover refusal. The preserved run does not prove that a ready index became unready between the probe and rollover.
 
 The package 2.0.28 harness consumes each delivered or queued notification exactly once, gives probe notifications the command's 180-second outer bound, and converts a readiness timeout into a fresh probe payload with the exact safe error. One focused in-memory RPC check proved that a repeated predicate remains pending until a new notification and receives the fresh timeout evidence. The readiness predicate, its 150-second inner deadline, command refusal, and all rollover, fork, restart, rollback, recovery, and source-preservation assertions remain unchanged. No runtime correction is justified from the stale 2.0.27 observation. One authorized 2.0.28 run after exact-head CI must establish the actual post-rollback result.
+
+## Package 2.0.28 result
+
+Exact-head pull-request CI run `34589583968` passed for candidate `ec1d2bb5cb7143b29b74699b1eb332b9001f598d`. The authorized installed-Pi run used package tree `61a922c65921dc3e4dd9b6f90c5e01259a4cdd9e`, the unchanged fresh-notification harness, Pi 0.85.1, Node 24.18.0 ABI 137, `better-sqlite3` 12.9.0, and native binding SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`.
+
+The run passed adoption, the initial indexed search, recall, and exact recovery probe, the first rollover, exact rollback, abandoned-branch retention, and presence of both source files. The fresh post-rollback probe then waited for its 150-second readiness deadline and reported `qualification-index-timeout`. Its final status had search disabled, catalog, capsules, index, memory, and rollup pending, no requested or indexed cut, no logical grant, `servingLastReady: false`, `requestedViewValidated: false`, startup ready, and `lastSafeError: search-v3-rollout-unsafe`. The run stopped after 170 seconds. No result JSON was emitted and no scenario was repeated.
+
+The final revision-5 manifest was valid. It retained the restored main shard and the replacement on an isolated rollback branch, both source files were present, and no rollover was pending. Thus the failure was not a missing source, incomplete rollback commit, readiness timeout, or stale harness notification.
+
+Pi 0.85.1 starts the resumed runtime and emits `session_start` before it invokes `switchSession()`'s `withSession` callback. `rollbackLast()` committed the manifest transition inside that callback. The first resumed startup therefore saw the pre-rollback manifest, safely rejected the old adoption binding, and disabled search. The callback then committed the correct manifest, but no second startup occurred. The focused correction reloads the resumed runtime only after the callback commits the rollback manifest. Prepared-rollover recovery uses the same commit-then-reload order after removing its intent. Switch cancellation leaves the manifest unchanged, and a reload failure leaves the committed manifest and every source available for a later normal reopen.
+
+A focused logical-session test preserves rollback, isolated-branch, source, and recovery assertions while requiring post-commit reload. A focused test against the actual Pi 0.85.1 runtime confirms the exact ordering: initial resumed startup sees pre-callback state, and the supported reload sees the committed state. Neither check calls a provider. The corrected source is not a packaged qualification result. One separately packaged candidate and exact-head CI run are required before one affected installed-Pi retry.
 
 ## Result fields
 
