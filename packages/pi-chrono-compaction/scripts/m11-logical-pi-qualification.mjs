@@ -82,10 +82,11 @@ class RpcClient {
       let event;
       try { event = JSON.parse(raw); } catch { continue; }
       if (event.type === "extension_ui_request" && event.method === "notify") {
-        this.notifications.push(String(event.message));
-        for (const waiter of [...this.waiters]) if (waiter.predicate(String(event.message))) {
-          this.waiters.splice(this.waiters.indexOf(waiter), 1); clearTimeout(waiter.timer); waiter.resolve(String(event.message));
-        }
+        const message = String(event.message);
+        const waiter = this.waiters.find(candidate => candidate.predicate(message));
+        if (waiter) {
+          this.waiters.splice(this.waiters.indexOf(waiter), 1); clearTimeout(waiter.timer); waiter.resolve(message);
+        } else this.notifications.push(message);
       }
       if (event.type === "response" && this.pending.has(event.id)) {
         const pending = this.pending.get(event.id); this.pending.delete(event.id); clearTimeout(pending.timer);
@@ -102,8 +103,8 @@ class RpcClient {
     });
   }
   notify(predicate, timeoutMs = 120_000) {
-    const existing = this.notifications.find(predicate);
-    if (existing !== undefined) return Promise.resolve(existing);
+    const existing = this.notifications.findIndex(predicate);
+    if (existing >= 0) return Promise.resolve(this.notifications.splice(existing, 1)[0]);
     return new Promise((resolvePromise, reject) => {
       const waiter = { predicate, resolve: resolvePromise, timer: undefined };
       waiter.timer = setTimeout(() => { this.waiters.splice(this.waiters.indexOf(waiter), 1); reject(new Error(`notify-timeout:${this.stderr}`)); }, timeoutMs);
@@ -155,7 +156,7 @@ async function seed(client, ordinal, marker) {
 }
 async function probe(client, marker, expectedRoutes, entryId) {
   const prefix = `QUALIFICATION_PROBE:${marker}:`;
-  const notice = client.notify(value => value.startsWith(prefix));
+  const notice = client.notify(value => value.startsWith(prefix), 180_000);
   await promptCommand(client, `/qualification-probe ${marker} ${expectedRoutes} ${entryId}`, 180_000);
   const result = JSON.parse((await notice).slice(prefix.length));
   assert.deepEqual({ routes: result.routes, search: result.search, recall: result.recall, exact: result.exact },
@@ -217,7 +218,9 @@ export default function qualificationBridge(pi) {
     ctx.ui.notify("QUALIFICATION_SEED:" + ordinal + ":" + JSON.stringify({ entries: ctx.sessionManager.getEntries().length, entryId: userId, summaryId }), "info");
   }});
   pi.registerCommand("qualification-probe", { handler: async (args, ctx) => {
-    const [marker, routesText, entryId] = args.trim().split(/\\s+/); const routes = Number(routesText); const status = await waitReady(ctx, routes);
+    const [marker, routesText, entryId] = args.trim().split(/\\s+/); const routes = Number(routesText); let status;
+    try { status = await waitReady(ctx, routes); }
+    catch (error) { ctx.ui.notify("QUALIFICATION_PROBE:" + marker + ":" + JSON.stringify({ error: String(error?.message ?? error) }), "warning"); return; }
     let cursor, found, shardId;
     for (let page = 0; page < 4 && !found; page++) {
       const search = (await call("history_search", { query: marker, mode: "exact", limit: 1, tokenBudget: 2000, ...(cursor ? { cursor } : {}) }, ctx)).details;
