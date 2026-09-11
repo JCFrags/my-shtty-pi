@@ -5,7 +5,8 @@ import {
   MAX_ITEM_TEXT_BYTES,
   type ProjectGlanceFeedItem,
 } from "../protocol/model.js";
-import { projectDisplayText, projectFeedText } from "../protocol/projection-text.js";
+import type { DurableItemType } from "../history/contracts.js";
+import { projectDisplayText, projectFeedText, sanitizeArchiveText } from "../protocol/projection-text.js";
 
 const WORKPLAN_ACTIVITY_VERSION = 1 as const;
 const MAX_SCAN_ENTRIES = 500;
@@ -73,12 +74,21 @@ function malformedTextSignature(block: Record<string, unknown>): boolean {
     (typeof signature !== "string" || (signature.trimStart().startsWith("{") && !parseTextSignature(signature)));
 }
 
-/** Extract at most one card from a finalized assistant message. */
-export function extractAssistantFeedItems(
+export interface EligibleArchiveItem {
+  sourceEntryId: string;
+  sourceKind: "assistant" | "workplan";
+  projectionId: string;
+  type: DurableItemType;
+  createdAt: string;
+  sanitizedBody: string;
+}
+
+/** Extract at most one complete sanitized update from a finalized assistant message. */
+export function extractAssistantArchiveItems(
   message: unknown,
   sourceId?: unknown,
   createdAt?: unknown,
-): ProjectGlanceFeedItem[] {
+): EligibleArchiveItem[] {
   const assistant = record(message);
   const id = safeIdentifier(sourceId);
   if (!assistant || !id || assistant.role !== "assistant" || !Array.isArray(assistant.content)) return [];
@@ -90,7 +100,6 @@ export function extractAssistantFeedItems(
   const textBlocks = content
     .map((value, index) => ({ block: record(value), index }))
     .filter(({ block }) => block?.type === "text" && typeof block.text === "string");
-
   if (textBlocks.some(({ block }) => block && malformedTextSignature(block))) return [];
   const phased = textBlocks
     .map(({ block }) => parseTextSignature(block?.textSignature))
@@ -107,16 +116,35 @@ export function extractAssistantFeedItems(
   }
 
   const paragraphs = selected
-    .map(({ block }) => projectFeedText(block?.text, MAX_ITEM_TEXT_BYTES))
+    .map(({ block }) => sanitizeArchiveText(block?.text))
     .filter((text): text is string => Boolean(text));
-  const text = projectFeedText(paragraphs.join("\n\n"), MAX_ITEM_TEXT_BYTES);
-  return text ? [{ id, type: "assistant_update", text, createdAt: at }] : [];
+  const text = sanitizeArchiveText(paragraphs.join("\n\n"));
+  return text ? [{ sourceEntryId: id, sourceKind: "assistant", projectionId: id, type: "assistant_update", createdAt: at, sanitizedBody: text }] : [];
+}
+
+/** Extract at most one clipped card for the bounded live relay. */
+export function extractAssistantFeedItems(
+  message: unknown,
+  sourceId?: unknown,
+  createdAt?: unknown,
+): ProjectGlanceFeedItem[] {
+  return extractAssistantArchiveItems(message, sourceId, createdAt).flatMap((item) => {
+    const text = projectFeedText(item.sanitizedBody, MAX_ITEM_TEXT_BYTES);
+    return text ? [{ id: item.projectionId, type: "assistant_update" as const, text, createdAt: item.createdAt }] : [];
+  });
 }
 
 export function extractAssistantEntryItems(entry: unknown): ProjectGlanceFeedItem[] {
   const candidate = record(entry);
   return candidate?.type === "message"
     ? extractAssistantFeedItems(candidate.message, candidate.id, candidate.timestamp)
+    : [];
+}
+
+export function extractAssistantEntryArchiveItems(entry: unknown): EligibleArchiveItem[] {
+  const candidate = record(entry);
+  return candidate?.type === "message"
+    ? extractAssistantArchiveItems(candidate.message, candidate.id, candidate.timestamp)
     : [];
 }
 
@@ -150,21 +178,35 @@ export function parseWorkplanActivity(value: unknown): ProjectGlanceWorkplanActi
   return parseActivity(value);
 }
 
-export function extractWorkplanEntryItem(entry: unknown): ProjectGlanceFeedItem | undefined {
+export function extractWorkplanEntryArchiveItem(entry: unknown): EligibleArchiveItem | undefined {
   const candidate = record(entry);
   const message = record(candidate?.message);
   const details = record(message?.details);
   if (candidate?.type !== "message" || message?.role !== "toolResult" || message.toolName !== "workplan") return undefined;
+  const sourceEntryId = safeIdentifier(candidate.id);
   const activity = parseActivity(details?.activity);
-  if (!activity) return undefined;
+  if (!sourceEntryId || !activity) return undefined;
   const prefix = activity.type === "checkpoint_recorded"
     ? "Checkpoint"
     : activity.type === "milestone_completed" ? "Milestone completed" : "Plan completed";
   const body = activity.type === "checkpoint_recorded"
     ? [activity.summary, activity.currentFocus, ...(activity.nextActions ?? [])].filter(Boolean).join(" — ")
     : activity.title;
-  const text = projectDisplayText(body ? `${prefix}: ${body}` : undefined, MAX_ITEM_TEXT_BYTES);
-  return text ? { id: activity.id, type: activity.type === "checkpoint_recorded" ? "checkpoint" : activity.type, text, createdAt: activity.at } : undefined;
+  const sanitizedBody = sanitizeArchiveText(body ? `${prefix}: ${body}` : undefined);
+  const type: DurableItemType = activity.type === "checkpoint_recorded" ? "checkpoint" : activity.type;
+  return sanitizedBody ? { sourceEntryId, sourceKind: "workplan", projectionId: activity.id, type, createdAt: activity.at, sanitizedBody } : undefined;
+}
+
+export function extractWorkplanEntryItem(entry: unknown): ProjectGlanceFeedItem | undefined {
+  const archive = extractWorkplanEntryArchiveItem(entry);
+  if (!archive) return undefined;
+  const text = projectDisplayText(archive.sanitizedBody, MAX_ITEM_TEXT_BYTES);
+  return text ? { id: archive.projectionId, type: archive.type, text, createdAt: archive.createdAt } : undefined;
+}
+
+export function extractArchiveItems(entry: unknown): EligibleArchiveItem[] {
+  const workplan = extractWorkplanEntryArchiveItem(entry);
+  return workplan ? [workplan] : extractAssistantEntryArchiveItems(entry);
 }
 
 export function boundRecentFeed(items: readonly ProjectGlanceFeedItem[], maximum = MAX_FEED_ITEMS): ProjectGlanceFeedItem[] {

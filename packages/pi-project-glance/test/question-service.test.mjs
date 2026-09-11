@@ -114,17 +114,18 @@ test("facade cancellation replays identical correlation at original receipt revi
   h.bus.emit(REQUEST_EVENT, { ...cancel, reason: "Changed" }); assert.equal(h.bus.responses.at(-1).error.code, "ASK_USER_CORRELATION_CONFLICT");
 });
 
-test("UI cancel and expiry persist, remove pending, and cancellation uses only safe idle outbox", (t) => {
+test("UI dismissal is durable, revision-checked, and uses only the safe-idle outbox", (t) => {
   const h = harness(t);
   const { result } = h.ask();
-  assert.equal(h.service.applyAction({ type: "question_cancel", questionId: result.questionId, expectedRevision: 99 }, "cancel-wrong"), false);
-  assert.equal(h.service.applyAction({ type: "question_cancel", questionId: result.questionId, expectedRevision: 1 }, "cancel-ui"), true);
+  assert.equal(h.service.applyAction({ type: "question_dismiss", questionId: result.questionId, expectedRevision: 99 }, "dismiss-wrong"), false);
+  assert.equal(h.service.applyAction({ type: "question_dismiss", questionId: result.questionId, expectedRevision: 1 }, "dismiss-ui"), true);
   assert.equal(h.service.pendingCount, 0); assert.equal(h.sends, 0);
-  h.idle = true; h.service.sync(); assert.equal(h.sends, 1); assert.match(h.messages()[0].content, /cancelled_by_user/u);
-  h.ask({ expiresAt: new Date(h.now + 1000).toISOString() });
-  h.now += 2000; h.service.sync(); assert.equal(h.service.pendingCount, 0);
-  assert.equal(h.entries().at(-1).data.kind, "EXPIRE");
-  assert.equal(h.ask({ expiresAt: new Date(h.now - 1).toISOString() }).result.state, "rejected");
+  assert.equal(h.entries().at(-1).data.kind, "DISMISS");
+  h.idle = true; h.service.sync();
+  assert.equal(h.sends, 1);
+  assert.match(h.messages()[0].content, /dismissed unanswered by user/u);
+  assert.doesNotMatch(h.messages()[0].content, /expired unanswered/u);
+  assert.equal(h.ask({ expiresAt: new Date(h.now + 1000).toISOString() }).result.state, "rejected");
 });
 
 test("four unresolved maximum and metadata/normalization overflow is rejected, never truncated", (t) => {
@@ -274,10 +275,10 @@ test("question and answer text are display-safe without clipping deliberate path
   assert.equal(h.service.questions[0].answer.text, "Use /tmp/synthetic\nkeep this line\tand tab");
 });
 
-test("queued UI cancellation notice retains one outbox slot so failure cannot exceed four cards", (t) => {
+test("queued UI dismissal notice retains one outbox slot so failure cannot exceed four cards", (t) => {
   const h = harness(t);
   const { result } = h.ask();
-  assert.equal(h.service.applyAction({ type: "question_cancel", questionId: result.questionId, expectedRevision: 1 }, "cancel-capacity"), true);
+  assert.equal(h.service.applyAction({ type: "question_dismiss", questionId: result.questionId, expectedRevision: 1 }, "dismiss-capacity"), true);
   for (let i = 0; i < 3; i++) assert.equal(h.ask().result.state, "queued");
   assert.equal(h.ask().result.state, "rejected");
   h.sendMode = "throw"; h.idle = true; h.service.sync();

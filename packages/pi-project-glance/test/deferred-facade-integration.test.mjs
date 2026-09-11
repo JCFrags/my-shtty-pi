@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -49,7 +49,10 @@ async function waitFor(predicate, label = "bounded integration condition") {
 async function harness(t) {
   const directory = mkdtempSync(join(tmpdir(), "glance-facade-integration-"));
   const priorRuntimeDir = process.env.XDG_RUNTIME_DIR;
+  const priorStateHome = process.env.XDG_STATE_HOME;
   process.env.XDG_RUNTIME_DIR = directory;
+  process.env.XDG_STATE_HOME = join(directory, "state");
+  mkdirSync(process.env.XDG_STATE_HOME, { recursive: true });
   const h = { directory, sm: SessionManager.create(directory, directory), idle: false, sends: [], sendPromises: [], clients: [], notices: [], pi: undefined };
   h.sm.appendMessage(assistant()); // Flush the real synthetic session before asking.
   h.rootLeaf = h.sm.getLeafId();
@@ -113,6 +116,7 @@ async function harness(t) {
       await Promise.all(h.sendPromises);
     } finally {
       if (priorRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR; else process.env.XDG_RUNTIME_DIR = priorRuntimeDir;
+      if (priorStateHome === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = priorStateHome;
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -246,7 +250,7 @@ test("actual relay rejects stale revision/wrong branch envelopes; facade cancel 
   h.sm.branch(h.rootLeaf);
   h.sm.appendCustomEntry("synthetic-other-branch", { marker: "No authority for sibling answers" });
   await h.pi.lifecycle("session_tree");
-  await waitFor(() => beforeBranch.snapshot.branchId !== oldSnapshot.branchId, "new branch snapshot");
+  await waitFor(() => beforeBranch.snapshot.revision !== oldSnapshot.revision && !(beforeBranch.snapshot.questions ?? []).some((q) => q.id === orphan.details.questionId), "new branch snapshot");
   assert.equal(beforeBranch.snapshot.questions?.length ?? 0, 0);
   const branchPeer = await rawPeer(t, h.descriptorPath());
   const orphanAction = { type: "question_answer", questionId: orphan.details.questionId, expectedRevision: 1, answer: { optionIds: ["a"] } };
@@ -263,8 +267,9 @@ test("actual enabled registration advertises narrow facade schema and preserves 
   assert.deepEqual(deferredSchema.properties.class.enum, ["preference", "information", "reversible"]);
   assert.deepEqual(deferredSchema.properties.deliveryMode.enum, ["nextTurn"]);
   assert.deepEqual(deferredSchema.properties.escalationPolicy.enum, ["never"]);
+  assert.equal(deferredSchema.properties.expiresAt, undefined);
   assert.doesNotMatch(tool.description, /Signals/u);
-  for (const patch of [{ class: "authorization" }, { deliveryMode: "steer" }, { deliveryMode: "followUp" }, { escalationPolicy: "when_agent_settles" }]) {
+  for (const patch of [{ class: "authorization" }, { deliveryMode: "steer" }, { deliveryMode: "followUp" }, { escalationPolicy: "when_agent_settles" }, { expiresAt: new Date(Date.now() + 60_000).toISOString() }]) {
     await assert.rejects(h.execute({ ...ask(), ...patch }, "invalid-public-input"), /ASK_USER_INVALID_REQUEST/);
   }
   assert.equal(h.pi.events.requests.length, 0);

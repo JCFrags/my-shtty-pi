@@ -97,7 +97,6 @@ const deferredAsk = Type.Object({
   affectedWork: Type.Optional(workItems),
   continuingWork: Type.Optional(workItems),
   attachments: Type.Optional(Type.Array(attachment, { maxItems: 10 })),
-  expiresAt: Type.Optional(Type.String({ minLength: 1, maxLength: 64, format: "date-time" })),
 }, { additionalProperties: false });
 
 const deferredCancel = Type.Object({
@@ -154,6 +153,9 @@ export function registerAskUserFacadeV1(pi: ExtensionAPI): void {
         throw providerError({ code: "ASK_USER_INVALID_REQUEST", message: "Deferred questions cannot request authorization. Use ask_user with mode=blocking for authorization; do not assume approval.", retryable: false });
       }
       if (input.mode === "deferred" && input.operation === "ask") {
+        if ("expiresAt" in input) {
+          throw providerError({ code: "ASK_USER_INVALID_REQUEST", message: "Deferred questions do not support wall-clock expiry. Pending questions expire only after observed continued work.", retryable: false });
+        }
         if (input.deliveryMode !== undefined && (input.deliveryMode as string) !== "nextTurn") {
           throw providerError({ code: "ASK_USER_INVALID_REQUEST", message: "Deferred ask_user does not support steering or automatic follow-up delivery. Omit deliveryMode or use nextTurn; answers are delivered at safe idle for the next natural turn.", retryable: false });
         }
@@ -254,7 +256,6 @@ function buildProviderRequest(input: AskUserToolInputV1, correlationId: string, 
     affectedWork: input.affectedWork ?? [],
     continuingWork: input.continuingWork ?? [],
     attachments: input.attachments ?? [],
-    ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
     ...(signal === undefined ? {} : { signal }),
   };
   if (!isDeferredProviderRequestV1(request)) throw invalidInput();

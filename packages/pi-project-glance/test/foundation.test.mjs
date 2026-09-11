@@ -86,7 +86,7 @@ const FIXTURE_NOW = "2026-09-02T00:00:00.000Z";
 
 async function withTemporaryRuntime(callback) {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-test-"));
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   let relay;
   try {
     relay = await startStaticFixtureRelay(environment, FIXTURE_NOW);
@@ -156,7 +156,7 @@ async function waitForUnauthorizedResponse(descriptor) {
 
 async function withFakeRelay(callback) {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-fake-"));
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   const sessionKey = deriveSessionKey("fake-project-glance-relay");
   const paths = runtimePathsForSession(sessionKey, environment);
   await ensurePrivateDirectory(paths.runtimeDirectory);
@@ -504,7 +504,7 @@ test("Pi extension boundary registers one command, public provider and lifecycle
   };
   await extension(pi);
   assert.deepEqual(commands.map((entry) => entry.name), ["project-glance"]);
-  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "message_end", "tool_execution_start", "turn_end", "agent_end", "agent_settled", "session_shutdown"]);
+  assert.deepEqual(events.map((entry) => entry.name), ["session_start", "session_tree", "message_end", "agent_start", "ui_prompt_start", "ui_prompt_end", "tool_execution_end", "tool_execution_start", "turn_end", "agent_end", "agent_settled", "session_shutdown"]);
   assert.deepEqual(publicEvents, ["pi-ask-user:deferred-request-v1"]);
   assert.equal("registerTool" in pi, false);
   assert.equal("registerWidget" in pi, false);
@@ -816,7 +816,7 @@ test("descriptor and runtime files reject unsafe modes and symlinks without chan
 
 test("fixture restart is serialized and restores the old descriptor on replacement failure", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-restart-"));
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   let relay;
   let failOnce = true;
   try {

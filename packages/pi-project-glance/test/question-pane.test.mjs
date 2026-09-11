@@ -150,15 +150,15 @@ test("Escape exits editing then focus before quit; Tab returns to questions", (t
   assert.deepEqual(h.actions, []);
 });
 
-test("resized/scrolled full SGR Cancel and Retry remain isolated from feed", async (t) => {
+test("resized/scrolled full SGR Dismiss and Retry delivery remain isolated from feed", async (t) => {
   const h = harness(t);
   h.clickQuestion("Alpha");
   h.resize(20, 18);
-  h.clickQuestion("[Cancel]"); await tick(); h.tui.renderNow();
-  assert.equal(h.actions[0].type, "question_cancel");
+  h.clickQuestion("[Dismiss witho"); await tick(); h.tui.renderNow();
+  assert.equal(h.actions[0].type, "question_dismiss");
   h.model.applySnapshot(snapshot({ revision: 2, questions: [question({ revision: 2, state: "delivery_failed", answer: { optionIds: ["alpha"] }, failure: "Synthetic delivery failure" })] }), { sessionKey, generation });
   h.view.invalidate(); h.resize(50, 30);
-  h.clickQuestion("[Retry]"); await tick(); h.tui.renderNow();
+  h.clickQuestion("[Retry delivery]"); await tick(); h.tui.renderNow();
   assert.equal(h.actions[1].type, "question_retry");
   assert.equal(h.actions[1].expectedRevision, 2);
   assert.deepEqual(h.feedHits, []);

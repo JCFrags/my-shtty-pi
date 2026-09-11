@@ -20,7 +20,7 @@ import {
   type ProjectGlanceServerFrame,
   type ProjectGlanceSnapshot,
 } from "./model.js";
-import { validateQuestionAction, validateQuestions } from "./question-validation.js";
+import { validateQuestionAction, validateQuestions, validateQuestionAttention } from "./question-validation.js";
 import { assertSnapshotFrameBudget } from "./framing.js";
 import { projectFeedText, validateProjectionText } from "./projection-text.js";
 
@@ -87,6 +87,33 @@ function optionalDisplayText(
   } catch {
     return undefined;
   }
+}
+
+function nonnegativeInteger(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) throw new ProjectGlanceValidationError();
+  return Number(value);
+}
+
+function historyView(value: unknown): "inbox" | "history" {
+  if (value !== "inbox" && value !== "history") throw new ProjectGlanceValidationError();
+  return value;
+}
+
+function bodyText(value: unknown, maximum: number): string {
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maximum ||
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]|[\uD800-\uDFFF]/u.test(value)) throw new ProjectGlanceValidationError();
+  return value;
+}
+
+function validateArchive(value: unknown): NonNullable<ProjectGlanceSnapshot["archive"]> {
+  const source = sourceRecord(value);
+  exactKeys(source, ["inboxCount", "historyCount", "commitSeq", "state"], ["errorCode"]);
+  if (!["ready", "importing", "error"].includes(String(source.state))) throw new ProjectGlanceValidationError();
+  const errorCode = source.errorCode === undefined ? undefined : boundedText(source.errorCode, 96);
+  if (errorCode !== undefined && !/^[a-z0-9_-]+$/u.test(errorCode)) throw new ProjectGlanceValidationError();
+  return { inboxCount: nonnegativeInteger(source.inboxCount), historyCount: nonnegativeInteger(source.historyCount),
+    commitSeq: nonnegativeInteger(source.commitSeq), state: source.state as "ready" | "importing" | "error",
+    ...(errorCode === undefined ? {} : { errorCode }) };
 }
 
 function boundedInteger(value: unknown, max: number): number {
@@ -168,7 +195,7 @@ function validateItem(value: unknown): ProjectGlanceFeedItem {
 
 export function validateSnapshot(value: unknown): ProjectGlanceSnapshot {
   const source = sourceRecord(value);
-  exactKeys(source, ["protocolVersion", "sessionKey", "revision", "generatedAt", "current", "feed"], ["branchId", "uiState", "focusSerial", "questions"]);
+  exactKeys(source, ["protocolVersion", "sessionKey", "revision", "generatedAt", "current", "feed"], ["branchId", "uiState", "focusSerial", "questions", "questionAttention", "archive"]);
   if (source.protocolVersion !== PROJECT_GLANCE_PROTOCOL_VERSION) {
     throw new ProjectGlanceValidationError();
   }
@@ -190,6 +217,8 @@ export function validateSnapshot(value: unknown): ProjectGlanceSnapshot {
     ...(branchId ? { branchId } : {}), current: validateCurrent(source.current), feed, ...(uiState ? { uiState } : {}),
     ...(source.focusSerial === undefined ? {} : { focusSerial: boundedInteger(source.focusSerial, Number.MAX_SAFE_INTEGER) }),
     ...(source.questions === undefined ? {} : { questions: validateQuestions(source.questions) }),
+    ...(source.questionAttention === undefined ? {} : { questionAttention: validateQuestionAttention(source.questionAttention) }),
+    ...(source.archive === undefined ? {} : { archive: validateArchive(source.archive) }),
   };
   const payloadBytes = Buffer.byteLength(JSON.stringify(snapshot), "utf8");
   if (payloadBytes > MAX_SNAPSHOT_BYTES) {
@@ -260,6 +289,18 @@ export function validateClientFrame(value: unknown): ProjectGlanceClientFrame {
       type,
       requestId: validateRequestId(source.requestId),
     };
+  }
+  if (type === "page_request" || type === "body_request" || type === "question_editing") {
+    const base = ["version", "type", "requestId", "sessionKey", "generation", "branchId"];
+    exactKeys(source, [...base, ...(type === "page_request" ? ["view"] : type === "body_request" ? ["itemId", "offset"] : ["questionId", "revision", "active"])], type === "page_request" ? ["cursor"] : []);
+    const identity = { version: PROJECT_GLANCE_PROTOCOL_VERSION, requestId: validateRequestId(source.requestId),
+      sessionKey: validateSessionKey(source.sessionKey), generation: validateGeneration(source.generation),
+      branchId: boundedText(source.branchId, MAX_ITEM_ID_BYTES) };
+    if (type === "page_request") return { ...identity, type, view: historyView(source.view),
+      ...(source.cursor === undefined ? {} : { cursor: boundedText(source.cursor, 512) }) };
+    if (type === "body_request") return { ...identity, type, itemId: boundedText(source.itemId, MAX_ITEM_ID_BYTES), offset: nonnegativeInteger(source.offset) };
+    if (typeof source.active !== "boolean") throw new ProjectGlanceValidationError();
+    return { ...identity, type, questionId: boundedText(source.questionId, MAX_ITEM_ID_BYTES), revision: boundedInteger(source.revision, Number.MAX_SAFE_INTEGER), active: source.active };
   }
   if (type === "action") {
     exactKeys(source, [
@@ -373,6 +414,39 @@ export function validateServerFrame(value: unknown): ProjectGlanceServerFrame {
       ...(requestId === undefined ? {} : { requestId }),
       snapshot: validateSnapshot(source.snapshot),
     };
+  }
+  if (type === "page") {
+    exactKeys(source, ["version", "type", "requestId", "branchId", "view", "snapshotSeq", "items"], ["nextCursor", "previousCursor"]);
+    if (!Array.isArray(source.items) || source.items.length > 25) throw new ProjectGlanceValidationError();
+    const ids = new Set<string>();
+    const items = source.items.map((value) => {
+      const item = sourceRecord(value);
+      exactKeys(item, ["itemId", "type", "preview", "createdAt", "bodyBytes"], ["archivedAt"]);
+      const itemId = boundedText(item.itemId, MAX_ITEM_ID_BYTES);
+      if (ids.has(itemId) || !(PROJECT_GLANCE_ITEM_TYPES as readonly unknown[]).includes(item.type)) throw new ProjectGlanceValidationError();
+      ids.add(itemId);
+      return { itemId, type: item.type as ProjectGlanceFeedItem["type"], preview: bodyText(item.preview, 1024),
+        createdAt: validateTimestamp(item.createdAt), bodyBytes: nonnegativeInteger(item.bodyBytes),
+        ...(item.archivedAt === undefined ? {} : { archivedAt: validateTimestamp(item.archivedAt) }) };
+    });
+    return { version: PROJECT_GLANCE_PROTOCOL_VERSION, type, requestId: validateRequestId(source.requestId),
+      branchId: boundedText(source.branchId, MAX_ITEM_ID_BYTES), view: historyView(source.view), snapshotSeq: nonnegativeInteger(source.snapshotSeq), items,
+      ...(source.nextCursor === undefined ? {} : { nextCursor: boundedText(source.nextCursor, 512) }),
+      ...(source.previousCursor === undefined ? {} : { previousCursor: boundedText(source.previousCursor, 512) }) };
+  }
+  if (type === "body") {
+    exactKeys(source, ["version", "type", "requestId", "branchId", "itemId", "offset", "text", "totalBytes", "bodyDigest"], ["nextOffset", "previousOffset"]);
+    const offset = nonnegativeInteger(source.offset), totalBytes = nonnegativeInteger(source.totalBytes);
+    const text = bodyText(source.text, 24 * 1024), end = offset + Buffer.byteLength(text, "utf8");
+    const nextOffset = source.nextOffset === undefined ? undefined : nonnegativeInteger(source.nextOffset);
+    const previousOffset = source.previousOffset === undefined ? undefined : nonnegativeInteger(source.previousOffset);
+    if (previousOffset !== undefined && previousOffset >= offset) throw new ProjectGlanceValidationError();
+    const bodyDigest = boundedText(source.bodyDigest, 64);
+    if (!/^[a-f0-9]{64}$/u.test(bodyDigest) || end > totalBytes ||
+        (nextOffset === undefined ? end !== totalBytes : nextOffset !== end || end >= totalBytes || end <= offset)) throw new ProjectGlanceValidationError();
+    return { version: PROJECT_GLANCE_PROTOCOL_VERSION, type, requestId: validateRequestId(source.requestId),
+      branchId: boundedText(source.branchId, MAX_ITEM_ID_BYTES), itemId: boundedText(source.itemId, MAX_ITEM_ID_BYTES),
+      offset, text, totalBytes, bodyDigest, ...(nextOffset === undefined ? {} : { nextOffset }), ...(previousOffset === undefined ? {} : { previousOffset }) };
   }
   if (type === "pong") {
     exactKeys(source, ["version", "type", "requestId"]);

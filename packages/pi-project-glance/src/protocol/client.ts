@@ -1,4 +1,5 @@
 import type { ProjectGlanceQuestionAction } from "../questions/model.js";
+import type { PageResult, BodyResult, HistoryView } from "../history/contracts.js";
 import { validateQuestionAction } from "./question-validation.js";
 import { randomUUID } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
@@ -70,6 +71,53 @@ export class ProjectGlanceClient {
   #latestSnapshot: ProjectGlanceSnapshot | undefined;
   #actionNeedsSnapshot = false;
   #sentBaseRevision = 0;
+  #reads = new Map<string, { type: "page" | "body"; branchId: string; view?: HistoryView; itemId?: string; offset?: number; resolve(value: PageResult | BodyResult): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+
+  requestPage(branchId: string, view: HistoryView, cursor?: string): Promise<PageResult> {
+    return this.#requestRead(branchId, { type: "page_request", view, ...(cursor === undefined ? {} : { cursor }) }) as Promise<PageResult>;
+  }
+
+  requestBody(branchId: string, itemId: string, offset = 0): Promise<BodyResult> {
+    return this.#requestRead(branchId, { type: "body_request", itemId, offset }) as Promise<BodyResult>;
+  }
+
+  #requestRead(branchId: string, request: { type: "page_request"; view: HistoryView; cursor?: string } | { type: "body_request"; itemId: string; offset: number }): Promise<PageResult | BodyResult> {
+    const socket = this.#socket, descriptor = this.#descriptor;
+    if (!socket?.writable || !descriptor || !this.#authenticated || branchId !== this.#latestSnapshot?.branchId || this.#reads.size >= 4) return Promise.reject(new Error("History is unavailable. Retry after reconnecting."));
+    const requestId = this.#nextRequestId();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#reads.delete(requestId);
+        reject(new Error("History request timed out. No stored update was removed."));
+      }, 10_000);
+      timer.unref?.();
+      this.#reads.set(requestId, { type: request.type === "page_request" ? "page" : "body", branchId,
+        ...(request.type === "page_request" ? { view: request.view } : { itemId: request.itemId, offset: request.offset }), resolve, reject, timer });
+      try { socket.write(encodeFrame({ ...request, version: PROJECT_GLANCE_PROTOCOL_VERSION, requestId, sessionKey: descriptor.sessionKey, generation: descriptor.generation, branchId })); }
+      catch { clearTimeout(timer); this.#reads.delete(requestId); reject(new Error("History request could not be sent.")); }
+    });
+  }
+
+  setQuestionEditing(branchId: string, questionId: string, revision: number, active: boolean): boolean {
+    const socket = this.#socket, descriptor = this.#descriptor;
+    if (!socket?.writable || !descriptor || !this.#authenticated || branchId !== this.#latestSnapshot?.branchId) return false;
+    try { socket.write(encodeFrame({ version: PROJECT_GLANCE_PROTOCOL_VERSION, type: "question_editing", requestId: this.#nextRequestId(), sessionKey: descriptor.sessionKey, generation: descriptor.generation, branchId, questionId, revision, active })); return true; }
+    catch { return false; }
+  }
+
+  sendFeedAction(branchId: string, baseRevision: number, action: { type: "dismiss"; itemId: string }): Promise<void> {
+    const socket = this.#socket, descriptor = this.#descriptor, snapshot = this.#latestSnapshot;
+    if (!socket?.writable || !descriptor || !this.#authenticated || !snapshot || this.#pendingActions.size || this.#actionNeedsSnapshot) return Promise.reject(new Error("An update is in progress. Retry after it completes."));
+    if (branchId !== snapshot.branchId || baseRevision !== snapshot.revision) return Promise.reject(new Error("Inbox changed. Review it and retry."));
+    const requestId = this.#nextRequestId(), actionId = `action-${randomUUID()}`;
+    this.#pendingActions.set(requestId, actionId); this.#sentBaseRevision = baseRevision;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => this.#dropConnection(socket, this.#activeConnectionId), 10_000); timer.unref?.();
+      this.#questionReceipts.set(requestId, { resolve, reject, timer });
+      try { socket.write(encodeFrame({ version: PROJECT_GLANCE_PROTOCOL_VERSION, type: "action", requestId, actionId, sessionKey: descriptor.sessionKey, generation: descriptor.generation, branchId, baseRevision, action })); }
+      catch { this.#pendingActions.delete(requestId); this.#finishQuestion(requestId, new Error("Archive action failed. Review the restored inbox before retrying.")); }
+    });
+  }
 
   constructor(options: ProjectGlanceClientOptions) {
     this.#descriptorPath = options.descriptorPath;
@@ -113,7 +161,9 @@ export class ProjectGlanceClient {
     const snapshot = this.#latestSnapshot;
     if (!socket?.writable || !this.#authenticated || !descriptor || !snapshot) return Promise.reject(new Error("Disconnected. Reconnect before submitting."));
     if (this.#pendingActions.size || this.#actionNeedsSnapshot) return Promise.reject(new Error("An update is in progress. Retry after it completes."));
-    if (branchId !== snapshot.branchId || baseRevision !== snapshot.revision || !snapshot.questions?.some((question) => question.id === action.questionId && question.revision === action.expectedRevision)) return Promise.reject(new Error("Question changed. Review the current question and retry."));
+    const visible = snapshot.questions?.some((question) => question.id === action.questionId && question.revision === action.expectedRevision);
+    const hiddenRetry = action.type === "question_retry" && snapshot.questionAttention?.some((entry) => entry.questionId === action.questionId && entry.revision === action.expectedRevision && entry.retryAvailable);
+    if (branchId !== snapshot.branchId || baseRevision !== snapshot.revision || (!visible && !hiddenRetry)) return Promise.reject(new Error("Question changed. Review the current question and retry."));
     let checked: ProjectGlanceQuestionAction;
     try { checked = validateQuestionAction(action); } catch { return Promise.reject(new Error("Invalid or oversized answer.")); }
     const requestId = this.#nextRequestId();
@@ -287,6 +337,11 @@ export class ProjectGlanceClient {
   ): void {
     if (!this.#isCurrent(socket, connectionId)) return;
     if (frame.type === "error") {
+      const read = frame.requestId ? this.#reads.get(frame.requestId) : undefined;
+      if (read && frame.requestId) {
+        clearTimeout(read.timer); this.#reads.delete(frame.requestId);
+        read.reject(new Error("History request failed. Stored updates were not removed.")); return;
+      }
       if (frame.requestId && this.#pendingActions.has(frame.requestId)) {
         this.#pendingActions.delete(frame.requestId);
         this.#finishQuestion(frame.requestId, new Error(frame.code === "stale_action" ? "Question changed. Review it and retry." : "Submission was not accepted. Review the question and retry."));
@@ -321,6 +376,17 @@ export class ProjectGlanceClient {
     if (!this.#authenticated || !this.#helloCompleted) {
       fail("frame");
       return;
+    }
+    if (frame.type === "page" || frame.type === "body") {
+      const pending = this.#reads.get(frame.requestId);
+      if (!pending) return; // A timed-out read is never replayed as an action.
+      clearTimeout(pending.timer); this.#reads.delete(frame.requestId);
+      if (pending.type !== frame.type || pending.branchId !== frame.branchId || frame.branchId !== this.#latestSnapshot?.branchId ||
+          (frame.type === "page" && pending.view !== frame.view) ||
+          (frame.type === "body" && (pending.itemId !== frame.itemId || pending.offset !== frame.offset))) {
+        pending.reject(new Error("History view changed. Reload its page.")); return;
+      }
+      pending.resolve(frame); return;
     }
     if (frame.type === "snapshot") {
       if (frame.snapshot.sessionKey !== descriptor.sessionKey) {
@@ -426,6 +492,8 @@ export class ProjectGlanceClient {
     this.#snapshotNotificationPending = false;
     for (const requestId of this.#questionReceipts.keys()) this.#finishQuestion(requestId, new Error("Connection changed. Review the restored question before retrying."));
     this.#pendingActions.clear();
+    for (const read of this.#reads.values()) { clearTimeout(read.timer); read.reject(new Error("Connection changed. Reload the history page.")); }
+    this.#reads.clear();
     this.#actionQueue = [];
     this.#latestSnapshot = undefined;
     this.#actionNeedsSnapshot = false;
