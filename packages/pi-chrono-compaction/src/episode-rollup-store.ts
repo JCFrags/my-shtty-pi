@@ -20,7 +20,7 @@ import {
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
 
 export const EPISODE_ROLLUP_SCHEMA_VERSION = 1 as const;
-export const EPISODE_ROLLUP_RULESET_VERSION = "episode-rollup-exact-v2" as const;
+export const EPISODE_ROLLUP_RULESET_VERSION = "episode-rollup-exact-v3" as const;
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
 const num = (row: SqlRow, key: string): number => Number(row[key]);
@@ -449,7 +449,7 @@ export async function executeEpisodeRollupRequest(request: Extract<EpisodeStateR
     budget.bytes += catalog.sourceBytes;
     if (!catalog.ok) fail(catalog.code === "catalog-source-changed" ? "search-v3-rollup-source-changed" : "search-v3-rollup-catalog-unavailable");
     const action = async (): Promise<EpisodeStateResponse> => {
-      const path = join(request.searchDirectory, "rollup-v2.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
+      const path = join(request.searchDirectory, "rollup-v3.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
       if (request.op === "rollupStatus") {
         try { lstatSync(path); } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("search-v3-rollup-store-missing");

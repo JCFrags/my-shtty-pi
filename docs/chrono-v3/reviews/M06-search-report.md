@@ -547,3 +547,62 @@ Whole paragraphs and individual obligations remain protected. The same v3
 memory derivation remains compatible; no second memory rebuild is needed.
 Earlier artifacts remain preserved. This correction receives routine CI, not
 additional local tests. The frozen installation remains unchanged.
+
+### M09 guarded fresh-session candidate (2.0.19)
+
+The directing assistant accepted the 2.0.18 corrections and CI for continued
+work. The shared installed selection remains 2.0.15. Only one isolated fresh
+session is authorized for guarded composition. PR45/46 remain unmerged.
+
+An explicit `chrono-canary-session` flag binds the exact fresh physical session
+and source. The control defaults off, reads its value after CLI flag binding,
+and cannot carry across resume, fork, switch, or reload. It uses the existing
+host admission policy through a read-only readiness check. It does not initialize
+another pool. The normal hook checks mandatory coverage before obtaining the
+independent Pi summary. Relevant gaps, overflow, source changes, unsafe tails,
+and composition errors cancel replacement and preserve context. Safe refusal
+codes are visible in status. No summary-only fallback counts as activation.
+
+State schema/rules v4 processes oversized bodies through one existing M05 decoded
+chunk per checkpointed background step, with an 8,192-unit boundary overlap.
+The 32,768-unit whole-body threshold is unchanged. Source coordinates remain
+absolute, overlapping clauses are deduplicated before state transitions, and
+processing does not advance past an unfinished source. Verified catalog parser
+metadata can establish a missing structural role. Unknown roles remain gaps.
+
+Mandatory selection reads at most eight indexed pages of 32 rows per category,
+512 rows total. Work reads user evidence before assistant reports and incidental
+failures. The 16 restriction and eight work reservations apply to representations,
+not raw rows. Only exact same-source context with matching category, authority,
+and status consolidates. The private selection retains every covered proposition
+and its source coordinates. Selection-work exhaustion and response overflow have
+separate flags. The external worker bounds and 30,000-token ceiling are unchanged.
+State-v4 and dependent rollup-v3 namespaces preserve prior stores and identities.
+Only affected memory and rollup derivations recompute.
+
+The coverage worker used two focused invocations. The first exposed an unrelated
+restriction in the fixture assertion. The second exposed repeated paragraph
+payloads displacing work. The final correction consolidates exact representations.
+No third local invocation ran. Routine CI must qualify that final correction.
+The parent canary check passed. Its second invocation did not match the composed
+preview test name, so that invocation provides no additional preview evidence.
+The routine workflow explicitly selects the real preview test and canary binding
+alongside the two relevant coverage/publication scenarios. No broad local suite
+ran. Exact-head CI, actual canary continuation, and updated original-cut evidence
+are pending, not claimed by this implementation report.
+
+
+### Shared paragraph payload correction (2.0.20)
+
+Both 2.0.19 CI runs failed the producer fixture because open work was absent.
+The other three focused scenarios passed. Consolidation still copied each full
+expanded paragraph into every covered proposition. The response budget then
+removed work. Patch 2.0.20 retains one paragraph representation, identified by a
+SHA-256 key. Covered propositions retain their original exact clauses and source
+coordinates and refer to that representation. No proposition, condition or
+authority is removed. The original open-work assertion remains unchanged.
+Typecheck and diff validation passed. No additional local runtime invocation ran.
+The correction requires fresh routine CI. State-v4 and rollup-v3 derivation
+identities remain valid because this changes response packing, not stored state.
+The failed 2.0.19 evidence remains preserved. No canary or shared deployment has
+run, and the fixed installed selection remains 2.0.15.

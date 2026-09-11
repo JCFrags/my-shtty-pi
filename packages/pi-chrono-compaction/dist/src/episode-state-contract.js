@@ -2,8 +2,8 @@ import { isCapsuleCatalogView, isScopedBodySourceRef, sourceRefWithinViewBounds,
 import { isSearchV3Identity } from "./search-v3-contract.js";
 /** Pure M07 protocol. Importing this module performs no I/O and loads no worker. */
 export const EPISODE_STATE_PROTOCOL_VERSION = 1;
-export const EPISODE_STATE_SCHEMA_VERSION = 3;
-export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v3";
+export const EPISODE_STATE_SCHEMA_VERSION = 4;
+export const EPISODE_STATE_RULESET_VERSION = "episode-state-exact-v4";
 export const EPISODE_STATE_LIMITS = Object.freeze({
     requestBytes: 48 * 1024,
     responseBytes: 96 * 1024,
@@ -27,6 +27,11 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
     composeProtected: 24,
     composeRestrictions: 16,
     composeOpenWork: 8,
+    composeScanPage: 32,
+    composeScanPages: 8,
+    composeScannedPerCategory: 256,
+    largeBodyOverlapUnits: 8 * 1024,
+    contextSideUnits: 8 * 1024,
     composeState: 12,
     composeRecentMembers: 12,
     composeUtf8Bytes: 80 * 1024,
@@ -57,7 +62,7 @@ function rollupAfter(value) {
         && typeof value.queryHash === "string" && /^[a-f0-9]{64}$/u.test(value.queryHash);
 }
 function rollupHandle(value) {
-    return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v2"
+    return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v3"
         && typeof value.branchKey === "string" && value.branchKey.length > 0 && value.branchKey.length <= 256
         && integer(value.eventCut) && positive(value.stateGeneration) && positive(value.rollupGeneration)
         && typeof value.rootNodeId === "string" && /^[a-f0-9]{64}$/u.test(value.rootNodeId);

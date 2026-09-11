@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { CapsuleCatalogView, ScopedBodySourceRef, ScopedRawSourceRef } from "./capsule-contract.js";
 import { canonicalJson } from "./capsule-segment.js";
 import { composeStoredSelection } from "./context-composer.js";
-import type { EpisodeStateSelection, EpisodeStateSelectionItem } from "./episode-state-contract.js";
+import type { EpisodeStateSelection, EpisodeStateSelectionItem, EpisodeStateSelectionProposition } from "./episode-state-contract.js";
 import type { LogicalActivationBinding } from "./logical-session-routing.js";
 import { resolveLogicalShardRoutes } from "./logical-session-routing.js";
 import type { ContinuationCandidate } from "./logical-session-rollover.js";
@@ -47,7 +47,15 @@ export function replacementContainsOnlyContinuation(entries: readonly SessionEnt
   return continuationCount === 1 && recordedLogicalBinding(entries)?.continuationHash === binding.continuationHash;
 }
 
-const mandatory = (item: EpisodeStateSelectionItem): boolean => ["restriction", "openwork", "blocker", "goal"].includes(item.kind);
+const mandatory = (item: Pick<EpisodeStateSelectionItem, "kind">): boolean => ["restriction", "openwork", "blocker", "goal"].includes(item.kind);
+const coveredPropositions = (item: EpisodeStateSelectionItem): readonly (EpisodeStateSelectionItem | EpisodeStateSelectionProposition)[] => {
+  if (!item.coveredPropositions) return [item];
+  if (!item.representationKey || item.coveredPropositions.length < 1
+    || item.coveredPropositions.some(value => value.representationKey !== item.representationKey)) {
+    throw new Error("logical-session-continuation-evidence-invalid");
+  }
+  return [item, ...item.coveredPropositions];
+};
 
 /** Build continuation evidence from the exact pinned selection and rendered artifact. No caller supplies completeness flags or counts. */
 export function buildManualContinuationCandidate(input: {
@@ -63,7 +71,12 @@ export function buildManualContinuationCandidate(input: {
   const branch = input.manifest.branches.find(value => value.branchId === input.branchId);
   if (!branch) throw new Error("logical-session-branch-scope-mismatch");
   const shard = input.manifest.shards.find(value => value.shardId === branch.activeShardId);
-  if (!shard || input.selection.sourceView.eventCut !== input.selection.requestedCut || !input.regularPiSummary.trim()) {
+  if (!shard || input.selection.sourceView.eventCut !== input.selection.requestedCut || !input.regularPiSummary.trim()
+    || input.selection.coverage.restrictionsComplete !== true || input.selection.coverage.openWorkComplete !== true
+    || input.selection.coverage.restrictionsScanComplete !== true || input.selection.coverage.openWorkScanComplete !== true
+    || input.selection.omissions.protectedAtLeastOne || input.selection.omissions.openWorkAtLeastOne
+    || input.selection.omissions.restrictionWorkExhausted || input.selection.omissions.openWorkExhausted
+    || input.selection.omissions.renderedOverflowAtLeastOne || input.selection.omissions.responseBudgetAtLeastOne) {
     throw new Error("logical-session-continuation-evidence-invalid");
   }
   const composed = composeStoredSelection({ regularPiSummary: input.regularPiSummary, combinedCeilingTokens: input.combinedCeilingTokens,
@@ -74,10 +87,22 @@ export function buildManualContinuationCandidate(input: {
     .filter(value => value.section === "protected" || value.section === "open-work").map(value => value.row.id));
   const all = [...input.selection.protected, ...input.selection.current,
     ...(input.selection.delta?.protected ?? []), ...(input.selection.delta?.current ?? [])].filter(mandatory);
-  const unique = [...new Map(all.map(item => [item.stableKey, item])).values()];
-  const restrictions = unique.filter(item => item.kind === "restriction");
-  const openWork = unique.filter(item => item.kind !== "restriction");
-  const omittedMandatory = unique.filter(item => !selectedMandatory.has(item.stableKey)).map(item => item.stableKey);
+  const selectedRepresentations = new Set(all.filter(item => selectedMandatory.has(item.stableKey))
+    .flatMap(item => item.representationKey ? [item.representationKey] : []));
+  const propositionMap = new Map<string, { kind: EpisodeStateSelectionItem["kind"]; covered: boolean }>();
+  for (const item of all) {
+    const represented = selectedMandatory.has(item.stableKey)
+      || item.representationKey !== undefined && selectedRepresentations.has(item.representationKey);
+    for (const proposition of coveredPropositions(item).filter(mandatory)) {
+      const prior = propositionMap.get(proposition.stableKey);
+      if (prior && prior.kind !== proposition.kind) throw new Error("logical-session-continuation-evidence-invalid");
+      propositionMap.set(proposition.stableKey, { kind: proposition.kind, covered: represented || prior?.covered === true });
+    }
+  }
+  const propositions = [...propositionMap.entries()].map(([stableKey, value]) => ({ stableKey, ...value }));
+  const restrictions = propositions.filter(item => item.kind === "restriction");
+  const openWork = propositions.filter(item => item.kind !== "restriction");
+  const omittedMandatory = propositions.filter(item => !item.covered).map(item => item.stableKey);
   const source = { catalogStoreKey: input.selection.sourceView.storeKey,
     catalogGeneration: input.selection.sourceView.generation, sessionKey: input.selection.sourceView.sessionKey,
     branchKey: input.selection.sourceView.branchKey, eventCut: input.selection.requestedCut, entryId: input.sourceLeafEntryId };
@@ -90,7 +115,7 @@ export function buildManualContinuationCandidate(input: {
     composition: { schemaVersion: 1, payloadHash: composed.envelope.payloadHash,
       artifactHash: hash(canonicalJson(composed.artifact)), combinedTokens: composed.envelope.combinedTokens,
       combinedCeilingTokens: input.combinedCeilingTokens, validation: { ...composed.envelope.validation } },
-    mandatory: { protectedEligible: restrictions.length, protectedCovered: restrictions.filter(item => selectedMandatory.has(item.stableKey)).length,
-      openWorkEligible: openWork.length, openWorkCovered: openWork.filter(item => selectedMandatory.has(item.stableKey)).length,
+    mandatory: { protectedEligible: restrictions.length, protectedCovered: restrictions.filter(item => item.covered).length,
+      openWorkEligible: openWork.length, openWorkCovered: openWork.filter(item => item.covered).length,
       omittedMandatory } };
 }

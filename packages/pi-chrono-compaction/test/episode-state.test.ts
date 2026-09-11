@@ -262,8 +262,10 @@ test("M09 actual producer selection preserves obligations and successive experie
   const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
   const sourcePath = join(directory, "main.jsonl"), sessionKey = "composer-producer";
   mkdirSync(searchDirectory, { mode: 0o700 });
+  const packedRestrictions = Array.from({ length: 20 }, (_, index) =>
+    `If approval ${index} is pending, never deploy /Repo/Parser-${index}.ts unless the owner authorizes it.`).join("\n");
   const texts: [string, string][] = [
-    ["user", Array.from({ length: 40 }, (_, i) => `Background observation ${i}.`).join("\n") + "\n\nIf approval is pending,\nnever deploy /Repo/Parser.ts unless the owner authorizes it."],
+    ["user", Array.from({ length: 40 }, (_, i) => `Background observation ${i}.`).join("\n") + `\n\n${packedRestrictions}`],
     ["assistant", "Next action: verify /Repo/Parser.ts before deployment."],
     ["assistant", "Inspect the parser input and preserve the failed attempt."],
     ["toolResult", "Parser check failed with exit code 2."],
@@ -305,11 +307,23 @@ test("M09 actual producer selection preserves obligations and successive experie
     assert.ok(settled);
     const response = await run("composeStateSelection"); assert.equal(response.ok, true, JSON.stringify(response)); if (!response.ok) return;
     const selection = response.result as unknown as EpisodeStateSelection;
-    const restriction = selection.protected.find(item => item.kind === "restriction" && (item.evidence as any).exactText.includes("never deploy /Repo/Parser.ts"));
+    const restriction = selection.protected.find(item => item.kind === "restriction" && (item.evidence as any).exactText.includes("never deploy /Repo/Parser-0.ts"));
     assert.ok(restriction, "real producer restriction survives stored selection");
-    assert.ok((restriction.evidence as any).exactText.includes("If approval is pending,"));
+    assert.ok((restriction.evidence as any).exactText.includes("If approval 0 is pending,"));
     assert.ok((restriction.evidence as any).exactText.includes("unless the owner authorizes it."));
     assert.equal((restriction.evidence as any).contextComplete, true);
+    const packed = selection.protected.find(item => item.kind === "restriction"
+      && (item.evidence as any).exactText.includes("/Repo/Parser-"));
+    assert.equal(packed?.coveredPropositions?.length, 20,
+      "one exact paragraph representation retains all covered propositions and source coordinates");
+    assert.match(packed?.representationKey ?? "", /^[a-f0-9]{64}$/u);
+    assert.ok(packed?.coveredPropositions?.every(item => item.representationKey === packed.representationKey));
+    assert.ok(packed?.coveredPropositions?.every(item => {
+      const evidence = item.evidence as any;
+      return evidence.exactText.includes("/Repo/Parser-") && !evidence.contextComplete
+        && evidence.decodedUtf16.end - evidence.decodedUtf16.start === evidence.exactText.length
+        && evidence.source.coordinateKind === "decoded-body";
+    }), "packed proposition records keep original clauses and coordinates instead of repeating the shared paragraph");
     assert.equal(selection.omissions.protectedAtLeastOne, false);
     assert.equal(selection.omissions.openWorkAtLeastOne, true, "later failures overflow only their own category");
     assert.equal(restriction.authority, "user");
@@ -319,7 +333,7 @@ test("M09 actual producer selection preserves obligations and successive experie
     const result = composeStoredSelection({ regularPiSummary: "Parser work remains pending. Deployment requires approval.", combinedCeilingTokens: 30000,
       cut: { sourceCutEntryId: "e17", sourceCutSeq: view.eventCut, firstKeptEntryId: "tail", firstKeptSeq: view.eventCut + 1,
         rawTailTokens: 100, toolPairSafe: true } }, selection, source => `synthetic-source:${source.eventSeq}:${source.descriptor}`);
-    assert.ok(result.text.includes("never deploy /Repo/Parser.ts unless the owner authorizes it."), "nonempty zero-omission evidence is not discarded");
+    assert.ok(result.text.includes("never deploy /Repo/Parser-0.ts unless the owner authorizes it."), "nonempty zero-omission evidence is not discarded");
     assert.ok(result.text.includes("Next action:"), "pending work survives rendering");
     assert.equal(result.envelope.validation.protectedCoverageComplete, true, "actual producer qualifies this synthetic cut, not the live session");
     assert.equal(result.envelope.validation.openWorkCoverageComplete, false, "work overflow does not certify restrictions or work");
@@ -328,8 +342,9 @@ test("M09 actual producer selection preserves obligations and successive experie
     assert.ok(optional.every(item => !mandatoryKeys.has(item.row.recovery)), "optional detail does not repeat mandatory source events");
     assert.ok(result.envelope.combinedTokens <= 30000);
     assert.equal(result.envelope.combinedTokens, result.envelope.renderedTokens + 100, "tail is counted once");
-    // A later unprocessed/oversized user source must not contaminate this pin.
-    appendFileSync(sourcePath, message("e18", "e17", "user", "Never silently discard conditions. " + "z".repeat(32769)));
+    // A later oversized user source is processed from existing decoded chunks without changing the historical pin.
+    const oversizedRestriction = "If the release window is absent,\nnever activate /Repo/Oversized.ts unless the owner grants it.";
+    appendFileSync(sourcePath, message("e18", "e17", "user", "z".repeat(32760) + `\n\n${oversizedRestriction}`));
     await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
     const laterView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "e18" } })).view as CapsuleCatalogView;
     await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, laterView);
@@ -343,7 +358,12 @@ test("M09 actual producer selection preserves obligations and successive experie
     assert.ok(historical.ok && later.ok);
     if (historical.ok && later.ok) {
       assert.equal((historical.result as any).coverage.restrictionsComplete, true);
-      assert.equal((later.result as any).coverage.restrictionsComplete, false);
+      assert.equal((later.result as any).coverage.restrictionsComplete, true);
+      const oversized = (later.result as any).protected.find((item: any) => item.kind === "restriction"
+        && item.evidence.exactText.includes("never activate /Repo/Oversized.ts"));
+      assert.ok(oversized, "an oversized relevant source is resumed and selected");
+      assert.ok(oversized.evidence.exactText.includes("If the release window is absent,"));
+      assert.equal(oversized.evidence.contextComplete, true, "cross-chunk condition and exception retain exact coordinates");
       assert.equal((historical.result as any).stateGeneration, selection.stateGeneration);
     }
     const artifactDir = join(directory, "artifacts");
