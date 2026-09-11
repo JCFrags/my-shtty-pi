@@ -1,7 +1,7 @@
 # ADR-011 — Logical-session rollover integration with Pi
 
-Status: implemented in 2.0.22, with a Pi 0.85.1 compatibility correction in the 2.0.23 main-promotion candidate. Consolidated approval and deployment verification remain pending. Automatic rollover remains disabled.
-Scope: owner-only logical manifests, continuation validation, manual session replacement, recovery, rollback, and ancestor routing.
+Status: implemented through the post-2.0.23 M10 completion candidate. Consolidated approval and deployment verification remain pending. Automatic rollover remains disabled.
+Scope: owner-only logical manifests, existing-session adoption, continuation validation, manual session replacement, logical forks, recovery, rollback, threshold status, and ancestor routing.
 
 ## Context
 
@@ -31,13 +31,19 @@ The coordinator performs this recoverable sequence:
 7. In `withSession`, use only the replacement context, verify its identity, and publish the active rollover receipt.
 8. Reload the replacement through its supported command context, then return without using stale context. Startup can now bind the completed manifest and continuation. The provisional logical replacement must not schedule work or initialize admission before setup.
 
-A crash before binding leaves `close-prepared`; reopening the old session can remove that intent. If the continuation was appended before the failure, the replacement can finish binding only when its one recorded operation ID, continuation hash, summary hash, parent path, session ID, and source path match the pending manifest. A crash after binding leaves `new-shard-bound`; the replacement identity can finish activation. No step deletes or rewrites an old shard.
+A crash before binding leaves `close-prepared`; reopening the old session can remove that intent. An empty replacement that has only Pi bootstrap metadata can switch to the exact parent and remove the intent after the reopened identity matches. If the continuation was appended before the failure, the replacement can finish binding only when its one recorded operation ID, continuation hash, summary hash, parent path, session ID, and source path match the pending manifest. A crash after binding leaves `new-shard-bound`; the replacement identity can finish activation. No step deletes or rewrites an old shard.
 
-Exact rollback uses `switchSession(oldPath, { withSession })`, verifies the reopened Pi session ID and file, and changes the logical active pointer only after the supported switch succeeds. Rollback is allowed only while the replacement contains its injected continuation and no user work. The replacement shard remains closed and intact.
+Exact rollback uses `switchSession(oldPath, { withSession })`, verifies the reopened Pi session ID and file, and changes the logical active pointer only after the supported switch succeeds. Rollback is allowed only while the replacement contains its injected continuation and no user work. The replacement shard remains intact on an isolated rollback branch, so later continuation of the restored branch does not route through an unpinned abandoned shard.
+
+An existing persisted session can be adopted as shard 0. Adoption writes one non-model `chrono-logical-adoption` custom entry containing only the manifest, branch, and shard identifiers. Startup must match that marker to the exact manifest session ID and source path before it grants logical tools. Adoption does not grant the composer canary.
+
+A manual logical fork uses the same empty-session replacement and validated continuation path as rollover. The parent branch remains active. The child branch records the exact immutable parent catalog cut and owns a new shard at ordinal 0. Child routing includes ancestors only through that cut and excludes siblings. This deliberately does not use Pi's physical `/fork`, which copies the old physical branch and would duplicate ancestor source in the child shard.
 
 The manifest is schema-versioned, integrity-hashed, revision-checked, atomically replaced, and stored in owner-only directories and files. It contains private source routes and is never a public diagnostic payload.
 
-Search integration receives ordered `LogicalShardRoute` values from the logical core. Routes include only the selected branch and its ancestors through each fork point. `scheduleLogical(grant)` is available only after the active session ID, source path, continuation hash, and manifest active shard match. It reuses the existing per-shard lifecycle and contained stores for each immutable final cut. Search runs newest-to-oldest in pages of at most eight shard routes. Recall routes by its pinned view. Exact entry and range calls require an explicit shard ID when they target an ancestor. Logical pagination binds the cursor to the logical session, manifest revision and hash, branch, route index, and existing store cursor. Sibling branches and stale manifests refuse.
+Search integration receives ordered `LogicalShardRoute` values from the logical core. Routes include only the selected branch and its ancestors through each fork point. `scheduleLogical(grant)` is available only after the active session ID, source path, binding, and manifest active shard match. It reuses the existing per-shard lifecycle and contained stores for each immutable final cut. Search runs newest-to-oldest in pages of at most eight shard routes. Recall routes by its pinned view. Exact entry and range calls require an explicit shard ID when they target an ancestor. Logical pagination binds the cursor to the logical session, manifest revision and hash, branch, route index, and existing store cursor. Sibling branches and stale manifests refuse.
+
+Threshold evaluation is read-only. It reports reached and remaining configured source-byte, record, compaction, and estimated-token thresholds. It never starts a rollover. M10 keeps `rolloverMode` manual until a later sustained canary proves automatic operation.
 
 ## Implemented candidate and verification
 
@@ -72,7 +78,7 @@ Cross-shard search can issue bounded calls to more than one existing store. It r
 
 An explicit adoption adapter creates a new logical manifest with the current persisted session as shard ordinal 0. Adoption does not ingest, compact, switch, or modify that session. The first rollover remains unavailable until the catalog and mandatory continuation requirements pass.
 
-Fork integration creates a branch with an explicit parent branch and ancestor cutoff shard. No sibling route is inherited. It remains unimplemented. The manual command and startup reconciliation are wired for owned disposable sessions only; shared activation remains unapproved.
+Fork integration creates a branch with an explicit parent branch, ancestor cutoff shard, and exact cutoff catalog view. No sibling route is inherited. The core operation is implemented, but its extension command/event adapter is pending integration. Shared activation remains unapproved.
 
 ## Reversal path
 

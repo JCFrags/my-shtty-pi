@@ -5,10 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { isLogicalSessionManifest } from "../src/logical-session-contract.js";
-import { consumeProvisionalLogicalReplacement, markProvisionalLogicalReplacement } from "../src/logical-session-integration.js";
-import { resolveLogicalActivation, resolveLogicalShardRoutes, searchLogicalAncestors } from "../src/logical-session-routing.js";
+import { consumeProvisionalLogicalReplacement, logicalAdoptionBinding, markProvisionalLogicalReplacement, recordedLogicalAdoptionBinding, replacementContainsOnlyBootstrap } from "../src/logical-session-integration.js";
+import { resolveAdoptedLogicalActivation, resolveExactLogicalRoute, resolveLogicalActivation, resolveLogicalShardRoutes, searchLogicalAncestors } from "../src/logical-session-routing.js";
+import { evaluateLogicalRolloverThresholds, logicalSessionStatus } from "../src/logical-session-status.js";
 import {
   ManualLogicalRollover,
+  adoptExistingSessionAsShardZero,
   createInitialLogicalManifest,
   type ContinuationCandidate,
   type ReplacementContextPort,
@@ -30,6 +32,7 @@ class FakeSession implements SessionSetupPort {
 class FakeCommands implements SessionCommandPort {
   replacement?: FakeSession;
   readonly events: string[] = [];
+  private sequence = 0;
   beforeReload?: () => Promise<void>;
   constructor(public sessionManager: FakeSession) {}
   private context(sessionManager: FakeSession): ReplacementContextPort {
@@ -39,7 +42,7 @@ class FakeCommands implements SessionCommandPort {
     } };
   }
   async newSession(options: { parentSession: string; setup: (manager: SessionSetupPort) => Promise<void>; withSession: (ctx: ReplacementContextPort) => Promise<void> }): Promise<{ cancelled: boolean }> {
-    this.replacement = new FakeSession("pi-new", join(tmpdir(), `${randomUUID()}.jsonl`), options.parentSession);
+    this.replacement = new FakeSession(`pi-new-${++this.sequence}`, join(tmpdir(), `${randomUUID()}.jsonl`), options.parentSession);
     this.sessionManager = this.replacement;
     // Pi 0.85.1 can start the replacement extension before setup.
     this.events.push("session_start", "setup");
@@ -49,7 +52,7 @@ class FakeCommands implements SessionCommandPort {
     return { cancelled: false };
   }
   async switchSession(path: string, options: { withSession: (ctx: ReplacementContextPort) => Promise<void> }): Promise<{ cancelled: boolean }> {
-    this.sessionManager = new FakeSession("pi-old", path);
+    this.sessionManager = new FakeSession(path.includes("old.jsonl") ? "pi-old" : `pi-switched-${++this.sequence}`, path);
     await options.withSession(this.context(this.sessionManager));
     return { cancelled: false };
   }
@@ -67,11 +70,20 @@ test("manual logical rollover is owner-only, coverage-gated, recoverable, and an
   assert.equal(consumeProvisionalLogicalReplacement(oldPath), false, "provisional replacement markers are one-shot");
   clearProvisional();
   const store = new LogicalSessionStore(root, logicalSessionId);
-  let manifest = await store.create(createInitialLogicalManifest({ logicalSessionId, ownerKey: "a".repeat(64), branchId: "main",
-    piSessionId: "pi-old", sourcePath: oldPath, createdAt: "2026-09-10T00:00:00.000Z" }));
+  let manifest = await adoptExistingSessionAsShardZero(store, { ownerKey: "a".repeat(64), branchId: "main",
+    piSessionId: "pi-old", sourcePath: oldPath, createdAt: "2026-09-10T00:00:00.000Z" });
+  assert.deepEqual(await adoptExistingSessionAsShardZero(store, { ownerKey: "a".repeat(64), branchId: "main",
+    piSessionId: "pi-old", sourcePath: oldPath }), manifest, "startup adoption is idempotent for the exact source identity");
+  await assert.rejects(() => adoptExistingSessionAsShardZero(store, { ownerKey: "a".repeat(64), branchId: "main",
+    piSessionId: "other", sourcePath: oldPath }), (error: any) => error.code === "logical-session-adoption-conflict");
   assert.ok(isLogicalSessionManifest(manifest));
   assert.equal((await stat(root)).mode & 0o777, 0o700);
   assert.equal((await stat(store.manifestPath)).mode & 0o777, 0o600);
+  const adoptionData = logicalAdoptionBinding(manifest, "main");
+  const adoption = recordedLogicalAdoptionBinding([{ type: "custom", customType: "chrono-logical-adoption", data: adoptionData }]);
+  assert.ok(adoption);
+  assert.equal(resolveAdoptedLogicalActivation(manifest, { piSessionId: "pi-old", sourcePath: oldPath }, adoption).activeShardId,
+    manifest.shards[0]!.shardId, "an explicitly bound existing session activates as shard zero");
   const oldShardId = manifest.shards[0]!.shardId;
   const candidate: ContinuationCandidate = { logicalSessionId, branchId: "main", fromShardId: oldShardId, source: cut("leaf-7"),
     coveredShards: [{ shardId: oldShardId, ...cut("leaf-7") }], summary: "Derived continuation with exact recovery references.",
@@ -99,11 +111,11 @@ test("manual logical rollover is owner-only, coverage-gated, recoverable, and an
   assert.equal(manifest.shards[1]!.state, "active");
   assert.equal(commands.replacement!.entries.length, 1);
   const details = commands.replacement!.entries[0]!.details as { continuationHash: string; toShardId: string };
-  const grant = resolveLogicalActivation(manifest, { piSessionId: "pi-new", sourcePath: commands.replacement!.path }, {
+  const grant = resolveLogicalActivation(manifest, { piSessionId: "pi-new-1", sourcePath: commands.replacement!.path }, {
     schemaVersion: 1, logicalSessionId, branchId: "main", shardId: details.toShardId, continuationHash: details.continuationHash });
   assert.equal(grant.composerCanaryInherited, false);
   assert.equal(grant.searchRoutes.length, 2);
-  assert.throws(() => resolveLogicalActivation(manifest, { piSessionId: "pi-new", sourcePath: commands.replacement!.path }, {
+  assert.throws(() => resolveLogicalActivation(manifest, { piSessionId: "pi-new-1", sourcePath: commands.replacement!.path }, {
     schemaVersion: 1, logicalSessionId, branchId: "main", shardId: details.toShardId, continuationHash: "d".repeat(64) }),
     (error: any) => error.code === "logical-session-activation-invalid");
   assert.deepEqual(resolveLogicalShardRoutes(manifest, "main").map(route => route.shardId), manifest.branches[0]!.shardIds);
@@ -112,8 +124,69 @@ test("manual logical rollover is owner-only, coverage-gated, recoverable, and an
 
   assert.deepEqual(await rollover.rollbackLast(commands, true), { cancelled: false });
   manifest = (await store.read())!;
-  assert.equal(manifest.branches[0]!.activeShardId, oldShardId);
+  assert.equal(manifest.branches.find(branch => branch.branchId === "main")!.activeShardId, oldShardId);
+  assert.equal(manifest.shards.find(shard => shard.shardId === oldShardId)!.state, "active");
+  assert.equal(resolveLogicalShardRoutes(manifest, "main").length, 1, "rolled-back replacement is preserved on an isolated branch");
+
+  for (let ordinal = 2; ordinal <= 10; ordinal += 1) {
+    const active = manifest.shards.find(shard => shard.shardId === manifest.branches[0]!.activeShardId)!;
+    const nextCut = { ...cut(`leaf-${ordinal}`), eventCut: ordinal + 6 };
+    const nextCandidate: ContinuationCandidate = { ...candidate, fromShardId: active.shardId, source: nextCut,
+      coveredShards: resolveLogicalShardRoutes(manifest, "main").map(route => route.shardId === active.shardId
+        ? { shardId: route.shardId, ...nextCut } : { shardId: route.shardId, ...route.catalog! }) };
+    await rollover.rollover(nextCandidate, { ...eligibility, sourceLeafEntryId: nextCut.entryId }, commands);
+    manifest = (await store.read())!;
+  }
+  assert.equal(manifest.branches[0]!.shardIds.length, 10, "one logical branch continues through ten physical shards");
+  const routes = resolveLogicalShardRoutes(manifest, "main");
+  assert.equal(routes.length, 10);
+  for (const route of routes.slice(0, -1)) assert.equal(resolveExactLogicalRoute(manifest, "main", route.shardId).catalog?.entryId, route.catalog?.entryId);
+  const all = await searchLogicalAncestors(manifest, "main", async route => ({ items: [route.shardId] }), 10);
+  assert.deepEqual(all.items, routes.map(route => route.shardId).reverse());
+
+  const parentActive = manifest.shards.find(shard => shard.shardId === manifest.branches[0]!.activeShardId)!;
+  const forkCut = { ...cut("fork-leaf"), eventCut: 20 };
+  const forkCandidate: ContinuationCandidate = { ...candidate, fromShardId: parentActive.shardId, source: forkCut,
+    coveredShards: routes.map(route => route.shardId === parentActive.shardId
+      ? { shardId: route.shardId, ...forkCut } : { shardId: route.shardId, ...route.catalog! }) };
+  await rollover.fork({ sourceBranchId: "main", targetBranchId: "experiment" }, forkCandidate,
+    { ...eligibility, sourceLeafEntryId: forkCut.entryId }, commands);
+  manifest = (await store.read())!;
+  const forkRoutes = resolveLogicalShardRoutes(manifest, "experiment");
+  assert.equal(forkRoutes.length, 11);
+  assert.equal(forkRoutes.at(-2)?.catalog?.entryId, "fork-leaf", "fork ancestry stops at its immutable parent cut");
+  assert.equal(forkRoutes.at(-1)?.shardId, manifest.branches.find(branch => branch.branchId === "experiment")!.activeShardId);
+  assert.deepEqual(resolveLogicalShardRoutes(manifest, "main").map(route => route.shardId), routes.map(route => route.shardId),
+    "creating a child branch does not mutate its parent route");
+
+  const status = logicalSessionStatus(manifest, "main", { sourceBytes: 255, records: 50, compactions: 4, estimatedTokens: 1000 },
+    { sourceBytes: 256, records: 50 });
+  assert.deepEqual((status.thresholds as { reached: string[] }).reached, ["records"]);
+  assert.deepEqual(evaluateLogicalRolloverThresholds({ sourceBytes: 256, records: 1, compactions: 0 }, { sourceBytes: 256 }),
+    { eligible: true, reached: ["sourceBytes"], remaining: {} });
+});
+
+test("prepared rollover can reopen from an empty replacement after a pre-setup crash", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-recover-"));
+  const oldPath = join(temporary, "old.jsonl"), logicalSessionId = randomUUID();
+  const store = new LogicalSessionStore(join(temporary, "logical"), logicalSessionId);
+  let manifest = await store.create(createInitialLogicalManifest({ logicalSessionId, ownerKey: "a".repeat(64), branchId: "main",
+    piSessionId: "pi-old", sourcePath: oldPath }));
+  const shardId = manifest.shards[0]!.shardId;
+  const candidate: ContinuationCandidate = { logicalSessionId, branchId: "main", fromShardId: shardId, source: cut("leaf-7"),
+    coveredShards: [{ shardId, ...cut("leaf-7") }], summary: "Bounded continuation.",
+    composition: { schemaVersion: 1, payloadHash: "b".repeat(64), artifactHash: "c".repeat(64), combinedTokens: 10,
+      combinedCeilingTokens: 100, validation: { safeTail: true, withinCombinedCeiling: true, protectedCoverageComplete: true, openWorkCoverageComplete: true } },
+    mandatory: { protectedEligible: 0, protectedCovered: 0, openWorkEligible: 0, openWorkCovered: 0, omittedMandatory: [] } };
+  const rollover = new ManualLogicalRollover(store);
+  manifest = await rollover.prepare(candidate, { persisted: true, idle: true, streaming: false, activeToolCalls: 0,
+    unmatchedToolPairs: 0, pendingMessages: false, compactionActive: false, sessionSwitchActive: false, catalogCaughtUp: true,
+    incompleteSourceTail: false, sourceLeafEntryId: "leaf-7", trigger: "manual" });
+  const empty = new FakeSession("pi-empty", join(temporary, "empty.jsonl"), oldPath);
+  const commands = new FakeCommands(empty);
+  assert.equal(replacementContainsOnlyBootstrap([{ type: "thinking_level_change" }]), true);
+  assert.deepEqual(await rollover.reopenPreparedFromEmptyReplacement(commands, true), { cancelled: false });
+  manifest = (await store.read())!;
+  assert.equal(manifest.pendingRollover, undefined);
   assert.equal(manifest.shards[0]!.state, "active");
-  assert.equal(manifest.shards[1]!.state, "closed");
-  assert.equal(manifest.shards.length, 2, "rollback preserves the replacement shard");
 });

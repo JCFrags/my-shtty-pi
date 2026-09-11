@@ -12,7 +12,10 @@ async function safeDirectory(path: string, create = false): Promise<void> {
   let current = "/";
   for (const part of path.split("/").filter(Boolean)) {
     current = join(current, part);
-    const stat = await lstat(current).catch(() => fail("logical-session-storage-unsafe"));
+    const stat = await lstat(current).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
+      return fail("logical-session-storage-unsafe");
+    });
     if (!stat.isDirectory() || stat.isSymbolicLink() || ![0, process.getuid?.()].includes(stat.uid)
       || ((stat.mode & 0o022) !== 0 && !(stat.uid === 0 && (stat.mode & 0o1000)))) fail("logical-session-storage-unsafe");
   }

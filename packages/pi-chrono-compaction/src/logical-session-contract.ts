@@ -27,7 +27,12 @@ export interface LogicalShard {
 }
 export interface LogicalBranch {
   readonly branchId: string;
-  readonly parent?: { readonly branchId: string; readonly throughShardId: string };
+  readonly parent?: {
+    readonly branchId: string;
+    readonly throughShardId: string;
+    /** Immutable parent cut shared by this branch. Required for newly created forks. */
+    readonly throughCut?: LogicalCatalogCut;
+  };
   readonly shardIds: readonly string[];
   readonly activeShardId: string;
   readonly createdAt: string;
@@ -55,7 +60,10 @@ export interface LogicalContinuation {
 export interface LogicalRolloverOperation {
   readonly operationId: string;
   readonly phase: "close-prepared" | "new-shard-bound";
+  /** Absent on old manifests and equivalent to rollover. */
+  readonly kind?: "rollover" | "fork";
   readonly branchId: string;
+  readonly sourceBranchId?: string;
   readonly oldShardId: string;
   readonly newShardId?: string;
   readonly continuation: LogicalContinuation;
@@ -63,6 +71,7 @@ export interface LogicalRolloverOperation {
 }
 export interface LogicalRolloverReceipt {
   readonly operationId: string;
+  readonly kind?: "rollover" | "fork";
   readonly branchId: string;
   readonly oldShardId: string;
   readonly newShardId: string;
@@ -127,7 +136,8 @@ export function isLogicalSessionManifest(value: unknown): value is LogicalSessio
       || !Array.isArray(branch.shardIds) || branch.shardIds.length < 1 || !uuid(branch.activeShardId)
       || !branch.shardIds.every(id => uuid(id))) return false;
     branchIds.add(branch.branchId);
-    if (branch.parent !== undefined && (!object(branch.parent) || !key(branch.parent.branchId) || !uuid(branch.parent.throughShardId))) return false;
+    if (branch.parent !== undefined && (!object(branch.parent) || !key(branch.parent.branchId) || !uuid(branch.parent.throughShardId)
+      || (branch.parent.throughCut !== undefined && !isCut(branch.parent.throughCut)))) return false;
   }
   for (const shard of shards) {
     if (!object(shard) || !uuid(shard.shardId) || shardIds.has(shard.shardId) || !key(shard.branchId) || !integer(shard.ordinal)
@@ -141,19 +151,44 @@ export function isLogicalSessionManifest(value: unknown): value is LogicalSessio
     if (!branch.shardIds.every(id => shardIds.has(id)) || !branch.shardIds.includes(branch.activeShardId)) return false;
     const owned = (shards as LogicalShard[]).filter(shard => shard.branchId === branch.branchId).map(shard => shard.shardId);
     if (owned.length !== branch.shardIds.length || owned.some((id, index) => id !== branch.shardIds[index])) return false;
+    const ordered = branch.shardIds.map(id => (shards as LogicalShard[]).find(shard => shard.shardId === id)!);
+    if (ordered.some((shard, index) => shard.ordinal !== index)) return false;
+    const active = ordered.find(shard => shard.shardId === branch.activeShardId);
+    const pending = object(value.pendingRollover) ? value.pendingRollover : undefined;
+    const preparingRollover = !!pending && (pending.kind ?? "rollover") === "rollover" && pending.phase === "close-prepared"
+      && pending.branchId === branch.branchId && pending.oldShardId === active?.shardId;
+    if (!active || (preparingRollover ? active.state !== "closing" : active.state !== "active")
+      || ordered.filter(shard => shard.state === "active").length !== (preparingRollover ? 0 : 1)) return false;
+    if (branch.parent) {
+      const parentShard = (shards as LogicalShard[]).find(shard => shard.shardId === branch.parent!.throughShardId)!;
+      if (parentShard.branchId !== branch.parent.branchId || !branch.parent.throughCut) return false;
+    }
+  }
+  for (const start of branches as LogicalBranch[]) {
+    const seen = new Set<string>(); let cursor: LogicalBranch | undefined = start;
+    while (cursor?.parent) {
+      if (seen.has(cursor.branchId)) return false;
+      seen.add(cursor.branchId);
+      cursor = (branches as LogicalBranch[]).find(branch => branch.branchId === cursor!.parent!.branchId);
+    }
   }
   if (value.pendingRollover !== undefined) {
     const op = value.pendingRollover;
     if (!object(op) || !uuid(op.operationId) || !["close-prepared", "new-shard-bound"].includes(String(op.phase)) || !key(op.branchId)
+      || (op.kind !== undefined && !["rollover", "fork"].includes(String(op.kind)))
+      || (op.sourceBranchId !== undefined && !key(op.sourceBranchId))
       || !uuid(op.oldShardId) || !uuid(op.newShardId) || !timestamp(op.createdAt)
       || !isLogicalContinuation(op.continuation) || op.continuation.logicalSessionId !== value.logicalSessionId
       || op.continuation.branchId !== op.branchId || op.continuation.fromShardId !== op.oldShardId
-      || !branchIds.has(op.branchId) || !shardIds.has(op.oldShardId)
+      || ((op.kind ?? "rollover") === "rollover" ? !branchIds.has(op.branchId)
+        : (op.phase === "close-prepared") === branchIds.has(op.branchId) || !branchIds.has(op.sourceBranchId as string))
+      || !shardIds.has(op.oldShardId)
       || (op.phase === "new-shard-bound") !== shardIds.has(op.newShardId)) return false;
   }
   if (value.lastRollover !== undefined) {
     const receipt = value.lastRollover;
-    if (!object(receipt) || !uuid(receipt.operationId) || !key(receipt.branchId) || !uuid(receipt.oldShardId)
+    if (!object(receipt) || !uuid(receipt.operationId) || (receipt.kind !== undefined && !["rollover", "fork"].includes(String(receipt.kind)))
+      || !key(receipt.branchId) || !uuid(receipt.oldShardId)
       || !uuid(receipt.newShardId) || !hash(receipt.continuationHash) || !timestamp(receipt.activatedAt)
       || !branchIds.has(receipt.branchId) || !shardIds.has(receipt.oldShardId) || !shardIds.has(receipt.newShardId)) return false;
   }
