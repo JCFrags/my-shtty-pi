@@ -204,7 +204,8 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
       assert.ok(selected.every((item: any) => item.range.end.eventSeq < oldView.eventCut + 1));
       assert.ok(selected.every((item: any) => item.reference.path[0] === oldRollupResult.handle.rootNodeId
         && item.reference.path.at(-1) === item.nodeId), "selected nodes retain a verified pinned expansion path");
-      assert.ok((composedRollup.result as any).metrics.nodesVisited <= 24, "top-down selection keeps the existing node ceiling");
+      assert.ok((composedRollup.result as any).metrics.nodesRead <= 24, "top-down selection counts every node load against the existing ceiling");
+      assert.ok((composedRollup.result as any).metrics.nodesVisited <= (composedRollup.result as any).metrics.nodesRead);
     }
     const noHit = await run(oldView, { op: "composeRollupSelection", query: "definitely-absent-term",
       beforeEventSeq: oldView.eventCut + 1, limit: 2, handle: oldRollupResult.handle });
@@ -242,10 +243,6 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     const capacityRollup = await materializeRollup(capacityView);
     assert.ok(capacityRollup.rollupGeneration > oldRollupResult.rollupGeneration, "a completed frontier continues into a later generation");
     assert.equal(capacityRollup.complete, true);
-    const historicalStatus = await run(oldView, { op: "rollupStatus" });
-    assert.equal(historicalStatus.ok, true, JSON.stringify(historicalStatus));
-    if (historicalStatus.ok) assert.equal((historicalStatus.result as any).handle.rollupGeneration,
-      oldRollupResult.handle.rollupGeneration, "status resolves the newest publication compatible with the historical cut");
     const pinnedComposition = await run(capacityView, { op: "composeRollupSelection", query: "parser",
       beforeEventSeq: oldView.eventCut + 1, limit: 1, handle: oldRollupResult.handle });
     assert.equal(pinnedComposition.ok, true, JSON.stringify(pinnedComposition));
