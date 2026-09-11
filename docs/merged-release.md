@@ -30,7 +30,8 @@ incomplete records. All three remaining live Pi processes match the selected
 artifact. The former integration parent exited after its verified adoption.
 Completed workers were retired by their owners. Unassigned or explicitly
 excluded sessions were not modified. The CLI, Pi registration, Herdr plugin
-selection and running daemon use the final release.
+selection use the final release. The exercised daemon matched it before the
+disposable test companion was closed during cleanup.
 
 Managed native-tool verification passed companion open/reuse, semantic and
 visual observation, slow-natural input, cross-origin embedded submission,
@@ -41,8 +42,8 @@ Closed shadow controls and transformed/CSS-zoom frame owners retain the tested
 limits documented in the browser README. Mixed-DPI hardware was not tested.
 
 All browser windows are released. No browser reload or activation is pending.
-The retained companion remains under preserved control; release documentation
-does not authorize opening it or resuming input. Future reloads still require
+The disposable test companion was closed without resuming input; release
+documentation does not authorize opening another companion. Future reloads still require
 fresh identity, idle-editor and job checks. External WebX/research remains
 independently owned. No external package publication is part of this closeout.
 
