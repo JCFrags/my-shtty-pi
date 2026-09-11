@@ -25,7 +25,7 @@ This directory contains the authoritative ChronoCompact V3 charter and milestone
 
 ## Current documentation boundary
 
-The operational documents describe source revision `30668f7586781410e9958fc56d8f677d08bc7d4e`, packaged as ChronoCompact `2.0.25` for Pi `0.85.1`. They supplement the frozen charter and accepted reports. They do not alter milestone acceptance.
+The operational documents describe source revision `30668f7586781410e9958fc56d8f677d08bc7d4e`. That source retains package metadata `2.0.25`, but its continuation-only shard persistence correction was not included in the immutable `2.0.25` distribution at `aa160c082dd9f027b0e378c53c2784e00ef1727e`. A distinct `2.0.26` package followed at `fac5d3566339b8ac51379c1703bcb1347e768d8b`; exact `2.0.26` CI and the installed-Pi retry remain pending. These documents supplement the frozen charter and accepted reports. They do not alter milestone acceptance.
 
 The candidate includes startup adoption, checkpoint-derived migration status, bounded indexed search and exact recovery, state-v4 and rollup-v3 derivation, guarded composition, manual logical rollover and fork, and continuation-only shard persistence. `memoryEngineEnabled` remains off by default pending qualification.
 

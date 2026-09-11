@@ -2,9 +2,9 @@
 
 ## Current operating boundary
 
-These procedures apply to the candidate at `30668f7586781410e9958fc56d8f677d08bc7d4e`. They do not authorize activation, deployment, reload, a provider call, or a qualification campaign.
+These procedures describe source revision `30668f7586781410e9958fc56d8f677d08bc7d4e`. They do not authorize activation, deployment, reload, a provider call, or a qualification campaign.
 
-The packaged version is `2.0.25`. `memoryEngineEnabled` defaults to off. The continuation-only shard persistence correction is present, but its installed-Pi ten-shard retry has not run. Treat status output as local process evidence only.
+The source retains package metadata `2.0.25`, but its continuation-only shard persistence correction is not in the immutable `2.0.25` distribution at `aa160c082dd9f027b0e378c53c2784e00ef1727e`. A distinct `2.0.26` package followed at `fac5d3566339b8ac51379c1703bcb1347e768d8b`. Exact `2.0.26` CI and the installed-Pi ten-shard retry remain pending. `memoryEngineEnabled` defaults to off. Treat status output as local process evidence only.
 
 ## Startup check
 

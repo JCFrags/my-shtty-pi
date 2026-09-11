@@ -2,13 +2,13 @@
 
 ## Evidence boundary
 
-This document describes the source at `30668f7586781410e9958fc56d8f677d08bc7d4e`. It is operational documentation, not M11 qualification or V3 acceptance. The packaged runtime at this revision is ChronoCompact `2.0.25` for Pi `0.85.1`.
+This document describes source revision `30668f7586781410e9958fc56d8f677d08bc7d4e`. It is operational documentation, not M11 qualification or V3 acceptance. That source retains package metadata `2.0.25`, but its continuation-only shard persistence correction was not included in the immutable `2.0.25` distribution at `aa160c082dd9f027b0e378c53c2784e00ef1727e`. A distinct `2.0.26` package followed at `fac5d3566339b8ac51379c1703bcb1347e768d8b`; exact `2.0.26` CI and the installed-Pi retry remain pending.
 
-`memoryEngineEnabled` remains `false` by default. The indexed memory path, logical-session commands, and continuation-only shard persistence exist, but the corrected ten-shard installed-Pi retry has not run. The original `state-v4` catch-up campaign and the exact `2.0.25` M11 core campaign are separate work. No default activation, scale pass, all-session adoption, N-of-N live-session result, or exercised deployment rollback is established here.
+`memoryEngineEnabled` remains `false` by default. The source contains the indexed memory path, logical-session commands, and the unbundled continuation-only shard persistence correction, but the corrected ten-shard installed-Pi retry has not run. The original `state-v4` catch-up campaign and the exact `2.0.25` M11 core campaign are separate work. No default activation, scale pass, all-session adoption, N-of-N live-session result, or exercised deployment rollback is established here.
 
 ## Source and derived data
 
-Pi session JSONL is the exact source. ChronoCompact does not rewrite or delete an old source shard. Catalogs, capsules, search indexes, state, rollups, composition artifacts, rollout records, and logical manifests are derived or routing data. They can refuse or be rebuilt without changing the source.
+Pi session JSONL is the exact source. ChronoCompact does not rewrite or delete an old source shard. Catalogs, capsules, search indexes, state, rollups, and composition artifacts are derived data. Derived-store reconstruction does not edit source. Rollout records and logical manifests are routing data and require their validated recovery paths rather than an assumed rebuild.
 
 For an ordinary physical session, the extension derives a session key from the Pi session ID and a shard key from the source path. The catalog lives beside the source under an owner-scoped `.chrono-catalog` directory. The catalog pins a branch view to a generation and event cut. All later handles include that scope.
 
