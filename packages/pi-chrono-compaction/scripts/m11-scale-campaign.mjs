@@ -20,7 +20,7 @@ const FULL = Object.freeze({
   sessionCounts: [4, 8, 16],
   slots: [1, 2, 4],
   totalDecodedUnits: 4_000_000_000,
-  largestSessionDecodedUnits: 400_000_000,
+  largestSessionDecodedUnits: 800_000_000,
   bodyUnits: MiB,
   shardDecodedUnits: 64 * MiB,
   compositionGenerations: 128,
@@ -73,9 +73,9 @@ function currentSha() { return execFileSync("git", ["rev-parse", "HEAD"], { enco
 function config(profile) { return profile === "smoke" ? SMOKE : FULL; }
 function sessionTargets(c) {
   if (c.sessions === 4) return Array(c.sessions).fill(c.largestSessionDecodedUnits);
-  const remaining = c.totalDecodedUnits - c.largestSessionDecodedUnits;
-  assert.equal(remaining % (c.sessions - 1), 0);
-  return [c.largestSessionDecodedUnits, ...Array(c.sessions - 1).fill(remaining / (c.sessions - 1))];
+  const remaining = c.totalDecodedUnits - c.largestSessionDecodedUnits, count = c.sessions - 1;
+  const base = Math.floor(remaining / count), extra = remaining % count;
+  return [c.largestSessionDecodedUnits, ...Array.from({ length: count }, (_, index) => base + (index < extra ? 1 : 0))];
 }
 function percentile(values, p) {
   if (!values.length) return null;
@@ -101,13 +101,27 @@ function processMemory() {
   } catch {}
   return result;
 }
+async function workstationRss() {
+  let rssBytes = 0, processes = 0;
+  for (const name of await readdir("/proc")) {
+    if (!/^\d+$/.test(name)) continue;
+    try { const match = (await readFile(`/proc/${name}/status`, "utf8")).match(/^VmRSS:\s+(\d+)\s+kB$/m); if (match) { rssBytes += Number(match[1]) * 1024; processes++; } } catch {}
+  }
+  return { rssBytes, processes, meaning: "Sum of readable process VmRSS values for the whole workstation; includes unrelated processes and double-counted shared pages." };
+}
+async function hashFile(path) {
+  const handle = await open(path, "r"), hash = createHash("sha256"), buffer = Buffer.allocUnsafe(64 * 1024); let position = 0;
+  try { for (;;) { const { bytesRead } = await handle.read(buffer, 0, buffer.length, position); if (!bytesRead) break; hash.update(buffer.subarray(0, bytesRead)); position += bytesRead; } }
+  finally { await handle.close(); }
+  return hash.digest("hex");
+}
 async function directoryBytes(root) {
   let total = 0;
   async function walk(path) { for (const name of await readdir(path)) { const child = join(path, name), meta = await lstat(child); if (meta.isDirectory()) await walk(child); else if (meta.isFile()) total += meta.size; } }
   await walk(root); return total;
 }
 function body(session, event, units) {
-  const marker = `m11-marker-session-${session}-event-${event}; pending approval; source must remain exact; `;
+  const marker = `m11-marker-session-${session}-event-${event}; deterministic generated scale payload; `;
   const fill = `S${session}E${event}:0123456789abcdefghijklmnopqrstuvwxyz\n`;
   let text = marker;
   while (text.length < units) text += fill.slice(0, Math.min(fill.length, units - text.length));
@@ -127,18 +141,23 @@ async function generateSession(root, session, targetUnits, c) {
   const generationTarget = Math.floor(c.compositionGenerations / c.sessions) + (session <= c.compositionGenerations % c.sessions ? 1 : 0);
   while (decodedUnits < targetUnits) {
     const path = join(sessionRoot, `shard-${String(shardOrdinal).padStart(4, "0")}.jsonl`), handle = await open(path, "wx", 0o600);
-    const shardFirstParent = parentId; let shardUnits = 0, shardBytes = 0, shardEvents = 0, firstEventId;
+    const shardFirstParent = parentId; let shardUnits = 0, shardBytes = 0, shardEvents = 0, firstEventId, firstPayloadEvent;
     try {
+      if (shardOrdinal === 0) {
+        const text = `m11-marker-session-${session}-event-1. Never modify exact source. Open work remains pending until qualification completes.`;
+        const eventId = `m11-s${session}-e${String(events + 1).padStart(8, "0")}`, bytes = Buffer.from(line(eventId, parentId, text));
+        await writeAll(handle, bytes); firstEventId = eventId; parentId = eventId; events++; shardEvents++; decodedUnits += text.length; shardUnits += text.length; sourceBytes += bytes.length; shardBytes += bytes.length;
+      }
       while (decodedUnits < targetUnits && shardUnits < c.shardDecodedUnits) {
         const units = Math.min(c.bodyUnits, targetUnits - decodedUnits, c.shardDecodedUnits - shardUnits);
-        const eventId = `m11-s${session}-e${String(events + 1).padStart(8, "0")}`;
-        const bytes = Buffer.from(line(eventId, parentId, body(session, events + 1, units)));
+        const eventOrdinal = events + 1, eventId = `m11-s${session}-e${String(eventOrdinal).padStart(8, "0")}`;
+        const bytes = Buffer.from(line(eventId, parentId, body(session, eventOrdinal, units))); firstPayloadEvent ??= eventOrdinal;
         await writeAll(handle, bytes); firstEventId ??= eventId; parentId = eventId; events++; shardEvents++; decodedUnits += units; shardUnits += units; sourceBytes += bytes.length; shardBytes += bytes.length;
         const due = Math.floor(events * generationTarget / Math.ceil(targetUnits / c.bodyUnits));
         if (compactions < due) { compactions++; const compact = Buffer.from(compactionLine(session, compactions, parentId)); await writeAll(handle, compact); parentId = `m11-s${session}-c${compactions}`; sourceBytes += compact.length; shardBytes += compact.length; }
       }
     } finally { await handle.close(); }
-    shards.push({ ordinal: shardOrdinal, path, sourceBytes: shardBytes, decodedUnits: shardUnits, events: shardEvents, firstParentId: shardFirstParent, firstEventId, leafId: parentId }); shardOrdinal++;
+    shards.push({ ordinal: shardOrdinal, path, sourceBytes: shardBytes, decodedUnits: shardUnits, events: shardEvents, firstParentId: shardFirstParent, firstEventId, firstPayloadEvent, leafId: parentId }); shardOrdinal++;
   }
   return { session, sessionRoot, decodedUnits, estimatedTokens: Math.max(1, Math.ceil(decodedUnits / 4)), sourceBytes, events, compactions, shards, leafId: parentId };
 }
@@ -154,13 +173,16 @@ async function runtimeModules() {
     import("../dist/src/capsule-contract.js"), import("../dist/src/context-composer.js"), import("../dist/src/host-worker-scheduler.js"),
   ]).then(([catalog, capsule, search, contract, composer, scheduler]) => ({ catalog, capsule, search, contract, composer, scheduler }));
 }
-function metrics() { return { calls: 0, failures: {}, latencies: { ingestion: [], search: [], recall: [], exact: [], composition: [], request: [] }, sourceBytes: {}, workerPeaks: [], processIo: { readChars: 0, writtenChars: 0, storageReadBytes: 0, storageWrittenBytes: 0 } }; }
+function metrics() { return { calls: 0, failures: {}, latencies: { ingestion: [], appendIngestionLag: [], search: [], recall: [], exact: [], composition: [], fault: [], recovery: [], request: [] }, sourceBytes: {}, workerPeaks: [], processIoByOperation: {} }; }
 function observe(m, kind, started, response) {
   const elapsed = performance.now() - started; m.calls++; m.latencies.request.push(elapsed); (m.latencies[kind] ??= []).push(elapsed);
   const code = response?.ok === false ? response.code : response?.response?.status === "failed" ? response.response.failureCode : null;
   if (code) m.failures[code] = (m.failures[code] ?? 0) + 1;
   const source = Number(response?.sourceBytes ?? 0); (m.sourceBytes[kind] ??= []).push(source);
-  const observation = safeObservation(response); if (observation) { m.workerPeaks.push(observation); for (const key of Object.keys(m.processIo)) m.processIo[key] += Number(observation.processIo?.[key] ?? 0); }
+  const observation = safeObservation(response); if (observation) {
+    m.workerPeaks.push(observation); const io = (m.processIoByOperation[kind] ??= { readChars: [], writtenChars: [], storageReadBytes: [], storageWrittenBytes: [] });
+    for (const key of Object.keys(io)) io[key].push(Number(observation.processIo?.[key] ?? 0));
+  }
   return elapsed;
 }
 async function pool(items, concurrency, worker) {
@@ -168,12 +190,12 @@ async function pool(items, concurrency, worker) {
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => { while (true) { const index = next++; if (index >= items.length) return; results[index] = await worker(items[index], index); } }));
   return results;
 }
-async function qualifyLane(root, generated, slots, modules, m) {
-  const schedulerDirectory = join(root, `scheduler-slots-${slots}`); await mkdir(schedulerDirectory, { mode: 0o700 });
+async function prepareStores(root, generated, modules, m) {
+  const slots = 4, schedulerDirectory = join(root, "scheduler-prepare"); await mkdir(schedulerDirectory, { mode: 0o700 });
   const states = await pool(generated.sessions, generated.sessions.length, async session => {
-    const laneRoot = join(root, `state-slots-${slots}`, `session-${String(session.session).padStart(2, "0")}`);
-    await mkdir(laneRoot, { recursive: true, mode: 0o700 });
-    const catalogDirectory = join(laneRoot, "catalog"), derivedDirectory = join(laneRoot, "derived"), searchDirectory = join(laneRoot, "search");
+    const stateRoot = join(root, "prepared", `session-${String(session.session).padStart(2, "0")}`);
+    await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+    const catalogDirectory = join(stateRoot, "catalog"), derivedDirectory = join(stateRoot, "derived"), searchDirectory = join(stateRoot, "search");
     const sessionKey = sha(`m11-session-${session.session}`).slice(0, 64), catalogBase = { v: 1, catalogDirectory, sessionKey };
     const catalogCall = async request => { const started = performance.now(); const response = await modules.catalog.runCatalogWorker({ ...catalogBase, ...request }, { schedulerDirectory, slots }); observe(m, "ingestion", started, response); assert.equal(response.ok, true, JSON.stringify(response)); return response.result; };
     for (const shard of session.shards) {
@@ -195,43 +217,67 @@ async function qualifyLane(root, generated, slots, modules, m) {
     let searchComplete = false;
     for (let guard = 0; guard < Math.ceil(session.decodedUnits / 32768) * 2 + 128; guard++) if ((await searchCall("ingestion", { op: "ingestPage", view, maxSources: 4, maxChunks: 8 })).complete) { searchComplete = true; break; }
     assert.equal(searchComplete, true, "search ingestion did not complete");
-    return { session, catalogCall, capsuleCall, searchCall, view, searchIdentity, directories: { catalogDirectory, derivedDirectory, searchDirectory } };
+    let verifiedShards = 0;
+    for (const shard of session.shards) {
+      const found = await searchCall("search", { op: "query", view, query: `m11-marker-session-${session.session}-event-${shard.firstPayloadEvent}`, mode: "literal", limit: 1 });
+      assert.ok(found.hits?.length === 1, `shard ${shard.ordinal} marker must be searchable`);
+      const recalled = await searchCall("recall", { op: "recall", view, handle: found.hits[0].handle });
+      assert.match(recalled.text, new RegExp(`m11-marker-session-${session.session}-event-${shard.firstPayloadEvent}`)); verifiedShards++;
+    }
+    let stateComplete = false;
+    for (let guard = 0; guard < session.events * 2 + 128; guard++) if ((await searchCall("ingestion", { op: "materializeState", view, limit: 8 })).complete) { stateComplete = true; break; }
+    assert.equal(stateComplete, true, "state materialization did not complete");
+    const selection = await searchCall("composition", { op: "composeStateSelection", view });
+    return { session, view, identity, searchIdentity, selection, sessionKey, verifiedShards, directories: { catalogDirectory, derivedDirectory, searchDirectory } };
   });
-  await pool(states, states.length, async state => {
-    const found = await state.searchCall("search", { op: "query", view: state.view, query: `m11-marker-session-${state.session.session}-event-1`, mode: "literal", limit: 2 });
-    assert.ok(found.hits?.length > 0, "search must find generated source");
-    const recalled = await state.searchCall("recall", { op: "recall", view: state.view, handle: found.hits[0].handle });
-    assert.match(recalled.text, new RegExp(`m11-marker-session-${state.session.session}`));
-    const shard = state.session.shards.at(-1), currentSourceBytes = (await stat(shard.path)).size;
-    const appendedId = `m11-s${state.session.session}-append-${slots}-${currentSourceBytes}`;
-    await appendFile(shard.path, line(appendedId, state.session.leafId, `m11 append session ${state.session.session}, slots ${slots}`));
-    const started = performance.now(); const ingest = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory,
-      sessionKey: sha(`m11-session-${state.session.session}`).slice(0, 64), op: "ingestStep", sourcePath: shard.path, shardKey: `shard-${shard.ordinal}`, branchKey: "main", shardOrdinal: shard.ordinal,
-      ...(shard.ordinal ? { parent: { shardKey: `shard-${shard.ordinal - 1}`, eventId: shard.firstParentId } } : {}) }, { schedulerDirectory, slots });
-    observe(m, "ingestion", started, ingest); assert.equal(ingest.ok, true);
-    const old = await state.catalogCall({ op: "page", view: state.view, after: Math.max(0, state.view.eventCut - 1), limit: 2 });
-    assert.equal(old.events.at(-1).metadata.id, state.session.leafId, "pinned view excludes concurrent append");
-    const rawEvent = old.events.at(-1); const exactStarted = performance.now();
-    const exact = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory,
-      sessionKey: sha(`m11-session-${state.session.session}`).slice(0, 64), op: "raw", view: state.view, eventSeq: rawEvent.seq, offset: rawEvent.rawStart,
-      length: Math.min(8192, rawEvent.endByte - rawEvent.rawStart) }, { schedulerDirectory, slots });
-    observe(m, "exact", exactStarted, exact); assert.equal(exact.ok, true);
-  });
-  const stale = states[0]; const staleStarted = performance.now();
-  const staleResponse = await modules.search.runSearchV3Worker({ v: 1, searchDirectory: stale.directories.searchDirectory, capsuleDirectory: stale.directories.derivedDirectory,
-    catalogDirectory: stale.directories.catalogDirectory, identity: { ...stale.searchIdentity, schemaVersion: 999 }, op: "status", view: stale.view }, { schedulerDirectory, slots });
-  observe(m, "search", staleStarted, staleResponse); assert.equal(staleResponse.ok, false, "stale schema must refuse");
   const residue = await modules.scheduler.schedulerArtifactCounts(schedulerDirectory); assert.deepEqual(residue, { tickets: 0, slots: 0 });
-  return { slots, sessions: states.length, schedulerResidue: residue };
+  return states;
 }
-function compositionInput(session, ordinal) {
-  const seq = Math.max(2, session.events); const row = (kind, suffix, startSeq) => ({ id: `${kind}-${ordinal}-${suffix}`, text: `${kind} for session ${session.session}, generation ${ordinal}; unresolved and source-linked.`,
-    startSeq, endSeq: startSeq, recovery: `opaque:m11:${session.session}:${startSeq}`, kind, authority: "derived", sourceAuthority: kind === "restriction" ? "user" : "assistant", status: kind === "restriction" ? "current" : "unresolved", importance: kind === "restriction" ? 1 : .8 });
-  return { regularPiSummary: `Deterministic Pi summary for session ${session.session}, generation ${ordinal}.`, combinedCeilingTokens: 30_000,
-    cut: { sourceCutEntryId: session.leafId, sourceCutSeq: seq, firstKeptEntryId: session.leafId, firstKeptSeq: seq, rawTailTokens: 64, toolPairSafe: true },
-    memory: { generation: `m11-${session.session}-${ordinal}`, representedStartSeq: 1, representedEndSeq: seq, committed: true },
-    rollups: { generation: `m11-rollup-${session.session}-${ordinal}`, representedStartSeq: 1, representedEndSeq: Math.max(1, seq - 1), complete: true },
-    mandatoryCoverage: { protectedComplete: true, openWorkComplete: true }, selected: { protected: [row("restriction", "p", 1)], openWork: [row("open-work", "w", seq - 1)], recent: [row("capsule", "r", seq)], older: [row("rollup", "o", 2)] }, delta: { records: [], completeThroughCut: true } };
+async function measureQueue(schedulerDirectory, slots, modules) {
+  const waits = [];
+  await Promise.all(Array.from({ length: slots + 2 }, async (_, index) => {
+    const lease = await modules.scheduler.acquireHostWorkerSlot({ slots, directory: schedulerDirectory, priority: index % 2 ? "low" : "high", jobType: "rollup-shadow", sessionKey: sha(`m11-queue-${index}`) });
+    waits.push({ queueWaitMs: lease.queueWaitMs, queuePosition: lease.queuePosition });
+    await new Promise(resolve => setTimeout(resolve, 40)); await lease.release();
+  }));
+  return { waitMs: distribution(waits.map(item => item.queueWaitMs)), maximumPosition: Math.max(...waits.map(item => item.queuePosition)) };
+}
+async function exerciseLane(root, states, sessionCount, slots, modules, m) {
+  const schedulerDirectory = join(root, `scheduler-lane-${sessionCount}-${slots}`); await mkdir(schedulerDirectory, { recursive: true, mode: 0o700 });
+  const selected = states.slice(0, sessionCount), queue = await measureQueue(schedulerDirectory, slots, modules);
+  await pool(selected, selected.length, async state => {
+    const searchRequest = extra => modules.search.runSearchV3Worker({ v: 1, searchDirectory: state.directories.searchDirectory, capsuleDirectory: state.directories.derivedDirectory, catalogDirectory: state.directories.catalogDirectory, identity: state.searchIdentity, view: state.view, ...extra }, { schedulerDirectory, slots });
+    const queryStarted = performance.now(), queryPromise = searchRequest({ op: "query", query: `m11-marker-session-${state.session.session}-event-2`, mode: "literal", limit: 2 });
+    const shard = state.session.shards.at(-1), currentSourceBytes = (await stat(shard.path)).size;
+    const appendedId = `m11-s${state.session.session}-append-${sessionCount}-${slots}-${currentSourceBytes}`, appendStarted = performance.now();
+    await appendFile(shard.path, line(appendedId, state.session.leafId, `m11 append session ${state.session.session}, lane ${sessionCount}x${slots}`));
+    const ingestStarted = performance.now(), ingestPromise = modules.catalog.runCatalogWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory, sessionKey: state.sessionKey, op: "ingestStep", sourcePath: shard.path, shardKey: `shard-${shard.ordinal}`, branchKey: "main", shardOrdinal: shard.ordinal, ...(shard.ordinal ? { parent: { shardKey: `shard-${shard.ordinal - 1}`, eventId: shard.firstParentId } } : {}) }, { schedulerDirectory, slots });
+    const [foundResponse, ingest] = await Promise.all([queryPromise, ingestPromise]);
+    observe(m, "search", queryStarted, foundResponse); observe(m, "ingestion", ingestStarted, ingest); assert.equal(foundResponse.ok, true, JSON.stringify(foundResponse)); assert.equal(ingest.ok, true, JSON.stringify(ingest));
+    m.latencies.appendIngestionLag.push(performance.now() - appendStarted);
+    const found = foundResponse.result; assert.ok(found.hits?.length > 0, "search must find generated source");
+    const recallStarted = performance.now(), recalled = await searchRequest({ op: "recall", handle: found.hits[0].handle }); observe(m, "recall", recallStarted, recalled); assert.equal(recalled.ok, true, JSON.stringify(recalled)); assert.match(recalled.result.text, new RegExp(`m11-marker-session-${state.session.session}`));
+    const chunkStarted = performance.now(), chunk = await modules.capsule.runCapsuleWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory, derivedDirectory: state.directories.derivedDirectory, identity: state.identity, op: "chunkRange", view: state.view, source: found.hits[0].handle.source, decodedStart: 0, decodedLength: 32768, limit: 2 }, { schedulerDirectory, slots }); observe(m, "exact", chunkStarted, chunk); assert.equal(chunk.ok, true, JSON.stringify(chunk));
+    const pageStarted = performance.now(), old = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory, sessionKey: state.sessionKey, op: "page", view: state.view, after: Math.max(0, state.view.eventCut - 1), limit: 2 }, { schedulerDirectory, slots }); observe(m, "exact", pageStarted, old); assert.equal(old.ok, true, JSON.stringify(old)); assert.equal(old.result.events.at(-1).metadata.id, state.session.leafId, "pinned view excludes concurrent append");
+    const rawEvent = old.result.events.at(-1), exactStarted = performance.now(), exact = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory, sessionKey: state.sessionKey, op: "raw", view: state.view, eventSeq: rawEvent.seq, offset: rawEvent.rawStart, length: Math.min(8192, rawEvent.endByte - rawEvent.rawStart) }, { schedulerDirectory, slots }); observe(m, "exact", exactStarted, exact); assert.equal(exact.ok, true, JSON.stringify(exact));
+  });
+  const residue = await modules.scheduler.schedulerArtifactCounts(schedulerDirectory); assert.deepEqual(residue, { tickets: 0, slots: 0 });
+  return { slots, sessions: sessionCount, queue, schedulerResidue: residue };
+}
+async function faultCampaign(root, state, modules, m) {
+  const schedulerDirectory = join(root, "scheduler-faults"); await mkdir(schedulerDirectory, { recursive: true, mode: 0o700 });
+  const sourceBefore = await Promise.all(state.session.shards.map(shard => hashFile(shard.path)));
+  const staleStarted = performance.now(), stale = await modules.search.runSearchV3Worker({ v: 1, searchDirectory: state.directories.searchDirectory, capsuleDirectory: state.directories.derivedDirectory, catalogDirectory: state.directories.catalogDirectory, identity: { ...state.searchIdentity, configHash: sha("m11-stale-search-generation") }, op: "status", view: state.view }, { schedulerDirectory, slots: 1 }); observe(m, "search", staleStarted, stale); assert.equal(stale.ok, false, "stale schema must refuse");
+  const { default: Database } = await import("better-sqlite3"), database = new Database(join(state.directories.derivedDirectory, "derived.sqlite"), { readonly: true, fileMustExist: true });
+  let name; try { name = database.prepare("SELECT segmentHash FROM artifacts WHERE layer='capsules' ORDER BY eventSeq,descriptor LIMIT 1").pluck().get(); } finally { database.close(); }
+  assert.match(name ?? "", /^[a-f0-9]{64}$/, "capsule segment required for corruption fault");
+  const path = join(state.directories.derivedDirectory, "segments", "capsules", name), original = await readFile(path), corrupted = Buffer.from(original); corrupted[Math.floor(corrupted.length / 2)] ^= 1; await writeFile(path, corrupted, { mode: 0o600 });
+  const request = { v: 1, catalogDirectory: state.directories.catalogDirectory, derivedDirectory: state.directories.derivedDirectory, identity: state.identity, op: "capsulePage", view: state.view, limit: 1 };
+  const corruptStarted = performance.now(); let refused; try { refused = await modules.capsule.runCapsuleWorker(request, { schedulerDirectory, slots: 1 }); observe(m, "fault", corruptStarted, refused); } finally { await writeFile(path, original, { mode: 0o600 }); }
+  assert.equal(refused.ok, false, "corrupt segment must refuse");
+  const repairStarted = performance.now(), recovered = await modules.capsule.runCapsuleWorker(request, { schedulerDirectory, slots: 1 }); observe(m, "recovery", repairStarted, recovered); assert.equal(recovered.ok, true, JSON.stringify(recovered));
+  const sourceAfter = await Promise.all(state.session.shards.map(shard => hashFile(shard.path))); assert.deepEqual(sourceAfter, sourceBefore, "fault and repair must not change source");
+  return { staleSchemaCode: stale.code, corruptSegmentCode: refused.code, repairRecoveryMs: performance.now() - repairStarted, sourceUnchanged: true };
 }
 async function runCampaign(args) {
   assert.equal(currentSha(), args.candidateSha, "candidate SHA must equal checkout HEAD");
@@ -251,41 +297,50 @@ async function runCampaign(args) {
       await writeFile(manifestPath, `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, candidateSha: args.candidateSha, profile, generated })}\n`, { mode: 0o600 });
     }
     const c = config(profile); assert.ok(generated.totals.sourceBytes <= c.diskLimitBytes); const modules = await runtimeModules(); const m = metrics();
-    const baseline = processMemory(), lanes = [];
-    for (let i = 0; i < c.slots.length; i++) {
-      const count = c.sessionCounts[Math.min(i, c.sessionCounts.length - 1)];
-      lanes.push(await qualifyLane(args.campaignRoot, { sessions: generated.sessions.slice(0, count) }, c.slots[i], modules, m));
-    }
-    const compositionHashes = [], compositionStart = performance.now();
+    const baseline = processMemory(), workstationBaseline = await workstationRss(), statePath = join(args.campaignRoot, "prepared-state.json");
+    const savedState = args.mode === "resume" ? JSON.parse(await readFile(statePath, "utf8")) : undefined;
+    if (savedState) { assert.equal(savedState.schemaVersion, 1); assert.equal(savedState.candidateSha, args.candidateSha); }
+    const states = savedState ? savedState.states : await prepareStores(args.campaignRoot, generated, modules, m);
+    if (args.mode !== "resume") await writeFile(statePath, `${JSON.stringify({ schemaVersion: 1, candidateSha: args.candidateSha, states })}\n`, { mode: 0o600 });
+    const lanes = [], faults = await faultCampaign(args.campaignRoot, states[0], modules, m);
+    for (const count of c.sessionCounts) for (const slots of c.slots) lanes.push(await exerciseLane(args.campaignRoot, states, count, slots, modules, m));
+    const compositionHashes = [], coverage = [], compositionStart = performance.now();
     for (let ordinal = 1; ordinal <= c.compositionGenerations; ordinal++) {
-      const session = generated.sessions[(ordinal - 1) % generated.sessions.length], one = performance.now();
-      const first = modules.composer.composeShadowContext(compositionInput(session, ordinal)); const second = modules.composer.composeShadowContext(compositionInput(session, ordinal));
-      m.latencies.composition.push(performance.now() - one); assert.equal(first.envelope.payloadHash, second.envelope.payloadHash); assert.equal(first.status, "composed"); compositionHashes.push(first.envelope.payloadHash);
+      const state = states[(ordinal - 1) % states.length], one = performance.now();
+      const input = { regularPiSummary: `Deterministic Pi summary for session ${state.session.session}, generation ${ordinal}.`, combinedCeilingTokens: 30_000,
+        cut: { sourceCutEntryId: state.session.leafId, sourceCutSeq: state.view.eventCut, firstKeptEntryId: `m11-tail-${state.session.session}-${ordinal}`, firstKeptSeq: state.view.eventCut + 1, rawTailTokens: 64, toolPairSafe: true } };
+      const recovery = source => `opaque:m11:${state.session.session}:${source.eventSeq}:${source.descriptor}`;
+      const first = modules.composer.composeStoredSelection(input, state.selection, recovery), second = modules.composer.composeStoredSelection(input, state.selection, recovery);
+      m.latencies.composition.push(performance.now() - one); assert.equal(first.envelope.payloadHash, second.envelope.payloadHash); compositionHashes.push(first.envelope.payloadHash);
+      coverage.push(first.envelope.validation);
     }
     const diskBytes = await directoryBytes(args.campaignRoot); assert.ok(diskBytes <= c.diskLimitBytes, "campaign disk ceiling");
     const largest = Math.max(...generated.sessions.map(item => item.estimatedTokens));
-    if (profile === "full") { assert.ok(largest >= 100_000_000); assert.ok(generated.totals.estimatedTokens >= 1_000_000_000); assert.ok(generated.totals.compactions >= 100); }
+    if (profile === "full") { assert.ok(largest >= 200_000_000); assert.ok(generated.totals.estimatedTokens >= 1_000_000_000); assert.ok(generated.totals.compactions >= 100); assert.ok(Math.max(...generated.sessions.map(item => item.shards.length)) >= 10); }
     delay.disable(); passed = true;
-    report = { schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-scale-campaign", status: "passed", profile, candidateSha: args.candidateSha,
+    report = { schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-scale-campaign", status: "completed", qualificationStatus: "partial-core-evidence", profile, candidateSha: args.candidateSha,
       generated: { totals: generated.totals, sessions: generated.sessions.map(item => ({ session: item.session, decodedUnits: item.decodedUnits, estimatedTokens: item.estimatedTokens,
         sourceBytes: item.sourceBytes, events: item.events, physicalShards: item.shards.length, compositionRecords: item.compactions })) }, lanes,
-      measurements: { mainProcess: { baseline, final: processMemory() }, workerPeakRssBytes: Math.max(0, ...m.workerPeaks.map(item => item.processPeakRssBytes ?? 0)),
-        totalHostRss: "unavailable: campaign observes its cgroup and worker peaks, not an independent live-host capacity pool",
+      measurements: { mainProcess: { baseline, final: processMemory() }, worker: { peakRssBytes: Math.max(0, ...m.workerPeaks.map(item => item.processPeakRssBytes ?? 0)), peakCgroupBytes: Math.max(0, ...m.workerPeaks.map(item => item.cgroupMemoryPeakBytes ?? 0)) },
+        workstationProcessRss: { baseline: workstationBaseline, final: await workstationRss() },
         eventLoopDelayMs: { p50: delay.percentile(50) / 1e6, p95: delay.percentile(95) / 1e6, p99: delay.percentile(99) / 1e6, maximum: delay.max / 1e6 },
-        ingestionLag: "bounded catch-up completion checked; elapsed settled-to-ready lag is not exposed by these worker APIs",
-        searchMs: distribution(m.latencies.search), recallMs: distribution(m.latencies.recall, false), exactMs: distribution(m.latencies.exact),
+        appendIngestionLagMs: distribution(m.latencies.appendIngestionLag), searchMs: distribution(m.latencies.search), recallMs: distribution(m.latencies.recall, false), exactMs: distribution(m.latencies.exact),
         compositionMs: { ...distribution(m.latencies.composition), total: performance.now() - compositionStart, excludesPiModelSummary: true },
         sourceBytesReadPerOperation: Object.fromEntries(Object.entries(m.sourceBytes).map(([key, values]) => [key, distribution(values)])),
-        segmentBytesRead: "unavailable: current public worker observations combine process I/O and do not attribute immutable-segment bytes",
-        queueWait: "unavailable: request wall time includes admission, process startup, work, and response; scheduler does not expose queue wait separately",
-        requestWallMs: distribution(m.latencies.request), failures: m.failures, recoveryTime: "process resume is measured by a separate resume invocation; system restart requires operator evidence",
-        exactReferenceValidation: { sampledSessions: generated.sessions.length, passed: true }, contextCoverage: { protectedComplete: true, openWorkComplete: true, deterministicGenerations: compositionHashes.length }, processIo: m.processIo },
+        processReaderCountersByOperation: Object.fromEntries(Object.entries(m.processIoByOperation).map(([kind, counters]) => [kind, Object.fromEntries(Object.entries(counters).map(([key, values]) => [key, distribution(values)]))])),
+        segmentBytesRead: "unavailable separately: public worker observations expose whole-process read characters/storage bytes, reported above, but not per-segment reads",
+        queueWaitByLane: lanes.map(lane => ({ sessions: lane.sessions, slots: lane.slots, ...lane.queue })),
+        requestWallMs: distribution(m.latencies.request), failures: m.failures, recoveryTime: { corruptSegmentMs: faults.repairRecoveryMs, processRestart: "requires separate resume invocation", systemRestart: "requires operator reboot evidence" },
+        exactReferenceValidation: { sampledSessions: generated.sessions.length, passed: true, perShardCatalogSearchRecall: states.reduce((sum, state) => sum + state.verifiedShards, 0), allPhysicalShardsVerified: states.every(state => state.verifiedShards === state.session.shards.length) }, contextCoverage: { source: "actual materializeState -> composeStateSelection -> composeStoredSelection", deterministicGenerations: compositionHashes.length,
+          protectedComplete: coverage.filter(item => item.protectedCoverageComplete).length, openWorkComplete: coverage.filter(item => item.openWorkCoverageComplete).length, safeTail: coverage.filter(item => item.safeTail).length,
+          withinCombinedCeiling: coverage.filter(item => item.withinCombinedCeiling).length }, faults },
       diskBytes, wallMs: performance.now() - started, startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(),
-      faultCoverage: { sourceAppendDuringPinnedSnapshot: "passed", staleSchemaGeneration: "passed", workerCrashAndTransactionKill: "reuse revision-bound M03/M04 evidence; not reinjected by this script", corruptedDerivedSegment: "not yet exercised",
-        processRestart: args.mode === "resume" ? "passed" : "pending resume invocation", systemRestart: "requires operator reboot between run and resume; not inferred" },
-      limitations: ["Generated estimated tokens equal ceil(actual decoded UTF-16 units / 4), the runtime estimator. Source bytes and event counts are measured from real writes.",
-        "Composition generations call the deterministic composer with source-linked generated identities. They do not claim a Pi provider summary or authoritative activation.",
-        "The campaign does not infer total host RSS, queue wait, segment-only bytes, ingestion-lag duration, or system-restart success from broader counters."] };
+      faultCoverage: { sourceAppendDuringPinnedSnapshot: "passed", staleSchemaGeneration: faults.staleSchemaCode, workerCrashAndTransactionKill: "reuse revision-bound unchanged M04 worker/runtime paths", corruptedDerivedSegment: faults.corruptSegmentCode,
+        corruptedSegmentRepair: "passed", sourceUnchangedAfterFaults: faults.sourceUnchanged, processRestart: args.mode === "resume" ? "process resumed" : "pending resume invocation", systemRestart: "requires operator reboot between run and resume; not inferred" },
+      remainingQualificationGates: ["actual Pi-process baseline and overhead", "actual Pi rollover/switch/rollback", "operator system restart", "model continuation quality is excluded because providers are forbidden"],
+      limitations: ["Completed means the bounded synthetic core campaign finished. It is not an M11 pass or full product qualification.", "Generated estimated tokens equal ceil(actual decoded UTF-16 units / 4), the runtime estimator. Source bytes and event counts are measured from real writes.",
+        "Composition uses actual deterministic state production and stored selection. It is core composer evidence, not a Pi hook, provider summary, continuation-quality result, or authoritative activation.",
+        "Whole-workstation RSS is a sampled sum of readable VmRSS fields and includes unrelated processes and shared-page double counting. Segment-only reads and system restart remain unavailable without narrower runtime counters or an operator reboot."] };
   } catch (error) {
     delay.disable(); report = { schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-scale-campaign", status: "failed", candidateSha: args.candidateSha,
       failureCode: /^[A-Za-z0-9_-]{1,80}$/.test(error?.code ?? "") ? error.code : "m11-campaign-failed", failureMessage: String(error?.message ?? "failure").replaceAll(args.campaignRoot ?? "", "<campaign-root>"),
@@ -295,12 +350,12 @@ async function runCampaign(args) {
   console.log(JSON.stringify({ status: report.status, profile: report.profile, output: basename(args.output), wallMs: report.wallMs }));
   if (!passed) process.exitCode = 1;
 }
-export { FULL, SMOKE, config, distribution, parseArgs, sessionTargets };
+export { FULL, SMOKE, config, distribution, exerciseLane, faultCampaign, metrics, parseArgs, runtimeModules, sessionTargets };
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv); if (args.mode === "help") return console.log(HELP);
   assert.equal(currentSha(), args.candidateSha, "candidate SHA must equal checkout HEAD");
   if (args.mode === "plan") { const c = config(args.profile); console.log(JSON.stringify({ schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-plan", profile: args.profile, candidateSha: args.candidateSha,
-    sessions: c.sessions, sessionMatrix: c.sessionCounts, workerSlotMatrix: c.slots, actualDecodedUnits: c.totalDecodedUnits, minimumEstimatedTokens: Math.ceil(c.totalDecodedUnits / 4),
+    sessions: c.sessions, sessionMatrix: c.sessionCounts, workerSlotMatrix: c.slots, concurrencyMatrix: c.sessionCounts.flatMap(sessions => c.slots.map(slots => ({ sessions, slots }))), actualDecodedUnits: c.totalDecodedUnits, minimumEstimatedTokens: Math.ceil(c.totalDecodedUnits / 4),
     largestSessionEstimatedTokens: Math.ceil(c.largestSessionDecodedUnits / 4), compositionGenerations: c.compositionGenerations, diskLimitBytes: c.diskLimitBytes, wallLimitMs: c.wallLimitMs,
     requiresExclusiveParentConfirmation: args.profile === "full" })); return; }
   await runCampaign(args);

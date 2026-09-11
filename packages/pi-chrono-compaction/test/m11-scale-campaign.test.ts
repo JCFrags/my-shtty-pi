@@ -14,13 +14,14 @@ test("M11 campaign requires revision binding and explicit absolute isolated path
   assert.throws(() => parseArgs(["run", "--profile", "full", "--candidate-sha", SHA, "--campaign-root", "/tmp/campaign", "--output", "/tmp/campaign/out.json"]), /output-inside-campaign/);
 });
 
-test("full profile represents actual billion-token decoded input and hundred-million-token largest session", () => {
+test("full profile represents actual billion-token decoded input and hundreds-of-millions-token largest session", () => {
   const targets = sessionTargets(FULL);
   assert.equal(targets.length, 16);
   assert.equal(targets.reduce((sum, value) => sum + value, 0), 4_000_000_000);
-  assert.equal(Math.ceil(Math.max(...targets) / 4), 100_000_000);
+  assert.equal(Math.ceil(Math.max(...targets) / 4), 200_000_000);
   assert.equal(Math.ceil(targets.reduce((sum, value) => sum + value, 0) / 4), 1_000_000_000);
   assert.ok(FULL.compositionGenerations >= 100);
+  assert.equal(FULL.sessionCounts.flatMap(sessions => FULL.slots.map(slots => ({ sessions, slots }))).length, 9);
   assert.deepEqual(SMOKE.sessionCounts, [4]);
 });
 
