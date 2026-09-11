@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.24 qualification blocked at the first rollover by a reproduced continuation-hash defect. The parent accepted the minimal source correction and focused regression. Qualification now awaits a distinct packaged 2.0.25 candidate and parent authorization.
+Status: package 2.0.25 qualification blocked after its first successful rollover and immediate successful rollback because Pi did not persist the bootstrap-only replacement source referenced by the retained rollback branch.
 
 ## Scope
 
@@ -73,7 +73,17 @@ Focused diagnosis through the same actual indexed selection reproduced `capsule-
 
 The accepted correction reuses `composed.envelope.artifactHash`. It does not loosen `canonicalJson`, alter producer importance, rebuild the frozen 2.0.24 candidate, or change other continuation validation. One focused regression sends an actual fractional-importance episode row through the composer and continuation builder, then verifies that the continuation preserves the composer artifact hash.
 
-All failed synthetic roots remain owner-only and retained for diagnosis. The 10-rollover, fork, reopen, recovery, bounded-shard, and no-deletion acceptance checks remain unqualified until the parent supplies a separately packaged corrected candidate.
+All failed synthetic roots remain owner-only and retained for diagnosis.
+
+## Package 2.0.25 result
+
+The authorized installed-Pi retry used unchanged runtime candidate `aa160c082dd9f027b0e378c53c2784e00ef1727e`, exact committed `dist`, package 2.0.25, Pi 0.85.1, Node 24.18.0 ABI 137, `better-sqlite3` 12.9.0, and native binding SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`. The package tree was `bf6d3c3c5d60732bb98b556c3f1a9a9f428aa849`; the 134-record manifest hash was `b0a8fdb3421e75f53fb86695d6f3b5d8c190555dc447f3a4c5928e6b9d4ee386`.
+
+The initial indexed search, recall, and exact recovery probe passed. The first actual rollover passed the corrected continuation producer and validation gates. The immediate rollback then passed and reopened the exact old source. Its manifest retained two physical shards across the main branch and isolated rollback branch, but Pi had not created the replacement JSONL named by the rollback shard.
+
+Pi 0.85.1 defers creation of a new session file until the session contains a normal assistant message. The logical continuation is a `custom_message`, while rollback eligibility correctly requires the replacement to contain only bootstrap records and that continuation. A focused harness-sequencing diagnostic confirmed that adding normal fixture messages creates the source but makes the real rollback gate refuse `logical-session-rollback-ineligible`. The harness cannot satisfy both conditions without fabricating a source or bypassing the gate.
+
+Scalar result: one rollover command passed, one immediate rollback command passed, one retained manifest source was absent, zero providers were called, and no qualification result JSON was emitted. Three failed owner-only synthetic roots are retained. The remaining ten-rollover, fork, reopen, ancestor recovery, bounded-shard, and no-source-deletion checks are unqualified. This requires parent runtime direction; it is not an ordinary harness correction.
 
 ## Result fields
 
