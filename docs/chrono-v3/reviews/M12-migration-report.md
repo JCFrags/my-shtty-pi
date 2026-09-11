@@ -22,6 +22,18 @@ The normal V3 path does not schedule the legacy incremental candidate reconstruc
 - Status reports source byte size from file metadata and record/compaction counts from the already loaded physical branch. It does not parse archived source to obtain these counts.
 - Automatic rollover remains disabled. Physical Pi `/fork` is not the logical-fork operation.
 
+## Operator boundaries
+
+1. Build and verify an exact accepted revision before changing its registration. Keep the package, startup authorization, and native dependency identity together.
+2. Save the current Chrono source slot, alias, configuration, and rollback assets. Restore only Chrono-owned values, not a whole settings snapshot that can overwrite another package's newer selection.
+3. Refresh the complete live process roster. A changed package source does not prove a running process loaded it.
+4. Reload a session only after its tools, managed jobs, compaction, and switch have settled and its editor is empty. Pi reload emits shutdown events and can stop managed jobs. Preserve drafts and let work finish naturally.
+5. Check loaded runtime identity, automatic tools, migration progress, actual composition gates, and bounded retrieval for each live session. Record blocked coverage and pending reloads separately.
+6. For migration repair, resume the existing store checkpoints. Do not reset catalog or source identity, delete old shards, or clear coverage gaps to force readiness.
+7. Exercise scoped rollback only at the same safe boundary. Retain both source and derived stores so the prior release can reopen its own supported generations. A rollback-check result is not an exercised rollback.
+
+No shared deployment or live-session rollback has been performed for this candidate. The final receipt must record those results independently from the focused fixture below.
+
 ## Focused evidence
 
 1. The exclusion fixture passed all three cases: explicit configuration disable, persisted exclusion, and unsafe rollout directory. Each existing-session compaction cancelled before legacy reconstruction. Migration readiness did not claim cut eligibility.
