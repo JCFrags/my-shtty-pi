@@ -21,10 +21,15 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.18.0"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm test
+      - name: Prepare verified Chrono native build headers
+        run: |
+          npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
+          node packages/pi-chrono-compaction/node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
+          echo "CHRONO_CATALOG_NODE_HEADERS=$RUNNER_TEMP/chrono-node-headers/24.18.0" >> "$GITHUB_ENV"
       - run: npm run verify
       - name: Verify preserved Chrono corrective package
         run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only

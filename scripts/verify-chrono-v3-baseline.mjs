@@ -6,12 +6,47 @@ import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const CHRONO_BASELINE = Object.freeze({
+export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
   commit: 'ad23f0b71ee473d33aff26d367459e76d208c631',
   tree: '14dbd0cb89a8b66f4225e2932503b62a808d9be1',
   files: 278,
-  package: 'packages/pi-chrono-compaction',
   version: '2.0.4',
+});
+export const CHRONO_BASELINE = Object.freeze({
+  commit: 'b5918dbf952423e86a50a71e03ae1996c4801ea5',
+  upstreamTree: 'fe3c1df802214b6eba96f39fc36912817058d0d3',
+  tree: 'eb53a6a18c63cd15cc6108bcc94243ec2c4116f7',
+  files: 398,
+  maps: 124,
+  package: 'packages/pi-chrono-compaction',
+  version: '2.0.15',
+  testOnlyDifferences: Object.freeze([
+    Object.freeze({
+      path: 'test/capsule-extension.test.ts',
+      upstreamSha256: '6070fcea5f49f22632d37d2853b6538b3c3daf41ff28608de002dda6b31d9902',
+      integratedSha256: 'd0dd28fb1f7dbe71f945f52174284a5102730c1631228cb7d64230478bd3e37d',
+    }),
+    Object.freeze({
+      path: 'test/catalog-history-provenance.test.ts',
+      upstreamSha256: '37a10d10a33c1ad7bebfb082d1e3396782331924fae9ecbd76dcefd09a0e4bbb',
+      integratedSha256: 'bdbd323f06ff4be86695c40e503c9dcc8d126950d53f6d6c52f3db1b545e1abd',
+    }),
+    Object.freeze({
+      path: 'test/catalog-lifecycle.test.ts',
+      upstreamSha256: 'ad0ac9d641c5453c181fd954776062dd156b3ed208f8fa447c6e2872f1a2d8c4',
+      integratedSha256: '90d33f69ddd8a7f93b0e8113d283207bdb2814fef73fc3f6c45f35d7efa7632d',
+    }),
+    Object.freeze({
+      path: 'test/extension.test.ts',
+      upstreamSha256: '1d0247207b0dc2fc30e3b219c277d0f8ad4ffdf12e7be9d7f5ac11f782675c06',
+      integratedSha256: 'b2c1439fc352ff4bb9fdf7b24cdc7bafaf6e97e330ed66105a4e9161ae2afc8d',
+    }),
+    Object.freeze({
+      path: 'test/worker-runtime.test.ts',
+      upstreamSha256: 'd55227e12c9ce45e42b4703daf30b2966f95d1352cd442319ae01fd8fbf7fee0',
+      integratedSha256: '54ed55886810e4dbaf14625efc8a84aacc39a6f88009a71c1e7ea20821046b3b',
+    }),
+  ]),
 });
 const fail = code => { throw new Error(code); };
 const objectHash = (kind, bytes) => createHash('sha1').update(`${kind} ${bytes.length}\0`).update(bytes).digest('hex');
@@ -53,7 +88,7 @@ function inspectChronoFiles(packageRoot, generatedMaps = false) {
   try {
     const identity = checkIdentity(visit(packageRoot, true), files, 'chrono-package-tree-mismatch');
     if (!generatedMaps) return identity;
-    if (maps.length !== 83 || JSON.stringify(maps.sort()) !== JSON.stringify(javascript.map(path => `${path}.map`).sort())) fail('chrono-generated-map-inventory');
+    if (maps.length !== CHRONO_BASELINE.maps || JSON.stringify(maps.sort()) !== JSON.stringify(javascript.map(path => `${path}.map`).sort())) fail('chrono-generated-map-inventory');
     for (const path of maps) {
       const map = JSON.parse(readFileSync(path, 'utf8'));
       const source = resolve(packageRoot, relative(join(packageRoot, 'dist'), path).replace(/\.js\.map$/, '.ts'));
@@ -104,7 +139,7 @@ export function verifyFrozenChrono(repositoryRoot) {
   // remain reachable after selective integration, branch cleanup, or shallow CI.
   verifyChronoIndex(records);
   const identity = verifyChronoFiles(join(repositoryRoot, CHRONO_BASELINE.package));
-  return { status: 'ok', sourceCommit: CHRONO_BASELINE.commit, packageVersion: CHRONO_BASELINE.version, ...identity, index: 'exact', worktree: 'exact', live: { state: 'not-checked' } };
+  return { status: 'ok', sourceCommit: CHRONO_BASELINE.commit, upstreamPackageTree: CHRONO_BASELINE.upstreamTree, packageVersion: CHRONO_BASELINE.version, testOnlyDifferences: CHRONO_BASELINE.testOnlyDifferences, ...identity, index: 'exact', worktree: 'exact', live: { state: 'not-checked' } };
 }
 export function main(args = process.argv.slice(2)) {
   let root = resolve(dirname(fileURLToPath(import.meta.url)), '..');

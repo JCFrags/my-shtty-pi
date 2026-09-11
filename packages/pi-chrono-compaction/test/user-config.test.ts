@@ -10,6 +10,13 @@ import {
   validateUserConfig,
 } from "../src/user-config.js";
 
+test("catalog shadow requires explicit opt-in and rejects invalid boolean configuration", () => {
+  assert.equal(validateUserConfig({}).catalogShadowEnabled, undefined);
+  assert.equal(applyConfigCommand({}, "catalog-shadow on").config.catalogShadowEnabled, true);
+  assert.equal(applyConfigCommand({}, "catalog-shadow off").config.catalogShadowEnabled, false);
+  assert.throws(() => validateUserConfig({ catalogShadowEnabled: "perhaps" }), /catalogShadowEnabled/);
+});
+
 test("persistent compactor controls set independent trigger, tail, and target values", () => {
   let config = applyConfigCommand({}, "trigger 48000").config;
   config = applyConfigCommand(config, "raw-tail dynamic").config;
