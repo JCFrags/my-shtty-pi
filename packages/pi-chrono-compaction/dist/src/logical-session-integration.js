@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { canonicalJson } from "./capsule-segment.js";
 import { composeStoredSelection } from "./context-composer.js";
 import { resolveLogicalShardRoutes } from "./logical-session-routing.js";
 const hash = (text) => createHash("sha256").update(text).digest("hex");
@@ -138,7 +137,7 @@ export function buildManualContinuationCandidate(input) {
     return { logicalSessionId: input.manifest.logicalSessionId, branchId: input.branchId, fromShardId: shard.shardId,
         source, coveredShards, summary: composed.text,
         composition: { schemaVersion: 1, payloadHash: composed.envelope.payloadHash,
-            artifactHash: hash(canonicalJson(composed.artifact)), combinedTokens: composed.envelope.combinedTokens,
+            artifactHash: composed.envelope.artifactHash, combinedTokens: composed.envelope.combinedTokens,
             combinedCeilingTokens: input.combinedCeilingTokens, validation: { ...composed.envelope.validation } },
         mandatory: { protectedEligible: restrictions.length, protectedCovered: restrictions.filter(item => item.covered).length,
             openWorkEligible: openWork.length, openWorkCovered: openWork.filter(item => item.covered).length,

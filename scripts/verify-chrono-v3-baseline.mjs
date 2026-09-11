@@ -15,16 +15,16 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "52d5b2e6fdaeed68f30da79cc9c8ce646c4559c3",
-  "files": 422,
+  "tree": "bf6d3c3c5d60732bb98b556c3f1a9a9f428aa849",
+  "files": 423,
   "maps": 133,
   "package": "packages/pi-chrono-compaction",
-  "version": "2.0.24",
+  "version": "2.0.25",
   "integrationDifferences": [
     {
       "path": "DEPLOYED.sha256",
       "upstreamSha256": "3954d79d5faa1bb68e189a9db2fc799f0b4659715a2d73c91df2d7e332f3d627",
-      "integratedSha256": "5a0661aab847753dcdb7ba8b9d45aa269ef21d027c3739b5999c90da54c940c0"
+      "integratedSha256": "b0a8fdb3421e75f53fb86695d6f3b5d8c190555dc447f3a4c5928e6b9d4ee386"
     },
     {
       "path": "README.md",
@@ -39,7 +39,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "dist/src/logical-session-integration.js",
       "upstreamSha256": "b92ed77386c2233c3ea2247f2b70cf247b7e0398c4aa8e38de95af6f0b0fada5",
-      "integratedSha256": "ba64ddaa7a6ffdd67021d81293270450050b45839573c62fa253f4417ea8be89"
+      "integratedSha256": "b944af5271a78b9d6d736dda86f08df1e631985d966c8bb518b8ba9b102182c3"
     },
     {
       "path": "dist/src/logical-session-rollover.js",
@@ -69,7 +69,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "dist/src/runtime-identity.js",
       "upstreamSha256": null,
-      "integratedSha256": "1d6585771fe67177d26f00872240d2a4ee480ba602abc957cf3b553fc04bc582"
+      "integratedSha256": "57bbff84205cc3b046aef494443a8bd370bdb7d35ea12b26597704899ed5c22e"
     },
     {
       "path": "dist/src/session-migration.js",
@@ -84,12 +84,17 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "package-lock.json",
       "upstreamSha256": "42024d0876d7a367509bb86b11601c3ede4cebb7282cfb14b803d42ce60114d9",
-      "integratedSha256": "2bade90ba051db80b40884b6590c03fdef1981c4adf32ddb571c3cd8152d39bf"
+      "integratedSha256": "ddb8afcde71710bf2a144aa0009f8082c494b75bb3f4d7eb894f730d01847465"
     },
     {
       "path": "package.json",
       "upstreamSha256": "18e98ac6afc84a504df0c3bee20690941c2a60390f74b0d413603b0b2cf717e4",
-      "integratedSha256": "10bfd2181fbe03e9bb57625d71b7970508aab670514b77b248620f1318141d93"
+      "integratedSha256": "58618ef6f07e47e2c13f9dfa6cb471b7567a6e42675347f3884a8e61fd055710"
+    },
+    {
+      "path": "scripts/m11-logical-pi-qualification.mjs",
+      "upstreamSha256": null,
+      "integratedSha256": "738ef9efc72cf39c363a85099a216c991fc880de4db233568da7daedc90dd0aa"
     },
     {
       "path": "scripts/m11-scale-campaign.mjs",
@@ -104,7 +109,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "src/logical-session-integration.ts",
       "upstreamSha256": "a9ee8074c4522ce5382ee8496b5799895f009d9de3eb2311bb2d5540b60aa776",
-      "integratedSha256": "fa271f038d99626f7cef08c2272c4bf3987828522a2940ffbeea5f6f0fba3286"
+      "integratedSha256": "6946c40d2e94676877f33fb1c9ebcb4151d3832ccf7eb28a717af955281e1fc6"
     },
     {
       "path": "src/logical-session-rollover.ts",
@@ -134,7 +139,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "src/runtime-identity.ts",
       "upstreamSha256": null,
-      "integratedSha256": "46123c9618c2e3b1d04d1224a55d9fdc4ca15e07fbc576016be769118bb224f6"
+      "integratedSha256": "b4d38dc0c25008049a5bb4528d70bde3b276c4340deb9dd28a2ef422ff33238e"
     },
     {
       "path": "src/session-migration.ts",
@@ -174,7 +179,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "test/logical-session-rollover.test.ts",
       "upstreamSha256": "cc8ed24310a5ff9301a48ffda61fadb3301b59b560e4b194073bfb7a364d1fd8",
-      "integratedSha256": "7dc65f8cf7188d7b2a8607b0f506c451a9fb54fcac3d586f63f073e1b91c7673"
+      "integratedSha256": "6cfece9404734835cdd873ef5374bb1f387112078cc6c82224341de3a877b4b9"
     },
     {
       "path": "test/m11-scale-campaign.test.ts",
