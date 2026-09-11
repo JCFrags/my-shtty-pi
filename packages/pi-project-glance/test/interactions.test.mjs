@@ -9,14 +9,13 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ProjectGlanceFeedRegion, ProjectGlancePaneView } from "../dist/pane/main.js";
 import { ProjectGlancePaneModel } from "../dist/pane/model.js";
 import { ProjectGlanceRelayRuntime } from "../dist/pi/lifecycle.js";
-import { ProjectGlanceClient, probeProjectGlanceRelay } from "../dist/protocol/client.js";
+import { ProjectGlanceClient } from "../dist/protocol/client.js";
 import { encodeFrame, ProjectGlanceFrameDecoder } from "../dist/protocol/framing.js";
-import { PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX, PROJECT_GLANCE_PROTOCOL_VERSION } from "../dist/protocol/model.js";
+import { PROJECT_GLANCE_PROTOCOL_VERSION } from "../dist/protocol/model.js";
 import { readConnectionDescriptor } from "../dist/runtime/connection-file.js";
 import { deriveSessionKey } from "../dist/runtime/paths.js";
 
 const AT = "2026-09-03T00:00:00.000Z";
-const UI_TYPE = `${PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX}ui-state-v1`;
 const item = (id) => ({ id, type: "assistant_update", text: `update ${id}`, createdAt: AT });
 const snapshot = (sessionKey, revision, overrides = {}) => ({
   protocolVersion: 1, sessionKey, revision, generatedAt: AT, branchId: "A",
@@ -25,21 +24,15 @@ const snapshot = (sessionKey, revision, overrides = {}) => ({
 });
 const message = (id) => ({
   type: "message", id, parentId: null, timestamp: AT,
-  message: { role: "assistant", stopReason: "stop", timestamp: Date.parse(AT), content: [{
-    type: "text", text: `update ${id}`,
-    textSignature: JSON.stringify({ v: 1, id: `sig-${id}`, phase: "commentary" }),
-  }] },
+  message: {
+    role: "assistant", api: "openai-responses", provider: "synthetic", model: "synthetic",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop", timestamp: Date.parse(AT), content: [{
+      type: "text", text: `update ${id}`,
+      textSignature: JSON.stringify({ v: 1, id: `sig-${id}`, phase: "commentary" }),
+    }],
+  },
 });
-const custom = (data) => ({ type: "custom", customType: UI_TYPE, data });
-
-function context(state, sessionId = "interaction-session") {
-  return { sessionManager: {
-    getSessionId: () => sessionId,
-    getLeafId: () => state.leaf,
-    getBranch: () => state.branches[state.leaf] ?? [],
-  } };
-}
-
 async function waitFor(predicate, timeoutMs = 2_000) {
   const start = Date.now();
   while (!predicate()) {
@@ -50,7 +43,11 @@ async function waitFor(predicate, timeoutMs = 2_000) {
 
 async function withRuntime(run) {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-interactions-"));
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = {
+    ...process.env,
+    XDG_RUNTIME_DIR: join(root, "runtime"),
+    XDG_STATE_HOME: join(root, "state"),
+  };
   try { await run({ root, environment }); }
   finally { await rm(root, { recursive: true, force: true }); }
 }
@@ -178,391 +175,156 @@ test("the complete CURRENT section uses one distinct width-bounded card", () => 
   }
 });
 
-test("oldest-unread focus scroll uses component row metadata after links are stripped", () => {
-  const sessionKey = deriveSessionKey("pane-focus-scroll");
+test("Inbox navigation keeps item anchors without acknowledging attention", () => {
+  const sessionKey = deriveSessionKey("pane-inbox-anchor");
   const model = new ProjectGlancePaneModel(sessionKey);
-  const feed = Array.from({ length: 20 }, (_, index) => item(`opaque-id-${index}`));
-  model.applySnapshot(snapshot(sessionKey, 1, { feed }));
+  model.applySnapshot(snapshot(sessionKey, 1, {
+    feed: [],
+    archive: { inboxCount: 40, historyCount: 0, commitSeq: 1, state: "ready" },
+  }));
+  model.archive.receivePage("inbox", undefined, {
+    branchId: "A", view: "inbox", snapshotSeq: 1,
+    items: Array.from({ length: 25 }, (_, index) => ({ itemId: `i${index}`, type: "assistant_update", preview: `Inbox ${index}`, createdAt: AT, bodyBytes: 20 })),
+    nextCursor: "older-25",
+  }, true);
+  model.reconcileSelection();
   const view = new ProjectGlancePaneView(model);
   const width = 32;
-  const contentHeight = view.feed.render(view.scrollView.getContentWidth(width)).length;
-  view.scrollView.updateLayout(contentHeight, 8, () => {});
-  view.scrollView.scrollToEnd();
-  const oldScrollTop = view.scrollView.scrollTop;
-  assert.ok(oldScrollTop > 0);
-  model.selectRelative(19);
-  assert.equal(model.focusOldestUnread(), "opaque-id-0");
-  view.scrollToSelected(width);
-  assert.ok(view.scrollView.scrollTop < oldScrollTop, "selected oldest unread must be brought back into view");
-  assert.equal(view.feed.selectedRow, 2, "focus includes the clickable top border");
+  const layout = () => view.scrollView.updateLayout(view.feed.render(width).length, 8, () => {});
+  layout();
+  view.scrollView.scrollTo(view.feed.rowForItem("i12") + 1);
+  const anchor = view.feed.anchorAt(view.scrollView.scrollTop);
+  view.preserveReadingPosition();
+  model.archive.receivePage("inbox", "older-25", {
+    branchId: "A", view: "inbox", snapshotSeq: 1,
+    items: Array.from({ length: 15 }, (_, index) => ({ itemId: `i${index + 25}`, type: "assistant_update", preview: `Inbox ${index + 25}`, createdAt: AT, bodyBytes: 20 })),
+    previousCursor: "newer-25",
+  }, false);
+  layout();
+  assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchor);
+  assert.equal(model.archive.summary.inboxCount, 40);
+  assert.deepEqual(model.snapshot.uiState?.readIds, []);
 });
 
-test("pane interaction state calculates unread, hides dismissed, and preserves selection and expansion", () => {
-  const sessionKey = deriveSessionKey("pane-interactions");
-  const model = new ProjectGlancePaneModel(sessionKey);
-  assert.equal(model.applySnapshot(snapshot(sessionKey, 1, {
-    uiState: { dismissedIds: ["two"], readIds: ["one"] },
-  })), "applied");
-  assert.deepEqual(model.visibleFeed.map(({ id }) => id), ["one", "three"]);
-  assert.equal(model.unreadCount, 1);
-  assert.equal(model.selectedId, "three");
-  assert.equal(model.isExpanded("three"), false);
-  model.toggleExpanded("three");
-  model.selectRelative(-1);
-  assert.equal(model.selectedId, "one");
-  assert.equal(model.isExpanded("three"), true);
-
-  assert.equal(model.applySnapshot(snapshot(sessionKey, 2, {
-    feed: [item("one"), item("three"), item("four")],
-    uiState: { dismissedIds: [], readIds: ["one"] },
-  })), "applied");
-  assert.equal(model.selectedId, "one");
-  assert.equal(model.isExpanded("three"), true);
-  assert.equal(model.isExpanded("four"), false);
-  model.toggleExpanded("three");
-  assert.equal(model.isExpanded("three"), false);
-
-  assert.equal(model.applySnapshot(snapshot(sessionKey, 3, {
-    feed: [item("three"), item("four")], uiState: { dismissedIds: [], readIds: [] },
-  })), "applied");
-  assert.equal(model.selectedId, "three", "removed selection falls back to oldest unread");
-});
-
-test("focusSerial uses a passive connection baseline and requests focus only for live increases", () => {
-  const sessionKey = deriveSessionKey("pane-focus");
-  const model = new ProjectGlancePaneModel(sessionKey);
-  model.applySnapshot(snapshot(sessionKey, 1, { focusSerial: 1, uiState: { dismissedIds: [], readIds: ["one"] } }));
-  assert.equal(model.consumeFocusRequest(), false);
-  assert.equal(model.focusOldestUnread(), "two");
-  assert.equal(model.consumeFocusRequest(), false);
-  model.applySnapshot(snapshot(sessionKey, 2, { focusSerial: 1, uiState: { dismissedIds: [], readIds: ["one"] } }));
-  assert.equal(model.consumeFocusRequest(), false);
-  model.applySnapshot(snapshot(sessionKey, 3, { focusSerial: 2, uiState: { dismissedIds: [], readIds: ["one"] } }));
-  assert.equal(model.consumeFocusRequest(), true);
-  assert.equal(model.consumeFocusRequest(), false);
-
-  model.setExpectedRelay({ sessionKey, generation: "b".repeat(32) });
-  model.applySnapshot(snapshot(sessionKey, 1, { focusSerial: 1 }), {
-    sessionKey,
-    generation: "b".repeat(32),
-  });
-  assert.equal(
-    model.consumeFocusRequest(),
-    false,
-    "a new relay generation must not replay old focus",
-  );
-});
-
-test("action server requires authentication and rejects stale identity, revision, and replay", async () => {
-  await withRuntime(async ({ environment }) => {
-    const state = { leaf: "A", branches: { A: [message("one"), message("two")] } };
-    const ctx = context(state);
-    const unreadCounts = [];
-    const runtime = new ProjectGlanceRelayRuntime(
-      environment,
-      undefined,
-      (data) => state.branches.A.push(custom(data)),
-      (count) => unreadCounts.push(count),
-    );
+test("durable pages retain every card and dismissal moves one card to permanent History", async () => {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  await withRuntime(async ({ root, environment }) => {
+    const manager = SessionManager.create(root, join(root, "sessions"));
+    manager.appendMessage({ role: "user", content: "Synthetic durable inbox", timestamp: Date.parse(AT) });
+    Array.from({ length: 70 }, (_, index) => manager.appendMessage(message(`m${index}`).message));
+    const runtime = new ProjectGlanceRelayRuntime(environment);
+    let client;
+    let latest;
     try {
-      await runtime.ensureForContext(ctx);
-      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
+      await runtime.ensureForContext({ sessionManager: manager });
+      client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (value) => { latest = value; } });
+      client.start();
+      await waitFor(() => latest?.archive?.inboxCount === 70);
+      assert.deepEqual(latest.feed, [], "archive-backed snapshots do not duplicate the first page");
+      const first = await client.requestPage(runtime.branchId, "inbox");
+      assert.equal(first.items.length, 25);
+      assert.deepEqual(first.items.map((value) => value.preview), Array.from({ length: 25 }, (_, index) => `update m${index}`), "Inbox is oldest first");
+      const second = await client.requestPage(runtime.branchId, "inbox", first.nextCursor);
+      assert.deepEqual(second.items.map((value) => value.preview), Array.from({ length: 25 }, (_, index) => `update m${index + 25}`));
+      const third = await client.requestPage(runtime.branchId, "inbox", second.nextCursor);
+      assert.deepEqual(third.items.map((value) => value.preview), Array.from({ length: 20 }, (_, index) => `update m${index + 50}`));
+      const itemIds = [...first.items, ...second.items, ...third.items].map((value) => value.itemId);
+      assert.equal(new Set(itemIds).size, 70, "pagination retains every durable card exactly once");
+      const dismissedId = first.items[0].itemId;
+      const revision = latest.revision;
+      await client.sendFeedAction(runtime.branchId, revision, { type: "dismiss", itemId: dismissedId });
+      await waitFor(() => latest?.archive?.inboxCount === 69 && latest?.archive?.historyCount === 1);
+      const inbox = await client.requestPage(runtime.branchId, "inbox");
+      const history = await client.requestPage(runtime.branchId, "history");
+      assert.equal(inbox.items.some((value) => value.itemId === dismissedId), false);
+      assert.deepEqual(history.items.map((value) => value.itemId), [dismissedId]);
+      assert.equal(history.items[0].archivedAt !== undefined, true);
+      assert.deepEqual(latest.uiState?.readIds ?? [], [], "dismissal does not create read acknowledgements");
+      client.stop();
+      client = undefined;
+      await runtime.restart("2026-09-03T00:00:01.000Z");
+      let restartedSnapshot;
+      client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (value) => { restartedSnapshot = value; } });
+      client.start();
+      await waitFor(() => restartedSnapshot?.archive?.historyCount === 1);
+      assert.equal((await client.requestPage(runtime.branchId, "history")).items[0].itemId, dismissedId, "History survives relay restart");
+    } finally { client?.stop(); await runtime.stop(); }
+  });
+});
 
+test("paged body transport keeps the full source behind a bounded preview", async () => {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  await withRuntime(async ({ root, environment }) => {
+    const manager = SessionManager.create(root, join(root, "sessions"));
+    manager.appendMessage({ role: "user", content: "Synthetic long body", timestamp: Date.parse(AT) });
+    const long = "界 durable paragraph ".repeat(3_000);
+    manager.appendMessage({
+      role: "assistant", api: "openai-responses", provider: "synthetic", model: "synthetic",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "toolUse", timestamp: Date.parse(AT), content: [
+        { type: "text", text: long },
+        { type: "toolCall", id: "tool", name: "read", arguments: {} },
+      ],
+    });
+    const runtime = new ProjectGlanceRelayRuntime(environment);
+    let client;
+    let latest;
+    try {
+      await runtime.ensureForContext({ sessionManager: manager });
+      client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (value) => { latest = value; } });
+      client.start();
+      await waitFor(() => latest?.archive?.inboxCount === 1);
+      const page = await client.requestPage(runtime.branchId, "inbox");
+      assert.equal(page.items.length, 1);
+      const card = page.items[0];
+      assert.ok(card.bodyBytes > Buffer.byteLength(card.preview, "utf8"));
+      const first = await client.requestBody(runtime.branchId, card.itemId, 0);
+      assert.ok(Buffer.byteLength(first.text, "utf8") <= 24 * 1024);
+      assert.equal(first.previousOffset, undefined);
+      const second = await client.requestBody(runtime.branchId, card.itemId, first.nextOffset);
+      assert.equal(second.previousOffset, 0);
+      assert.equal(second.bodyDigest, first.bodyDigest);
+      assert.equal(second.totalBytes, first.totalBytes);
+    } finally { client?.stop(); await runtime.stop(); }
+  });
+});
+
+test("dismiss action requires authentication and rejects stale identity and replay", async () => {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  await withRuntime(async ({ root, environment }) => {
+    const manager = SessionManager.create(root, join(root, "sessions"));
+    manager.appendMessage({ role: "user", content: "Synthetic action checks", timestamp: Date.parse(AT) });
+    manager.appendMessage(message("one").message);
+    const runtime = new ProjectGlanceRelayRuntime(environment);
+    try {
+      await runtime.ensureForContext({ sessionManager: manager });
+      let discoverySnapshot;
+      const discovery = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (value) => { discoverySnapshot = value; } });
+      discovery.start();
+      await waitFor(() => discoverySnapshot?.archive?.inboxCount === 1);
+      const page = await discovery.requestPage(runtime.branchId, "inbox");
+      discovery.stop();
+      assert.equal(page.items.length, 1);
+      const itemId = page.items[0].itemId;
+      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
       const unauthenticated = connectFrames(descriptor);
-      unauthenticated.socket.write(encodeFrame(action(descriptor, 2, "unauth", { type: "mark_read", itemId: "one" })));
-      assert.equal((await nextFrame(unauthenticated, (f) => f.type === "error")).code, "authentication_required");
+      unauthenticated.socket.write(encodeFrame(action(descriptor, 1, "unauth", { type: "dismiss", itemId }, { branchId: runtime.branchId })));
+      assert.equal((await nextFrame(unauthenticated, (frame) => frame.type === "error")).code, "authentication_required");
       unauthenticated.socket.destroy();
 
       const peer = connectFrames(descriptor);
       peer.socket.write(encodeFrame(hello(descriptor)));
-      await nextFrame(peer, (f) => f.type === "hello");
-      const initial = (await nextFrame(peer, (f) => f.type === "snapshot")).snapshot;
-      assert.equal(unreadCounts.at(-1), 2);
-
-      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "bad-generation", { type: "mark_read", itemId: "one" }, { generation: "f".repeat(32) })));
-      assert.equal((await nextFrame(peer, (f) => f.requestId === "request-bad-generation")).code, "authentication_failed");
-      peer.socket.write(encodeFrame(action(descriptor, initial.revision - 1, "stale", { type: "mark_read", itemId: "one" })));
-      assert.equal((await nextFrame(peer, (f) => f.requestId === "request-stale")).code, "stale_action");
-
-      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "read", { type: "mark_read", itemId: "one" })));
-      const readResult = await nextFrame(peer, (f) => f.type === "action_result" && f.actionId === "read");
-      assert.ok(Number.isSafeInteger(readResult.revision) && readResult.revision > initial.revision);
-      let current = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.deepEqual(current.uiState.readIds, ["one"]);
-      assert.equal(unreadCounts.at(-1), 1);
-
-      peer.socket.write(encodeFrame(action(descriptor, current.revision, "dismiss", { type: "dismiss", itemId: "two" })));
-      await nextFrame(peer, (f) => f.type === "action_result" && f.actionId === "dismiss");
-      current = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.deepEqual(current.feed.map((item) => item.id), ["one"]);
-      assert.equal(state.branches.A.at(-1).data.action, "dismiss");
-      assert.equal(unreadCounts.at(-1), 0);
-
-      peer.socket.write(encodeFrame(action(descriptor, current.revision, "focus", { type: "focus" })));
-      await nextFrame(peer, (f) => f.type === "action_result" && f.actionId === "focus");
-      current = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.deepEqual(current.uiState.readIds, ["one"]);
-
-      peer.socket.write(encodeFrame(action(descriptor, current.revision, "focus", { type: "focus" })));
-      assert.equal((await nextFrame(peer, (f) => f.requestId === "request-focus")).code, "replayed_action");
+      await nextFrame(peer, (frame) => frame.type === "hello");
+      const initial = (await nextFrame(peer, (frame) => frame.type === "snapshot")).snapshot;
+      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "bad-generation", { type: "dismiss", itemId }, { branchId: runtime.branchId, generation: "f".repeat(32) })));
+      assert.equal((await nextFrame(peer, (frame) => frame.requestId === "request-bad-generation")).code, "authentication_failed");
+      peer.socket.write(encodeFrame(action(descriptor, initial.revision - 1, "stale", { type: "dismiss", itemId }, { branchId: runtime.branchId })));
+      assert.equal((await nextFrame(peer, (frame) => frame.requestId === "request-stale")).code, "stale_action");
+      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "durable", { type: "dismiss", itemId }, { branchId: runtime.branchId })));
+      await nextFrame(peer, (frame) => frame.type === "action_result" && frame.actionId === "durable");
+      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "durable", { type: "dismiss", itemId }, { branchId: runtime.branchId })));
+      assert.equal((await nextFrame(peer, (frame) => frame.requestId === "request-durable")).code, "replayed_action");
       peer.socket.destroy();
-    } finally { await runtime.stop(); }
-  });
-});
-
-test("custom entries persist across branch ancestry and runtime close-reopen; passive snapshots append nothing", async () => {
-  await withRuntime(async ({ environment }) => {
-    const state = { leaf: "A", branches: { A: [message("one"), message("two")] } };
-    const appended = [];
-    const append = (data) => { const entry = custom(data); appended.push(entry); state.branches[state.leaf].push(entry); };
-    const ctx = context(state, "persistence-session");
-    let runtime = new ProjectGlanceRelayRuntime(environment, undefined, append);
-    try {
-      await runtime.ensureForContext(ctx);
-      const beforeProbe = appended.length;
-      await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.equal(appended.length, beforeProbe, "unattended snapshot must not generate state");
-
-      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
-      const peer = connectFrames(descriptor);
-      peer.socket.write(encodeFrame(hello(descriptor)));
-      await nextFrame(peer, (f) => f.type === "hello");
-      const initial = (await nextFrame(peer, (f) => f.type === "snapshot")).snapshot;
-      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "persist-read", { type: "mark_read", itemId: "one" })));
-      await nextFrame(peer, (f) => f.type === "action_result");
-      peer.socket.destroy();
-
-      state.branches.B = [];
-      state.leaf = "B";
-      await runtime.onSessionTree(ctx);
-      const branchB = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.deepEqual(branchB.feed, [], "an empty destination must clear old branch cards");
-      assert.deepEqual(
-        branchB.uiState.readIds,
-        [],
-        "a sibling branch must not inherit UI state recorded after divergence",
-      );
-      state.leaf = "A";
-      await runtime.onSessionTree(ctx);
-      assert.deepEqual((await probeProjectGlanceRelay(runtime.descriptorPath)).uiState.readIds, ["one"]);
-
-      await runtime.restart("2026-09-03T00:00:01.000Z");
-      assert.deepEqual((await probeProjectGlanceRelay(runtime.descriptorPath)).uiState.readIds, ["one"]);
-      await runtime.stop();
-      runtime = new ProjectGlanceRelayRuntime(environment, undefined, append);
-      await runtime.ensureForContext(ctx);
-      assert.deepEqual((await probeProjectGlanceRelay(runtime.descriptorPath)).uiState.readIds, ["one"]);
-    } finally { await runtime.stop(); }
-  });
-});
-
-test("repeated focus/read/dismiss are idempotent and dismissal backfills across restart", async () => {
-  await withRuntime(async ({ environment }) => {
-    const state = { leaf: "A", branches: { A: Array.from({ length: 70 }, (_, i) => message(`m${i}`)) } };
-    const appended = [];
-    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => { appended.push(data); state.branches.A.push(custom(data)); });
-    try {
-      await runtime.ensureForContext(context(state));
-      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
-      const peer = connectFrames(descriptor);
-      peer.socket.write(encodeFrame(hello(descriptor)));
-      await nextFrame(peer, (f) => f.type === "snapshot");
-      let sequence = 0;
-      const send = async (value) => {
-        const current = await probeProjectGlanceRelay(runtime.descriptorPath);
-        const id = `idempotent-${sequence++}`;
-        peer.socket.write(encodeFrame(action(descriptor, current.revision, id, value)));
-        return nextFrame(peer, (f) => f.actionId === id || f.requestId === `request-${id}`);
-      };
-      assert.equal((await send({ type: "focus" })).accepted, true);
-      assert.equal(appended.length, 50);
-      for (let i = 0; i < 20; i++) assert.equal((await send({ type: "focus" })).accepted, true);
-      await send({ type: "mark_read", itemId: "m69" });
-      assert.equal(appended.length, 50);
-      await send({ type: "dismiss", itemId: "m69" });
-      await send({ type: "dismiss", itemId: "m69" });
-      assert.equal(appended.length, 51);
-      assert.equal(runtime.feed.length, 50);
-      assert.equal(runtime.feed[0].id, "m19");
-      assert.equal(runtime.feed.at(-1).id, "m68");
-      peer.socket.destroy();
-      await runtime.restart();
-      assert.equal(runtime.feed[0].id, "m19");
-      const restored = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.equal(restored.uiState.readIds.length, 49);
-      assert.equal(appended.length, 51);
-    } finally { await runtime.stop(); }
-  });
-});
-
-test("rapid client actions serialize and never broaden stale focus to unseen arrivals", async () => {
-  await withRuntime(async ({ environment }) => {
-    const state = { leaf: "A", branches: { A: [message("one"), message("two"), message("three")] } };
-    const appended = [];
-    const counts = [];
-    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => { appended.push(data); state.branches[state.leaf].push(custom(data)); }, (n) => counts.push(n));
-    let latest;
-    let client;
-    try {
-      await runtime.ensureForContext(context(state));
-      client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (s) => { latest = s; } });
-      client.start();
-      await waitFor(() => latest !== undefined);
-      const original = latest;
-      client.sendAction("A", original.revision, { type: "mark_read", itemId: "one" });
-      client.sendAction("A", original.revision, { type: "dismiss", itemId: "two" });
-      client.sendAction("A", original.revision, { type: "mark_read", itemId: "three" });
-      client.sendAction("A", original.revision, { type: "focus" });
-      await waitFor(() => appended.length === 3);
-      await waitFor(() => latest.uiState.readIds.includes("three"));
-      assert.deepEqual(appended.map((x) => [x.action, x.itemId]), [["mark_read", "one"], ["dismiss", "two"], ["mark_read", "three"]]);
-      state.branches.A.push(message("arrival"));
-      await runtime.syncFeed(context(state));
-      client.sendAction("A", original.revision, { type: "focus" });
-      await waitFor(() => latest.feed.some((i) => i.id === "arrival"));
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      assert.equal(appended.length, 3);
-      assert.equal(counts.at(-1), 1);
-    } finally { client?.stop(); await runtime.stop(); }
-    assert.equal(counts.at(-1), 0, "runtime disposal clears compact attention status");
-  });
-});
-
-test("reconnect and branch snapshots never replay focus or discard a retained reading anchor", () => {
-  const sessionKey = deriveSessionKey("reading-anchor");
-  const identity = { sessionKey, generation: "a".repeat(32) };
-  const model = new ProjectGlancePaneModel();
-  model.setExpectedRelay(identity);
-  const feed = Array.from({ length: 50 }, (_, i) => item(`m${i}`));
-  model.applySnapshot(snapshot(sessionKey, 1, { feed, focusSerial: 8 }), identity);
-  assert.equal(model.consumeFocusRequest(), false);
-  const view = new ProjectGlancePaneView(model);
-  const width = 40;
-  const layout = () => view.scrollView.updateLayout(view.feed.render(width).length, 8, () => {});
-  layout();
-  view.scrollView.scrollTo(view.feed.rowForItem("m20") + 2);
-  const anchor = view.feed.anchorAt(view.scrollView.scrollTop);
-  view.preserveReadingPosition();
-  model.setExpectedRelay(identity);
-  model.applySnapshot(snapshot(sessionKey, 2, { feed: [...feed.slice(1), item("m50")], focusSerial: 9 }), identity);
-  layout();
-  assert.equal(model.consumeFocusRequest(), false, "missed focus while disconnected is not a live action");
-  assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchor);
-  model.applySnapshot(snapshot(sessionKey, 3, { feed, focusSerial: 10 }), identity);
-  assert.equal(model.consumeFocusRequest(), true);
-  model.applySnapshot(snapshot(sessionKey, 4, { branchId: "B", feed: [item("other")], focusSerial: 10 }), identity);
-  assert.equal(model.consumeFocusRequest(), false);
-  assert.equal(model.selectedId, "other");
-});
-
-test("an explicit open focus waits for the passive baseline and cannot survive a branch transition", async () => {
-  await withRuntime(async ({ environment }) => {
-    const state = { leaf: "A", branches: { A: [message("one")], B: [] } };
-    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => state.branches[state.leaf].push(custom(data)));
-    const model = new ProjectGlancePaneModel();
-    let client;
-    let liveFocus = 0;
-    try {
-      await runtime.ensureForContext(context(state));
-      const focused = runtime.capturePaneFocus();
-      const pending = focused();
-      client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath,
-        onDescriptor: (d) => model.setExpectedRelay(d),
-        onSnapshot: (s, identity) => { model.applySnapshot(s, identity); if (model.consumeFocusRequest()) liveFocus++; },
-      });
-      client.start();
-      await pending;
-      await waitFor(() => liveFocus === 1);
-      const staleFocus = runtime.capturePaneFocus();
-      state.leaf = "B";
-      await runtime.onSessionTree(context(state));
-      await staleFocus();
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      assert.equal(liveFocus, 1);
-      assert.equal(state.branches.A.length, 1, "focus delivery alone is not a read acknowledgement");
-      assert.equal(state.branches.B.length, 0);
-    } finally { client?.stop(); await runtime.stop(); }
-  });
-});
-
-test("synthetic persisted Pi session restores UI state without replay or extra records", async () => {
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  await withRuntime(async ({ root, environment }) => {
-    const sm = SessionManager.create(root, join(root, "sessions"));
-    sm.appendMessage({ role: "user", content: "Synthetic fixture", timestamp: Date.parse(AT) });
-    const id = sm.appendMessage(message("synthetic").message);
-    const ctx = { sessionManager: sm };
-    let runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => sm.appendCustomEntry(UI_TYPE, data));
-    try {
-      await runtime.ensureForContext(ctx);
-      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
-      const peer = connectFrames(descriptor);
-      peer.socket.write(encodeFrame(hello(descriptor)));
-      const initial = (await nextFrame(peer, (f) => f.type === "snapshot")).snapshot;
-      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "disk-read", { type: "mark_read", itemId: id }, { branchId: runtime.branchId })));
-      await nextFrame(peer, (f) => f.type === "action_result");
-      peer.socket.destroy();
-      await runtime.stop();
-      const restored = SessionManager.open(sm.getSessionFile());
-      const before = restored.getEntries().length;
-      runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => restored.appendCustomEntry(UI_TYPE, data));
-      await runtime.ensureForContext({ sessionManager: restored });
-      const current = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.deepEqual(current.uiState.readIds, [id]);
-      await runtime.ensureForContext({ sessionManager: restored });
-      assert.equal(restored.getEntries().length, before);
-    } finally { await runtime.stop(); }
-  });
-});
-
-test("old branch actions and delayed open completion cannot write into a destination or restarted runtime", async () => {
-  await withRuntime(async ({ environment }) => {
-    const state = { leaf: "A", branches: { A: [message("one")], B: [message("destination")] } };
-    const appended = [];
-    const runtime = new ProjectGlanceRelayRuntime(environment, undefined, (data) => { appended.push(data); state.branches[state.leaf].push(custom(data)); });
-    try {
-      await runtime.ensureForContext(context(state));
-      const descriptor = await readConnectionDescriptor(runtime.descriptorPath);
-      const peer = connectFrames(descriptor);
-      peer.socket.write(encodeFrame(hello(descriptor)));
-      const initial = (await nextFrame(peer, (f) => f.type === "snapshot")).snapshot;
-      const delayed = runtime.capturePaneFocus();
-      state.leaf = "B";
-      const transition = runtime.onSessionTree(context(state));
-      peer.socket.write(encodeFrame(action(descriptor, initial.revision, "old-branch", { type: "focus" })));
-      await transition;
-      const rejected = await nextFrame(peer, (f) => f.requestId === "request-old-branch");
-      assert.equal(rejected.type, "error");
-      assert.equal(appended.length, 0);
-      await runtime.restart();
-      await delayed();
-      const restarted = await probeProjectGlanceRelay(runtime.descriptorPath);
-      assert.equal(restarted.focusSerial, undefined);
-      assert.deepEqual(restarted.uiState.readIds, []);
-      assert.deepEqual(restarted.feed.map((i) => i.id), ["destination"]);
-      peer.socket.destroy();
-    } finally { await runtime.stop(); }
-  });
-});
-
-test("UI restoration scans long ancestry without resurrecting old dismissals or unread state", async () => {
-  await withRuntime(async ({ environment }) => {
-    const branch = Array.from({ length: 70 }, (_, i) => message(`m${i}`));
-    branch.push(custom({ version: 1, action: "mark_read", itemId: "m20" }));
-    branch.push(custom({ version: 1, action: "dismiss", itemId: "m69" }));
-    branch.push(...Array.from({ length: 1500 }, (_, i) => custom({ version: 1, action: "mark_read", itemId: `irrelevant-${i}` })));
-    const state = { leaf: "A", branches: { A: branch } };
-    const runtime = new ProjectGlanceRelayRuntime(environment);
-    try {
-      await runtime.ensureForContext(context(state));
-      for (let i = 0; i < 2; i++) {
-        const s = await probeProjectGlanceRelay(runtime.descriptorPath);
-        assert.equal(s.feed.length, 50);
-        assert.equal(s.feed[0].id, "m19");
-        assert.equal(s.feed.some((x) => x.id === "m69"), false);
-        assert.deepEqual(s.uiState.readIds, ["m20"]);
-        await runtime.restart();
-      }
     } finally { await runtime.stop(); }
   });
 });

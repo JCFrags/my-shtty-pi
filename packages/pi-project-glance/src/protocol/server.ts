@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import type { PageResult, BodyResult } from "../history/contracts.js";
 import { chmod, lstat, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import {
@@ -49,6 +50,10 @@ export interface ProjectGlanceServerOptions {
   generation: string;
   snapshot: ProjectGlanceSnapshot;
   onAction?(frame: Extract<ProjectGlanceClientFrame, { type: "action" }>): Promise<number | undefined> | number | undefined;
+  onPage?(frame: Extract<ProjectGlanceClientFrame, { type: "page_request" }>): Promise<PageResult> | PageResult;
+  onBody?(frame: Extract<ProjectGlanceClientFrame, { type: "body_request" }>): Promise<BodyResult> | BodyResult;
+  onEditingChanged?(): void;
+  onConnected?(): void | Promise<void>;
 }
 
 interface ClientState {
@@ -56,6 +61,8 @@ interface ClientState {
   decoder: ProjectGlanceFrameDecoder;
   authenticated: boolean;
   closed: boolean;
+  pendingReads: number;
+  editing?: { branchId: string; questionId: string; revision: number } | undefined;
 }
 
 function tokenMatches(expected: string, actual: string): boolean {
@@ -174,6 +181,15 @@ export class ProjectGlanceServer {
   #started = false;
   readonly #onAction: NonNullable<ProjectGlanceServerOptions["onAction"]>;
   readonly #seenActions = new Set<string>();
+  readonly #onPage: ProjectGlanceServerOptions["onPage"];
+  readonly #onBody: ProjectGlanceServerOptions["onBody"];
+  readonly #onEditingChanged: () => void;
+  readonly #onConnected: ProjectGlanceServerOptions["onConnected"];
+
+  isQuestionEditing(branchId: string, questionId: string, revision: number): boolean {
+    return [...this.#clients].some((client) => !client.closed && client.authenticated &&
+      client.editing?.branchId === branchId && client.editing.questionId === questionId && client.editing.revision === revision);
+  }
 
   constructor(options: ProjectGlanceServerOptions) {
     this.#paths = options.paths;
@@ -182,6 +198,10 @@ export class ProjectGlanceServer {
     this.#generation = validateGeneration(options.generation);
     this.#snapshot = validateSnapshot(options.snapshot);
     this.#onAction = options.onAction ?? (() => undefined);
+    this.#onPage = options.onPage;
+    this.#onBody = options.onBody;
+    this.#onEditingChanged = options.onEditingChanged ?? (() => undefined);
+    this.#onConnected = options.onConnected;
     if (this.#snapshot.sessionKey !== this.#sessionKey) {
       throw new ProjectGlanceValidationError();
     }
@@ -278,6 +298,7 @@ export class ProjectGlanceServer {
       decoder: new ProjectGlanceFrameDecoder(),
       authenticated: false,
       closed: false,
+      pendingReads: 0,
     };
     this.#clients.add(client);
     socket.on("data", (chunk: Buffer) => {
@@ -292,6 +313,7 @@ export class ProjectGlanceServer {
     socket.on("close", () => {
       client.closed = true;
       this.#clients.delete(client);
+      if (client.editing) { client.editing = undefined; this.#onEditingChanged(); }
     });
   }
 
@@ -334,6 +356,11 @@ export class ProjectGlanceServer {
         type: "snapshot",
         snapshot: this.#snapshot,
       });
+      // Reconcile persisted entries once for this authenticated connection.
+      // Ordinary snapshot requests do not re-extract the session.
+      void Promise.resolve().then(() => this.#onConnected?.()).catch(() => {
+        if (!client.closed) sendError(client, "server_unavailable");
+      });
       return;
     }
     if (frame.type === "ping") {
@@ -342,6 +369,38 @@ export class ProjectGlanceServer {
         type: "pong",
         requestId: frame.requestId,
       });
+      return;
+    }
+    if (frame.type === "page_request" || frame.type === "body_request" || frame.type === "question_editing") {
+      if (frame.sessionKey !== this.#sessionKey || frame.generation !== this.#generation) {
+        sendError(client, "authentication_failed", frame.requestId); return;
+      }
+      if (frame.branchId !== this.#snapshot.branchId) { sendError(client, "stale_action", frame.requestId); return; }
+      if (frame.type === "question_editing") {
+        if (frame.active && !this.#snapshot.questions?.some((q) => q.id === frame.questionId && q.revision === frame.revision)) {
+          sendError(client, "stale_action", frame.requestId); return;
+        }
+        if (frame.active) client.editing = { branchId: frame.branchId, questionId: frame.questionId, revision: frame.revision };
+        else if (client.editing?.questionId === frame.questionId && client.editing.revision === frame.revision) client.editing = undefined;
+        this.#onEditingChanged();
+        return;
+      }
+      if (client.pendingReads >= 4) { sendError(client, "server_unavailable", frame.requestId); return; }
+      client.pendingReads += 1;
+      void Promise.resolve().then(async () => {
+        if (frame.type === "page_request") {
+          if (!this.#onPage) throw new Error("ARCHIVE_UNAVAILABLE");
+          const page = await this.#onPage(frame);
+          if (!client.closed && frame.branchId === this.#snapshot.branchId) sendFrame(client, { ...page, version: PROJECT_GLANCE_PROTOCOL_VERSION, type: "page", requestId: frame.requestId });
+          else if (!client.closed) sendError(client, "stale_action", frame.requestId);
+        } else {
+          if (!this.#onBody) throw new Error("ARCHIVE_UNAVAILABLE");
+          const body = await this.#onBody(frame);
+          if (!client.closed && frame.branchId === this.#snapshot.branchId) sendFrame(client, { ...body, branchId: frame.branchId, version: PROJECT_GLANCE_PROTOCOL_VERSION, type: "body", requestId: frame.requestId });
+          else if (!client.closed) sendError(client, "stale_action", frame.requestId);
+        }
+      }).catch(() => { if (!client.closed) sendError(client, "server_unavailable", frame.requestId); })
+        .finally(() => { client.pendingReads -= 1; });
       return;
     }
     if (frame.type === "action") {
@@ -367,7 +426,7 @@ export class ProjectGlanceServer {
         this.#seenActions.delete(this.#seenActions.values().next().value!);
       }
       this.#seenActions.add(frame.actionId);
-      void Promise.resolve(this.#onAction(frame))
+      void Promise.resolve().then(() => this.#onAction(frame))
         .then((revision) => {
           if (client.closed) return;
           if (revision === undefined) {

@@ -56,7 +56,7 @@ export interface AskRequest {
   recommendedOptionIds: string[]; affectedWork: string[]; continuingWork: string[]; attachments: RecordValue[];
   recommendation?: string; recommendedText?: string;
   temporaryDefault?: { optionIds: string[]; disclosure: string };
-  priority?: "normal" | "high"; blockingPolicy?: "never"; deliveryMode?: "nextTurn"; expiresAt?: string;
+  priority?: "normal" | "high"; blockingPolicy?: "never"; deliveryMode?: "nextTurn";
 }
 export interface CancelRequest {
   schemaVersion: 1; correlationId: string; operation: "cancel"; mode: "deferred";
@@ -77,7 +77,7 @@ function normalize(value: unknown): unknown {
   return value;
 }
 /** Independent implementation of the public deferred V1 wire schema, narrowed to non-blocking next-natural-turn delivery. */
-export function parseRequest(input: unknown): Request | undefined {
+export function parseRequest(input: unknown, options: { allowLegacyExpiresAt?: boolean } = {}): Request | undefined {
   if (!record(input) || input.schemaVersion !== 1 || input.mode !== "deferred" || typeof input.correlationId !== "string" || !CORRELATION.test(input.correlationId)) return undefined;
   if (input.signal !== undefined && (!(input.signal instanceof AbortSignal))) return undefined;
   const { signal: _signal, ...wire } = input;
@@ -86,13 +86,13 @@ export function parseRequest(input: unknown): Request | undefined {
     if (!keys(value, ["schemaVersion", "correlationId", "operation", "mode", "id", "expectedRevision", "reason"]) || typeof value.id !== "string" || !(QUESTION_ID.test(value.id) || /^Q-[1-9][0-9]*$/u.test(value.id)) || !integer(value.expectedRevision) || !text(value.reason, 1000)) return undefined;
     return normalize(value) as CancelRequest;
   }
-  if (value.operation !== "ask" || !keys(value, ["schemaVersion", "correlationId", "operation", "mode", "question", "reason", "class", "response", "recommendation", "recommendedOptionIds", "recommendedText", "temporaryDefault", "priority", "blockingPolicy", "deliveryMode", "affectedWork", "continuingWork", "attachments", "expiresAt"])) return undefined;
+  if (value.operation !== "ask" || !keys(value, ["schemaVersion", "correlationId", "operation", "mode", "question", "reason", "class", "response", "recommendation", "recommendedOptionIds", "recommendedText", "temporaryDefault", "priority", "blockingPolicy", "deliveryMode", "affectedWork", "continuingWork", "attachments", ...(options.allowLegacyExpiresAt ? ["expiresAt"] : [])])) return undefined;
   if (!text(value.question, 160) || !text(value.reason, 4000) || !["preference", "information", "reversible"].includes(String(value.class)) || !response(value.response)) return undefined;
   if (!optionalText(value.recommendation, 1000) || !optionalText(value.recommendedText, 4000) || !optionIds(value.recommendedOptionIds)) return undefined;
   if (!list(value.affectedWork, 20, (item) => text(item, 240)) || !list(value.continuingWork, 20, (item) => text(item, 240)) || value.affectedWork.some((item) => value.continuingWork instanceof Array && value.continuingWork.includes(item))) return undefined;
   if (!Array.isArray(value.attachments) || value.attachments.length > 10 || !value.attachments.every(attachment)) return undefined;
   if ((value.priority !== undefined && value.priority !== "normal" && value.priority !== "high") || (value.blockingPolicy !== undefined && value.blockingPolicy !== "never") || (value.deliveryMode !== undefined && value.deliveryMode !== "nextTurn")) return undefined;
-  if (value.expiresAt !== undefined && (!text(value.expiresAt, 64) || !/^\d{4}-\d{2}-\d{2}T/u.test(value.expiresAt) || !Number.isFinite(Date.parse(value.expiresAt)))) return undefined;
+  if (value.expiresAt !== undefined && (!options.allowLegacyExpiresAt || !text(value.expiresAt, 64) || !/^\d{4}-\d{2}-\d{2}T/u.test(value.expiresAt) || !Number.isFinite(Date.parse(value.expiresAt)))) return undefined;
   const ids = new Set(value.response.options?.map((option) => option.id));
   const single = ["single", "single_or_text"].includes(value.response.kind);
   if (!value.recommendedOptionIds.every((id) => ids.has(id)) || (single && value.recommendedOptionIds.length > 1)) return undefined;
@@ -101,9 +101,12 @@ export function parseRequest(input: unknown): Request | undefined {
     const temp = value.temporaryDefault;
     if (!record(temp) || !keys(temp, ["optionIds", "disclosure"]) || value.class !== "reversible" || value.response.kind === "text" || !optionIds(temp.optionIds) || temp.optionIds.length === 0 || !temp.optionIds.every((id) => ids.has(id)) || (single && temp.optionIds.length !== 1) || !text(temp.disclosure, 1000)) return undefined;
   }
-  const normalized = normalize(value);
+  const normalizedSource = normalize(value) as RecordValue;
+  // Legacy records remain decodable, but wall-clock expiry is intentionally discarded.
+  if (options.allowLegacyExpiresAt) delete normalizedSource.expiresAt;
+  const normalized = normalizedSource;
   if (Buffer.byteLength(canonical(normalized), "utf8") > MAX_QUESTION_BYTES) return undefined;
   // Revalidate normalized lists: whitespace normalization must not create duplicate or overlapping metadata.
-  if (canonical(normalized) !== canonical(value)) return parseRequest(normalized);
-  return normalized as AskRequest;
+  if (canonical(normalized) !== canonical(value) && value.expiresAt === undefined) return parseRequest(normalized, options);
+  return normalized as unknown as AskRequest;
 }

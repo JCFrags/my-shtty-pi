@@ -373,7 +373,7 @@ test("branch normalization conformance uses one fixture across Todo, Workplan, a
 
 test("runtime reconciles authoritative branches through navigation, restart, ensure, and return", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-branch-") );
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   const bus = new EventBus();
   const state = { activeBranch: "A", requests: [], rejected: 0, pauseResponses: false };
   installBranchEnforcingProviders(bus, state);
@@ -448,7 +448,7 @@ test("runtime reconciles authoritative branches through navigation, restart, ens
 
 test("serialized navigation and restart follow invocation order and clean up", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-project-glance-race-"));
-  const environment = { ...process.env, XDG_RUNTIME_DIR: root };
+  const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   const bus = new EventBus();
   const state = { activeBranch: "A", requests: [], rejected: 0, pauseResponses: false };
   installBranchEnforcingProviders(bus, state);

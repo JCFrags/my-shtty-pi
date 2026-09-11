@@ -17,7 +17,9 @@ import {
   PROJECT_GLANCE_TITLE,
 } from "../protocol/model.js";
 import { ProjectGlanceClient } from "../protocol/client.js";
+import type { HistoryView } from "../history/contracts.js";
 import type { ProjectGlanceQuestionAction } from "../questions/model.js";
+import type { ProjectGlancePaneDataAdapter } from "./archive.js";
 import { ProjectGlanceQuestionsRegion } from "./questions.js";
 import {
   ProjectGlancePaneModel,
@@ -58,6 +60,11 @@ export class ProjectGlanceFeedRegion implements Component {
   #hitTargets = new Map<number, { start: number; end: number; url: string }[]>();
   #cache: { key: string; lines: string[] } | undefined;
   #selectedRow: number | undefined;
+  #firstHistoryRow: number | undefined;
+  #lastHistoryRow: number | undefined;
+  #renderedWidth: number | undefined;
+  #actionError = "";
+  onBeforeWidthChange: (() => void) | undefined;
   #itemRows = new Map<string, number>();
 
   constructor(
@@ -75,6 +82,14 @@ export class ProjectGlanceFeedRegion implements Component {
   }
 
   rowForItem(id: string): number | undefined { return this.#itemRows.get(id); }
+  get firstHistoryRow(): number | undefined { return this.#firstHistoryRow; }
+  get lastHistoryRow(): number | undefined { return this.#lastHistoryRow; }
+
+  setActionError(message: string): void {
+    if (message === this.#actionError) return;
+    this.#actionError = message;
+    this.invalidate();
+  }
 
   anchorAt(row: number): { id: string; offset: number } | undefined {
     let anchor: { id: string; offset: number } | undefined;
@@ -86,24 +101,27 @@ export class ProjectGlanceFeedRegion implements Component {
   }
 
   render(width: number): string[] {
-    const expandedIds = new Set(
-      this.#model.visibleFeed
-        .filter((item) => this.#model.isExpanded(item.id))
-        .map((item) => item.id),
-    );
+    if (this.#renderedWidth !== undefined && this.#renderedWidth !== width) this.onBeforeWidthChange?.();
+    this.#renderedWidth = width;
+    const expandedIds = new Set(this.#model.selectableIds.filter((id) => this.#model.isExpanded(id)));
     const selectedId = this.#model.selectedId;
     const snapshot = this.#model.snapshot;
     // snapshot getters return copies. Key actual renderer inputs, not object
     // identity or revision alone (relay/branch changes can reuse revisions).
-    const key = JSON.stringify([width, snapshot !== undefined, snapshot?.feed, snapshot?.uiState, selectedId, [...expandedIds]]);
+    const key = JSON.stringify([width, snapshot !== undefined, snapshot?.feed, snapshot?.uiState, selectedId, [...expandedIds], this.#model.archive.summary, this.#model.archive.historyExpanded, this.#actionError]);
     if (this.#cache?.key === key) return this.#cache.lines;
     this.#itemRows.clear();
     const linkedLines = renderProjectGlanceFeed(snapshot, width, {
       ...(selectedId ? { selectedId } : {}),
       expandedIds,
+      archive: this.#model.archive,
     });
+    if (this.#actionError) linkedLines.push(truncateToWidth(this.#actionError, width));
     const hitTargets = new Map<number, { start: number; end: number; url: string }[]>();
     let selectedRow: number | undefined;
+    let firstHistoryRow: number | undefined;
+    let lastHistoryRow: number | undefined;
+    const historyIds = new Set(this.#model.archive.activeItems("history").map((item) => item.itemId));
     const selectedSuffix = selectedId ? `/${encodeURIComponent(selectedId)}` : undefined;
     for (let y = 0; y < linkedLines.length; y += 1) {
       const line = linkedLines[y] ?? "";
@@ -117,9 +135,16 @@ export class ProjectGlanceFeedRegion implements Component {
         const end = Math.min(width, column + visibleWidth(line.slice(offset, match.index)));
         if (url && end > column) {
           targets.push({ start: column, end, url });
-          const id = decodeURIComponent(new URL(url).pathname.slice(1));
-          if (!this.#itemRows.has(id)) this.#itemRows.set(id, y);
-          if (selectedSuffix && url.endsWith(selectedSuffix)) selectedRow ??= y;
+          const target = new URL(url);
+          if (target.hostname === "toggle" || target.hostname === "dismiss") {
+            const id = decodeURIComponent(target.pathname.slice(1));
+            if (!this.#itemRows.has(id)) this.#itemRows.set(id, y);
+            if (historyIds.has(id)) {
+              firstHistoryRow ??= y;
+              lastHistoryRow = y;
+            }
+            if (selectedSuffix && url.endsWith(selectedSuffix)) selectedRow ??= y;
+          }
         }
         column = end;
         offset = match.index + match[0].length;
@@ -129,6 +154,8 @@ export class ProjectGlanceFeedRegion implements Component {
     }
     this.#hitTargets = hitTargets;
     this.#selectedRow = selectedRow;
+    this.#firstHistoryRow = firstHistoryRow;
+    this.#lastHistoryRow = lastHistoryRow;
     const lines = linkedLines.map(stripOsc8Links);
     this.#cache = { key, lines };
     return lines;
@@ -177,9 +204,12 @@ class QuestionScrollView extends PositionedScrollView {
 
 export interface ProjectGlancePaneQuestionOptions {
   onQuestionAction?: (action: ProjectGlanceQuestionAction) => Promise<void> | void;
+  onQuestionEditing?: (questionId: string, revision: number, active: boolean) => void;
   requestRender?: () => void;
   onQuestionFocusExit?: () => void;
   onQuestionFocusEnter?: () => void;
+  dataAdapter?: ProjectGlancePaneDataAdapter;
+  onDismiss?: (itemId: string) => Promise<void>;
 }
 
 /** Fixed edges surround the question viewport, not its scrolling document.
@@ -260,7 +290,10 @@ export class ProjectGlancePaneView implements Component {
   #questionIdentity = "";
   #model: ProjectGlancePaneModel;
   #questionOptions: ProjectGlancePaneQuestionOptions;
-  #position: { id: string; offset: number } | "selected" | undefined;
+  #position: { id: string; offset: number; fallbackIds: string[] } | "selected" | undefined;
+  #lastRequestedCommit = new Map<HistoryView, number>();
+  #archiveBranch: string | undefined;
+  #dismissPending = new Set<string>();
   readonly root: VStack;
 
   constructor(model: ProjectGlancePaneModel, activateUrl?: (url: string) => void, questionOptions: ProjectGlancePaneQuestionOptions = {}) {
@@ -273,6 +306,7 @@ export class ProjectGlancePaneView implements Component {
         return questionOptions.onQuestionAction(action);
       },
       () => questionOptions.requestRender?.(),
+      questionOptions.onQuestionEditing,
     );
     this.questionScrollView = new QuestionScrollView(this.questions, {
       follow: "none", primary: false, overscroll: "contain", scrollbar: "auto",
@@ -287,23 +321,41 @@ export class ProjectGlancePaneView implements Component {
       if (row < scroll.scrollTop) scroll.scrollTo(row);
       else if (row >= scroll.scrollTop + scroll.viewportHeight) scroll.scrollTo(row - scroll.viewportHeight + 1);
     };
-    this.feed = new ProjectGlanceFeedRegion(model, activateUrl ? (url) => {
+    this.feed = new ProjectGlanceFeedRegion(model, (url) => {
       this.releaseQuestionFocus();
-      activateUrl(url);
-    } : undefined);
+      if (this.handleArchiveUrl(url)) return;
+      try {
+        const target = new URL(url);
+        if (target.hostname === "toggle") this.preserveReadingPosition();
+        activateUrl?.(url);
+        const itemId = decodeURIComponent(target.pathname.slice(1));
+        if (target.hostname === "toggle" && model.isExpanded(itemId)) this.ensureBody(itemId, model.archive.bodyOffset(itemId));
+      } catch {
+        // Ignore malformed terminal links.
+      }
+    });
     this.scrollView = new PositionedScrollView(this.feed, {
       follow: "none",
       primary: true,
       overscroll: "contain",
       scrollbar: "auto",
     });
+    this.feed.onBeforeWidthChange = () => this.preserveReadingPosition();
     this.scrollView.afterLayout = () => {
       const position = this.#position;
       this.#position = undefined;
-      if (!position) return;
-      const anchoredRow = position === "selected" ? undefined : this.feed.rowForItem(position.id);
-      const row = anchoredRow ?? this.feed.selectedRow;
-      if (row !== undefined) this.scrollView.scrollTo(row + (anchoredRow === undefined || position === "selected" ? 0 : position.offset), { disableFollow: true });
+      if (position) {
+        let anchoredRow: number | undefined;
+        if (position !== "selected") {
+          for (const id of [position.id, ...position.fallbackIds]) {
+            anchoredRow = this.feed.rowForItem(id);
+            if (anchoredRow !== undefined) break;
+          }
+        }
+        const row = anchoredRow ?? this.feed.selectedRow;
+        if (row !== undefined) this.scrollView.scrollTo(row + (anchoredRow === undefined || position === "selected" ? 0 : position.offset), { disableFollow: true });
+      }
+      this.maybePrefetchHistory();
     };
     this.root = new QuestionsPaneStack(this.pinned, new QuestionFrame(this.questionScrollView), this.scrollView, (width, height) => {
       this.#questionWidth = width;
@@ -325,13 +377,14 @@ export class ProjectGlancePaneView implements Component {
       connected,
     ]);
     const questions = connected ? snapshot?.questions ?? [] : [];
-    this.questions.update(questions, identity);
+    const attention = connected ? snapshot?.questionAttention ?? [] : [];
+    this.questions.update(questions, identity, attention);
     if (identity !== this.#questionIdentity) {
       this.#questionIdentity = identity;
       this.questionScrollView.scrollToStart();
     }
-    if (!questions.length && this.questions.focused) this.releaseQuestionFocus();
-    return questions.length > 0;
+    if (!questions.length && !attention.length && this.questions.focused) this.releaseQuestionFocus();
+    return questions.length > 0 || attention.length > 0;
   }
 
   releaseQuestionFocus(): void {
@@ -361,8 +414,209 @@ export class ProjectGlancePaneView implements Component {
     return true;
   }
 
+  private syncArchive(): void {
+    const adapter = this.#questionOptions.dataAdapter;
+    const archive = this.#model.archive;
+    const summary = archive.summary;
+    if (archive.branchId !== this.#archiveBranch) {
+      this.#archiveBranch = archive.branchId;
+      this.#lastRequestedCommit.clear();
+      this.#dismissPending.clear();
+      this.feed.setActionError("");
+    }
+    if (!adapter || this.#model.state !== "connected" || !archive.branchId || !summary || summary.state !== "ready") return;
+    if (this.#lastRequestedCommit.get("inbox") !== summary.commitSeq) {
+      if (this.ensurePage("inbox", undefined, archive.activeIsInitial("inbox"), true)) {
+        this.#lastRequestedCommit.set("inbox", summary.commitSeq);
+      }
+    }
+    if (archive.historyExpanded && this.#lastRequestedCommit.get("history") !== summary.commitSeq) {
+      if (this.ensurePage("history", undefined, archive.activeIsInitial("history"), true)) {
+        this.#lastRequestedCommit.set("history", summary.commitSeq);
+      }
+    }
+  }
+
+  private ensurePage(view: HistoryView, cursor: string | undefined, activate: boolean, force = false): boolean {
+    const adapter = this.#questionOptions.dataAdapter;
+    const branchId = this.#model.archive.branchId;
+    if (!adapter || !branchId || this.#model.archive.summary?.state !== "ready") return false;
+    if (!force && cursor !== undefined && this.#model.archive.hasCachedPage(view, cursor)) {
+      const included = activate
+        ? this.#model.archive.activateCachedPage(view, cursor)
+        : view === "history" && this.#model.archive.includeCachedHistoryPage(cursor);
+      if (included) {
+        this.#model.reconcileSelection();
+        if (activate) this.requestSelectedPosition();
+        this.root.invalidate();
+        this.#questionOptions.requestRender?.();
+      }
+      return included;
+    }
+    if (!this.#model.archive.beginPage(view, cursor)) return false;
+    this.root.invalidate();
+    this.#questionOptions.requestRender?.();
+    void adapter.requestPage(branchId, view, cursor).then((page) => {
+      if (this.#model.archive.branchId !== branchId) return;
+      this.preserveReadingPosition();
+      const currentCommit = this.#model.archive.summary?.commitSeq;
+      const staleInitial = cursor === undefined && currentCommit !== undefined && page.snapshotSeq < currentCommit;
+      if (staleInitial) {
+        // The initial page key is also the active key. Storing an old response,
+        // even without explicit activation, would make stale cards visible.
+        this.#model.archive.failPage(view, cursor);
+      } else if (this.#model.archive.receivePage(view, cursor, page, activate)) {
+        this.#model.reconcileSelection();
+        if (activate) this.requestSelectedPosition();
+      }
+      // A newer snapshot can arrive while the initial page request is in
+      // flight. The suppressed request must start as soon as this one clears.
+      this.syncArchive();
+      this.root.invalidate();
+      this.#questionOptions.requestRender?.();
+    }, () => {
+      if (this.#model.archive.branchId !== branchId) return;
+      this.#model.archive.failPage(view, cursor);
+      this.syncArchive();
+      this.root.invalidate();
+      this.#questionOptions.requestRender?.();
+    });
+    return true;
+  }
+
+  toggleHistory(): void {
+    this.preserveReadingPosition();
+    const expanded = this.#model.archive.toggleHistory();
+    this.#model.reconcileSelection();
+    if (expanded) this.ensurePage("history", undefined, true);
+    this.root.invalidate();
+    this.#questionOptions.requestRender?.();
+  }
+
+  toggleSelected(): void {
+    const itemId = this.#model.selectedId;
+    if (!itemId) return;
+    this.preserveReadingPosition();
+    this.#model.toggleExpanded(itemId);
+    if (this.#model.isExpanded(itemId)) this.ensureBody(itemId, this.#model.archive.bodyOffset(itemId));
+  }
+
+  dismissSelected(): void {
+    const itemId = this.#model.selectedId;
+    if (itemId) this.dismissItem(itemId);
+  }
+
+  dismissItem(itemId: string): void {
+    const snapshot = this.#model.snapshot;
+    const isInboxItem = this.#model.archive.activeItems("inbox").some((item) => item.itemId === itemId);
+    if (!snapshot?.branchId || !isInboxItem || !this.#questionOptions.onDismiss || this.#dismissPending.has(itemId)) return;
+    const branchId = snapshot.branchId;
+    this.preserveReadingPosition();
+    this.feed.setActionError("");
+    this.#dismissPending.add(itemId);
+    this.root.invalidate();
+    this.#questionOptions.requestRender?.();
+    const send = async () => { await this.#questionOptions.onDismiss?.(itemId); };
+    void send().then(() => {
+      if (this.#model.snapshot?.branchId !== branchId) return;
+      this.preserveReadingPosition();
+      this.feed.setActionError("");
+    }, () => {
+      if (this.#model.snapshot?.branchId !== branchId) return;
+      this.preserveReadingPosition();
+      this.feed.setActionError("Dismiss failed. The Inbox item remains. Review the current Inbox and retry.");
+    }).finally(() => {
+      this.#dismissPending.delete(itemId);
+      this.root.invalidate();
+      this.#questionOptions.requestRender?.();
+    });
+  }
+
+  navigatePage(direction: "previous" | "next", view?: HistoryView): void {
+    const selected = this.#model.selectedId;
+    const activeView = view ?? (selected && this.#model.archive.activeItems("history").some((item) => item.itemId === selected) ? "history" : "inbox");
+    const cursor = this.#model.archive.pageCursor(activeView, direction);
+    if (!cursor) return;
+    this.ensurePage(activeView, cursor, activeView === "inbox");
+  }
+
+  private ensureBody(itemId: string, offset: number): void {
+    const adapter = this.#questionOptions.dataAdapter;
+    const branchId = this.#model.archive.branchId;
+    if (!adapter || !branchId || this.#model.archive.summary?.state !== "ready") return;
+    if (this.#model.archive.setBodyOffset(itemId, offset)) {
+      this.root.invalidate();
+      this.#questionOptions.requestRender?.();
+      return;
+    }
+    if (!this.#model.archive.beginBody(itemId, offset)) return;
+    this.root.invalidate();
+    this.#questionOptions.requestRender?.();
+    void adapter.requestBody(branchId, itemId, offset).then((body) => {
+      if (this.#model.archive.branchId !== branchId) return;
+      this.preserveReadingPosition();
+      this.#model.archive.receiveBody(itemId, offset, body);
+      this.root.invalidate();
+      this.#questionOptions.requestRender?.();
+    }, () => {
+      if (this.#model.archive.branchId !== branchId) return;
+      this.#model.archive.failBody(itemId, offset);
+      this.root.invalidate();
+      this.#questionOptions.requestRender?.();
+    });
+  }
+
+  private handleArchiveUrl(url: string): boolean {
+    try {
+      const target = new URL(url);
+      if (target.hostname === "history") {
+        this.toggleHistory();
+        return true;
+      }
+      if (target.hostname === "dismiss") {
+        this.dismissItem(decodeURIComponent(target.pathname.slice(1)));
+        return true;
+      }
+      const match = /^page-(inbox|history)-(previous|next)$/u.exec(target.hostname);
+      if (match) {
+        this.navigatePage(match[2] as "previous" | "next", match[1] as HistoryView);
+        return true;
+      }
+      const first = /^page-(inbox|history)-first$/u.exec(target.hostname);
+      if (first) {
+        this.ensurePage(first[1] as HistoryView, undefined, true);
+        return true;
+      }
+      if (target.hostname === "body-next" || target.hostname === "body-previous") {
+        this.preserveReadingPosition();
+        const itemId = decodeURIComponent(target.pathname.slice(1));
+        const offset = this.#model.archive.moveBody(itemId, target.hostname === "body-next" ? "next" : "previous");
+        if (offset !== undefined) this.ensureBody(itemId, offset);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private maybePrefetchHistory(): void {
+    if (!this.#model.archive.historyExpanded) return;
+    const first = this.feed.firstHistoryRow;
+    const last = this.feed.lastHistoryRow;
+    if (first === undefined || last === undefined) return;
+    const margin = Math.max(3, this.scrollView.viewportHeight);
+    const visibleTop = this.scrollView.scrollTop;
+    const visibleBottom = visibleTop + this.scrollView.viewportHeight;
+    const previous = this.#model.archive.pageCursor("history", "previous");
+    const next = this.#model.archive.pageCursor("history", "next");
+    if (previous && visibleTop <= first + margin) this.ensurePage("history", previous, false);
+    if (next && visibleBottom >= last - margin) this.ensurePage("history", next, false);
+  }
+
   invalidate(): void {
     this.syncQuestions();
+    this.syncArchive();
     this.root.invalidate();
   }
 
@@ -372,7 +626,12 @@ export class ProjectGlancePaneView implements Component {
   }
 
   preserveReadingPosition(): void {
-    this.#position ??= this.feed.anchorAt(this.scrollView.scrollTop);
+    if (this.#position) return;
+    const anchor = this.feed.anchorAt(this.scrollView.scrollTop);
+    if (!anchor) return;
+    const ids = this.#model.selectableIds;
+    const index = ids.indexOf(anchor.id);
+    this.#position = { ...anchor, fallbackIds: index < 0 ? [] : [...ids.slice(index + 1), ...ids.slice(0, index).reverse()] };
   }
 
   requestSelectedPosition(): void { this.#position = "selected"; }
@@ -418,17 +677,8 @@ export async function main(): Promise<void> {
       if (target.protocol !== "project-glance:") return;
       const action = target.hostname;
       const itemId = decodeURIComponent(target.pathname.slice(1));
-      const snapshot = model.snapshot;
-      if (!snapshot?.branchId || !snapshot.feed.some((item) => item.id === itemId)) return;
-
-      if (action === "toggle") {
-        model.toggleExpanded(itemId);
-      } else if (action === "read" || action === "dismiss") {
-        client?.sendAction(snapshot.branchId, snapshot.revision, {
-          type: action === "read" ? "mark_read" : "dismiss",
-          itemId,
-        });
-      }
+      if (!model.selectableIds.includes(itemId)) return;
+      if (action === "toggle") model.toggleExpanded(itemId);
       tui.requestRender();
     } catch {
       // Ignore malformed terminal links.
@@ -439,6 +689,19 @@ export async function main(): Promise<void> {
       const snapshot = model.snapshot;
       if (model.state !== "connected" || !snapshot?.branchId || !client) return Promise.reject(new Error("QUESTION_UNAVAILABLE"));
       return client.sendQuestionAction(snapshot.branchId, snapshot.revision, action);
+    },
+    onQuestionEditing: (questionId, revision, active) => {
+      const branchId = model.snapshot?.branchId;
+      if (model.state === "connected" && branchId && client) client.setQuestionEditing(branchId, questionId, revision, active);
+    },
+    onDismiss: (itemId) => {
+      const snapshot = model.snapshot;
+      if (model.state !== "connected" || !snapshot?.branchId || !client) return Promise.reject(new Error("INBOX_UNAVAILABLE"));
+      return client.sendFeedAction(snapshot.branchId, snapshot.revision, { type: "dismiss", itemId });
+    },
+    dataAdapter: {
+      requestPage: (branchId, historyView, cursor) => client.requestPage(branchId, historyView, cursor),
+      requestBody: (branchId, itemId, offset) => client.requestBody(branchId, itemId, offset),
     },
     requestRender: () => tui?.requestRender(),
     onQuestionFocusExit: () => tui?.setFocus(null),
@@ -465,23 +728,21 @@ export async function main(): Promise<void> {
       finish();
       return { consume: true };
     }
-    if (data === "j" || data === "\u001b[B") model.selectRelative(1);
-    else if (data === "k" || data === "\u001b[A") model.selectRelative(-1);
-    else if (data === "u") model.focusOldestUnread();
-    else if ((data === "\r" || data === " ") && model.selectedId) {
-      model.toggleExpanded(model.selectedId);
-    } else if ((data === "r" || data === "d") && model.selectedId) {
-      const snapshot = model.snapshot;
-      if (snapshot?.branchId) {
-        client?.sendAction(snapshot.branchId, snapshot.revision, {
-          type: data === "r" ? "mark_read" : "dismiss",
-          itemId: model.selectedId,
-        });
-      }
-    } else {
-      return undefined;
-    }
-    view.requestSelectedPosition();
+    if (data === "j" || data === "\u001b[B") {
+      model.selectRelative(1);
+      view.requestSelectedPosition();
+    } else if (data === "k" || data === "\u001b[A") {
+      model.selectRelative(-1);
+      view.requestSelectedPosition();
+    } else if (data === "u") {
+      model.focusOldestUnread();
+      view.requestSelectedPosition();
+    } else if (data === "[") view.navigatePage("previous");
+    else if (data === "]") view.navigatePage("next");
+    else if (data === "h") view.toggleHistory();
+    else if ((data === "\r" || data === " ") && model.selectedId) view.toggleSelected();
+    else if (data === "d" && model.selectedId) view.dismissSelected();
+    else return undefined;
     view.invalidate();
     tui.requestRender();
     return { consume: true };
@@ -517,7 +778,6 @@ export async function main(): Promise<void> {
             view.requestSelectedPosition();
           }
           requestRender();
-          client.sendAction(snapshot.branchId, snapshot.revision, { type: "focus" });
           return;
         }
       } catch {
