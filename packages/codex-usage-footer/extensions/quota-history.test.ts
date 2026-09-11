@@ -287,7 +287,13 @@ test("default shared display edit propagates, history stays bounded, invalid fil
 test("stale lock recovery and failed polling preserve last good history", async (t) => {
 	const cacheRoot = await mkdtemp(join(tmpdir(), "codex-quota-recovery-")); const identity = resolveAccountIdentity(tokenFor("recovery-account"))!; let now = 1_000_000; let latest: QuotaCache | undefined; let fail = false; let requests = 0;
 	const coordinator = new SharedQuotaCoordinator({ accountKey: identity.accountKey, cacheRoot, resolveAuth: async () => identity, now: () => now, pollIntervalMs: 100, lockStaleMs: 50, scanIntervalMs: 1_000_000, fetch: async (input) => { if (input === RESET_CREDITS_URL) return new Response(JSON.stringify({ available_count: 0, credits: [] }), { status: 200 }); requests += 1; return fail ? new Response("no", { status: 503 }) : new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: 9, limit_window_seconds: 604800 } } }), { status: 200 }); }, onUpdate: (cache) => { latest = cache; } }); t.after(() => coordinator.stop());
-	const lockPath = join(cacheRoot, `${identity.accountKey}.poll.lock`); await mkdir(lockPath); await utimes(lockPath, new Date(0), new Date(0)); await coordinator.start(); await waitFor(() => latest?.history.length === 1 && latest.bankedDetailsLastSuccessAt === now); const good = latest!.history[0]; fail = true; now += 101; await coordinator.tick(); await waitFor(() => latest?.lastErrorAt === now); assert.deepEqual(latest?.history, [good]); await coordinator.tick(); assert.equal(requests, 2); assert.match(formatCachedStatus(latest, now + 200_000), /stale/);
+	const lockPath = join(cacheRoot, `${identity.accountKey}.poll.lock`); await mkdir(lockPath); await utimes(lockPath, new Date(0), new Date(0));
+	// A watcher can publish the cache before the startup tick releases its locks.
+	// Wait for that tick itself before advancing time and requesting another poll.
+	const tick = coordinator.tick.bind(coordinator); let startupTick: Promise<void> | undefined;
+	coordinator.tick = () => { const pending = tick(); startupTick ??= pending; return pending; };
+	await coordinator.start(); assert.ok(startupTick); await startupTick; coordinator.tick = tick;
+	await waitFor(() => latest?.history.length === 1 && latest.bankedDetailsLastSuccessAt === now); const good = latest!.history[0]; fail = true; now += 101; await coordinator.tick(); await waitFor(() => latest?.lastErrorAt === now); assert.deepEqual(latest?.history, [good]); await coordinator.tick(); assert.equal(requests, 2); assert.match(formatCachedStatus(latest, now + 200_000), /stale/);
 });
 
 test("newest banked count wins, with usage summary winning equal-time ties", () => {
