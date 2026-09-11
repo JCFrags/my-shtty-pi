@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.28 passed exact-head CI and its one authorized installed-Pi run produced fresh post-rollback failure evidence. The result establishes a runtime rebind defect after the rollback manifest commit. A focused correction is prepared for the next package. No full M10 or M11 pass is claimed.
+Status: package 2.0.29 passed exact-head CI and its one authorized installed-Pi run passed post-rollback readiness, then stopped at a strict harness seed-shape assertion. The retained source establishes one bounded Pi lifecycle entry before the logical continuation and five seed rows. A fixture-only harness correction is prepared. No full M10 or M11 pass is claimed.
 
 ## Scope
 
@@ -18,7 +18,7 @@ The scenario checks:
 - refusal of an exact read that names the abandoned sibling shard from the child branch;
 - process shutdown and a fresh installed-Pi RPC reopen of the child;
 - an actual RPC `switch_session` back to the main active shard;
-- a maximum of six non-header entries in each physical source file;
+- exactly one Pi thinking-level lifecycle entry, one logical-continuation entry, and five linked seed entries in each seeded physical source, with a maximum of seven non-header entries in every physical source file;
 - unchanged hashes for all source shards present before restart, all source files still present, and zero source deletions;
 - Pi 0.85.1, the required candidate package version, candidate SHA, built distribution, and native `better-sqlite3` prerequisites.
 
@@ -120,6 +120,16 @@ The final revision-5 manifest was valid. It retained the restored main shard and
 Pi 0.85.1 starts the resumed runtime and emits `session_start` before it invokes `switchSession()`'s `withSession` callback. `rollbackLast()` committed the manifest transition inside that callback. The first resumed startup therefore saw the pre-rollback manifest, safely rejected the old adoption binding, and disabled search. The callback then committed the correct manifest, but no second startup occurred. The focused correction reloads the resumed runtime only after the callback commits the rollback manifest. Prepared-rollover recovery uses the same commit-then-reload order after removing its intent. Switch cancellation leaves the manifest unchanged, and a reload failure leaves the committed manifest and every source available for a later normal reopen.
 
 A focused logical-session test preserves rollback, isolated-branch, source, and recovery assertions while requiring post-commit reload. A focused test against the actual Pi 0.85.1 runtime confirms the exact ordering: initial resumed startup sees pre-callback state, and the supported reload sees the committed state. Neither check calls a provider. The corrected source is not a packaged qualification result. One separately packaged candidate and exact-head CI run are required before one affected installed-Pi retry.
+
+## Package 2.0.29 result
+
+Exact-head pull-request CI run `34592458271` passed for candidate `65abc70be9de289300b19cfdd70ad909d6292b14`. The authorized installed-Pi run used package tree `09d7c3275e2ccaa0498a876b18fe95b1e9fb2393`, Pi 0.85.1, Node 24.18.0 ABI 137, `better-sqlite3` 12.9.0, and native binding SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`.
+
+The run passed adoption, initial search, recall, and exact recovery, the first rollover, exact rollback, abandoned-branch retention, the fresh post-rollback search, recall, and exact probe, and the next rollover command. It stopped after 27 seconds at seed ordinal 1 because `SessionManager.getEntries()` returned seven entries while the harness allowed at most six. No result JSON was emitted and the scenario was not repeated. The owner-only scalar evidence has SHA-256 `5876f9741b2cdc5acee4c613f52eff3db8b20182c0089c05d85533c6a5a675ed`.
+
+The retained active source had eight physical rows: its header, one `thinking_level_change` lifecycle entry, one `chrono-logical-continuation`, and the five linked seed entries. The lifecycle correction in package 2.0.29 reloads Pi after committing rollback state, so Pi records its bounded thinking-level startup entry before the continuation. The earlier coarse six-entry limit did not describe that established lifecycle shape.
+
+The corrected harness requires exactly seven non-header entries for every seeded shard. It validates the lifecycle and continuation order, all five seed row types and roles, the complete parent chain, the returned seed and summary identifiers, nonempty unique identifiers, and the unchanged seven-entry ceiling. It rejects an unknown lifecycle row, a duplicate identifier, or any extra row. The final all-shard ceiling remains strict at seven. One focused shape check accepted the observed shape and rejected separate unknown-row, duplicate-identifier, and extra-row fixtures. This correction does not change runtime code, production guards, package version, readiness predicates, rollover behavior, providers, or source retention. Packaging and exact-head CI are still required before one affected run. The ten-rollover, fork, restart, and final source-preservation results remain unqualified.
 
 ## Result fields
 

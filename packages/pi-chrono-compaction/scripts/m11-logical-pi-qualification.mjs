@@ -12,7 +12,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const EXPECTED_PI_VERSION = "0.85.1";
 const EXPECTED_PACKAGE_VERSION = "2.0.29";
 const MAIN_ROLLOVERS = 10;
+const MAX_ACTIVE_ENTRIES = 7;
 const HELP = `Usage:
+  node scripts/m11-logical-pi-qualification.mjs check-seed-shape
   node scripts/m11-logical-pi-qualification.mjs plan --runtime-sha <40-hex>
   node scripts/m11-logical-pi-qualification.mjs run --runtime-sha <40-hex> --root <absolute-new-directory> --output <absolute-json>
 
@@ -23,7 +25,7 @@ function sha(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function parseArgs(argv) {
   if (["help", "--help", "-h"].includes(argv[0])) return { mode: "help" };
   const mode = argv[0];
-  if (!["plan", "run"].includes(mode)) throw new Error("qualification-mode");
+  if (!["check-seed-shape", "plan", "run"].includes(mode)) throw new Error("qualification-mode");
   const values = {};
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
@@ -31,6 +33,10 @@ function parseArgs(argv) {
     values[key.slice(2)] = value;
   }
   if (Object.keys(values).some(key => !["runtime-sha", "root", "output"].includes(key))) throw new Error("qualification-option");
+  if (mode === "check-seed-shape") {
+    if (Object.keys(values).length > 0) throw new Error("qualification-option");
+    return { mode };
+  }
   if (!/^[a-f0-9]{40}$/.test(values["runtime-sha"] ?? "")) throw new Error("qualification-runtime-sha");
   if (mode === "run") {
     for (const key of ["root", "output"]) if (!isAbsolute(values[key] ?? "")) throw new Error(`qualification-${key}`);
@@ -146,12 +152,54 @@ async function promptCommand(client, message, timeoutMs = 120_000) {
   const refused = client.notifications.slice(before).find(value => value.startsWith("Logical session command refused:"));
   assert.equal(refused, undefined, `${message}: ${refused}`);
 }
+function assertSeedShape(result) {
+  assert.equal(result.entries, MAX_ACTIVE_ENTRIES, JSON.stringify(result));
+  assert.ok(Array.isArray(result.shape), JSON.stringify(result));
+  assert.equal(result.shape.length, MAX_ACTIVE_ENTRIES, JSON.stringify(result));
+  const ids = result.shape.map(entry => entry.id);
+  assert.ok(ids.every(id => typeof id === "string" && id.length > 0), JSON.stringify(result));
+  assert.equal(new Set(ids).size, ids.length, JSON.stringify(result));
+  const [thinking, continuation, user, assistant, compaction, tailUser, tailAssistant] = result.shape;
+  assert.deepEqual({ type: thinking.type, role: thinking.role, customType: thinking.customType, parentId: thinking.parentId },
+    { type: "thinking_level_change", role: null, customType: null, parentId: null }, JSON.stringify(result));
+  assert.deepEqual({ type: continuation.type, role: continuation.role, customType: continuation.customType, parentId: continuation.parentId },
+    { type: "custom_message", role: null, customType: "chrono-logical-continuation", parentId: thinking.id }, JSON.stringify(result));
+  assert.deepEqual({ type: user.type, role: user.role, customType: user.customType, parentId: user.parentId },
+    { type: "message", role: "user", customType: null, parentId: continuation.id }, JSON.stringify(result));
+  assert.deepEqual({ type: assistant.type, role: assistant.role, customType: assistant.customType, parentId: assistant.parentId },
+    { type: "message", role: "assistant", customType: null, parentId: user.id }, JSON.stringify(result));
+  assert.deepEqual({ type: compaction.type, role: compaction.role, customType: compaction.customType, parentId: compaction.parentId },
+    { type: "compaction", role: null, customType: null, parentId: assistant.id }, JSON.stringify(result));
+  assert.deepEqual({ type: tailUser.type, role: tailUser.role, customType: tailUser.customType, parentId: tailUser.parentId },
+    { type: "message", role: "user", customType: null, parentId: compaction.id }, JSON.stringify(result));
+  assert.deepEqual({ type: tailAssistant.type, role: tailAssistant.role, customType: tailAssistant.customType, parentId: tailAssistant.parentId },
+    { type: "message", role: "assistant", customType: null, parentId: tailUser.id }, JSON.stringify(result));
+  assert.equal(result.entryId, user.id, JSON.stringify(result));
+  assert.equal(result.summaryId, compaction.id, JSON.stringify(result));
+}
+function checkSeedShape() {
+  const shape = [
+    { type: "thinking_level_change", role: null, customType: null, id: "thinking", parentId: null },
+    { type: "custom_message", role: null, customType: "chrono-logical-continuation", id: "continuation", parentId: "thinking" },
+    { type: "message", role: "user", customType: null, id: "seed-user", parentId: "continuation" },
+    { type: "message", role: "assistant", customType: null, id: "seed-assistant", parentId: "seed-user" },
+    { type: "compaction", role: null, customType: null, id: "seed-summary", parentId: "seed-assistant" },
+    { type: "message", role: "user", customType: null, id: "tail-user", parentId: "seed-summary" },
+    { type: "message", role: "assistant", customType: null, id: "tail-assistant", parentId: "tail-user" },
+  ];
+  const observed = { entries: shape.length, entryId: "seed-user", summaryId: "seed-summary", shape };
+  assert.doesNotThrow(() => assertSeedShape(observed));
+  assert.throws(() => assertSeedShape({ ...observed, shape: shape.map((entry, index) => index === 0 ? { ...entry, type: "unknown" } : entry) }));
+  assert.throws(() => assertSeedShape({ ...observed, shape: shape.map((entry, index) => index === 6 ? { ...entry, id: "tail-user" } : entry) }));
+  assert.throws(() => assertSeedShape({ ...observed, entries: 8, shape: [...shape, { type: "message", role: "user", customType: null, id: "extra", parentId: "tail-assistant" }] }));
+  return { acceptedShapes: 1, rejectedUnknownShapes: 1, rejectedDuplicateShapes: 1, rejectedUnboundedShapes: 1, maximumActiveEntries: MAX_ACTIVE_ENTRIES };
+}
 async function seed(client, ordinal, marker) {
   const prefix = `QUALIFICATION_SEED:${ordinal}:`;
   const notice = client.notify(value => value.startsWith(prefix));
   await promptCommand(client, `/qualification-seed ${ordinal} ${marker}`);
   const result = JSON.parse((await notice).slice(prefix.length));
-  assert.ok(result.entries <= 6, JSON.stringify(result));
+  assertSeedShape(result);
   return result;
 }
 async function probe(client, marker, expectedRoutes, entryId) {
@@ -215,7 +263,10 @@ export default function qualificationBridge(pi) {
     ctx.sessionManager.appendMessage({ role: "user", content: "Continue the bounded qualification scenario.", timestamp: Date.now() });
     ctx.sessionManager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Ready for the next bounded qualification operation." }],
       api: "qualification-no-provider", provider: "qualification", model: "synthetic", usage, stopReason: "stop", timestamp: Date.now() });
-    ctx.ui.notify("QUALIFICATION_SEED:" + ordinal + ":" + JSON.stringify({ entries: ctx.sessionManager.getEntries().length, entryId: userId, summaryId }), "info");
+    const entries = ctx.sessionManager.getEntries();
+    const shape = entries.map(entry => ({ type: entry.type, role: entry.message?.role ?? null, customType: entry.customType ?? null,
+      id: entry.id, parentId: entry.parentId ?? null }));
+    ctx.ui.notify("QUALIFICATION_SEED:" + ordinal + ":" + JSON.stringify({ entries: entries.length, entryId: userId, summaryId, shape }), "info");
   }});
   pi.registerCommand("qualification-probe", { handler: async (args, ctx) => {
     const [marker, routesText, entryId] = args.trim().split(/\\s+/); const routes = Number(routesText); let status;
@@ -321,7 +372,7 @@ export default function qualificationBridge(pi) {
     const maximumActiveEntries = Math.max(...await Promise.all(manifest.shards.map(async shard => {
       const records = (await readFile(shard.sourcePath, "utf8")).trim().split("\n"); return Math.max(0, records.length - 1);
     })));
-    assert.ok(maximumActiveEntries <= 6, `active physical branch exceeded bound: ${maximumActiveEntries}`);
+    assert.ok(maximumActiveEntries <= MAX_ACTIVE_ENTRIES, `active physical branch exceeded bound: ${maximumActiveEntries}`);
     const result = { schemaVersion: 1, status: "passed", runtimeSha: input.runtimeSha, harnessSha, packageVersion: metadata.version,
       piVersion: EXPECTED_PI_VERSION, mainRolloverOperations: MAIN_ROLLOVERS, mainPhysicalShards: MAIN_ROLLOVERS + 1,
       totalPhysicalShards: manifest.shards.length, ancestorSearchRoutes: MAIN_ROLLOVERS + 2,
@@ -336,6 +387,7 @@ export default function qualificationBridge(pi) {
 
 const input = parseArgs(process.argv.slice(2));
 if (input.mode === "help") console.log(HELP);
+else if (input.mode === "check-seed-shape") console.log(JSON.stringify(checkSeedShape()));
 else if (input.mode === "plan") {
   assertRuntimeIdentity(input.runtimeSha);
   console.log(JSON.stringify({ runtimeSha: input.runtimeSha, harnessSha: gitHead(), requiredPackageVersion: EXPECTED_PACKAGE_VERSION, requiredInstalledPiVersion: EXPECTED_PI_VERSION,
