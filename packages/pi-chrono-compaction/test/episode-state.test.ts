@@ -270,7 +270,7 @@ test("M09 actual producer selection preserves obligations and successive experie
     ["assistant", "Inspect the parser input and preserve the failed attempt."],
     ["toolResult", "Parser check failed with exit code 2."],
     ["assistant", "Adjust the parser boundary check; verification remains unresolved."],
-    ["user", "Continue the parser investigation."],
+    ["user", "Goal: investigate the parser boundary."],
     ["assistant", "Read the boundary evidence."],
     ["assistant", "Attempt the smaller correction."],
     ["toolResult", "The narrow check completed without an execution error."],
