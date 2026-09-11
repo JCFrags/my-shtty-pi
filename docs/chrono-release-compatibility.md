@@ -1,6 +1,18 @@
 # ChronoCompact release compatibility
 
-## Current release boundary
+## Current promotion
+
+The owner now directs promotion of the finished M09/M10 stack and all-live-session
+adoption. See [the promotion report](chrono-v3/reviews/main-promotion.md) for the
+2.0.23 integration delta, approval boundary and rollout policy. Its candidate
+identity replaces the current verifier pins only after explicit reconciliation.
+No approval, merge or loaded adoption is implied by this document change.
+
+The sections below record the earlier 2.0.15 release. Their version, file counts,
+peer range and campaign commands are historical, not instructions to repeat
+those campaigns for the new promotion.
+
+## Prior 2.0.15 release boundary
 
 The current integration nominates ChronoCompact **2.0.15** from commit
 `b5918dbf952423e86a50a71e03ae1996c4801ea5`. Its upstream package tree is

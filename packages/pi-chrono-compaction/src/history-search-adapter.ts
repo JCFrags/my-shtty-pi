@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { estimateTokensFromText } from "./utils.js";
-import { resolveCatalogHistory, readCatalogHistoryPage, type CatalogHistoryExecutor, type CatalogHistoryScope } from "./catalog-history.js";
+import { resolveCatalogHistory, resolveCompositionEntry, readCatalogHistoryPage, type CatalogHistoryExecutor, type CatalogHistoryScope } from "./catalog-history.js";
 import { CAPSULE_REDUCER_PIPELINE_VERSION, isCapsuleCatalogView, isCapsuleReadiness, isScopedBodySourceRef, isScopedRawSourceRef, sourceRefWithinViewBounds, type ScopedRawSourceRef, type ScopedBodySourceRef, type CapsuleCatalogView, type DerivedStoreIdentity } from "./capsule-contract.js";
 import { canonicalJson } from "./capsule-segment.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
@@ -11,6 +11,8 @@ import { runSearchV3Worker } from "./search-v3-worker-client.js";
 import { isSearchV3Handle, type SearchV3Handle, type SearchV3Request } from "./search-v3-contract.js";
 import { EPISODE_STATE_RULESET_VERSION, isEpisodeStateRequest, type EpisodeRollupHandle, type EpisodeRollupAfter, type EpisodeRollupRecallLevel, type EpisodeStateAfter, type EpisodeStateLevel, type EpisodeStateSelection } from "./episode-state-contract.js";
 import { SearchLifecycleScheduler, type SearchLifecycleTarget, type SearchLifecycleProgress } from "./search-lifecycle.js";
+import type { LogicalActivationGrant, LogicalShardRoute } from "./logical-session-routing.js";
+import type { LogicalCatalogCut } from "./logical-session-contract.js";
 
 type Target = Extract<SearchV3Request, { op: "ingestPage" }>;
 const hash = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -52,6 +54,11 @@ export function encodeCompositionRecovery(view: CapsuleCatalogView, source: Scop
 /** Real lifecycle pipeline. Only contained workers inspect source or SQLite.
  * Identities are deterministic across append/restart; branch views remain pinned.
  * One active target is retained, never lifetime history or a full postings list. */
+interface HistorySearchAdapterOptions { readonly schedulerDirectory?: string; readonly slots?: number; readonly logicalChild?: boolean }
+interface LogicalSearchPosition { readonly v: 1; readonly logicalSessionId: string; readonly manifestRevision: number; readonly manifestHash: string; readonly branchId: string; readonly routeIndex: number; readonly inner?: string; readonly integrityHash: string }
+const logicalCursorPrefix = "chrono-logical-v1:";
+const logicalCursorHash = (value: Omit<LogicalSearchPosition, "integrityHash">): string => hash(`chrono-logical-history-cursor-v1\0${canonicalJson(value)}`);
+
 export class HistorySearchAdapter {
   readonly scheduler: SearchLifecycleScheduler;
   private key?: string;
@@ -69,7 +76,10 @@ export class HistorySearchAdapter {
   private rollupResumeChecked = false;
   private sourceTarget?: SearchLifecycleTarget;
   private progress: SearchLifecycleProgress = { catalog: "pending", capsules: "pending", index: "pending" };
-  constructor(private readonly options: { schedulerDirectory?: string; slots?: number } = {}) {
+  private logicalGrant?: LogicalActivationGrant;
+  private readonly logicalAdapters = new Map<string, HistorySearchAdapter>();
+  private expectedLogicalCut?: LogicalCatalogCut;
+  constructor(private readonly options: HistorySearchAdapterOptions = {}) {
     this.scheduler = new SearchLifecycleScheduler((target, signal) => this.step(target, signal));
   }
   schedule(target: SearchLifecycleTarget): void {
@@ -81,9 +91,36 @@ export class HistorySearchAdapter {
     if (this.key !== key) { this.rollup = { state: "pending", knownThroughCut: null }; this.rollupTurn = false; this.rollupResumeChecked = false; this.memory = { state: "pending", knownThroughCut: null }; this.memoryTick = 0; this.memoryResumeChecked = false; this.key = key; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
     this.scheduler.schedule(target);
   }
-  cancel(): void { this.rollup = { state: "pending", knownThroughCut: null }; this.rollupTurn = false; this.rollupResumeChecked = false; this.memory = { state: "pending", knownThroughCut: null }; this.memoryTick = 0; this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
+  cancel(): void { this.cancelLogical(); this.rollup = { state: "pending", knownThroughCut: null }; this.rollupTurn = false; this.rollupResumeChecked = false; this.memory = { state: "pending", knownThroughCut: null }; this.memoryTick = 0; this.scheduler.cancel(); this.key = undefined; this.target = undefined; this.workTarget = undefined; this.resumeChecked = false; this.lastReady = undefined; this.readyValidated = false; this.progress = { catalog: "pending", capsules: "pending", index: "pending" }; }
   disable(): void { this.enabled = false; this.cancel(); this.scheduler.disable(); }
   dispose(): void { this.disable(); this.scheduler.dispose(); }
+  private cancelLogical(): void {
+    this.logicalGrant = undefined;
+    for (const adapter of this.logicalAdapters.values()) adapter.dispose();
+    this.logicalAdapters.clear();
+  }
+  /** Re-establish ancestor tools only from an exact active-session grant. Closed shards use their pinned final cuts. */
+  scheduleLogical(grant: LogicalActivationGrant): void {
+    if (this.options.logicalChild || !this.sourceTarget) return fail("logical-session-activation-invalid");
+    const active = grant.searchRoutes.find(route => route.shardId === grant.activeShardId);
+    if (!active || active.sourcePath !== this.sourceTarget.sourcePath || grant.composerCanaryInherited !== false) return fail("logical-session-activation-invalid");
+    this.cancelLogical();
+    this.logicalGrant = grant;
+    for (const route of grant.searchRoutes) {
+      if (route.shardId === grant.activeShardId) continue;
+      if (!route.catalog) return fail("logical-session-route-unpinned");
+      const adapter = new HistorySearchAdapter({ ...this.options, logicalChild: true });
+      adapter.expectedLogicalCut = route.catalog;
+      adapter.schedule(this.targetForRoute(route));
+      this.logicalAdapters.set(route.shardId, adapter);
+    }
+  }
+  private targetForRoute(route: LogicalShardRoute): SearchLifecycleTarget {
+    const cut = route.catalog ?? fail("logical-session-route-unpinned");
+    return { sourcePath: route.sourcePath, sessionKey: cut.sessionKey,
+      shardKey: hash(`pi-jsonl-v1\0${route.sourcePath}`), leafId: cut.entryId,
+      catalogDirectory: join(dirname(route.sourcePath), ".chrono-catalog", cut.sessionKey) };
+  }
   /** Cached bounded state only: no worker, source I/O, or lifetime counts. */
   status(): Record<string, unknown> {
     const state = this.scheduler.status();
@@ -93,6 +130,8 @@ export class HistorySearchAdapter {
       memory: { ...this.memory, requestedCut, coverage: "Known through the materialized branch cut only; later state may exist." },
       rollup: { ...this.rollup, requestedCut, coverage: "Closed historical intervals only, not completed tasks. Later or open history may be absent." },
       requestedCut, indexedCut, lag: requestedCut !== null && indexedCut !== null ? Math.max(0, requestedCut - indexedCut) : null,
+      logical: this.logicalGrant ? { logicalSessionId: this.logicalGrant.logicalSessionId, branchId: this.logicalGrant.branchId,
+        routes: this.logicalGrant.searchRoutes.length, composerCanaryInherited: false } : null,
       servingLastReady: this.readyValidated && !!this.lastReady, requestedViewValidated: !!this.target, lastSafeError: state.errorCode ?? null };
   }
   /** Explicit shadow preview only. Pin the already-cataloged real compaction cut;
@@ -108,6 +147,15 @@ export class HistorySearchAdapter {
     const view = response.result.view as CapsuleCatalogView;
     if (!isCapsuleCatalogView(view) || !this.within(view, current.view)) return fail("search-v3-view-incompatible");
     return structuredClone(this.makeTarget(source, view));
+  }
+  /** Resolve an explicit historical compaction through current catalog membership
+   * and bounded verified source bytes, including entries beyond discovery. */
+  async compositionEntry(entryId: string, expected?: import("./types.js").SessionEntryLike, signal?: AbortSignal): Promise<import("./types.js").SessionEntryLike> {
+    const key = this.key;
+    const { scope, execute } = this.catalogScope(signal);
+    const entry = await resolveCompositionEntry(scope, entryId, execute, expected);
+    if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
+    return entry;
   }
   /** One contained read from an existing state store. No ingestion or publication. */
   async compositionSelection(prefixLeafId: string, signal?: AbortSignal): Promise<EpisodeStateSelection> {
@@ -146,7 +194,7 @@ export class HistorySearchAdapter {
     // A growing requested view must not starve already closed history.
     const rollupPending = !!searchable && this.rollup.state !== "error" && Number(this.memory.knownThroughCut) > 0
       && (this.rollup.complete !== true || Number(this.rollup.processedCut ?? 0) < Number(this.memory.knownThroughCut));
-    if (searchable && (memoryPending || rollupPending) && (searchComplete || this.memoryTick++ % 8 === 0)) {
+    if (!this.expectedLogicalCut && searchable && (memoryPending || rollupPending) && (searchComplete || this.memoryTick++ % 8 === 0)) {
       const key = this.key;
       const rollupJob = rollupPending && (!memoryPending || this.rollupTurn);
       this.rollupTurn = !rollupJob;
@@ -191,6 +239,18 @@ export class HistorySearchAdapter {
     const options = { ...this.options, signal };
     const key = JSON.stringify(t);
     const valid = (): void => { if (signal.aborted || key !== this.key) fail("search-v3-worker-aborted"); };
+    if (this.progress.catalog !== "ready" && this.expectedLogicalCut) {
+      const pinned = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: t.catalogDirectory,
+        sessionKey: t.sessionKey, branchKey: this.expectedLogicalCut.branchKey,
+        leaf: { shardKey: t.shardKey, eventId: this.expectedLogicalCut.entryId } }, options);
+      valid(); if (!pinned.ok) return fail("logical-session-route-unavailable");
+      const view = pinned.result.view as CapsuleCatalogView;
+      if (!isCapsuleCatalogView(view) || view.storeKey !== this.expectedLogicalCut.catalogStoreKey
+        || view.generation !== this.expectedLogicalCut.catalogGeneration || view.sessionKey !== this.expectedLogicalCut.sessionKey
+        || view.branchKey !== this.expectedLogicalCut.branchKey || view.eventCut !== this.expectedLogicalCut.eventCut) return fail("logical-session-route-scope-mismatch");
+      this.target = this.makeTarget(t, view); this.progress = { catalog: "ready", capsules: "pending", index: "pending" };
+      return { ...this.progress };
+    }
     if (this.progress.catalog !== "ready") {
       const ingested = await runCatalogWorker({ v: 1, op: "ingestStep", sourcePath: t.sourcePath, catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, shardKey: t.shardKey, branchKey: "pi-session", shardOrdinal: 0 }, options);
       valid(); if (!ingested.ok) return fail(ingested.code);
@@ -223,12 +283,14 @@ export class HistorySearchAdapter {
       // path. The subsequent create operation remains authoritative and will
       // preserve any real storage failure.
       if (!status.ok) {
+        if (this.expectedLogicalCut) return fail("logical-session-route-unavailable");
         if (status.code !== "search-v3-storage-io") return fail(status.code);
         this.resumeChecked = true;
         return { ...this.progress };
       }
       const indexed = status.result.indexedView as { branchKey?: unknown; eventCut?: unknown; hash?: unknown; complete?: unknown } | null;
       if (indexed === null) {
+        if (this.expectedLogicalCut) return fail("logical-session-route-unavailable");
         this.resumeChecked = true;
         return { ...this.progress };
       }
@@ -236,6 +298,7 @@ export class HistorySearchAdapter {
         || Number(indexed.eventCut) > requested.view.eventCut || typeof indexed.hash !== "string" || !/^[a-f0-9]{64}$/.test(indexed.hash)
         || typeof indexed.complete !== "boolean") return fail("search-v3-resume-invalid");
       const cut = Number(indexed.eventCut);
+      if (this.expectedLogicalCut && (indexed.complete !== true || cut !== this.expectedLogicalCut.eventCut)) return fail("logical-session-route-unavailable");
       const catalogView = { ...requested.view, segments: requested.view.segments.map(segment => ({ ...segment })) };
       const page = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: t.catalogDirectory, sessionKey: t.sessionKey, view: catalogView, after: cut - 1, limit: 1 }, options);
       valid(); if (!page.ok) return fail(page.code);
@@ -317,12 +380,54 @@ export class HistorySearchAdapter {
   private scoped(reference?: Reference): Target {
     const current = this.readyValidated ? this.lastReady : undefined;
     if (!current) return fail("search-v3-index-not-ready");
+    if (this.expectedLogicalCut && (current.view.storeKey !== this.expectedLogicalCut.catalogStoreKey
+      || current.view.generation !== this.expectedLogicalCut.catalogGeneration
+      || current.view.sessionKey !== this.expectedLogicalCut.sessionKey || current.view.branchKey !== this.expectedLogicalCut.branchKey
+      || current.view.eventCut !== this.expectedLogicalCut.eventCut)) return fail("logical-session-route-scope-mismatch");
     if (!reference) return current;
     const view = reference.view;
     if (!this.within(view, current.view)) return fail("search-v3-reference-scope-mismatch");
     return { ...current, view };
   }
   async search(params: Record<string, unknown>, signal?: AbortSignal): Promise<SearchToolResult> {
+    if (!this.logicalGrant) return this.searchOne(params, signal);
+    try {
+      const grant = this.logicalGrant;
+      const routes = [...grant.searchRoutes].reverse();
+      let position = 0, inner: string | undefined;
+      if (typeof params.cursor === "string" && params.cursor.startsWith(logicalCursorPrefix)) {
+        const parsed = JSON.parse(Buffer.from(params.cursor.slice(logicalCursorPrefix.length), "base64url").toString("utf8")) as LogicalSearchPosition;
+        const { integrityHash, ...body } = parsed;
+        if (parsed.v !== 1 || parsed.logicalSessionId !== grant.logicalSessionId || parsed.manifestRevision !== grant.manifestRevision
+          || parsed.manifestHash !== grant.manifestHash || parsed.branchId !== grant.branchId || !Number.isSafeInteger(parsed.routeIndex)
+          || parsed.routeIndex < 0 || parsed.routeIndex >= routes.length || logicalCursorHash(body) !== integrityHash
+          || parsed.inner !== undefined && (typeof parsed.inner !== "string" || parsed.inner.length > 16_384)) return fail("logical-session-cursor-invalid");
+        position = parsed.routeIndex; inner = parsed.inner;
+      } else if (params.cursor !== undefined) {
+        inner = String(params.cursor);
+      }
+      const makeCursor = (routeIndex: number, storeCursor?: string): string => {
+        const body = { v: 1 as const, logicalSessionId: grant.logicalSessionId, manifestRevision: grant.manifestRevision,
+          manifestHash: grant.manifestHash, branchId: grant.branchId, routeIndex, ...(storeCursor ? { inner: storeCursor } : {}) };
+        return logicalCursorPrefix + Buffer.from(JSON.stringify({ ...body, integrityHash: logicalCursorHash(body) })).toString("base64url");
+      };
+      for (let inspected = 0; position < routes.length && inspected < 8; position += 1, inspected += 1, inner = undefined) {
+        const route = routes[position]!;
+        const adapter = route.shardId === grant.activeShardId ? this : this.logicalAdapters.get(route.shardId) ?? fail("logical-session-route-unavailable");
+        const page = await adapter.searchOne({ ...params, ...(inner ? { cursor: inner } : { cursor: undefined }) }, signal);
+        if (page.details.status === "ok" && Array.isArray(page.details.hits) && page.details.hits.length > 0) {
+          const storeNext = typeof page.details.nextCursor === "string" ? page.details.nextCursor : undefined;
+          const nextCursor = storeNext ? makeCursor(position, storeNext) : position + 1 < routes.length ? makeCursor(position + 1) : undefined;
+          return result({ ...page.details, logicalSessionId: grant.logicalSessionId, shardId: route.shardId,
+            ...(nextCursor ? { nextCursor } : {}) }, Number(params.tokenBudget ?? 2000));
+        }
+        if (page.details.status !== "ok") return page;
+      }
+      return result({ status: "ok", logicalSessionId: grant.logicalSessionId, hits: [],
+        ...(position < routes.length ? { nextCursor: makeCursor(position) } : {}), evidence: "Source-linked search cues from the active logical branch only." }, Number(params.tokenBudget ?? 2000));
+    } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
+  }
+  private async searchOne(params: Record<string, unknown>, signal?: AbortSignal): Promise<SearchToolResult> {
     try {
       if (params.unresolved !== undefined || params.includeNeighbors === true || Number(params.startMatch ?? 0) !== 0) return fail("search-v3-option-unsupported");
       const tokenBudget = Number(params.tokenBudget ?? 2000);
@@ -431,6 +536,13 @@ export class HistorySearchAdapter {
   async recall(handle: string, startChar?: number, maxChars?: number, signal?: AbortSignal, tokenBudget?: number): Promise<SearchToolResult> {
     try {
       const reference = decode(handle);
+      if (this.logicalGrant) {
+        const route = this.logicalGrant.searchRoutes.find(value => value.catalog?.catalogStoreKey === reference.view.storeKey
+          && value.catalog.catalogGeneration === reference.view.generation && value.catalog.sessionKey === reference.view.sessionKey);
+        if (route && route.shardId !== this.logicalGrant.activeShardId) {
+          return (this.logicalAdapters.get(route.shardId) ?? fail("logical-session-route-unavailable")).recall(handle, startChar, maxChars, signal, tokenBudget);
+        }
+      }
       const target = this.scoped(reference);
       if (reference.rawSource) {
         const source = reference.rawSource, length = source.raw.end - source.raw.start;
@@ -500,7 +612,9 @@ export class HistorySearchAdapter {
     };
     return { scope, execute };
   }
-  async getBlock(entryId: string, blockIndex: number, startChar?: number, maxChars?: number, signal?: AbortSignal): Promise<SearchToolResult> {
+  async getBlock(entryId: string, blockIndex: number, startChar?: number, maxChars?: number, signal?: AbortSignal, shardId?: string): Promise<SearchToolResult> {
+    if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+    if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getBlock(entryId, blockIndex, startChar, maxChars, signal);
     try {
       const target = this.scoped();
       const { scope, execute } = this.catalogScope(signal);
@@ -512,7 +626,9 @@ export class HistorySearchAdapter {
       return this.recall(encode({ v: 1, view: target.view, handle: source.handle }), startChar, maxChars, signal);
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
-  async getRaw(entryId: string, options: { startByte?: number; maxChars?: number; startChar?: number; contextBefore?: number; contextAfter?: number }, signal?: AbortSignal): Promise<SearchToolResult> {
+  async getRaw(entryId: string, options: { startByte?: number; maxChars?: number; startChar?: number; contextBefore?: number; contextAfter?: number }, signal?: AbortSignal, shardId?: string): Promise<SearchToolResult> {
+    if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+    if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getRaw(entryId, options, signal);
     try {
       if (options.contextBefore || options.contextAfter) return fail("search-v3-option-unsupported");
       const { scope, execute } = this.catalogScope(signal);
@@ -530,7 +646,9 @@ export class HistorySearchAdapter {
       return result({ status: "ok", entryId, ...page, evidence: "Exact source bytes in base64. Continue with startByte=nextByte; no whole-record parse." });
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
-  async range(start: string, end: string, maxEntries = 16, cursor?: string, signal?: AbortSignal): Promise<SearchToolResult> {
+  async range(start: string, end: string, maxEntries = 16, cursor?: string, signal?: AbortSignal, shardId?: string): Promise<SearchToolResult> {
+    if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+    if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).range(start, end, maxEntries, cursor, signal);
     try {
       if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) return fail("catalog-history-range-invalid");
       const reference = cursor ? decode(cursor) : undefined;
@@ -556,5 +674,5 @@ export class HistorySearchAdapter {
       return result({ status: "ok", startEntryId: start, endEntryId: end, entries, complete, ...(!complete ? { nextCursor: encode({ v: 1, view: scope.view, range: { start, end, after: nextAfter, ...(nextByte === undefined ? {} : { byte: nextByte }) } }) } : {}), evidence: "Chronological exact source bytes in base64, pinned to this branch and cut." });
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
-  private code(error: unknown): string { const code = (error as { code?: unknown })?.code; return typeof code === "string" && /^(search|catalog|capsule)-[a-z0-9-]{1,80}$/.test(code) ? code : "search-v3-unavailable"; }
+  private code(error: unknown): string { const code = (error as { code?: unknown })?.code; return typeof code === "string" && /^(search|catalog|capsule|logical-session)-[a-z0-9-]{1,80}$/.test(code) ? code : "search-v3-unavailable"; }
 }

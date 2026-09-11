@@ -33,6 +33,10 @@ const viewHash = (request: EpisodeStateRequest): string => sha(canonicalJson(req
 const schema = [
   "CREATE TABLE meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, identity TEXT NOT NULL, searchRoute TEXT NOT NULL, capsuleRoute TEXT NOT NULL, catalogRoute TEXT NOT NULL, ruleset TEXT NOT NULL, generation INTEGER NOT NULL)",
   "CREATE TABLE cuts (lineage TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(lineage,eventSeq,descriptor)) WITHOUT ROWID",
+  "CREATE TABLE coverage (lineage TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, generation INTEGER NOT NULL, restrictionGap INTEGER NOT NULL, openWorkGap INTEGER NOT NULL, optionalGap INTEGER NOT NULL, PRIMARY KEY(lineage,eventSeq,descriptor)) WITHOUT ROWID",
+  "CREATE INDEX coverage_restriction ON coverage(lineage,restrictionGap,eventSeq,generation)",
+  "CREATE INDEX coverage_work ON coverage(lineage,openWorkGap,eventSeq,generation)",
+  "CREATE INDEX coverage_optional ON coverage(lineage,optionalGap,eventSeq,generation)",
   "CREATE TABLE heads (lineage TEXT PRIMARY KEY, view TEXT NOT NULL, afterEventSeq INTEGER NOT NULL, afterDescriptor INTEGER NOT NULL, metadataAfterEventSeq INTEGER NOT NULL, generation INTEGER NOT NULL, complete INTEGER NOT NULL, metadataComplete INTEGER NOT NULL, partialCount INTEGER NOT NULL)",
   "CREATE TABLE episodes (lineage TEXT NOT NULL, episodeKey TEXT NOT NULL, startEventSeq INTEGER NOT NULL, startDescriptor INTEGER NOT NULL, endEventSeq INTEGER NOT NULL, endDescriptor INTEGER NOT NULL, open INTEGER NOT NULL, memberCount INTEGER NOT NULL, objective TEXT NOT NULL, objectiveEvidence TEXT NOT NULL, createdGeneration INTEGER NOT NULL, PRIMARY KEY(lineage,episodeKey,createdGeneration)) WITHOUT ROWID",
   "CREATE INDEX episodes_page ON episodes(lineage,createdGeneration,startEventSeq,startDescriptor,episodeKey)",
@@ -43,6 +47,9 @@ const schema = [
   "CREATE TABLE state_items (lineage TEXT NOT NULL, stableKey TEXT NOT NULL, propositionKey TEXT NOT NULL, spanKey TEXT NOT NULL, subject TEXT NOT NULL, revision TEXT NOT NULL, kind TEXT NOT NULL, authority TEXT NOT NULL, confidence TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, createdGeneration INTEGER NOT NULL, supersededGeneration INTEGER, resolutionEvidence TEXT, PRIMARY KEY(lineage,stableKey)) WITHOUT ROWID",
   "CREATE INDEX state_page ON state_items(lineage,createdGeneration,eventSeq,descriptor,stableKey,supersededGeneration)",
   "CREATE INDEX state_transition ON state_items(lineage,propositionKey,authority,status,createdGeneration,supersededGeneration)",
+  "CREATE INDEX state_compose ON state_items(lineage,kind,eventSeq DESC,descriptor DESC,stableKey DESC)",
+  "CREATE INDEX state_compose_authority ON state_items(lineage,kind,authority,eventSeq DESC,descriptor DESC,stableKey DESC)",
+  "CREATE TABLE large_bodies (lineage TEXT PRIMARY KEY, envelope TEXT NOT NULL, structural TEXT NOT NULL, nextDecoded INTEGER NOT NULL, restrictionGap INTEGER NOT NULL, openWorkGap INTEGER NOT NULL, partial INTEGER NOT NULL) WITHOUT ROWID",
   "CREATE VIRTUAL TABLE state_fts USING fts5(lineage UNINDEXED,stableKey UNINDEXED,body,tokenize='unicode61')",
   "CREATE TABLE resources (lineage TEXT NOT NULL, stableKey TEXT NOT NULL, resourceKind TEXT NOT NULL, resourceKey TEXT NOT NULL, relation TEXT NOT NULL, revision TEXT, revisionBasis TEXT NOT NULL, currentRevision TEXT NOT NULL, knownThrough INTEGER NOT NULL, failed INTEGER, executionOutcome TEXT NOT NULL, evidence TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, createdGeneration INTEGER NOT NULL, supersededGeneration INTEGER, PRIMARY KEY(lineage,stableKey)) WITHOUT ROWID",
   "CREATE INDEX resource_page ON resources(lineage,createdGeneration,eventSeq,descriptor,stableKey,supersededGeneration)",
@@ -144,8 +151,12 @@ async function exactStructural(request: EpisodeStateRequest, envelope: ReducerEn
   const candidate = page.events?.[0] as CatalogEventRow | undefined;
   if (!candidate || candidate.seq !== envelope.source.eventSeq || !Number.isSafeInteger(candidate.rawStart) || !Number.isSafeInteger(candidate.rawEnd)) return fail("search-v3-state-source-invalid");
   const event: CatalogEventRow = candidate;
+  const catalogFacts = (): VerifiedEventStructuralFacts => ({
+    ...(typeof event.metadata.role === "string" ? { role: { value: event.metadata.role } } : {}),
+    ...(typeof event.metadata.toolName === "string" ? { toolName: { value: event.metadata.toolName } } : {}),
+  });
   const length = event.rawEnd - event.rawStart;
-  if (length < 1 || length > 64 * 1024) return undefined;
+  if (length < 1 || length > 64 * 1024) return Object.keys(catalogFacts()).length ? catalogFacts() : undefined;
   const raw = await catalogCall(request, executor, budget, { op: "raw", view: request.view, eventSeq: event.seq, offset: event.rawStart, length });
   const bytes = Buffer.from(String(raw.data), "base64");
   if (bytes.length !== length) fail("search-v3-state-source-invalid");
@@ -162,7 +173,9 @@ async function exactStructural(request: EpisodeStateRequest, envelope: ReducerEn
   const exitCode = exitValue === undefined ? undefined : rawFact(request, envelope, event, rawText, "exitCode", exitValue);
   const cancelledValue = typeof message.cancelled === "boolean" ? message.cancelled : typeof block?.cancelled === "boolean" ? block.cancelled : undefined;
   const cancelled = cancelledValue === undefined ? undefined : rawFact(request, envelope, event, rawText, "cancelled", cancelledValue);
-  return { ...(role ? { role } : {}), ...(toolName ? { toolName } : {}), ...(isError ? { isError } : {}), ...(exitCode ? { exitCode } : {}), ...(cancelled ? { cancelled } : {}) };
+  const facts = catalogFacts();
+  return { ...(facts.role ? { role: facts.role } : {}), ...(facts.toolName ? { toolName: facts.toolName } : {}),
+    ...(role ? { role } : {}), ...(toolName ? { toolName } : {}), ...(isError ? { isError } : {}), ...(exitCode ? { exitCode } : {}), ...(cancelled ? { cancelled } : {}) };
 }
 interface MetadataProgress { afterEventSeq: number; complete: boolean; processedEvents: number; acceptedMemoryEvents: number; acceptedRetentionHints: number; partial: number }
 const memoryActions = new Set(["remember", "update", "promote", "touch", "demote", "forget"]);
@@ -278,9 +291,9 @@ function extendsView(current: EpisodeStateRequest["view"], old: EpisodeStateRequ
   return current.branchKey === old.branchKey && current.eventCut >= old.eventCut && current.segments.length >= old.segments.length
     && old.segments.every((item, index) => current.segments[index]?.segment === item.segment && current.segments[index]!.cut >= item.cut);
 }
-function insertReduced(store: Store, request: EpisodeStateRequest, reduced: ReducedEpisodeEvent, generation: number): void {
+function insertReduced(store: Store, request: EpisodeStateRequest, reduced: ReducedEpisodeEvent, generation: number, stateOnly = false): void {
   const line = lineage(request), eventSeq = reduced.source.eventSeq, descriptor = reduced.source.descriptor;
-  if (reduced.startsEpisode) {
+  if (!stateOnly && reduced.startsEpisode) {
     const previous = store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.open=1 AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey) ORDER BY e.startEventSeq DESC,e.startDescriptor DESC LIMIT 1", line);
     if (previous) {
       if (num(previous, "createdGeneration") === generation) store.run("UPDATE episodes SET endEventSeq=?,endDescriptor=?,open=0 WHERE lineage=? AND episodeKey=? AND createdGeneration=?",
@@ -292,7 +305,7 @@ function insertReduced(store: Store, request: EpisodeStateRequest, reduced: Redu
     store.run("INSERT OR IGNORE INTO episodes VALUES(?,?,?,?,?,?,?,?,?,?,?)", line, episodeKey, eventSeq, descriptor, eventSeq, descriptor, 1, 1,
       reduced.objective?.exactText ?? "", canonicalJson(reduced.objective ?? { source: reduced.source, partial: true }), generation);
     store.run("INSERT INTO episode_fts(lineage,episodeKey,body) SELECT ?,?,? WHERE changes()>0", line, episodeKey, reduced.objective?.exactText ?? "");
-  } else {
+  } else if (!stateOnly) {
     const open = store.get("SELECT e.* FROM episodes e WHERE e.lineage=? AND e.open=1 AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey) ORDER BY e.startEventSeq DESC,e.startDescriptor DESC LIMIT 1", line);
     if (open) {
       if (num(open, "createdGeneration") === generation) store.run("UPDATE episodes SET endEventSeq=?,endDescriptor=?,memberCount=memberCount+1 WHERE lineage=? AND episodeKey=? AND createdGeneration=?",
@@ -301,7 +314,7 @@ function insertReduced(store: Store, request: EpisodeStateRequest, reduced: Redu
         eventSeq, descriptor, 1, num(open, "memberCount") + 1, str(open, "objective"), str(open, "objectiveEvidence"), generation);
     }
   }
-  const episode = store.get("SELECT e.episodeKey FROM episodes e WHERE e.lineage=? AND e.open=1 AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey) ORDER BY e.startEventSeq DESC,e.startDescriptor DESC LIMIT 1", line);
+  const episode = stateOnly ? undefined : store.get("SELECT e.episodeKey FROM episodes e WHERE e.lineage=? AND e.open=1 AND e.createdGeneration=(SELECT MAX(v.createdGeneration) FROM episodes v WHERE v.lineage=e.lineage AND v.episodeKey=e.episodeKey) ORDER BY e.startEventSeq DESC,e.startDescriptor DESC LIMIT 1", line);
   const cue = [reduced.capsuleCue, ...reduced.states.map(item => `${item.kind}: ${item.evidence.exactText}`),
     ...reduced.resources.map(item => `${item.relation} ${item.resourceKey}: ${item.executionOutcome}`)].filter(Boolean).join("\n").slice(0, 2048);
   if (episode) {
@@ -311,6 +324,8 @@ function insertReduced(store: Store, request: EpisodeStateRequest, reduced: Redu
     store.run("INSERT INTO episode_member_fts(lineage,episodeKey,sourceKey,body) SELECT ?,?,?,? WHERE changes()>0", line, str(episode, "episodeKey"), memberSourceKey, cue);
   }
   for (const item of reduced.states) {
+    // Overlapped decoded windows can rediscover one exact span. Do not replay its lifecycle transition.
+    if (store.get("SELECT stableKey FROM state_items WHERE lineage=? AND stableKey=?", line, item.stableKey)) continue;
     if (item.transition) {
       const old = store.rows("SELECT stableKey,evidence FROM state_items WHERE lineage=? AND propositionKey=? AND authority=? AND kind='restriction' AND supersededGeneration IS NULL AND createdGeneration<? ORDER BY eventSeq,descriptor,stableKey LIMIT ?",
         EPISODE_STATE_LIMITS.page, line, item.transition.targetPropositionKey, item.authority, generation, EPISODE_STATE_LIMITS.page);
@@ -341,42 +356,96 @@ async function materialize(request: Extract<EpisodeStateRequest, { op: "material
   const afterEventSeq = request.after?.eventSeq ?? (head ? num(head, "afterEventSeq") : 0);
   const afterDescriptor = request.after?.descriptor ?? (head ? num(head, "afterDescriptor") : 0);
   const metadataAfterEventSeq = head ? num(head, "metadataAfterEventSeq") : 0;
-  if (request.after && head && (afterEventSeq !== num(head, "afterEventSeq") || afterDescriptor !== num(head, "afterDescriptor"))) fail("search-v3-state-cursor-invalid");
-  const result = await capsuleCall(request, executor, budget, { op: "capsulePage", view: request.view, afterEventSeq, afterDescriptor,
-    limit: Math.min(request.limit ?? EPISODE_STATE_LIMITS.materializeCapsules, EPISODE_STATE_LIMITS.materializeCapsules) });
-  const capsules = (result.capsules ?? []) as ReducerEnvelope[], reduced: ReducedEpisodeEvent[] = [];
-  for (const envelope of capsules) reduced.push(reduceEpisodeStateEnvelope(envelope, await body(request, envelope, executor, budget),
-    await exactStructural(request, envelope, catalogExecutor, budget)));
-  const current = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation"), bodyGeneration = current + capsules.length;
-  const nextEventSeq = Number(result.next?.afterEventSeq ?? afterEventSeq), nextDescriptor = Number(result.next?.afterDescriptor ?? afterDescriptor);
-  const bodyComplete = Boolean(result.complete), priorPartial = head ? num(head, "partialCount") : 0;
-  const bodyPartial = reduced.filter(item => item.partial).length;
-  store.transaction(() => {
-    for (const [index, item] of reduced.entries()) {
-      const itemGeneration = current + index + 1;
-      insertReduced(store, request, item, itemGeneration);
-      store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, item.source.eventSeq, item.source.descriptor, itemGeneration);
+  const priorPartial = head ? num(head, "partialCount") : 0;
+  if (request.after && head && (afterEventSeq !== num(head, "afterEventSeq") || afterDescriptor !== num(head, "afterDescriptor")))
+    fail("search-v3-state-cursor-invalid");
+
+  let active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
+  let envelope: ReducerEnvelope | undefined, verified: VerifiedEventStructuralFacts | undefined;
+  let pageComplete = false;
+  if (active) {
+    try { envelope = JSON.parse(str(active, "envelope")); verified = JSON.parse(str(active, "structural")); }
+    catch { return fail("search-v3-state-checkpoint-corrupt"); }
+  } else {
+    const page = await capsuleCall(request, executor, budget, { op: "capsulePage", view: request.view, afterEventSeq, afterDescriptor, limit: 1 });
+    envelope = (page.capsules ?? [])[0] as ReducerEnvelope | undefined;
+    pageComplete = page.complete === true;
+    if (envelope && envelope.source.decodedUtf16.end - envelope.source.decodedUtf16.start > EPISODE_STATE_LIMITS.wholeBodyUtf16Units) {
+      verified = await exactStructural(request, envelope, catalogExecutor, budget);
+      store.run("INSERT INTO large_bodies VALUES(?,?,?,?,?,?,?)", line, canonicalJson(envelope), canonicalJson(verified ?? {}),
+        envelope.source.decodedUtf16.start, 0, 0, 0);
+      active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
     }
-    if (capsules.length) store.run("UPDATE meta SET generation=? WHERE singleton=1", bodyGeneration);
-    store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?,?,?)", line, canonicalJson(request.view), nextEventSeq, nextDescriptor,
-      metadataAfterEventSeq, bodyGeneration, bodyComplete ? 1 : 0, metadataAfterEventSeq >= request.view.eventCut ? 1 : 0, priorPartial + bodyPartial);
-  });
-  const metadata = await materializeMetadata(request, store, catalogExecutor, budget, metadataAfterEventSeq, bodyGeneration, bodyComplete ? request.view.eventCut : Math.max(0, nextEventSeq - 1));
-  const generation = metadata.generation, complete = bodyComplete && metadata.complete;
-  const partialCount = priorPartial + bodyPartial + metadata.partial;
+  }
+
+  let generation = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation");
+  let nextEventSeq = afterEventSeq, nextDescriptor = afterDescriptor, bodyPartial = 0;
+  if (envelope && active) {
+    const sourceStart = envelope.source.decodedUtf16.start, sourceEnd = envelope.source.decodedUtf16.end;
+    const nextDecoded = num(active, "nextDecoded");
+    const decodedStart = nextDecoded === sourceStart ? sourceStart : Math.max(sourceStart, nextDecoded - EPISODE_STATE_LIMITS.largeBodyOverlapUnits);
+    const length = Math.min(EPISODE_STATE_LIMITS.wholeBodyUtf16Units, sourceEnd - decodedStart);
+    const chunk = await capsuleCall(request, executor, budget, { op: "chunkRange", view: request.view, source: envelope.source,
+      decodedStart, decodedLength: length, limit: 2 });
+    const bytes = Buffer.from(String(chunk.data), "base64"), text = bytes.toString("utf16le");
+    if (bytes.length !== length * 2 || text.length !== length) fail("search-v3-state-source-invalid");
+    const through = decodedStart + length, final = through === sourceEnd;
+    const reduced = reduceEpisodeStateEnvelope(envelope, text, verified, { decodedStart, final });
+    generation++; bodyPartial = reduced.partial ? 1 : 0;
+    const restrictionGap = num(active, "restrictionGap") === 1 || reduced.coverage.restrictionGap;
+    const openWorkGap = num(active, "openWorkGap") === 1 || reduced.coverage.openWorkGap;
+    const partial = num(active, "partial") === 1 || reduced.partial;
+    store.transaction(() => {
+      insertReduced(store, request, reduced, generation, nextDecoded !== sourceStart);
+      store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
+      if (final) {
+        store.run("DELETE FROM large_bodies WHERE lineage=?", line);
+        store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor,
+          generation, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0);
+        store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor, generation);
+      } else store.run("UPDATE large_bodies SET nextDecoded=?,restrictionGap=?,openWorkGap=?,partial=? WHERE lineage=?",
+        through, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0, line);
+    });
+    if (!final) {
+      store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?,?,?)", line, canonicalJson(request.view), afterEventSeq, afterDescriptor,
+        metadataAfterEventSeq, generation, 0, 0, priorPartial);
+      const known = Math.max(0, Math.min(request.view.eventCut, afterEventSeq - 1, metadataAfterEventSeq));
+      return { stateGeneration: generation, branchKey: request.view.branchKey, knownThroughCut: known, knownThrough: known, partial: true, complete: false,
+        next: { eventSeq: afterEventSeq, descriptor: afterDescriptor, generation }, metadata: { afterEventSeq: metadataAfterEventSeq, complete: false,
+          processedEvents: 0, acceptedMemoryEvents: 0, acceptedRetentionHints: 0 }, largeBody: { checkpointed: true, nextDecoded: through, endDecoded: sourceEnd },
+        metrics: { capsules: 1, decodedChunks: 1, partialRecords: bodyPartial, sqliteStatements: store.statements } };
+    }
+    nextEventSeq = envelope.source.eventSeq; nextDescriptor = envelope.source.descriptor;
+  } else if (envelope) {
+    verified = await exactStructural(request, envelope, catalogExecutor, budget);
+    const reduced = reduceEpisodeStateEnvelope(envelope, await body(request, envelope, executor, budget), verified);
+    generation++; bodyPartial = reduced.partial ? 1 : 0;
+    nextEventSeq = envelope.source.eventSeq; nextDescriptor = envelope.source.descriptor;
+    store.transaction(() => {
+      insertReduced(store, request, reduced, generation);
+      store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
+      store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor, generation,
+        reduced.coverage.restrictionGap ? 1 : 0, reduced.coverage.openWorkGap ? 1 : 0, reduced.partial ? 1 : 0);
+      store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor, generation);
+    });
+  }
+
+  const bodyComplete = !envelope && pageComplete;
+  const metadata = await materializeMetadata(request, store, catalogExecutor, budget, metadataAfterEventSeq, generation,
+    bodyComplete ? request.view.eventCut : Math.max(0, nextEventSeq - 1));
+  generation = metadata.generation;
+  const complete = bodyComplete && metadata.complete, partialCount = priorPartial + bodyPartial + metadata.partial;
   store.transaction(() => {
-    if (generation !== bodyGeneration) store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
+    store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
     store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?,?,?)", line, canonicalJson(request.view), nextEventSeq, nextDescriptor,
       metadata.afterEventSeq, generation, bodyComplete ? 1 : 0, metadata.complete ? 1 : 0, partialCount);
   });
-  // A non-final capsule page can stop between descriptors in nextEventSeq.
-  // Report only the preceding event as fully materialized in that case.
   const knownThroughCut = complete ? request.view.eventCut : Math.max(0, Math.min(request.view.eventCut, nextEventSeq - 1, metadata.afterEventSeq));
   return { stateGeneration: generation, branchKey: request.view.branchKey, knownThroughCut, knownThrough: knownThroughCut, partial: !complete || partialCount > 0,
     complete, next: { eventSeq: nextEventSeq, descriptor: nextDescriptor, generation }, metadata: { afterEventSeq: metadata.afterEventSeq,
       complete: metadata.complete, processedEvents: metadata.processedEvents, acceptedMemoryEvents: metadata.acceptedMemoryEvents,
-      acceptedRetentionHints: metadata.acceptedRetentionHints }, metrics: { capsules: capsules.length, partialRecords: reduced.filter(item => item.partial).length + metadata.partial,
-      sqliteStatements: store.statements } };
+      acceptedRetentionHints: metadata.acceptedRetentionHints }, metrics: { capsules: envelope ? 1 : 0, decodedChunks: envelope && active ? 1 : 0,
+      partialRecords: bodyPartial + metadata.partial, sqliteStatements: store.statements } };
 }
 function pin(request: Extract<EpisodeStateRequest, { op: "recallState" }>, store: Store): number {
   const cut = store.get("SELECT MAX(generation) AS generation FROM cuts WHERE lineage=? AND eventSeq<=?", lineage(request), request.view.eventCut);
@@ -471,6 +540,25 @@ function selectionItem(row: SqlRow, effectiveAtCut: number): EpisodeStateSelecti
     status: str(row, "status") as EpisodeStateSelectionItem["status"], effectiveAtCut, evidence: JSON.parse(str(row, "evidence")) };
 }
 
+/** Page an indexed category with explicit statement and row bounds. */
+function boundedCategoryRows(store: Store, line: string, active: string, condition: string, values: readonly SqlValue[],
+  stateGeneration: number, processedCut: number, maximumPages: number = EPISODE_STATE_LIMITS.composeScanPages): { rows: SqlRow[]; complete: boolean; pages: number } {
+  const rows: SqlRow[] = [];
+  let cursor: { eventSeq: number; descriptor: number; stableKey: string } | undefined;
+  for (let page = 0; page < maximumPages; page++) {
+    const after = cursor ? " AND (eventSeq<? OR (eventSeq=? AND (descriptor<? OR (descriptor=? AND stableKey<?))))" : "";
+    const batch = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND ${condition}${after}
+      ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`, EPISODE_STATE_LIMITS.composeScanPage,
+      line, stateGeneration, processedCut, stateGeneration, processedCut, ...values,
+      ...(cursor ? [cursor.eventSeq, cursor.eventSeq, cursor.descriptor, cursor.descriptor, cursor.stableKey] : []), EPISODE_STATE_LIMITS.composeScanPage);
+    rows.push(...batch);
+    if (batch.length < EPISODE_STATE_LIMITS.composeScanPage) return { rows, complete: true, pages: page + 1 };
+    const last = batch.at(-1)!;
+    cursor = { eventSeq: num(last, "eventSeq"), descriptor: num(last, "descriptor"), stableKey: str(last, "stableKey") };
+  }
+  return { rows: rows.slice(0, EPISODE_STATE_LIMITS.composeScannedPerCategory), complete: false, pages: maximumPages };
+}
+
 /** M09 selection reads one common body and metadata prefix without materialization or source-body access. */
 function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "composeStateSelection" }>, store: Store): EpisodeStateSelection {
   const line = lineage(request), requestedCut = request.view.eventCut;
@@ -486,13 +574,33 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
   const stateGeneration = generationRow?.generation === null || generationRow?.generation === undefined ? 0 : num(generationRow, "generation");
   if (stateGeneration > num(head, "generation")) fail("search-v3-state-checkpoint-corrupt");
   const active = "createdGeneration<=? AND eventSeq<=? AND (supersededGeneration IS NULL OR supersededGeneration>? OR json_extract(resolutionEvidence,'$.source.eventSeq')>?)";
-  const protectedRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('restriction','openwork','blocker') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
-    EPISODE_STATE_LIMITS.composeProtected + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeProtected + 1);
-  const currentRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('goal','decision') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
+  // Scan each mandatory category before representation packing. Raw rows do not consume the 16+8 representation reservations.
+  const restrictionScan = boundedCategoryRows(store, line, active, "kind='restriction'", [], stateGeneration, processedCut);
+  // Spend one shared eight-page work bound in authority order. Later tool failures cannot consume the scan before user work.
+  const workConditions = ["kind IN ('goal','openwork','blocker') AND authority='user'",
+    "kind IN ('goal','openwork','blocker') AND authority='assistant-report'",
+    "kind IN ('goal','openwork','blocker') AND authority NOT IN ('user','assistant-report')"];
+  const workRows: SqlRow[] = [];
+  let workPages = 0, workComplete = true;
+  for (const condition of workConditions) {
+    const remaining = EPISODE_STATE_LIMITS.composeScanPages - workPages;
+    if (remaining <= 0) { workComplete = false; break; }
+    const scan = boundedCategoryRows(store, line, active, condition, [], stateGeneration, processedCut, remaining);
+    workRows.push(...scan.rows); workPages += scan.pages;
+    if (!scan.complete) { workComplete = false; break; }
+  }
+  const workScan = { rows: workRows.slice(0, EPISODE_STATE_LIMITS.composeScannedPerCategory), complete: workComplete, pages: workPages };
+  const restrictionRows = restrictionScan.rows;
+  const currentRows = store.rows(`SELECT * FROM state_items WHERE lineage=? AND ${active} AND kind IN ('decision','approval') ORDER BY eventSeq DESC,descriptor DESC,stableKey DESC LIMIT ?`,
     EPISODE_STATE_LIMITS.composeState + 1, line, stateGeneration, processedCut, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeState + 1);
   // Select successive experience across boundaries, not only the latest episode.
-  const recentRows = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND createdGeneration<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT ?",
+  const latestEpisode = store.get("SELECT startEventSeq FROM episodes WHERE lineage=? AND createdGeneration<=? AND startEventSeq<=? ORDER BY startEventSeq DESC,createdGeneration DESC LIMIT 1", line, stateGeneration, processedCut);
+  const recentEnd = store.rows("SELECT * FROM episode_membership WHERE lineage=? AND createdGeneration<=? AND eventSeq<=? ORDER BY eventSeq DESC,descriptor DESC,sourceKey DESC LIMIT ?",
     EPISODE_STATE_LIMITS.composeRecentMembers + 1, line, stateGeneration, processedCut, EPISODE_STATE_LIMITS.composeRecentMembers + 1);
+  const recentStartRows = latestEpisode ? store.rows("SELECT * FROM episode_membership WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,descriptor,sourceKey LIMIT 6",
+    6, line, stateGeneration, num(latestEpisode, "startEventSeq"), processedCut) : [];
+  const recentBySource = new Map([...recentStartRows, ...recentEnd.slice(0, 6)].map(row => [str(row, "sourceKey"), row]));
+  const recentRows = [...recentBySource.values()].sort((a, b) => num(b, "eventSeq") - num(a, "eventSeq") || num(b, "descriptor") - num(a, "descriptor"));
   const member = (row: SqlRow): EpisodeStateSelectionMember => {
     const episode = store.get("SELECT * FROM episodes WHERE lineage=? AND episodeKey=? AND createdGeneration<=? AND endEventSeq<=? ORDER BY createdGeneration DESC LIMIT 1",
       line, str(row, "episodeKey"), stateGeneration, processedCut) ?? fail("search-v3-state-checkpoint-corrupt");
@@ -502,7 +610,8 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
         end: { eventSeq: num(episode, "endEventSeq"), descriptor: num(episode, "endDescriptor") }, open: num(episode, "open") === 1,
         objective: str(episode, "objective"), objectiveEvidence: JSON.parse(str(episode, "objectiveEvidence")) } };
   };
-  const protectedItems = protectedRows.slice(0, EPISODE_STATE_LIMITS.composeProtected).reverse().map(row => selectionItem(row, processedCut));
+  // Keep query authority order through representation reservation. Chronology is restored only after packing.
+  const protectedItems = [...restrictionRows, ...workRows].map(row => selectionItem(row, processedCut));
   const currentItems = currentRows.slice(0, EPISODE_STATE_LIMITS.composeState).reverse().map(row => selectionItem(row, processedCut));
   const recentItems = recentRows.slice(0, EPISODE_STATE_LIMITS.composeRecentMembers).reverse().map(member);
   // Older experience is selected through existing obligation-to-episode membership,
@@ -523,63 +632,171 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
     }
   }
   olderItems.sort((a, b) => a.eventSeq - b.eventSeq || a.descriptor - b.descriptor || a.sourceKey.localeCompare(b.sourceKey));
-  let protectedAtLeastOne = protectedRows.length > EPISODE_STATE_LIMITS.composeProtected;
+  let protectedAtLeastOne = !restrictionScan.complete;
+  let openWorkAtLeastOne = !workScan.complete;
+  let restrictionWorkExhausted = !restrictionScan.complete;
+  let openWorkExhausted = !workScan.complete;
+  let renderedOverflowAtLeastOne = false;
   let currentAtLeastOne = currentRows.length > EPISODE_STATE_LIMITS.composeState;
-  let recentAtLeastOne = recentRows.length > EPISODE_STATE_LIMITS.composeRecentMembers;
+  let recentAtLeastOne = recentEnd.length > recentRows.length;
   let responseBudgetAtLeastOne = false;
   const bodyComplete = bodyCut >= requestedCut, metadataComplete = processedMemoryCut >= requestedCut;
   const partialMemory = !metadataComplete;
-  const qualifiedReducers = num(head, "partialCount") > 0;
+  const gap = (column: "restrictionGap" | "openWorkGap" | "optionalGap"): boolean => Boolean(store.get(
+    `SELECT eventSeq FROM coverage WHERE lineage=? AND ${column}=1 AND eventSeq<=? AND generation<=? LIMIT 1`, line, processedCut, stateGeneration));
+  const restrictionsComplete = bodyComplete && metadataComplete && !gap("restrictionGap");
+  const openWorkComplete = bodyComplete && metadataComplete && !gap("openWorkGap");
+  const qualifiedReducers = gap("optionalGap");
   const build = (): EpisodeStateSelection => {
-    const partial = !bodyComplete || !metadataComplete || qualifiedReducers || protectedAtLeastOne || currentAtLeastOne || recentAtLeastOne || responseBudgetAtLeastOne;
+    const partial = !bodyComplete || !metadataComplete || qualifiedReducers || protectedAtLeastOne || openWorkAtLeastOne || currentAtLeastOne || recentAtLeastOne || responseBudgetAtLeastOne;
     return { stateGeneration, branchKey: request.view.branchKey, sourceView: request.view, requestedCut, processedCut, processedMemoryCut, complete: !partial, partial,
-      coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers }, protected: protectedItems, current: currentItems, recent: recentItems, older: olderItems,
-      omissions: { protectedAtLeastOne, currentAtLeastOne, recentAtLeastOne, responseBudgetAtLeastOne }, metrics: { sqliteStatements: store.statements } };
+      coverage: { bodyComplete, metadataComplete, partialMemory, qualifiedReducers, restrictionsComplete, openWorkComplete,
+        restrictionsScanComplete: !restrictionWorkExhausted, openWorkScanComplete: !openWorkExhausted }, protected: protectedItems, current: currentItems, recent: recentItems, older: olderItems,
+      omissions: { protectedAtLeastOne, openWorkAtLeastOne, currentAtLeastOne, recentAtLeastOne, responseBudgetAtLeastOne,
+        restrictionWorkExhausted, openWorkExhausted, renderedOverflowAtLeastOne }, metrics: { sqliteStatements: store.statements,
+        mandatoryRowsScanned: restrictionRows.length + workRows.length,
+        mandatoryRowsScanLimit: EPISODE_STATE_LIMITS.composeScannedPerCategory * 2,
+        mandatoryScanPageLimit: EPISODE_STATE_LIMITS.composeScanPages * 2,
+        outputUtf8ByteLimit: EPISODE_STATE_LIMITS.composeUtf8Bytes } };
   };
-  while (Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
-    responseBudgetAtLeastOne = true;
-    if (olderItems.length) { olderItems.shift(); continue; }
-    if (recentItems.length) { recentItems.shift(); recentAtLeastOne = true; continue; }
-    if (currentItems.length) { currentItems.shift(); currentAtLeastOne = true; continue; }
-    if (protectedItems.length) { protectedItems.shift(); protectedAtLeastOne = true; continue; }
-    fail("search-v3-state-response-limit");
-  }
   return build();
 }
 
-/** Resolve bounded surrounding context without changing stored evidence or its authority. */
+/** Resolve bounded surrounding context, then charge category quotas to exact representations rather than raw rows. */
 async function selectionContext(request: EpisodeStateRequest, selection: EpisodeStateSelection,
   options: EpisodeStateExecutionOptions, budget: { bytes: number }): Promise<EpisodeStateSelection> {
-  const cache = new Map<string, string | undefined>();
+  const cache = new Map<string, { text: string; start: number }>();
   const enrich = async (item: EpisodeStateSelectionItem): Promise<EpisodeStateSelectionItem> => {
     const evidence = item.evidence as { source?: ScopedBodySourceRef; decodedUtf16?: { start: number; end: number }; exactText?: string };
     const source = evidence?.source;
     if (!source || source.coordinateKind !== "decoded-body" || !evidence.decodedUtf16 || typeof evidence.exactText !== "string") return item;
     if (evidence.decodedUtf16.start === source.decodedUtf16.start && evidence.decodedUtf16.end === source.decodedUtf16.end) return item;
-    // A whole bounded source retains preceding conditions and following exceptions.
-    // Larger sources stay explicitly unsupported rather than certifying a guessed clause boundary.
-    if (source.decodedUtf16.end - source.decodedUtf16.start > 8192) return item;
-    const key = sourceKey(source);
-    if (!cache.has(key)) cache.set(key, await body(request, { source } as ReducerEnvelope, options.capsuleExecutor ?? executeCapsuleRequest, budget));
-    const text = cache.get(key);
-    if (text === undefined || Buffer.byteLength(text) > 16 * 1024) return item;
-    if (text.slice(evidence.decodedUtf16.start - source.decodedUtf16.start, evidence.decodedUtf16.end - source.decodedUtf16.start) !== evidence.exactText)
-      fail("search-v3-state-source-invalid");
-    return { ...item, evidence: { ...evidence, exactText: text, decodedUtf16: source.decodedUtf16,
+    const readStart = Math.max(source.decodedUtf16.start, evidence.decodedUtf16.start - EPISODE_STATE_LIMITS.contextSideUnits);
+    const readEnd = Math.min(source.decodedUtf16.end, evidence.decodedUtf16.end + EPISODE_STATE_LIMITS.contextSideUnits);
+    const key = `${sourceKey(source)}:${readStart}:${readEnd}`;
+    if (!cache.has(key)) {
+      const response = await capsuleCall(request, options.capsuleExecutor ?? executeCapsuleRequest, budget, { op: "chunkRange", view: request.view,
+        source, decodedStart: readStart, decodedLength: readEnd - readStart, limit: 2 });
+      const bytes = Buffer.from(String(response.data), "base64"), text = bytes.toString("utf16le");
+      if (bytes.length !== (readEnd - readStart) * 2 || text.length !== readEnd - readStart) fail("search-v3-state-source-invalid");
+      cache.set(key, { text, start: readStart });
+    }
+    const window = cache.get(key)!;
+    const clauseStart = evidence.decodedUtf16.start - window.start, clauseEnd = evidence.decodedUtf16.end - window.start;
+    if (window.text.slice(clauseStart, clauseEnd) !== evidence.exactText) fail("search-v3-state-source-invalid");
+    const before = [...window.text.slice(0, clauseStart).matchAll(/\n[ \t]*\n/gu)].at(-1);
+    const after = /\n[ \t]*\n/u.exec(window.text.slice(clauseEnd));
+    if (!before && readStart !== source.decodedUtf16.start || !after && readEnd !== source.decodedUtf16.end) return item;
+    const start = before ? before.index! + before[0].length : 0, end = after ? clauseEnd + after.index : window.text.length;
+    const context = window.text.slice(start, end), absoluteStart = window.start + start, absoluteEnd = window.start + end;
+    if (Buffer.byteLength(context) > 16 * 1024) return item;
+    return { ...item, evidence: { ...evidence, exactText: context, decodedUtf16: { start: absoluteStart, end: absoluteEnd },
       retainedClause: { exactText: evidence.exactText, decodedUtf16: evidence.decodedUtf16 },
-      omissions: [{ beforeUtf16: 0, afterUtf16: 0 }], contextComplete: true } };
+      omissions: [{ beforeUtf16: absoluteStart - source.decodedUtf16.start, afterUtf16: source.decodedUtf16.end - absoluteEnd }], contextComplete: true } };
   };
-  const result = { ...selection, protected: [...selection.protected], current: [...selection.current],
+  const optionalCurrent = [...selection.current], optionalRecent = [...selection.recent], optionalOlder = [...(selection.older ?? [])];
+  // Pack mandatory rows first. Bounded optional candidates are refilled only after the final mandatory size is known.
+  const result = { ...selection, protected: [] as EpisodeStateSelectionItem[], current: [] as EpisodeStateSelectionItem[],
+    recent: [] as EpisodeStateSelectionMember[], older: [] as EpisodeStateSelectionMember[], omissions: { ...selection.omissions },
+    coverage: { ...selection.coverage },
     delta: selection.delta ? { ...selection.delta, protected: [...selection.delta.protected], current: [...selection.delta.current] } : undefined };
-  const groups = [result.protected, result.current, ...(result.delta ? [result.delta.protected, result.delta.current] : [])];
-  for (const group of groups) for (let index = 0; index < group.length; index++) {
-    const original = group[index]!;
-    group[index] = await enrich(original);
-    // Keep each successful bounded expansion. A later large source must not
-    // undo previously verified context or displace a different obligation.
-    if (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes) group[index] = original;
+  const representationKey = (item: EpisodeStateSelectionItem): string => {
+    const evidence = item.evidence as { source?: ScopedBodySourceRef; decodedUtf16?: { start: number; end: number }; exactText?: string };
+    const category = item.kind === "restriction" ? "restriction" : "work";
+    if (evidence.source && evidence.decodedUtf16 && typeof evidence.exactText === "string")
+      return sha(canonicalJson({ category, authority: item.authority, status: item.status, source: sourceKey(evidence.source),
+        decodedUtf16: evidence.decodedUtf16, exactText: evidence.exactText }));
+    return sha(canonicalJson({ category, authority: item.authority, status: item.status, subject: item.subject, revision: item.revision, evidence: item.evidence }));
+  };
+  const counts = { restriction: new Set<string>(), work: new Set<string>() };
+  const represented = { restriction: new Map<string, number>(), work: new Map<string, number>() };
+  const representedOriginal = new Map<string, EpisodeStateSelectionItem>();
+  const selectedSources = { restriction: new Set<string>(), work: new Set<string>() };
+  const proposition = (item: EpisodeStateSelectionItem, representationKey: string) => ({ representationKey, stableKey: item.stableKey,
+    propositionKey: item.propositionKey, spanKey: item.spanKey, subject: item.subject, revision: item.revision, kind: item.kind,
+    authority: item.authority, confidence: item.confidence, status: item.status, effectiveAtCut: item.effectiveAtCut, evidence: item.evidence });
+  const workPriority = (item: EpisodeStateSelectionItem): number => item.authority === "user" ? 0
+    : item.authority === "assistant-report" && item.kind === "openwork" ? 1
+    : item.authority === "assistant-report" ? 2 : item.authority === "verified-tool" ? 4 : 3;
+  const ordered = [...selection.protected].sort((a, b) => Number(b.kind === "restriction") - Number(a.kind === "restriction")
+    || (a.kind === "restriction" ? 0 : workPriority(a) - workPriority(b)));
+  for (const original of ordered) {
+    const category = original.kind === "restriction" ? "restriction" : "work";
+    const source = (original.evidence as { source?: ScopedBodySourceRef }).source;
+    const sourceId = source ? sourceKey(source) : "";
+    const limit = category === "restriction" ? EPISODE_STATE_LIMITS.composeRestrictions : EPISODE_STATE_LIMITS.composeOpenWork;
+    // Once a category is full, only an already represented source can prove overlap without another source read.
+    if (counts[category].size >= limit && sourceId && !selectedSources[category].has(sourceId)) {
+      if (category === "restriction") result.omissions.restrictionWorkExhausted = result.omissions.protectedAtLeastOne = true;
+      else result.omissions.openWorkExhausted = result.omissions.openWorkAtLeastOne = true;
+      continue;
+    }
+    const item = await enrich(original), key = representationKey(item);
+    if (!counts[category].has(key) && counts[category].size >= limit) {
+      if (category === "restriction") result.omissions.restrictionWorkExhausted = result.omissions.protectedAtLeastOne = true;
+      else result.omissions.openWorkExhausted = result.omissions.openWorkAtLeastOne = true;
+      continue;
+    }
+    const representedAt = represented[category].get(key);
+    if (representedAt !== undefined) {
+      const existing = result.protected[representedAt]!, first = representedOriginal.get(key) ?? fail("search-v3-state-checkpoint-corrupt");
+      result.protected[representedAt] = { ...existing,
+        coveredPropositions: [...(existing.coveredPropositions ?? [proposition(first, key)]), proposition(original, key)] };
+      continue;
+    }
+    counts[category].add(key); if (sourceId) selectedSources[category].add(sourceId);
+    represented[category].set(key, result.protected.length); representedOriginal.set(key, original);
+    result.protected.push({ ...item, representationKey: key });
   }
-  return result;
+  result.protected.sort((a, b) => {
+    const left = (a.evidence as any).source, right = (b.evidence as any).source;
+    return Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0) || Number(left?.descriptor ?? 0) - Number(right?.descriptor ?? 0);
+  });
+  for (let index = 0; index < optionalCurrent.length; index++) optionalCurrent[index] = await enrich(optionalCurrent[index]!);
+  if (result.delta) {
+    for (let index = 0; index < result.delta.protected.length; index++) result.delta.protected[index] = await enrich(result.delta.protected[index]!);
+    for (let index = 0; index < result.delta.current.length; index++) result.delta.current[index] = await enrich(result.delta.current[index]!);
+  }
+  result.coverage.restrictionsScanComplete = !result.omissions.restrictionWorkExhausted;
+  result.coverage.openWorkScanComplete = !result.omissions.openWorkExhausted;
+  while (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
+    result.omissions.responseBudgetAtLeastOne = true; result.omissions.renderedOverflowAtLeastOne = true;
+    const removableWork = result.protected.reduce((selected, item, index, all) => {
+      if (item.kind === "restriction") return selected;
+      if (selected < 0 || workPriority(item) > workPriority(all[selected]!)) return index;
+      if (workPriority(item) === workPriority(all[selected]!)
+        && Buffer.byteLength(JSON.stringify(item)) > Buffer.byteLength(JSON.stringify(all[selected]!))) return index;
+      return selected;
+    }, -1);
+    if (removableWork >= 0) { result.protected.splice(removableWork, 1); result.omissions.openWorkAtLeastOne = true; continue; }
+    if (result.protected.length) { result.protected.pop(); result.omissions.protectedAtLeastOne = true; continue; }
+    fail("search-v3-state-response-limit");
+  }
+  const refill = <T>(candidates: readonly T[], target: T[], omission: "currentAtLeastOne" | "recentAtLeastOne"): void => {
+    for (const candidate of candidates) {
+      target.push(candidate);
+      if (Buffer.byteLength(JSON.stringify(result)) <= EPISODE_STATE_LIMITS.composeUtf8Bytes) continue;
+      target.pop(); result.omissions[omission] = true;
+      result.omissions.responseBudgetAtLeastOne = true; result.omissions.renderedOverflowAtLeastOne = true;
+    }
+  };
+  // This is the inverse of the former shedding priority: recent chronology, then current state, then older context.
+  refill(optionalRecent, result.recent, "recentAtLeastOne");
+  refill(optionalCurrent, result.current, "currentAtLeastOne");
+  for (const candidate of optionalOlder) {
+    result.older.push(candidate);
+    if (Buffer.byteLength(JSON.stringify(result)) <= EPISODE_STATE_LIMITS.composeUtf8Bytes) continue;
+    result.older.pop(); result.omissions.responseBudgetAtLeastOne = true; result.omissions.renderedOverflowAtLeastOne = true;
+  }
+  // Omission flags also consume bytes. If the first new flag crosses the boundary, remove only already-refilled optional detail.
+  while (Buffer.byteLength(JSON.stringify(result)) > EPISODE_STATE_LIMITS.composeUtf8Bytes) {
+    if (result.older.length) { result.older.pop(); continue; }
+    if (result.current.length) { result.current.pop(); result.omissions.currentAtLeastOne = true; continue; }
+    if (result.recent.length) { result.recent.pop(); result.omissions.recentAtLeastOne = true; continue; }
+    fail("search-v3-state-response-limit");
+  }
+  const loss = Object.values(result.omissions).some(Boolean);
+  return { ...result, partial: result.partial || loss, complete: result.complete && !loss };
 }
 
 /** Read a small committed capsule delta, never derive missing capsules or replay lifetime state. */
@@ -741,13 +958,13 @@ export interface EpisodeRollupInputPage {
   };
 }
 
-/** Bounded read-only export for M08. It never creates or mutates state-v2.sqlite. */
+/** Bounded read-only export for M08. It never creates or mutates state-v4.sqlite. */
 export async function readEpisodeRollupInputPage(request: EpisodeStateRequest, cursor: EpisodeRollupInputCursor | undefined,
   options: EpisodeStateExecutionOptions = {}, budget: { bytes: number } = { bytes: 0 }): Promise<EpisodeRollupInputPage> {
   let db: CatalogSqlite | undefined;
   try {
     prepareDirectory(request.searchDirectory);
-    const path = join(request.searchDirectory, "state-v2.sqlite");
+    const path = join(request.searchDirectory, "state-v4.sqlite");
     db = CatalogSqlite.open(path, candidate => new Store(candidate, request).validate(false));
     const store = new Store(db, request), line = lineage(request), head = store.get("SELECT * FROM heads WHERE lineage=?", line);
     const headRow = head ?? fail("search-v3-rollup-state-not-ready");
@@ -837,7 +1054,7 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
     // Authorize this exact view and current physical source even for read-only memory.
     await catalogCall(request, options.catalogExecutor ?? executeCatalogStoreRequest, budget, { op: "page", view: request.view, after: request.view.eventCut, limit: 1 });
     const action = async (): Promise<EpisodeStateResponse> => {
-      const path = join(request.searchDirectory, "state-v2.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
+      const path = join(request.searchDirectory, "state-v4.sqlite"), validate = (candidate: CatalogSqlite): void => new Store(candidate, request).validate(create);
       if (request.op === "stateStatus" || request.op === "composeStateSelection") {
         try { lstatSync(path); } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("search-v3-state-store-missing");

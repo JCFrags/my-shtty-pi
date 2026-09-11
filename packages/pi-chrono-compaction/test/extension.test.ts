@@ -262,7 +262,8 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
     assert.equal(existsSync(candidateSegmentStorePath(sessionPath)), false, "feature-off must not create a candidate store");
     assert.equal(existsSync(sourceLedgerPath(sessionPath)), false, "feature-off must not create a source ledger");
     assert.deepEqual(readFileSync(sessionPath), sourceSessionBytes, "incremental work must not rewrite the authoritative session");
-    assert.ok(notifications.some((message) => /ChronoCompact 2\.0\.3 candidate/.test(message)));
+    const packageVersion = JSON.parse(readFileSync(resolve("package.json"), "utf8")).version;
+    assert.ok(notifications.some((message) => message.includes(`ChronoCompact ${packageVersion} candidate`)));
   } finally {
     releaseWriter();
     fsPromises.rm = originalRm;
@@ -387,7 +388,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "request_compaction",
     "history_status",
   ]);
-  assert.deepEqual(commandNames, ["chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-logical-session", "chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
@@ -416,6 +417,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     },
     sessionManager: {
       getSessionFile: () => undefined,
+      getSessionId: () => "synthetic-replay",
       getEntries: () => branch,
       getBranch: () => branch,
     },
@@ -558,7 +560,7 @@ test("default-off and explicitly disabled classifier paths make zero classifier 
               return { ok: true, apiKey: "not-used" };
             },
           },
-          sessionManager: { getSessionFile: () => undefined },
+          sessionManager: { getSessionFile: () => undefined, getSessionId: () => "synthetic-compaction" },
           ui: { notify() {} },
         },
       ) as { compaction?: { details?: { historyEditor?: { status?: string; calls?: number }; hybrid?: { enabled?: boolean } } } };
@@ -623,7 +625,7 @@ test("Pi-prepared tail mode moves the cut after an orphan function output", asyn
       signal: new AbortController().signal,
     }, {
       hasUI: true,
-      sessionManager: { getSessionFile: () => undefined },
+      sessionManager: { getSessionFile: () => undefined, getSessionId: () => "synthetic-compaction" },
       ui: { notify() {} },
       modelRegistry: {},
     }) as { compaction?: { firstKeptEntryId?: string; details?: { retainedTail?: { reason?: string } } } };
@@ -682,7 +684,7 @@ test("V1 hard ceiling bounds regular summary, Chrono history, and raw tail to 30
     },
     {
       hasUI: true,
-      sessionManager: { getSessionFile: () => undefined },
+      sessionManager: { getSessionFile: () => undefined, getSessionId: () => "synthetic-compaction" },
       ui: { notify() {} },
       modelRegistry: {},
     },
@@ -742,6 +744,7 @@ test("uniform continuation follows unresolved turns across successful compaction
     },
     sessionManager: {
       getSessionFile: () => undefined,
+      getSessionId: () => "synthetic-continuation",
       getEntries: () => [],
       getBranch: () => [],
     },
@@ -940,7 +943,7 @@ test("shadow-on extension output equals shadow-off output and completes after re
     const branch = getActiveBranch(session);
     const hook = hooks.get("session_before_compact");
     assert.ok(hook);
-    return hook({ branchEntries: branch, preparation: { firstKeptEntryId: "e133", tokensBefore: 16_000 }, customInstructions: "Preserve the public API restriction.", reason: "manual", willRetry: false, signal: new AbortController().signal }, { hasUI: true, model: { contextWindow: 272_000 }, sessionManager: { getSessionFile: () => sessionPath, getEntries: () => branch, getBranch: () => branch }, ui: { notify() {} }, modelRegistry: {} }) as Promise<{ compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number } }>;
+    return hook({ branchEntries: branch, preparation: { firstKeptEntryId: "e133", tokensBefore: 16_000 }, customInstructions: "Preserve the public API restriction.", reason: "manual", willRetry: false, signal: new AbortController().signal }, { hasUI: true, model: { contextWindow: 272_000 }, sessionManager: { getSessionFile: () => sessionPath, getSessionId: () => "synthetic-shadow", getEntries: () => branch, getBranch: () => branch }, ui: { notify() {} }, modelRegistry: {} }) as Promise<{ compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number } }>;
   };
   try {
     const off = await execute(false);
@@ -968,5 +971,5 @@ test("shadow-on extension output equals shadow-off output and completes after re
 test("isolated worker extension path uses persisted source and returns exact bounded replay", async () => {
   const directory=mkdtempSync(join(tmpdir(),"chrono-extension-worker-"));const sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});
   const names=["PI_CHRONO_CONFIG_PATH","PI_CHRONO_ISOLATED_WORKER","PI_CHRONO_CACHE"];const previous=new Map(names.map(name=>[name,process.env[name]]));process.env.PI_CHRONO_CONFIG_PATH=join(directory,"config.json");process.env.PI_CHRONO_ISOLATED_WORKER="true";process.env.PI_CHRONO_CACHE="false";
-  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime") });const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result?.compaction, notifications.join("\n"));assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
+  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime") });const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getSessionId:()=>"synthetic-worker",getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result?.compaction, notifications.join("\n"));assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
 });

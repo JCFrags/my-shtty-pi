@@ -1,11 +1,12 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { env } from "node:process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
-import { previewStoredCompaction, composeStoredCompactionForNormalReturn, M09_AUTHORITATIVE_REPLACEMENT_ENABLED } from "./composition-preview.js";
+import { previewStoredCompaction, composeStoredCompactionForNormalReturn } from "./composition-preview.js";
+import { SessionCanary } from "./session-canary.js";
 import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
 import { startAuthorizedWorkerRuntime, startupAuthorizationPath } from "./worker-runtime-startup-client.js";
 import { CatalogShadowScheduler } from "./catalog-shadow.js";
@@ -13,6 +14,7 @@ import { createContainedCapsuleShadow } from "./capsule-shadow-worker.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
 import { createHistoryRuntimeTransport } from "./history-runtime-transport.js";
 import { runtimeHostStatus } from "./worker-runtime.js";
+import { verifyLegacyAdmissionGate } from "./worker-runtime-legacy-gate.js";
 import { cachePathForSession, hashCompactionConfig, nextCacheGeneration, readCompactionCache, writeCompactionCache, } from "./cache.js";
 import { compactEntries, CompactionValidationError, computeGenerationHash, computeSummaryBudget, HARD_REPLAY_CAP_TOKENS, resolveCompactorConfig, selectReplayTarget, } from "./compactor.js";
 import { parseHistoricalBlocks } from "./blocks.js";
@@ -40,7 +42,13 @@ import { replayWorkerDiagnosticPath, runCompactionWorker } from "./compaction-wo
 import { defaultSchedulerDirectory, schedulerArtifactCounts } from "./host-worker-scheduler.js";
 import { getRollupShadowStatus } from "./history-rollup-shadow.js";
 import { returnAuthoritativeAfterShadowSchedule } from "./post-result-shadow.js";
-const EXTENSION_VERSION = "2.0.3";
+import { LogicalSessionStore } from "./logical-session-store.js";
+import { ManualLogicalRollover, createInitialLogicalManifest } from "./logical-session-rollover.js";
+import { resolveLogicalActivation } from "./logical-session-routing.js";
+import { buildManualContinuationCandidate, consumeProvisionalLogicalReplacement, markProvisionalLogicalReplacement, recordedLogicalBinding, replacementContainsOnlyContinuation, } from "./logical-session-integration.js";
+import { CHRONO_VERSION, captureRuntimeIdentity } from "./runtime-identity.js";
+const EXTENSION_VERSION = CHRONO_VERSION;
+const LOADED_RUNTIME_IDENTITY = captureRuntimeIdentity(import.meta.url);
 export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
 const MAX_RAW_TAIL_WITH_HISTORY_TOKENS = 27_000;
 const RETENTION_HINT_CUSTOM_TYPE = "chrono-compact-retention-hint";
@@ -494,6 +502,61 @@ function createTailTokenEstimator(entries) {
         return startIndex >= 0 && startIndex <= entries.length ? (suffixTokens[startIndex] ?? 0) : estimateEntryTokens(tail);
     };
 }
+function unmatchedToolCallCount(entries) {
+    const pending = new Set();
+    for (const entry of entries) {
+        if (entry.type !== "message" || !entry.message || typeof entry.message !== "object")
+            continue;
+        const message = entry.message;
+        if (message.role === "toolResult" && typeof message.toolCallId === "string")
+            pending.delete(message.toolCallId);
+        const content = Array.isArray(message.content) ? message.content : [];
+        for (const block of content) {
+            if (!block || typeof block !== "object")
+                continue;
+            const value = block;
+            if (value.type === "toolCall" && typeof value.id === "string")
+                pending.add(value.id);
+        }
+    }
+    return pending.size;
+}
+function logicalErrorCode(error) {
+    const candidate = error?.code ?? error?.message;
+    if (typeof candidate === "string" && candidate.startsWith("Usage: /chrono-logical-session "))
+        return candidate;
+    return typeof candidate === "string" && /^(logical-session|search-v3|source-changed)[a-z0-9-]*$/.test(candidate)
+        ? candidate : "logical-session-unavailable";
+}
+function validLogicalCommandId(value) {
+    return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+function commandSessionPort(ctx) {
+    const setup = (manager) => manager;
+    return {
+        sessionManager: setup(ctx.sessionManager),
+        newSession: async (options) => {
+            const clearProvisional = markProvisionalLogicalReplacement(options.parentSession);
+            try {
+                return await ctx.newSession({ parentSession: options.parentSession,
+                    setup: manager => options.setup(setup(manager)),
+                    withSession: replacement => options.withSession({
+                        sessionManager: setup(replacement.sessionManager),
+                        reload: () => replacement.reload(),
+                    }) });
+            }
+            finally {
+                clearProvisional();
+            }
+        },
+        switchSession: (path, options) => ctx.switchSession(path, {
+            withSession: replacement => options.withSession({
+                sessionManager: setup(replacement.sessionManager),
+                reload: () => replacement.reload(),
+            }),
+        }),
+    };
+}
 async function historySourceState(path) {
     const value = await stat(path);
     if (!value.isFile())
@@ -525,6 +588,7 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
         description: "Return an exact immutable Pi JSONL entry or one exact content block, with nearby context.",
         parameters: Type.Object({
             entryId: Type.String({ description: "Pi session entry ID or indexed source handle" }),
+            shardId: Type.Optional(Type.String({ description: "Logical shard ID reported by logical history search" })),
             startByte: Type.Optional(Type.Number({ minimum: 0, description: "Continue exact raw byte recovery at nextByte" })),
             blockIndex: Type.Optional(Type.Number({ minimum: 0 })),
             contextBefore: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
@@ -542,9 +606,9 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
                 if (params.blockIndex !== undefined) {
                     if (params.contextBefore || params.contextAfter || params.startByte !== undefined)
                         return toolText("Indexed block recovery uses decoded character coordinates without neighbors.", { status: "unavailable", code: "search-v3-option-unsupported" });
-                    return search.getBlock(params.entryId, params.blockIndex, params.startChar, params.maxChars, _signal);
+                    return search.getBlock(params.entryId, params.blockIndex, params.startChar, params.maxChars, _signal, params.shardId);
                 }
-                return search.getRaw(params.entryId, params, _signal);
+                return search.getRaw(params.entryId, params, _signal, params.shardId);
             }
             const options = {
                 blockIndex: params.blockIndex,
@@ -679,10 +743,11 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             endEntryId: Type.String(),
             maxEntries: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
             cursor: Type.Optional(Type.String({ description: "Pinned indexed range continuation" })),
+            shardId: Type.Optional(Type.String({ description: "Exact logical shard ID; ranges never cross shard boundaries" })),
         }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             if (settings().searchIndexEnabled)
-                return search.range(params.startEntryId, params.endEntryId, params.maxEntries, params.cursor, _signal);
+                return search.range(params.startEntryId, params.endEntryId, params.maxEntries, params.cursor, _signal, params.shardId);
             const options = { maxEntries: params.maxEntries };
             const ledger = await availableLedger(ctx);
             let text;
@@ -844,6 +909,10 @@ function registerRetentionHintTool(pi) {
     });
 }
 export default function chronoCompactExtension(pi, adapters = {}) {
+    pi.registerFlag?.("chrono-canary-session", { type: "string", description: "Authorize guarded composition only in this exact fresh session ID. No inherited activation." });
+    // CLI flag values are assigned after extension factories finish loading.
+    let canary = new SessionCanary(undefined);
+    let canaryControlInitialized = false;
     const userConfigPath = defaultUserConfigPath();
     const loadedUserConfig = loadUserConfig(userConfigPath);
     let userConfig = loadedUserConfig.config;
@@ -852,6 +921,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     // Only an exact session/source sidecar can opt this session in persistently.
     // Ordinary extension loading reads it; history queries never read or write it.
     const sessionRolloutDirectory = adapters.sessionRolloutDirectory ?? join(dirname(userConfigPath), "chrono-session-rollouts");
+    const logicalSessionRoot = join(dirname(userConfigPath), "chrono-logical-sessions");
+    let logicalGrant;
+    let logicalSwitchActive = false;
     let sessionSearchOverride;
     let rolloutEpoch = 0;
     let rolloutError;
@@ -865,7 +937,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         return { ...settings, searchIndexEnabled: disabled ? false : (sessionSearchOverride ?? settings.searchIndexEnabled) };
     };
     const searchStatus = () => ({ ...search.status(),
+        loaded: LOADED_RUNTIME_IDENTITY,
         enabled: searchSettings().searchIndexEnabled,
+        canary: { active: startupContext ? canary.active(startupContext.sessionManager.getSessionId(), startupContext.sessionManager.getSessionFile()) : false, refusal: canary.refusal },
         rollout: { persisted: sessionSearchOverride !== undefined, enabled: searchSettings().searchIndexEnabled },
         startup: { ...startupStatus },
         ...((rolloutError ?? startupStatus.errorCode) ? { lastSafeError: rolloutError ?? startupStatus.errorCode } : {}) });
@@ -887,14 +961,24 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         const sessionKey = createHash("sha256").update("pi-session-v1\0").update(ctx.sessionManager.getSessionId()).digest("hex");
         const shardKey = createHash("sha256").update("pi-jsonl-v1\0").update(sourcePath).digest("hex");
         search.schedule({ sourcePath, sessionKey, shardKey, leafId, catalogDirectory: join(dirname(sourcePath), ".chrono-catalog", sessionKey) });
+        if (logicalGrant)
+            search.scheduleLogical(logicalGrant);
     };
     const beginStartup = (ctx) => {
         startupContext = ctx;
         if (startupStatus.state !== "pending")
             return;
         startupStatus = { state: "running" };
+        // A logical replacement or isolated canary can reuse an existing host policy.
+        // Neither path initializes a second pool or recovers admission state as a load side effect.
+        const readOnlyStartup = !!logicalGrant || canary.requested(ctx.sessionManager.getSessionId());
+        const startup = readOnlyStartup
+            ? verifyLegacyAdmissionGate().then(ready => ready
+                ? { state: "ready", changed: false }
+                : { state: "unavailable", errorCode: "worker-legacy-transition-required" })
+            : startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath));
         // Do not await this from a Pi hook: the child has its own bounded deadline.
-        void startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath)).then(status => {
+        void startup.then(status => {
             startupStatus = status;
             if (status.state === "ready" && startupContext)
                 scheduleSearch(startupContext);
@@ -1277,18 +1361,86 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             return undefined;
         }
     });
-    pi.on("session_start", async (_event, ctx) => {
+    const resolveStartedLogicalSession = async (ctx) => {
+        const entries = asEntries(ctx.sessionManager.getBranch());
+        const binding = recordedLogicalBinding(entries);
+        const sourcePath = ctx.sessionManager.getSessionFile();
+        if (!binding || !sourcePath)
+            return undefined;
+        const store = new LogicalSessionStore(logicalSessionRoot, binding.logicalSessionId);
+        const rollover = new ManualLogicalRollover(store);
+        let manifest = await store.read();
+        if (!manifest)
+            throw new Error("logical-session-manifest-missing");
+        if (manifest.pendingRollover?.operationId === binding.operationId) {
+            if (binding.logicalSessionId !== manifest.logicalSessionId || binding.branchId !== manifest.pendingRollover.branchId
+                || binding.fromShardId !== manifest.pendingRollover.oldShardId || binding.shardId !== manifest.pendingRollover.newShardId) {
+                throw new Error("logical-session-recovery-binding-mismatch");
+            }
+            if (manifest.pendingRollover.phase === "close-prepared") {
+                await rollover.bindRecordedNewShard(binding.operationId, ctx.sessionManager, binding.continuationHash);
+            }
+            manifest = await store.read();
+            if (manifest?.pendingRollover?.operationId === binding.operationId && manifest.pendingRollover.phase === "new-shard-bound") {
+                await rollover.activateNewShard(binding.operationId, ctx.sessionManager);
+            }
+            manifest = await store.read();
+        }
+        if (!manifest)
+            throw new Error("logical-session-manifest-missing");
+        return resolveLogicalActivation(manifest, { piSessionId: ctx.sessionManager.getSessionId(), sourcePath }, binding);
+    };
+    pi.on("session_start", async (event, ctx) => {
         const epoch = ++rolloutEpoch;
         const nextSearchSessionId = ctx.sessionManager.getSessionId();
         const sourcePath = ctx.sessionManager.getSessionFile();
+        if (!canaryControlInitialized) {
+            canary = new SessionCanary(pi.getFlag?.("chrono-canary-session"));
+            canaryControlInitialized = true;
+        }
+        const canaryRequested = canary.requested(nextSearchSessionId);
+        const parentSession = event.reason === "new"
+            ? ctx.sessionManager.getHeader?.()?.parentSession
+            : undefined;
+        const markedProvisionalReplacement = typeof parentSession === "string"
+            && consumeProvisionalLogicalReplacement(parentSession);
+        const branchEntries = markedProvisionalReplacement || canaryRequested
+            ? asEntries(ctx.sessionManager.getBranch())
+            : undefined;
+        canary.start(nextSearchSessionId, sourcePath, canaryRequested ? branchEntries ?? [] : []);
         sessionSearchOverride = undefined;
+        logicalGrant = undefined;
         rolloutError = undefined;
         search.cancel();
+        let provisionalLogicalReplacement = false;
+        if (markedProvisionalReplacement && branchEntries) {
+            // Pi creates model/thinking bootstrap entries before session_start. Reuse
+            // the fresh-canary policy: at most 16 model/thinking/session-info entries,
+            // with all conversation, tool, compaction, and custom entries rejected.
+            const freshness = new SessionCanary(nextSearchSessionId);
+            freshness.start(nextSearchSessionId, sourcePath, branchEntries);
+            provisionalLogicalReplacement = freshness.active(nextSearchSessionId, sourcePath);
+        }
+        if (provisionalLogicalReplacement) {
+            // Pi 0.85.1 can bind and start the replacement extension before setup.
+            // The post-activation reload performs normal startup from the recorded binding.
+            startupContext = undefined;
+            capsuleShadow.cancel();
+            catalogShadow.cancel();
+            cancelIncrementalWork(true);
+            cancelShadowWork();
+            cancelValueWorker();
+            historyLedger = undefined;
+            projectionSeenToolCallIds = new Set();
+            lastProjectionMetrics = undefined;
+            return;
+        }
         try {
+            logicalGrant = await resolveStartedLogicalSession(ctx);
             const enabled = sourcePath ? await readSessionRollout(sessionRolloutDirectory, { sessionId: nextSearchSessionId, sourcePath }) : undefined;
             if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId)
                 return;
-            sessionSearchOverride = enabled;
+            sessionSearchOverride = logicalGrant ? true : enabled ?? (canary.active(nextSearchSessionId, sourcePath) ? true : undefined);
         }
         catch {
             if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== nextSearchSessionId)
@@ -1320,7 +1472,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         scheduleIncrementalWork(ctx);
     });
     pi.on("session_before_switch", () => {
+        canary.stop();
         startupContext = undefined;
+        logicalGrant = undefined;
         rolloutEpoch++;
         search.cancel();
         capsuleShadow.cancel();
@@ -1332,7 +1486,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_before_fork", () => {
+        canary.stop();
         startupContext = undefined;
+        logicalGrant = undefined;
         rolloutEpoch++;
         search.cancel();
         capsuleShadow.cancel();
@@ -1345,6 +1501,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     });
     pi.on("session_shutdown", () => {
         startupContext = undefined;
+        logicalGrant = undefined;
         rolloutEpoch++;
         search.dispose();
         capsuleShadow.dispose();
@@ -1448,6 +1605,84 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 throw new Error(`Pi prepared cut entry ${preparedFirstKeptEntryId} was not present on the active branch.`);
             const estimateTailTokens = createTailTokenEstimator(branchEntries);
             const preparedTailTokens = estimateTailTokens(branchEntries.slice(preparedCutIndex));
+            const normalFixture = adapters.schedulerDirectory ? adapters.normalCompositionFixture : undefined;
+            const canaryRequested = canary.requested(ctx.sessionManager.getSessionId());
+            if (canaryRequested && !canary.active(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile()))
+                return canary.refuse("session-ineligible");
+            if (canaryRequested || normalFixture) {
+                const preparedEntry = branchEntries[preparedCutIndex];
+                const sourceCutEntryId = preparedCutIndex > 0 ? branchEntries[preparedCutIndex - 1]?.id : undefined;
+                const preparedTailSafe = isSafeCompactionCut(branchEntries, preparedCutIndex);
+                const availableSummaryTokens = HARD_COMBINED_CONTEXT_CAP_TOKENS - preparedTailTokens;
+                if (!preparedTailSafe || typeof sourceCutEntryId !== "string" || preparedEntry?.parentId !== sourceCutEntryId
+                    || availableSummaryTokens < 512) {
+                    if (ctx.hasUI)
+                        ctx.ui.notify("Stored composition refused Pi's prepared boundary; compaction was cancelled.", "warning");
+                    return { cancel: true };
+                }
+                const sessionId = ctx.sessionManager.getSessionId(), epoch = rolloutEpoch;
+                const branchLeaf = ctx.sessionManager.getLeafId();
+                const identityChanged = () => epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId
+                    || ctx.sessionManager.getLeafId() !== branchLeaf;
+                let pinnedSelection;
+                if (!normalFixture) {
+                    try {
+                        pinnedSelection = await search.compositionSelection(sourceCutEntryId, event.signal);
+                        if (!pinnedSelection.coverage.restrictionsComplete || !pinnedSelection.coverage.openWorkComplete
+                            || pinnedSelection.omissions.protectedAtLeastOne || pinnedSelection.omissions.openWorkAtLeastOne
+                            || identityChanged() || event.signal?.aborted)
+                            return canary.refuse("mandatory-coverage-incomplete");
+                    }
+                    catch {
+                        if (ctx.hasUI)
+                            ctx.ui.notify("Stored composition coverage is unavailable; current context is unchanged.", "warning");
+                        return canary.refuse("selection-unavailable");
+                    }
+                }
+                let regularPiSummary;
+                try {
+                    regularPiSummary = await (normalFixture?.createPiSummary ?? createPiRegularSummary)(ctx, event.preparation, {
+                        targetTokens: Math.min(settings.hybridSummaryTargetTokens, availableSummaryTokens),
+                        customInstructions: event.customInstructions,
+                        signal: event.signal,
+                        previousSummary: event.preparation.previousSummary,
+                    });
+                }
+                catch (error) {
+                    if (!event.signal?.aborted && ctx.hasUI) {
+                        ctx.ui.notify(`Regular Pi summary failed; compaction was cancelled: ${safeErrorMessage(error)}`, "warning");
+                    }
+                    return canary.refuse("summary-unavailable");
+                }
+                if (!regularPiSummary || identityChanged() || event.signal?.aborted) {
+                    return canary.refuse("summary-unavailable");
+                }
+                try {
+                    const composed = await (normalFixture?.compose ?? composeStoredCompactionForNormalReturn)({
+                        regularPiSummary: regularPiSummary.text, sourceCutEntryId,
+                        firstKeptEntryId: preparedFirstKeptEntryId, rawTailTokens: preparedTailTokens, toolPairSafe: true,
+                    }, {
+                        getEntry: entryId => ctx.sessionManager.getEntry(entryId),
+                        select: entryId => pinnedSelection && entryId === sourceCutEntryId ? Promise.resolve(pinnedSelection) : search.compositionSelection(entryId, event.signal),
+                        pin: async (entryId) => (await search.compositionTarget(entryId, event.signal)).view,
+                        recovery: encodeCompositionRecovery,
+                    }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
+                    if (identityChanged() || event.signal?.aborted)
+                        return { cancel: true };
+                    return { compaction: { summary: composed.summary, firstKeptEntryId: composed.firstKeptEntryId, tokensBefore,
+                            ...(regularPiSummary.usage === undefined ? {} : { usage: regularPiSummary.usage }),
+                            details: { kind: "chrono-v3-composed-context", composition: composed.envelope } } };
+                }
+                catch (error) {
+                    if (event.signal?.aborted || identityChanged()) {
+                        return { cancel: true };
+                    }
+                    if (ctx.hasUI) {
+                        ctx.ui.notify(`Stored composition refused; current context is unchanged: ${safeErrorMessage(error)}`, "warning");
+                    }
+                    return canary.refuse("composition-refused");
+                }
+            }
             let tailSelection = {
                 mode: "pi",
                 actualTokens: preparedTailTokens,
@@ -1731,7 +1966,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     ctx.ui.notify(`ChronoCompact cache write failed: ${safeErrorMessage(cacheError)}`, "warning");
                 }
             }
-            ctx.ui.notify(`ChronoCompact 2.0.3 candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`, "info");
+            ctx.ui.notify(`ChronoCompact ${EXTENSION_VERSION} candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`, "info");
             const shadowBranchLeafId = sourceEntries.at(-1)?.id;
             const authoritativeResponse = {
                 compaction: {
@@ -1778,30 +2013,6 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     },
                 },
             };
-            // Deliberately disabled until the directing assistant accepts actual composed output.
-            // A future activation uses this same bounded stored-selection path, not a second planner.
-            if (M09_AUTHORITATIVE_REPLACEMENT_ENABLED && piSummary) {
-                const sessionId = ctx.sessionManager.getSessionId(), epoch = rolloutEpoch;
-                try {
-                    const composed = await composeStoredCompactionForNormalReturn({ type: "compaction", id: "pending-v3",
-                        parentId: ctx.sessionManager.getLeafId(), ...authoritativeResponse.compaction }, {
-                        getEntry: entryId => ctx.sessionManager.getEntry(entryId),
-                        select: entryId => search.compositionSelection(entryId, event.signal),
-                        pin: async (entryId) => (await search.compositionTarget(entryId, event.signal)).view,
-                        recovery: encodeCompositionRecovery,
-                    }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
-                    if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || event.signal?.aborted)
-                        return { cancel: true };
-                    return { compaction: { summary: composed.summary, firstKeptEntryId: composed.firstKeptEntryId, tokensBefore,
-                            ...(piSummary.usage === undefined ? {} : { usage: piSummary.usage }),
-                            details: { kind: "chrono-v3-composed-context", piSummary: piSummary.text, retainedTail: tailSelection,
-                                composition: composed.envelope } } };
-                }
-                catch {
-                    // No incomplete mandatory selection can replace the existing authoritative result.
-                    ctx.ui.notify("Stored composition unavailable; preserving the existing compaction result.", "warning");
-                }
-            }
             return returnAuthoritativeAfterShadowSchedule(authoritativeResponse, () => {
                 if (settings.rollupShadowEnabled && sessionPath && typeof shadowBranchLeafId === "string") {
                     scheduleRollupShadow({
@@ -1818,6 +2029,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             });
         }
         catch (error) {
+            if (canary.requested(ctx.sessionManager.getSessionId())) {
+                if (ctx.hasUI)
+                    ctx.ui.notify("Guarded composition failed; current context is unchanged.", "warning");
+                return canary.refuse("operation-failed");
+            }
             const noSavings = error instanceof CompactionValidationError && error.report.issues.some((issue) => issue.code === "no-net-savings");
             if (noSavings && event.reason === "manual") {
                 ctx.ui.notify("ChronoCompact stopped because it would not reduce the selected historical prefix.", "info");
@@ -1835,6 +2051,112 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         parameters: Type.Object({}),
         async execute() { const status = searchStatus(); return toolText(JSON.stringify(status), status); },
     });
+    pi.registerCommand("chrono-logical-session", {
+        description: "Manually adopt, inspect, roll over, recover, or roll back one owner-only logical session",
+        handler: async (args, ctx) => {
+            const parts = args.trim().split(/\s+/).filter(Boolean);
+            const action = parts[0];
+            const sourcePath = ctx.sessionManager.getSessionFile();
+            try {
+                if (action === "adopt") {
+                    const branchId = parts[1] ?? "main";
+                    if (!sourcePath || parts.length > 2)
+                        throw new Error("Usage: /chrono-logical-session adopt [branch-id]");
+                    const initial = createInitialLogicalManifest({ ownerKey: randomBytes(32).toString("hex"), branchId,
+                        piSessionId: ctx.sessionManager.getSessionId(), sourcePath });
+                    const store = new LogicalSessionStore(logicalSessionRoot, initial.logicalSessionId);
+                    const manifest = await store.create(initial);
+                    ctx.ui.notify(`Logical session adopted: ${manifest.logicalSessionId} on branch ${branchId}. No rollover occurred.`, "info");
+                    return;
+                }
+                if (!sourcePath || !validLogicalCommandId(parts[1]))
+                    throw new Error("Usage: /chrono-logical-session status|rollover|recover|rollback <logical-session-id> [branch-id]");
+                const store = new LogicalSessionStore(logicalSessionRoot, parts[1]);
+                const rollover = new ManualLogicalRollover(store);
+                const manifest = await store.read();
+                if (!manifest)
+                    throw new Error("logical-session-manifest-missing");
+                if (action === "status") {
+                    const branch = manifest.branches.find(value => value.activeShardId && manifest.shards.some(shard => shard.shardId === value.activeShardId && shard.piSessionId === ctx.sessionManager.getSessionId() && shard.sourcePath === sourcePath));
+                    ctx.ui.notify(JSON.stringify({ logicalSessionId: manifest.logicalSessionId, revision: manifest.revision,
+                        activeBranch: branch?.branchId ?? null, pendingPhase: manifest.pendingRollover?.phase ?? null,
+                        shards: manifest.shards.length, composerCanaryInherited: false }), "info");
+                    return;
+                }
+                if (action === "recover") {
+                    const pending = manifest.pendingRollover;
+                    if (!pending)
+                        throw new Error("logical-session-recovery-unavailable");
+                    const old = manifest.shards.find(value => value.shardId === pending.oldShardId);
+                    if (pending.phase === "close-prepared" && old?.piSessionId === ctx.sessionManager.getSessionId() && old.sourcePath === sourcePath) {
+                        await rollover.abortPrepared(pending.operationId);
+                        ctx.ui.notify("Prepared rollover was reopened. No shard was deleted.", "info");
+                        return;
+                    }
+                    const binding = recordedLogicalBinding(asEntries(ctx.sessionManager.getBranch()));
+                    if (!binding || binding.operationId !== pending.operationId || binding.logicalSessionId !== manifest.logicalSessionId
+                        || binding.branchId !== pending.branchId || binding.fromShardId !== pending.oldShardId || binding.shardId !== pending.newShardId) {
+                        throw new Error("logical-session-recovery-binding-missing");
+                    }
+                    if (pending.phase === "close-prepared")
+                        await rollover.bindRecordedNewShard(pending.operationId, ctx.sessionManager, binding.continuationHash);
+                    await rollover.activateNewShard(pending.operationId, ctx.sessionManager);
+                    return;
+                }
+                if (action === "rollback") {
+                    const binding = recordedLogicalBinding(asEntries(ctx.sessionManager.getBranch()));
+                    if (!binding || binding.logicalSessionId !== manifest.logicalSessionId)
+                        throw new Error("logical-session-rollback-ineligible");
+                    logicalSwitchActive = true;
+                    try {
+                        await rollover.rollbackLast(commandSessionPort(ctx), replacementContainsOnlyContinuation(asEntries(ctx.sessionManager.getBranch()), binding));
+                    }
+                    finally {
+                        logicalSwitchActive = false;
+                    }
+                    return;
+                }
+                if (action !== "rollover" || !parts[2] || parts.length !== 3)
+                    throw new Error("Usage: /chrono-logical-session rollover <logical-session-id> <branch-id>");
+                const branchEntries = asEntries(ctx.sessionManager.getBranch());
+                const leafId = ctx.sessionManager.getLeafId?.();
+                if (!leafId || !ctx.isIdle())
+                    throw new Error("logical-session-rollover-ineligible");
+                const before = await historySourceState(sourcePath);
+                const pinned = await search.compositionTarget(leafId);
+                const selection = await search.compositionSelection(leafId);
+                const regularPiSummary = previousRegularPiSummary(branchEntries, undefined);
+                if (!regularPiSummary || pinned.view.eventCut !== selection.requestedCut || pinned.view.eventCut !== selection.sourceView.eventCut
+                    || pinned.view.storeKey !== selection.sourceView.storeKey || pinned.view.generation !== selection.sourceView.generation) {
+                    throw new Error("logical-session-continuation-evidence-invalid");
+                }
+                const unmatched = unmatchedToolCallCount(branchEntries);
+                const candidate = buildManualContinuationCandidate({ manifest, branchId: parts[2], sourceLeafEntryId: leafId,
+                    regularPiSummary, selection, recover: encodeCompositionRecovery,
+                    combinedCeilingTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS, toolPairSafe: unmatched === 0 });
+                const after = await historySourceState(sourcePath);
+                if (stableStringify(before) !== stableStringify(after) || ctx.sessionManager.getSessionFile() !== sourcePath
+                    || ctx.sessionManager.getLeafId?.() !== leafId)
+                    throw new Error("source-changed");
+                const idle = ctx.isIdle();
+                const eligibility = { persisted: true, idle, streaming: !idle,
+                    activeToolCalls: idle ? 0 : unmatched, unmatchedToolPairs: unmatched, pendingMessages: hasUnresolvedTurn(branchEntries),
+                    compactionActive: triggerPending || valueWorkerCompactionGate, sessionSwitchActive: logicalSwitchActive,
+                    // Both reads above require the lifecycle to be caught up to this exact leaf. A partial JSONL tail cannot produce that pin.
+                    catalogCaughtUp: true, incompleteSourceTail: false, sourceLeafEntryId: leafId, trigger: "manual" };
+                logicalSwitchActive = true;
+                try {
+                    await rollover.rollover(candidate, eligibility, commandSessionPort(ctx));
+                }
+                finally {
+                    logicalSwitchActive = false;
+                }
+            }
+            catch (error) {
+                ctx.ui.notify(`Logical session command refused: ${logicalErrorCode(error)}`, "warning");
+            }
+        },
+    });
     pi.registerCommand("chrono-composition-preview", {
         description: "Save a bounded private shadow comparison for a recorded compaction ID, or the nearest compaction. Does not activate compaction.",
         handler: async (args, ctx) => {
@@ -1845,10 +2167,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             }
             const sessionId = ctx.sessionManager.getSessionId();
             const epoch = rolloutEpoch;
-            let id = ctx.sessionManager.getLeafId();
-            let selected;
-            // Never enumerate the session or read its JSONL to discover a candidate.
-            for (let visited = 0; id && visited < 256; visited++) {
+            const branchLeaf = ctx.sessionManager.getLeafId();
+            let id = branchLeaf;
+            let selected = requested ? ctx.sessionManager.getEntry(requested) : undefined;
+            // Only nearest-compaction discovery walks parents. An explicit target is
+            // authorized below through catalog membership and verified selected bytes.
+            for (let visited = 0; !requested && id && visited < 256; visited++) {
                 const entry = ctx.sessionManager.getEntry(id);
                 if (!entry)
                     break;
@@ -1858,18 +2182,24 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 }
                 id = entry.parentId;
             }
-            if (!selected) {
+            if (!selected && !requested) {
                 ctx.ui.notify("No matching compaction within the bounded current-branch lookup.", "warning");
                 return;
             }
             try {
+                const targetId = requested || selected?.id;
+                if (!targetId)
+                    throw new Error("composition-target-id-missing");
+                selected = await search.compositionEntry(targetId, selected, ctx.signal);
+                if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== branchLeaf)
+                    return;
                 const preview = await previewStoredCompaction(selected, {
                     getEntry: entryId => ctx.sessionManager.getEntry(entryId),
                     select: entryId => search.compositionSelection(entryId, ctx.signal),
                     pin: async (entryId) => (await search.compositionTarget(entryId, ctx.signal)).view,
                     recovery: encodeCompositionRecovery,
                 }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
-                if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId)
+                if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== branchLeaf)
                     return;
                 // UI-only receipt: neither comparison prose nor a replacement context is appended.
                 ctx.ui.notify(JSON.stringify({ artifactRef: preview.artifactRef, ...preview.envelope }), "info");

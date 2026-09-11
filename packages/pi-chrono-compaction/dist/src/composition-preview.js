@@ -2,7 +2,7 @@ import { composeStoredSelection, persistPrivateCompositionArtifact } from "./con
 import { isSafeCompactionCut } from "./tail-selection.js";
 import { byteCount, estimateTokensFromText, getRecord, getString, stableStringify } from "./utils.js";
 export const COMPOSITION_PREVIEW_LIMITS = { tailEntries: 256, tailBytes: 512 * 1024, comparisonBytes: 512 * 1024 };
-/** Authoritative replacement remains impossible to enable through runtime configuration. */
+/** Global activation is not supported. The extension uses an exact fresh-session canary control. */
 export const M09_AUTHORITATIVE_REPLACEMENT_ENABLED = false;
 /** Reuse one recorded compaction's exact Pi summary, original raw-tail cut and
  * baseline representation. A bounded lookup failure refuses, not reconstructs. */
@@ -81,12 +81,39 @@ export async function previewStoredCompaction(compaction, reader, artifactDirect
     const stored = await persistPrivateCompositionArtifact(artifactDirectory, artifact);
     return { summary: result.text, envelope: { ...result.envelope, artifactHash: stored.artifactHash }, artifactRef: stored.artifactRef };
 }
-/** Future normal-return adapter. The extension must additionally gate every call
- * on M09_AUTHORITATIVE_REPLACEMENT_ENABLED. Only this minimal envelope is fit
- * for Pi compaction details; the detailed comparison remains owner-only. */
-export async function composeStoredCompactionForNormalReturn(compaction, reader, artifactDirectory, combinedCeilingTokens) {
-    const preview = await previewStoredCompaction(compaction, reader, artifactDirectory, combinedCeilingTokens, true, true);
-    return { summary: preview.summary, firstKeptEntryId: preview.envelope.firstKeptEntryId,
-        envelope: { ...preview.envelope, artifactRef: preview.artifactRef } };
+/** Compose the current Pi-prepared boundary directly. Unlike preview, this path
+ * has no recorded compaction or comparison baseline. The extension must gate
+ * every production call on explicit fresh-session canary authorization. */
+export async function composeStoredCompactionForNormalReturn(input, reader, artifactDirectory, combinedCeilingTokens) {
+    if (!input.regularPiSummary || !input.sourceCutEntryId || !input.firstKeptEntryId) {
+        throw new Error("normal composition requires the actual Pi summary and prepared boundary");
+    }
+    if (!Number.isSafeInteger(combinedCeilingTokens) || combinedCeilingTokens > 30_000 || combinedCeilingTokens < 512
+        || !Number.isSafeInteger(input.rawTailTokens) || input.rawTailTokens < 0) {
+        throw new Error("normal composition exceeds the existing bounded context limits");
+    }
+    const first = reader.getEntry(input.firstKeptEntryId);
+    const parentId = first && getString(first.parentId);
+    if (parentId !== input.sourceCutEntryId || !reader.getEntry(input.sourceCutEntryId)) {
+        throw new Error("normal composition does not match the actual prepared boundary");
+    }
+    const selection = await reader.select(input.sourceCutEntryId);
+    const firstView = await reader.pin(input.firstKeptEntryId);
+    if (firstView.storeKey !== selection.sourceView.storeKey || firstView.generation !== selection.sourceView.generation
+        || firstView.branchKey !== selection.branchKey || firstView.sessionKey !== selection.sourceView.sessionKey
+        || firstView.eventCut <= selection.requestedCut)
+        throw new Error("retained tail and memory views are incompatible");
+    const result = composeStoredSelection({ regularPiSummary: input.regularPiSummary, combinedCeilingTokens,
+        cut: { sourceCutEntryId: input.sourceCutEntryId, sourceCutSeq: selection.requestedCut,
+            firstKeptEntryId: input.firstKeptEntryId, firstKeptSeq: firstView.eventCut,
+            rawTailTokens: input.rawTailTokens, toolPairSafe: input.toolPairSafe } }, selection, source => reader.recovery(selection.sourceView, source));
+    if (!result.envelope.validation.protectedCoverageComplete
+        || !result.envelope.validation.openWorkCoverageComplete || !result.envelope.validation.safeTail
+        || !result.envelope.validation.withinCombinedCeiling || result.status !== "composed") {
+        throw new Error("normal composition requires complete mandatory coverage and a valid bounded result");
+    }
+    const stored = await persistPrivateCompositionArtifact(artifactDirectory, result.artifact);
+    return { summary: result.text, firstKeptEntryId: result.firstKeptEntryId,
+        envelope: { ...result.envelope, artifactHash: stored.artifactHash, artifactRef: stored.artifactRef } };
 }
 //# sourceMappingURL=composition-preview.js.map
