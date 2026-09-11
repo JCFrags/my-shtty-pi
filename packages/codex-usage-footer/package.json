@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "node --test extensions/*.test.ts"
+  },
   "pi": {
     "extensions": [
       "./extensions/codex-usage-footer.ts"
