@@ -6,20 +6,22 @@ those identities and results on the release PR and immutable release checkpoint.
 
 ## Coordinated external browser pin
 
-This is a proposed component pin for COMMAND 8, not an activated release or
-final integrated acceptance. The browser lead owns deployment and readiness.
+This is the fixed component pin for COMMAND 8. Approved recovery and selection
+are complete. The browser lead verified its loaded parent and daemon, but final
+in-scope session convergence remains a separate gate. This is not final
+integrated acceptance. The browser lead owns deployment and readiness.
 
 | Identity | Exact value |
 | --- | --- |
 | External repository | `JCFrags/my-shtty-pi-web` |
 | Reviewed artifact source | `3ac4ca2b02b8133d1843f62d6df41843c565548a` |
-| Staged immutable artifact | `d62924d931d306aa9624ff6e44f26d3bece4f1abda89d8e868db53d8d87ba0f4` |
+| Selected immutable artifact | `d62924d931d306aa9624ff6e44f26d3bece4f1abda89d8e868db53d8d87ba0f4` |
 | History-preserving main promotion | `a89e0363c9904b7bf34ad9a35125d05ca4656285` ([PR #11](https://github.com/JCFrags/my-shtty-pi-web/pull/11)) |
 | Previously selected browser artifact | `e5acc00eee9bce5cd70a0d6f425f5f002767c45d8352ba82bc609c980215572c` |
 
 The browser lead reports that promotion preserves the reviewed source ancestry
 and changes only the release workflow and README relative to that source.
-Runtime/package inputs are unchanged. The staged artifact therefore retains
+Runtime/package inputs are unchanged. The selected artifact therefore retains
 `3ac4ca2b02b8133d1843f62d6df41843c565548a` as its source identity; do not relabel it
 as built from the promotion merge. Promotion removes automatic external
 publication/deployment on a main push. Explicit tag/manual publication is a
@@ -33,14 +35,19 @@ promotion checks, not proof of installed or per-session runtime parity.
 
 Coordination references are board entries
 `20260910T153009Z-command8-release-freeze-proposal` and
-`20260910T170517Z-browser-main-window-request`. The proposed window
-`browser-main-cutover-20260910-01` remains planning-only until explicit recovery
-approval and COMMAND 8/affected-owner start acknowledgements. No recovery,
-activation, browser launch, settings write, or reload is authorized by this pin.
-Require fresh process-level inventory, source/build/runtime checks, scoped
-rollback evidence and explicit window release from the browser owner. Multiple
-Pi processes can share a pane. A stopped process is not exited or safe to reload;
-its preserved conversation requires separate owner-approved handling.
+`20260910T170517Z-browser-main-window-request`. Approved window
+`browser-main-cutover-20260910-01` completed guarded recovery and scoped browser
+selection, then was explicitly released. Board entry
+`20260911T021000Z-browser-recovery-selected` records that result. The separate
+`browser-parent-verify-01` window also completed and was released. The browser
+owner verified a loaded parent, matching daemon, companion reuse, semantic and
+visual observation, a native click, and manual pause/resume. The companion was
+left paused. These checks do not prove that every older session has converged.
+No further write, reload, or automatic resume is authorized by this document.
+Require fresh process-level inventory and exact safe handoffs for remaining
+reloads. Multiple Pi processes can share a pane. A stopped process is not exited
+or safe to reload. Preserve its conversation. Also wait for managed shell jobs
+to settle normally: Pi reload can terminate them even when the editor is idle.
 
 External WebX/research remains independently owned and unchanged. Chrono
 2.0.15 at `b5918dbf952423e86a50a71e03ae1996c4801ea5` remains the fixed installed
@@ -52,8 +59,11 @@ redeploying unchanged runtime inputs.
 ## Integration boundary
 
 - Accepted Glance V1.1: `5eb72bae6ff1cc1e174a4d6aec2ba86be2608efc`.
-- Main integration input: `3c87f445f788d460554999a5b5d01a627d7c0bcc`.
+- Release integration base: `250179d8f458534380410208c599eed0db1b0c13`.
   Fetch again before merge; validate any newer integrated tree.
+- Codex Usage Footer is user-accepted. PR #54 integrated its runtime. PR #58
+  changes only two polling fixtures to await startup settlement; required CI
+  `34556905509` passed. These test changes do not require a runtime reload.
 - Keep main's removal of the temporary cancellation extension. The supported
   registry rejects reintroduction of that extension or Signal Board.
 - The accepted orchestration package already contains all six main M10 direct
@@ -61,11 +71,32 @@ redeploying unchanged runtime inputs.
   broker, authentication, historical replay, CLI, and `/agent-settings` source
   closure. Retired presentation routes and tracked generated orchestration
   output remain absent.
-- Preserve the already-deployed ChronoCompact corrective release, not the older
-  package in either integration input. Its source is
-  `ad23f0b71ee473d33aff26d367459e76d208c631`, version 2.0.4. See
-  [Chrono compatibility](chrono-release-compatibility.md). Do not import the
-  unfinished M04 catalog or change its live gate, policy, slots, or configuration.
+- Integrate the fixed installed ChronoCompact 2.0.15 runtime from
+  `b5918dbf952423e86a50a71e03ae1996c4801ea5`, not newer development heads.
+  See [Chrono compatibility](chrono-release-compatibility.md) for the complete
+  package pin and declared test-only integration correction. Preserve runtime
+  source, compiled distribution, live gate, policy, slots, and configuration.
+  PR #45, #46, and #55 remain separate development work, not release inputs.
+  The older 2.0.4 integration is historical provenance, not the selected runtime.
+
+### Chrono operating limits and acceptance
+
+The nominated source keeps `M09_AUTHORITATIVE_REPLACEMENT_ENABLED` false.
+The original large-session mandatory-coverage failure blocks the new stored-
+selection replacement mode. It is not a demonstrated failure of the existing
+normal compaction policy, whose response follows a separate code path. Keep
+legacy replay, the independent Pi summary, retained tail, ceilings, and current
+session enablement unchanged. No new mode, automatic rollover, or wider rollout
+is part of this release.
+
+The legacy representation is bounded and lossy. Derived search and state can
+lag or be partial. The installed explicit-ID preview searches only 256 recent
+branch entries. The package declares Pi peers below 0.85, while local Pi is
+0.85.1; existing loader and practical-use checks provide limited compatibility
+evidence, not a changed support declaration. Newer isolated canary results do
+not qualify the original large session. Record the user's plain-language
+acceptance of these limits in the final release check. Do not wait for later
+M09 backfill or M10 development to finish this fixed release.
 
 Use a protected history-preserving PR merge. Required CI applies to the actual
 reviewed head. An independent agent review is evidence, not a fabricated GitHub

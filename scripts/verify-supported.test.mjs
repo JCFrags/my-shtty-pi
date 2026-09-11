@@ -161,7 +161,7 @@ test('Chrono test-build imports require the exact caller, spec, config, and reta
 
 test('complete Chrono tree gate rejects missing, extra, source, lock, fixture, and mode drift', () => fixture(root => {
   const dir = chronoFixture(root);
-  assert.deepEqual(verifyChronoFiles(dir), { tree: CHRONO_BASELINE.tree, files: 278 });
+  assert.deepEqual(verifyChronoFiles(dir), { tree: CHRONO_BASELINE.tree, files: CHRONO_BASELINE.files });
   for (const name of ['src/jsonl.ts', 'package-lock.json', 'test/fixtures/session.jsonl']) {
     const path = join(dir, name), original = readFileSync(path);
     writeFileSync(path, Buffer.concat([original, Buffer.from('\n')]));
@@ -199,7 +199,7 @@ test('independent Chrono gate needs no ancestor commit and rejects index-only dr
 }));
 
 // Model compiler output deterministically; the real selected-product verifier
-// separately runs the locked compiler/tests and compares all 83 tracked JS bytes.
+// separately runs the locked compiler/tests and compares every tracked JS byte.
 function generatedChrono(root) {
   const dir = chronoFixture(root), files = walk(dir).map(path => relative(root, path));
   const sources = walk(dir).filter(path => path.endsWith('.ts') && !path.endsWith('.d.ts') && !path.endsWith('/test/incremental-context.test.ts'));
@@ -254,7 +254,7 @@ test('Chrono scripts isolate HOME, agent configuration, and tmpdir legacy namesp
 }));
 
 
-test('explicit candidate map cleanup requires exact index/package and all 83 valid maps', () => fixture(root => {
+test('explicit candidate map cleanup requires exact index/package and every valid map', () => fixture(root => {
   const { dir } = generatedChrono(root);
   rmSync(join(dir, 'dist-test'), { recursive: true });
   git(root, 'init', '-q');
@@ -275,7 +275,7 @@ test('explicit candidate map cleanup requires exact index/package and all 83 val
   assert.throws(() => removeChronoBuildMaps(root), /tree-mismatch/);
   assert.ok(existsSync(map));
   rmSync(join(dir, 'untracked-extra'));
-  assert.deepEqual(removeChronoBuildMaps(root), { status: 'passed', removedGeneratedMaps: 83, tree: CHRONO_BASELINE.tree, files: 278 });
+  assert.deepEqual(removeChronoBuildMaps(root), { status: 'passed', removedGeneratedMaps: CHRONO_BASELINE.maps, tree: CHRONO_BASELINE.tree, files: CHRONO_BASELINE.files });
   assert.equal(existsSync(map), false);
   assert.equal(verifyFrozenChrono(root).worktree, 'exact');
 }));

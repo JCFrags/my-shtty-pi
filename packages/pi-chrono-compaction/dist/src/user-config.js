@@ -17,6 +17,8 @@ const CONFIG_KEYS = [
     "incrementalPrecomputeEnabled",
     "isolatedWorkerEnabled",
     "rollupShadowEnabled",
+    "catalogShadowEnabled",
+    "searchIndexEnabled",
     "hostWorkerSlots",
     "workerTimeoutSeconds",
     "workerNiceLevel",
@@ -42,6 +44,8 @@ const COMMAND_TO_KEY = {
     "incremental-precompute": "incrementalPrecomputeEnabled",
     "isolated-worker": "isolatedWorkerEnabled",
     "rollup-shadow": "rollupShadowEnabled",
+    "catalog-shadow": "catalogShadowEnabled",
+    "search-index": "searchIndexEnabled",
     "worker-slots": "hostWorkerSlots",
     "worker-timeout": "workerTimeoutSeconds",
     "worker-nice": "workerNiceLevel",
@@ -167,6 +171,10 @@ export function validateUserConfig(value) {
         config.isolatedWorkerEnabled = booleanValue(input.isolatedWorkerEnabled, "isolatedWorkerEnabled");
     if (input.rollupShadowEnabled !== undefined)
         config.rollupShadowEnabled = booleanValue(input.rollupShadowEnabled, "rollupShadowEnabled");
+    if (input.searchIndexEnabled !== undefined)
+        config.searchIndexEnabled = booleanValue(input.searchIndexEnabled, "searchIndexEnabled");
+    if (input.catalogShadowEnabled !== undefined)
+        config.catalogShadowEnabled = booleanValue(input.catalogShadowEnabled, "catalogShadowEnabled");
     if (input.hostWorkerSlots !== undefined)
         config.hostWorkerSlots = boundedInteger(input.hostWorkerSlots, "hostWorkerSlots", WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max);
     if (input.workerTimeoutSeconds !== undefined)
@@ -342,6 +350,10 @@ export function applyConfigCommand(config, args) {
             value = booleanValue(raw, command);
             break;
         case "rollupShadowEnabled":
+            value = booleanValue(raw, command);
+            break;
+        case "searchIndexEnabled":
+        case "catalogShadowEnabled":
             value = booleanValue(raw, command);
             break;
         case "hostWorkerSlots":
