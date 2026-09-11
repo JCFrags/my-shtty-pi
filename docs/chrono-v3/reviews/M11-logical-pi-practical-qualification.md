@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.26 passed exact-head CI and preserved the continuation-only replacement through its first rollover and immediate rollback. Its one authorized installed-Pi qualification run then stopped safely because the harness issued the next rollover before the rebuilt search index became ready. A minimal harness readiness correction is prepared for the next separately packaged candidate; no corrected retry has run.
+Status: package 2.0.27 passed exact-head CI and repeated the first rollover and immediate rollback, but its one authorized installed-Pi run exposed stale probe evidence in the qualification harness. The corrected harness is bound to package 2.0.28. No corrected retry has run, and no full M10 or M11 pass is claimed.
 
 ## Scope
 
@@ -98,6 +98,16 @@ Exact-head pull-request CI run `34581029129` passed for candidate `fac5d3566339b
 The run passed adoption, the initial indexed search, recall, and exact recovery probe, the first rollover, exact rollback, abandoned-branch retention, and presence of the abandoned continuation source. It then issued the first rollover in the ten-rollover loop while the search index was rebuilding after the session switch. The command safely refused with `search-v3-index-not-ready`, and the harness assertion stopped the run after 19.788 seconds. Zero providers were called. No result JSON was emitted. The owner-only failure root and exact failure log remain preserved.
 
 The existing `probe()` command already waits for catalog, capsules, index, memory, rollup, and the expected logical route count for up to 150 seconds, then verifies search, recall, and exact recovery. The harness now calls that probe after it validates the rollback branch and before it starts the ten-rollover loop. This is a harness sequencing correction, not a runtime change. The ten-rollover, fork, restart, and final source-preservation assertions remain unqualified until one authorized run of the next frozen candidate completes. Package 2.0.26 does not establish a full M10 or M11 pass.
+
+## Package 2.0.27 result
+
+Exact-head pull-request CI run `34586386020` passed for candidate `3cde8caf97b1ca48898dbf73d141d210f496649d`. The authorized installed-Pi run used package tree `bfee6f916a07f6209a9da6f3f75ae08079d7c589`, Pi 0.85.1, Node 24.18.0 ABI 137, `better-sqlite3` 12.9.0, and native binding SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`.
+
+The run again passed adoption, the initial indexed search, recall, and exact recovery probe, the first rollover, exact rollback, abandoned-branch retention, and presence of the abandoned continuation source. It stopped after 170.543 seconds when the first rollover in the ten-rollover loop safely refused with `search-v3-index-not-ready`. No loop rollover completed, no result JSON was emitted, and the owner-only failure root and log remain preserved.
+
+The apparent successful post-rollback probe was stale harness evidence. `RpcClient.notify()` retained a notification after it delivered the notification to a waiter. The harness deliberately reused the initial marker after rollback, so the second probe selected the earlier pre-rollback success. Pi 0.85.1 awaits an extension slash-command handler, but reports the command as handled after converting a handler failure into an extension error. Thus the post-rollback command could exhaust its 150-second readiness bound without invalidating the stale payload that `probe()` later asserted. The elapsed time is consistent with that bounded wait followed by the safe rollover refusal. The preserved run does not prove that a ready index became unready between the probe and rollover.
+
+The package 2.0.28 harness consumes each delivered or queued notification exactly once, gives probe notifications the command's 180-second outer bound, and converts a readiness timeout into a fresh probe payload with the exact safe error. One focused in-memory RPC check proved that a repeated predicate remains pending until a new notification and receives the fresh timeout evidence. The readiness predicate, its 150-second inner deadline, command refusal, and all rollover, fork, restart, rollback, recovery, and source-preservation assertions remain unchanged. No runtime correction is justified from the stale 2.0.27 observation. One authorized 2.0.28 run after exact-head CI must establish the actual post-rollback result.
 
 ## Result fields
 

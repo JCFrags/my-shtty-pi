@@ -10,7 +10,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const EXPECTED_PI_VERSION = "0.85.1";
-const EXPECTED_PACKAGE_VERSION = "2.0.27";
+const EXPECTED_PACKAGE_VERSION = "2.0.28";
 const MAIN_ROLLOVERS = 10;
 const HELP = `Usage:
   node scripts/m11-logical-pi-qualification.mjs plan --runtime-sha <40-hex>

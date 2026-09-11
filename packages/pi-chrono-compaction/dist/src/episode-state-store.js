@@ -769,7 +769,6 @@ async function selectionContext(request, selection, options, budget) {
     };
     const counts = { restriction: new Set(), work: new Set() };
     const represented = { restriction: new Map(), work: new Map() };
-    const representedOriginal = new Map();
     const selectedSources = { restriction: new Set(), work: new Set() };
     const proposition = (item, representationKey) => ({ representationKey, stableKey: item.stableKey,
         propositionKey: item.propositionKey, spanKey: item.spanKey, subject: item.subject, revision: item.revision, kind: item.kind,
@@ -802,16 +801,17 @@ async function selectionContext(request, selection, options, budget) {
         }
         const representedAt = represented[category].get(key);
         if (representedAt !== undefined) {
-            const existing = result.protected[representedAt], first = representedOriginal.get(key) ?? fail("search-v3-state-checkpoint-corrupt");
+            const existing = result.protected[representedAt];
+            // The primary item already carries the first proposition. Store only the
+            // additional clauses so their exact evidence is not serialized twice.
             result.protected[representedAt] = { ...existing,
-                coveredPropositions: [...(existing.coveredPropositions ?? [proposition(first, key)]), proposition(original, key)] };
+                coveredPropositions: [...(existing.coveredPropositions ?? []), proposition(original, key)] };
             continue;
         }
         counts[category].add(key);
         if (sourceId)
             selectedSources[category].add(sourceId);
         represented[category].set(key, result.protected.length);
-        representedOriginal.set(key, original);
         result.protected.push({ ...item, representationKey: key });
     }
     result.protected.sort((a, b) => {
