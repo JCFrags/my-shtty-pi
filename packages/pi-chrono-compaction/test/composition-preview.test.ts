@@ -9,8 +9,9 @@ import type { CapsuleCatalogView } from "../src/capsule-contract.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import extension from "../src/pi-extension.js";
 import type { SessionEntryLike } from "../src/types.js";
+import { HistorySearchAdapter } from "../src/history-search-adapter.js";
 
-test("recorded same-cut preview persists privately and refuses an unsafe tool-pair tail before selection", async () => {
+test("recorded same-cut preview and normal hooks preserve selection readiness until compaction settles", async (t) => {
   assert.equal(M09_AUTHORITATIVE_REPLACEMENT_ENABLED, false);
   const root = await mkdtemp(join(tmpdir(), "chrono-preview-"));
   await chmod(root, 0o700);
@@ -59,13 +60,29 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
     assert.equal(reads, 1, "unsafe tail must refuse before contained selection");
 
     const previousConfigPath = process.env.PI_CHRONO_CONFIG_PATH;
+    const previousSearchIndex = process.env.PI_CHRONO_SEARCH_INDEX;
     process.env.PI_CHRONO_CONFIG_PATH = join(root, "config.json");
+    process.env.PI_CHRONO_SEARCH_INDEX = "true";
     try {
       type Hook = (event: any, context: any) => Promise<any> | any;
       const hooks = new Map<string, Hook>();
+      const tools = new Map<string, () => Promise<unknown>>();
+      const compactRequests: Array<{ onComplete?: (result: unknown) => void; onError?: (error: Error) => void }> = [];
+      const scheduledLeaves: string[] = [];
+      let ready = false;
+      t.mock.method(HistorySearchAdapter.prototype, "schedule", (target: Parameters<HistorySearchAdapter["schedule"]>[0]) => {
+        scheduledLeaves.push(target.leafId);
+        ready = false; // A new lifecycle target clears validated readiness.
+      });
+      t.mock.method(HistorySearchAdapter.prototype, "compositionSelection", async (entryId: string) => {
+        assert.equal(entryId, "prefix");
+        assert.equal(ready, true, "settlement must not clear the maintained target before V3 selection");
+        return selection;
+      });
       let summaryCalls = 0, composeCalls = 0;
       let refuseComposition = false;
-      const pi = { registerTool() {}, registerCommand() {}, appendEntry() {}, sendMessage() {},
+      const pi = { registerTool(tool: { name: string; execute: () => Promise<unknown> }) { tools.set(tool.name, tool.execute); },
+        registerCommand() {}, appendEntry() {}, sendMessage() {},
         on(name: string, handler: Hook) { hooks.set(name, handler); } };
       extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(root, "runtime"),
         normalCompositionFixture: {
@@ -74,8 +91,9 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
             assert.equal(preparation.firstKeptEntryId, "tail");
             return { text: "Independent Pi summary.", tokens: 6, model: "fixture/model" };
           },
-          compose: async input => {
+          compose: async (input, maintained) => {
             composeCalls++;
+            await maintained.select(input.sourceCutEntryId);
             if (refuseComposition) throw new Error("mandatory coverage incomplete");
             assert.equal(input.sourceCutEntryId, "prefix");
             assert.equal(input.firstKeptEntryId, "tail");
@@ -106,11 +124,25 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
         firstKeptEntryId: "tail", tokensBefore: 1000, previousSummary: "Prior Pi summary.",
         messagesToSummarize: [], turnPrefixMessages: [], settings: { reserveTokens: 512 },
       }, reason: "manual", willRetry: false, signal: new AbortController().signal };
+      let leafId = "prefix";
       const compactContext = {
-        hasUI: true, ui: { notify() {} },
-        sessionManager: { getSessionId: () => "fixture-session", getLeafId: () => "tail", getEntry: (id: string) => entries.find(entry => entry.id === id),
-          getSessionFile: () => { throw new Error("legacy reconstruction must not run"); } },
+        hasUI: true, ui: { notify() {} }, getContextUsage: () => undefined,
+        compact(options: typeof compactRequests[number]) { compactRequests.push(options); },
+        sessionManager: { getSessionId: () => "fixture-session", getLeafId: () => leafId, getEntry: (id: string) => entries.find(entry => entry.id === id),
+          getSessionFile: () => join(root, "session.jsonl"),
+          getBranch: () => { throw new Error("legacy reconstruction must not run"); } },
       };
+      const settle = () => hooks.get("agent_settled")!({}, compactContext);
+      const request = tools.get("request_compaction")!;
+      await settle();
+      assert.deepEqual(scheduledLeaves, ["prefix"]);
+      ready = true; // The existing target finished normal background validation.
+      leafId = "tail";
+      await request();
+      await settle();
+      await settle(); // A repeated settlement must not retarget a pending request.
+      assert.equal(compactRequests.length, 1);
+      assert.deepEqual(scheduledLeaves, ["prefix"]);
       const result = await hook(compactEvent, compactContext);
       assert.equal(summaryCalls, 1);
       assert.equal(composeCalls, 1);
@@ -120,12 +152,29 @@ test("recorded same-cut preview persists privately and refuses an unsafe tool-pa
       assert.equal(result.compaction.details.piSummary, undefined);
       assert.deepEqual(result.compaction.details.composition.validation, { safeTail: true, withinCombinedCeiling: true,
         protectedCoverageComplete: true, openWorkCoverageComplete: true });
+      leafId = "compacted";
+      await hooks.get("session_compact")!({ willRetry: false }, compactContext);
+      compactRequests[0]!.onComplete?.(result.compaction);
+      assert.deepEqual(scheduledLeaves, ["prefix", "compacted"], "completion resumes scheduling at the current leaf");
+
+      ready = true;
+      leafId = "later-tail";
       refuseComposition = true;
+      await request();
+      await settle();
+      assert.equal(compactRequests.length, 2);
       assert.deepEqual(await hook(compactEvent, compactContext), { cancel: true },
         "coverage refusal must preserve context, not publish a summary-only success");
+      compactRequests[1]!.onError?.(new Error("Compaction cancelled"));
+      assert.deepEqual(scheduledLeaves, ["prefix", "compacted", "later-tail"], "refusal resumes background catch-up");
+      await settle();
+      assert.equal(compactRequests.length, 2, "a refusal must not automatically retry compaction");
+      assert.equal(scheduledLeaves.length, 4, "ordinary settlement scheduling resumes after refusal");
     } finally {
       if (previousConfigPath === undefined) delete process.env.PI_CHRONO_CONFIG_PATH;
       else process.env.PI_CHRONO_CONFIG_PATH = previousConfigPath;
+      if (previousSearchIndex === undefined) delete process.env.PI_CHRONO_SEARCH_INDEX;
+      else process.env.PI_CHRONO_SEARCH_INDEX = previousSearchIndex;
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

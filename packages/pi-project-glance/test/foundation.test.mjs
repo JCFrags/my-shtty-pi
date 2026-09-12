@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import {
   chmod,
   lstat,
@@ -445,46 +447,82 @@ test("opener focuses a registered pane and opens only when focus cannot find it"
 test("actual concurrent opens share one pane and focus the registered result", async () => {
   await withTemporaryRuntime(async ({ relay, environment }) => {
     const calls = [];
-    const runner = async (_executable, args) => {
-      calls.push([...args]);
-      if (args[0] === "plugin" && args[1] === "list") return {
-        ok: true,
-        stdout: JSON.stringify({ result: { plugins: [{
-          plugin_id: "pi.project-glance",
-          plugin_root: process.cwd(),
-          enabled: true,
-          panes: [{ id: "glance", command: ["./bin/pi-project-glance", "glance"] }],
-        }] } }),
-        stderr: "",
+    let contenderReading, ownerReleased;
+    const reading = new Promise((resolve) => { contenderReading = resolve; });
+    const released = new Promise((resolve) => { ownerReleased = resolve; });
+    const originalOpen = fsPromises.open, originalUnlink = fsPromises.unlink;
+    let heldRead = false, observedMissing = false;
+    // Force owner release between the contender's lstat and private-file open.
+    fsPromises.open = async (...args) => {
+      if (args[0] === relay.paths.registryLockPath && !heldRead) {
+        heldRead = true;
+        contenderReading();
+        await released;
+        try { return await originalOpen(...args); }
+        catch (error) {
+          assert.equal(error.code, "ENOENT");
+          observedMissing = true;
+          throw error;
+        }
+      }
+      return originalOpen(...args);
+    };
+    fsPromises.unlink = async (...args) => {
+      const result = await originalUnlink(...args);
+      if (args[0] === relay.paths.registryLockPath) ownerReleased();
+      return result;
+    };
+    syncBuiltinESMExports();
+    try {
+      const runner = async (_executable, args) => {
+        calls.push([...args]);
+        if (args[0] === "plugin" && args[1] === "list") return {
+          ok: true,
+          stdout: JSON.stringify({ result: { plugins: [{
+            plugin_id: "pi.project-glance",
+            plugin_root: process.cwd(),
+            enabled: true,
+            panes: [{ id: "glance", command: ["./bin/pi-project-glance", "glance"] }],
+          }] } }),
+          stderr: "",
+        };
+        if (args[0] === "plugin" && args[2] === "open") {
+          await reading;
+          return { ok: true, stdout: JSON.stringify({ result: { type: "plugin_pane_opened", plugin_pane: {
+            plugin_id: "pi.project-glance",
+            entrypoint: "glance",
+            pane: { pane_id: "pane-concurrent" },
+          } } }), stderr: "" };
+        }
+        if (args[0] === "plugin" && args[2] === "focus") {
+          return { ok: true, stdout: "", stderr: "" };
+        }
+        return { ok: false, stdout: "", stderr: "" };
       };
-      if (args[0] === "plugin" && args[2] === "open") {
-        await new Promise((resolve) => setTimeout(resolve, 40));
-        return { ok: true, stdout: JSON.stringify({ result: { type: "plugin_pane_opened", plugin_pane: {
-          plugin_id: "pi.project-glance",
-          entrypoint: "glance",
-          pane: { pane_id: "pane-concurrent" },
-        } } }), stderr: "" };
-      }
-      if (args[0] === "plugin" && args[2] === "focus") {
-        return { ok: true, stdout: "", stderr: "" };
-      }
-      return { ok: false, stdout: "", stderr: "" };
-    };
-    const options = {
-      sessionKey: relay.sessionKey,
-      descriptorPath: relay.paths.descriptorPath,
-      currentPaneId: "pane-current",
-      workspaceId: "workspace-test",
-      environment: { ...environment, HERDR_ENV: "1" },
-      runner,
-    };
-    const results = await Promise.all([
-      openOrFocusProjectGlancePane(options),
-      openOrFocusProjectGlancePane(options),
-    ]);
-    assert.equal(calls.filter((args) => args[2] === "open").length, 1);
-    assert.deepEqual(new Set(results.map((result) => result.action)), new Set(["opened", "focused"]));
-    assert.deepEqual(results.map((result) => result.paneId), ["pane-concurrent", "pane-concurrent"]);
+      const options = {
+        sessionKey: relay.sessionKey,
+        descriptorPath: relay.paths.descriptorPath,
+        currentPaneId: "pane-current",
+        workspaceId: "workspace-test",
+        environment: { ...environment, HERDR_ENV: "1" },
+        runner,
+      };
+      const results = await Promise.all([
+        openOrFocusProjectGlancePane(options),
+        openOrFocusProjectGlancePane(options),
+      ]);
+      assert.equal(calls.filter((args) => args[2] === "open").length, 1);
+      assert.deepEqual(new Set(results.map((result) => result.action)), new Set(["opened", "focused"]));
+      assert.deepEqual(results.map((result) => result.paneId), ["pane-concurrent", "pane-concurrent"]);
+      assert.equal(heldRead, true);
+      assert.equal(observedMissing, true, "the contender must observe the released lock as absent");
+    } finally {
+      contenderReading();
+      ownerReleased();
+      fsPromises.open = originalOpen;
+      fsPromises.unlink = originalUnlink;
+      syncBuiltinESMExports();
+    }
   });
 });
 

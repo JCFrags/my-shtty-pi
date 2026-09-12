@@ -374,7 +374,9 @@ async function readLockCandidate(
   let body: Buffer;
   try {
     body = await readPrivateFile(lockPath, MAX_REGISTRY_LOCK_BYTES, paths.runtimeDirectory);
-  } catch {
+  } catch (error) {
+    // The owner can release the lock after lstat but before the private read.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw new Error("Project Glance registry is busy.");
   }
   try {

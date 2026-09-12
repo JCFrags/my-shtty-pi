@@ -942,6 +942,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let rolloutError;
     let startupStatus = { state: adapters.schedulerDirectory ? "ready" : "pending" };
     let startupContext;
+    let deferredCompactionSearch;
+    const usesStoredComposition = (ctx) => resolveExtensionSettings(userConfig).memoryEngineEnabled
+        || canary.requested(ctx.sessionManager.getSessionId()) || !!(adapters.schedulerDirectory && adapters.normalCompositionFixture);
     const searchSettings = () => {
         const settings = resolveExtensionSettings(userConfig);
         // An explicit environment/config disable takes precedence over rollout.
@@ -975,6 +978,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             search.cancel();
             return;
         }
+        // Keep the validated maintained target until this V3 request settles.
+        if (deferredCompactionSearch?.epoch === rolloutEpoch)
+            return;
         const sessionKey = createHash("sha256").update("pi-session-v1\0").update(ctx.sessionManager.getSessionId()).digest("hex");
         const shardKey = createHash("sha256").update("pi-jsonl-v1\0").update(sourcePath).digest("hex");
         search.schedule({ sourcePath, sessionKey, shardKey, leafId, catalogDirectory: join(dirname(sourcePath), ".chrono-catalog", sessionKey) });
@@ -1320,15 +1326,29 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             lastTriggerAttemptTokens = currentTokens;
         if (ctx.hasUI)
             ctx.ui.notify(`ChronoCompact trigger: ${reason}.`, "info");
+        const deferred = usesStoredComposition(ctx) ? { epoch: rolloutEpoch,
+            sessionId: ctx.sessionManager.getSessionId(), sourcePath: ctx.sessionManager.getSessionFile() } : undefined;
+        if (deferred)
+            deferredCompactionSearch = deferred;
+        const resumeSearch = () => {
+            if (!deferred || deferredCompactionSearch !== deferred)
+                return;
+            deferredCompactionSearch = undefined;
+            if (deferred.epoch === rolloutEpoch && deferred.sessionId === ctx.sessionManager.getSessionId()
+                && deferred.sourcePath === ctx.sessionManager.getSessionFile())
+                scheduleSearch(ctx);
+        };
         ctx.compact({
             customInstructions: `ChronoCompact trigger: ${reason}. Preserve direct user restrictions, decisive failures, and unresolved work.`,
             onComplete: () => {
                 triggerPending = false;
+                resumeSearch();
             },
             onError: (error) => {
                 triggerPending = false;
                 forcedContinuationPending = false;
                 continueAfterSuccessfulCompaction = false;
+                resumeSearch();
                 if (ctx.hasUI)
                     ctx.ui.notify(`ChronoCompact request failed: ${error.message}`, "warning");
             },
@@ -1604,28 +1624,38 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("agent_settled", (_event, ctx) => {
         scheduleCapsuleShadow(ctx);
         scheduleCatalogShadow(ctx);
-        scheduleSearch(ctx);
+        const storedComposition = usesStoredComposition(ctx);
+        // Compatibility precomputation keeps its existing pre-trigger ordering.
+        if (!storedComposition)
+            scheduleSearch(ctx);
         scheduleIncrementalWork(ctx);
-        const usage = ctx.getContextUsage();
-        if (forcedCompactionReason) {
-            const reason = forcedCompactionReason;
-            forcedCompactionReason = undefined;
-            launchCompaction(ctx, reason, usage?.tokens ?? undefined, true);
-            return;
+        try {
+            const usage = ctx.getContextUsage();
+            if (forcedCompactionReason) {
+                const reason = forcedCompactionReason;
+                forcedCompactionReason = undefined;
+                launchCompaction(ctx, reason, usage?.tokens ?? undefined, true);
+                return;
+            }
+            const settings = resolveExtensionSettings(userConfig);
+            if (!usage || usage.tokens === null)
+                return;
+            const decision = decideCompactionTrigger({
+                currentTokens: usage.tokens,
+                thresholdTokens: settings.triggerThresholdTokens,
+                minimumGrowthTokens: settings.triggerMinimumGrowthTokens,
+                lastAttemptTokens: lastTriggerAttemptTokens,
+                pending: triggerPending,
+            });
+            if (!decision.trigger)
+                return;
+            launchCompaction(ctx, decision.reason, usage.tokens);
         }
-        const settings = resolveExtensionSettings(userConfig);
-        if (!usage || usage.tokens === null)
-            return;
-        const decision = decideCompactionTrigger({
-            currentTokens: usage.tokens,
-            thresholdTokens: settings.triggerThresholdTokens,
-            minimumGrowthTokens: settings.triggerMinimumGrowthTokens,
-            lastAttemptTokens: lastTriggerAttemptTokens,
-            pending: triggerPending,
-        });
-        if (!decision.trigger)
-            return;
-        launchCompaction(ctx, decision.reason, usage.tokens);
+        finally {
+            // A pending V3 request defers this retarget until onComplete or onError.
+            if (storedComposition)
+                scheduleSearch(ctx);
+        }
     });
     pi.on("session_compact", (event) => {
         valueWorkerCompactionGate = false;
