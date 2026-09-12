@@ -55,6 +55,35 @@ function after(value) {
         && (value.stableKey === undefined || typeof value.stableKey === "string" && value.stableKey.length <= 128)
         && (value.generation === undefined || positive(value.generation));
 }
+const hash = (value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+function supersession(value, view) {
+    const evidence = value.authorization, decision = value.decision, targets = value.targets;
+    if (!positive(value.expectedGeneration) || value.expectedGeneration >= Number.MAX_SAFE_INTEGER
+        || !object(evidence) || !isScopedBodySourceRef(evidence.source) || !sourceRefWithinViewBounds(evidence.source, view)
+        || !object(evidence.decodedUtf16) || !integer(evidence.decodedUtf16.start) || !integer(evidence.decodedUtf16.end)
+        || evidence.decodedUtf16.start < evidence.source.decodedUtf16.start || evidence.decodedUtf16.end > evidence.source.decodedUtf16.end
+        || evidence.decodedUtf16.end <= evidence.decodedUtf16.start
+        || evidence.decodedUtf16.end - evidence.decodedUtf16.start > EPISODE_STATE_LIMITS.clauseUtf16Units
+        || !hash(evidence.spanHash) || !hash(evidence.rawEventHash)
+        || !object(decision) || !["operator", "agent"].includes(String(decision.actor))
+        || decision.basis !== "direct-original-user-instruction" || decision.scope !== "repository-and-chrono"
+        || decision.action !== "revoke-prior-user-restrictions-and-approval-holds"
+        || typeof decision.rationale !== "string" || !decision.rationale.trim() || decision.rationale.length > EPISODE_STATE_LIMITS.clauseUtf16Units
+        || !Array.isArray(targets) || targets.length < 1 || targets.length > EPISODE_STATE_LIMITS.page)
+        return false;
+    const seen = new Set();
+    for (const target of targets) {
+        if (!object(target) || typeof target.stableKey !== "string" || !/^[a-f0-9]{32}$/u.test(target.stableKey) || seen.has(target.stableKey)
+            || !hash(target.propositionKey) || !hash(target.spanKey) || !hash(target.evidenceHash)
+            || !positive(target.createdGeneration) || target.createdGeneration > value.expectedGeneration || target.authority !== "user"
+            || !["repository", "chrono"].includes(String(target.scope))
+            || !(target.category === "restriction" && target.kind === "restriction"
+                || target.category === "approval-hold" && ["restriction", "openwork", "blocker"].includes(String(target.kind))))
+            return false;
+        seen.add(target.stableKey);
+    }
+    return value.limit === undefined && value.after === undefined;
+}
 function rollupAfter(value) {
     return object(value) && typeof value.nodeId === "string" && /^[a-f0-9]{64}$/u.test(value.nodeId)
         && integer(value.itemIndex) && value.itemIndex <= EPISODE_STATE_LIMITS.rollupNodesPerRecall && positive(value.generation)
@@ -63,6 +92,7 @@ function rollupAfter(value) {
 }
 function rollupHandle(value) {
     return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v3"
+        && (value.storeId === undefined || typeof value.storeId === "string" && /^[a-f0-9]{64}$/u.test(value.storeId))
         && typeof value.branchKey === "string" && value.branchKey.length > 0 && value.branchKey.length <= 256
         && integer(value.eventCut) && positive(value.stateGeneration) && positive(value.rollupGeneration)
         && typeof value.rootNodeId === "string" && /^[a-f0-9]{64}$/u.test(value.rootNodeId);
@@ -78,6 +108,7 @@ export function isEpisodeStateRequest(value) {
     switch (value.op) {
         case "materializeState": return stateCommon;
         case "stateStatus": return value.limit === undefined && value.after === undefined;
+        case "supersedeState": return supersession(value, value.view);
         case "composeStateSelection": return value.limit === undefined && value.after === undefined;
         case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
             && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)
@@ -86,6 +117,15 @@ export function isEpisodeStateRequest(value) {
         case "materializeRollup": return value.after === undefined
             && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob);
         case "rollupStatus": return value.limit === undefined && value.after === undefined;
+        case "repairRollup": return (value.action === "start" || value.action === "step" || value.action === "status" || value.action === "publish")
+            && typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
+            && (value.action === "step" ? value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob : value.limit === undefined)
+            && (value.action === "publish" ? value.expectedActiveStoreId === null || typeof value.expectedActiveStoreId === "string" && /^[a-f0-9]{64}$/u.test(value.expectedActiveStoreId) : value.expectedActiveStoreId === undefined);
+        case "composeRollupSelection": return rollupHandle(value.handle) && value.handle.branchKey === value.view.branchKey
+            && value.handle.eventCut <= value.view.eventCut && typeof value.query === "string" && value.query.trim().length > 0
+            && value.query.length <= EPISODE_STATE_LIMITS.queryUnits && positive(value.beforeEventSeq)
+            && value.beforeEventSeq <= value.view.eventCut + 1
+            && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page);
         case "recallRollup": return (positive(value.generation) || rollupHandle(value.handle))
             && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page)
             && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0 && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)

@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { lstatSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, constants as F, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { canonicalJson } from "./capsule-segment.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
 import { CatalogSqlite } from "./catalog-sqlite.js";
@@ -23,13 +23,140 @@ const schema = [
     "CREATE TABLE publications (generation INTEGER PRIMARY KEY, lineage TEXT NOT NULL, branchKey TEXT NOT NULL, eventCut INTEGER NOT NULL, stateGeneration INTEGER NOT NULL, rootNodeId TEXT NOT NULL, complete INTEGER NOT NULL) WITHOUT ROWID",
     "CREATE INDEX publications_lineage ON publications(lineage,generation)",
 ];
+const repairedPublicationIndex = "CREATE INDEX publications_cut ON publications(lineage,eventCut DESC,generation DESC)";
+const REPAIR_ROOT = "rollup-repair-v1";
+const missing = (error) => error?.code === "ENOENT";
+const storeIdValid = (value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+const activeValid = (value) => value?.v === 1 && storeIdValid(value.storeId);
+const stageValid = (value) => value?.v === 1 && storeIdValid(value.storeId) && typeof value.repairId === "string"
+    && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId) && (value.expectedActiveStoreId === null || storeIdValid(value.expectedActiveStoreId))
+    && storeIdValid(value.viewHash) && storeIdValid(value.identityHash) && Number.isSafeInteger(value.stateGeneration) && value.stateGeneration > 0
+    && Number.isSafeInteger(value.processedCut) && value.processedCut >= 0 && Number.isSafeInteger(value.processedMemoryCut) && value.processedMemoryCut >= value.processedCut;
+function privateDir(path, create = false) {
+    if (resolve(path) !== path || path === "/")
+        fail("search-v3-rollup-storage-unsafe");
+    try {
+        if (create)
+            mkdirSync(path, { mode: 0o700 });
+    }
+    catch (error) {
+        if (error.code !== "EEXIST")
+            throw error;
+    }
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o7777) !== 0o700)
+        fail("search-v3-rollup-storage-unsafe");
+    return stat;
+}
+function syncDir(path) { const fd = openSync(path, F.O_RDONLY | F.O_DIRECTORY | F.O_NOFOLLOW); try {
+    fsyncSync(fd);
+}
+finally {
+    closeSync(fd);
+} }
+function safeRecord(path, valid) {
+    privateDir(dirname(path));
+    let stat;
+    try {
+        stat = lstatSync(path);
+    }
+    catch (error) {
+        if (missing(error))
+            return undefined;
+        throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o7777) !== 0o600
+        || stat.nlink !== 1 || stat.size < 2 || stat.size > 4096)
+        fail("search-v3-rollup-pointer-unsafe");
+    const fd = openSync(path, F.O_RDONLY | F.O_NOFOLLOW);
+    try {
+        const opened = fstatSync(fd);
+        if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size)
+            fail("search-v3-rollup-pointer-changed");
+        const bytes = Buffer.allocUnsafe(stat.size + 1), count = readSync(fd, bytes, 0, bytes.length, 0), final = fstatSync(fd);
+        if (count !== stat.size || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size)
+            fail("search-v3-rollup-pointer-changed");
+        const value = JSON.parse(bytes.subarray(0, count).toString("utf8"));
+        if (!valid(value))
+            fail("search-v3-rollup-pointer-invalid");
+        return value;
+    }
+    catch (error) {
+        if (error instanceof SyntaxError)
+            fail("search-v3-rollup-pointer-invalid");
+        throw error;
+    }
+    finally {
+        closeSync(fd);
+    }
+}
+function atomicRecord(path, value) {
+    const parent = privateDir(dirname(path)), bytes = Buffer.from(JSON.stringify(value));
+    if (bytes.length > 4096)
+        fail("search-v3-rollup-pointer-limit");
+    const temporary = join(dirname(path), `.pending-${randomUUID()}`);
+    let fd;
+    try {
+        fd = openSync(temporary, F.O_WRONLY | F.O_CREAT | F.O_EXCL | F.O_NOFOLLOW, 0o600);
+        let offset = 0;
+        while (offset < bytes.length)
+            offset += writeSync(fd, bytes, offset, bytes.length - offset);
+        fsyncSync(fd);
+        const made = fstatSync(fd);
+        if (!made.isFile() || made.uid !== process.getuid?.() || (made.mode & 0o7777) !== 0o600 || made.nlink !== 1)
+            fail("search-v3-rollup-pointer-unsafe");
+        const now = privateDir(dirname(path));
+        if (now.dev !== parent.dev || now.ino !== parent.ino)
+            fail("search-v3-rollup-pointer-changed");
+        renameSync(temporary, path);
+        syncDir(dirname(path));
+    }
+    finally {
+        if (fd !== undefined)
+            closeSync(fd);
+        try {
+            unlinkSync(temporary);
+        }
+        catch (error) {
+            if (!missing(error))
+                throw error;
+        }
+    }
+}
+function repairPaths(searchDirectory) {
+    const root = join(searchDirectory, REPAIR_ROOT);
+    return { root, stores: join(root, "stores"), stages: join(root, "stages"), active: join(root, "active.json") };
+}
+function prepareRepairPaths(searchDirectory) {
+    const paths = repairPaths(searchDirectory);
+    privateDir(searchDirectory);
+    privateDir(paths.root, true);
+    privateDir(paths.stores, true);
+    privateDir(paths.stages, true);
+    return paths;
+}
+function repairStorePath(searchDirectory, storeId) {
+    if (!storeIdValid(storeId))
+        fail("search-v3-rollup-store-mismatch");
+    return join(repairPaths(searchDirectory).stores, `rollup-${storeId}.sqlite`);
+}
+function safeStoreFile(path) {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.()
+        || (stat.mode & 0o7777) !== 0o600 || stat.nlink !== 1)
+        fail("search-v3-rollup-storage-unsafe");
+}
 class Store {
     db;
     request;
+    storeId;
+    indexedCut;
     statements = 0;
-    constructor(db, request) {
+    constructor(db, request, storeId, indexedCut = false) {
         this.db = db;
         this.request = request;
+        this.storeId = storeId;
+        this.indexedCut = indexedCut;
     }
     get(sql, ...values) { this.statements++; return this.db.prepare(sql).get(...values); }
     run(sql, ...values) { this.statements++; this.db.prepare(sql).run(...values); }
@@ -52,6 +179,8 @@ class Store {
             if (this.get("SELECT sql FROM sqlite_master WHERE name=?", name)?.sql !== sql)
                 fail("search-v3-rollup-version-mismatch");
         }
+        if (this.indexedCut && this.get("SELECT sql FROM sqlite_master WHERE name='publications_cut'")?.sql !== repairedPublicationIndex)
+            fail("search-v3-rollup-version-mismatch");
     }
     initialize() {
         this.transaction(() => {
@@ -59,6 +188,8 @@ class Store {
             if (!this.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'")) {
                 for (const sql of schema)
                     this.run(sql);
+                if (this.indexedCut)
+                    this.run(repairedPublicationIndex);
                 this.run("INSERT INTO meta VALUES(1,?,?,?,?,?,?,0)", EPISODE_ROLLUP_SCHEMA_VERSION, canonicalJson(this.request.identity), this.request.searchDirectory, this.request.capsuleDirectory, this.request.catalogDirectory, EPISODE_ROLLUP_RULESET_VERSION);
             }
         });
@@ -226,8 +357,8 @@ function buildRoot(store, value, generation, created) {
     }
     return nodes[0];
 }
-function handle(request, row) {
-    return { schemaVersion: 1, ruleset: EPISODE_ROLLUP_RULESET_VERSION, branchKey: request.view.branchKey, eventCut: num(row, "eventCut"),
+function handle(request, row, store) {
+    return { schemaVersion: 1, ...(store?.storeId ? { storeId: store.storeId } : {}), ruleset: EPISODE_ROLLUP_RULESET_VERSION, branchKey: request.view.branchKey, eventCut: num(row, "eventCut"),
         stateGeneration: num(row, "stateGeneration"), rollupGeneration: num(row, "generation"), rootNodeId: str(row, "rootNodeId") };
 }
 function compatibleView(current, old) {
@@ -309,11 +440,12 @@ async function materialize(request, store, options, budget) {
         branchKey: request.view.branchKey, requestedCut, processedCut, processedMemoryCut, knownThroughCut: processedCut, complete: exhausted,
         closedIntervalsOnly: true, representedClosedRange, closedThroughCut: root?.range.end.eventSeq ?? 0, excludedOpenTail: Boolean(root),
         remainingWork: pending, noEligibleEpisode: pages.length === 0,
-        ...(publication ? { handle: handle(request, publication), rootReference: { kind: "rollup-node", handle: handle(request, publication), nodeId: root.nodeId, path: [root.nodeId] } } : {}),
+        ...(publication ? { handle: handle(request, publication, store), rootReference: { kind: "rollup-node", handle: handle(request, publication, store), nodeId: root.nodeId, path: [root.nodeId] } } : {}),
         next: cursor, metrics: { leafPages: pages.length, nodesCreated: created.count, sqliteStatements: store.statements } };
 }
 function publicationFor(request, store) {
-    const line = lineage(request), generation = request.handle?.rollupGeneration ?? request.generation;
+    const line = lineage(request), generation = request.handle?.rollupGeneration
+        ?? (request.op === "recallRollup" ? request.generation : undefined);
     if (!generation)
         fail("search-v3-rollup-generation-required");
     const row = store.get("SELECT * FROM publications WHERE lineage=? AND generation=?", line, generation);
@@ -329,6 +461,11 @@ function matches(node, query) {
     const terms = query.toLowerCase().match(/[\p{L}\p{N}_./:+-]{2,}/gu) ?? [];
     const text = canonicalJson({ summary: node.summary, protected: node.protectedReferences, metadata: node.metadataHints }).toLowerCase();
     return terms.some(term => text.includes(term));
+}
+function matchScore(node, query) {
+    const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_./:+-]{2,}/gu) ?? [])];
+    const text = canonicalJson({ summary: node.summary, protected: node.protectedReferences, metadata: node.metadataHints }).toLowerCase();
+    return terms.reduce((score, term) => score + Number(text.includes(term)), 0);
 }
 function nodeReference(h, node, path) {
     return { kind: "rollup-node", handle: h, nodeId: node.nodeId, path, nodeType: node.nodeType, level: node.level,
@@ -358,8 +495,71 @@ function episodeItem(h, node, path) {
         omittedProtectedCount: node.omittedProtectedCount, metadataHints: node.metadataHints, omittedMetadataCount: node.omittedMetadataCount,
         remainingDetail: node.remainingDetail };
 }
+/** Select relevant historical nodes top-down. Selected nodes stop descent, so
+ * query work is bounded by actual node reads rather than history size. */
+function composeRollupSelection(request, store) {
+    const publication = publicationFor(request, store), h = handle(request, publication, store);
+    let nodesRead = 0;
+    const readNode = (nodeId) => {
+        if (nodesRead >= EPISODE_STATE_LIMITS.rollupNodesPerRecall)
+            fail("search-v3-rollup-node-limit");
+        nodesRead++;
+        return loadNode(store, nodeId);
+    };
+    const root = readNode(h.rootNodeId), limit = request.limit ?? Math.min(4, EPISODE_STATE_LIMITS.page);
+    const queue = [{ node: root, path: [root.nodeId], score: matchScore(root, request.query) }];
+    const selected = [];
+    let visited = 0, traversalLimited = false;
+    while (queue.length && selected.length < limit) {
+        const current = queue.shift();
+        visited++;
+        if (current.node.range.end.eventSeq < request.beforeEventSeq && current.score > 0) {
+            selected.push(current);
+            continue;
+        }
+        if (current.node.nodeType === "episode-fragment")
+            continue;
+        const children = [];
+        for (const id of current.node.orderedChildren) {
+            if (nodesRead >= EPISODE_STATE_LIMITS.rollupNodesPerRecall) {
+                traversalLimited = true;
+                break;
+            }
+            const node = readNode(id);
+            if (node.range.start.eventSeq >= request.beforeEventSeq)
+                continue;
+            children.push({ node, path: [...current.path, id], score: matchScore(node, request.query) });
+        }
+        children.sort((a, b) => b.score - a.score || b.node.level - a.node.level
+            || a.node.range.start.eventSeq - b.node.range.start.eventSeq || a.node.nodeId.localeCompare(b.node.nodeId));
+        queue.push(...children);
+        if (traversalLimited)
+            break;
+    }
+    if (queue.length && selected.length >= limit)
+        traversalLimited = true;
+    selected.sort((a, b) => a.node.range.start.eventSeq - b.node.range.start.eventSeq
+        || a.node.range.end.eventSeq - b.node.range.end.eventSeq || a.node.nodeId.localeCompare(b.node.nodeId));
+    const items = selected.map(item => ({ reference: nodeReference(h, item.node, item.path), nodeId: item.node.nodeId,
+        nodeType: item.node.nodeType, path: item.path, range: item.node.range, summary: item.node.summary,
+        remainingDetail: item.node.remainingDetail }));
+    const partialReasons = traversalLimited ? ["bounded-node-traversal"] : [];
+    let responseLimited = false;
+    const build = () => ({ handle: h, representedRange: root.range,
+        publicationComplete: num(publication, "complete") === 1, selectionPartial: traversalLimited || responseLimited, partialReasons,
+        items, noQueryHit: items.length === 0,
+        metrics: { nodesRead, nodesVisited: visited, nodeLimit: EPISODE_STATE_LIMITS.rollupNodesPerRecall, selectedNodeLimit: limit,
+            sqliteStatements: store.statements } });
+    while (items.length > 1 && Buffer.byteLength(JSON.stringify(build())) > EPISODE_STATE_LIMITS.responseBytes - 4096) {
+        items.pop();
+        responseLimited = true;
+        if (!partialReasons.includes("response-budget"))
+            partialReasons.push("response-budget");
+    }
+    return build();
+}
 function recall(request, store) {
-    const publication = publicationFor(request, store), h = handle(request, publication), rootId = str(publication, "rootNodeId");
+    const publication = publicationFor(request, store), h = handle(request, publication, store), rootId = str(publication, "rootNodeId");
     const targetId = request.nodeId ?? rootId, route = verifiedPath(store, rootId, targetId, request.path);
     const target = loadNode(store, targetId), level = request.level ?? "root", limit = request.limit ?? EPISODE_STATE_LIMITS.page;
     const queryHash = sha(canonicalJson({ query: request.query?.trim() ?? "", level, nodeId: targetId, path: route.path,
@@ -457,26 +657,145 @@ function status(request, store) {
             remainingWork: remainingWork(request.view.eventCut, processedCut, complete, 0), noEligibleEpisode: true, cursor,
             metrics: { sqliteStatements: store.statements } };
     }
-    const publication = store.get("SELECT * FROM publications WHERE generation=?", num(head, "generation"));
+    const publication = store.indexedCut
+        ? store.get("SELECT * FROM publications WHERE lineage=? AND eventCut<=? ORDER BY eventCut DESC,generation DESC LIMIT 1", lineage(request), request.view.eventCut)
+        : store.get("SELECT * FROM publications WHERE generation=?", num(head, "generation"));
     const publicationRow = publication ?? fail("search-v3-rollup-publication-missing");
     if (str(publicationRow, "branchKey") !== request.view.branchKey || num(publicationRow, "eventCut") > request.view.eventCut)
         return { readiness: "incompatible", rollupGeneration: num(publicationRow, "generation"), branchKey: request.view.branchKey,
             requestedCut: request.view.eventCut, processedCut: 0, processedMemoryCut: 0, knownThroughCut: 0, complete: false,
             closedIntervalsOnly: true, representedClosedRange: null, remainingWork: "state-catch-up", noEligibleEpisode: true,
             metrics: { sqliteStatements: store.statements } };
-    const h = handle(request, publicationRow), root = loadNode(store, h.rootNodeId), complete = num(head, "complete") === 1;
+    const h = handle(request, publicationRow, store), root = loadNode(store, h.rootNodeId), complete = num(publicationRow, "complete") === 1;
+    const selectedIsHead = num(publicationRow, "generation") === num(head, "generation");
     const rootRow = store.get("SELECT createdGeneration FROM nodes WHERE nodeId=?", h.rootNodeId);
     const noEligibleEpisode = complete && Boolean(rootRow) && num(rootRow, "createdGeneration") < h.rollupGeneration;
     return { readiness: complete ? "ready" : "partial", rollupGeneration: h.rollupGeneration,
         stateGeneration: h.stateGeneration, branchKey: h.branchKey, requestedCut: request.view.eventCut, processedCut: h.eventCut,
-        processedMemoryCut: snapshot?.processedMemoryCut ?? h.eventCut, knownThroughCut: h.eventCut, complete,
+        processedMemoryCut: selectedIsHead ? snapshot?.processedMemoryCut ?? h.eventCut : h.eventCut, knownThroughCut: h.eventCut, complete,
         closedIntervalsOnly: true, representedClosedRange: root.range, closedThroughCut: root.range.end.eventSeq,
         excludedOpenTail: true, remainingWork: remainingWork(request.view.eventCut, h.eventCut, complete, noEligibleEpisode ? 0 : 1), noEligibleEpisode,
         handle: h, rootReference: { kind: "rollup-node", handle: h, nodeId: h.rootNodeId, path: [h.rootNodeId] },
-        cursor, metrics: { sqliteStatements: store.statements } };
+        ...(selectedIsHead ? { cursor } : {}), metrics: { sqliteStatements: store.statements } };
+}
+function activeStoreId(searchDirectory) {
+    const paths = repairPaths(searchDirectory);
+    try {
+        lstatSync(paths.root);
+    }
+    catch (error) {
+        if (missing(error))
+            return null;
+        throw error;
+    }
+    privateDir(paths.root);
+    privateDir(paths.stores);
+    privateDir(paths.stages);
+    return safeRecord(paths.active, activeValid)?.storeId ?? null;
+}
+function repairStage(request, create, snapshot) {
+    const paths = create ? prepareRepairPaths(request.searchDirectory) : repairPaths(request.searchDirectory);
+    if (!create) {
+        privateDir(paths.root);
+        privateDir(paths.stores);
+        privateDir(paths.stages);
+    }
+    const path = join(paths.stages, `${sha(request.repairId)}.json`);
+    const identityHash = sha(canonicalJson(request.identity)), viewHash = sha(canonicalJson(request.view));
+    let stage = safeRecord(path, stageValid);
+    if (!stage && create) {
+        if (!snapshot)
+            fail("search-v3-rollup-state-not-ready");
+        const selectedSnapshot = snapshot;
+        const expectedActiveStoreId = safeRecord(paths.active, activeValid)?.storeId ?? null;
+        stage = { v: 1, repairId: request.repairId,
+            storeId: sha(canonicalJson({ repairId: request.repairId, identityHash, viewHash, stateGeneration: selectedSnapshot.stateGeneration,
+                processedCut: selectedSnapshot.processedCut, processedMemoryCut: selectedSnapshot.processedMemoryCut, ruleset: EPISODE_ROLLUP_RULESET_VERSION })),
+            expectedActiveStoreId, viewHash, identityHash, stateGeneration: selectedSnapshot.stateGeneration,
+            processedCut: selectedSnapshot.processedCut, processedMemoryCut: selectedSnapshot.processedMemoryCut };
+        atomicRecord(path, stage);
+    }
+    if (!stage)
+        fail("search-v3-rollup-repair-missing");
+    const selected = stage;
+    if (selected.repairId !== request.repairId || selected.identityHash !== identityHash || selected.viewHash !== viewHash)
+        fail("search-v3-rollup-repair-mismatch");
+    return { paths, stage: selected };
+}
+async function repair(request, options, budget) {
+    const snapshot = request.action === "start" ? await readEpisodeRollupInputPage(request, undefined, options, budget) : undefined;
+    const { paths, stage } = repairStage(request, request.action === "start", snapshot), path = repairStorePath(request.searchDirectory, stage.storeId);
+    const openStore = (create) => {
+        if (!create)
+            safeStoreFile(path);
+        const validate = (candidate) => new Store(candidate, request, stage.storeId, true).validate(create);
+        const db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
+        const store = new Store(db, request, stage.storeId, true);
+        if (create) {
+            store.initialize();
+            if (!store.get("SELECT lineage FROM heads WHERE lineage=?", lineage(request))) {
+                const cursor = { episodeStartEventSeq: 0, episodeStartDescriptor: 0, episodeKey: "", memberEventSeq: 0,
+                    memberDescriptor: 0, memberSourceKey: "", episodeComplete: true, fragmentIndex: 0,
+                    snapshot: { stateGeneration: stage.stateGeneration, requestedCut: request.view.eventCut, processedCut: stage.processedCut,
+                        processedMemoryCut: stage.processedMemoryCut, sourceView: request.view } };
+                store.run("INSERT INTO heads VALUES(?,?,?,?,?,?,?)", lineage(request), canonicalJson(request.view), stage.stateGeneration, canonicalJson(cursor), 0, null, 0);
+            }
+        }
+        else
+            store.validate(false);
+        safeStoreFile(path);
+        return { db, store };
+    };
+    if (request.action === "start") {
+        const { db, store } = openStore(true);
+        try {
+            db.checkpoint();
+            return { action: "start", repairId: request.repairId, targetStoreId: stage.storeId,
+                expectedActiveStoreId: stage.expectedActiveStoreId, stateGeneration: stage.stateGeneration,
+                processedCut: stage.processedCut, resumable: true, metrics: { sqliteStatements: store.statements } };
+        }
+        finally {
+            db.close();
+        }
+    }
+    const { db, store } = openStore(false);
+    try {
+        if (request.action === "step") {
+            const value = await materialize({ ...request, op: "materializeRollup", limit: request.limit }, store, options, budget);
+            try {
+                db.checkpoint();
+            }
+            catch { /* committed WAL remains authoritative */ }
+            return { action: "step", repairId: request.repairId, targetStoreId: stage.storeId, resumable: value.complete !== true, ...value };
+        }
+        const value = status({ ...request, op: "rollupStatus" }, store);
+        if (request.action === "status")
+            return { action: "status", repairId: request.repairId, targetStoreId: stage.storeId,
+                expectedActiveStoreId: stage.expectedActiveStoreId, ...value };
+        if (request.expectedActiveStoreId !== stage.expectedActiveStoreId)
+            fail("search-v3-rollup-publication-conflict");
+        const h = value.handle;
+        if (value.complete !== true || !h || h.storeId !== stage.storeId || h.eventCut !== request.view.eventCut
+            || h.stateGeneration !== stage.stateGeneration || h.branchKey !== request.view.branchKey
+            || h.ruleset !== EPISODE_ROLLUP_RULESET_VERSION)
+            fail("search-v3-rollup-repair-incomplete");
+        const validHandle = h;
+        loadNode(store, validHandle.rootNodeId);
+        db.checkpoint();
+        safeStoreFile(path);
+        const current = safeRecord(paths.active, activeValid)?.storeId ?? null;
+        if (current !== stage.expectedActiveStoreId && current !== stage.storeId)
+            fail("search-v3-rollup-publication-conflict");
+        if (current !== stage.storeId)
+            atomicRecord(paths.active, { v: 1, storeId: stage.storeId });
+        return { action: "publish", repairId: request.repairId, targetStoreId: stage.storeId, published: true, handle: validHandle };
+    }
+    finally {
+        db.close();
+    }
 }
 export async function executeEpisodeRollupRequest(request, options = {}) {
-    const create = request.op === "materializeRollup", budget = { bytes: 0 };
+    const budget = { bytes: 0 };
     let db;
     try {
         const catalog = await (options.catalogExecutor ?? executeCatalogStoreRequest)({ v: 1, catalogDirectory: request.catalogDirectory,
@@ -485,38 +804,50 @@ export async function executeEpisodeRollupRequest(request, options = {}) {
         if (!catalog.ok)
             fail(catalog.code === "catalog-source-changed" ? "search-v3-rollup-source-changed" : "search-v3-rollup-catalog-unavailable");
         const action = async () => {
-            const path = join(request.searchDirectory, "rollup-v3.sqlite"), validate = (candidate) => new Store(candidate, request).validate(create);
-            if (request.op === "rollupStatus") {
-                try {
-                    lstatSync(path);
+            let result;
+            if (request.op === "repairRollup")
+                result = await repair(request, options, budget);
+            else {
+                const explicitHandle = request.op === "recallRollup" || request.op === "composeRollupSelection" ? request.handle : undefined;
+                // A handle without storeId always means the legacy file, even after route publication.
+                const storeId = explicitHandle ? explicitHandle.storeId ?? null : activeStoreId(request.searchDirectory);
+                const path = storeId ? repairStorePath(request.searchDirectory, storeId) : join(request.searchDirectory, "rollup-v3.sqlite");
+                const indexedCut = storeId !== null, createStore = request.op === "materializeRollup" && !storeId;
+                if (!createStore) {
+                    try {
+                        safeStoreFile(path);
+                    }
+                    catch (error) {
+                        if (missing(error))
+                            fail("search-v3-rollup-store-missing");
+                        throw error;
+                    }
                 }
-                catch (error) {
-                    if (error.code === "ENOENT")
-                        fail("search-v3-rollup-store-missing");
-                    throw error;
-                }
+                const validate = (candidate) => new Store(candidate, request, storeId ?? undefined, indexedCut).validate(createStore);
+                db = createStore ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
+                const store = new Store(db, request, storeId ?? undefined, indexedCut);
+                if (createStore)
+                    store.initialize();
+                else
+                    store.validate(false);
+                result = request.op === "materializeRollup" ? await materialize(request, store, options, budget)
+                    : request.op === "recallRollup" ? recall(request, store)
+                        : request.op === "composeRollupSelection" ? composeRollupSelection(request, store) : status(request, store);
+                if (createStore)
+                    try {
+                        db.checkpoint();
+                    }
+                    catch { /* committed WAL remains authoritative */ }
             }
-            db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
-            const store = new Store(db, request);
-            if (create)
-                store.initialize();
-            else
-                store.validate(false);
-            const result = request.op === "materializeRollup" ? await materialize(request, store, options, budget)
-                : request.op === "recallRollup" ? recall(request, store) : status(request, store);
             const response = { v: 1, ok: true, result: { ...result,
                     coverageScope: "Closed episode intervals and exact M07 source references. Interval closure is not task completion. Protected omissions stay explicit and detail remains reachable through children or exact sources." },
                 sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };
             if (Buffer.byteLength(JSON.stringify(response)) > EPISODE_STATE_LIMITS.responseBytes)
                 fail("search-v3-rollup-response-limit");
-            if (create)
-                try {
-                    db.checkpoint();
-                }
-                catch { /* committed WAL remains authoritative */ }
             return response;
         };
-        return create ? await withRuntimeMutex(join(request.searchDirectory, "rollup-publication.lock"), action) : await action();
+        const writes = request.op === "materializeRollup" || request.op === "repairRollup";
+        return writes ? await withRuntimeMutex(join(request.searchDirectory, "rollup-publication.lock"), action) : await action();
     }
     catch (error) {
         const candidate = error.code;

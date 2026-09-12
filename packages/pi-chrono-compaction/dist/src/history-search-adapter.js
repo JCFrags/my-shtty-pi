@@ -183,7 +183,7 @@ export class HistorySearchAdapter {
             return fail("search-v3-worker-aborted");
         return entry;
     }
-    /** One contained read from an existing state store. No ingestion or publication. */
+    /** Bounded reads from existing state and rollup stores. No ingestion or publication. */
     async compositionSelection(prefixLeafId, signal) {
         const key = this.key;
         const target = await this.compositionTarget(prefixLeafId, signal);
@@ -197,7 +197,92 @@ export class HistorySearchAdapter {
             || selection.requestedCut !== target.view.eventCut || selection.processedCut > selection.requestedCut
             || selection.processedMemoryCut < selection.processedCut)
             return fail("search-v3-state-view-incompatible");
-        return selection;
+        const queryTerms = [], seenTerms = new Set();
+        const queryItems = [...selection.protected, ...selection.current].sort((a, b) => {
+            const rank = (kind) => { const value = ["goal", "openwork", "blocker", "restriction"].indexOf(kind); return value < 0 ? 4 : value; };
+            return rank(a.kind) - rank(b.kind) || b.effectiveAtCut - a.effectiveAtCut || a.stableKey.localeCompare(b.stableKey);
+        });
+        for (const item of queryItems) {
+            const evidence = item.evidence;
+            const sourceText = `${item.subject} ${typeof evidence?.exactText === "string" ? evidence.exactText : ""}`;
+            let taken = 0;
+            for (const term of sourceText.match(/[\p{L}\p{N}_./:+-]{2,}/gu) ?? []) {
+                const normalized = term.toLowerCase();
+                if (seenTerms.has(normalized))
+                    continue;
+                if (`${queryTerms.join(" ")} ${term}`.trim().length > 256 || queryTerms.length >= 12)
+                    break;
+                seenTerms.add(normalized);
+                queryTerms.push(term);
+                taken++;
+                if (taken === 2)
+                    break;
+            }
+            if (queryTerms.length >= 12)
+                break;
+        }
+        if (!queryTerms.length)
+            return selection;
+        const status = await runSearchV3Worker({ ...target, op: "rollupStatus" }, { ...this.options, signal });
+        if (signal?.aborted || this.key !== key || !this.enabled)
+            return fail("search-v3-worker-aborted");
+        if (!status.ok) {
+            if (status.code === "search-v3-rollup-store-missing")
+                return selection;
+            return fail(status.code);
+        }
+        const handle = status.result.handle;
+        if (!handle)
+            return selection;
+        if (handle.ruleset !== "episode-rollup-exact-v3" || handle.branchKey !== selection.branchKey
+            || handle.eventCut > selection.processedCut)
+            return fail("search-v3-rollup-publication-missing");
+        const beforeEventSeq = selection.recent[0]?.eventSeq ?? selection.processedCut + 1;
+        const rollupRequest = { ...target, op: "composeRollupSelection", handle,
+            query: queryTerms.join(" "), beforeEventSeq, limit: 4 };
+        if (!isEpisodeStateRequest(rollupRequest))
+            return fail("search-v3-reference-invalid");
+        const rollup = await runSearchV3Worker(rollupRequest, { ...this.options, signal });
+        if (signal?.aborted || this.key !== key || !this.enabled)
+            return fail("search-v3-worker-aborted");
+        if (!rollup.ok)
+            return fail(rollup.code);
+        const pinned = rollup.result.handle;
+        const represented = rollup.result.representedRange;
+        if (canonicalJson(pinned) !== canonicalJson(handle) || !Number.isSafeInteger(represented?.start?.eventSeq)
+            || !Number.isSafeInteger(represented?.end?.eventSeq) || Number(represented.end.eventSeq) > handle.eventCut) {
+            return fail("search-v3-rollup-publication-missing");
+        }
+        const items = rollup.result.items.map((item) => {
+            const reference = item.reference;
+            if (typeof reference?.nodeId !== "string" || !["episode-fragment", "rollup"].includes(String(reference.nodeType))
+                || !Array.isArray(reference.path) || !reference.path.every(value => typeof value === "string")
+                || !item.range || !Array.isArray(item.summary))
+                return fail("search-v3-rollup-node-corrupt");
+            const level = reference.nodeType === "episode-fragment" ? "source" : "child";
+            return { nodeId: reference.nodeId, nodeType: reference.nodeType,
+                path: reference.path, range: item.range,
+                summary: item.summary.map(String), recovery: encode({ v: 1, view: target.view,
+                    rollup: { handle, nodeId: reference.nodeId, path: reference.path, level } }) };
+        });
+        return { ...selection, rollups: { handle, representedStartSeq: Number(represented.start.eventSeq),
+                representedEndSeq: Number(represented.end.eventSeq), publicationComplete: rollup.result.publicationComplete === true,
+                selectionPartial: rollup.result.selectionPartial === true,
+                partialReasons: Array.isArray(rollup.result.partialReasons) ? rollup.result.partialReasons.map(String) : [], items } };
+    }
+    /** One finite repair transition. The caller repeats `step`; this method never loops. */
+    async repairRollup(prefixLeafId, action, repairId, expectedActiveStoreId, signal) {
+        const key = this.key, target = await this.compositionTarget(prefixLeafId, signal);
+        const request = { ...target, op: "repairRollup", action, repairId,
+            ...(action === "step" ? { limit: 1 } : {}), ...(action === "publish" ? { expectedActiveStoreId: expectedActiveStoreId ?? null } : {}) };
+        if (!isEpisodeStateRequest(request))
+            return fail("search-v3-reference-invalid");
+        const response = await runSearchV3Worker(request, { ...this.options, signal });
+        if (signal?.aborted || this.key !== key || !this.enabled)
+            return fail("search-v3-worker-aborted");
+        if (!response.ok)
+            return fail(response.code);
+        return response.result;
     }
     within(view, current) {
         return view.storeKey === current.storeKey && view.generation === current.generation && view.sessionKey === current.sessionKey
@@ -755,11 +840,11 @@ export class HistorySearchAdapter {
         return { scope, execute };
     }
     async getBlock(entryId, blockIndex, startChar, maxChars, signal, shardId) {
-        if (shardId && !this.logicalGrant)
-            return result({ status: "unavailable", code: "logical-session-route-unavailable" });
-        if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId)
-            return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getBlock(entryId, blockIndex, startChar, maxChars, signal);
         try {
+            if (shardId && !this.logicalGrant)
+                return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+            if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId)
+                return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getBlock(entryId, blockIndex, startChar, maxChars, signal);
             const target = this.scoped();
             const { scope, execute } = this.catalogScope(signal);
             const event = await resolveCatalogHistory(scope, entryId, execute);
@@ -776,11 +861,11 @@ export class HistorySearchAdapter {
         }
     }
     async getRaw(entryId, options, signal, shardId) {
-        if (shardId && !this.logicalGrant)
-            return result({ status: "unavailable", code: "logical-session-route-unavailable" });
-        if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId)
-            return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getRaw(entryId, options, signal);
         try {
+            if (shardId && !this.logicalGrant)
+                return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+            if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId)
+                return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getRaw(entryId, options, signal);
             if (options.contextBefore || options.contextAfter)
                 return fail("search-v3-option-unsupported");
             const { scope, execute } = this.catalogScope(signal);
@@ -805,11 +890,11 @@ export class HistorySearchAdapter {
         }
     }
     async range(start, end, maxEntries = 16, cursor, signal, shardId) {
-        if (shardId && !this.logicalGrant)
-            return result({ status: "unavailable", code: "logical-session-route-unavailable" });
-        if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId)
-            return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).range(start, end, maxEntries, cursor, signal);
         try {
+            if (shardId && !this.logicalGrant)
+                return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+            if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId)
+                return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).range(start, end, maxEntries, cursor, signal);
             if (!Number.isSafeInteger(maxEntries) || maxEntries < 1)
                 return fail("catalog-history-range-invalid");
             const reference = cursor ? decode(cursor) : undefined;

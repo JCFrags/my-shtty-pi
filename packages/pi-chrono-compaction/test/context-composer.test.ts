@@ -162,6 +162,31 @@ test("stored selection retains source-validated surrounding omissions and separa
   assert.equal(composed.artifact.selectedRows.filter(candidate => candidate.section === "protected").length, 2,
     "known exact obligations remain reserved even when total coverage and delta verification are incomplete");
 
+  const withRollup = structuredClone(selection) as EpisodeStateSelection;
+  Object.assign(withRollup, { requestedCut: 40, processedCut: 40, processedMemoryCut: 40, delta: undefined,
+    coverage: { bodyComplete: true, metadataComplete: true, partialMemory: false, qualifiedReducers: false,
+      restrictionsComplete: true, openWorkComplete: true },
+    recent: [{ episodeKey: "recent", eventSeq: 38, descriptor: 38, sourceKey: "recent-source", source: source(38),
+      cue: "Recent parser evidence.", episode: { start: { eventSeq: 38, descriptor: 38 }, end: { eventSeq: 38, descriptor: 38 },
+        open: true, objective: "Recent parser work", objectiveEvidence: null } }],
+    omissions: { protectedAtLeastOne: false, openWorkAtLeastOne: false, currentAtLeastOne: false,
+      recentAtLeastOne: false, responseBudgetAtLeastOne: false },
+    rollups: { handle: { schemaVersion: 1, ruleset: "episode-rollup-exact-v3", branchKey: "branch", eventCut: 30,
+      stateGeneration: 2, rollupGeneration: 7, rootNodeId: "b".repeat(64) }, representedStartSeq: 1,
+      representedEndSeq: 30, publicationComplete: true, selectionPartial: false, partialReasons: [], items: [{
+        nodeId: "c".repeat(64), nodeType: "rollup", path: ["b".repeat(64), "c".repeat(64)],
+        range: { start: { eventSeq: 5, descriptor: 1 }, end: { eventSeq: 15, descriptor: 2 } },
+        summary: ["Older parser rollup evidence."], recovery: "chrono-v3:opaque-rollup" }] } });
+  const rollupComposition = composeStoredSelection({ regularPiSummary, combinedCeilingTokens: 2500,
+    cut: { ...fixture.cut, sourceCutSeq: 40 } }, withRollup, candidate => `opaque:${candidate.eventSeq}`);
+  assert.match(rollupComposition.text, /Older parser rollup evidence\./);
+  const rollupRow = rollupComposition.artifact.selectedRows.find(candidate => candidate.row.kind === "rollup");
+  assert.equal(rollupRow?.section, "older");
+  assert.equal(rollupRow?.row.recovery, "chrono-v3:opaque-rollup");
+  assert.deepEqual(rollupComposition.envelope.rollupRepresentedRange, [1, 30]);
+  assert.equal(rollupComposition.envelope.validation.protectedCoverageComplete, true,
+    "rollup selection does not override or weaken independently complete mandatory coverage");
+
   const malformed = structuredClone(selection) as EpisodeStateSelection;
   const malformedEvidence = malformed.protected[0]!.evidence as { decodedUtf16: { start: number; end: number } };
   malformedEvidence.decodedUtf16.end -= 1;

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { isScopedBodySourceRef, sourceRefWithinViewBounds } from "./capsule-contract.js";
+import { bodySource } from "./capsule-derive.js";
 import { executeCapsuleRequest } from "./capsule-store.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
 import { canonicalJson } from "./capsule-segment.js";
@@ -333,6 +335,146 @@ function extendsView(current, old) {
     return current.branchKey === old.branchKey && current.eventCut >= old.eventCut && current.segments.length >= old.segments.length
         && old.segments.every((item, index) => current.segments[index]?.segment === item.segment && current.segments[index].cut >= item.cut);
 }
+/** Verify catalog role/provenance and exact descriptor identity, not memory labels or capsule prose. */
+async function originalUserSource(request, source, executor, budget) {
+    if (!isScopedBodySourceRef(source) || !sourceRefWithinViewBounds(source, request.view))
+        fail("search-v3-state-supersession-source-invalid");
+    const page = await catalogCall(request, executor, budget, { op: "page", view: request.view, after: source.eventSeq - 1, limit: 1 });
+    const event = page.events?.[0];
+    if (!event || event.seq !== source.eventSeq || event.metadata.type !== "message" || event.metadata.role !== "user"
+        || event.metadata.provenance !== "original" || event.metadata.customType !== undefined || event.metadata.messageCustomType !== undefined)
+        return fail("search-v3-state-supersession-authority-invalid");
+    const blocks = await catalogCall(request, executor, budget, { op: "blocks", view: request.view, eventSeq: source.eventSeq,
+        after: source.descriptor, limit: 1 });
+    const block = blocks.blocks?.[0];
+    const exact = block && bodySource(request.identity.capsule, request.view, event, block);
+    if (!block || block.index !== source.descriptor || block.metadata.provenance !== "original"
+        || !["text", "content"].includes(source.field) || !exact || canonicalJson(exact) !== canonicalJson(source))
+        return fail("search-v3-state-supersession-source-invalid");
+    return event;
+}
+async function supersessionSpan(request, source, span, executor, budget) {
+    if (!Number.isSafeInteger(span.start) || !Number.isSafeInteger(span.end) || span.start < source.decodedUtf16.start
+        || span.end > source.decodedUtf16.end || span.end <= span.start || span.end - span.start > EPISODE_STATE_LIMITS.clauseUtf16Units)
+        return fail("search-v3-state-supersession-source-invalid");
+    const result = await capsuleCall(request, executor, budget, { op: "chunkRange", view: request.view, source,
+        decodedStart: span.start, decodedLength: span.end - span.start, limit: 2 });
+    const bytes = Buffer.from(String(result.data), "base64"), text = bytes.toString("utf16le");
+    if (bytes.length !== (span.end - span.start) * 2 || text.length !== span.end - span.start)
+        fail("search-v3-state-supersession-source-invalid");
+    return text;
+}
+/** Explicit bounded state transition. No extraction, automatic retirement, or coverage certification. */
+async function supersedeState(request, store, options, budget) {
+    const catalog = options.catalogExecutor ?? executeCatalogStoreRequest, capsules = options.capsuleExecutor ?? executeCapsuleRequest;
+    const line = lineage(request), authorization = request.authorization;
+    const targets = [...request.targets].sort((a, b) => a.stableKey.localeCompare(b.stableKey));
+    const decisionKey = sha(canonicalJson({ contract: "explicit-user-supersession-v1", identity: request.identity, view: request.view,
+        expectedGeneration: request.expectedGeneration, authorization, decision: request.decision, targets }));
+    const generation = request.expectedGeneration + 1;
+    const event = await originalUserSource(request, authorization.source, catalog, budget);
+    const rawLength = event.rawEnd - event.rawStart;
+    // The existing raw-read ceiling is a refusal boundary, never a whole-file fallback.
+    if (!Number.isSafeInteger(rawLength) || rawLength < 1 || rawLength > 64 * 1024)
+        fail("search-v3-state-supersession-source-limit");
+    const raw = await catalogCall(request, catalog, budget, { op: "raw", view: request.view, eventSeq: event.seq, offset: event.rawStart, length: rawLength });
+    const bytes = Buffer.from(String(raw.data), "base64");
+    if (bytes.length !== rawLength || createHash("sha256").update(bytes).digest("hex") !== authorization.rawEventHash)
+        fail("search-v3-state-supersession-source-invalid");
+    let record;
+    try {
+        record = JSON.parse(bytes.toString("utf8"));
+    }
+    catch {
+        return fail("search-v3-state-supersession-source-invalid");
+    }
+    const content = record?.message?.content, source = authorization.source;
+    const directText = source.blockIndex === undefined && source.field === "content" && typeof content === "string" ? content
+        : Array.isArray(content) && source.blockIndex !== undefined && source.field === "text" && content[source.blockIndex]?.type === "text"
+            ? content[source.blockIndex].text : undefined;
+    if (record?.type !== "message" || record?.message?.role !== "user" || typeof directText !== "string"
+        || directText.length !== source.decodedUtf16.end || source.decodedUtf16.start !== 0)
+        fail("search-v3-state-supersession-authority-invalid");
+    const exactText = await supersessionSpan(request, source, authorization.decodedUtf16, capsules, budget);
+    if (directText.slice(authorization.decodedUtf16.start, authorization.decodedUtf16.end) !== exactText
+        || createHash("sha256").update(Buffer.from(exactText, "utf16le")).digest("hex") !== authorization.spanHash)
+        fail("search-v3-state-supersession-source-invalid");
+    const rows = [];
+    const verifiedSources = new Set([sourceKey(source)]);
+    for (const target of targets) {
+        const row = store.get("SELECT * FROM state_items WHERE lineage=? AND stableKey=?", line, target.stableKey);
+        if (!row || str(row, "propositionKey") !== target.propositionKey || str(row, "spanKey") !== target.spanKey
+            || num(row, "createdGeneration") !== target.createdGeneration || sha(str(row, "evidence")) !== target.evidenceHash
+            || str(row, "kind") !== target.kind || str(row, "authority") !== target.authority || str(row, "confidence") !== "verified"
+            || !["current", "unresolved"].includes(str(row, "status")))
+            fail("search-v3-state-supersession-target-invalid");
+        const exactRow = row;
+        let evidence;
+        try {
+            evidence = JSON.parse(str(exactRow, "evidence"));
+        }
+        catch {
+            return fail("search-v3-state-supersession-target-invalid");
+        }
+        if (!isScopedBodySourceRef(evidence?.source) || !sourceRefWithinViewBounds(evidence.source, request.view)
+            || evidence.source.eventSeq !== num(exactRow, "eventSeq") || evidence.source.descriptor !== num(exactRow, "descriptor")
+            || evidence.source.eventSeq >= source.eventSeq || !evidence.decodedUtf16 || typeof evidence.exactText !== "string")
+            fail("search-v3-state-supersession-target-invalid");
+        const key = sourceKey(evidence.source);
+        if (!verifiedSources.has(key)) {
+            await originalUserSource(request, evidence.source, catalog, budget);
+            verifiedSources.add(key);
+        }
+        if (await supersessionSpan(request, evidence.source, evidence.decodedUtf16, capsules, budget) !== evidence.exactText)
+            fail("search-v3-state-supersession-target-invalid");
+        rows.push(exactRow);
+    }
+    const resolutionEvidence = { contract: "explicit-user-supersession-v1", decisionKey, source,
+        decodedUtf16: authorization.decodedUtf16, exactText, spanHash: authorization.spanHash,
+        rawSource: rawEventSource(request, event, bytes), decision: request.decision, targets,
+        branchKey: request.view.branchKey, lineage: line, viewHash: viewHash(request), effectiveAtCut: request.view.eventCut,
+        previousGeneration: request.expectedGeneration, stateGeneration: generation,
+        cutDescriptor: Number.MAX_SAFE_INTEGER - generation, semanticCompletion: false };
+    const serialized = canonicalJson(resolutionEvidence);
+    const result = (alreadyApplied) => ({ decisionKey, alreadyApplied, stateGeneration: generation,
+        branchKey: request.view.branchKey, effectiveAtCut: request.view.eventCut, supersededCount: targets.length,
+        resolutionEvidence, resolutionEvidenceHash: sha(serialized), coverageChanged: false, semanticCompletion: false,
+        metrics: { sqliteStatements: store.statements, targets: targets.length, targetLimit: EPISODE_STATE_LIMITS.page } });
+    // Replays require the entire same decision and target set, not a reused label or partial overlap.
+    if (rows.every(row => num(row, "supersededGeneration") === generation && row.resolutionEvidence === serialized))
+        return result(true);
+    if (rows.some(row => row.supersededGeneration !== null || row.resolutionEvidence !== null))
+        fail("search-v3-state-supersession-stale");
+    const current = store.get("SELECT generation FROM meta WHERE singleton=1");
+    if (num(current, "generation") !== request.expectedGeneration)
+        fail("search-v3-state-supersession-stale");
+    const head = store.get("SELECT * FROM heads WHERE lineage=?", line);
+    if (!head || str(head, "view") !== canonicalJson(request.view) || num(head, "complete") !== 1 || num(head, "metadataComplete") !== 1
+        || num(head, "metadataAfterEventSeq") < request.view.eventCut || store.get("SELECT 1 AS found FROM large_bodies WHERE lineage=?", line))
+        fail("search-v3-state-supersession-current-cut-required");
+    if (store.get("SELECT 1 AS found FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?", line, request.view.eventCut, resolutionEvidence.cutDescriptor))
+        fail("search-v3-state-supersession-stale");
+    if (Buffer.byteLength(JSON.stringify(result(false))) > EPISODE_STATE_LIMITS.responseBytes - 4096)
+        fail("search-v3-state-response-limit");
+    const committed = store.transaction(() => {
+        // Recheck every exact row in one SQLite snapshot before the first mutation.
+        if (num(store.get("SELECT generation FROM meta WHERE singleton=1"), "generation") !== request.expectedGeneration
+            || canonicalJson(store.get("SELECT * FROM heads WHERE lineage=?", line)) !== canonicalJson(head)
+            || rows.some(row => canonicalJson(store.get("SELECT * FROM state_items WHERE lineage=? AND stableKey=?", line, str(row, "stableKey"))) !== canonicalJson(row)))
+            return false;
+        for (const target of targets)
+            store.run("UPDATE state_items SET supersededGeneration=?,resolutionEvidence=? WHERE lineage=? AND stableKey=?", generation, serialized, line, target.stableKey);
+        // Canonical cut values are nonnegative. A generation-derived high descriptor
+        // records this operator cut, not a source. Refuse a collision and retain old markers.
+        store.run("INSERT INTO cuts VALUES(?,?,?,?)", line, request.view.eventCut, resolutionEvidence.cutDescriptor, generation);
+        store.run("UPDATE heads SET generation=? WHERE lineage=?", generation, line);
+        store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
+        return true;
+    });
+    if (!committed)
+        fail("search-v3-state-supersession-stale");
+    return result(false);
+}
 function insertReduced(store, request, reduced, generation, stateOnly = false) {
     const line = lineage(request), eventSeq = reduced.source.eventSeq, descriptor = reduced.source.descriptor;
     if (!stateOnly && reduced.startsEpisode) {
@@ -546,7 +688,7 @@ function recall(request, store) {
     }
     else {
         const match = request.query ? ftsQuery(request.query) : undefined;
-        const stateRows = store.rows(`SELECT s.*,'state' AS metadataKind FROM state_items s${match ? " JOIN state_fts ON state_fts.lineage=s.lineage AND state_fts.stableKey=s.stableKey" : ""} WHERE s.lineage=? AND s.createdGeneration<=? AND s.eventSeq<=? AND (s.supersededGeneration IS NULL OR s.supersededGeneration>? OR json_extract(s.resolutionEvidence,'$.source.eventSeq')>?)${match ? " AND state_fts MATCH ?" : ""}${source ? " AND json_extract(s.evidence,'$.source')=?" : ""}${after.sql} ORDER BY s.eventSeq,s.descriptor,s.stableKey LIMIT ?`, limit + 1, line, generation, request.view.eventCut, generation, request.view.eventCut, ...(match ? [match] : []), ...(source ? [canonicalJson(request.source)] : []), ...after.values, limit + 1);
+        const stateRows = store.rows(`SELECT s.*,'state' AS metadataKind FROM state_items s${match ? " JOIN state_fts ON state_fts.lineage=s.lineage AND state_fts.stableKey=s.stableKey" : ""} WHERE s.lineage=? AND s.createdGeneration<=? AND s.eventSeq<=? AND (s.supersededGeneration IS NULL OR s.supersededGeneration>? OR COALESCE(json_extract(s.resolutionEvidence,'$.effectiveAtCut'),json_extract(s.resolutionEvidence,'$.source.eventSeq'))>?)${match ? " AND state_fts MATCH ?" : ""}${source ? " AND json_extract(s.evidence,'$.source')=?" : ""}${after.sql} ORDER BY s.eventSeq,s.descriptor,s.stableKey LIMIT ?`, limit + 1, line, generation, request.view.eventCut, generation, request.view.eventCut, ...(match ? [match] : []), ...(source ? [canonicalJson(request.source)] : []), ...after.values, limit + 1);
         const metadataAfterSql = (alias) => request.after ? ` AND (${alias}.eventSeq>? OR (${alias}.eventSeq=? AND (0>? OR (0=? AND ${alias}.stableKey>?))))` : "";
         const metadataAfterValues = request.after ? [request.after.eventSeq, request.after.eventSeq, request.after.descriptor, request.after.descriptor, request.after.stableKey ?? ""] : [];
         const memoryRows = source ? [] : store.rows(`SELECT m.*,0 AS descriptor,'memory' AS metadataKind FROM memory_items m${match ? " JOIN memory_fts ON memory_fts.lineage=m.lineage AND memory_fts.stableKey=m.stableKey" : ""} WHERE m.lineage=? AND m.createdGeneration<=? AND m.eventSeq<=? AND (m.supersededGeneration IS NULL OR m.supersededGeneration>? OR EXISTS(SELECT 1 FROM memory_items transition WHERE transition.lineage=m.lineage AND transition.createdGeneration=m.supersededGeneration AND transition.eventSeq>?)) AND m.state='current'${match ? " AND memory_fts MATCH ?" : ""}${metadataAfterSql("m")} ORDER BY m.eventSeq,m.stableKey LIMIT ?`, limit + 1, line, generation, request.view.eventCut, generation, request.view.eventCut, ...(match ? [match] : []), ...metadataAfterValues, limit + 1);
@@ -562,7 +704,8 @@ function recall(request, store) {
                 return { level, stableKey: str(row, "stableKey"), metadataKind, kind: "retentionhint", subject: "retention:compaction",
                     revision: "advisory", authority: "ordinary-memory", confidence: "advisory", status: "current", hint: JSON.parse(str(row, "data")), evidence: JSON.parse(str(row, "evidence")) };
             return { level, stableKey: str(row, "stableKey"), propositionKey: str(row, "propositionKey"), spanKey: str(row, "spanKey"), subject: str(row, "subject"),
-                revision: str(row, "revision"), kind: str(row, "kind"), authority: str(row, "authority"), confidence: str(row, "confidence"), status: str(row, "status"), evidence: JSON.parse(str(row, "evidence")) };
+                revision: str(row, "revision"), kind: str(row, "kind"), authority: str(row, "authority"), confidence: str(row, "confidence"), status: str(row, "status"),
+                createdGeneration: num(row, "createdGeneration"), evidenceHash: sha(str(row, "evidence")), evidence: JSON.parse(str(row, "evidence")) };
         });
     }
     while (items.length > 1 && Buffer.byteLength(JSON.stringify(items)) > EPISODE_STATE_LIMITS.recallUtf8Bytes)
@@ -623,7 +766,7 @@ function composeStateSelection(request, store) {
     const stateGeneration = generationRow?.generation === null || generationRow?.generation === undefined ? 0 : num(generationRow, "generation");
     if (stateGeneration > num(head, "generation"))
         fail("search-v3-state-checkpoint-corrupt");
-    const active = "createdGeneration<=? AND eventSeq<=? AND (supersededGeneration IS NULL OR supersededGeneration>? OR json_extract(resolutionEvidence,'$.source.eventSeq')>?)";
+    const active = "createdGeneration<=? AND eventSeq<=? AND (supersededGeneration IS NULL OR supersededGeneration>? OR COALESCE(json_extract(resolutionEvidence,'$.effectiveAtCut'),json_extract(resolutionEvidence,'$.source.eventSeq'))>?)";
     // Scan each mandatory category before representation packing. Raw rows do not consume the 16+8 representation reservations.
     const restrictionScan = boundedCategoryRows(store, line, active, "kind='restriction'", [], stateGeneration, processedCut);
     // Spend one shared eight-page work bound in authority order. Later tool failures cannot consume the scan before user work.
@@ -769,7 +912,6 @@ async function selectionContext(request, selection, options, budget) {
     };
     const counts = { restriction: new Set(), work: new Set() };
     const represented = { restriction: new Map(), work: new Map() };
-    const representedOriginal = new Map();
     const selectedSources = { restriction: new Set(), work: new Set() };
     const proposition = (item, representationKey) => ({ representationKey, stableKey: item.stableKey,
         propositionKey: item.propositionKey, spanKey: item.spanKey, subject: item.subject, revision: item.revision, kind: item.kind,
@@ -802,16 +944,17 @@ async function selectionContext(request, selection, options, budget) {
         }
         const representedAt = represented[category].get(key);
         if (representedAt !== undefined) {
-            const existing = result.protected[representedAt], first = representedOriginal.get(key) ?? fail("search-v3-state-checkpoint-corrupt");
+            const existing = result.protected[representedAt];
+            // The primary item already carries the first proposition. Store only the
+            // additional clauses so their exact evidence is not serialized twice.
             result.protected[representedAt] = { ...existing,
-                coveredPropositions: [...(existing.coveredPropositions ?? [proposition(first, key)]), proposition(original, key)] };
+                coveredPropositions: [...(existing.coveredPropositions ?? []), proposition(original, key)] };
             continue;
         }
         counts[category].add(key);
         if (sourceId)
             selectedSources[category].add(sourceId);
         represented[category].set(key, result.protected.length);
-        representedOriginal.set(key, original);
         result.protected.push({ ...item, representationKey: key });
     }
     result.protected.sort((a, b) => {
@@ -1048,7 +1191,7 @@ export async function readEpisodeRollupInputPage(request, cursor, options = {}, 
         }
         if (!members.length)
             fail("search-v3-rollup-input-invalid");
-        const protectedRows = store.rows("SELECT stableKey,kind,status,authority,confidence,evidence FROM state_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? AND kind IN ('restriction','blocker','openwork') AND (supersededGeneration IS NULL OR supersededGeneration>? OR json_extract(resolutionEvidence,'$.source.eventSeq')>?) ORDER BY eventSeq,descriptor,stableKey LIMIT ?", EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), stateGeneration, processedCut, EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1);
+        const protectedRows = store.rows("SELECT stableKey,kind,status,authority,confidence,evidence FROM state_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? AND kind IN ('restriction','blocker','openwork') AND (supersededGeneration IS NULL OR supersededGeneration>? OR COALESCE(json_extract(resolutionEvidence,'$.effectiveAtCut'),json_extract(resolutionEvidence,'$.source.eventSeq'))>?) ORDER BY eventSeq,descriptor,stableKey LIMIT ?", EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), stateGeneration, processedCut, EPISODE_STATE_LIMITS.rollupProtectedPerNode + 1);
         const memoryRows = store.rows("SELECT stableKey,'memory' AS kind,text AS data,evidence FROM memory_items WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,stableKey LIMIT ?", EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1);
         const retentionRows = store.rows("SELECT stableKey,'retention-hint' AS kind,data,evidence FROM retention_hints WHERE lineage=? AND createdGeneration<=? AND eventSeq>=? AND eventSeq<=? ORDER BY eventSeq,stableKey LIMIT ?", EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1, line, stateGeneration, num(episode, "startEventSeq"), num(episode, "endEventSeq"), EPISODE_STATE_LIMITS.rollupMetadataPerNode + 1);
         const metadataRows = [...memoryRows, ...retentionRows].sort((a, b) => str(a, "stableKey").localeCompare(str(b, "stableKey")));
@@ -1086,11 +1229,11 @@ export async function executeEpisodeStateRequest(value, options = {}) {
         return { v: 1, ok: false, code: "search-v3-state-request-invalid", sourceBytes: 0,
             sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes, resumable: false };
     const request = value;
-    if (request.op === "materializeRollup" || request.op === "rollupStatus" || request.op === "recallRollup") {
+    if (request.op === "materializeRollup" || request.op === "rollupStatus" || request.op === "repairRollup" || request.op === "composeRollupSelection" || request.op === "recallRollup") {
         const { executeEpisodeRollupRequest } = await import("./episode-rollup-store.js");
         return executeEpisodeRollupRequest(request, options);
     }
-    const create = request.op === "materializeState";
+    const create = request.op === "materializeState", mutate = create || request.op === "supersedeState";
     let db;
     const budget = { bytes: 0 };
     try {
@@ -1116,21 +1259,22 @@ export async function executeEpisodeStateRequest(value, options = {}) {
             else
                 store.validate(false);
             const result = request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest, options.catalogExecutor ?? executeCatalogStoreRequest, budget)
-                : request.op === "recallState" ? recall(request, store)
-                    : request.op === "composeStateSelection" ? await selectionContext(request, await selectionDelta(request, composeStateSelection(request, store), options, budget), options, budget) : status(request, store);
+                : request.op === "supersedeState" ? await supersedeState(request, store, options, budget)
+                    : request.op === "recallState" ? recall(request, store)
+                        : request.op === "composeStateSelection" ? await selectionContext(request, await selectionDelta(request, composeStateSelection(request, store), options, budget), options, budget) : status(request, store);
             const response = { v: 1, ok: true, result: { ...result,
                     coverageScope: "Body capsules plus structurally validated ordinary writer metadata. Custom type and hash-chain checks are not producer authentication; no metadata gains instruction authority.",
                 }, sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };
             if (Buffer.byteLength(JSON.stringify(response)) > EPISODE_STATE_LIMITS.responseBytes)
                 fail("search-v3-state-response-limit");
-            if (create)
+            if (mutate)
                 try {
                     db.checkpoint();
                 }
                 catch { /* committed WAL remains authoritative */ }
             return response;
         };
-        return create ? await withRuntimeMutex(join(request.searchDirectory, "state-publication.lock"), action) : await action();
+        return mutate ? await withRuntimeMutex(join(request.searchDirectory, "state-publication.lock"), action) : await action();
     }
     catch (error) {
         const candidate = error.code;

@@ -52,6 +52,48 @@ export type EpisodeStateKind = "restriction" | "goal" | "openwork" | "blocker" |
 export type EpisodeStateAuthority = "user" | "verified-tool" | "assistant-report" | "ordinary-memory" | "verified-configured-source";
 export type EpisodeStateConfidence = "verified" | "supported" | "qualified" | "advisory";
 
+/** Exact targets, never a query, wildcard, resource name, or proposition-wide match. */
+export interface EpisodeStateSupersessionTarget {
+  readonly stableKey: string;
+  readonly propositionKey: string;
+  readonly spanKey: string;
+  readonly createdGeneration: number;
+  /** SHA-256 of canonicalJson(the stored exact evidence), encoded as UTF-8. */
+  readonly evidenceHash: string;
+  readonly kind: "restriction" | "openwork" | "blocker";
+  readonly authority: "user";
+  /** Operator classifications, not classifications inferred from text by this API. */
+  readonly scope: "repository" | "chrono";
+  readonly category: "restriction" | "approval-hold";
+}
+
+export interface EpisodeStateSupersessionAuthorization {
+  readonly source: ScopedBodySourceRef;
+  readonly decodedUtf16: { readonly start: number; readonly end: number };
+  /** SHA-256 of this exact decoded span, encoded as UTF-16LE. */
+  readonly spanHash: string;
+  /** SHA-256 of catalog [rawStart,rawEnd) bytes, excluding the JSONL line ending. */
+  readonly rawEventHash: string;
+}
+
+/** An explicit operator interpretation of original user evidence, not new user authority.
+ * Inspect the evidence and each target. Quoted/retrieved text and memory metadata do
+ * not authorize this action. Do not target goals, future directions, unrelated duties,
+ * or higher-priority safeguards. The API does not certify natural-language meaning.
+ *
+ * Apply only to an existing store with body/metadata complete at exactly the requested
+ * current view. Every target must precede the authorizing event in that same lineage.
+ * The application cut and new generation control visibility. Earlier cuts and pins
+ * remain valid. Exact retries return the persisted decision without a new generation.
+ */
+export interface EpisodeStateSupersessionDecision {
+  readonly actor: "operator" | "agent";
+  readonly basis: "direct-original-user-instruction";
+  readonly scope: "repository-and-chrono";
+  readonly action: "revoke-prior-user-restrictions-and-approval-holds";
+  readonly rationale: string;
+}
+
 export interface EpisodeStateAfter {
   readonly eventSeq: number;
   readonly descriptor: number;
@@ -118,6 +160,29 @@ export interface EpisodeStateSelectionMember {
   };
 }
 
+export interface EpisodeRollupCompositionItem {
+  readonly nodeId: string;
+  readonly nodeType: "episode-fragment" | "rollup";
+  readonly path: readonly string[];
+  readonly range: {
+    readonly start: { readonly eventSeq: number; readonly descriptor: number };
+    readonly end: { readonly eventSeq: number; readonly descriptor: number };
+  };
+  readonly summary: readonly string[];
+  /** Adapter-encoded route for bounded child/source expansion and exact recovery. */
+  readonly recovery: string;
+}
+
+export interface EpisodeRollupCompositionSelection {
+  readonly handle: EpisodeRollupHandle;
+  readonly representedStartSeq: number;
+  readonly representedEndSeq: number;
+  readonly publicationComplete: boolean;
+  readonly selectionPartial: boolean;
+  readonly partialReasons: readonly string[];
+  readonly items: readonly EpisodeRollupCompositionItem[];
+}
+
 /** One bounded read-only M09 snapshot. Omission flags mean at least one more record exists. */
 export interface EpisodeStateSelection {
   readonly stateGeneration: number;
@@ -144,6 +209,7 @@ export interface EpisodeStateSelection {
   readonly current: readonly EpisodeStateSelectionItem[];
   readonly recent: readonly EpisodeStateSelectionMember[];
   readonly older?: readonly EpisodeStateSelectionMember[];
+  readonly rollups?: EpisodeRollupCompositionSelection;
   readonly delta?: {
     readonly verified: boolean;
     readonly throughCut: number;
@@ -175,6 +241,8 @@ export interface EpisodeStateSelection {
 
 export interface EpisodeRollupHandle {
   readonly schemaVersion: 1;
+  /** Absent handles remain bound to the immutable legacy rollup-v3.sqlite store. */
+  readonly storeId?: string;
   readonly ruleset: "episode-rollup-exact-v3";
   readonly branchKey: string;
   /** Common body-plus-metadata cut represented by this immutable publication. */
@@ -195,11 +263,18 @@ interface Base {
 export type EpisodeStateRequest = Base & (
   | { readonly op: "materializeState"; readonly after?: EpisodeStateAfter; readonly limit?: number }
   | { readonly op: "stateStatus" }
+  | { readonly op: "supersedeState"; readonly expectedGeneration: number;
+      readonly authorization: EpisodeStateSupersessionAuthorization; readonly decision: EpisodeStateSupersessionDecision;
+      readonly targets: readonly EpisodeStateSupersessionTarget[] }
   | { readonly op: "composeStateSelection" }
   | { readonly op: "recallState"; readonly query?: string; readonly source?: ScopedBodySourceRef;
       readonly level?: EpisodeStateLevel; readonly limit?: number; readonly after?: EpisodeStateAfter }
   | { readonly op: "materializeRollup"; readonly limit?: number }
   | { readonly op: "rollupStatus" }
+  | { readonly op: "repairRollup"; readonly action: "start" | "step" | "status" | "publish";
+      readonly repairId: string; readonly limit?: number; readonly expectedActiveStoreId?: string | null }
+  | { readonly op: "composeRollupSelection"; readonly query: string; readonly beforeEventSeq: number;
+      readonly limit?: number; readonly handle: EpisodeRollupHandle }
   | { readonly op: "recallRollup"; readonly query?: string; readonly nodeId?: string; readonly path?: readonly string[];
       readonly level?: EpisodeRollupRecallLevel; readonly limit?: number; readonly generation?: number;
       readonly after?: EpisodeRollupAfter; readonly handle?: EpisodeRollupHandle }
@@ -220,6 +295,33 @@ function after(value: unknown): value is EpisodeStateAfter {
     && (value.stableKey === undefined || typeof value.stableKey === "string" && value.stableKey.length <= 128)
     && (value.generation === undefined || positive(value.generation));
 }
+const hash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+function supersession(value: Record<string, unknown>, view: CapsuleCatalogView): boolean {
+  const evidence = value.authorization, decision = value.decision, targets = value.targets;
+  if (!positive(value.expectedGeneration) || value.expectedGeneration >= Number.MAX_SAFE_INTEGER
+    || !object(evidence) || !isScopedBodySourceRef(evidence.source) || !sourceRefWithinViewBounds(evidence.source, view)
+    || !object(evidence.decodedUtf16) || !integer(evidence.decodedUtf16.start) || !integer(evidence.decodedUtf16.end)
+    || evidence.decodedUtf16.start < evidence.source.decodedUtf16.start || evidence.decodedUtf16.end > evidence.source.decodedUtf16.end
+    || evidence.decodedUtf16.end <= evidence.decodedUtf16.start
+    || evidence.decodedUtf16.end - evidence.decodedUtf16.start > EPISODE_STATE_LIMITS.clauseUtf16Units
+    || !hash(evidence.spanHash) || !hash(evidence.rawEventHash)
+    || !object(decision) || !["operator", "agent"].includes(String(decision.actor))
+    || decision.basis !== "direct-original-user-instruction" || decision.scope !== "repository-and-chrono"
+    || decision.action !== "revoke-prior-user-restrictions-and-approval-holds"
+    || typeof decision.rationale !== "string" || !decision.rationale.trim() || decision.rationale.length > EPISODE_STATE_LIMITS.clauseUtf16Units
+    || !Array.isArray(targets) || targets.length < 1 || targets.length > EPISODE_STATE_LIMITS.page) return false;
+  const seen = new Set<string>();
+  for (const target of targets) {
+    if (!object(target) || typeof target.stableKey !== "string" || !/^[a-f0-9]{32}$/u.test(target.stableKey) || seen.has(target.stableKey)
+      || !hash(target.propositionKey) || !hash(target.spanKey) || !hash(target.evidenceHash)
+      || !positive(target.createdGeneration) || target.createdGeneration > value.expectedGeneration || target.authority !== "user"
+      || !["repository", "chrono"].includes(String(target.scope))
+      || !(target.category === "restriction" && target.kind === "restriction"
+        || target.category === "approval-hold" && ["restriction", "openwork", "blocker"].includes(String(target.kind)))) return false;
+    seen.add(target.stableKey);
+  }
+  return value.limit === undefined && value.after === undefined;
+}
 function rollupAfter(value: unknown): value is EpisodeRollupAfter {
   return object(value) && typeof value.nodeId === "string" && /^[a-f0-9]{64}$/u.test(value.nodeId)
     && integer(value.itemIndex) && value.itemIndex <= EPISODE_STATE_LIMITS.rollupNodesPerRecall && positive(value.generation)
@@ -228,6 +330,7 @@ function rollupAfter(value: unknown): value is EpisodeRollupAfter {
 }
 function rollupHandle(value: unknown): value is EpisodeRollupHandle {
   return object(value) && value.schemaVersion === 1 && value.ruleset === "episode-rollup-exact-v3"
+    && (value.storeId === undefined || typeof value.storeId === "string" && /^[a-f0-9]{64}$/u.test(value.storeId))
     && typeof value.branchKey === "string" && value.branchKey.length > 0 && value.branchKey.length <= 256
     && integer(value.eventCut) && positive(value.stateGeneration) && positive(value.rollupGeneration)
     && typeof value.rootNodeId === "string" && /^[a-f0-9]{64}$/u.test(value.rootNodeId);
@@ -243,6 +346,7 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
   switch (value.op) {
     case "materializeState": return stateCommon;
     case "stateStatus": return value.limit === undefined && value.after === undefined;
+    case "supersedeState": return supersession(value, value.view);
     case "composeStateSelection": return value.limit === undefined && value.after === undefined;
     case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
         && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)
@@ -251,6 +355,15 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
     case "materializeRollup": return value.after === undefined
       && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob);
     case "rollupStatus": return value.limit === undefined && value.after === undefined;
+    case "repairRollup": return (value.action === "start" || value.action === "step" || value.action === "status" || value.action === "publish")
+      && typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
+      && (value.action === "step" ? value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.rollupLeavesPerJob : value.limit === undefined)
+      && (value.action === "publish" ? value.expectedActiveStoreId === null || typeof value.expectedActiveStoreId === "string" && /^[a-f0-9]{64}$/u.test(value.expectedActiveStoreId) : value.expectedActiveStoreId === undefined);
+    case "composeRollupSelection": return rollupHandle(value.handle) && value.handle.branchKey === value.view.branchKey
+      && value.handle.eventCut <= value.view.eventCut && typeof value.query === "string" && value.query.trim().length > 0
+      && value.query.length <= EPISODE_STATE_LIMITS.queryUnits && positive(value.beforeEventSeq)
+      && value.beforeEventSeq <= value.view.eventCut + 1
+      && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page);
     case "recallRollup": return (positive(value.generation) || rollupHandle(value.handle))
       && (value.limit === undefined || positive(value.limit) && value.limit <= EPISODE_STATE_LIMITS.page)
       && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0 && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)

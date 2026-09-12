@@ -52,16 +52,23 @@ function ancestryShardIds(manifest: LogicalSessionManifest, branchId: string, se
   if (!current.parent) return own;
   const parentIds = ancestryShardIds(manifest, current.parent.branchId, seen);
   const through = parentIds.indexOf(current.parent.throughShardId);
-  if (through < 0) return fail("logical-session-branch-scope-mismatch");
+  if (through < 0 || !current.parent.throughCut) return fail("logical-session-branch-scope-mismatch");
   return [...parentIds.slice(0, through + 1), ...own];
 }
 
 /** Ordered oldest-to-newest routes for this branch and its ancestors. Siblings are never included. */
 export function resolveLogicalShardRoutes(manifest: LogicalSessionManifest, branchId: string): LogicalShardRoute[] {
+  const cuts = new Map<string, LogicalShard["finalCut"]>();
+  let cursor: LogicalBranch | undefined = branch(manifest, branchId);
+  while (cursor?.parent) {
+    cuts.set(cursor.parent.throughShardId, cursor.parent.throughCut);
+    cursor = branch(manifest, cursor.parent.branchId);
+  }
   return ancestryShardIds(manifest, branchId).map(shardId => {
     const shard = manifest.shards.find(candidate => candidate.shardId === shardId) ?? fail("logical-session-shard-missing");
     return { logicalSessionId: manifest.logicalSessionId, manifestRevision: manifest.revision, branchId,
-      shardId, piSessionId: shard.piSessionId, sourcePath: shard.sourcePath, ordinal: shard.ordinal, catalog: shard.finalCut };
+      shardId, piSessionId: shard.piSessionId, sourcePath: shard.sourcePath, ordinal: shard.ordinal,
+      catalog: cuts.has(shardId) ? cuts.get(shardId) : shard.finalCut };
   });
 }
 export function resolveExactLogicalRoute(manifest: LogicalSessionManifest, branchId: string, shardId: string): LogicalShardRoute {
@@ -70,6 +77,21 @@ export function resolveExactLogicalRoute(manifest: LogicalSessionManifest, branc
 }
 /** A replacement session gets cross-shard tools only from its exact injected binding.
  * This grant does not enable or inherit any composer canary or global setting. */
+/** Activate an adopted shard zero only from its explicit session-local binding. */
+export function resolveAdoptedLogicalActivation(manifest: LogicalSessionManifest,
+  active: { readonly piSessionId: string; readonly sourcePath: string },
+  binding: { readonly schemaVersion: 1; readonly logicalSessionId: string; readonly branchId: string; readonly shardId: string }): LogicalActivationGrant {
+  const branch = manifest.branches.find(value => value.branchId === binding.branchId) ?? fail("logical-session-activation-invalid");
+  const shard = manifest.shards.find(value => value.shardId === binding.shardId) ?? fail("logical-session-activation-invalid");
+  if (binding.schemaVersion !== 1 || binding.logicalSessionId !== manifest.logicalSessionId || manifest.pendingRollover
+    || branch.parent || branch.shardIds.length !== 1 || branch.activeShardId !== shard.shardId || shard.ordinal !== 0
+    || shard.state !== "active" || shard.continuationHash !== undefined
+    || shard.piSessionId !== active.piSessionId || shard.sourcePath !== active.sourcePath) return fail("logical-session-activation-invalid");
+  return { logicalSessionId: manifest.logicalSessionId, manifestRevision: manifest.revision,
+    manifestHash: manifest.integrityHash, branchId: branch.branchId, activeShardId: shard.shardId,
+    searchRoutes: resolveLogicalShardRoutes(manifest, branch.branchId), composerCanaryInherited: false };
+}
+
 export function resolveLogicalActivation(manifest: LogicalSessionManifest, active: { readonly piSessionId: string; readonly sourcePath: string },
   binding: LogicalActivationBinding): LogicalActivationGrant {
   if (binding.schemaVersion !== 1 || binding.logicalSessionId !== manifest.logicalSessionId || !/^[a-f0-9]{64}$/.test(binding.continuationHash)) {

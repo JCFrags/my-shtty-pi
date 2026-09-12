@@ -19,6 +19,7 @@ const CONFIG_KEYS = [
     "rollupShadowEnabled",
     "catalogShadowEnabled",
     "searchIndexEnabled",
+    "memoryEngineEnabled",
     "hostWorkerSlots",
     "workerTimeoutSeconds",
     "workerNiceLevel",
@@ -46,6 +47,7 @@ const COMMAND_TO_KEY = {
     "rollup-shadow": "rollupShadowEnabled",
     "catalog-shadow": "catalogShadowEnabled",
     "search-index": "searchIndexEnabled",
+    "memory-engine": "memoryEngineEnabled",
     "worker-slots": "hostWorkerSlots",
     "worker-timeout": "workerTimeoutSeconds",
     "worker-nice": "workerNiceLevel",
@@ -173,6 +175,8 @@ export function validateUserConfig(value) {
         config.rollupShadowEnabled = booleanValue(input.rollupShadowEnabled, "rollupShadowEnabled");
     if (input.searchIndexEnabled !== undefined)
         config.searchIndexEnabled = booleanValue(input.searchIndexEnabled, "searchIndexEnabled");
+    if (input.memoryEngineEnabled !== undefined)
+        config.memoryEngineEnabled = booleanValue(input.memoryEngineEnabled, "memoryEngineEnabled");
     if (input.catalogShadowEnabled !== undefined)
         config.catalogShadowEnabled = booleanValue(input.catalogShadowEnabled, "catalogShadowEnabled");
     if (input.hostWorkerSlots !== undefined)
@@ -353,6 +357,7 @@ export function applyConfigCommand(config, args) {
             value = booleanValue(raw, command);
             break;
         case "searchIndexEnabled":
+        case "memoryEngineEnabled":
         case "catalogShadowEnabled":
             value = booleanValue(raw, command);
             break;

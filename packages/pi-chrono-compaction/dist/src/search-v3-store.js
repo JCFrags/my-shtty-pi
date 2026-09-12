@@ -247,6 +247,11 @@ function ftsQuery(query) {
     const values = terms(query).filter(value => value.length >= 2).slice(0, 12);
     return values.length ? values.map(value => `"${value.replaceAll('"', '""')}"`).join(" OR ") : undefined;
 }
+function literalFtsQuery(query) {
+    // Let FTS5 tokenize one quoted phrase. Exact punctuation, case, and source
+    // coordinates remain the responsibility of firstMatch after candidate lookup.
+    return ftsQuery(query) === undefined ? undefined : `"${query.replaceAll('"', '""')}"`;
+}
 function viewBoundsSql(view, alias = "d") {
     const clauses = view.segments.map(() => `(${alias}.segment=? AND ${alias}.eventSeq<=?)`);
     return { sql: ` AND (${clauses.join(" OR ")})`, values: view.segments.flatMap(item => [item.segment, item.cut]) };
@@ -378,7 +383,7 @@ function query(request, store) {
     // lexical/lookaround context. Refuse those assertions rather than invent it.
     if (mode === "regex" && (/\(\?|\\[bB]/u.test(request.query) || compileRegex(request.query, request.caseSensitive).test("")))
         fail("search-v3-regex-unsupported");
-    const match = request.scan || mode === "regex" ? undefined : ftsQuery(request.query);
+    const match = request.scan || mode === "regex" ? undefined : mode === "literal" ? literalFtsQuery(request.query) : ftsQuery(request.query);
     if (mode === "literal" && !match && !request.scan)
         fail("search-v3-scan-required");
     const queryHash = sha256(canonicalJson({ op: "query", view: request.view, query: request.query, mode,
@@ -396,7 +401,16 @@ function query(request, store) {
             candidates.push(...cueRows.map(row => ({ row, score: relevance(request.query, str(row, "cue"), "generated-cue", caseSensitive),
                 evidence: "generated-cue", reason: "bounded capsule cue relevance" })));
         }
-        const rawRows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`, maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
+        const rawCandidates = (expression) => store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`, maximum + 1, lineage, expression, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
+        let rawRows = rawCandidates(match);
+        // A literal can start inside an indexed token, such as violet in İviolet.
+        // If phrase lookup is empty, retain bounded lexical candidate recovery.
+        // This remains non-exhaustive; explicit scans cover arbitrary substrings.
+        if (mode === "literal" && rawRows.length === 0) {
+            const lexical = ftsQuery(request.query);
+            if (lexical && lexical !== match)
+                rawRows = rawCandidates(lexical);
+        }
         if (rawRows.length > maximum)
             fail("search-v3-query-budget");
         for (const row of rawRows) {

@@ -1,6 +1,6 @@
 # Chrono main promotion and local adoption
 
-Status: PR63 approved and merged as `d9c5f1fd8bfdba8dc17ef9c6509db28e6a0fd9a3`. Local rollout and remaining V3 work are authorized. Deployment remains pending resulting-main CI correction.
+Status: 2.0.24 final qualification candidate. PR63 and the PR66 resulting-main correction are merged. Final CI, M11 qualification, approval, and deployment remain pending.
 
 ## Source reconciliation
 
@@ -12,9 +12,9 @@ Main's supported-product verifier, workflow, native build prerequisite, reposito
 
 After the promotion merges, PR45, PR46 and PR55 are incorporated through ancestry and superseded as separate promotion routes. Until then, their open/draft state is not acceptance. PR57 carries the append-only coordination update separately. Inclusion of M10 does not mark M10 or V3 complete.
 
-## Remaining integration delta for approval
+## Integrated delta for final qualification
 
-The candidate uses patch **2.0.23** because it changes the finished 2.0.22 package for the installed Pi API:
+The candidate uses patch **2.0.24** because it packages the integrated M10 recovery and M12 guarded migration runtime after the 2.0.23 Pi API adaptation. It includes the M11 qualification harness, but no M11 scale result. The candidate retains these 2.0.23 compatibility changes:
 
 - Pin Pi development dependencies to 0.85.1 and declare peers `>=0.85.1 <0.86.0`. Do not claim compatibility with the previous 0.84 API order.
 - Adapt manual replacement to Pi 0.85.1, which starts the replacement extensions before `setup`. Prevent provisional logical replacement startup from initializing admission or scheduling work. Bind the completed manifest and continuation before the final replacement reload. Keep rollover manual and preserve refusal/recovery behavior.
@@ -35,20 +35,22 @@ The original large-session bounded campaign ended naturally after 6,653 jobs, kn
 
 The installed Pi 0.85.1 replacement fixture passed after one substantive correction. The first run exposed SDK bootstrap metadata before setup, so the empty-branch assumption was wrong. The corrected predicate reuses the existing fresh-canary policy only behind the exact one-shot M10 parent marker: at most 16 model, thinking-level or session-info entries, and no conversation or custom content. The fixture captures entry types outside Pi's error-catching callback and verifies replacement, post-bind reload and the retained session-switch assertions. It made no provider call.
 
-The second short check invoked the compiled factory's `history_status` tool. It verified 14 registered tools, 12 commands, the manual logical-session command, a captured process-bound 2.0.23 identity and disabled canary authorization. It did not activate a live session. The deployment manifest was then corrected to include every nested distribution module, not only top-level modules. Complete manifest verification passed for 132 records. The status mechanism is unchanged; final deployment must compare the complete manifest digest below.
+The second short check invoked the compiled factory's `history_status` tool. It verified 14 registered tools, 12 commands, the manual logical-session command, a captured process-bound 2.0.23 identity and disabled canary authorization. It did not activate a live session. That evidence remains specific to 2.0.23. The 2.0.24 packaging build records every nested distribution module in a 134-record deployment manifest. The status mechanism is unchanged; final qualification and deployment must compare the complete manifest digest below.
 
 Strict native source build and probe passed on Node 24.18.0 with native SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`. The probe confirmed allocation refusal. Typecheck, generated build and root static verification passed. The root static gate ran its existing 18 indexed-input/integrity checks. No broad local runtime or scale campaign ran. Promotion CI 34567753311 failed on nine legacy mocks without the required `getSessionId()` method and one obsolete 2.0.3 diagnostic assertion. The correction supplies explicit synthetic session identities and checks the package version. Runtime artifacts and coverage guards remain unchanged. Existing behavior assertions remain in place. The corrected head requires fresh CI; no unchanged workflow retry or broad local rerun is used.
 
-The integrated package has 415 indexed files, Git tree `617dd5703364f3b78afa24cc35c5b5a333dca4ab`, and 21 declared differences from the M10 upstream package tree. The current root verifier records every changed path and both available digests, rather than calling the runtime changes test-only.
+Generate `DEPLOYED.sha256` with bytewise `LC_ALL=C` path sorting. Locale-aware sorting can reorder names that differ near punctuation and change the manifest bytes without changing artifact bytes. Inspect the manifest diff and require unchanged rows to retain their prior order.
+
+The integrated 2.0.24 package has 422 indexed files, Git tree `52d5b2e6fdaeed68f30da79cc9c8ce646c4559c3`, and 37 declared differences from the preserved M10 upstream package tree. The root verifier records every changed path and both available digests. New M11, M10 completion, and M12 files are tracked in the exact inventory.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| Package metadata | `5205da43c549fd0305a210dcf5be0586286bc81581392bd444d6d8dcbf851dc5` |
-| Package lock | `f638461aeaee2d16ee2e69c3ffaf3088ed196c7a49aa92ade74c6d48f4e0b4fb` |
-| Deployment manifest | `021a2f9c548a4c3277fa1bd0b289a221cdf2802559c77df00f511bef2da8ae75` |
-| Entrypoint | `0469b59884d19bda307d481a4a8d05c7063b794957a8686d9b6b86602f311203` |
-| Source tree, 132 files | `658c576dd968ef33da7cbb23ced118b1fd9a25ba2221108323d86680d9807c98` |
-| Distribution tree, 131 files | `da8f0bfbf9eab05cb7c273c07cc60c549e4851bc4933b82a727cc5cb929c9e0c` |
+| Package metadata | `10bfd2181fbe03e9bb57625d71b7970508aab670514b77b248620f1318141d93` |
+| Package lock | `2bade90ba051db80b40884b6590c03fdef1981c4adf32ddb571c3cd8152d39bf` |
+| Deployment manifest | `5a0661aab847753dcdb7ba8b9d45aa269ef21d027c3739b5999c90da54c940c0` |
+| Entrypoint | `ebebe119ef38bef358b1a0185f32c970d8050768bf17f03fb75c3fa7855edae4` |
+| Source tree, 134 files | `41b1d2c2622f610f08ef16839c664fe2266512b607d3546dfd1ff95778dc28ad` |
+| Distribution tree, 133 files | `9dfd81919cfa04a4c94d6a076014e0039d6eda50c5fc4efd51059f3abbcd0ab7` |
 
 Tree SHA-256 values use sorted directory-relative paths, NUL, file bytes and NUL. The source commit for approval is the exact promotion PR head, not the upstream M10 commit. The package tree and digest records avoid a self-referential embedded commit hash.
 

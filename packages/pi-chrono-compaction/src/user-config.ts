@@ -37,6 +37,8 @@ export interface UserConfig {
   readonly rollupShadowEnabled?: boolean;
   readonly catalogShadowEnabled?: boolean;
   readonly searchIndexEnabled?: boolean;
+  /** Normal V3 architecture. Every composition still validates its actual cut. */
+  readonly memoryEngineEnabled?: boolean;
   readonly hostWorkerSlots?: number;
   readonly workerTimeoutSeconds?: number;
   readonly workerNiceLevel?: number;
@@ -71,6 +73,7 @@ const CONFIG_KEYS = [
   "rollupShadowEnabled",
   "catalogShadowEnabled",
   "searchIndexEnabled",
+  "memoryEngineEnabled",
   "hostWorkerSlots",
   "workerTimeoutSeconds",
   "workerNiceLevel",
@@ -101,6 +104,7 @@ const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
   "rollup-shadow": "rollupShadowEnabled",
   "catalog-shadow": "catalogShadowEnabled",
   "search-index": "searchIndexEnabled",
+  "memory-engine": "memoryEngineEnabled",
   "worker-slots": "hostWorkerSlots",
   "worker-timeout": "workerTimeoutSeconds",
   "worker-nice": "workerNiceLevel",
@@ -178,6 +182,7 @@ export function validateUserConfig(value: unknown): UserConfig {
   if (input.isolatedWorkerEnabled !== undefined) config.isolatedWorkerEnabled = booleanValue(input.isolatedWorkerEnabled, "isolatedWorkerEnabled");
   if (input.rollupShadowEnabled !== undefined) config.rollupShadowEnabled = booleanValue(input.rollupShadowEnabled, "rollupShadowEnabled");
   if (input.searchIndexEnabled !== undefined) config.searchIndexEnabled = booleanValue(input.searchIndexEnabled, "searchIndexEnabled");
+  if (input.memoryEngineEnabled !== undefined) config.memoryEngineEnabled = booleanValue(input.memoryEngineEnabled, "memoryEngineEnabled");
   if (input.catalogShadowEnabled !== undefined) config.catalogShadowEnabled = booleanValue(input.catalogShadowEnabled, "catalogShadowEnabled");
   if (input.hostWorkerSlots !== undefined) config.hostWorkerSlots = boundedInteger(input.hostWorkerSlots, "hostWorkerSlots", WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max);
   if (input.workerTimeoutSeconds !== undefined) config.workerTimeoutSeconds = boundedInteger(input.workerTimeoutSeconds, "workerTimeoutSeconds", WORKER_LIMITS.timeoutSeconds.min, WORKER_LIMITS.timeoutSeconds.max);
@@ -283,6 +288,7 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     case "isolatedWorkerEnabled": value = booleanValue(raw, command); break;
     case "rollupShadowEnabled": value = booleanValue(raw, command); break;
     case "searchIndexEnabled":
+    case "memoryEngineEnabled":
     case "catalogShadowEnabled": value = booleanValue(raw, command); break;
     case "hostWorkerSlots": value = boundedInteger(raw, command, WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max); break;
     case "workerTimeoutSeconds": value = boundedInteger(raw, command, WORKER_LIMITS.timeoutSeconds.min, WORKER_LIMITS.timeoutSeconds.max); break;

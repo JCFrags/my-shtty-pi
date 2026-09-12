@@ -23,6 +23,8 @@ The expected identity is `JCFrags/my-shtty-pi`, `visibility=PUBLIC`, `isPrivate=
 
 Owner-only evidence belongs under the ignored `.chrono-v3-private/` directory in the execution clone. That directory is not a project artifact and must not be staged.
 
+Current V3 private runtime data also includes logical-session manifests and bindings, per-session rollout records, catalog and derived SQLite stores, capsule and chunk segments, state-v4 and rollup-v3 stores, composition artifacts, migration progress, and qualification roots or reports. Keep this data outside Git. Public documentation can use generic `$HOME` examples, but it must not contain actual source paths, logical identifiers, process IDs, session markers, or private command output.
+
 ## Allowed publication
 
 Source, deterministic tests, synthetic fixtures, sanitized aggregate measurements, architecture documents, and reproducible verification tools may be committed. Synthetic JSONL is allowed only when it is clearly fabricated, contains no private paths or identifiers, and is covered by the privacy verifier.
@@ -44,4 +46,6 @@ The privacy verifier scans current worktree bytes, staged index bytes, Git objec
 
 Event-scoped mode fails closed on missing, malformed, contradictory, unsupported, or unscanned event input. Pull requests scan the checked-out tree and exact base-to-head commits; ordinary pushes scan `before..after` and the resulting tree; new branches scan complete ancestry reachable from `after` and the resulting tree; schedules and manual dispatch scan all fetched refs and the checked-out tree.
 
-A finding, unscanned input, unsafe file type, malformed event, identity mismatch, or unexplained correction artifact blocks publication. The known exposure classification is P1 for limited historical metadata and CI metadata; no P2 credential or private-session material and no P3 surface were confirmed.
+A finding, unscanned input, unsafe file type, malformed event, identity mismatch, or unexplained correction artifact blocks publication. Synthetic `/home/<name>` paths can match private-path rules. Use neutral `/tmp/chrono-synthetic-*` paths in public fixtures. Scan the exact outgoing range and the staged index before publication because an index-only pass does not validate earlier commits. Before publishing operational documentation, also screen Git author identity and authored prose. GitHub material identifies the owner only as `JCFrags` and must not expose a private local account or path.
+
+The known exposure classification is P1 for limited historical metadata and CI metadata; no P2 credential or private-session material and no P3 surface were confirmed.

@@ -184,6 +184,51 @@ test("literal search finds capsule-omitted text and recall recovers the exact so
   } finally { fixture.cleanup(); }
 });
 
+test("literal phrase planning bounds common-token candidates and preserves exact semantics", async () => {
+  const literal = 'Common/"Quoted"-UniqueNeedle';
+  const records = [line("e0", null, `target ${literal} suffix`)];
+  for (let index = 1; index < 130; index++) records.push(line(`e${index}`, `e${index - 1}`, `Common decoy ${index}`));
+  const fixture = setupCapsuleFixture(records.join(""));
+  try {
+    const view = await fixture.initialize("e129");
+    await deriveAll(fixture, view);
+    const searchDirectory = join(fixture.directory, "search"); mkdirSync(searchDirectory, { mode: 0o700 });
+    const schedulerDirectory = join(fixture.directory, "scheduler"); mkdirSync(schedulerDirectory, { mode: 0o700 });
+    const identity: SearchV3Identity = { storeKey: randomUUID(), capsule: fixture.identity, schemaVersion: 1,
+      configHash: createHash("sha256").update("literal-phrase-search").digest("hex") };
+    const run = (request: SearchV3Request) => runSearchV3Worker(request, { schedulerDirectory, slots: 1 });
+    await searchAll(fixture, view, identity, searchDirectory, schedulerDirectory);
+
+    const base = { v: 1 as const, searchDirectory, capsuleDirectory: fixture.derivedDirectory,
+      catalogDirectory: fixture.catalogDirectory, identity, op: "query" as const, view, limit: 2 };
+    const found = await run({ ...base, query: literal, mode: "literal" });
+    assert.equal(found.ok, true, JSON.stringify(found));
+    if (found.ok) {
+      assert.equal((found.result as any).hits.length, 1);
+      assert.equal((found.result as any).hits[0].handle.source.entryId, "e0");
+      assert.equal((found.result as any).metrics.candidates, 1);
+    }
+    const folded = await run({ ...base, query: literal.toLowerCase(), mode: "literal" });
+    assert.equal(folded.ok, true, JSON.stringify(folded));
+    if (folded.ok) assert.equal((folded.result as any).hits.length, 1);
+    const exactCase = await run({ ...base, query: literal.toLowerCase(), mode: "literal", caseSensitive: true });
+    assert.equal(exactCase.ok, true, JSON.stringify(exactCase));
+    if (exactCase.ok) assert.equal((exactCase.result as any).hits.length, 0);
+    const substring = await run({ ...base, query: "niqueNeed", mode: "literal" });
+    assert.equal(substring.ok, true, JSON.stringify(substring));
+    if (substring.ok) assert.equal((substring.result as any).hits.length, 0);
+    const scanned = await run({ ...base, query: "niqueNeed", mode: "literal", scan: { maxChunks: 64, maxMs: 250 } });
+    assert.equal(scanned.ok, true, JSON.stringify(scanned));
+    if (scanned.ok) assert.equal((scanned.result as any).hits.length, 1);
+    const nonToken = await run({ ...base, query: "💥", mode: "literal" });
+    assert.equal(nonToken.ok, false);
+    if (!nonToken.ok) assert.equal(nonToken.code, "search-v3-scan-required");
+    const ranked = await run({ ...base, query: literal, mode: "ranked" });
+    assert.equal(ranked.ok, false);
+    if (!ranked.ok) assert.equal(ranked.code, "search-v3-query-budget");
+  } finally { fixture.cleanup(); }
+});
+
 test("append restart keeps a cursor generation pinned and real fork views isolated", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-search-branch-"));
   const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");

@@ -13,7 +13,7 @@ import {
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
-test("installed Pi 0.85.1 starts before setup and reloads the activated replacement without a provider call", async () => {
+test("installed Pi 0.85.1 reloads committed replacement and switch state without a provider call", async () => {
   assert.equal(VERSION, "0.85.1");
   const root = await mkdtemp(join(tmpdir(), "chrono-pinned-session-"));
   const cwd = join(root, "project"), agentDir = join(root, "agent"), sessions = join(root, "sessions");
@@ -22,6 +22,8 @@ test("installed Pi 0.85.1 starts before setup and reloads the activated replacem
   let preSetupBranch: { count: number; types: string[] } | undefined;
   let originalPath = "", replacementPath = "", switchTargetPath = "";
   let newCancelled: boolean | undefined;
+  let recordSwitchLifecycle = false, switchManifestCommitted = false;
+  const switchLifecycle: string[] = [];
 
   const extension: ExtensionFactory = pi => {
     pi.on("session_start", (event, ctx) => {
@@ -29,6 +31,7 @@ test("installed Pi 0.85.1 starts before setup and reloads the activated replacem
       if (event.reason === "new") preSetupBranch = { count: branch.length, types: branch.map(entry => entry.type) };
       const continuations = branch.filter(entry => entry.type === "custom_message").length;
       lifecycle.push(`session_start:${event.reason}:${continuations}`);
+      if (recordSwitchLifecycle) switchLifecycle.push(`session_start:${event.reason}:committed=${switchManifestCommitted}`);
     });
     pi.on("session_shutdown", event => { lifecycle.push(`session_shutdown:${event.reason}`); });
     pi.registerCommand("replace-probe", { description: "test", handler: async (_args, ctx) => {
@@ -52,6 +55,8 @@ test("installed Pi 0.85.1 starts before setup and reloads the activated replacem
     pi.registerCommand("switch-probe", { description: "test", handler: async (args, ctx) => {
       const result = await ctx.switchSession(args, { withSession: async replacement => {
         assert.equal(replacement.sessionManager.getSessionFile(), args);
+        switchManifestCommitted = true;
+        await replacement.reload();
       } });
       assert.equal(result.cancelled, false);
     } });
@@ -100,8 +105,11 @@ test("installed Pi 0.85.1 starts before setup and reloads the activated replacem
     switchTargetPath = target.getSessionFile()!;
     const switchBack = runtime.session.extensionRunner.getCommand("switch-probe");
     assert.ok(switchBack);
+    recordSwitchLifecycle = true;
     await switchBack.handler(switchTargetPath, runtime.session.extensionRunner.createCommandContext());
     assert.equal(runtime.session.sessionFile, switchTargetPath);
+    assert.deepEqual(switchLifecycle, ["session_start:resume:committed=false", "session_start:reload:committed=true"],
+      "Pi starts the switched runtime before withSession, then reload observes state committed by withSession");
   } finally {
     await runtime?.dispose();
   }
