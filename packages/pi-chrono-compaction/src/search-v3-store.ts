@@ -353,8 +353,16 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
       candidates.push(...cueRows.map(row => ({ row, score: relevance(request.query, str(row, "cue"), "generated-cue", caseSensitive),
         evidence: "generated-cue" as const, reason: "bounded capsule cue relevance" })));
     }
-    const rawRows = store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`,
-      maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
+    const rawCandidates = (expression: string) => store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`,
+      maximum + 1, lineage, expression, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
+    let rawRows = rawCandidates(match);
+    // A literal can start inside an indexed token, such as violet in İviolet.
+    // If phrase lookup is empty, retain bounded lexical candidate recovery.
+    // This remains non-exhaustive; explicit scans cover arbitrary substrings.
+    if (mode === "literal" && rawRows.length === 0) {
+      const lexical = ftsQuery(request.query);
+      if (lexical && lexical !== match) rawRows = rawCandidates(lexical);
+    }
     if (rawRows.length > maximum) fail("search-v3-query-budget");
     for (const row of rawRows) {
       const text = str(row, "text");

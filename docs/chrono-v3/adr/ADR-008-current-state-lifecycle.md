@@ -10,6 +10,8 @@ Chronological cues alone cannot distinguish a restriction from an assistant repo
 
 Store exact evidence spans with proposition/span identities, category, authority, confidence, revision when known, and effective cut. New supported propositions are `current` or `unresolved`. Explicit supported restriction revocation/replacement targets the matching proposition under the same authority and retains transition evidence.
 
+An explicit operator action can also supersede 1–12 exact prior user restrictions or approval holds under a verified original-user instruction. It pins the full current view and generation, verifies exact target evidence, records the decision atomically, and preserves earlier cuts and generations. The operator owns the scope and meaning assessment. The API does not infer revocation, grant authority to quoted or generated text, alter extraction coverage, or mark a task complete. See [the operation contract](../episodes-and-state.md#explicit-user-supersession).
+
 Tool failure/cancellation can create a blocker. Unrelated success, quoted completion, or another revision does not resolve it. Assistant reports stay reports. Memory events and retention hints remain advisory. Resource observations do not imply known current resource bytes.
 
 This is a targeted deterministic lifecycle, not the charter's complete proposed general-purpose state machine. [Episodes and state](../episodes-and-state.md) owns implemented categories, readiness, and source links.

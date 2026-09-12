@@ -10,7 +10,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const EXPECTED_PI_VERSION = "0.85.1";
-const EXPECTED_PACKAGE_VERSION = "2.0.30";
+const EXPECTED_PACKAGE_VERSION = "2.0.31";
 const MAIN_ROLLOVERS = 10;
 const MAX_ACTIVE_ENTRIES = 7;
 const HELP = `Usage:

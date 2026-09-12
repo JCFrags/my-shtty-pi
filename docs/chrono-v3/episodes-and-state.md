@@ -22,6 +22,16 @@ The current lifecycle is deliberately narrower than the charter's proposed gener
 
 Resource recall presents observations and declared revisions. A later mention or a complete tool-result body is not proof of the current resource bytes. Unknown current revisions remain unknown. The candidate does not provide universal task-resolution or resource-version inference.
 
+## Explicit user supersession
+
+The bounded `supersedeState` worker operation can retire an inspected list of prior user repository or Chrono restrictions and approval holds. It is not a text query or automatic inference. Each of 1–12 targets must identify its exact stable key, proposition, span, generation, stored evidence hash, user authority, scope, and category.
+
+The operation verifies an original user message through its catalog descriptor, decoded span, and exact raw-event hash. Quotes, retrieval output, and ordinary memory cannot provide this authority. The operator must confirm the instruction's meaning and each target's scope. Goals, future directions, unrelated duties, and higher-priority safeguards are not targets.
+
+Application requires the current exact view with complete body and metadata progress and a matching state generation. All targets must precede the authorizing event. One transaction records the exact decision and supersession generation only after every target validates. Exact replay is idempotent. Stale, conflicting, missing, foreign, or oversized requests refuse without partial changes.
+
+Sources, state rows, coverage records, old cut markers, and published rollup handles remain intact. Earlier cuts and generations retain their prior state. Supersession is effective at the application cut, not retroactively at an older authorization or compaction cut. It does not mark a task complete or certify mandatory coverage. Recheck ordinary composition selection after application.
+
 ## Readiness and mandatory selection
 
 Body progress, metadata progress, and `knownThroughCut` are separate. A ready store can still fail selection for a later or more demanding cut. Mandatory selection has bounded category scans and output limits. Restrictions and open work have distinct completeness and omission flags.

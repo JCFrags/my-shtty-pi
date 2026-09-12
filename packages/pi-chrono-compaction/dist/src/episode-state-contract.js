@@ -55,6 +55,35 @@ function after(value) {
         && (value.stableKey === undefined || typeof value.stableKey === "string" && value.stableKey.length <= 128)
         && (value.generation === undefined || positive(value.generation));
 }
+const hash = (value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+function supersession(value, view) {
+    const evidence = value.authorization, decision = value.decision, targets = value.targets;
+    if (!positive(value.expectedGeneration) || value.expectedGeneration >= Number.MAX_SAFE_INTEGER
+        || !object(evidence) || !isScopedBodySourceRef(evidence.source) || !sourceRefWithinViewBounds(evidence.source, view)
+        || !object(evidence.decodedUtf16) || !integer(evidence.decodedUtf16.start) || !integer(evidence.decodedUtf16.end)
+        || evidence.decodedUtf16.start < evidence.source.decodedUtf16.start || evidence.decodedUtf16.end > evidence.source.decodedUtf16.end
+        || evidence.decodedUtf16.end <= evidence.decodedUtf16.start
+        || evidence.decodedUtf16.end - evidence.decodedUtf16.start > EPISODE_STATE_LIMITS.clauseUtf16Units
+        || !hash(evidence.spanHash) || !hash(evidence.rawEventHash)
+        || !object(decision) || !["operator", "agent"].includes(String(decision.actor))
+        || decision.basis !== "direct-original-user-instruction" || decision.scope !== "repository-and-chrono"
+        || decision.action !== "revoke-prior-user-restrictions-and-approval-holds"
+        || typeof decision.rationale !== "string" || !decision.rationale.trim() || decision.rationale.length > EPISODE_STATE_LIMITS.clauseUtf16Units
+        || !Array.isArray(targets) || targets.length < 1 || targets.length > EPISODE_STATE_LIMITS.page)
+        return false;
+    const seen = new Set();
+    for (const target of targets) {
+        if (!object(target) || typeof target.stableKey !== "string" || !/^[a-f0-9]{32}$/u.test(target.stableKey) || seen.has(target.stableKey)
+            || !hash(target.propositionKey) || !hash(target.spanKey) || !hash(target.evidenceHash)
+            || !positive(target.createdGeneration) || target.createdGeneration > value.expectedGeneration || target.authority !== "user"
+            || !["repository", "chrono"].includes(String(target.scope))
+            || !(target.category === "restriction" && target.kind === "restriction"
+                || target.category === "approval-hold" && ["restriction", "openwork", "blocker"].includes(String(target.kind))))
+            return false;
+        seen.add(target.stableKey);
+    }
+    return value.limit === undefined && value.after === undefined;
+}
 function rollupAfter(value) {
     return object(value) && typeof value.nodeId === "string" && /^[a-f0-9]{64}$/u.test(value.nodeId)
         && integer(value.itemIndex) && value.itemIndex <= EPISODE_STATE_LIMITS.rollupNodesPerRecall && positive(value.generation)
@@ -79,6 +108,7 @@ export function isEpisodeStateRequest(value) {
     switch (value.op) {
         case "materializeState": return stateCommon;
         case "stateStatus": return value.limit === undefined && value.after === undefined;
+        case "supersedeState": return supersession(value, value.view);
         case "composeStateSelection": return value.limit === undefined && value.after === undefined;
         case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
             && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)

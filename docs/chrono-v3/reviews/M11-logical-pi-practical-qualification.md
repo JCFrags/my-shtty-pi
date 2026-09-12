@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.29 at `9e35102a64f31694757eed11a982a1f81af6d347` passed required CI `34660070498`. Its installed-Pi run completed ten main rollovers and created the logical fork, then stopped during the remaining checks. The retained sources support an affected-tail resumption. A structured shard-refusal correction passed its focused check. Full qualification remains pending that resumption.
+Status: M10 practical qualification passed using the retained ten-rollover preparation at `9e35102a64f31694757eed11a982a1f81af6d347` and the affected tail at `09a8e9147095079668689546ae85146d787d8b68` (2.0.30). The tail verified all eleven main shards, child and sibling isolation, restart, switch-back, and all thirteen unchanged sources. This is combined revision-bound evidence, not a repeated clean campaign, full M11 scale qualification, or live installation adoption.
 
 ## Scope
 
@@ -152,6 +152,32 @@ A fresh read-only probe on the retained child recovered the oldest main marker t
 The committed adapter reproduced the cause without workers or source reads: `getBlock`, `getRaw`, and `range` throw `logical-session-route-unavailable` for an unlisted shard before entering their error handler. The branch guard correctly prevents access, but the missing structured result escapes the qualification command. The correction moves those same route guards inside the existing handler. It preserves the refusal code, ancestor routes, source scope, and worker limits. One focused check passed all three structured refusals and confirmed unchanged scheduler state.
 
 The RPC fixture now checks `extension_error` events after each command and returns a probe notification for every probe failure. Readiness predicates, deadlines, route-page limits, and output limits are unchanged. The retained thirteen sources will be reused for the remaining sibling refusal, all-shard retrieval, process reopen, switch-back, and hash-preservation checks. Preparation and correction runtime identities must be reported separately. No full campaign restart is needed for this correction.
+
+## Retained-tail package 2.0.30 result
+
+The affected tail passed on the unchanged thirteen-source preparation. Runtime and committed harness were `09a8e9147095079668689546ae85146d787d8b68`, package tree `c317f4851100b072ff84a5d78dd0a7fadc77131f`, Pi 0.85.1, Node 24.18.0 ABI 137, and the unchanged native binding recorded above. The preparation and fixture marker remained bound to 2.0.29 at `9e35102a64f31694757eed11a982a1f81af6d347`.
+
+An added private preflight assertion first stopped before any tail probe because Pi 0.85.1 `get_commands` reports provenance in `sourceInfo`, not a top-level `path`. Removing that unsupported assertion allowed the still-unrun tail to execute once. Both the failed receipt and successful receipt are retained. The correction did not change a runtime guard, readiness predicate, deadline, or source.
+
+| Observation | Measured result |
+| --- | --- |
+| Tail search, recall, and exact probes | 14 passed |
+| Main shards recovered from the child | All 11, with exact returned shard identities |
+| Child route count | 12, including ancestors |
+| Abandoned sibling exact read | Refused |
+| Fresh child-process reopen | Passed |
+| Actual RPC switch back to main | Passed, with 11 routes |
+| Physical sources | All 13 present, zero hash or size changes |
+| Maximum non-header entries per source | 7 |
+| Manifest revision | 38, unchanged |
+| Owned Pi shutdowns | Both exited 0 without signals or extension errors |
+| Qualification time | 181,102 ms |
+| Complete shell wall time | 191.14 seconds |
+| Repeated rollovers, seeds, providers, source deletions | 0 |
+
+The successful scalar receipt has SHA-256 `06bf574219ea849df15dd3b661404cd18561a95d966ad32f66e557a16c679729`. Detailed evidence has SHA-256 `1f893e7c4b3f6e19c55badd4858e7ed7be42f56743dc2b27339c7ffc661c83e9`. The parent read both receipts and verified their hashes. The worker separately confirmed current source preservation and absent owned Pi processes without repeating any tail operation, then closed normally.
+
+Combined with the retained actual-command preparation, this satisfies the M10 ten-shard, bounded active branch, exact recovery, ancestor search, recoverable rollover, source-retention, and source-linked continuation criteria. The preparation's successful rollover commands independently enforced continuation coverage. Earlier failures remain failures. Required CI for 2.0.30 exposed a separate Unicode literal-query regression, so this targeted result does not certify that CI, the later corrective candidate, M11 scale, or shared activation.
 
 ## Result fields
 
