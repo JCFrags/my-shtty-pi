@@ -239,7 +239,7 @@ async function verifyRuntime(go, counters) {
   const bindingsRequire = createRequire(pathToFileURL(join(nm, "bindings/bindings.js")));
   check(sqliteRequire.resolve("bindings") === join(nm, "bindings/bindings.js") && bindingsRequire.resolve("file-uri-to-path") === join(nm, "file-uri-to-path/index.js"), "dependency-route");
   // Resolve without loading a candidate addon. Frozen workers must choose the verified release binding.
-  check(require("bindings")({ bindings: "better_sqlite3.node", module_root: join(nm, "better-sqlite3"), path: true })
+  check(require(join(nm, "bindings/bindings.js"))({ bindings: "better_sqlite3.node", module_root: join(nm, "better-sqlite3"), path: true })
     === join(nm, "better-sqlite3/build/Release/better_sqlite3.node"), "native-route");
   const modules = await runtimeModules(go.runtimePackage), segment = await import(pathToFileURL(join(go.runtimePackage, "dist/src/capsule-segment.js")));
   const schemas = {};
