@@ -195,11 +195,12 @@ async function generate(root, c) {
   const totals = sessions.reduce((out, item) => { for (const key of ["decodedUnits", "estimatedTokens", "sourceBytes", "events", "compactions"]) out[key] += item[key]; out.shards += item.shards.length; return out; }, { decodedUnits: 0, estimatedTokens: 0, sourceBytes: 0, events: 0, compactions: 0, shards: 0 });
   return { sessions, totals };
 }
-async function runtimeModules() {
+async function runtimeModules(packageRoot) {
+  const base = packageRoot ? pathToFileURL(`${join(packageRoot, "dist", "src")}/`) : new URL("../dist/src/", import.meta.url);
   return Promise.all([
-    import("../dist/src/catalog-worker-client.js"), import("../dist/src/capsule-worker-client.js"), import("../dist/src/search-v3-worker-client.js"),
-    import("../dist/src/capsule-contract.js"), import("../dist/src/context-composer.js"), import("../dist/src/host-worker-scheduler.js"),
-    import("../dist/src/episode-state-contract.js"),
+    import(new URL("catalog-worker-client.js", base)), import(new URL("capsule-worker-client.js", base)), import(new URL("search-v3-worker-client.js", base)),
+    import(new URL("capsule-contract.js", base)), import(new URL("context-composer.js", base)), import(new URL("host-worker-scheduler.js", base)),
+    import(new URL("episode-state-contract.js", base)),
   ]).then(([catalog, capsule, search, contract, composer, scheduler, stateContract]) => ({ catalog, capsule, search, contract, composer, scheduler, stateContract }));
 }
 function metrics() { return { calls: 0, failures: {}, latencies: { ingestion: [], appendIngestionLag: [], search: [], recall: [], exact: [], composition: [], fault: [], recovery: [], request: [] }, sourceBytes: {}, workerPeaks: [], processIoByOperation: {} }; }
@@ -222,9 +223,11 @@ function observe(m, kind, started, response) {
   }
   return elapsed;
 }
-async function pool(items, concurrency, worker) {
+async function pool(items, concurrency, worker, settleOnFailure = false) {
   let next = 0; const results = Array(items.length);
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => { while (true) { const index = next++; if (index >= items.length) return; results[index] = await worker(items[index], index); } }));
+  const jobs = Array.from({ length: Math.min(concurrency, items.length) }, async () => { while (true) { const index = next++; if (index >= items.length) return; results[index] = await worker(items[index], index); } });
+  if (settleOnFailure) { const settled = await Promise.allSettled(jobs), failed = settled.find(item => item.status === "rejected"); if (failed) throw failed.reason; }
+  else await Promise.all(jobs);
   return results;
 }
 async function prepareStores(root, generated, modules, m) {
@@ -350,18 +353,18 @@ async function recoverPreparedStores(root, generated, modules, m) {
   const residue = await modules.scheduler.schedulerArtifactCounts(schedulerDirectory); assert.deepEqual(residue, { tickets: 0, slots: 0 });
   return states;
 }
-async function measureQueue(schedulerDirectory, slots, modules) {
+async function measureQueue(schedulerDirectory, slots, modules, settleOnFailure = false) {
   const waits = [];
-  await Promise.all(Array.from({ length: slots + 2 }, async (_, index) => {
+  await pool(Array.from({ length: slots + 2 }, (_, index) => index), slots + 2, async index => {
     const lease = await modules.scheduler.acquireHostWorkerSlot({ slots, directory: schedulerDirectory, priority: index % 2 ? "low" : "high", jobType: "rollup-shadow", sessionKey: sha(`m11-queue-${index}`) });
     waits.push({ queueWaitMs: lease.queueWaitMs, queuePosition: lease.queuePosition });
     await new Promise(resolve => setTimeout(resolve, 40)); await lease.release();
-  }));
+  }, settleOnFailure);
   return { waitMs: distribution(waits.map(item => item.queueWaitMs)), maximumPosition: Math.max(...waits.map(item => item.queuePosition)) };
 }
-async function exerciseLane(root, states, sessionCount, slots, modules, m) {
+async function exerciseLane(root, states, sessionCount, slots, modules, m, recovery = {}) {
   const schedulerDirectory = join(root, `scheduler-lane-${sessionCount}-${slots}`); await mkdir(schedulerDirectory, { recursive: true, mode: 0o700 });
-  const selected = states.slice(0, sessionCount), queue = await measureQueue(schedulerDirectory, slots, modules);
+  const selected = states.slice(0, sessionCount), queue = await measureQueue(schedulerDirectory, slots, modules, recovery.settleOnFailure === true);
   await pool(selected, selected.length, async state => {
     const searchRequest = extra => modules.search.runSearchV3Worker({ v: 1, searchDirectory: state.directories.searchDirectory, capsuleDirectory: state.directories.derivedDirectory, catalogDirectory: state.directories.catalogDirectory, identity: state.searchIdentity, view: state.view, ...extra }, { schedulerDirectory, slots });
     const queryStarted = performance.now(), queryPromise = searchRequest({ op: "query", query: `m11-marker-session-${state.session.session}-event-2`, mode: "literal", limit: 2 });
@@ -377,23 +380,29 @@ async function exerciseLane(root, states, sessionCount, slots, modules, m) {
     const chunkStarted = performance.now(), chunk = await modules.capsule.runCapsuleWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory, derivedDirectory: state.directories.derivedDirectory, identity: state.identity, op: "chunkRange", view: state.view, source: found.hits[0].handle.source, decodedStart: 0, decodedLength: 32768, limit: 2 }, { schedulerDirectory, slots }); observe(m, "exact", chunkStarted, chunk); assert.equal(chunk.ok, true, JSON.stringify(chunk));
     const pageStarted = performance.now(), old = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory, sessionKey: state.sessionKey, op: "page", view: state.view, after: Math.max(0, state.view.eventCut - 1), limit: 2 }, { schedulerDirectory, slots }); observe(m, "exact", pageStarted, old); assert.equal(old.ok, true, JSON.stringify(old)); assert.equal(old.result.events.at(-1).metadata.id, state.session.leafId, "pinned view excludes concurrent append");
     const rawEvent = old.result.events.at(-1), exactStarted = performance.now(), exact = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory: state.directories.catalogDirectory, sessionKey: state.sessionKey, op: "raw", view: state.view, eventSeq: rawEvent.seq, offset: rawEvent.rawStart, length: Math.min(8192, rawEvent.endByte - rawEvent.rawStart) }, { schedulerDirectory, slots }); observe(m, "exact", exactStarted, exact); assert.equal(exact.ok, true, JSON.stringify(exact));
-  });
+  }, recovery.settleOnFailure === true);
   const residue = await modules.scheduler.schedulerArtifactCounts(schedulerDirectory); assert.deepEqual(residue, { tickets: 0, slots: 0 });
   return { slots, sessions: sessionCount, queue, schedulerResidue: residue };
 }
-async function faultCampaign(root, state, modules, m) {
+async function faultCampaign(root, state, modules, m, recovery = {}) {
   const schedulerDirectory = join(root, "scheduler-faults"); await mkdir(schedulerDirectory, { recursive: true, mode: 0o700 });
-  const sourceBefore = await Promise.all(state.session.shards.map(shard => hashFile(shard.path)));
+  const sourceHash = recovery.sourceHash ?? hashFile;
+  const sourceBefore = await Promise.all(state.session.shards.map(shard => sourceHash(shard.path)));
   const staleStarted = performance.now(), stale = await modules.search.runSearchV3Worker({ v: 1, searchDirectory: state.directories.searchDirectory, capsuleDirectory: state.directories.derivedDirectory, catalogDirectory: state.directories.catalogDirectory, identity: { ...state.searchIdentity, configHash: sha("m11-stale-search-generation") }, op: "status", view: state.view }, { schedulerDirectory, slots: 1 }); observe(m, "search", staleStarted, stale); assert.equal(stale.ok, false, "stale schema must refuse");
-  const { default: Database } = await import("better-sqlite3"), database = new Database(join(state.directories.derivedDirectory, "derived.sqlite"), { readonly: true, fileMustExist: true });
+  const Database = recovery.Database ?? (await import("better-sqlite3")).default;
+  const database = new Database(join(state.directories.derivedDirectory, "derived.sqlite"), { readonly: true, fileMustExist: true });
   let name; try { name = database.prepare("SELECT segmentHash FROM artifacts WHERE layer='capsules' ORDER BY eventSeq,descriptor LIMIT 1").pluck().get(); } finally { database.close(); }
   assert.match(name ?? "", /^[a-f0-9]{64}$/, "capsule segment required for corruption fault");
-  const path = join(state.directories.derivedDirectory, "segments", "capsules", name), original = await readFile(path), corrupted = Buffer.from(original); corrupted[Math.floor(corrupted.length / 2)] ^= 1; await writeFile(path, corrupted, { mode: 0o600 });
+  const path = join(state.directories.derivedDirectory, "segments", "capsules", name), original = await readFile(path), corrupted = Buffer.from(original);
+  await recovery.beforeCorruption?.(path, original, name);
+  corrupted[Math.floor(corrupted.length / 2)] ^= 1;
   const request = { v: 1, catalogDirectory: state.directories.catalogDirectory, derivedDirectory: state.directories.derivedDirectory, identity: state.identity, op: "capsulePage", view: state.view, limit: 1 };
-  const corruptStarted = performance.now(); let refused; try { refused = await modules.capsule.runCapsuleWorker(request, { schedulerDirectory, slots: 1 }); observe(m, "fault", corruptStarted, refused); } finally { await writeFile(path, original, { mode: 0o600 }); }
+  const corruptStarted = performance.now(); let refused;
+  try { await writeFile(path, corrupted, { mode: 0o600 }); refused = await modules.capsule.runCapsuleWorker(request, { schedulerDirectory, slots: 1 }); observe(m, "fault", corruptStarted, refused); }
+  finally { await writeFile(path, original, { mode: 0o600 }); }
   assert.equal(refused.ok, false, "corrupt segment must refuse");
   const repairStarted = performance.now(), recovered = await modules.capsule.runCapsuleWorker(request, { schedulerDirectory, slots: 1 }); observe(m, "recovery", repairStarted, recovered); assert.equal(recovered.ok, true, JSON.stringify(recovered));
-  const sourceAfter = await Promise.all(state.session.shards.map(shard => hashFile(shard.path))); assert.deepEqual(sourceAfter, sourceBefore, "fault and repair must not change source");
+  const sourceAfter = await Promise.all(state.session.shards.map(shard => sourceHash(shard.path))); assert.deepEqual(sourceAfter, sourceBefore, "fault and repair must not change source");
   return { staleSchemaCode: stale.code, corruptSegmentCode: refused.code, repairRecoveryMs: performance.now() - repairStarted, sourceUnchanged: true };
 }
 async function runCampaign(args) {

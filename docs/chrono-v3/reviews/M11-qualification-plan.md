@@ -1,6 +1,6 @@
 # M11 qualification evidence plan
 
-Status: the first full campaign prepared all catalog, capsule, and search stores, then failed after 28,693,015 ms with `search-v3-query-budget` before state materialization, faults, matrix lanes, or composition. Its retained data and failure report are not a pass. The later [report correction and recovery design](M11-report-correction.md) addresses a reproduced final-aggregation failure without changing the retained runtime or certifying a completed campaign.
+Status: the first full campaign prepared all catalog, capsule, and search stores, then failed after 28,693,015 ms with `search-v3-query-budget` before state materialization, faults, matrix lanes, or composition. Its retained data and failure report are not a pass. The later [report correction and retained-tail command](M11-report-correction.md) addresses a reproduced final-aggregation failure without changing the retained runtime or certifying a completed campaign. The separate recovery command is implemented but has not run. It requires natural settlement and a new parent exact-go after implementation delivery.
 
 ## Run boundary
 
@@ -57,7 +57,9 @@ systemd-run --user --wait --pipe --collect \
     --output "$HOME/.local/state/chrono-m11-results/$SHA.json"
 ```
 
-### Retained preparation recovery
+### Historical retained preparation resume
+
+This is the original pre-state resume route. It is not current-main or post-matrix recovery. Use the separate retained-tail command only within its narrower approved boundary.
 
 The failed preparation candidate is `aa160c082dd9f027b0e378c53c2784e00ef1727e`. Resume may reuse its completed catalog, capsule, and search stores only when the harness validates all of these conditions:
 
@@ -89,6 +91,33 @@ systemd-run --user --wait --pipe --collect \
 A resumed report must record both candidate SHAs and that 16 prepared stores were reused. Initial preparation latency, request, process-I/O, and worker-peak measurements were not persisted by the failed process. They remain unavailable and resumed measurements must not replace them.
 
 The retained M07 runtime at `09a8e9147095079668689546ae85146d787d8b68` processes one large-body chunk per worker job. The first chunk covers 32,768 decoded UTF-16 units and each later overlapped chunk advances by at least 24,576 units. Applying that contract to the retained indexed source ranges projects 164,170 body-step calls across 16 sessions, plus final completion work. This is a calculation from retained metadata, not measured runtime. The harness uses a finite per-session upper guard derived from decoded units, record count, the 24,576-unit minimum progress, and eight-event metadata pages: 34,322 calls for the largest session and 9,262 for each other session. These guards do not increase any worker, source, output, memory, or externally enforced wall-time cap. If systemd reaches the 36-hour cutoff, the campaign has not passed and might not write a result JSON. The parent must also establish that the separately contained workers have settled.
+
+## Separate retained-tail recovery
+
+Use `scripts/m11-retained-tail-recovery.mjs`, not ordinary `resume`, for the anticipated natural final-aggregation failure under exact frozen runtime `09a8e9147095079668689546ae85146d787d8b68`. The [command documentation](M11-report-correction.md#exact-go-input-and-invocation) defines the hash-bound approval file, unchanged runtime/dependencies, original parent identity receipt, existing nonblocking lock, all worker namespaces, exclusive output, and external two-hour guard.
+
+It validates completed retained state and exactly one original matrix suffix. It then permits only three fault worker calls, nine lanes/504 calls, 39 lease probes, 84 new tiny appends, and 128 double compositions. The 80 validation worker calls, 64 read-only database opens, bounded source reads, and validation time are separate measurements. Missing original metrics remain unavailable. A completed frozen tail does not qualify the final runtime or close the remaining M11 gaps.
+
+## Minimal final-runtime qualification route
+
+This is planning for the parent to approve, not an additional test campaign. The comparison is exact frozen `09a8e9147095079668689546ae85146d787d8b68` against accepted `613d523610a869a6dc801ef8a7d1dcc326883beb`, runtime version `2.0.34`. Refresh the comparison if the final source changes. Do not repeat source generation or infer state equivalence from schema numbers, complete cuts, or row counts.
+
+| Changed production paths, with corresponding generated JavaScript | Smallest affected behavior check |
+| --- | --- |
+| `catalog-sqlite.ts`, `logical-session-store.ts`, repair paths in `episode-state-store.ts` | One small disposable store scenario that distinguishes recognized corruption/repair from permission or storage failure. Require unchanged source, safe error classification, no reset on denied parent access, and bounded successful recovery only for the supported repair case. |
+| `episode-state-contract.ts`, `episode-state-reducer.ts`, `episode-state-store.ts` | One dense synthetic state scenario through actual materialization, stored selection, and exact recall. Include supersession at old/new cuts, sibling exclusion, explicit custom-message authority, protected-row coverage, and mandatory-row overflow refusal. Check real selected content and provenance, not only completeness flags. |
+| Batching and large-body paths in `episode-state-store.ts` | One body that crosses overlapping chunks plus enough small records to cross the new batch boundary. Resume an interrupted step on the same synthetic source, finish metadata, and compare the resulting selection with an uninterrupted result. Require bounded work and no duplicate or missing state. |
+| `search-v3-store.ts` | One small literal search/recall scenario that needs lexical fallback, including punctuation or text without a useful FTS candidate. Check exact verification, old-view exclusion of later appends, and truthful bounded refusal when the candidate budget is exhausted. |
+| `runtime-identity.ts` | Verify the accepted package/native identity and the identity reported by the actually loaded final tool during the checks above. A build or settings change alone is not activation evidence. |
+
+Prefer the corresponding existing focused checks and practical tool calls. These are four behavior scenarios plus identity verification, not a request to add a new suite or rerun the full preparation. The parent must settle the exact test selection and any additional scope first.
+
+Separate evidence reuse as follows:
+
+- The manifest and preserved source hashes can support the original real source-scale claim. They do not provide lost historical preparation latency or I/O distributions.
+- Catalog, capsule, chunk, scheduler, and worker producer paths outside the listed storage-wrapper changes have unchanged production source in this comparison. Their revision-bound source/preparation evidence can support those paths after exact identity/compatibility checks. This is not permission to widen ordinary resume or use a different runtime on the retained stores.
+- Frozen state materialization, saved selections, and frozen composition results remain evidence for `09a8e91` only. Changed reduction, effective cuts, supersession, repair, selection coverage, and lexical behavior require the final-runtime checks above. An unchanged composer does not make its changed state inputs equivalent.
+- Final integrated Pi behavior, remaining scale-matrix performance, reboot evidence, and other unverified M11 rows remain separate acceptance decisions. Neither the small final-runtime checks nor the frozen retained tail alone produces full M11 acceptance.
 
 ## Actual scale represented by the full profile
 
@@ -176,7 +205,7 @@ The report must keep these fields unavailable. Do not derive them from maxima, w
 ## Remaining implementation and execution gaps
 
 - A controlled native build or an exact verified reusable native binding is a campaign prerequisite. The complete smoke attempts are failures, not a complete M11 pass. Focused final-path fault, lane, and actual-producer composition checks passed after the last failure.
-- The retained full campaign preparation ran at `aa160c082dd9f027b0e378c53c2784e00ef1727e`, not the final integrated candidate. Reuse is valid only through the strict preparation-path diff allowlist and exact retained metadata/source validation. Pending state materialization, faults, matrix lanes, and composition must run on the final candidate.
+- The retained full campaign preparation ran at `aa160c082dd9f027b0e378c53c2784e00ef1727e`, with the later state resume at frozen `09a8e91`, not final runtime `2.0.34`. Ordinary resume keeps its strict preparation-path allowlist. Separate frozen retained-tail recovery does not authorize current-main store or selection reuse. The parent must approve the concrete final-runtime checks and evidence boundaries above.
 - The current harness does not inject repeated worker death or kill a live transaction. Prior evidence is revision-bound and later runtime changed.
 - The current harness safely refuses an incompatible search generation, preserves a pinned view across source append, and corrupts/restores one selected capsule segment with source hashes unchanged. It does not rebuild a completely new derived store after corruption because exact-byte restoration is the bounded repair under test.
 - The current harness does not perform a real system reboot.
