@@ -13,6 +13,7 @@ import { executeCatalogStoreRequest } from "../src/catalog-store.js";
 import { CATALOG_LIMITS, isCatalogRequest } from "../src/catalog-contract.js";
 import { CatalogSqlite, CatalogSqliteError } from "../src/catalog-sqlite.js";
 import { executeCapsuleRequest } from "../src/capsule-store.js";
+import { canonicalJson } from "../src/capsule-segment.js";
 import { reduceEpisodeStateEnvelope } from "../src/episode-state-reducer.js";
 import { executeEpisodeStateRequest } from "../src/episode-state-store.js";
 import { createMemoryEvent } from "../src/memory-store.js";
@@ -551,8 +552,11 @@ test("state gap repair: bounded legacy reconciliation preserves historical handl
   const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
   const sourcePath = join(directory, "main.jsonl"), sessionKey = "state-gap-repair";
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-  const clauses = Array.from({ length: 96 }, (_, index) => index % 2
-    ? `Goal: verify /Repo/Gap${index}.ts before release.` : `Never deploy /Repo/Gap${index}.ts without approval.`);
+  const clauses = Array.from({ length: 96 }, (_, index) => {
+    const revision = index === 0 ? " at revision first-window" : index === 1 ? " at revision unspecified"
+      : index === 64 ? " at revision later-window" : "";
+    return index % 2 ? `Goal: verify /Repo/Gap${index}.ts before release${revision}.` : `Never deploy /Repo/Gap${index}.ts without approval${revision}.`;
+  });
   const text = clauses.map(clause => clause.padEnd(510, " ") + "\n\n").join("");
   mkdirSync(searchDirectory, { mode: 0o700 });
   writeFileSync(sourcePath, message("u1", null, "user", text), { mode: 0o600 });
@@ -593,19 +597,20 @@ test("state gap repair: bounded legacy reconciliation preserves historical handl
     assert.ok(capsulePage.ok);
     const source = (capsulePage.result.capsules as ReducerEnvelope[])[0]!.source;
     // Construct a persisted old truncation: 16 first-window rows and 16 later-window rows.
-    // Later identities use the legacy window-relative offsets, but evidence stays exact.
+    // Later identities use legacy window-relative offsets and contextual revision.
+    // Leave part of the overlap missing so repair also revisits newly staged rows.
     database(db => db.transaction(() => {
       const rows = [...db.prepare("SELECT * FROM state_items WHERE eventSeq=1 ORDER BY stableKey LIMIT 128").iterate(128)];
       assert.equal(rows.length, 96);
       for (const row of rows) {
         const evidence = JSON.parse(String(row.evidence)), index = evidence.decodedUtf16.start / 512;
-        if (!(index < 16 || index >= 48 && index < 64)) {
+        if (!(index < 16 || index >= 48 && index < 56 || index >= 64 && index < 72)) {
           db.prepare("DELETE FROM state_fts WHERE stableKey=?").run(String(row.stableKey));
           db.prepare("DELETE FROM state_items WHERE stableKey=?").run(String(row.stableKey));
         } else if (index >= 48) {
           const spanKey = hash(`${JSON.stringify(source)}\n${evidence.decodedUtf16.start - 24576}\n${evidence.decodedUtf16.end - 24576}`);
           const stableKey = hash(`${row.propositionKey}\n${spanKey}`).slice(0, 32);
-          db.prepare("UPDATE state_items SET stableKey=?,spanKey=? WHERE stableKey=?").run(stableKey, spanKey, String(row.stableKey));
+          db.prepare("UPDATE state_items SET stableKey=?,spanKey=?,revision=? WHERE stableKey=?").run(stableKey, spanKey, "later-window", String(row.stableKey));
           db.prepare("UPDATE state_fts SET stableKey=? WHERE stableKey=?").run(stableKey, String(row.stableKey));
         }
       }
@@ -620,6 +625,7 @@ test("state gap repair: bounded legacy reconciliation preserves historical handl
     await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, view);
     const ready = await settle(view);
     const target = database(db => db.prepare("SELECT * FROM state_items WHERE eventSeq=1 AND json_extract(evidence,'$.decodedUtf16.start')=24576").get()!);
+    assert.equal(target.revision, "later-window", "legacy overlap retains its old window context");
     const authorization = database(db => JSON.parse(String(db.prepare("SELECT evidence FROM state_items WHERE eventSeq=2 LIMIT 1").get()!.evidence)));
     await run(view, { op: "supersedeState", expectedGeneration: ready.stateGeneration,
       authorization: { source: authorization.source, decodedUtf16: authorization.decodedUtf16,
@@ -662,11 +668,38 @@ test("state gap repair: bounded legacy reconciliation preserves historical handl
         t.diagnostic(`Previous executor ${op} refused: ${refusal.code}`);
       }
     }
-    let steps = 0, restartedBatch = false;
+    let steps = 0, restartedBatch = false, explicitRevisionRefused = false;
+    let stagedOverlap: Record<string, any> | undefined;
     for (; steps < 24 && repair.phase !== "ready"; steps++) {
+      if (repair.phase === "extract" && !explicitRevisionRefused) {
+        const saved = database(db => ({
+          row: db.prepare("SELECT * FROM state_items WHERE eventSeq=1 AND json_extract(evidence,'$.decodedUtf16.start')=512").get()!,
+          progress: db.prepare("SELECT progress FROM state_gap_repairs WHERE repairId=?").get(repairId)!.progress,
+        }));
+        assert.equal(saved.row.revision, "first-window");
+        // Even the explicit value "unspecified" is not an absent declaration.
+        // Keep the synthetic row hash valid so the revision guard must refuse.
+        database(db => db.transaction(() => {
+          db.prepare("UPDATE state_items SET revision='wrong-clause-revision' WHERE stableKey=?").run(String(saved.row.stableKey));
+          const changed = db.prepare("SELECT * FROM state_items WHERE stableKey=?").get(String(saved.row.stableKey))!;
+          db.prepare("UPDATE state_gap_legacy SET rowHash=? WHERE repairId=? AND stableKey=?").run(hash(canonicalJson(changed)), repairId, String(saved.row.stableKey));
+        }));
+        await refuses({ ...binding, action: "step" }, "search-v3-state-repair-evidence-ambiguous");
+        database(db => db.transaction(() => {
+          assert.equal(db.prepare("SELECT progress FROM state_gap_repairs WHERE repairId=?").get(repairId)!.progress, saved.progress);
+          db.prepare("UPDATE state_items SET revision=? WHERE stableKey=?").run(String(saved.row.revision), String(saved.row.stableKey));
+          db.prepare("UPDATE state_gap_legacy SET rowHash=? WHERE repairId=? AND stableKey=?").run(hash(canonicalJson(saved.row)), repairId, String(saved.row.stableKey));
+        }));
+        explicitRevisionRefused = true;
+      }
       repair = await run(view, JSON.parse(JSON.stringify({ ...binding, action: "step" })));
       assert.ok(repair.metrics.stateItems <= 32);
       assert.equal((await run(view, { op: "stateStatus" })).stateGeneration, status.expectedGeneration);
+      if (repair.nextDecoded === 32768 && !stagedOverlap) {
+        stagedOverlap = database(db => db.prepare("SELECT * FROM state_items WHERE eventSeq=1 AND json_extract(evidence,'$.decodedUtf16.start')=?").get(56 * 512)!);
+        assert.equal(stagedOverlap!.createdGeneration, status.expectedGeneration + 1);
+        assert.equal(stagedOverlap!.revision, "first-window", "the next window supplies a different contextual revision");
+      }
       if (repair.afterState && !restartedBatch) {
         restartedBatch = true;
         const restored = await run(view, { op: "repairState", action: "status", repairId, source });
@@ -677,6 +710,7 @@ test("state gap repair: bounded legacy reconciliation preserves historical handl
       }
     }
     assert.equal(repair.phase, "ready"); assert.equal(restartedBatch, true);
+    assert.equal(explicitRevisionRefused, true); assert.ok(stagedOverlap);
     assert.equal(repair.accounted, 96); assert.equal(repair.matched, 32); assert.equal(repair.inserted, 64);
     assert.equal(repair.supersededPreserved, 1);
     const publication = await run(view, { ...binding, action: "publish" });
@@ -691,6 +725,8 @@ test("state gap repair: bounded legacy reconciliation preserves historical handl
     assert.deepEqual((await run(view, { op: "recallRollup", handle: rollup.handle, level: "root", limit: 1 })).items, historicalRoot.items);
     database(db => {
       for (const row of frozen.rows) assert.deepEqual(db.prepare("SELECT * FROM state_items WHERE stableKey=?").get(String(row.stableKey)), row);
+      assert.deepEqual(db.prepare("SELECT * FROM state_items WHERE stableKey=?").get(String(stagedOverlap!.stableKey)), stagedOverlap,
+        "staged overlap keeps its existing revision and row");
       assert.deepEqual([...db.prepare("SELECT * FROM coverage ORDER BY eventSeq,descriptor LIMIT 16").iterate(16)], frozen.coverage);
       for (const cut of frozen.cuts) assert.deepEqual(db.prepare("SELECT * FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?").get(String(cut.lineage), Number(cut.eventSeq), Number(cut.descriptor)), cut);
       assert.deepEqual({ ...db.prepare("SELECT * FROM heads LIMIT 1").get(), generation: frozen.head.generation }, frozen.head);
@@ -698,7 +734,8 @@ test("state gap repair: bounded legacy reconciliation preserves historical handl
     });
     assert.equal(hash(readFileSync(sourcePath, "utf8")), sourceHash);
     t.diagnostic(JSON.stringify({ steps, accounted: repair.accounted, matched: repair.matched, inserted: repair.inserted,
-      supersededPreserved: repair.supersededPreserved, historicalHandle: rollup.handle.ruleset, oldBinaryChecks: !!process.env.CHRONO_PREVIOUS_STATE_EXECUTOR }));
+      supersededPreserved: repair.supersededPreserved, historicalHandle: rollup.handle.ruleset, explicitRevisionRefused,
+      stagedRevisionPreserved: stagedOverlap!.revision, oldBinaryChecks: !!process.env.CHRONO_PREVIOUS_STATE_EXECUTOR }));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

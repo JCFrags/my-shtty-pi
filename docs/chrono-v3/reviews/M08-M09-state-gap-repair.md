@@ -37,6 +37,16 @@ Initial PR75 CI passed 680 of 681 Chrono tests. The existing timeout fixture wai
 
 The affected credential, timeout, abort, and crash fixture passed in 1.7 seconds. The first local launch used the non-emitting typecheck configuration, so no test ran. The corrected launch used the existing test-build configuration. No broad local suite or unchanged CI retry ran.
 
+## Overlapping-window correction, 2.0.34
+
+The first private 157-target application verified its online backup, then stopped after 19 worker calls with no published target. Its pending stage, original coverage, bindings, and refusal receipts remain intact.
+
+A bounded read-only simulation identified the failure. The same exact clause inherited different revision labels from overlapping windows. Its legacy row hash and every other comparison still matched. Repair now permits only this contextual revision difference when the exact clause has no explicit revision. It preserves the existing row and revision. Clause-local revision mismatches and all other evidence and lifecycle checks still refuse. Reducer output, state order, checkpoints, and repair bindings do not change.
+
+The SQLite transaction wrapper also masked the specific repair refusal as a generic store failure. Its explicit error-code allowlist now retains known repair codes while discarding private diagnostic text and unknown codes.
+
+Two focused checks passed. The transaction check verified rollback and diagnostic sanitization. The persisted repair check completed 15 steps, accounted for 96 states, matched 32 legacy rows, inserted 64 rows, and preserved one supersession. It also verified staged-overlap preservation and explicit-revision refusal. These are focused checks, not a successful retry of the private application. Required CI, delivery, and the unchanged campaign's guarded continuation remain separate.
+
 ## Compatibility and remaining work
 
 Explicit repair opts the store into `episode-state-exact-v4-gap-repair-v1`. Compatible readers retain historical pins and handles. Actual pre-repair 2.0.32 code refused both reads and writes on the opted-in fixture store. Its native wrapper reported `search-v3-state-store-failed`. This refusal is not exercised rollback. Do not discard a pending stage or relabel the store for an older binary.

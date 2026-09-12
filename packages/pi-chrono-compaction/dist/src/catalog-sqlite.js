@@ -26,6 +26,21 @@ const SAFE_APPLICATION_ERROR_CODES = new Set([
     "search-v3-rollup-store-mismatch",
     "search-v3-rollup-tree-limit",
     "search-v3-rollup-version-mismatch",
+    "search-v3-state-repair-active",
+    "search-v3-state-repair-binding-mismatch",
+    "search-v3-state-repair-checkpoint-invalid",
+    "search-v3-state-repair-coverage-mismatch",
+    "search-v3-state-repair-coverage-missing",
+    "search-v3-state-repair-current-cut-required",
+    "search-v3-state-repair-evidence-ambiguous",
+    "search-v3-state-repair-evidence-invalid",
+    "search-v3-state-repair-extraction-qualified",
+    "search-v3-state-repair-incomplete",
+    "search-v3-state-repair-lifecycle-ambiguous",
+    "search-v3-state-repair-missing",
+    "search-v3-state-repair-not-a-gap",
+    "search-v3-state-repair-source-invalid",
+    "search-v3-state-repair-stale",
 ]);
 function sanitized(error) {
     if (error instanceof CatalogSqliteError)

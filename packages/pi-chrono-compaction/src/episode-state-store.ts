@@ -24,7 +24,7 @@ import {
   type EpisodeStateSelectionItem,
   type EpisodeStateSelectionMember,
 } from "./episode-state-contract.js";
-import { isVerifiedCustomMessage, reduceEpisodeStateEnvelope, type ExactStateEvidence, type ReducedEpisodeEvent, type ReducedStateItem, type VerifiedEventStructuralFacts } from "./episode-state-reducer.js";
+import { explicitRevisionOf, isVerifiedCustomMessage, reduceEpisodeStateEnvelope, type ExactStateEvidence, type ReducedEpisodeEvent, type ReducedStateItem, type VerifiedEventStructuralFacts } from "./episode-state-reducer.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
@@ -671,8 +671,11 @@ function repairEvidenceKey(source: ScopedBodySourceRef, evidence: ExactStateEvid
   return sha(canonicalJson({ source, decodedUtf16: evidence.decodedUtf16, exactText: evidence.exactText }));
 }
 function repairItemMatches(row: SqlRow, item: ReducedStateItem): boolean {
-  return ["propositionKey", "subject", "revision", "kind", "authority", "confidence", "status"].every(key =>
-    str(row, key) === item[key as keyof ReducedStateItem]);
+  // Callers first bind identical exact evidence. Keep the existing row's contextual
+  // revision when overlapping windows differ, but never waive a clause-local revision.
+  return ["propositionKey", "subject", "kind", "authority", "confidence", "status"].every(key =>
+    str(row, key) === item[key as keyof ReducedStateItem])
+    && (str(row, "revision") === item.revision || explicitRevisionOf(item.evidence.exactText) === undefined);
 }
 
 /** Repair-only body verification. Descriptor zero is not itself evidence of a body. */

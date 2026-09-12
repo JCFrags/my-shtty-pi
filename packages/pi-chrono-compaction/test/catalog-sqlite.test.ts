@@ -37,6 +37,29 @@ test("WAL/FULL, heap/cache/temp readbacks, FTS5 bound MATCH, transactions and ch
   } finally { db.close(); f.cleanup(); }
 });
 
+test("state repair transaction refusals preserve safe codes without private diagnostics", () => {
+  const f = fixture(); const db = CatalogSqlite.create(f.path);
+  try {
+    db.prepare("CREATE TABLE synthetic (value TEXT)").run();
+    for (const applicationCode of ["search-v3-state-repair-evidence-ambiguous", "search-v3-state-repair-lifecycle-ambiguous"]) {
+      assert.throws(() => db.transaction(() => {
+        db.prepare("INSERT INTO synthetic VALUES (?)").run("rollback");
+        throw Object.assign(new Error("synthetic private detail"), { code: applicationCode, detail: "synthetic private value" });
+      }), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal((error as Error & { code: string }).code, applicationCode);
+        assert.equal(error.message, applicationCode);
+        assert.equal("detail" in error, false);
+        return true;
+      });
+      assert.equal(db.prepare("SELECT count(*) AS n FROM synthetic").get()?.n, 0);
+    }
+    assert.throws(() => db.transaction(() => {
+      throw Object.assign(new Error("synthetic private detail"), { code: "search-v3-state-repair-untrusted-detail" });
+    }), code("catalog-sqlite-failed"));
+  } finally { db.close(); f.cleanup(); }
+});
+
 test("two connections isolate uncommitted writes, reader snapshot, and bounded writer lock", () => {
   const f = fixture(); const writer = CatalogSqlite.create(f.path); const reader = CatalogSqlite.open(f.path);
   try {
