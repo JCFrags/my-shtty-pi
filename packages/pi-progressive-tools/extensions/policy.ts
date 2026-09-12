@@ -8,7 +8,8 @@ import type {
 	ToolMatchRule,
 } from "./types.ts";
 
-export const SEARCH_TOOL_NAME = "search_tools";
+export const HELP_TOOL_NAME = "tool_help";
+export const LIST_TOOL_NAME = "list_tools";
 
 const CORE_TOOL_NAMES = new Set(["read", "write", "edit", "bash", "ls"]);
 
@@ -83,9 +84,9 @@ function areasForRules(rules: ToolMatchRule[]): string[] {
 }
 
 export function classifyTool(tool: ToolInfo, config: ProgressiveToolsConfig): PolicyDecision {
-	// The loader is unconditional. Explicit blocked rules can retire a built-in
-	// name, but no other policy rule can manage or force-activate a built-in.
-	if (tool.name === SEARCH_TOOL_NAME) {
+	// The help and inventory tools are unconditional. Explicit blocked rules can
+	// retire a built-in name, but other rules cannot manage or force-activate it.
+	if (tool.name === HELP_TOOL_NAME || tool.name === LIST_TOOL_NAME) {
 		return {
 			state: "core",
 			forceActive: true,
@@ -198,13 +199,13 @@ export function buildInventory(options: {
 		if (estimatedTokens >= options.config.audit.largeSchemaTokens) flags.push("large-schema");
 		if (CORE_TOOL_NAMES.has(tool.name) && tool.sourceInfo.source !== "builtin") flags.push("core-name-override");
 		if (!options.initialToolIdentities.has(toolIdentity(tool))) flags.push("new-this-session");
-		if (options.activatedManaged.has(tool.name)) flags.push("loaded-by-search");
+		if (options.activatedManaged.has(tool.name)) flags.push("loaded-by-help");
 
 		return {
 			tool,
 			decision,
 			active: options.activeTools.has(tool.name),
-			activatedBySearch: options.activatedManaged.has(tool.name),
+			activatedByHelp: options.activatedManaged.has(tool.name),
 			newThisSession: !options.initialToolIdentities.has(toolIdentity(tool)),
 			estimatedTokens,
 			flags,

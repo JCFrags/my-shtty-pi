@@ -6,6 +6,12 @@ inventory frozen to an old deployment.
 
 ## Supported architecture
 
+The [capability vision](docs/capability-vision.md) describes the long-term role of
+native tools, CLIs, skills, and progressive disclosure without prescribing a migration.
+
+- **Progressive Tools** (`packages/pi-progressive-tools`) keeps short tool names
+  and usage hints visible. `tool_help` loads selected definitions and guidance;
+  `list_tools` provides the catalog again without loading definitions.
 - **Project Glance** (`packages/pi-project-glance`) presents Todo, Workplan, and
   progress updates and deferred questions. `/project-glance` opens its Herdr pane. It does not import
   orchestration, Files, or provider implementation code in its runtime.

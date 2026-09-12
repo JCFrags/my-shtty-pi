@@ -13,9 +13,9 @@ export interface ToolMatchRule {
 	scope?: PatternValue;
 	/** Match sourceInfo.origin. */
 	origin?: PatternValue;
-	/** Short capability area for the model-visible capability map. */
+	/** Short capability area retained for audit filtering. */
 	area?: string;
-	/** Extra task and service words used by search. */
+	/** Extra task and service words retained for audit filtering. */
 	aliases?: string[];
 	/** Optional note shown in the audit report. */
 	note?: string;
@@ -48,6 +48,9 @@ export interface ProgressiveToolsConfig {
 	managed: ToolMatchRule[];
 	blocked: ToolMatchRule[];
 	aliases: ToolAliasRule[];
+	/** Short usage hints keyed by exact registered tool name. */
+	summaries: Record<string, string>;
+	/** Legacy search settings are accepted but not used by exact-name help. */
 	search: SearchConfig;
 	audit: AuditConfig;
 }
@@ -75,14 +78,8 @@ export interface InventoryItem {
 	tool: ToolInfo;
 	decision: PolicyDecision;
 	active: boolean;
-	activatedBySearch: boolean;
+	activatedByHelp: boolean;
 	newThisSession: boolean;
 	estimatedTokens: number;
 	flags: string[];
-}
-
-export interface RankedTool {
-	item: InventoryItem;
-	score: number;
-	matchedTerms: string[];
 }
