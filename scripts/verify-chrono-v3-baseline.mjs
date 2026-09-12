@@ -15,7 +15,7 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "6e381a4ecabcad292892bf9ff5c1ba4cf7798029",
+  "tree": "a043ae6c2248c9a05cc267186775d158d6ce3724",
   "files": 428,
   "maps": 134,
   "package": "packages/pi-chrono-compaction",
@@ -24,7 +24,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "DEPLOYED.sha256",
       "upstreamSha256": "3954d79d5faa1bb68e189a9db2fc799f0b4659715a2d73c91df2d7e332f3d627",
-      "integratedSha256": "31ef1b509ce00709937b0cd30d01a16a801b10acfd829336dd841abcff94bd66"
+      "integratedSha256": "7657421e4257fe12a6621372b1fb2f883eaed887a1977fbc633af5bb3d08ca0c"
     },
     {
       "path": "README.md",
@@ -99,7 +99,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "dist/src/runtime-identity.js",
       "upstreamSha256": null,
-      "integratedSha256": "5d0b8eda033882a24bfa5250566c9fb2648eff2048fb5bc26bdb0bb78ffdd66a"
+      "integratedSha256": "3855e5a8e90f2a450c525fa433b10129ec7584c3449200f1f494043b75785efb"
     },
     {
       "path": "dist/src/search-v3-store.js",
@@ -209,7 +209,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "src/runtime-identity.ts",
       "upstreamSha256": null,
-      "integratedSha256": "4075dd888e3bddf97c54703f6acf6b34a585580eab71bb5ed4ea22bd10ce0fd2"
+      "integratedSha256": "ee177799ca693f5515f0da6f81cd43e23b272586b82b4f0b1fe91ae20ed284f5"
     },
     {
       "path": "src/search-v3-store.ts",
