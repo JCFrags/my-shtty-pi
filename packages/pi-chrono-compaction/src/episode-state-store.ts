@@ -24,7 +24,7 @@ import {
   type EpisodeStateSelectionItem,
   type EpisodeStateSelectionMember,
 } from "./episode-state-contract.js";
-import { reduceEpisodeStateEnvelope, type ReducedEpisodeEvent, type VerifiedEventStructuralFacts } from "./episode-state-reducer.js";
+import { reduceEpisodeStateEnvelope, type ExactStateEvidence, type ReducedEpisodeEvent, type ReducedStateItem, type VerifiedEventStructuralFacts } from "./episode-state-reducer.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
@@ -68,6 +68,19 @@ const schema = [
   "CREATE VIRTUAL TABLE retention_fts USING fts5(lineage UNINDEXED,stableKey UNINDEXED,body,tokenize='unicode61')",
 ];
 
+// Explicit opt-in. Pre-repair v4 readers and writers reject this storage marker.
+const STATE_REPAIR_RULESET = "episode-state-exact-v4-gap-repair-v1";
+const repairSchema = [
+  "CREATE TABLE state_gap_repairs (repairId TEXT PRIMARY KEY, lineage TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, priorGeneration INTEGER NOT NULL, effectiveCut INTEGER NOT NULL, generation INTEGER NOT NULL, binding TEXT NOT NULL, snapshot TEXT NOT NULL, progress TEXT NOT NULL, phase TEXT NOT NULL) WITHOUT ROWID",
+  "CREATE INDEX state_gap_active ON state_gap_repairs(phase)",
+  "CREATE INDEX state_gap_coverage ON state_gap_repairs(lineage,eventSeq,descriptor,priorGeneration,phase,effectiveCut,generation)",
+  "CREATE TABLE state_gap_legacy (repairId TEXT NOT NULL, stableKey TEXT NOT NULL, evidenceKey TEXT NOT NULL, rowHash TEXT NOT NULL, matched INTEGER NOT NULL, PRIMARY KEY(repairId,stableKey)) WITHOUT ROWID",
+  "CREATE INDEX state_gap_evidence ON state_gap_legacy(repairId,evidenceKey)",
+  "CREATE INDEX state_gap_unmatched ON state_gap_legacy(repairId,matched)",
+];
+const repairKinds = ["restriction", "goal", "openwork", "blocker", "decision", "approval", "reportedimplementation",
+  "observedverification", "deployment", "memory", "retentionhint"];
+
 type CapsuleExecutor = (request: unknown) => Promise<CapsuleWorkerResponse>;
 type CatalogExecutor = (request: unknown) => Promise<CatalogResponse>;
 export interface EpisodeStateExecutionOptions { readonly capsuleExecutor?: CapsuleExecutor; readonly catalogExecutor?: CatalogExecutor }
@@ -84,9 +97,12 @@ class Store {
     const meta = this.get("SELECT * FROM meta WHERE singleton=1");
     if (!meta || num(meta, "version") !== EPISODE_STATE_SCHEMA_VERSION || str(meta, "identity") !== canonicalJson(this.request.identity)
       || str(meta, "searchRoute") !== this.request.searchDirectory || str(meta, "capsuleRoute") !== this.request.capsuleDirectory
-      || str(meta, "catalogRoute") !== this.request.catalogDirectory || str(meta, "ruleset") !== EPISODE_STATE_RULESET_VERSION)
+      || str(meta, "catalogRoute") !== this.request.catalogDirectory
+      || ![EPISODE_STATE_RULESET_VERSION, STATE_REPAIR_RULESET].includes(str(meta, "ruleset")))
       fail("search-v3-state-store-mismatch");
-    for (const sql of schema) {
+    if (str(meta!, "ruleset") !== STATE_REPAIR_RULESET && this.get("SELECT name FROM sqlite_master WHERE name='state_gap_repairs'"))
+      fail("search-v3-state-version-mismatch");
+    for (const sql of [...schema, ...(str(meta!, "ruleset") === STATE_REPAIR_RULESET ? repairSchema : [])]) {
       const parts = sql.split(" "), name = parts[1] === "VIRTUAL" ? parts[3]! : parts[2]!;
       if (this.get("SELECT sql FROM sqlite_master WHERE name=?", name)?.sql !== sql) fail("search-v3-state-version-mismatch");
     }
@@ -298,7 +314,7 @@ function extendsView(current: EpisodeStateRequest["view"], old: EpisodeStateRequ
 type SupersessionRequest = Extract<EpisodeStateRequest, { op: "supersedeState" }>;
 
 /** Verify catalog role/provenance and exact descriptor identity, not memory labels or capsule prose. */
-async function originalUserSource(request: SupersessionRequest, source: ScopedBodySourceRef, executor: CatalogExecutor,
+async function originalUserSource(request: EpisodeStateRequest, source: ScopedBodySourceRef, executor: CatalogExecutor,
   budget: { bytes: number }): Promise<CatalogEventRow> {
   if (!isScopedBodySourceRef(source) || !sourceRefWithinViewBounds(source, request.view)) fail("search-v3-state-supersession-source-invalid");
   const page = await catalogCall(request, executor, budget, { op: "page", view: request.view, after: source.eventSeq - 1, limit: 1 });
@@ -627,6 +643,203 @@ async function materialize(request: Extract<EpisodeStateRequest, { op: "material
       acceptedRetentionHints: metadata.acceptedRetentionHints }, metrics: { capsules: checkpoint ? 1 : 0, decodedChunks, stateItems,
       stateItemsPerBatch: EPISODE_STATE_LIMITS.stateItemsPerBatch, partialRecords: bodyPartial + metadata.partial, sqliteStatements: store.statements } };
 }
+type StateRepairRequest = Extract<EpisodeStateRequest, { op: "repairState" }>;
+interface StateRepairProgress {
+  checkpoint: StateBodyCheckpoint;
+  structural: VerifiedEventStructuralFacts;
+  nextDecoded: number;
+  legacyKind: number;
+  legacyAfter: string;
+  legacyRows: number;
+  matched: number;
+  inserted: number;
+  superseded: number;
+}
+function repairEnabled(store: Store): boolean {
+  return store.get("SELECT ruleset FROM meta WHERE singleton=1")?.ruleset === STATE_REPAIR_RULESET;
+}
+function repairEvidenceKey(source: ScopedBodySourceRef, evidence: ExactStateEvidence): string {
+  if (canonicalJson(evidence?.source) !== canonicalJson(source) || !Number.isSafeInteger(evidence?.decodedUtf16?.start)
+    || !Number.isSafeInteger(evidence.decodedUtf16.end) || evidence.decodedUtf16.start < source.decodedUtf16.start
+    || evidence.decodedUtf16.end > source.decodedUtf16.end || typeof evidence.exactText !== "string"
+    || evidence.exactText.length < 1 || evidence.exactText.length > EPISODE_STATE_LIMITS.clauseUtf16Units
+    || evidence.exactText.length !== evidence.decodedUtf16.end - evidence.decodedUtf16.start) fail("search-v3-state-repair-evidence-invalid");
+  return sha(canonicalJson({ source, decodedUtf16: evidence.decodedUtf16, exactText: evidence.exactText }));
+}
+function repairItemMatches(row: SqlRow, item: ReducedStateItem): boolean {
+  return ["propositionKey", "subject", "revision", "kind", "authority", "confidence", "status"].every(key =>
+    str(row, key) === item[key as keyof ReducedStateItem]);
+}
+
+/** Exact-descriptor repair. Staged rows use one reserved, unpublished generation. */
+async function repairState(request: StateRepairRequest, store: Store, options: EpisodeStateExecutionOptions,
+  budget: { bytes: number }): Promise<Record<string, unknown>> {
+  const line = lineage(request), source = request.source;
+  const coverage = store.get("SELECT * FROM coverage WHERE lineage=? AND eventSeq=? AND descriptor=?", line, source.eventSeq, source.descriptor)
+    ?? fail("search-v3-state-repair-coverage-missing");
+  const priorCoverage = { generation: num(coverage, "generation"), hash: sha(canonicalJson(coverage)) };
+  const currentGeneration = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation");
+  const enabled = repairEnabled(store);
+  let stage = enabled ? store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId) : undefined;
+  const binding = canonicalJson({ identity: request.identity, view: request.view, source,
+    expectedGeneration: request.expectedGeneration, priorCoverage: request.priorCoverage });
+  const result = (row: SqlRow, stateItems = 0): Record<string, unknown> => {
+    const progress = JSON.parse(str(row, "progress")) as StateRepairProgress;
+    return { repairId: request.repairId, phase: str(row, "phase"), sourceHash: source.bodyHash, sourceViewHash: viewHash(request),
+      priorCoverage, expectedGeneration: num(row, "generation") - 1, publicationGeneration: num(row, "generation"),
+      effectiveAtCut: num(row, "effectiveCut"), published: row.phase === "published", storageRuleset: STATE_REPAIR_RULESET,
+      nextDecoded: progress.nextDecoded, endDecoded: source.decodedUtf16.end, afterState: progress.checkpoint.batch?.cursor.afterState ?? 0,
+      legacyKind: progress.legacyKind, legacyAfter: progress.legacyAfter, legacyRows: progress.legacyRows,
+      matched: progress.matched, inserted: progress.inserted, supersededPreserved: progress.superseded,
+      accounted: progress.matched + progress.inserted, semanticCompletion: false,
+      metrics: { stateItems, stateItemsPerBatch: EPISODE_STATE_LIMITS.stateItemsPerBatch, sqliteStatements: store.statements } };
+  };
+  if (stage) {
+    const saved = JSON.parse(str(stage, "binding"));
+    if (stage.lineage !== line || canonicalJson(saved.source) !== canonicalJson(source)
+      || canonicalJson(saved.view) !== canonicalJson(request.view) || canonicalJson(saved.identity) !== canonicalJson(request.identity)
+      || request.action !== "status" && stage.binding !== binding) fail("search-v3-state-repair-binding-mismatch");
+    if (request.action === "status" || stage.phase === "published") return result(stage);
+  } else if (request.action === "status") return { repairId: request.repairId, phase: "missing", priorCoverage,
+    expectedGeneration: currentGeneration, sourceHash: source.bodyHash, sourceViewHash: viewHash(request), published: false };
+  else if (request.action !== "start") fail("search-v3-state-repair-missing");
+
+  if (currentGeneration !== request.expectedGeneration || canonicalJson(priorCoverage) !== canonicalJson(request.priorCoverage))
+    fail("search-v3-state-repair-stale");
+  const head = store.get("SELECT * FROM heads WHERE lineage=?", line) ?? fail("search-v3-state-repair-current-cut-required");
+  if (head.view !== canonicalJson(request.view) || head.complete !== 1 || head.metadataComplete !== 1
+    || num(head, "metadataAfterEventSeq") < request.view.eventCut || store.get("SELECT 1 AS found FROM large_bodies LIMIT 1"))
+    fail("search-v3-state-repair-current-cut-required");
+  const originalCut = store.get("SELECT * FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?", line, source.eventSeq, source.descriptor);
+  if (!originalCut || originalCut.generation !== coverage.generation) fail("search-v3-state-repair-coverage-mismatch");
+  const snapshot = canonicalJson({ head, coverage, originalCut });
+  if (stage && stage.snapshot !== snapshot) fail("search-v3-state-repair-stale");
+  const catalog = options.catalogExecutor ?? executeCatalogStoreRequest, capsules = options.capsuleExecutor ?? executeCapsuleRequest;
+  await originalUserSource(request, source, catalog, budget);
+  if (!stage) {
+    if (![coverage.restrictionGap, coverage.openWorkGap, coverage.optionalGap].includes(1)) fail("search-v3-state-repair-not-a-gap");
+    if (enabled && store.get("SELECT 1 AS found FROM state_gap_repairs WHERE phase!='published' OR (lineage=? AND eventSeq=? AND descriptor=?) LIMIT 1",
+      line, source.eventSeq, source.descriptor)) fail("search-v3-state-repair-active");
+    const page = await capsuleCall(request, capsules, budget, { op: "capsulePage", view: request.view,
+      afterEventSeq: source.eventSeq, afterDescriptor: source.descriptor - 1, limit: 1 });
+    const envelope = page.capsules?.[0] as ReducerEnvelope | undefined;
+    if (!envelope || envelope.provenance !== "original" || canonicalJson(envelope.source) !== canonicalJson(source)) fail("search-v3-state-repair-source-invalid");
+    const structural = await exactStructural(request, envelope!, catalog, budget);
+    if (structural?.role?.value !== "user") fail("search-v3-state-repair-source-invalid");
+    const progress: StateRepairProgress = { checkpoint: { format: STATE_BATCH_CHECKPOINT, view: request.view, envelope: envelope! }, structural: structural!,
+      nextDecoded: source.decodedUtf16.start, legacyKind: 0, legacyAfter: "", legacyRows: 0, matched: 0, inserted: 0, superseded: 0 };
+    store.transaction(() => {
+      if (!enabled) {
+        for (const sql of repairSchema) store.run(sql);
+        store.run("UPDATE meta SET ruleset=? WHERE singleton=1", STATE_REPAIR_RULESET);
+      }
+      store.run("INSERT INTO state_gap_repairs VALUES(?,?,?,?,?,?,?,?,?,?,?)", request.repairId, line, source.eventSeq, source.descriptor,
+        priorCoverage.generation, request.view.eventCut, currentGeneration + 1, binding, snapshot, JSON.stringify(progress), "legacy");
+    });
+    return result(store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId)!);
+  }
+  if (request.action === "start") return result(stage);
+  const generation = num(stage, "generation"), progress = JSON.parse(str(stage, "progress")) as StateRepairProgress;
+  if (request.action === "publish") {
+    if (stage.phase !== "ready" || progress.nextDecoded !== source.decodedUtf16.end || progress.checkpoint.batch
+      || store.get("SELECT 1 AS found FROM state_gap_legacy WHERE repairId=? AND matched=0 LIMIT 1", request.repairId))
+      fail("search-v3-state-repair-incomplete");
+    const descriptor = Number.MAX_SAFE_INTEGER - generation;
+    if (store.get("SELECT 1 AS found FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?", line, request.view.eventCut, descriptor))
+      fail("search-v3-state-repair-stale");
+    store.transaction(() => {
+      store.run("INSERT INTO cuts VALUES(?,?,?,?)", line, request.view.eventCut, descriptor, generation);
+      store.run("UPDATE state_gap_repairs SET phase='published' WHERE repairId=?", request.repairId);
+      store.run("UPDATE heads SET generation=? WHERE lineage=?", generation, line);
+      store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
+    });
+    return result(store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId)!);
+  }
+  if (stage.phase === "ready") return result(stage);
+  let phase = str(stage, "phase"), stateItems = 0;
+  if (phase === "legacy") {
+    if (!Number.isSafeInteger(progress.legacyKind) || progress.legacyKind < 0 || progress.legacyKind >= repairKinds.length
+      || !/^(?:[a-f0-9]{32})?$/u.test(progress.legacyAfter)) fail("search-v3-state-repair-checkpoint-invalid");
+    // Reuse the existing kind/source index. Never build an index over lifetime state.
+    const rows = store.rows("SELECT * FROM state_items INDEXED BY state_compose WHERE lineage=? AND kind=? AND eventSeq=? AND descriptor=? AND createdGeneration<=? AND stableKey>? ORDER BY stableKey LIMIT ?",
+      EPISODE_STATE_LIMITS.stateItemsPerBatch, line, repairKinds[progress.legacyKind]!, source.eventSeq, source.descriptor,
+      request.expectedGeneration!, progress.legacyAfter, EPISODE_STATE_LIMITS.stateItemsPerBatch);
+    const exact = rows.map(row => {
+      if (row.authority !== "user" || row.confidence !== "verified") fail("search-v3-state-repair-evidence-invalid");
+      if (row.supersededGeneration !== null) {
+        const resolution = JSON.parse(str(row, "resolutionEvidence"));
+        if (num(row, "supersededGeneration") > request.expectedGeneration! || !isScopedBodySourceRef(resolution?.source)
+          || !sourceRefWithinViewBounds(resolution.source, request.view)
+          || Number(resolution.effectiveAtCut ?? resolution.source.eventSeq) > request.view.eventCut)
+          fail("search-v3-state-repair-lifecycle-ambiguous");
+      } else if (row.resolutionEvidence !== null) fail("search-v3-state-repair-lifecycle-ambiguous");
+      return { row, key: repairEvidenceKey(source, JSON.parse(str(row, "evidence"))) };
+    });
+    stateItems = rows.length; progress.legacyRows += rows.length;
+    if (rows.length < EPISODE_STATE_LIMITS.stateItemsPerBatch) { progress.legacyKind++; progress.legacyAfter = ""; }
+    else progress.legacyAfter = str(rows.at(-1)!, "stableKey");
+    if (progress.legacyKind === repairKinds.length) phase = "extract";
+    store.transaction(() => {
+      for (const { row, key } of exact) store.run("INSERT INTO state_gap_legacy VALUES(?,?,?,?,0)", request.repairId, str(row, "stableKey"), key, sha(canonicalJson(row)));
+      store.run("UPDATE state_gap_repairs SET progress=?,phase=? WHERE repairId=?", JSON.stringify(progress), phase, request.repairId);
+    });
+  } else if (phase === "extract") {
+    const { checkpoint } = progress, next = progress.nextDecoded;
+    if (canonicalJson(checkpoint.view) !== canonicalJson(request.view) || canonicalJson(checkpoint.envelope?.source) !== canonicalJson(source)
+      || progress.structural?.role?.value !== "user" || !Number.isSafeInteger(next) || next < source.decodedUtf16.start || next >= source.decodedUtf16.end)
+      fail("search-v3-state-repair-checkpoint-invalid");
+    if (checkpoint.batch || next > source.decodedUtf16.start)
+      decodeStateCheckpoint(request, { envelope: JSON.stringify(checkpoint), nextDecoded: next }, request.view);
+    const start = next === source.decodedUtf16.start ? next : Math.max(source.decodedUtf16.start, next - EPISODE_STATE_LIMITS.largeBodyOverlapUnits);
+    const length = Math.min(EPISODE_STATE_LIMITS.wholeBodyUtf16Units, source.decodedUtf16.end - start), end = start + length;
+    const chunk = await capsuleCall(request, capsules, budget, { op: "chunkRange", view: request.view, source: checkpoint.envelope.source,
+      decodedStart: start, decodedLength: length, limit: 2 });
+    const bytes = Buffer.from(String(chunk.data), "base64"), text = bytes.toString("utf16le"), windowHash = createHash("sha256").update(bytes).digest("hex");
+    if (bytes.length !== length * 2 || text.length !== length) fail("search-v3-state-repair-source-invalid");
+    if (checkpoint.batch && checkpoint.batch.windowHash !== windowHash) fail("search-v3-state-repair-checkpoint-invalid");
+    const reduced = reduceEpisodeStateEnvelope(checkpoint.envelope, text, progress.structural,
+      { decodedStart: start, final: end === source.decodedUtf16.end, after: checkpoint.batch?.cursor });
+    if (!reduced.nextBatch && (reduced.partial || reduced.coverage.restrictionGap || reduced.coverage.openWorkGap))
+      fail("search-v3-state-repair-extraction-qualified");
+    stateItems = reduced.states.length;
+    store.transaction(() => {
+      for (const item of reduced.states) {
+        const key = repairEvidenceKey(source, item.evidence);
+        const matches = store.rows("SELECT * FROM state_gap_legacy WHERE repairId=? AND evidenceKey=? LIMIT 2", 2, request.repairId, key);
+        if (matches.length > 1) fail("search-v3-state-repair-evidence-ambiguous");
+        if (matches.length) {
+          const match = matches[0]!, row = store.get("SELECT * FROM state_items WHERE lineage=? AND stableKey=?", line, str(match, "stableKey"));
+          if (!row || sha(canonicalJson(row)) !== match.rowHash || !repairItemMatches(row, item)) fail("search-v3-state-repair-evidence-ambiguous");
+          if (match.matched === 0) {
+            store.run("UPDATE state_gap_legacy SET matched=1 WHERE repairId=? AND stableKey=?", request.repairId, str(match, "stableKey"));
+            progress.matched++; if (row!.supersededGeneration !== null) progress.superseded++;
+          }
+          continue;
+        }
+        const staged = store.get("SELECT * FROM state_items WHERE lineage=? AND stableKey=?", line, item.stableKey);
+        if (staged) {
+          if (staged.createdGeneration !== generation || repairEvidenceKey(source, JSON.parse(str(staged, "evidence"))) !== key
+            || !repairItemMatches(staged, item)) fail("search-v3-state-repair-evidence-ambiguous");
+          continue;
+        }
+        if (item.transition || store.get("SELECT 1 AS found FROM state_items WHERE lineage=? AND propositionKey=? AND authority=? AND kind='decision' AND eventSeq>? AND createdGeneration<=? LIMIT 1",
+          line, item.propositionKey, item.authority, source.eventSeq, request.expectedGeneration!)) fail("search-v3-state-repair-lifecycle-ambiguous");
+        store.run("INSERT INTO state_items VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", line, item.stableKey, item.propositionKey, item.spanKey,
+          item.subject, item.revision, item.kind, item.authority, item.confidence, item.status, canonicalJson(item.evidence),
+          source.eventSeq, source.descriptor, generation, null, null);
+        store.run("INSERT INTO state_fts(lineage,stableKey,body) VALUES(?,?,?)", line, item.stableKey, `${item.kind} ${item.subject} ${item.evidence.exactText}`);
+        progress.inserted++;
+      }
+      progress.checkpoint = { format: STATE_BATCH_CHECKPOINT, view: checkpoint.view, envelope: checkpoint.envelope,
+        ...(reduced.nextBatch ? { batch: { cursor: reduced.nextBatch, start, end, windowHash } } : {}) };
+      if (!reduced.nextBatch) progress.nextDecoded = end;
+      if (!reduced.nextBatch && end === source.decodedUtf16.end) phase = "ready";
+      store.run("UPDATE state_gap_repairs SET progress=?,phase=? WHERE repairId=?", JSON.stringify(progress), phase, request.repairId);
+    });
+  } else fail("search-v3-state-repair-checkpoint-invalid");
+  return result(store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId)!, stateItems);
+}
+
 function pin(request: Extract<EpisodeStateRequest, { op: "recallState" }>, store: Store): number {
   const cut = store.get("SELECT MAX(generation) AS generation FROM cuts WHERE lineage=? AND eventSeq<=?", lineage(request), request.view.eventCut);
   const current = cut ? num(cut, "generation") : 0, generation = request.after?.generation ?? current;
@@ -823,8 +1036,11 @@ function composeStateSelection(request: Extract<EpisodeStateRequest, { op: "comp
   let responseBudgetAtLeastOne = false;
   const bodyComplete = bodyCut >= requestedCut, metadataComplete = processedMemoryCut >= requestedCut;
   const partialMemory = !metadataComplete;
+  const repaired = repairEnabled(store);
   const gap = (column: "restrictionGap" | "openWorkGap" | "optionalGap"): boolean => Boolean(store.get(
-    `SELECT eventSeq FROM coverage WHERE lineage=? AND ${column}=1 AND eventSeq<=? AND generation<=? LIMIT 1`, line, processedCut, stateGeneration));
+    `SELECT c.eventSeq FROM coverage c WHERE c.lineage=? AND c.${column}=1 AND c.eventSeq<=? AND c.generation<=?${repaired
+      ? " AND NOT EXISTS(SELECT 1 FROM state_gap_repairs r WHERE r.lineage=c.lineage AND r.eventSeq=c.eventSeq AND r.descriptor=c.descriptor AND r.priorGeneration=c.generation AND r.phase='published' AND r.effectiveCut<=? AND r.generation<=?)" : ""} LIMIT 1`,
+    line, processedCut, stateGeneration, ...(repaired ? [processedCut, stateGeneration] : [])));
   const restrictionsComplete = bodyComplete && metadataComplete && !gap("restrictionGap");
   const openWorkComplete = bodyComplete && metadataComplete && !gap("openWorkGap");
   const qualifiedReducers = gap("optionalGap");
@@ -1250,7 +1466,8 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
     const { executeEpisodeRollupRequest } = await import("./episode-rollup-store.js");
     return executeEpisodeRollupRequest(request, options);
   }
-  const create = request.op === "materializeState", mutate = create || request.op === "supersedeState";
+  const create = request.op === "materializeState", mutate = create || request.op === "supersedeState"
+    || request.op === "repairState" && request.action !== "status";
   let db: CatalogSqlite | undefined; const budget = { bytes: 0 };
   try {
     prepareDirectory(request.searchDirectory);
@@ -1266,7 +1483,10 @@ export async function executeEpisodeStateRequest(value: unknown, options: Episod
       }
       db = create ? CatalogSqlite.create(path, validate) : CatalogSqlite.open(path, validate);
       const store = new Store(db, request); if (create) store.initialize(); else store.validate(false);
-      const result = request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest,
+      if (mutate && request.op !== "repairState" && repairEnabled(store)
+        && store.get("SELECT 1 AS found FROM state_gap_repairs WHERE phase!='published' LIMIT 1")) fail("search-v3-state-repair-active");
+      const result = request.op === "repairState" ? await repairState(request, store, options, budget)
+        : request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest,
         options.catalogExecutor ?? executeCatalogStoreRequest, budget)
         : request.op === "supersedeState" ? await supersedeState(request, store, options, budget)
         : request.op === "recallState" ? recall(request, store)

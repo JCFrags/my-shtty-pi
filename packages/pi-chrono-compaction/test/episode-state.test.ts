@@ -458,6 +458,162 @@ test("M09 actual producer selection preserves obligations and successive experie
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("state gap repair: bounded legacy reconciliation preserves historical handles and coverage", async t => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-state-gap-repair-"));
+  const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
+  const sourcePath = join(directory, "main.jsonl"), sessionKey = "state-gap-repair";
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const clauses = Array.from({ length: 96 }, (_, index) => index % 2
+    ? `Goal: verify /Repo/Gap${index}.ts before release.` : `Never deploy /Repo/Gap${index}.ts without approval.`);
+  const text = clauses.map(clause => clause.padEnd(510, " ") + "\n\n").join("");
+  mkdirSync(searchDirectory, { mode: 0o700 });
+  writeFileSync(sourcePath, message("u1", null, "user", text), { mode: 0o600 });
+  const catalog = async (extra: Record<string, unknown>): Promise<any> => {
+    const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
+    assert.equal(response.ok, true, JSON.stringify(response)); return response.ok ? response.result : {};
+  };
+  const database = <T>(fn: (db: CatalogSqlite) => T): T => {
+    const db = CatalogSqlite.open(join(searchDirectory, "state-v4.sqlite"));
+    try { return fn(db); } finally { db.close(); }
+  };
+  try {
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const oldView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "u1" } })).view as CapsuleCatalogView;
+    const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation,
+      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
+      reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: hash("repair-capsules") };
+    const identity: SearchV3Identity = { storeKey: randomUUID(), capsule: capsuleIdentity, schemaVersion: 1, configHash: hash("repair-search") };
+    const request = (view: CapsuleCatalogView, extra: Record<string, unknown>) => ({ v: 1, catalogDirectory, capsuleDirectory, searchDirectory, identity, view, ...extra });
+    const run = async (view: CapsuleCatalogView, extra: Record<string, unknown>): Promise<any> => {
+      const response = await executeEpisodeStateRequest(request(view, extra));
+      assert.equal(response.ok, true, JSON.stringify(response));
+      assert.ok(response.sourceBytes <= EPISODE_STATE_LIMITS.sourceBytesPerJob);
+      assert.equal(response.sqliteNativeLimitBytes, EPISODE_STATE_LIMITS.nativeSqliteBytes);
+      return response.ok ? response.result : {};
+    };
+    const settle = async (view: CapsuleCatalogView): Promise<any> => {
+      for (let step = 0; step < 16; step++) {
+        const result = await run(view, { op: "materializeState" });
+        if (result.complete) return result;
+      }
+      assert.fail("fixture state did not settle");
+    };
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, oldView);
+    const base = await settle(oldView);
+    const capsulePage = await executeCapsuleRequest({ v: 1, derivedDirectory: capsuleDirectory, catalogDirectory, identity: capsuleIdentity,
+      op: "capsulePage", view: oldView, limit: 1 });
+    assert.ok(capsulePage.ok);
+    const source = (capsulePage.result.capsules as ReducerEnvelope[])[0]!.source;
+    // Construct a persisted old truncation: 16 first-window rows and 16 later-window rows.
+    // Later identities use the legacy window-relative offsets, but evidence stays exact.
+    database(db => db.transaction(() => {
+      const rows = [...db.prepare("SELECT * FROM state_items WHERE eventSeq=1 ORDER BY stableKey LIMIT 128").iterate(128)];
+      assert.equal(rows.length, 96);
+      for (const row of rows) {
+        const evidence = JSON.parse(String(row.evidence)), index = evidence.decodedUtf16.start / 512;
+        if (!(index < 16 || index >= 48 && index < 64)) {
+          db.prepare("DELETE FROM state_fts WHERE stableKey=?").run(String(row.stableKey));
+          db.prepare("DELETE FROM state_items WHERE stableKey=?").run(String(row.stableKey));
+        } else if (index >= 48) {
+          const spanKey = hash(`${JSON.stringify(source)}\n${evidence.decodedUtf16.start - 24576}\n${evidence.decodedUtf16.end - 24576}`);
+          const stableKey = hash(`${row.propositionKey}\n${spanKey}`).slice(0, 32);
+          db.prepare("UPDATE state_items SET stableKey=?,spanKey=? WHERE stableKey=?").run(stableKey, spanKey, String(row.stableKey));
+          db.prepare("UPDATE state_fts SET stableKey=? WHERE stableKey=?").run(stableKey, String(row.stableKey));
+        }
+      }
+      db.prepare("UPDATE coverage SET restrictionGap=1,openWorkGap=1,optionalGap=1 WHERE eventSeq=1").run();
+      db.prepare("UPDATE heads SET partialCount=1").run();
+    }));
+    const authorizationText = "I authorize retiring the prior repository restriction.";
+    const authorizationRaw = message("u2", "u1", "user", authorizationText);
+    appendFileSync(sourcePath, authorizationRaw + message("u3", "u2", "user", "Never remove /Repo/Unrelated.ts."));
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const view = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "u3" } })).view as CapsuleCatalogView;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, view);
+    const ready = await settle(view);
+    const target = database(db => db.prepare("SELECT * FROM state_items WHERE eventSeq=1 AND json_extract(evidence,'$.decodedUtf16.start')=24576").get()!);
+    const authorization = database(db => JSON.parse(String(db.prepare("SELECT evidence FROM state_items WHERE eventSeq=2 LIMIT 1").get()!.evidence)));
+    await run(view, { op: "supersedeState", expectedGeneration: ready.stateGeneration,
+      authorization: { source: authorization.source, decodedUtf16: authorization.decodedUtf16,
+        spanHash: createHash("sha256").update(Buffer.from(authorizationText, "utf16le")).digest("hex"), rawEventHash: hash(authorizationRaw.slice(0, -1)) },
+      decision: { actor: "agent", basis: "direct-original-user-instruction", scope: "repository-and-chrono",
+        action: "revoke-prior-user-restrictions-and-approval-holds", rationale: "Retire only the exact synthetic legacy restriction." },
+      targets: [{ stableKey: target.stableKey, propositionKey: target.propositionKey, spanKey: target.spanKey, createdGeneration: target.createdGeneration,
+        evidenceHash: hash(String(target.evidence)), kind: "restriction", authority: "user", scope: "repository", category: "restriction" }] });
+    const oldPin = { eventSeq: 1, descriptor: 0, stableKey: "", generation: base.stateGeneration };
+    const oldRecall = await run(oldView, { op: "recallState", after: oldPin });
+    const oldSelection = await run(oldView, { op: "composeStateSelection" });
+    assert.equal(oldSelection.coverage.restrictionsComplete, false);
+    let rollup: any;
+    for (let step = 0; step < 20; step++) {
+      rollup = await run(view, { op: "materializeRollup", limit: 1 });
+      if (rollup.complete) break;
+    }
+    assert.ok(rollup.complete && rollup.handle);
+    const historicalRoot = await run(view, { op: "recallRollup", handle: rollup.handle, level: "root", limit: 1 });
+    const frozen = database(db => ({ rows: [...db.prepare("SELECT * FROM state_items ORDER BY stableKey LIMIT 128").iterate(128)],
+      coverage: [...db.prepare("SELECT * FROM coverage ORDER BY eventSeq,descriptor LIMIT 16").iterate(16)],
+      cuts: [...db.prepare("SELECT * FROM cuts ORDER BY eventSeq,descriptor LIMIT 16").iterate(16)], head: db.prepare("SELECT * FROM heads LIMIT 1").get()! }));
+    const sourceHash = hash(readFileSync(sourcePath, "utf8"));
+    const repairId = "dense-legacy", status = await run(view, { op: "repairState", action: "status", repairId, source });
+    const binding = { op: "repairState", repairId, source, expectedGeneration: status.expectedGeneration, priorCoverage: status.priorCoverage };
+    const refuses = async (extra: Record<string, unknown>, code: string) => {
+      const response = await executeEpisodeStateRequest(request(view, extra));
+      assert.equal(response.ok, false); if (!response.ok) assert.equal(response.code, code);
+    };
+    await refuses({ ...binding, action: "start", priorCoverage: { ...status.priorCoverage, hash: "0".repeat(64) } }, "search-v3-state-repair-stale");
+    let repair = await run(view, { ...binding, action: "start" });
+    await refuses({ ...binding, action: "publish" }, "search-v3-state-repair-incomplete");
+    await refuses({ op: "materializeState" }, "search-v3-state-repair-active");
+    if (process.env.CHRONO_PREVIOUS_STATE_EXECUTOR) {
+      const previous = await import(pathToFileURL(process.env.CHRONO_PREVIOUS_STATE_EXECUTOR).href);
+      for (const op of ["materializeState", "recallState"]) {
+        const refusal = await previous.executeEpisodeStateRequest(request(oldView, { op }));
+        assert.equal(refusal.ok, false);
+        assert.ok(["search-v3-state-store-mismatch", "search-v3-state-store-failed"].includes(refusal.code));
+        t.diagnostic(`Previous executor ${op} refused: ${refusal.code}`);
+      }
+    }
+    let steps = 0, restartedBatch = false;
+    for (; steps < 24 && repair.phase !== "ready"; steps++) {
+      repair = await run(view, JSON.parse(JSON.stringify({ ...binding, action: "step" })));
+      assert.ok(repair.metrics.stateItems <= 32);
+      assert.equal((await run(view, { op: "stateStatus" })).stateGeneration, status.expectedGeneration);
+      if (repair.afterState && !restartedBatch) {
+        restartedBatch = true;
+        const restored = await run(view, { op: "repairState", action: "status", repairId, source });
+        assert.equal(restored.afterState, repair.afterState);
+        assert.equal(restored.nextDecoded, repair.nextDecoded);
+        assert.equal((await run(view, { op: "composeStateSelection" })).coverage.restrictionsComplete, false);
+        assert.deepEqual((await run(oldView, { op: "recallState", after: oldPin })).items, oldRecall.items);
+      }
+    }
+    assert.equal(repair.phase, "ready"); assert.equal(restartedBatch, true);
+    assert.equal(repair.accounted, 96); assert.equal(repair.matched, 32); assert.equal(repair.inserted, 64);
+    assert.equal(repair.supersededPreserved, 1);
+    const publication = await run(view, { ...binding, action: "publish" });
+    assert.equal(publication.published, true); assert.equal(publication.publicationGeneration, status.expectedGeneration + 1);
+    assert.equal((await run(view, { ...binding, action: "publish" })).publicationGeneration, publication.publicationGeneration);
+    const current = await run(view, { op: "composeStateSelection" });
+    assert.equal(current.coverage.restrictionsComplete, true); assert.equal(current.coverage.openWorkComplete, true);
+    assert.equal(current.omissions.protectedAtLeastOne, true, "repair does not waive mandatory representation limits");
+    assert.equal((await run(oldView, { op: "composeStateSelection" })).coverage.restrictionsComplete, false);
+    const restored = await run(oldView, { op: "recallState", after: oldPin });
+    assert.equal(restored.stateGeneration, oldRecall.stateGeneration); assert.deepEqual(restored.items, oldRecall.items);
+    assert.deepEqual((await run(view, { op: "recallRollup", handle: rollup.handle, level: "root", limit: 1 })).items, historicalRoot.items);
+    database(db => {
+      for (const row of frozen.rows) assert.deepEqual(db.prepare("SELECT * FROM state_items WHERE stableKey=?").get(String(row.stableKey)), row);
+      assert.deepEqual([...db.prepare("SELECT * FROM coverage ORDER BY eventSeq,descriptor LIMIT 16").iterate(16)], frozen.coverage);
+      for (const cut of frozen.cuts) assert.deepEqual(db.prepare("SELECT * FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?").get(String(cut.lineage), Number(cut.eventSeq), Number(cut.descriptor)), cut);
+      assert.deepEqual({ ...db.prepare("SELECT * FROM heads LIMIT 1").get(), generation: frozen.head.generation }, frozen.head);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM state_items WHERE eventSeq=1 AND json_extract(evidence,'$.decodedUtf16.start')=24576").get()!.count, 1);
+    });
+    assert.equal(hash(readFileSync(sourcePath, "utf8")), sourceHash);
+    t.diagnostic(JSON.stringify({ steps, accounted: repair.accounted, matched: repair.matched, inserted: repair.inserted,
+      supersededPreserved: repair.supersededPreserved, historicalHandle: rollup.handle.ruleset, oldBinaryChecks: !!process.env.CHRONO_PREVIOUS_STATE_EXECUTOR }));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("state delta pagination: noncontiguous events and late metadata stay bounded", async t => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-state-delta-pages-"));
   const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");

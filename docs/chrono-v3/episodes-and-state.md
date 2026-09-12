@@ -20,15 +20,22 @@ A valid legacy checkpoint resumes from its stored decoded frontier without a cla
 
 Older materializers cannot resume a new checkpoint. The versioned payload is not a bare reducer envelope, so an older writer refuses before it can advance or erase the checkpoint. Preserve the pending store and resume it with a compatible writer. Do not remove the checkpoint to make a rollback proceed. Read-only historical pins remain separate from writer compatibility. See [migration](migration.md).
 
-## Historical gap repair follow-up
+## Explicit historical state-gap repair
 
-Completed gaps remain unresolved. Ordinary continuation refuses to revisit an already published source marker. A bounded repair operation is not implemented by this prerequisite. Its follow-up contract must include:
+Ordinary continuation refuses to revisit a published source marker. The explicit `repairState` worker operation instead binds one original-user body descriptor to a completed current view. It does not accept a text query or perform a lifetime scan.
 
-1. Explicit `start`, `step`, `status`, and `publish` actions for an exact source descriptor, not a text query or lifetime scan. Bind the catalog/capsule/search identities, lineage, source view and hash, prior coverage row identity, and expected state generation.
-2. A durable stage that uses the same verified chunk reader and at most 32 recognized states per step. Keep finite decoded-window and clause-prefix progress. Refuse source, cursor, or generation mismatch without resetting the stage.
-3. Exact evidence reconciliation with existing rows, including legacy span keys and supersession records. Do not insert a new current copy of an already superseded obligation or infer that a genuine obligation ended.
-4. A versioned coverage publication in the existing generation mechanism, with an explicit effective cut. The current single-row coverage key cannot be overwritten safely for historical repair. Old coverage, rows, cut markers, and pins must remain readable under their original generation and cut.
-5. Publication only after every recognized clause in the target source is accounted for. Preserve other gaps and non-target state. Recheck mandatory selection separately. Repair does not increase its scan, representation, response, or combined-context limits.
+1. Call `status` with the normal catalog/capsule/search identity and routes, exact `view`, scoped `source`, and a `repairId`. For an unstaged descriptor, the result supplies `expectedGeneration` and `priorCoverage: { generation, hash }`. The hash covers the canonical original coverage row. The source carries its exact body hash.
+2. Call `start` with those same fields and returned bindings. The view's cut is the explicit later effective cut and must follow the source event. Body and metadata heads must be complete at exactly that view. Start preserves the old coverage and cut, adds repair/accounting tables in `state-v4.sqlite`, and reserves the next generation without publishing it.
+3. Repeat `step` with the identical binding. Each job first pages at most 32 legacy state rows through the existing kind/source index, or reads one existing bounded decoded window and handles at most 32 recognized clauses. The persisted window hash, prefix cursor, and source view support restart. Normal state writers remain blocked while this one repair is pending.
+4. Call `publish` only when the stage is `ready`. Publication requires every legacy row to have an exact recovered counterpart and every decoded window and clause batch to be complete and unqualified. It adds a later cut marker and publishes the repair receipt in one transaction. The original coverage row and cut remain unchanged. Exact repeat publication returns the same generation.
+
+Legacy matching uses the exact source, decoded span, text, normalized proposition, and ordinary state labels, not a legacy span key alone. Matching rows keep their original identity and lifecycle evidence, including supersession. Missing rows are staged at the reserved future generation and remain invisible until publication. Ambiguous duplicate evidence, incompatible labels, new lifecycle transitions, or potentially applicable later transitions refuse. Repair does not invent a task resolution or broaden an exact supersession target.
+
+Only a published receipt visible at both the requested generation and later effective cut can discharge its exact prior coverage row. Old coverage and state remain readable under their original cuts and generations. Existing historical rollup handles retain their original ruleset, generation, cut, and immutable store. Other gaps, non-target rows, resources, chronology, and the maintained body/metadata head positions remain unchanged. Aggregate head partial counts stay conservative.
+
+Repair opts the store into `episode-state-exact-v4-gap-repair-v1`. The repair-aware reader still accepts ordinary v4 stores and valid historical pins. Older binaries that require the exact `episode-state-exact-v4` storage marker, including 2.0.32, refuse both reads and writes on an opted-in store. This refusal is a compatibility boundary, not rollback qualification. There is no automatic stage discard or downgrade. Preserve a pending stage and use a compatible writer. See [migration](migration.md).
+
+A repaired descriptor is not global coverage. Recheck all remaining gaps and mandatory selection. Repair does not increase scan, representation, response, source, native-memory, or combined-context limits.
 
 ## State and authority
 

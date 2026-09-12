@@ -285,6 +285,9 @@ export type EpisodeStateRequest = Base & (
   | { readonly op: "supersedeState"; readonly expectedGeneration: number;
       readonly authorization: EpisodeStateSupersessionAuthorization; readonly decision: EpisodeStateSupersessionDecision;
       readonly targets: readonly EpisodeStateSupersessionTarget[] }
+  | { readonly op: "repairState"; readonly action: "start" | "step" | "status" | "publish";
+      readonly repairId: string; readonly source: ScopedBodySourceRef; readonly expectedGeneration?: number;
+      readonly priorCoverage?: { readonly generation: number; readonly hash: string } }
   | { readonly op: "composeStateSelection" }
   | { readonly op: "recallState"; readonly query?: string; readonly source?: ScopedBodySourceRef;
       readonly level?: EpisodeStateLevel; readonly limit?: number; readonly after?: EpisodeStateAfter }
@@ -366,6 +369,15 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
     case "materializeState": return stateCommon;
     case "stateStatus": return value.limit === undefined && value.after === undefined;
     case "supersedeState": return supersession(value, value.view);
+    case "repairState": return ["start", "step", "status", "publish"].includes(String(value.action))
+      && typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
+      && isScopedBodySourceRef(value.source) && sourceRefWithinViewBounds(value.source, value.view)
+      && value.source.eventSeq < value.view.eventCut && value.source.descriptor > 0
+      && value.limit === undefined && value.after === undefined && value.query === undefined
+      && (value.action === "status" ? value.expectedGeneration === undefined && value.priorCoverage === undefined
+        : positive(value.expectedGeneration) && value.expectedGeneration < Number.MAX_SAFE_INTEGER - 1
+          && object(value.priorCoverage) && positive(value.priorCoverage.generation)
+          && value.priorCoverage.generation <= value.expectedGeneration && hash(value.priorCoverage.hash));
     case "composeStateSelection": return value.limit === undefined && value.after === undefined;
     case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
         && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)
