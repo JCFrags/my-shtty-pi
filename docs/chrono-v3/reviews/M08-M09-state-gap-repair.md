@@ -31,6 +31,12 @@ The paired custom-message fixture passed in 3.2 seconds. It repaired body descri
 
 The implementing agent ran these focused checks. The parent inspected the source changes and exact results. No independent review is claimed. Test compilation, the candidate build, the locked native SQLite build and allocation probe, generated-map validation, and independent static package identity passed. An initial deployment-check invocation used the repository directory instead of the package directory. The corrected invocation verified all 135 manifest records without rebuilding.
 
+## CI fixture correction
+
+Initial PR75 CI passed 680 of 681 Chrono tests. The existing timeout fixture waited for a synthetic child marker even though its 500 ms waiter deadline includes startup. The waiter can expire before that marker exists. The correction awaits the timeout result directly and retains the exact `worker-timeout` assertion. Abort still requires the child readiness marker. No runtime code, deadline, or timeout was changed.
+
+The affected credential, timeout, abort, and crash fixture passed in 1.7 seconds. The first local launch used the non-emitting typecheck configuration, so no test ran. The corrected launch used the existing test-build configuration. No broad local suite or unchanged CI retry ran.
+
 ## Compatibility and remaining work
 
 Explicit repair opts the store into `episode-state-exact-v4-gap-repair-v1`. Compatible readers retain historical pins and handles. Actual pre-repair 2.0.32 code refused both reads and writes on the opted-in fixture store. Its native wrapper reported `search-v3-state-store-failed`. This refusal is not exercised rollback. Do not discard a pending stage or relabel the store for an older binary.
