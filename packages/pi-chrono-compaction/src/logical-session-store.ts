@@ -6,7 +6,7 @@ import { isLogicalSessionManifest, sealLogicalManifest, type LogicalSessionManif
 import { acquireDerivedStoreLock } from "./derived-store-lock.js";
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
-async function safeDirectory(path: string, create = false): Promise<void> {
+async function safeDirectory(path: string, create = false, privateLeaf = true): Promise<void> {
   if (!isAbsolute(path) || resolve(path) !== path) fail("logical-session-storage-unsafe");
   if (create) await mkdir(path, { recursive: true, mode: 0o700 });
   let current = "/";
@@ -20,7 +20,9 @@ async function safeDirectory(path: string, create = false): Promise<void> {
       || ((stat.mode & 0o022) !== 0 && !(stat.uid === 0 && (stat.mode & 0o1000)))) fail("logical-session-storage-unsafe");
   }
   const stat = await lstat(path);
-  if (stat.uid !== process.getuid?.() || (stat.mode & 0o777) !== 0o700 || await realpath(path) !== path) fail("logical-session-storage-unsafe");
+  if (stat.uid !== process.getuid?.()
+    || (privateLeaf ? (stat.mode & 0o777) !== 0o700 : (stat.mode & 0o022) !== 0)
+    || await realpath(path) !== path) fail("logical-session-storage-unsafe");
 }
 
 export class LogicalSessionStore {
@@ -53,7 +55,8 @@ export class LogicalSessionStore {
   }
 
   async create(initial: Omit<LogicalSessionManifest, "revision" | "integrityHash">): Promise<LogicalSessionManifest> {
-    await safeDirectory(dirname(this.root));
+    // The shared Pi agent directory can be readable. Chrono stores remain private.
+    await safeDirectory(dirname(this.root), false, false);
     await safeDirectory(this.root, true);
     await safeDirectory(this.directory, true);
     const release = await acquireDerivedStoreLock(join(this.directory, "manifest.lock"));

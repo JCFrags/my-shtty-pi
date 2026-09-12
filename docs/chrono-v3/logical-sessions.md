@@ -8,6 +8,8 @@ The owner-only manifest records branches, ordered shard IDs, one active shard pe
 
 Existing-session adoption binds the persisted source as shard zero and appends a non-model adoption marker. It neither reduces that file nor makes a large physical branch small. Automatic adoption requires the configured memory-engine path and valid startup/exclusion checks. See [migration](migration.md).
 
+The logical-store parent must belong to the current user and must not allow group or other users to write. A readable parent such as mode `0755` is valid. The Chrono store root and session directories still require mode `0700`, and manifests require mode `0600`. Symbolic links and unsafe ancestors refuse. Adoption does not change shared parent permissions.
+
 Rollover and logical fork are manual guarded commands. Threshold status only reports reached or remaining limits. It does not schedule automatic switching. Pi's physical `/fork` copies a physical branch and is not a substitute for logical fork.
 
 ## Continuation boundary
