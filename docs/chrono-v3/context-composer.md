@@ -13,6 +13,8 @@ When the memory engine or a valid canary is selected:
 5. Post-render validation checks mandatory coverage, the safe tail, and the fixed 30,000-token combined summary-and-tail ceiling. The adapter also rechecks session, branch leaf, and cancellation identity.
 6. A successful return persists the minimal `chrono-v3-composed-context` envelope. Detailed rows and comparison data stay in owner-only artifacts.
 
+Version 2.0.35 corrects settlement ordering: a triggered V3 compaction preserves the validated maintained search target before selection. Search retargeting is deferred while that request is pending and resumes after completion or refusal/error, subject to session, source, and epoch checks. Selection still requires a compatible prepared cut and validated coverage. It does not start ingestion, wait for catch-up, or retry compaction after refusal. Compatibility-mode incremental scheduling is unchanged.
+
 The V3 return path uses Pi's prepared tail. Do not assume the compatibility path's dynamic-tail selection or a larger `targetContextTokens` value raises the V3 ceiling.
 
 ## Budgets and refusal
