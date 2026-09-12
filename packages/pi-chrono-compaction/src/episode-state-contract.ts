@@ -372,7 +372,7 @@ export function isEpisodeStateRequest(value: unknown): value is EpisodeStateRequ
     case "repairState": return ["start", "step", "status", "publish"].includes(String(value.action))
       && typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
       && isScopedBodySourceRef(value.source) && sourceRefWithinViewBounds(value.source, value.view)
-      && value.source.eventSeq < value.view.eventCut && value.source.descriptor > 0
+      && value.source.eventSeq < value.view.eventCut
       && value.limit === undefined && value.after === undefined && value.query === undefined
       && (value.action === "status" ? value.expectedGeneration === undefined && value.priorCoverage === undefined
         : positive(value.expectedGeneration) && value.expectedGeneration < Number.MAX_SAFE_INTEGER - 1

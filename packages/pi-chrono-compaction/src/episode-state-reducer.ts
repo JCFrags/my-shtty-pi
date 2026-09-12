@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ReducerEnvelope, ScopedBodySourceRef, ScopedRawSourceRef } from "./capsule-contract.js";
+import { isScopedRawSourceRef, type ReducerEnvelope, type ScopedBodySourceRef, type ScopedRawSourceRef } from "./capsule-contract.js";
 import {
   EPISODE_STATE_LIMITS,
   EPISODE_STATE_RULESET_VERSION,
@@ -45,6 +45,8 @@ export interface ReducedResourceObservation {
   readonly evidence: ExactStateEvidence;
 }
 export interface VerifiedEventStructuralFacts {
+  /** Exact top-level record type. This never supplies a message role or instruction authority. */
+  readonly recordType?: { readonly value: "custom_message"; readonly source: ScopedRawSourceRef };
   /** Catalog metadata is structurally verified but does not invent a raw coordinate. */
   readonly role?: { readonly value: string; readonly source?: ScopedRawSourceRef };
   readonly toolName?: { readonly value: string; readonly source?: ScopedRawSourceRef };
@@ -183,17 +185,27 @@ function resource(text: string, envelope: ReducerEnvelope, ev: ExactStateEvidenc
     failed: toolFailure(envelope, verified), executionOutcome: toolOutcome(envelope, verified), evidence: ev };
 }
 
+/** A source-verified extension record is not a message with an unknown role. */
+export function isVerifiedCustomMessage(envelope: ReducerEnvelope, verified?: VerifiedEventStructuralFacts): boolean {
+  const fact = verified?.recordType;
+  return envelope.provenance === "original" && fact?.value === "custom_message" && isScopedRawSourceRef(fact.source)
+    && fact.source.field === "type"
+    && (["catalogStoreKey", "sessionKey", "catalogGeneration", "shardKey", "segment", "eventSeq", "ordinal", "descriptor"] as const)
+      .every(key => fact.source[key] === envelope.source[key]);
+}
+
 /** Extract only source-local, bounded claims. Lifecycle transitions are store-owned. */
 export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: string, verified?: VerifiedEventStructuralFacts,
   window?: { readonly decodedStart: number; readonly final: boolean; readonly after?: EpisodeStateBatchCursor }): ReducedEpisodeEvent {
-  const roleFact = structural(envelope, "role", verified), role = typeof roleFact?.value === "string" ? roleFact.value.toLowerCase() : null;
+  const customMessage = isVerifiedCustomMessage(envelope, verified);
+  const roleFact = customMessage ? undefined : structural(envelope, "role", verified), role = typeof roleFact?.value === "string" ? roleFact.value.toLowerCase() : null;
   const original = envelope.provenance === "original";
   const decodedStart = window?.decodedStart ?? envelope.source.decodedUtf16.start;
   const analyzable = body !== undefined && body.length <= EPISODE_STATE_LIMITS.wholeBodyUtf16Units;
   const sourceComplete = analyzable && decodedStart === envelope.source.decodedUtf16.start
     && decodedStart + body!.length === envelope.source.decodedUtf16.end;
   const text = analyzable ? body! : "";
-  const clauses = analyzable ? neighborhoods(text) : [];
+  const clauses = analyzable && !customMessage ? neighborhoods(text) : [];
   const startsEpisode = original && role === "user" && decodedStart === envelope.source.decodedUtf16.start
     && (envelope.source.blockIndex === undefined || envelope.source.blockIndex === 0);
   const compaction = role === "assistant" && /compaction|branch-summary/iu.test(envelope.family);
@@ -231,7 +243,7 @@ export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: str
   const end = Math.min(states.length, offset + EPISODE_STATE_LIMITS.stateItemsPerBatch);
   const selectedStates = states.slice(offset, end), pending = states.slice(end);
   const nextBatch = pending.length ? { afterState: end, prefixHash: prefixHash(end) } : undefined;
-  const unknownOriginal = original && !role;
+  const unknownOriginal = original && !role && !customMessage;
   const coverage = {
     restrictionGap: unknownOriginal || original && role === "user" && !analyzable || pending.some(item => item.kind === "restriction"),
     openWorkGap: unknownOriginal || original && ["user", "assistant", "tool", "toolresult"].includes(role ?? "") && !analyzable
@@ -243,11 +255,11 @@ export function reduceEpisodeStateEnvelope(envelope: ReducerEnvelope, body?: str
   const objective = objectiveClause ? evidence(envelope.source, roleFact?.source, text, objectiveClause, decodedStart) : undefined;
   const resourceClause = clauses.find(clause => /(?:[A-Za-z]:[\\/]|\.?\.?[\\/]|\/|https?:\/\/|\brevision\b)/u.test(clause.text)) ?? clauses[0];
   const resourceEvidence = resourceClause ? evidence(envelope.source, roleFact?.source, text, resourceClause, decodedStart) : wholeEvidence;
-  const observed = resourceEvidence ? resource(text, envelope, resourceEvidence, verified) : undefined;
+  const observed = resourceEvidence && !customMessage ? resource(text, envelope, resourceEvidence, verified) : undefined;
   const capsuleCue = envelope.alternatives.map(alternative => alternative.text).filter(Boolean).join("\n").slice(0, 2048);
   return { source: envelope.source, role, original, startsEpisode, boundaryKind: startsEpisode ? "user-request" : compaction ? "compaction-continuation" : "none",
     ...(objective ? { objective } : {}), states: selectedStates, ...(nextBatch ? { nextBatch } : {}), capsuleCue,
-    resources: observed ? [observed] : [], coverage, partial: !analyzable || !role || pending.length > 0 };
+    resources: observed ? [observed] : [], coverage, partial: !analyzable || !role && !customMessage || pending.length > 0 };
 }
 
 export function episodeStateRulesetIdentity(): string { return EPISODE_STATE_RULESET_VERSION; }

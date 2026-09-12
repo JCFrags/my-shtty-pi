@@ -22,7 +22,7 @@ Older materializers cannot resume a new checkpoint. The versioned payload is not
 
 ## Explicit historical state-gap repair
 
-Ordinary continuation refuses to revisit a published source marker. The explicit `repairState` worker operation instead binds one original-user body descriptor to a completed current view. It does not accept a text query or perform a lifetime scan.
+Ordinary continuation refuses to revisit a published source marker. The explicit `repairState` worker operation instead binds one original-user body or source-verified original `custom_message` body descriptor to a completed current view. It does not accept a text query or perform a lifetime scan.
 
 1. Call `status` with the normal catalog/capsule/search identity and routes, exact `view`, scoped `source`, and a `repairId`. For an unstaged descriptor, the result supplies `expectedGeneration` and `priorCoverage: { generation, hash }`. The hash covers the canonical original coverage row. The source carries its exact body hash.
 2. Call `start` with those same fields and returned bindings. The view's cut is the explicit later effective cut and must follow the source event. Body and metadata heads must be complete at exactly that view. Start preserves the old coverage and cut, adds repair/accounting tables in `state-v4.sqlite`, and reserves the next generation without publishing it.
@@ -37,6 +37,27 @@ Repair opts the store into `episode-state-exact-v4-gap-repair-v1`. The repair-aw
 
 A repaired descriptor is not global coverage. Recheck all remaining gaps and mandatory selection. Repair does not increase scan, representation, response, source, native-memory, or combined-context limits.
 
+Descriptor zero is accepted only when the catalog descriptor and hash resolve to the exact supported body reference. A raw metadata reference or descriptor number alone is insufficient. Custom-message repair must verify the record type and reread every bounded body window. It refuses unexpected legacy state rows instead of retiring or relabeling them. Supersession keeps its separate original-user-only verifier.
+
+A bounded caller can use the existing `runSearchV3Worker` with these shapes. `base` supplies the normal routes, identity, and completed later view. `source` is the exact body reference, and `maxSteps` is the caller's finite allowance. `checked` must reject any failed worker response.
+
+```js
+const common = { ...base, op: "repairState", repairId, source };
+const observed = checked(await runSearchV3Worker({ ...common, action: "status" }));
+const bound = { ...common, expectedGeneration: observed.expectedGeneration,
+  priorCoverage: observed.priorCoverage };
+let progress = checked(await runSearchV3Worker({ ...bound, action: "start" }));
+for (let step = 0; step < maxSteps && progress.phase !== "ready" && !progress.published; step++) {
+  progress = checked(await runSearchV3Worker({ ...bound, action: "step" }));
+}
+if (progress.phase === "ready") {
+  progress = checked(await runSearchV3Worker({ ...bound, action: "publish" }));
+}
+// If the allowance expires, preserve the binding and resume the same stage later.
+```
+
+Normal append continuation remains `materializeState` on its ordinary compatible view. Each job handles one body window or clause batch, then returns its persisted progress. The existing `limit` and 8 MiB source cap do not enable several chunk steps in one job. A caller must retain finite job/deadline bounds and repeat the normal operation until its body and metadata heads are complete before starting repair.
+
 ## State and authority
 
 State items retain an exact evidence span, proposition identity, source-span identity, category, revision when known, authority, confidence, and effective cut. Categories distinguish restrictions, goals, open work, blockers, decisions, approvals, implementation reports, verification/deployment information, and advisory metadata.
@@ -48,6 +69,7 @@ The current lifecycle is deliberately narrower than the charter's proposed gener
 - Tool failure or cancellation can create a blocker. Execution without a reported error is not task verification and does not automatically resolve another failure.
 - Assistant implementation or deployment text remains an assistant report. Quoted or generated content cannot grant approval.
 - Memory events and retention hints retain advisory provenance. A valid memory hash chain does not make its writer a user or project authority.
+- A source-verified `custom_message` is a non-user extension record, even when its text is imperative. The worker binds its parsed/catalog type to an exact raw type token under the existing 64 KiB structural-read bound. The reducer assigns no message role and emits no instruction state or resource observation from that record. Its source body remains exactly recoverable in chronology. Missing-role or malformed message records, and records without sufficient type evidence within that bound, remain qualified. A `customType` string never grants user authority. Existing historical coverage is unchanged until explicit repair publishes it.
 
 Resource recall presents observations and declared revisions. A later mention or a complete tool-result body is not proof of the current resource bytes. Unknown current revisions remain unknown. The candidate does not provide universal task-resolution or resource-version inference.
 

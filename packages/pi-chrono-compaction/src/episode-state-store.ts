@@ -24,7 +24,7 @@ import {
   type EpisodeStateSelectionItem,
   type EpisodeStateSelectionMember,
 } from "./episode-state-contract.js";
-import { reduceEpisodeStateEnvelope, type ExactStateEvidence, type ReducedEpisodeEvent, type ReducedStateItem, type VerifiedEventStructuralFacts } from "./episode-state-reducer.js";
+import { isVerifiedCustomMessage, reduceEpisodeStateEnvelope, type ExactStateEvidence, type ReducedEpisodeEvent, type ReducedStateItem, type VerifiedEventStructuralFacts } from "./episode-state-reducer.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
@@ -181,6 +181,10 @@ async function exactStructural(request: EpisodeStateRequest, envelope: ReducerEn
   const bytes = Buffer.from(String(raw.data), "base64");
   if (bytes.length !== length) fail("search-v3-state-source-invalid");
   let parsed: any; try { parsed = JSON.parse(bytes.toString("utf8")); } catch { return undefined; }
+  if (parsed?.type === "custom_message" && event.metadata.type === "custom_message") {
+    const recordType = rawFact(request, envelope, event, bytes.toString("utf8"), "type", "custom_message");
+    return recordType ? { recordType } : undefined;
+  }
   const message = parsed?.message;
   if (!message || typeof message !== "object") return undefined;
   const rawText = bytes.toString("utf8"), block = Array.isArray(message.content) && envelope.source.blockIndex !== undefined ? message.content[envelope.source.blockIndex] : undefined;
@@ -671,6 +675,24 @@ function repairItemMatches(row: SqlRow, item: ReducedStateItem): boolean {
     str(row, key) === item[key as keyof ReducedStateItem]);
 }
 
+/** Repair-only body verification. Descriptor zero is not itself evidence of a body. */
+async function originalRepairSource(request: StateRepairRequest, executor: CatalogExecutor, budget: { bytes: number }): Promise<void> {
+  const source = request.source;
+  const page = await catalogCall(request, executor, budget, { op: "page", view: request.view, after: source.eventSeq - 1, limit: 1 });
+  const event = page.events?.[0] as CatalogEventRow | undefined;
+  if (!event || event.seq !== source.eventSeq || event.metadata.provenance !== "original") fail("search-v3-state-repair-source-invalid");
+  if (event!.metadata.type === "message" && event!.metadata.role === "user") {
+    await originalUserSource(request, source, executor, budget); return;
+  }
+  if (event!.metadata.type !== "custom_message") fail("search-v3-state-repair-source-invalid");
+  const blocks = await catalogCall(request, executor, budget, { op: "blocks", view: request.view, eventSeq: source.eventSeq, after: source.descriptor, limit: 1 });
+  const block = blocks.blocks?.[0] as CatalogBlockShape | undefined;
+  const exact = block && bodySource(request.identity.capsule, request.view, event!, block);
+  if (!block || block.index !== source.descriptor || block.metadata.provenance !== "original"
+    || !["text", "content"].includes(source.field) || !exact || canonicalJson(exact) !== canonicalJson(source))
+    fail("search-v3-state-repair-source-invalid");
+}
+
 /** Exact-descriptor repair. Staged rows use one reserved, unpublished generation. */
 async function repairState(request: StateRepairRequest, store: Store, options: EpisodeStateExecutionOptions,
   budget: { bytes: number }): Promise<Record<string, unknown>> {
@@ -715,17 +737,18 @@ async function repairState(request: StateRepairRequest, store: Store, options: E
   const snapshot = canonicalJson({ head, coverage, originalCut });
   if (stage && stage.snapshot !== snapshot) fail("search-v3-state-repair-stale");
   const catalog = options.catalogExecutor ?? executeCatalogStoreRequest, capsules = options.capsuleExecutor ?? executeCapsuleRequest;
-  await originalUserSource(request, source, catalog, budget);
+  await originalRepairSource(request, catalog, budget);
   if (!stage) {
     if (![coverage.restrictionGap, coverage.openWorkGap, coverage.optionalGap].includes(1)) fail("search-v3-state-repair-not-a-gap");
     if (enabled && store.get("SELECT 1 AS found FROM state_gap_repairs WHERE phase!='published' OR (lineage=? AND eventSeq=? AND descriptor=?) LIMIT 1",
       line, source.eventSeq, source.descriptor)) fail("search-v3-state-repair-active");
     const page = await capsuleCall(request, capsules, budget, { op: "capsulePage", view: request.view,
-      afterEventSeq: source.eventSeq, afterDescriptor: source.descriptor - 1, limit: 1 });
+      afterEventSeq: source.descriptor === 0 ? source.eventSeq - 1 : source.eventSeq,
+      afterDescriptor: source.descriptor === 0 ? Number.MAX_SAFE_INTEGER : source.descriptor - 1, limit: 1 });
     const envelope = page.capsules?.[0] as ReducerEnvelope | undefined;
     if (!envelope || envelope.provenance !== "original" || canonicalJson(envelope.source) !== canonicalJson(source)) fail("search-v3-state-repair-source-invalid");
     const structural = await exactStructural(request, envelope!, catalog, budget);
-    if (structural?.role?.value !== "user") fail("search-v3-state-repair-source-invalid");
+    if (structural?.role?.value !== "user" && !isVerifiedCustomMessage(envelope!, structural)) fail("search-v3-state-repair-source-invalid");
     const progress: StateRepairProgress = { checkpoint: { format: STATE_BATCH_CHECKPOINT, view: request.view, envelope: envelope! }, structural: structural!,
       nextDecoded: source.decodedUtf16.start, legacyKind: 0, legacyAfter: "", legacyRows: 0, matched: 0, inserted: 0, superseded: 0 };
     store.transaction(() => {
@@ -765,7 +788,8 @@ async function repairState(request: StateRepairRequest, store: Store, options: E
       EPISODE_STATE_LIMITS.stateItemsPerBatch, line, repairKinds[progress.legacyKind]!, source.eventSeq, source.descriptor,
       request.expectedGeneration!, progress.legacyAfter, EPISODE_STATE_LIMITS.stateItemsPerBatch);
     const exact = rows.map(row => {
-      if (row.authority !== "user" || row.confidence !== "verified") fail("search-v3-state-repair-evidence-invalid");
+      if (row.authority !== "user" || row.confidence !== "verified" || isVerifiedCustomMessage(progress.checkpoint.envelope, progress.structural))
+        fail("search-v3-state-repair-evidence-invalid");
       if (row.supersededGeneration !== null) {
         const resolution = JSON.parse(str(row, "resolutionEvidence"));
         if (num(row, "supersededGeneration") > request.expectedGeneration! || !isScopedBodySourceRef(resolution?.source)
@@ -786,7 +810,8 @@ async function repairState(request: StateRepairRequest, store: Store, options: E
   } else if (phase === "extract") {
     const { checkpoint } = progress, next = progress.nextDecoded;
     if (canonicalJson(checkpoint.view) !== canonicalJson(request.view) || canonicalJson(checkpoint.envelope?.source) !== canonicalJson(source)
-      || progress.structural?.role?.value !== "user" || !Number.isSafeInteger(next) || next < source.decodedUtf16.start || next >= source.decodedUtf16.end)
+      || progress.structural?.role?.value !== "user" && !isVerifiedCustomMessage(checkpoint.envelope, progress.structural)
+      || !Number.isSafeInteger(next) || next < source.decodedUtf16.start || next >= source.decodedUtf16.end)
       fail("search-v3-state-repair-checkpoint-invalid");
     if (checkpoint.batch || next > source.decodedUtf16.start)
       decodeStateCheckpoint(request, { envelope: JSON.stringify(checkpoint), nextDecoded: next }, request.view);
