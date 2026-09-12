@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { isScopedBodySourceRef, sourceRefWithinViewBounds } from "./capsule-contract.js";
+import { isCapsuleCatalogView, isScopedBodySourceRef, sourceRefWithinViewBounds } from "./capsule-contract.js";
 import { bodySource } from "./capsule-derive.js";
 import { executeCapsuleRequest } from "./capsule-store.js";
+import { CATALOG_LIMITS } from "./catalog-contract.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
 import { canonicalJson } from "./capsule-segment.js";
 import { stableStringify } from "./utils.js";
 import { CatalogSqlite } from "./catalog-sqlite.js";
 import { EPISODE_STATE_LIMITS, EPISODE_STATE_RULESET_VERSION, EPISODE_STATE_SCHEMA_VERSION, isEpisodeStateRequest, } from "./episode-state-contract.js";
-import { reduceEpisodeStateEnvelope } from "./episode-state-reducer.js";
+import { isVerifiedCustomMessage, reduceEpisodeStateEnvelope } from "./episode-state-reducer.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
 const fail = (code) => { throw Object.assign(new Error(code), { code }); };
 const sha = (text) => createHash("sha256").update(text).digest("hex");
@@ -51,6 +52,18 @@ const schema = [
     "CREATE INDEX retention_page ON retention_hints(lineage,createdGeneration,eventSeq,stableKey)",
     "CREATE VIRTUAL TABLE retention_fts USING fts5(lineage UNINDEXED,stableKey UNINDEXED,body,tokenize='unicode61')",
 ];
+// Explicit opt-in. Pre-repair v4 readers and writers reject this storage marker.
+const STATE_REPAIR_RULESET = "episode-state-exact-v4-gap-repair-v1";
+const repairSchema = [
+    "CREATE TABLE state_gap_repairs (repairId TEXT PRIMARY KEY, lineage TEXT NOT NULL, eventSeq INTEGER NOT NULL, descriptor INTEGER NOT NULL, priorGeneration INTEGER NOT NULL, effectiveCut INTEGER NOT NULL, generation INTEGER NOT NULL, binding TEXT NOT NULL, snapshot TEXT NOT NULL, progress TEXT NOT NULL, phase TEXT NOT NULL) WITHOUT ROWID",
+    "CREATE INDEX state_gap_active ON state_gap_repairs(phase)",
+    "CREATE INDEX state_gap_coverage ON state_gap_repairs(lineage,eventSeq,descriptor,priorGeneration,phase,effectiveCut,generation)",
+    "CREATE TABLE state_gap_legacy (repairId TEXT NOT NULL, stableKey TEXT NOT NULL, evidenceKey TEXT NOT NULL, rowHash TEXT NOT NULL, matched INTEGER NOT NULL, PRIMARY KEY(repairId,stableKey)) WITHOUT ROWID",
+    "CREATE INDEX state_gap_evidence ON state_gap_legacy(repairId,evidenceKey)",
+    "CREATE INDEX state_gap_unmatched ON state_gap_legacy(repairId,matched)",
+];
+const repairKinds = ["restriction", "goal", "openwork", "blocker", "decision", "approval", "reportedimplementation",
+    "observedverification", "deployment", "memory", "retentionhint"];
 class Store {
     db;
     request;
@@ -73,9 +86,12 @@ class Store {
         const meta = this.get("SELECT * FROM meta WHERE singleton=1");
         if (!meta || num(meta, "version") !== EPISODE_STATE_SCHEMA_VERSION || str(meta, "identity") !== canonicalJson(this.request.identity)
             || str(meta, "searchRoute") !== this.request.searchDirectory || str(meta, "capsuleRoute") !== this.request.capsuleDirectory
-            || str(meta, "catalogRoute") !== this.request.catalogDirectory || str(meta, "ruleset") !== EPISODE_STATE_RULESET_VERSION)
+            || str(meta, "catalogRoute") !== this.request.catalogDirectory
+            || ![EPISODE_STATE_RULESET_VERSION, STATE_REPAIR_RULESET].includes(str(meta, "ruleset")))
             fail("search-v3-state-store-mismatch");
-        for (const sql of schema) {
+        if (str(meta, "ruleset") !== STATE_REPAIR_RULESET && this.get("SELECT name FROM sqlite_master WHERE name='state_gap_repairs'"))
+            fail("search-v3-state-version-mismatch");
+        for (const sql of [...schema, ...(str(meta, "ruleset") === STATE_REPAIR_RULESET ? repairSchema : [])]) {
             const parts = sql.split(" "), name = parts[1] === "VIRTUAL" ? parts[3] : parts[2];
             if (this.get("SELECT sql FROM sqlite_master WHERE name=?", name)?.sql !== sql)
                 fail("search-v3-state-version-mismatch");
@@ -170,6 +186,10 @@ async function exactStructural(request, envelope, executor, budget) {
     }
     catch {
         return undefined;
+    }
+    if (parsed?.type === "custom_message" && event.metadata.type === "custom_message") {
+        const recordType = rawFact(request, envelope, event, bytes.toString("utf8"), "type", "custom_message");
+        return recordType ? { recordType } : undefined;
     }
     const message = parsed?.message;
     if (!message || typeof message !== "object")
@@ -525,25 +545,67 @@ function insertReduced(store, request, reduced, generation, stateOnly = false) {
         store.run("INSERT INTO resource_fts(lineage,stableKey,body) SELECT ?,?,? WHERE changes()>0", line, item.stableKey, `${item.resourceKind} ${item.resourceKey} ${item.relation} ${item.revision ?? "unknown"}`);
     }
 }
+const STATE_BATCH_CHECKPOINT = "state-clause-batch-v1";
+function decodeStateCheckpoint(request, row, indexed) {
+    let parsed;
+    try {
+        parsed = JSON.parse(str(row, "envelope"));
+    }
+    catch {
+        return fail("search-v3-state-checkpoint-corrupt");
+    }
+    // Legacy checkpoints contain a bare envelope. Preserve their already accumulated gaps.
+    // New checkpoints deliberately lack .source, so an old writer refuses before its first mutation.
+    const checkpoint = parsed?.format === undefined
+        ? { format: STATE_BATCH_CHECKPOINT, view: indexed, envelope: parsed } : parsed;
+    if (checkpoint?.format !== STATE_BATCH_CHECKPOINT || Object.hasOwn(checkpoint, "source")
+        || !isCapsuleCatalogView(checkpoint.view) || !extendsView(request.view, checkpoint.view) || !extendsView(indexed, checkpoint.view)
+        || lineage({ ...request, view: checkpoint.view }) !== lineage(request)
+        || !isScopedBodySourceRef(checkpoint.envelope?.source)
+        || !sourceRefWithinViewBounds(checkpoint.envelope.source, checkpoint.view))
+        fail("search-v3-state-checkpoint-corrupt");
+    const source = checkpoint.envelope.source, nextDecoded = num(row, "nextDecoded");
+    if (!Number.isSafeInteger(nextDecoded) || nextDecoded < source.decodedUtf16.start || nextDecoded >= source.decodedUtf16.end)
+        fail("search-v3-state-checkpoint-corrupt");
+    const batch = checkpoint.batch;
+    if (parsed?.format !== undefined && ((!batch && nextDecoded === source.decodedUtf16.start)
+        || Object.hasOwn(parsed, "batch") && !batch))
+        fail("search-v3-state-checkpoint-corrupt");
+    if (batch) {
+        const start = nextDecoded === source.decodedUtf16.start ? nextDecoded
+            : Math.max(source.decodedUtf16.start, nextDecoded - EPISODE_STATE_LIMITS.largeBodyOverlapUnits);
+        if (!Number.isSafeInteger(batch.cursor?.afterState) || batch.cursor.afterState < 1
+            || batch.cursor.afterState > EPISODE_STATE_LIMITS.wholeBodyUtf16Units
+            || batch.cursor.afterState % EPISODE_STATE_LIMITS.stateItemsPerBatch !== 0
+            || !/^[a-f0-9]{64}$/u.test(batch.cursor.prefixHash) || !/^[a-f0-9]{64}$/u.test(batch.windowHash)
+            || batch.start !== start || batch.end !== Math.min(source.decodedUtf16.end, start + EPISODE_STATE_LIMITS.wholeBodyUtf16Units))
+            fail("search-v3-state-checkpoint-corrupt");
+    }
+    return parsed?.format === undefined && nextDecoded > source.decodedUtf16.start
+        ? { ...checkpoint, legacyPrefixUnverified: true } : checkpoint;
+}
+function bodyCheckpointProgress(checkpoint, nextDecoded) {
+    const source = checkpoint.envelope.source;
+    return { eventSeq: source.eventSeq, descriptor: source.descriptor, sourceViewHash: sha(canonicalJson(checkpoint.view)),
+        nextDecoded, endDecoded: source.decodedUtf16.end, afterState: checkpoint.batch?.cursor.afterState ?? 0 };
+}
 async function materialize(request, store, executor, catalogExecutor, budget) {
     const line = lineage(request), head = store.get("SELECT * FROM heads WHERE lineage=?", line);
-    if (head) {
-        const old = JSON.parse(str(head, "view"));
-        if (!extendsView(request.view, old))
-            fail("search-v3-state-view-incompatible");
-    }
+    const indexed = head ? JSON.parse(str(head, "view")) : request.view;
+    if (!extendsView(request.view, indexed))
+        fail("search-v3-state-view-incompatible");
     const afterEventSeq = request.after?.eventSeq ?? (head ? num(head, "afterEventSeq") : 0);
     const afterDescriptor = request.after?.descriptor ?? (head ? num(head, "afterDescriptor") : 0);
     const metadataAfterEventSeq = head ? num(head, "metadataAfterEventSeq") : 0;
     const priorPartial = head ? num(head, "partialCount") : 0;
     if (request.after && head && (afterEventSeq !== num(head, "afterEventSeq") || afterDescriptor !== num(head, "afterDescriptor")))
         fail("search-v3-state-cursor-invalid");
-    let active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
-    let envelope, verified;
+    const active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
+    let checkpoint, verified;
     let pageComplete = false;
     if (active) {
+        checkpoint = decodeStateCheckpoint(request, active, indexed);
         try {
-            envelope = JSON.parse(str(active, "envelope"));
             verified = JSON.parse(str(active, "structural"));
         }
         catch {
@@ -552,70 +614,82 @@ async function materialize(request, store, executor, catalogExecutor, budget) {
     }
     else {
         const page = await capsuleCall(request, executor, budget, { op: "capsulePage", view: request.view, afterEventSeq, afterDescriptor, limit: 1 });
-        envelope = (page.capsules ?? [])[0];
+        const envelope = (page.capsules ?? [])[0];
         pageComplete = page.complete === true;
-        if (envelope && envelope.source.decodedUtf16.end - envelope.source.decodedUtf16.start > EPISODE_STATE_LIMITS.wholeBodyUtf16Units) {
+        if (envelope) {
             verified = await exactStructural(request, envelope, catalogExecutor, budget);
-            store.run("INSERT INTO large_bodies VALUES(?,?,?,?,?,?,?)", line, canonicalJson(envelope), canonicalJson(verified ?? {}), envelope.source.decodedUtf16.start, 0, 0, 0);
-            active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
+            checkpoint = { format: STATE_BATCH_CHECKPOINT, view: request.view, envelope };
         }
     }
     let generation = num(store.get("SELECT generation FROM meta WHERE singleton=1"), "generation");
-    let nextEventSeq = afterEventSeq, nextDescriptor = afterDescriptor, bodyPartial = 0;
-    if (envelope && active) {
-        const sourceStart = envelope.source.decodedUtf16.start, sourceEnd = envelope.source.decodedUtf16.end;
-        const nextDecoded = num(active, "nextDecoded");
+    let nextEventSeq = afterEventSeq, nextDescriptor = afterDescriptor, bodyPartial = 0, stateItems = 0, decodedChunks = 0;
+    if (checkpoint) {
+        const { envelope, batch } = checkpoint, source = envelope.source;
+        if (!isScopedBodySourceRef(source) || !sourceRefWithinViewBounds(source, checkpoint.view)
+            || source.eventSeq < afterEventSeq || source.eventSeq === afterEventSeq && source.descriptor <= afterDescriptor
+            || metadataAfterEventSeq >= source.eventSeq)
+            fail("search-v3-state-checkpoint-corrupt");
+        // This is append continuation, never an implicit repair of an older publication.
+        if (store.get("SELECT 1 AS found WHERE EXISTS(SELECT 1 FROM coverage WHERE lineage=? AND eventSeq=? AND descriptor=?) OR EXISTS(SELECT 1 FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?)", line, source.eventSeq, source.descriptor, line, source.eventSeq, source.descriptor))
+            fail("search-v3-state-checkpoint-corrupt");
+        const sourceStart = source.decodedUtf16.start, sourceEnd = source.decodedUtf16.end;
+        const nextDecoded = active ? num(active, "nextDecoded") : sourceStart;
         const decodedStart = nextDecoded === sourceStart ? sourceStart : Math.max(sourceStart, nextDecoded - EPISODE_STATE_LIMITS.largeBodyOverlapUnits);
-        const length = Math.min(EPISODE_STATE_LIMITS.wholeBodyUtf16Units, sourceEnd - decodedStart);
-        const chunk = await capsuleCall(request, executor, budget, { op: "chunkRange", view: request.view, source: envelope.source,
-            decodedStart, decodedLength: length, limit: 2 });
+        const length = Math.min(EPISODE_STATE_LIMITS.wholeBodyUtf16Units, sourceEnd - decodedStart), through = decodedStart + length;
+        const chunk = length ? await capsuleCall(request, executor, budget, { op: "chunkRange", view: checkpoint.view, source,
+            decodedStart, decodedLength: length, limit: 2 }) : { data: "" };
         const bytes = Buffer.from(String(chunk.data), "base64"), text = bytes.toString("utf16le");
         if (bytes.length !== length * 2 || text.length !== length)
             fail("search-v3-state-source-invalid");
-        const through = decodedStart + length, final = through === sourceEnd;
-        const reduced = reduceEpisodeStateEnvelope(envelope, text, verified, { decodedStart, final });
+        const windowHash = createHash("sha256").update(bytes).digest("hex");
+        if (batch && batch.windowHash !== windowHash)
+            fail("search-v3-state-checkpoint-corrupt");
+        const reduced = reduceEpisodeStateEnvelope(envelope, text, verified, { decodedStart, final: through === sourceEnd, after: batch?.cursor });
+        const windowComplete = reduced.nextBatch === undefined, final = through === sourceEnd && windowComplete;
+        // A pending batch is not a permanent gap. The final batch repeats the same exact
+        // window and retains any intrinsic qualifier. Earlier completed-window gaps stay set.
+        const legacyPrefix = checkpoint.legacyPrefixUnverified === true;
+        const restrictionGap = active?.restrictionGap === 1 || legacyPrefix || windowComplete && reduced.coverage.restrictionGap;
+        const openWorkGap = active?.openWorkGap === 1 || legacyPrefix || windowComplete && reduced.coverage.openWorkGap;
+        const partial = active?.partial === 1 || legacyPrefix || windowComplete && reduced.partial;
+        const nextCheckpoint = { format: STATE_BATCH_CHECKPOINT, view: checkpoint.view, envelope,
+            ...(legacyPrefix ? { legacyPrefixUnverified: true } : {}),
+            ...(reduced.nextBatch ? { batch: { cursor: reduced.nextBatch, start: decodedStart, end: through, windowHash } } : {}) };
+        const nextWindow = windowComplete ? through : nextDecoded;
         generation++;
-        bodyPartial = reduced.partial ? 1 : 0;
-        const restrictionGap = num(active, "restrictionGap") === 1 || reduced.coverage.restrictionGap;
-        const openWorkGap = num(active, "openWorkGap") === 1 || reduced.coverage.openWorkGap;
-        const partial = num(active, "partial") === 1 || reduced.partial;
+        stateItems = reduced.states.length;
+        decodedChunks = length ? 1 : 0;
+        bodyPartial = final && partial ? 1 : 0;
+        if (final) {
+            nextEventSeq = source.eventSeq;
+            nextDescriptor = source.descriptor;
+        }
         store.transaction(() => {
-            insertReduced(store, request, reduced, generation, nextDecoded !== sourceStart);
+            insertReduced(store, request, reduced, generation, nextDecoded !== sourceStart || batch !== undefined);
             store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
             if (final) {
                 store.run("DELETE FROM large_bodies WHERE lineage=?", line);
-                store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, envelope.source.eventSeq, envelope.source.descriptor, generation, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0);
-                store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, envelope.source.eventSeq, envelope.source.descriptor, generation);
+                store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, source.eventSeq, source.descriptor, generation, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0);
+                store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, source.eventSeq, source.descriptor, generation);
             }
             else
-                store.run("UPDATE large_bodies SET nextDecoded=?,restrictionGap=?,openWorkGap=?,partial=? WHERE lineage=?", through, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0, line);
+                store.run("INSERT OR REPLACE INTO large_bodies VALUES(?,?,?,?,?,?,?)", line, JSON.stringify(nextCheckpoint), canonicalJson(verified ?? {}), nextWindow, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0);
+            // Commit the body head with its rows/checkpoint, including the final batch.
+            // A later metadata read failure cannot replay the completed envelope.
+            store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?,?,?)", line, canonicalJson(request.view), nextEventSeq, nextDescriptor, metadataAfterEventSeq, generation, 0, 0, priorPartial + bodyPartial);
         });
         if (!final) {
-            store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?,?,?)", line, canonicalJson(request.view), afterEventSeq, afterDescriptor, metadataAfterEventSeq, generation, 0, 0, priorPartial);
             const known = Math.max(0, Math.min(request.view.eventCut, afterEventSeq - 1, metadataAfterEventSeq));
             return { stateGeneration: generation, branchKey: request.view.branchKey, knownThroughCut: known, knownThrough: known, partial: true, complete: false,
                 next: { eventSeq: afterEventSeq, descriptor: afterDescriptor, generation }, metadata: { afterEventSeq: metadataAfterEventSeq, complete: false,
-                    processedEvents: 0, acceptedMemoryEvents: 0, acceptedRetentionHints: 0 }, largeBody: { checkpointed: true, nextDecoded: through, endDecoded: sourceEnd },
-                metrics: { capsules: 1, decodedChunks: 1, partialRecords: bodyPartial, sqliteStatements: store.statements } };
+                    processedEvents: 0, acceptedMemoryEvents: 0, acceptedRetentionHints: 0 }, bodyCheckpoint: bodyCheckpointProgress(nextCheckpoint, nextWindow),
+                ...(sourceEnd - sourceStart > EPISODE_STATE_LIMITS.wholeBodyUtf16Units
+                    ? { largeBody: { checkpointed: true, nextDecoded: nextWindow, endDecoded: sourceEnd } } : {}),
+                metrics: { capsules: 1, decodedChunks, stateItems, stateItemsPerBatch: EPISODE_STATE_LIMITS.stateItemsPerBatch,
+                    partialRecords: 0, sqliteStatements: store.statements } };
         }
-        nextEventSeq = envelope.source.eventSeq;
-        nextDescriptor = envelope.source.descriptor;
     }
-    else if (envelope) {
-        verified = await exactStructural(request, envelope, catalogExecutor, budget);
-        const reduced = reduceEpisodeStateEnvelope(envelope, await body(request, envelope, executor, budget), verified);
-        generation++;
-        bodyPartial = reduced.partial ? 1 : 0;
-        nextEventSeq = envelope.source.eventSeq;
-        nextDescriptor = envelope.source.descriptor;
-        store.transaction(() => {
-            insertReduced(store, request, reduced, generation);
-            store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
-            store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, envelope.source.eventSeq, envelope.source.descriptor, generation, reduced.coverage.restrictionGap ? 1 : 0, reduced.coverage.openWorkGap ? 1 : 0, reduced.partial ? 1 : 0);
-            store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, envelope.source.eventSeq, envelope.source.descriptor, generation);
-        });
-    }
-    const bodyComplete = !envelope && pageComplete;
+    const bodyComplete = !checkpoint && pageComplete;
     const metadata = await materializeMetadata(request, store, catalogExecutor, budget, metadataAfterEventSeq, generation, bodyComplete ? request.view.eventCut : Math.max(0, nextEventSeq - 1));
     generation = metadata.generation;
     const complete = bodyComplete && metadata.complete, partialCount = priorPartial + bodyPartial + metadata.partial;
@@ -627,8 +701,241 @@ async function materialize(request, store, executor, catalogExecutor, budget) {
     return { stateGeneration: generation, branchKey: request.view.branchKey, knownThroughCut, knownThrough: knownThroughCut, partial: !complete || partialCount > 0,
         complete, next: { eventSeq: nextEventSeq, descriptor: nextDescriptor, generation }, metadata: { afterEventSeq: metadata.afterEventSeq,
             complete: metadata.complete, processedEvents: metadata.processedEvents, acceptedMemoryEvents: metadata.acceptedMemoryEvents,
-            acceptedRetentionHints: metadata.acceptedRetentionHints }, metrics: { capsules: envelope ? 1 : 0, decodedChunks: envelope && active ? 1 : 0,
-            partialRecords: bodyPartial + metadata.partial, sqliteStatements: store.statements } };
+            acceptedRetentionHints: metadata.acceptedRetentionHints }, metrics: { capsules: checkpoint ? 1 : 0, decodedChunks, stateItems,
+            stateItemsPerBatch: EPISODE_STATE_LIMITS.stateItemsPerBatch, partialRecords: bodyPartial + metadata.partial, sqliteStatements: store.statements } };
+}
+function repairEnabled(store) {
+    return store.get("SELECT ruleset FROM meta WHERE singleton=1")?.ruleset === STATE_REPAIR_RULESET;
+}
+function repairEvidenceKey(source, evidence) {
+    if (canonicalJson(evidence?.source) !== canonicalJson(source) || !Number.isSafeInteger(evidence?.decodedUtf16?.start)
+        || !Number.isSafeInteger(evidence.decodedUtf16.end) || evidence.decodedUtf16.start < source.decodedUtf16.start
+        || evidence.decodedUtf16.end > source.decodedUtf16.end || typeof evidence.exactText !== "string"
+        || evidence.exactText.length < 1 || evidence.exactText.length > EPISODE_STATE_LIMITS.clauseUtf16Units
+        || evidence.exactText.length !== evidence.decodedUtf16.end - evidence.decodedUtf16.start)
+        fail("search-v3-state-repair-evidence-invalid");
+    return sha(canonicalJson({ source, decodedUtf16: evidence.decodedUtf16, exactText: evidence.exactText }));
+}
+function repairItemMatches(row, item) {
+    return ["propositionKey", "subject", "revision", "kind", "authority", "confidence", "status"].every(key => str(row, key) === item[key]);
+}
+/** Repair-only body verification. Descriptor zero is not itself evidence of a body. */
+async function originalRepairSource(request, executor, budget) {
+    const source = request.source;
+    const page = await catalogCall(request, executor, budget, { op: "page", view: request.view, after: source.eventSeq - 1, limit: 1 });
+    const event = page.events?.[0];
+    if (!event || event.seq !== source.eventSeq || event.metadata.provenance !== "original")
+        fail("search-v3-state-repair-source-invalid");
+    if (event.metadata.type === "message" && event.metadata.role === "user") {
+        await originalUserSource(request, source, executor, budget);
+        return;
+    }
+    if (event.metadata.type !== "custom_message")
+        fail("search-v3-state-repair-source-invalid");
+    const blocks = await catalogCall(request, executor, budget, { op: "blocks", view: request.view, eventSeq: source.eventSeq, after: source.descriptor, limit: 1 });
+    const block = blocks.blocks?.[0];
+    const exact = block && bodySource(request.identity.capsule, request.view, event, block);
+    if (!block || block.index !== source.descriptor || block.metadata.provenance !== "original"
+        || !["text", "content"].includes(source.field) || !exact || canonicalJson(exact) !== canonicalJson(source))
+        fail("search-v3-state-repair-source-invalid");
+}
+/** Exact-descriptor repair. Staged rows use one reserved, unpublished generation. */
+async function repairState(request, store, options, budget) {
+    const line = lineage(request), source = request.source;
+    const coverage = store.get("SELECT * FROM coverage WHERE lineage=? AND eventSeq=? AND descriptor=?", line, source.eventSeq, source.descriptor)
+        ?? fail("search-v3-state-repair-coverage-missing");
+    const priorCoverage = { generation: num(coverage, "generation"), hash: sha(canonicalJson(coverage)) };
+    const currentGeneration = num(store.get("SELECT generation FROM meta WHERE singleton=1"), "generation");
+    const enabled = repairEnabled(store);
+    let stage = enabled ? store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId) : undefined;
+    const binding = canonicalJson({ identity: request.identity, view: request.view, source,
+        expectedGeneration: request.expectedGeneration, priorCoverage: request.priorCoverage });
+    const result = (row, stateItems = 0) => {
+        const progress = JSON.parse(str(row, "progress"));
+        return { repairId: request.repairId, phase: str(row, "phase"), sourceHash: source.bodyHash, sourceViewHash: viewHash(request),
+            priorCoverage, expectedGeneration: num(row, "generation") - 1, publicationGeneration: num(row, "generation"),
+            effectiveAtCut: num(row, "effectiveCut"), published: row.phase === "published", storageRuleset: STATE_REPAIR_RULESET,
+            nextDecoded: progress.nextDecoded, endDecoded: source.decodedUtf16.end, afterState: progress.checkpoint.batch?.cursor.afterState ?? 0,
+            legacyKind: progress.legacyKind, legacyAfter: progress.legacyAfter, legacyRows: progress.legacyRows,
+            matched: progress.matched, inserted: progress.inserted, supersededPreserved: progress.superseded,
+            accounted: progress.matched + progress.inserted, semanticCompletion: false,
+            metrics: { stateItems, stateItemsPerBatch: EPISODE_STATE_LIMITS.stateItemsPerBatch, sqliteStatements: store.statements } };
+    };
+    if (stage) {
+        const saved = JSON.parse(str(stage, "binding"));
+        if (stage.lineage !== line || canonicalJson(saved.source) !== canonicalJson(source)
+            || canonicalJson(saved.view) !== canonicalJson(request.view) || canonicalJson(saved.identity) !== canonicalJson(request.identity)
+            || request.action !== "status" && stage.binding !== binding)
+            fail("search-v3-state-repair-binding-mismatch");
+        if (request.action === "status" || stage.phase === "published")
+            return result(stage);
+    }
+    else if (request.action === "status")
+        return { repairId: request.repairId, phase: "missing", priorCoverage,
+            expectedGeneration: currentGeneration, sourceHash: source.bodyHash, sourceViewHash: viewHash(request), published: false };
+    else if (request.action !== "start")
+        fail("search-v3-state-repair-missing");
+    if (currentGeneration !== request.expectedGeneration || canonicalJson(priorCoverage) !== canonicalJson(request.priorCoverage))
+        fail("search-v3-state-repair-stale");
+    const head = store.get("SELECT * FROM heads WHERE lineage=?", line) ?? fail("search-v3-state-repair-current-cut-required");
+    if (head.view !== canonicalJson(request.view) || head.complete !== 1 || head.metadataComplete !== 1
+        || num(head, "metadataAfterEventSeq") < request.view.eventCut || store.get("SELECT 1 AS found FROM large_bodies LIMIT 1"))
+        fail("search-v3-state-repair-current-cut-required");
+    const originalCut = store.get("SELECT * FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?", line, source.eventSeq, source.descriptor);
+    if (!originalCut || originalCut.generation !== coverage.generation)
+        fail("search-v3-state-repair-coverage-mismatch");
+    const snapshot = canonicalJson({ head, coverage, originalCut });
+    if (stage && stage.snapshot !== snapshot)
+        fail("search-v3-state-repair-stale");
+    const catalog = options.catalogExecutor ?? executeCatalogStoreRequest, capsules = options.capsuleExecutor ?? executeCapsuleRequest;
+    await originalRepairSource(request, catalog, budget);
+    if (!stage) {
+        if (![coverage.restrictionGap, coverage.openWorkGap, coverage.optionalGap].includes(1))
+            fail("search-v3-state-repair-not-a-gap");
+        if (enabled && store.get("SELECT 1 AS found FROM state_gap_repairs WHERE phase!='published' OR (lineage=? AND eventSeq=? AND descriptor=?) LIMIT 1", line, source.eventSeq, source.descriptor))
+            fail("search-v3-state-repair-active");
+        const page = await capsuleCall(request, capsules, budget, { op: "capsulePage", view: request.view,
+            afterEventSeq: source.descriptor === 0 ? source.eventSeq - 1 : source.eventSeq,
+            afterDescriptor: source.descriptor === 0 ? Number.MAX_SAFE_INTEGER : source.descriptor - 1, limit: 1 });
+        const envelope = page.capsules?.[0];
+        if (!envelope || envelope.provenance !== "original" || canonicalJson(envelope.source) !== canonicalJson(source))
+            fail("search-v3-state-repair-source-invalid");
+        const structural = await exactStructural(request, envelope, catalog, budget);
+        if (structural?.role?.value !== "user" && !isVerifiedCustomMessage(envelope, structural))
+            fail("search-v3-state-repair-source-invalid");
+        const progress = { checkpoint: { format: STATE_BATCH_CHECKPOINT, view: request.view, envelope: envelope }, structural: structural,
+            nextDecoded: source.decodedUtf16.start, legacyKind: 0, legacyAfter: "", legacyRows: 0, matched: 0, inserted: 0, superseded: 0 };
+        store.transaction(() => {
+            if (!enabled) {
+                for (const sql of repairSchema)
+                    store.run(sql);
+                store.run("UPDATE meta SET ruleset=? WHERE singleton=1", STATE_REPAIR_RULESET);
+            }
+            store.run("INSERT INTO state_gap_repairs VALUES(?,?,?,?,?,?,?,?,?,?,?)", request.repairId, line, source.eventSeq, source.descriptor, priorCoverage.generation, request.view.eventCut, currentGeneration + 1, binding, snapshot, JSON.stringify(progress), "legacy");
+        });
+        return result(store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId));
+    }
+    if (request.action === "start")
+        return result(stage);
+    const generation = num(stage, "generation"), progress = JSON.parse(str(stage, "progress"));
+    if (request.action === "publish") {
+        if (stage.phase !== "ready" || progress.nextDecoded !== source.decodedUtf16.end || progress.checkpoint.batch
+            || store.get("SELECT 1 AS found FROM state_gap_legacy WHERE repairId=? AND matched=0 LIMIT 1", request.repairId))
+            fail("search-v3-state-repair-incomplete");
+        const descriptor = Number.MAX_SAFE_INTEGER - generation;
+        if (store.get("SELECT 1 AS found FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?", line, request.view.eventCut, descriptor))
+            fail("search-v3-state-repair-stale");
+        store.transaction(() => {
+            store.run("INSERT INTO cuts VALUES(?,?,?,?)", line, request.view.eventCut, descriptor, generation);
+            store.run("UPDATE state_gap_repairs SET phase='published' WHERE repairId=?", request.repairId);
+            store.run("UPDATE heads SET generation=? WHERE lineage=?", generation, line);
+            store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
+        });
+        return result(store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId));
+    }
+    if (stage.phase === "ready")
+        return result(stage);
+    let phase = str(stage, "phase"), stateItems = 0;
+    if (phase === "legacy") {
+        if (!Number.isSafeInteger(progress.legacyKind) || progress.legacyKind < 0 || progress.legacyKind >= repairKinds.length
+            || !/^(?:[a-f0-9]{32})?$/u.test(progress.legacyAfter))
+            fail("search-v3-state-repair-checkpoint-invalid");
+        // Reuse the existing kind/source index. Never build an index over lifetime state.
+        const rows = store.rows("SELECT * FROM state_items INDEXED BY state_compose WHERE lineage=? AND kind=? AND eventSeq=? AND descriptor=? AND createdGeneration<=? AND stableKey>? ORDER BY stableKey LIMIT ?", EPISODE_STATE_LIMITS.stateItemsPerBatch, line, repairKinds[progress.legacyKind], source.eventSeq, source.descriptor, request.expectedGeneration, progress.legacyAfter, EPISODE_STATE_LIMITS.stateItemsPerBatch);
+        const exact = rows.map(row => {
+            if (row.authority !== "user" || row.confidence !== "verified" || isVerifiedCustomMessage(progress.checkpoint.envelope, progress.structural))
+                fail("search-v3-state-repair-evidence-invalid");
+            if (row.supersededGeneration !== null) {
+                const resolution = JSON.parse(str(row, "resolutionEvidence"));
+                if (num(row, "supersededGeneration") > request.expectedGeneration || !isScopedBodySourceRef(resolution?.source)
+                    || !sourceRefWithinViewBounds(resolution.source, request.view)
+                    || Number(resolution.effectiveAtCut ?? resolution.source.eventSeq) > request.view.eventCut)
+                    fail("search-v3-state-repair-lifecycle-ambiguous");
+            }
+            else if (row.resolutionEvidence !== null)
+                fail("search-v3-state-repair-lifecycle-ambiguous");
+            return { row, key: repairEvidenceKey(source, JSON.parse(str(row, "evidence"))) };
+        });
+        stateItems = rows.length;
+        progress.legacyRows += rows.length;
+        if (rows.length < EPISODE_STATE_LIMITS.stateItemsPerBatch) {
+            progress.legacyKind++;
+            progress.legacyAfter = "";
+        }
+        else
+            progress.legacyAfter = str(rows.at(-1), "stableKey");
+        if (progress.legacyKind === repairKinds.length)
+            phase = "extract";
+        store.transaction(() => {
+            for (const { row, key } of exact)
+                store.run("INSERT INTO state_gap_legacy VALUES(?,?,?,?,0)", request.repairId, str(row, "stableKey"), key, sha(canonicalJson(row)));
+            store.run("UPDATE state_gap_repairs SET progress=?,phase=? WHERE repairId=?", JSON.stringify(progress), phase, request.repairId);
+        });
+    }
+    else if (phase === "extract") {
+        const { checkpoint } = progress, next = progress.nextDecoded;
+        if (canonicalJson(checkpoint.view) !== canonicalJson(request.view) || canonicalJson(checkpoint.envelope?.source) !== canonicalJson(source)
+            || progress.structural?.role?.value !== "user" && !isVerifiedCustomMessage(checkpoint.envelope, progress.structural)
+            || !Number.isSafeInteger(next) || next < source.decodedUtf16.start || next >= source.decodedUtf16.end)
+            fail("search-v3-state-repair-checkpoint-invalid");
+        if (checkpoint.batch || next > source.decodedUtf16.start)
+            decodeStateCheckpoint(request, { envelope: JSON.stringify(checkpoint), nextDecoded: next }, request.view);
+        const start = next === source.decodedUtf16.start ? next : Math.max(source.decodedUtf16.start, next - EPISODE_STATE_LIMITS.largeBodyOverlapUnits);
+        const length = Math.min(EPISODE_STATE_LIMITS.wholeBodyUtf16Units, source.decodedUtf16.end - start), end = start + length;
+        const chunk = await capsuleCall(request, capsules, budget, { op: "chunkRange", view: request.view, source: checkpoint.envelope.source,
+            decodedStart: start, decodedLength: length, limit: 2 });
+        const bytes = Buffer.from(String(chunk.data), "base64"), text = bytes.toString("utf16le"), windowHash = createHash("sha256").update(bytes).digest("hex");
+        if (bytes.length !== length * 2 || text.length !== length)
+            fail("search-v3-state-repair-source-invalid");
+        if (checkpoint.batch && checkpoint.batch.windowHash !== windowHash)
+            fail("search-v3-state-repair-checkpoint-invalid");
+        const reduced = reduceEpisodeStateEnvelope(checkpoint.envelope, text, progress.structural, { decodedStart: start, final: end === source.decodedUtf16.end, after: checkpoint.batch?.cursor });
+        if (!reduced.nextBatch && (reduced.partial || reduced.coverage.restrictionGap || reduced.coverage.openWorkGap))
+            fail("search-v3-state-repair-extraction-qualified");
+        stateItems = reduced.states.length;
+        store.transaction(() => {
+            for (const item of reduced.states) {
+                const key = repairEvidenceKey(source, item.evidence);
+                const matches = store.rows("SELECT * FROM state_gap_legacy WHERE repairId=? AND evidenceKey=? LIMIT 2", 2, request.repairId, key);
+                if (matches.length > 1)
+                    fail("search-v3-state-repair-evidence-ambiguous");
+                if (matches.length) {
+                    const match = matches[0], row = store.get("SELECT * FROM state_items WHERE lineage=? AND stableKey=?", line, str(match, "stableKey"));
+                    if (!row || sha(canonicalJson(row)) !== match.rowHash || !repairItemMatches(row, item))
+                        fail("search-v3-state-repair-evidence-ambiguous");
+                    if (match.matched === 0) {
+                        store.run("UPDATE state_gap_legacy SET matched=1 WHERE repairId=? AND stableKey=?", request.repairId, str(match, "stableKey"));
+                        progress.matched++;
+                        if (row.supersededGeneration !== null)
+                            progress.superseded++;
+                    }
+                    continue;
+                }
+                const staged = store.get("SELECT * FROM state_items WHERE lineage=? AND stableKey=?", line, item.stableKey);
+                if (staged) {
+                    if (staged.createdGeneration !== generation || repairEvidenceKey(source, JSON.parse(str(staged, "evidence"))) !== key
+                        || !repairItemMatches(staged, item))
+                        fail("search-v3-state-repair-evidence-ambiguous");
+                    continue;
+                }
+                if (item.transition || store.get("SELECT 1 AS found FROM state_items WHERE lineage=? AND propositionKey=? AND authority=? AND kind='decision' AND eventSeq>? AND createdGeneration<=? LIMIT 1", line, item.propositionKey, item.authority, source.eventSeq, request.expectedGeneration))
+                    fail("search-v3-state-repair-lifecycle-ambiguous");
+                store.run("INSERT INTO state_items VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", line, item.stableKey, item.propositionKey, item.spanKey, item.subject, item.revision, item.kind, item.authority, item.confidence, item.status, canonicalJson(item.evidence), source.eventSeq, source.descriptor, generation, null, null);
+                store.run("INSERT INTO state_fts(lineage,stableKey,body) VALUES(?,?,?)", line, item.stableKey, `${item.kind} ${item.subject} ${item.evidence.exactText}`);
+                progress.inserted++;
+            }
+            progress.checkpoint = { format: STATE_BATCH_CHECKPOINT, view: checkpoint.view, envelope: checkpoint.envelope,
+                ...(reduced.nextBatch ? { batch: { cursor: reduced.nextBatch, start, end, windowHash } } : {}) };
+            if (!reduced.nextBatch)
+                progress.nextDecoded = end;
+            if (!reduced.nextBatch && end === source.decodedUtf16.end)
+                phase = "ready";
+            store.run("UPDATE state_gap_repairs SET progress=?,phase=? WHERE repairId=?", JSON.stringify(progress), phase, request.repairId);
+        });
+    }
+    else
+        fail("search-v3-state-repair-checkpoint-invalid");
+    return result(store.get("SELECT * FROM state_gap_repairs WHERE repairId=?", request.repairId), stateItems);
 }
 function pin(request, store) {
     const cut = store.get("SELECT MAX(generation) AS generation FROM cuts WHERE lineage=? AND eventSeq<=?", lineage(request), request.view.eventCut);
@@ -841,7 +1148,9 @@ function composeStateSelection(request, store) {
     let responseBudgetAtLeastOne = false;
     const bodyComplete = bodyCut >= requestedCut, metadataComplete = processedMemoryCut >= requestedCut;
     const partialMemory = !metadataComplete;
-    const gap = (column) => Boolean(store.get(`SELECT eventSeq FROM coverage WHERE lineage=? AND ${column}=1 AND eventSeq<=? AND generation<=? LIMIT 1`, line, processedCut, stateGeneration));
+    const repaired = repairEnabled(store);
+    const gap = (column) => Boolean(store.get(`SELECT c.eventSeq FROM coverage c WHERE c.lineage=? AND c.${column}=1 AND c.eventSeq<=? AND c.generation<=?${repaired
+        ? " AND NOT EXISTS(SELECT 1 FROM state_gap_repairs r WHERE r.lineage=c.lineage AND r.eventSeq=c.eventSeq AND r.descriptor=c.descriptor AND r.priorGeneration=c.generation AND r.phase='published' AND r.effectiveCut<=? AND r.generation<=?)" : ""} LIMIT 1`, line, processedCut, stateGeneration, ...(repaired ? [processedCut, stateGeneration] : [])));
     const restrictionsComplete = bodyComplete && metadataComplete && !gap("restrictionGap");
     const openWorkComplete = bodyComplete && metadataComplete && !gap("openWorkGap");
     const qualifiedReducers = gap("optionalGap");
@@ -1074,8 +1383,26 @@ async function selectionDelta(request, selection, options, budget) {
             throw error;
         }
     }
-    const events = await catalogCall(request, catalog, budget, { op: "page", view: request.view, after: start, limit: 64 });
-    const metadata = (events.events ?? []);
+    const metadata = [];
+    let metadataAfter = start;
+    for (let pageIndex = 0; pageIndex < 4 && metadataAfter < end; pageIndex++) {
+        const events = await catalogCall(request, catalog, budget, { op: "page", view: request.view,
+            after: metadataAfter, limit: CATALOG_LIMITS.page });
+        const page = events.events ?? [];
+        if (!Array.isArray(page) || page.length > CATALOG_LIMITS.page)
+            fail("search-v3-state-source-invalid");
+        if (!page.length)
+            return empty("delta-metadata-incomplete");
+        for (const event of page) {
+            if (!Number.isSafeInteger(event.seq) || event.seq <= metadataAfter || event.seq > end)
+                fail("search-v3-state-source-invalid");
+            metadata.push(event);
+            // A branch view can omit sequence numbers. Advance by the actual last event.
+            metadataAfter = event.seq;
+        }
+    }
+    if (metadataAfter !== end)
+        return empty("delta-metadata-incomplete");
     // Metadata writers require their maintained reducer/checkpoint, not an ad-hoc overlay.
     if (metadata.some(event => ["chrono-memory-v2-event", "chrono-compact-retention-hint"].includes(String(event.metadata?.customType))))
         return empty("delta-requires-metadata-materialization");
@@ -1087,6 +1414,9 @@ async function selectionDelta(request, selection, options, budget) {
             if (envelope.source.eventSeq <= start || envelope.source.eventSeq > end)
                 fail("search-v3-state-source-invalid");
             const reduced = reduceEpisodeStateEnvelope(envelope, await body(request, envelope, capsules, budget), await exactStructural(request, envelope, catalog, budget));
+            // Only the maintained materializer can drain a clause checkpoint across jobs.
+            if (reduced.nextBatch)
+                return empty("delta-extraction-qualified");
             qualified ||= reduced.partial || reduced.states.some(item => !!item.transition);
             for (const item of reduced.states) {
                 const selected = { ...item, effectiveAtCut: end };
@@ -1134,10 +1464,14 @@ function status(request, store) {
     const complete = compatible && num(head, "complete") === 1 && num(head, "metadataComplete") === 1 && indexed.eventCut >= request.view.eventCut;
     const knownThroughCut = complete ? request.view.eventCut : Math.max(0, Math.min(knownThrough - 1, num(head, "metadataAfterEventSeq")));
     const partial = !complete || knownThroughCut < request.view.eventCut || num(head, "partialCount") > 0;
+    const active = store.get("SELECT * FROM large_bodies WHERE lineage=?", lineage(request));
+    const checkpoint = active && compatible ? decodeStateCheckpoint({ ...request, view: indexed }, active, indexed) : undefined;
     return { identity: request.identity, ruleset: EPISODE_STATE_RULESET_VERSION, stateGeneration: generation, knownThroughCut, knownThrough: knownThroughCut, complete, partial,
         readiness: compatible ? partial ? "partial" : "ready" : "incompatible", requestedView: { branchKey: request.view.branchKey, eventCut: request.view.eventCut, hash: viewHash(request) },
         indexedView: { branchKey: indexed.branchKey, eventCut: indexed.eventCut, complete },
         cursor: { eventSeq: num(head, "afterEventSeq"), descriptor: num(head, "afterDescriptor"), generation: num(head, "generation") },
+        ...(checkpoint && sourceRefWithinViewBounds(checkpoint.envelope.source, request.view)
+            ? { bodyCheckpoint: bodyCheckpointProgress(checkpoint, num(active, "nextDecoded")) } : {}),
         metadata: { afterEventSeq: num(head, "metadataAfterEventSeq"), complete: num(head, "metadataComplete") === 1 }, metrics: { sqliteStatements: store.statements } };
 }
 /** Bounded read-only export for M08. It never creates or mutates state-v4.sqlite. */
@@ -1233,7 +1567,8 @@ export async function executeEpisodeStateRequest(value, options = {}) {
         const { executeEpisodeRollupRequest } = await import("./episode-rollup-store.js");
         return executeEpisodeRollupRequest(request, options);
     }
-    const create = request.op === "materializeState", mutate = create || request.op === "supersedeState";
+    const create = request.op === "materializeState", mutate = create || request.op === "supersedeState"
+        || request.op === "repairState" && request.action !== "status";
     let db;
     const budget = { bytes: 0 };
     try {
@@ -1258,10 +1593,14 @@ export async function executeEpisodeStateRequest(value, options = {}) {
                 store.initialize();
             else
                 store.validate(false);
-            const result = request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest, options.catalogExecutor ?? executeCatalogStoreRequest, budget)
-                : request.op === "supersedeState" ? await supersedeState(request, store, options, budget)
-                    : request.op === "recallState" ? recall(request, store)
-                        : request.op === "composeStateSelection" ? await selectionContext(request, await selectionDelta(request, composeStateSelection(request, store), options, budget), options, budget) : status(request, store);
+            if (mutate && request.op !== "repairState" && repairEnabled(store)
+                && store.get("SELECT 1 AS found FROM state_gap_repairs WHERE phase!='published' LIMIT 1"))
+                fail("search-v3-state-repair-active");
+            const result = request.op === "repairState" ? await repairState(request, store, options, budget)
+                : request.op === "materializeState" ? await materialize(request, store, options.capsuleExecutor ?? executeCapsuleRequest, options.catalogExecutor ?? executeCatalogStoreRequest, budget)
+                    : request.op === "supersedeState" ? await supersedeState(request, store, options, budget)
+                        : request.op === "recallState" ? recall(request, store)
+                            : request.op === "composeStateSelection" ? await selectionContext(request, await selectionDelta(request, composeStateSelection(request, store), options, budget), options, budget) : status(request, store);
             const response = { v: 1, ok: true, result: { ...result,
                     coverageScope: "Body capsules plus structurally validated ordinary writer metadata. Custom type and hash-chain checks are not producer authentication; no metadata gains instruction authority.",
                 }, sourceBytes: budget.bytes, sqliteNativeLimitBytes: EPISODE_STATE_LIMITS.nativeSqliteBytes };
