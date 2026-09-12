@@ -10,6 +10,7 @@ import {
   type CapsuleCatalogView, type DerivedStoreIdentity, type ReducerEnvelope, type ScopedBodySourceRef, type ScopedRawSourceRef,
 } from "../src/capsule-contract.js";
 import { executeCatalogStoreRequest } from "../src/catalog-store.js";
+import { CATALOG_LIMITS, isCatalogRequest } from "../src/catalog-contract.js";
 import { CatalogSqlite, CatalogSqliteError } from "../src/catalog-sqlite.js";
 import { executeCapsuleRequest } from "../src/capsule-store.js";
 import { reduceEpisodeStateEnvelope } from "../src/episode-state-reducer.js";
@@ -457,6 +458,73 @@ test("M09 actual producer selection preserves obligations and successive experie
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("state delta pagination: noncontiguous events and late metadata stay bounded", async t => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-state-delta-pages-"));
+  const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
+  const sourcePath = join(directory, "main.jsonl"), sessionKey = "state-delta-pages";
+  mkdirSync(searchDirectory, { mode: 0o700 });
+  writeFileSync(sourcePath, message("u0", null, "user", "Goal: inspect /Repo/Delta.ts."), { mode: 0o600 });
+  const catalog = async (extra: Record<string, unknown>): Promise<any> => {
+    const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
+    assert.equal(response.ok, true, JSON.stringify(response)); return response.ok ? response.result : {};
+  };
+  const ingest = () => catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+  const pin = async (eventId: string) => (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId } })).view as CapsuleCatalogView;
+  try {
+    await ingest();
+    const oldView = await pin("u0");
+    const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation,
+      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
+      reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: createHash("sha256").update("state-delta-capsules").digest("hex") };
+    const identity: SearchV3Identity = { storeKey: randomUUID(), capsule: capsuleIdentity, schemaVersion: 1,
+      configHash: createHash("sha256").update("state-delta-search").digest("hex") };
+    const pages: { after: number; count: number; last: number }[] = [];
+    const run = async (view: CapsuleCatalogView, op: string): Promise<any> => {
+      const response = await executeEpisodeStateRequest({ v: 1, catalogDirectory, capsuleDirectory, searchDirectory, identity, view, op }, {
+        catalogExecutor: async request => {
+          assert.ok(isCatalogRequest(request), "every catalog call respects its existing contract");
+          const result = await executeCatalogStoreRequest(request);
+          if (request.op === "page" && request.limit === CATALOG_LIMITS.page && result.ok) {
+            const events = result.result.events as { seq: number }[];
+            pages.push({ after: request.after ?? 0, count: events.length, last: events.at(-1)?.seq ?? 0 });
+          }
+          return result;
+        },
+      });
+      assert.equal(response.ok, true, JSON.stringify(response));
+      assert.ok(response.sourceBytes <= EPISODE_STATE_LIMITS.sourceBytesPerJob);
+      return response.ok ? response.result : {};
+    };
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, oldView);
+    let ready = false;
+    for (let step = 0; step < 4 && !ready; step++) ready = (await run(oldView, "materializeState")).complete;
+    assert.equal(ready, true);
+    for (let index = 1; index <= 20; index++) appendFileSync(sourcePath,
+      message(`m${index}`, index === 1 ? "u0" : `m${index - 1}`, "assistant", `Evidence detail ${index}.`)
+      + message(`s${index}`, "u0", "assistant", `Sibling observation ${index}.`));
+    await ingest();
+    const view = await pin("m20");
+    assert.equal(view.eventCut, 40);
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, view);
+    pages.length = 0;
+    const selection = await run(view, "composeStateSelection");
+    assert.equal(selection.delta.verified, true);
+    assert.equal(selection.delta.throughCut, view.eventCut);
+    assert.equal(selection.delta.reason, "bounded-committed-delta");
+    assert.deepEqual(pages, [{ after: 1, count: 16, last: 32 }, { after: 32, count: 4, last: 40 }]);
+    appendFileSync(sourcePath, custom("h1", "m20", "chrono-compact-retention-hint", { preserveExact: "Keep the exact delta source." }));
+    await ingest();
+    const lateView = await pin("h1");
+    pages.length = 0;
+    const late = await run(lateView, "composeStateSelection");
+    assert.equal(late.delta.verified, false);
+    assert.equal(late.delta.throughCut, 1);
+    assert.equal(late.delta.reason, "delta-requires-metadata-materialization");
+    assert.deepEqual(pages, [{ after: 1, count: 16, last: 32 }, { after: 32, count: 5, last: 42 }]);
+    t.diagnostic("20 noncontiguous events use 2 catalog pages; the 21st metadata writer refuses the overlay on page 2");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 for (const mode of ["whole", "large"] as const) test(`state clause continuation: ${mode} body preserves exact recovery and old pins`, async t => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-state-batches-"));
   const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
@@ -534,17 +602,10 @@ for (const mode of ["whole", "large"] as const) test(`state clause continuation:
     const pendingStatus = await run(view, { op: "stateStatus" });
     assert.deepEqual(pendingStatus.bodyCheckpoint, result.bodyCheckpoint);
     assert.equal(pendingStatus.complete, false);
-    const pendingSelection = await executeEpisodeStateRequest(request(view, { op: "composeStateSelection" }));
-    if (pendingSelection.ok) {
-      const coverage = pendingSelection.result.coverage as any;
-      assert.equal(coverage.bodyComplete, false);
-      assert.equal(coverage.restrictionsComplete, false);
-      assert.equal(coverage.openWorkComplete, false);
-    } else {
-      // The separate delta path currently requests 64 metadata rows from a 16-row API.
-      // Its refusal is also fail-closed; this extraction change must not weaken it.
-      assert.equal(pendingSelection.code, "search-v3-state-catalog-unavailable");
-    }
+    const pendingSelection = await run(view, { op: "composeStateSelection" });
+    assert.equal(pendingSelection.coverage.bodyComplete, false);
+    assert.equal(pendingSelection.coverage.restrictionsComplete, false);
+    assert.equal(pendingSelection.coverage.openWorkComplete, false);
     const checkpointRow = database(db => db.prepare("SELECT * FROM large_bodies LIMIT 1").get()!);
     const checkpoint = JSON.parse(String(checkpointRow.envelope));
     assert.equal(checkpoint.format, "state-clause-batch-v1");

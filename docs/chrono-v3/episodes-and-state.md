@@ -58,6 +58,8 @@ Sources, state rows, coverage records, old cut markers, and published rollup han
 
 Body progress, metadata progress, and `knownThroughCut` are separate. A ready store can still fail selection for a later or more demanding cut. Mandatory selection has bounded category scans and output limits. Restrictions and open work have distinct completeness and omission flags.
 
+The small committed delta keeps its 64-event sequence-range limit. It reads catalog metadata in at most four pages of 16 events, advances by actual sequence numbers within the pinned branch view, and requires the exact requested cut. Missing metadata progress cannot certify the delta. Memory events or retention hints on any page require maintained metadata materialization before the delta can be verified. A pending clause batch also returns an unverified empty delta until the maintained materializer drains it.
+
 One exact context representation can cover multiple propositions only when the representation and each proposition are validated. Count propositions, not packed rows. Cut/category readiness means that the implemented extraction and selection completed within those bounds. It is not semantic certification that every obligation was recognized.
 
 The original large-session mandatory overflow remains unresolved. Do not infer usable composition from state readiness alone. See [context composition](context-composer.md).

@@ -5,7 +5,7 @@ import { isCapsuleCatalogView, isScopedBodySourceRef, sourceRefWithinViewBounds,
   type ScopedBodySourceRef, type ScopedRawSourceRef } from "./capsule-contract.js";
 import { bodySource, type CatalogBlockShape } from "./capsule-derive.js";
 import { executeCapsuleRequest } from "./capsule-store.js";
-import type { CatalogResponse } from "./catalog-contract.js";
+import { CATALOG_LIMITS, type CatalogResponse } from "./catalog-contract.js";
 import { executeCatalogStoreRequest } from "./catalog-store.js";
 import { canonicalJson } from "./capsule-segment.js";
 import { stableStringify } from "./utils.js";
@@ -1012,8 +1012,22 @@ async function selectionDelta(request: Extract<EpisodeStateRequest, { op: "compo
       throw error;
     }
   }
-  const events = await catalogCall(request, catalog, budget, { op: "page", view: request.view, after: start, limit: 64 });
-  const metadata = (events.events ?? []) as CatalogEventRow[];
+  const metadata: CatalogEventRow[] = [];
+  let metadataAfter = start;
+  for (let pageIndex = 0; pageIndex < 4 && metadataAfter < end; pageIndex++) {
+    const events = await catalogCall(request, catalog, budget, { op: "page", view: request.view,
+      after: metadataAfter, limit: CATALOG_LIMITS.page });
+    const page = events.events ?? [];
+    if (!Array.isArray(page) || page.length > CATALOG_LIMITS.page) fail("search-v3-state-source-invalid");
+    if (!page.length) return empty("delta-metadata-incomplete");
+    for (const event of page as CatalogEventRow[]) {
+      if (!Number.isSafeInteger(event.seq) || event.seq <= metadataAfter || event.seq > end) fail("search-v3-state-source-invalid");
+      metadata.push(event);
+      // A branch view can omit sequence numbers. Advance by the actual last event.
+      metadataAfter = event.seq;
+    }
+  }
+  if (metadataAfter !== end) return empty("delta-metadata-incomplete");
   // Metadata writers require their maintained reducer/checkpoint, not an ad-hoc overlay.
   if (metadata.some(event => ["chrono-memory-v2-event", "chrono-compact-retention-hint"].includes(String(event.metadata?.customType))))
     return empty("delta-requires-metadata-materialization");
@@ -1025,6 +1039,8 @@ async function selectionDelta(request: Extract<EpisodeStateRequest, { op: "compo
       if (envelope.source.eventSeq <= start || envelope.source.eventSeq > end) fail("search-v3-state-source-invalid");
       const reduced = reduceEpisodeStateEnvelope(envelope, await body(request, envelope, capsules, budget),
         await exactStructural(request, envelope, catalog, budget));
+      // Only the maintained materializer can drain a clause checkpoint across jobs.
+      if (reduced.nextBatch) return empty("delta-extraction-qualified");
       qualified ||= reduced.partial || reduced.states.some(item => !!item.transition);
       for (const item of reduced.states) {
         const selected = { ...item, effectiveAtCut: end };
