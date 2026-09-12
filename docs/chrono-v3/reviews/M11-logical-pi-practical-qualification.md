@@ -1,6 +1,6 @@
 # M11 installed-Pi logical-session practical qualification
 
-Status: package 2.0.29 passed exact-head CI. Its first authorized installed-Pi run established the bounded seven-entry seed shape. The one authorized corrected-harness run passed that shape and then stopped at the first main-loop probe because the fixture had not refreshed lifecycle scheduling after its direct seed appends. A fixture-only terminal reload correction is prepared. No full M10 or M11 pass is claimed.
+Status: package 2.0.29 at `9e35102a64f31694757eed11a982a1f81af6d347` passed required CI `34660070498`. Its installed-Pi run completed ten main rollovers and created the logical fork, then stopped during the remaining checks. The retained sources support an affected-tail resumption. A structured shard-refusal correction passed its focused check. Full qualification remains pending that resumption.
 
 ## Scope
 
@@ -26,7 +26,7 @@ The synthetic setup appends completed user and assistant turns around one Pi com
 
 ## Execution boundary
 
-Run this scenario once after the project lead supplies and authorizes the next corrected packaged candidate. Do not treat a plan invocation, any blocked prior run, or the mock ten-route fixture as qualification evidence.
+Run against an exact packaged candidate under the owner's standing completion authorization. Reuse validated retained sources after a late failure and repeat only the affected checks. Do not treat a plan invocation, any blocked prior run, or the mock ten-route fixture as qualification evidence.
 
 Prerequisites:
 
@@ -41,7 +41,7 @@ Generic commands:
 
 ```sh
 cd packages/pi-chrono-compaction
-RUNTIME_SHA="${CORRECTED_CANDIDATE_SHA:?set corrected 2.0.25 candidate SHA}"
+RUNTIME_SHA="${CORRECTED_CANDIDATE_SHA:?set the exact corrected candidate SHA}"
 npm ci
 npm run catalog:sqlite:probe
 npm run build
@@ -142,6 +142,16 @@ The active source contained eight rows and 8,728 bytes: the header, the bounded 
 The qualification seed command writes five entries directly through `SessionManager`. Pi extension slash commands do not run an agent turn and do not emit `agent_settled`. Chrono schedules search at `session_start`, session transitions, and `agent_settled`, so no scheduling boundary followed those direct fixture appends. The subsequent readiness call saw the already-complete event-3 request. A later search miss or search error escaped the probe handler because only the readiness wait has a notification-producing catch. Pi 0.85.1 converts a thrown extension command handler error into an extension error and reports the slash command as handled, so the RPC prompt completed while the harness waited for a notification that could not arrive.
 
 The fixture correction sends the seed-shape receipt, then calls the supported `ctx.reload()` as its terminal action. Reload emits a fresh `session_start` against the same current source, which schedules the search target at the new leaf before the separate probe command. The correction does not reinterpret readiness, force an index state, change the 150-second inner wait or 180-second outer bound, change worker admission, or alter runtime scheduling. This qualification uses an explicit fixture reload after direct `SessionManager` seed writes. It does not establish that ordinary extension-command appends schedule search automatically. The correction changes only the qualification fixture and this report. The full ten-rollover, fork, restart, and final source-preservation sequence remains unqualified until a separately packaged candidate passes exact-head CI and one authorized affected run.
+
+## Ten-rollover result and retained-source recovery
+
+Candidate `9e35102a64f31694757eed11a982a1f81af6d347` ran through the actual installed Pi 0.85.1 RPC interface with committed 2.0.29 artifacts. It completed adoption, the first replacement and exact old-path rollback assertion, all ten main-loop rollovers with their seven-entry seed and search/recall/exact assertions, and the logical fork. Its revision-38 manifest retained eleven main shards, one child shard, and one abandoned rollback shard. Every source was present. The run then ended with `notify-timeout` and no final result report. These intermediate results do not constitute a complete run.
+
+A fresh read-only probe on the retained child recovered the oldest main marker through twelve logical routes with search, recall, and exact retrieval. It did not repeat rollover or change source. The subsequent affected-tail resumption reached the abandoned-shard refusal and timed out because the RPC fixture did not surface the thrown extension error.
+
+The committed adapter reproduced the cause without workers or source reads: `getBlock`, `getRaw`, and `range` throw `logical-session-route-unavailable` for an unlisted shard before entering their error handler. The branch guard correctly prevents access, but the missing structured result escapes the qualification command. The correction moves those same route guards inside the existing handler. It preserves the refusal code, ancestor routes, source scope, and worker limits. One focused check passed all three structured refusals and confirmed unchanged scheduler state.
+
+The RPC fixture now checks `extension_error` events after each command and returns a probe notification for every probe failure. Readiness predicates, deadlines, route-page limits, and output limits are unchanged. The retained thirteen sources will be reused for the remaining sibling refusal, all-shard retrieval, process reopen, switch-back, and hash-preservation checks. Preparation and correction runtime identities must be reported separately. No full campaign restart is needed for this correction.
 
 ## Result fields
 

@@ -42,7 +42,7 @@ const SMOKE = Object.freeze({
 const HELP = `Usage:
   node scripts/m11-scale-campaign.mjs plan --profile full --candidate-sha <40-hex>
   node scripts/m11-scale-campaign.mjs run --profile smoke|full --candidate-sha <40-hex> --campaign-root <absolute-new-directory> --output <absolute-json>
-  node scripts/m11-scale-campaign.mjs resume --candidate-sha <40-hex> --campaign-root <absolute-existing-directory> --output <absolute-json>
+  node scripts/m11-scale-campaign.mjs resume --candidate-sha <40-hex> [--prepared-candidate-sha <40-hex>] --campaign-root <absolute-existing-directory> --output <absolute-json>
 
 Full run safety: launch only after the parent confirms the final integrated candidate and exclusive M11 campaign ownership.`;
 
@@ -58,16 +58,18 @@ function parseArgs(argv) {
     if (!key?.startsWith("--") || !value || value.startsWith("--") || Object.hasOwn(values, key.slice(2))) throw new Error("m11-option");
     values[key.slice(2)] = value;
   }
-  const allowed = new Set(["profile", "candidate-sha", "campaign-root", "output"]);
+  const allowed = new Set(["profile", "candidate-sha", "prepared-candidate-sha", "campaign-root", "output"]);
   if (Object.keys(values).some(key => !allowed.has(key))) throw new Error("m11-option");
   const profile = values.profile ?? (mode === "resume" ? undefined : "full");
   if (profile !== undefined && !["smoke", "full"].includes(profile)) throw new Error("m11-profile");
   if (!/^[a-f0-9]{40}$/.test(values["candidate-sha"] ?? "")) throw new Error("m11-candidate-sha");
+  if (values["prepared-candidate-sha"] !== undefined && (mode !== "resume" || !/^[a-f0-9]{40}$/.test(values["prepared-candidate-sha"]))) throw new Error("m11-prepared-candidate-sha");
   if (mode !== "plan") {
     for (const key of ["campaign-root", "output"]) if (!isAbsolute(values[key] ?? "")) throw new Error(`m11-${key}`);
     if (resolve(values["output"]).startsWith(`${resolve(values["campaign-root"])}${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("m11-output-inside-campaign");
   }
-  return { mode, profile, candidateSha: values["candidate-sha"], campaignRoot: values["campaign-root"], output: values.output };
+  return { mode, profile, candidateSha: values["candidate-sha"], campaignRoot: values["campaign-root"], output: values.output,
+    ...(values["prepared-candidate-sha"] ? { preparedCandidateSha: values["prepared-candidate-sha"] } : {}) };
 }
 function currentSha() { return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(); }
 function config(profile) { return profile === "smoke" ? SMOKE : FULL; }
@@ -114,6 +116,28 @@ async function hashFile(path) {
   try { for (;;) { const { bytesRead } = await handle.read(buffer, 0, buffer.length, position); if (!bytesRead) break; hash.update(buffer.subarray(0, bytesRead)); position += bytesRead; } }
   finally { await handle.close(); }
   return hash.digest("hex");
+}
+async function hashRange(path, offset, length) {
+  const handle = await open(path, "r"), hash = createHash("sha256"), buffer = Buffer.allocUnsafe(Math.min(64 * 1024, length)); let position = offset, remaining = length;
+  try { while (remaining) { const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, remaining), position); assert.ok(bytesRead > 0, "prepared source anchor truncated"); hash.update(buffer.subarray(0, bytesRead)); position += bytesRead; remaining -= bytesRead; } }
+  finally { await handle.close(); }
+  return hash.digest("hex");
+}
+const PREPARATION_PATHS = Object.freeze([
+  ":(top,glob)packages/pi-chrono-compaction/src/catalog-*.ts", ":(top,glob)packages/pi-chrono-compaction/src/capsule-*.ts",
+  ":(top,glob)packages/pi-chrono-compaction/src/search-v3-*.ts", ":(top,glob)packages/pi-chrono-compaction/src/worker-runtime*.ts",
+  ":(top,literal)packages/pi-chrono-compaction/src/host-worker-scheduler.ts", ":(top,glob)packages/pi-chrono-compaction/dist/src/catalog-*.js",
+  ":(top,glob)packages/pi-chrono-compaction/dist/src/capsule-*.js", ":(top,glob)packages/pi-chrono-compaction/dist/src/search-v3-*.js",
+  ":(top,glob)packages/pi-chrono-compaction/dist/src/worker-runtime*.js", ":(top,literal)packages/pi-chrono-compaction/dist/src/host-worker-scheduler.js",
+]);
+const PREPARATION_DIFF_ALLOWLIST = new Set([
+  "packages/pi-chrono-compaction/src/search-v3-store.ts", "packages/pi-chrono-compaction/dist/src/search-v3-store.js",
+]);
+function validatePreparationRevision(preparedCandidateSha, candidateSha) {
+  if (preparedCandidateSha === candidateSha) return;
+  execFileSync("git", ["merge-base", "--is-ancestor", preparedCandidateSha, candidateSha]);
+  const changed = execFileSync("git", ["diff", "--name-only", `${preparedCandidateSha}..${candidateSha}`, "--", ...PREPARATION_PATHS], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
+  assert.deepEqual(changed.filter(path => !PREPARATION_DIFF_ALLOWLIST.has(path)), [], "prepared-store producer paths changed");
 }
 async function directoryBytes(root) {
   let total = 0;
@@ -171,9 +195,18 @@ async function runtimeModules() {
   return Promise.all([
     import("../dist/src/catalog-worker-client.js"), import("../dist/src/capsule-worker-client.js"), import("../dist/src/search-v3-worker-client.js"),
     import("../dist/src/capsule-contract.js"), import("../dist/src/context-composer.js"), import("../dist/src/host-worker-scheduler.js"),
-  ]).then(([catalog, capsule, search, contract, composer, scheduler]) => ({ catalog, capsule, search, contract, composer, scheduler }));
+    import("../dist/src/episode-state-contract.js"),
+  ]).then(([catalog, capsule, search, contract, composer, scheduler, stateContract]) => ({ catalog, capsule, search, contract, composer, scheduler, stateContract }));
 }
 function metrics() { return { calls: 0, failures: {}, latencies: { ingestion: [], appendIngestionLag: [], search: [], recall: [], exact: [], composition: [], fault: [], recovery: [], request: [] }, sourceBytes: {}, workerPeaks: [], processIoByOperation: {} }; }
+function stateMaterializationGuard(session, limits) {
+  const progressUnits = limits.wholeBodyUtf16Units - limits.largeBodyOverlapUnits;
+  assert.ok(progressUnits > 0, "state materialization progress must be positive");
+  const records = session.events + session.compactions;
+  // Every large-body step advances by at least progressUnits after its first
+  // chunk. Per-record and metadata terms cover ceiling loss and final pages.
+  return Math.ceil(session.decodedUnits / progressUnits) + records * 2 + Math.ceil(records / limits.materializeCapsules) + 128;
+}
 function observe(m, kind, started, response) {
   const elapsed = performance.now() - started; m.calls++; m.latencies.request.push(elapsed); (m.latencies[kind] ??= []).push(elapsed);
   const code = response?.ok === false ? response.code : response?.response?.status === "failed" ? response.response.failureCode : null;
@@ -225,7 +258,87 @@ async function prepareStores(root, generated, modules, m) {
       assert.match(recalled.text, new RegExp(`m11-marker-session-${session.session}-event-${shard.firstPayloadEvent}`)); verifiedShards++;
     }
     let stateComplete = false;
-    for (let guard = 0; guard < session.events * 2 + 128; guard++) if ((await searchCall("ingestion", { op: "materializeState", view, limit: 8 })).complete) { stateComplete = true; break; }
+    for (let guard = 0; guard < stateMaterializationGuard(session, modules.stateContract.EPISODE_STATE_LIMITS); guard++) if ((await searchCall("ingestion", { op: "materializeState", view, limit: 8 })).complete) { stateComplete = true; break; }
+    assert.equal(stateComplete, true, "state materialization did not complete");
+    const selection = await searchCall("composition", { op: "composeStateSelection", view });
+    return { session, view, identity, searchIdentity, selection, sessionKey, verifiedShards, directories: { catalogDirectory, derivedDirectory, searchDirectory } };
+  });
+  const residue = await modules.scheduler.schedulerArtifactCounts(schedulerDirectory); assert.deepEqual(residue, { tickets: 0, slots: 0 });
+  return states;
+}
+async function recoverPreparedStores(root, generated, modules, m) {
+  const { default: Database } = await import("better-sqlite3");
+  const schedulerDirectory = join(root, "scheduler-prepare"); await mkdir(schedulerDirectory, { recursive: true, mode: 0o700 });
+  const states = await pool(generated.sessions, generated.sessions.length, async session => {
+    const stateRoot = join(root, "prepared", `session-${String(session.session).padStart(2, "0")}`);
+    const catalogDirectory = join(stateRoot, "catalog"), derivedDirectory = join(stateRoot, "derived"), searchDirectory = join(stateRoot, "search");
+    const active = JSON.parse(await readFile(join(catalogDirectory, "active.json"), "utf8"));
+    const storeRoots = await readdir(join(catalogDirectory, "stores")); assert.equal(storeRoots.length, 1, "prepared catalog store count");
+    const storeFiles = (await readdir(join(catalogDirectory, "stores", storeRoots[0]))).filter(name => name.endsWith(".sqlite"));
+    assert.equal(storeFiles.length, 1, "prepared catalog database count");
+    const catalog = new Database(join(catalogDirectory, "stores", storeRoots[0], storeFiles[0]), { readonly: true, fileMustExist: true });
+    let catalogMeta, catalogShards, catalogEvents, lastId;
+    try {
+      catalogMeta = catalog.prepare("SELECT version,session,store FROM meta WHERE singleton=1").get();
+      catalogShards = catalog.prepare("SELECT shard,branch,ordinal,path,snapshot,observed,committed,caught FROM shards WHERE g=1 ORDER BY ordinal").all();
+      catalogEvents = catalog.prepare("SELECT count(*) AS count FROM events WHERE g=1").get().count;
+      lastId = catalog.prepare("SELECT id FROM events WHERE g=1 ORDER BY seq DESC LIMIT 1").pluck().get();
+    } finally { catalog.close(); }
+    const sessionKey = sha(`m11-session-${session.session}`).slice(0, 64), expectedRecords = session.events + session.compactions;
+    assert.deepEqual(catalogMeta, { version: 1, session: sessionKey, store: active.storeKey });
+    assert.equal(active.v, 1); assert.equal(active.sessionKey, sessionKey); assert.equal(catalogEvents, expectedRecords); assert.equal(JSON.parse(lastId), session.leafId);
+    assert.equal(catalogShards.length, session.shards.length);
+    for (const [index, row] of catalogShards.entries()) {
+      const shard = session.shards[index], snapshot = JSON.parse(row.snapshot), source = await stat(shard.path);
+      assert.equal(row.shard, `shard-${shard.ordinal}`); assert.equal(row.branch, "main"); assert.equal(row.ordinal, shard.ordinal); assert.equal(row.path, shard.path);
+      assert.equal(row.observed, shard.sourceBytes); assert.equal(row.committed, shard.sourceBytes); assert.equal(row.caught, 1);
+      assert.equal(source.size, shard.sourceBytes); assert.equal(String(source.dev), snapshot.identity.device); assert.equal(String(source.ino), snapshot.identity.inode); assert.equal(snapshot.size, shard.sourceBytes);
+      for (const anchor of snapshot.anchors) assert.equal(await hashRange(shard.path, anchor.offset, anchor.length), anchor.sha256, "prepared source anchor changed");
+    }
+    const derived = new Database(join(derivedDirectory, "derived.sqlite"), { readonly: true, fileMustExist: true });
+    let derivedMeta, derivedHead, derivedReadiness;
+    try {
+      derivedMeta = derived.prepare("SELECT version,identity,derivedRoute,catalogRoute FROM meta WHERE singleton=1").get();
+      derivedHead = derived.prepare("SELECT view,cursor FROM heads").get(); derivedReadiness = derived.prepare("SELECT * FROM readiness").get();
+    } finally { derived.close(); }
+    const identity = JSON.parse(derivedMeta.identity), view = JSON.parse(derivedHead.view), derivedCursor = JSON.parse(derivedHead.cursor);
+    assert.equal(derivedMeta.version, modules.contract.DERIVED_SCHEMA_VERSION); assert.equal(derivedMeta.derivedRoute, derivedDirectory); assert.equal(derivedMeta.catalogRoute, catalogDirectory);
+    assert.equal(identity.sessionKey, sessionKey); assert.equal(identity.catalogStoreKey, active.storeKey); assert.equal(identity.catalogGeneration, view.generation);
+    assert.deepEqual(derivedCursor.identity, identity); assert.deepEqual(derivedCursor.view, view); assert.equal(view.eventCut, expectedRecords); assert.equal(view.branchKey, "main");
+    assert.equal(derivedReadiness.capsuleEligible, session.events * 2 + session.compactions); assert.equal(derivedReadiness.capsuleReady, expectedRecords);
+    assert.equal(derivedReadiness.capsuleUnsupported, session.events); assert.equal(derivedReadiness.capsuleFailed, 0);
+    assert.equal(derivedReadiness.chunkEligible, expectedRecords); assert.equal(derivedReadiness.chunkReady, expectedRecords); assert.equal(derivedReadiness.chunkFailed, 0); assert.equal(derivedReadiness.chunkExcluded, session.events);
+    const search = new Database(join(searchDirectory, "search.sqlite"), { readonly: true, fileMustExist: true });
+    let searchMeta, searchHead, searchCounts;
+    try {
+      searchMeta = search.prepare("SELECT version,identity,searchRoute,capsuleRoute,catalogRoute,generation FROM meta WHERE singleton=1").get();
+      searchHead = search.prepare("SELECT view,afterEventSeq,afterDescriptor,active,generation,cueReady,rawReady,excluded,complete FROM heads").get();
+      searchCounts = search.prepare("SELECT (SELECT count(*) FROM documents) documents,(SELECT count(*) FROM chunks) chunks,(SELECT count(*) FROM membership) membership").get();
+    } finally { search.close(); }
+    const searchIdentity = JSON.parse(searchMeta.identity);
+    assert.equal(searchMeta.version, 1); assert.equal(searchMeta.searchRoute, searchDirectory); assert.equal(searchMeta.capsuleRoute, derivedDirectory); assert.equal(searchMeta.catalogRoute, catalogDirectory);
+    assert.deepEqual(searchIdentity.capsule, identity); assert.deepEqual(JSON.parse(searchHead.view), view); assert.equal(searchHead.complete, 1); assert.equal(searchHead.active, null);
+    assert.equal(searchHead.afterEventSeq, expectedRecords); assert.equal(searchHead.afterDescriptor, 0); assert.equal(searchHead.generation, expectedRecords); assert.equal(searchMeta.generation, expectedRecords);
+    assert.equal(searchHead.cueReady, expectedRecords); assert.equal(searchHead.rawReady, session.events); assert.equal(searchHead.excluded, session.compactions);
+    assert.equal(searchCounts.documents, expectedRecords); assert.equal(searchCounts.membership, expectedRecords); assert.ok(searchCounts.chunks >= session.events);
+    const catalogStatus = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory, sessionKey, op: "status" }, { schedulerDirectory, slots: 4 });
+    assert.equal(catalogStatus.ok, true, JSON.stringify(catalogStatus));
+    const pinned = await modules.catalog.runCatalogWorker({ v: 1, catalogDirectory, sessionKey, op: "pin", branchKey: "main",
+      leaf: { shardKey: `shard-${session.shards.length - 1}`, eventId: session.leafId } }, { schedulerDirectory, slots: 4 });
+    assert.equal(pinned.ok, true, JSON.stringify(pinned)); if (pinned.ok) assert.deepEqual(pinned.result.view, view);
+    const capsuleStatus = await modules.capsule.runCapsuleWorker({ v: 1, catalogDirectory, derivedDirectory, identity, op: "status", view }, { schedulerDirectory, slots: 4 });
+    assert.equal(capsuleStatus.ok, true, JSON.stringify(capsuleStatus));
+    const searchCall = async (kind, request) => { const started = performance.now(); const response = await modules.search.runSearchV3Worker({ v: 1, searchDirectory, capsuleDirectory: derivedDirectory, catalogDirectory, identity: searchIdentity, ...request }, { schedulerDirectory, slots: 4 }); observe(m, kind, started, response); assert.equal(response.ok, true, JSON.stringify(response)); return response.result; };
+    const searchStatus = await searchCall("ingestion", { op: "status", view }); assert.equal(searchStatus.readiness.raw, "ready");
+    let verifiedShards = 0;
+    for (const shard of session.shards) {
+      const marker = `m11-marker-session-${session.session}-event-${shard.firstPayloadEvent}`;
+      const found = await searchCall("search", { op: "query", view, query: marker, mode: "literal", limit: 1 });
+      assert.equal(found.hits?.length, 1, `shard ${shard.ordinal} marker must be searchable`);
+      const recalled = await searchCall("recall", { op: "recall", view, handle: found.hits[0].handle }); assert.match(recalled.text, new RegExp(marker)); verifiedShards++;
+    }
+    let stateComplete = false;
+    for (let guard = 0; guard < stateMaterializationGuard(session, modules.stateContract.EPISODE_STATE_LIMITS); guard++) if ((await searchCall("ingestion", { op: "materializeState", view, limit: 8 })).complete) { stateComplete = true; break; }
     assert.equal(stateComplete, true, "state materialization did not complete");
     const selection = await searchCall("composition", { op: "composeStateSelection", view });
     return { session, view, identity, searchIdentity, selection, sessionKey, verifiedShards, directories: { catalogDirectory, derivedDirectory, searchDirectory } };
@@ -283,14 +396,15 @@ async function runCampaign(args) {
   assert.equal(currentSha(), args.candidateSha, "candidate SHA must equal checkout HEAD");
   const startedAt = Date.now(), started = performance.now();
   const delay = monitorEventLoopDelay({ resolution: 20 }); delay.enable();
-  let rootCreated = false, passed = false, report;
+  let rootCreated = false, passed = false, report, preparedCandidateSha = args.preparedCandidateSha ?? args.candidateSha;
   try {
     if (args.mode === "run") { await mkdir(args.campaignRoot, { mode: 0o700 }); rootCreated = true; }
     const meta = await lstat(args.campaignRoot); assert.ok(meta.isDirectory() && !meta.isSymbolicLink() && (meta.mode & 0o077) === 0, "campaign root must be owner-only");
     const manifestPath = join(args.campaignRoot, "campaign-manifest.json");
     let profile, generated;
     if (args.mode === "resume") {
-      const saved = JSON.parse(await readFile(manifestPath, "utf8")); assert.equal(saved.schemaVersion, SCHEMA_VERSION); assert.equal(saved.candidateSha, args.candidateSha); profile = saved.profile; generated = saved.generated;
+      const saved = JSON.parse(await readFile(manifestPath, "utf8")); assert.equal(saved.schemaVersion, SCHEMA_VERSION); assert.equal(saved.candidateSha, preparedCandidateSha); profile = saved.profile; generated = saved.generated;
+      validatePreparationRevision(preparedCandidateSha, args.candidateSha);
       for (const session of generated.sessions) for (const shard of session.shards) assert.ok((await stat(shard.path)).size >= shard.sourceBytes, "resume source was truncated");
     } else {
       profile = args.profile; const c = config(profile); generated = await generate(args.campaignRoot, c);
@@ -298,10 +412,11 @@ async function runCampaign(args) {
     }
     const c = config(profile); assert.ok(generated.totals.sourceBytes <= c.diskLimitBytes); const modules = await runtimeModules(); const m = metrics();
     const baseline = processMemory(), workstationBaseline = await workstationRss(), statePath = join(args.campaignRoot, "prepared-state.json");
-    const savedState = args.mode === "resume" ? JSON.parse(await readFile(statePath, "utf8")) : undefined;
+    const savedState = args.mode === "resume" ? await readFile(statePath, "utf8").then(JSON.parse).catch(error => error?.code === "ENOENT" ? undefined : Promise.reject(error)) : undefined;
     if (savedState) { assert.equal(savedState.schemaVersion, 1); assert.equal(savedState.candidateSha, args.candidateSha); }
-    const states = savedState ? savedState.states : await prepareStores(args.campaignRoot, generated, modules, m);
-    if (args.mode !== "resume") await writeFile(statePath, `${JSON.stringify({ schemaVersion: 1, candidateSha: args.candidateSha, states })}\n`, { mode: 0o600 });
+    const reusedPreparedStores = args.mode === "resume";
+    const states = savedState ? savedState.states : reusedPreparedStores ? await recoverPreparedStores(args.campaignRoot, generated, modules, m) : await prepareStores(args.campaignRoot, generated, modules, m);
+    if (!savedState) await writeFile(statePath, `${JSON.stringify({ schemaVersion: 1, candidateSha: args.candidateSha, preparedCandidateSha, reusedPreparedStores, states })}\n`, { mode: 0o600 });
     const lanes = [], faults = await faultCampaign(args.campaignRoot, states[0], modules, m);
     for (const count of c.sessionCounts) for (const slots of c.slots) lanes.push(await exerciseLane(args.campaignRoot, states, count, slots, modules, m));
     const compositionHashes = [], coverage = [], compositionStart = performance.now();
@@ -334,15 +449,18 @@ async function runCampaign(args) {
         exactReferenceValidation: { sampledSessions: generated.sessions.length, passed: true, perShardCatalogSearchRecall: states.reduce((sum, state) => sum + state.verifiedShards, 0), allPhysicalShardsVerified: states.every(state => state.verifiedShards === state.session.shards.length) }, contextCoverage: { source: "actual materializeState -> composeStateSelection -> composeStoredSelection", deterministicGenerations: compositionHashes.length,
           protectedComplete: coverage.filter(item => item.protectedCoverageComplete).length, openWorkComplete: coverage.filter(item => item.openWorkCoverageComplete).length, safeTail: coverage.filter(item => item.safeTail).length,
           withinCombinedCeiling: coverage.filter(item => item.withinCombinedCeiling).length }, faults },
+      preparation: { candidateSha: preparedCandidateSha, finalCandidateSha: args.candidateSha, reusedPreparedStores,
+        initialPreparationMetrics: reusedPreparedStores ? "unavailable: the retained failed process did not persist successful preparation measurements" : "included in this report" },
       diskBytes, wallMs: performance.now() - started, startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(),
       faultCoverage: { sourceAppendDuringPinnedSnapshot: "passed", staleSchemaGeneration: faults.staleSchemaCode, workerCrashAndTransactionKill: "reuse revision-bound unchanged M04 worker/runtime paths", corruptedDerivedSegment: faults.corruptSegmentCode,
         corruptedSegmentRepair: "passed", sourceUnchangedAfterFaults: faults.sourceUnchanged, processRestart: args.mode === "resume" ? "process resumed" : "pending resume invocation", systemRestart: "requires operator reboot between run and resume; not inferred" },
       remainingQualificationGates: ["actual Pi-process baseline and overhead", "actual Pi rollover/switch/rollback", "operator system restart", "model continuation quality is excluded because providers are forbidden"],
       limitations: ["Completed means the bounded synthetic core campaign finished. It is not an M11 pass or full product qualification.", "Generated estimated tokens equal ceil(actual decoded UTF-16 units / 4), the runtime estimator. Source bytes and event counts are measured from real writes.",
         "Composition uses actual deterministic state production and stored selection. It is core composer evidence, not a Pi hook, provider summary, continuation-quality result, or authoritative activation.",
-        "Whole-workstation RSS is a sampled sum of readable VmRSS fields and includes unrelated processes and shared-page double counting. Segment-only reads and system restart remain unavailable without narrower runtime counters or an operator reboot."] };
+        "Whole-workstation RSS is a sampled sum of readable VmRSS fields and includes unrelated processes and shared-page double counting. Segment-only reads and system restart remain unavailable without narrower runtime counters or an operator reboot.",
+        ...(reusedPreparedStores ? ["Catalog, capsule, and search stores were validated and reused from the recorded preparation candidate. Initial preparation latency, request, I/O, and worker-peak measurements were not persisted by the failed process and remain unavailable; resumed measurements do not replace them."] : [])] };
   } catch (error) {
-    delay.disable(); report = { schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-scale-campaign", status: "failed", candidateSha: args.candidateSha,
+    delay.disable(); report = { schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-scale-campaign", status: "failed", candidateSha: args.candidateSha, preparedCandidateSha,
       failureCode: /^[A-Za-z0-9_-]{1,80}$/.test(error?.code ?? "") ? error.code : "m11-campaign-failed", failureMessage: String(error?.message ?? "failure").replaceAll(args.campaignRoot ?? "", "<campaign-root>"),
       retainedCampaignRoot: rootCreated || args.mode === "resume", wallMs: performance.now() - started };
   }

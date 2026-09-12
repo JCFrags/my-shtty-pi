@@ -229,6 +229,11 @@ function ftsQuery(query: string): string | undefined {
   const values = terms(query).filter(value => value.length >= 2).slice(0, 12);
   return values.length ? values.map(value => `"${value.replaceAll('"', '""')}"`).join(" OR ") : undefined;
 }
+function literalFtsQuery(query: string): string | undefined {
+  // Let FTS5 tokenize one quoted phrase. Exact punctuation, case, and source
+  // coordinates remain the responsibility of firstMatch after candidate lookup.
+  return ftsQuery(query) === undefined ? undefined : `"${query.replaceAll('"', '""')}"`;
+}
 function viewBoundsSql(view: SearchV3View, alias = "d"): { sql: string; values: SqlValue[] } {
   const clauses = view.segments.map(() => `(${alias}.segment=? AND ${alias}.eventSeq<=?)`);
   return { sql: ` AND (${clauses.join(" OR ")})`, values: view.segments.flatMap(item => [item.segment, item.cut]) };
@@ -331,7 +336,7 @@ function query(request: Extract<SearchV3Request, { op: "query" }>, store: Store)
   // lexical/lookaround context. Refuse those assertions rather than invent it.
   if (mode === "regex" && (/\(\?|\\[bB]/u.test(request.query) || compileRegex(request.query, request.caseSensitive).test("")))
     fail("search-v3-regex-unsupported");
-  const match = request.scan || mode === "regex" ? undefined : ftsQuery(request.query);
+  const match = request.scan || mode === "regex" ? undefined : mode === "literal" ? literalFtsQuery(request.query) : ftsQuery(request.query);
   if (mode === "literal" && !match && !request.scan) fail("search-v3-scan-required");
   const queryHash = sha256(canonicalJson({ op: "query", view: request.view, query: request.query, mode,
     caseSensitive: request.caseSensitive ?? false, filters: request.filters ?? null, scan: request.scan ?? null }));

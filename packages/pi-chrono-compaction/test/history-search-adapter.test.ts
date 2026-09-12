@@ -58,6 +58,22 @@ async function readyLayers(adapter: HistorySearchAdapter): Promise<void> {
   assert.equal(adapter.scheduler.status().state, "ready");
 }
 
+test("unlisted logical shards return a structured refusal without starting work", async () => {
+  const adapter = new HistorySearchAdapter();
+  // Only the route guard is under test. No source or worker is needed to reject
+  // a shard absent from the active grant and its ancestor adapter map.
+  Object.assign(adapter, { logicalGrant: { activeShardId: "active" } });
+  const before = adapter.scheduler.status();
+  try {
+    for (const response of [
+      await adapter.getBlock("entry", 0, undefined, undefined, undefined, "sibling"),
+      await adapter.getRaw("entry", {}, undefined, "sibling"),
+      await adapter.range("first", "last", 16, undefined, undefined, "sibling"),
+    ]) assert.deepEqual(response.details, { status: "unavailable", code: "logical-session-route-unavailable" });
+    assert.deepEqual(adapter.scheduler.status(), before);
+  } finally { adapter.dispose(); }
+});
+
 test("real lifecycle search, decoded block and exact raw range survive append with branch isolation", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-"));
   const sourcePath = join(directory, "source.jsonl");

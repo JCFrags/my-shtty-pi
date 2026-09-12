@@ -1,6 +1,6 @@
 # M11 qualification evidence plan
 
-Status: harness prepared at the M11 branch based on `d9c5f1fd8bfdba8dc17ef9c6509db28e6a0fd9a3`. The full campaign has not run. Its result is not a pass.
+Status: the first full campaign prepared all catalog, capsule, and search stores, then failed after 28,693,015 ms with `search-v3-query-budget` before state materialization, faults, matrix lanes, or composition. Its retained data and failure report are not a pass.
 
 ## Run boundary
 
@@ -56,6 +56,39 @@ systemd-run --user --wait --pipe --collect \
     --campaign-root "$HOME/.local/state/chrono-m11/$SHA" \
     --output "$HOME/.local/state/chrono-m11-results/$SHA.json"
 ```
+
+### Retained preparation recovery
+
+The failed preparation candidate is `aa160c082dd9f027b0e378c53c2784e00ef1727e`. Resume may reuse its completed catalog, capsule, and search stores only when the harness validates all of these conditions:
+
+- the manifest names that preparation candidate and the generated source files still match their catalog snapshot identities, exact sizes, and sampled anchor hashes;
+- catalog, derived, and search metadata, schema versions, routes, identities, views, generations, readiness counts, and failure counts match exactly;
+- all preparation-path Git differences between the preparation candidate and final candidate are on the narrow allowlist. The allowlist contains only the literal-query planner source and generated output;
+- the final candidate uses the same existing postings and does not rebuild, clear, or regenerate the retained source or stores.
+
+The literal correction uses one quoted FTS5 phrase for literal candidate selection. Ranked search keeps its bounded OR-term plan. Exact source verification and all existing candidate, request, response, memory, worker, disk, and wall limits remain unchanged.
+
+After the corrected candidate is built and its SHA is final, use the existing owner-only root and a new safe output file:
+
+```sh
+cd packages/pi-chrono-compaction
+SHA=$(git rev-parse HEAD)
+systemd-run --user --wait --pipe --collect \
+  --unit="chrono-m11-resume-${SHA:0:12}" \
+  --property=MemoryMax=1073741824 \
+  --property=MemorySwapMax=0 \
+  --property=TasksMax=512 \
+  --property=RuntimeMaxSec=129600 \
+  node --max-old-space-size=512 scripts/m11-scale-campaign.mjs resume \
+    --candidate-sha "$SHA" \
+    --prepared-candidate-sha aa160c082dd9f027b0e378c53c2784e00ef1727e \
+    --campaign-root "$HOME/.local/state/chrono-m11/aa160c082dd9f027b0e378c53c2784e00ef1727e" \
+    --output "$HOME/.local/state/chrono-m11-results/${SHA}-resume.json"
+```
+
+A resumed report must record both candidate SHAs and that 16 prepared stores were reused. Initial preparation latency, request, process-I/O, and worker-peak measurements were not persisted by the failed process. They remain unavailable and resumed measurements must not replace them.
+
+Current M07 materialization processes one large-body chunk per worker job. The first chunk covers 32,768 decoded UTF-16 units and each later overlapped chunk advances by at least 24,576 units. Applying that contract to the retained indexed source ranges projects 164,170 body-step calls across 16 sessions, plus final completion work. This is a calculation from retained metadata, not measured runtime. The harness uses a finite per-session upper guard derived from decoded units, record count, the 24,576-unit minimum progress, and eight-event metadata pages: 34,322 calls for the largest session and 9,262 for each other session. These guards do not increase any worker, source, output, memory, or wall-time cap. If the 36-hour wall limit expires, the result remains a bounded failure and must not be reported as a pass.
 
 ## Actual scale represented by the full profile
 
@@ -136,12 +169,14 @@ The report must keep these fields unavailable. Do not derive them from maxima, w
 - The corrected injector selects the exact first capsule segment through the derived catalog. A focused final-path check returned `capsule-content-corrupt`, restored the original bytes, recovered in 503 ms, refused the incompatible search generation, and verified every source-shard hash unchanged.
 - A focused 4-session/1-slot lane passed with one shared scheduler: three measured lease waits had p50 441 ms and p95/p99 616 ms, maximum queue position 3, four searches, four recalls, twelve exact operations including large decoded chunk reads, four measured append lags, and zero ticket/slot residue.
 - A direct actual-producer composer check used retained `materializeState` and `composeStateSelection` output. Two compositions had equal hashes. Actual validation was safe-tail true, within-ceiling true, protected coverage false, and open-work coverage true. The false protected result is retained rather than hand-overridden. The generator now places one bounded explicit restriction separately from neutral large payloads for the final campaign.
-- No broad suite, provider call, or full-scale launch occurred. The failed owner-only roots remain available for local diagnosis.
+- The first full campaign generated the full source scale and completed all 16 catalog, capsule, and search stores. Its first literal shard-marker query exceeded the 128-candidate budget because literal mode incorrectly shared ranked mode's broad OR-term candidate plan. Read-only inspection found 214–782 candidates for the failing unscoped queries. A quoted FTS5 phrase returns exactly one candidate for each of all 72 retained marker targets from the existing postings.
+- The retained stores contain 3,967 catalog events across 72 shards; 3,967 capsule-ready records with zero capsule failures; and 3,967 search documents, 3,839 raw-ready documents, 128 generated exclusions, 122,096 chunks, and 16 complete search heads. No state materialization, matrix lane, fault phase, or composition completed.
+- No provider call occurred. The retained owner-only root remains available for bounded recovery and must not be cleared or regenerated.
 
 ## Remaining implementation and execution gaps
 
 - A controlled native build or an exact verified reusable native binding is a campaign prerequisite. The complete smoke attempts are failures, not a complete M11 pass. Focused final-path fault, lane, and actual-producer composition checks passed after the last failure.
-- The full campaign has not run on the final integrated M08/M09/M10/M12 candidate.
+- The retained full campaign preparation ran at `aa160c082dd9f027b0e378c53c2784e00ef1727e`, not the final integrated candidate. Reuse is valid only through the strict preparation-path diff allowlist and exact retained metadata/source validation. Pending state materialization, faults, matrix lanes, and composition must run on the final candidate.
 - The current harness does not inject repeated worker death or kill a live transaction. Prior evidence is revision-bound and later runtime changed.
 - The current harness safely refuses an incompatible search generation, preserves a pinned view across source append, and corrupts/restores one selected capsule segment with source hashes unchanged. It does not rebuild a completely new derived store after corruption because exact-byte restoration is the bounded repair under test.
 - The current harness does not perform a real system reboot.

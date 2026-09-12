@@ -681,9 +681,9 @@ export class HistorySearchAdapter {
     return { scope, execute };
   }
   async getBlock(entryId: string, blockIndex: number, startChar?: number, maxChars?: number, signal?: AbortSignal, shardId?: string): Promise<SearchToolResult> {
-    if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
-    if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getBlock(entryId, blockIndex, startChar, maxChars, signal);
     try {
+      if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+      if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getBlock(entryId, blockIndex, startChar, maxChars, signal);
       const target = this.scoped();
       const { scope, execute } = this.catalogScope(signal);
       const event = await resolveCatalogHistory(scope, entryId, execute);
@@ -695,9 +695,9 @@ export class HistorySearchAdapter {
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
   async getRaw(entryId: string, options: { startByte?: number; maxChars?: number; startChar?: number; contextBefore?: number; contextAfter?: number }, signal?: AbortSignal, shardId?: string): Promise<SearchToolResult> {
-    if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
-    if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getRaw(entryId, options, signal);
     try {
+      if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+      if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getRaw(entryId, options, signal);
       if (options.contextBefore || options.contextAfter) return fail("search-v3-option-unsupported");
       const { scope, execute } = this.catalogScope(signal);
       const event = await resolveCatalogHistory(scope, entryId, execute);
@@ -715,9 +715,9 @@ export class HistorySearchAdapter {
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
   async range(start: string, end: string, maxEntries = 16, cursor?: string, signal?: AbortSignal, shardId?: string): Promise<SearchToolResult> {
-    if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
-    if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).range(start, end, maxEntries, cursor, signal);
     try {
+      if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
+      if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).range(start, end, maxEntries, cursor, signal);
       if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) return fail("catalog-history-range-invalid");
       const reference = cursor ? decode(cursor) : undefined;
       if (reference && (!reference.range || reference.range.start !== start || reference.range.end !== end)) return fail("search-v3-reference-invalid");

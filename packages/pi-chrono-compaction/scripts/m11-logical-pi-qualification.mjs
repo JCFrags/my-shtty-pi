@@ -10,7 +10,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const EXPECTED_PI_VERSION = "0.85.1";
-const EXPECTED_PACKAGE_VERSION = "2.0.29";
+const EXPECTED_PACKAGE_VERSION = "2.0.30";
 const MAIN_ROLLOVERS = 10;
 const MAX_ACTIVE_ENTRIES = 7;
 const HELP = `Usage:
@@ -71,6 +71,7 @@ class RpcClient {
     this.sequence = 0;
     this.pending = new Map();
     this.notifications = [];
+    this.errors = [];
     this.waiters = [];
     this.stderr = "";
     this.closed = new Promise(resolve => child.once("close", resolve));
@@ -87,6 +88,7 @@ class RpcClient {
       this.buffer = this.buffer.slice(newline + 1);
       let event;
       try { event = JSON.parse(raw); } catch { continue; }
+      if (event.type === "extension_error") this.errors.push(String(event.error).slice(0, 8192));
       if (event.type === "extension_ui_request" && event.method === "notify") {
         const message = String(event.message);
         const waiter = this.waiters.find(candidate => candidate.predicate(message));
@@ -147,8 +149,9 @@ async function sourceSnapshot(manifest) {
   return new Map(await Promise.all(manifest.shards.map(async shard => [shard.shardId, { hash: await fileHash(shard.sourcePath), size: (await stat(shard.sourcePath)).size }])));
 }
 async function promptCommand(client, message, timeoutMs = 120_000) {
-  const before = client.notifications.length;
+  const before = client.notifications.length, errorsBefore = client.errors.length;
   await client.send("prompt", { message }, timeoutMs);
+  assert.equal(client.errors.length, errorsBefore, `${message}: ${client.errors.slice(errorsBefore).join("\n")}`);
   const refused = client.notifications.slice(before).find(value => value.startsWith("Logical session command refused:"));
   assert.equal(refused, undefined, `${message}: ${refused}`);
 }
@@ -272,8 +275,8 @@ export default function qualificationBridge(pi) {
   }});
   pi.registerCommand("qualification-probe", { handler: async (args, ctx) => {
     const [marker, routesText, entryId] = args.trim().split(/\\s+/); const routes = Number(routesText); let status;
-    try { status = await waitReady(ctx, routes); }
-    catch (error) { ctx.ui.notify("QUALIFICATION_PROBE:" + marker + ":" + JSON.stringify({ error: String(error?.message ?? error) }), "warning"); return; }
+    try {
+    status = await waitReady(ctx, routes);
     let cursor, found, shardId;
     for (let page = 0; page < 4 && !found; page++) {
       const search = (await call("history_search", { query: marker, mode: "exact", limit: 1, tokenBudget: 2000, ...(cursor ? { cursor } : {}) }, ctx)).details;
@@ -287,6 +290,7 @@ export default function qualificationBridge(pi) {
     ctx.ui.notify("QUALIFICATION_PROBE:" + marker + ":" + JSON.stringify({ routes: status.logical.routes, search: true,
       recall: recalled.status === "ok" && String(recalled.text).includes(marker), exact: exact.status === "ok" && String(exact.text).includes(marker),
       exactStatus: exact.status, exactCode: exact.code, exactTextType: typeof exact.text, shardId, entryId }), "info");
+    } catch (error) { ctx.ui.notify("QUALIFICATION_PROBE:" + marker + ":" + JSON.stringify({ error: String(error?.message ?? error) }), "warning"); }
   }});
   pi.registerCommand("qualification-refuse", { handler: async (args, ctx) => {
     const [shardId, entryId] = args.trim().split(/\\s+/); const result = (await call("history_get", { entryId, shardId, blockIndex: 0 }, ctx)).details;
