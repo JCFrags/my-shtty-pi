@@ -41,4 +41,12 @@ No shared deployment or live-session rollback has been performed for this candid
 
 The first private fixture attempt lacked dependency resolution from its external output directory. It failed before execution. After the staged metadata and dependency link were supplied, the affected fixture passed. The prerequisite is documented in `test-recovery.md`.
 
+### Installed parent-directory correction
+
+Actual existing-session use on 2.0.31 refused with `search-v3-rollout-unsafe` before creating the logical store. The shared Pi agent directory had safe mode `0755`, but logical-store creation incorrectly required that parent to be `0700`. The global memory-engine setting was restored to its exact prior bytes. This reversal was not an exercised package rollback, and loaded configuration remained distinct from the restored file.
+
+The 2.0.32 correction accepts an owned, non-group/other-writable parent while retaining `0700` for Chrono store directories, `0600` for manifests, and the existing ownership, symbolic-link, ancestor, lock, and atomic-publication checks. It does not change the shared directory's permissions. One focused adoption fixture passed. It checks idempotent adoption under a `0755` parent, private child modes, unchanged source bytes, refusal of a readable Chrono root, and refusal of a `0777` parent before store creation. Installed retry remains pending.
+
+Initial PR CI passed 675 of 676 Chrono tests. The existing lifecycle check caught a stale `CHRONO_VERSION` constant in the first 2.0.32 candidate. The constant and generated runtime were corrected. The affected lifecycle check then passed locally without changing its assertions or repeating the full suite.
+
 These checks do not prove original large-session coverage, ten-store retrieval, full-scale composition, default deployment, or all-session live adoption. Those criteria remain open. Later command integration and qualification use the required CI and consolidated M11 evidence rather than another broad local suite.

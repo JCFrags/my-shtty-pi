@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { isLogicalSessionManifest, sealLogicalManifest } from "./logical-session-contract.js";
 import { acquireDerivedStoreLock } from "./derived-store-lock.js";
 const fail = (code) => { throw Object.assign(new Error(code), { code }); };
-async function safeDirectory(path, create = false) {
+async function safeDirectory(path, create = false, privateLeaf = true) {
     if (!isAbsolute(path) || resolve(path) !== path)
         fail("logical-session-storage-unsafe");
     if (create)
@@ -23,7 +23,9 @@ async function safeDirectory(path, create = false) {
             fail("logical-session-storage-unsafe");
     }
     const stat = await lstat(path);
-    if (stat.uid !== process.getuid?.() || (stat.mode & 0o777) !== 0o700 || await realpath(path) !== path)
+    if (stat.uid !== process.getuid?.()
+        || (privateLeaf ? (stat.mode & 0o777) !== 0o700 : (stat.mode & 0o022) !== 0)
+        || await realpath(path) !== path)
         fail("logical-session-storage-unsafe");
 }
 export class LogicalSessionStore {
@@ -72,7 +74,8 @@ export class LogicalSessionStore {
         }
     }
     async create(initial) {
-        await safeDirectory(dirname(this.root));
+        // The shared Pi agent directory can be readable. Chrono stores remain private.
+        await safeDirectory(dirname(this.root), false, false);
         await safeDirectory(this.root, true);
         await safeDirectory(this.directory, true);
         const release = await acquireDerivedStoreLock(join(this.directory, "manifest.lock"));

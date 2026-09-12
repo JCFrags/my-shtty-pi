@@ -112,6 +112,33 @@ test("actual Pi manager keeps an exact durable continuation prefix through its f
   assert.equal(await readFile(oldPath, "utf8"), oldBytes, "the old source is never opened for writing");
 });
 
+test("automatic adoption accepts a safe readable parent but keeps logical stores private", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-parent-"));
+  await chmod(temporary, 0o755);
+  const sourcePath = join(temporary, "old.jsonl");
+  const sourceBytes = "preserved-existing-source\n";
+  await writeFile(sourcePath, sourceBytes, { mode: 0o600, flag: "wx" });
+  const store = new LogicalSessionStore(join(temporary, "logical"), randomUUID());
+  const identity = { ownerKey: "a".repeat(64), branchId: "main", piSessionId: "pi-old", sourcePath };
+  const manifest = await adoptExistingSessionAsShardZero(store, identity);
+  assert.deepEqual(await adoptExistingSessionAsShardZero(store, identity), manifest);
+  assert.equal((await stat(temporary)).mode & 0o777, 0o755, "adoption does not chmod the shared parent");
+  for (const directory of [store.root, store.directory]) assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  assert.equal((await stat(store.manifestPath)).mode & 0o777, 0o600);
+  assert.equal(await readFile(sourcePath, "utf8"), sourceBytes);
+  await chmod(store.root, 0o755);
+  await assert.rejects(() => store.read(), (error: any) => error.code === "logical-session-storage-unsafe");
+  await chmod(store.root, 0o700);
+
+  await chmod(temporary, 0o777);
+  const unsafe = new LogicalSessionStore(join(temporary, "unsafe-logical"), randomUUID());
+  await assert.rejects(() => adoptExistingSessionAsShardZero(unsafe, identity),
+    (error: any) => error.code === "logical-session-storage-unsafe");
+  await assert.rejects(stat(unsafe.root), (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    "an unsafe writable parent is rejected before creating the store");
+  await chmod(temporary, 0o700);
+});
+
 test("fractional-importance producer artifact reaches a manual continuation with the composer hash", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-fractional-"));
   const logicalSessionId = randomUUID();

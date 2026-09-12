@@ -15,16 +15,16 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "8e84aea796ee5e17f25a868570d3dba1e93f7843",
+  "tree": "a043ae6c2248c9a05cc267186775d158d6ce3724",
   "files": 428,
   "maps": 134,
   "package": "packages/pi-chrono-compaction",
-  "version": "2.0.31",
+  "version": "2.0.32",
   "integrationDifferences": [
     {
       "path": "DEPLOYED.sha256",
       "upstreamSha256": "3954d79d5faa1bb68e189a9db2fc799f0b4659715a2d73c91df2d7e332f3d627",
-      "integratedSha256": "faa271992516debbe150b45c22f7c7d1e58a0113dabb2a4b35ea139800252e7c"
+      "integratedSha256": "7657421e4257fe12a6621372b1fb2f883eaed887a1977fbc633af5bb3d08ca0c"
     },
     {
       "path": "README.md",
@@ -89,7 +89,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "dist/src/logical-session-store.js",
       "upstreamSha256": "21ab5e9e43ff3bf5bb0589c59caa54d1f7fb4bb04ed975c7de157c28e2dcfdfd",
-      "integratedSha256": "55019527621ac814fae81c22e15c2de6ae4ef09c8e482570804984b319e0b7fe"
+      "integratedSha256": "1cf63c2477fefedaac4fa1dd39506c8d201e59a493b7109d237963076c7f70cd"
     },
     {
       "path": "dist/src/pi-extension.js",
@@ -99,7 +99,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "dist/src/runtime-identity.js",
       "upstreamSha256": null,
-      "integratedSha256": "5d0b8eda033882a24bfa5250566c9fb2648eff2048fb5bc26bdb0bb78ffdd66a"
+      "integratedSha256": "3855e5a8e90f2a450c525fa433b10129ec7584c3449200f1f494043b75785efb"
     },
     {
       "path": "dist/src/search-v3-store.js",
@@ -119,12 +119,12 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "package-lock.json",
       "upstreamSha256": "42024d0876d7a367509bb86b11601c3ede4cebb7282cfb14b803d42ce60114d9",
-      "integratedSha256": "7458881d981fbad67e8a94cdee6a396674d8a4aa9572c25b6d8dd61227ea24ea"
+      "integratedSha256": "9668ba843531542ac89705a9a3483b9576bb512159970e5627d5edd466e51a39"
     },
     {
       "path": "package.json",
       "upstreamSha256": "18e98ac6afc84a504df0c3bee20690941c2a60390f74b0d413603b0b2cf717e4",
-      "integratedSha256": "51090065fba8b721740c6870e409fa984462ca4287cda6e237a12158785e69bb"
+      "integratedSha256": "1defa74a10fe6e32906282d74a8eb8f6277323749f76cb0a415a7e039c16ba4c"
     },
     {
       "path": "scripts/m11-logical-pi-qualification.mjs",
@@ -199,7 +199,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "src/logical-session-store.ts",
       "upstreamSha256": "422936b3460c256d954b57662cde101ae4183ce6c8a0a87e3a90d62b77df1864",
-      "integratedSha256": "50c1d19245b8d807967e714671f09962b354250c8fa266b987cca81423961301"
+      "integratedSha256": "d87cc5a828de406689e6534c9329e61a2576ce3f32e7ba003ebc62300b294b26"
     },
     {
       "path": "src/pi-extension.ts",
@@ -209,7 +209,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "src/runtime-identity.ts",
       "upstreamSha256": null,
-      "integratedSha256": "4075dd888e3bddf97c54703f6acf6b34a585580eab71bb5ed4ea22bd10ce0fd2"
+      "integratedSha256": "ee177799ca693f5515f0da6f81cd43e23b272586b82b4f0b1fe91ae20ed284f5"
     },
     {
       "path": "src/search-v3-store.ts",
@@ -269,7 +269,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "test/logical-session-rollover.test.ts",
       "upstreamSha256": "cc8ed24310a5ff9301a48ffda61fadb3301b59b560e4b194073bfb7a364d1fd8",
-      "integratedSha256": "551997467c120eccf34e84caf8f3288275d4979c17e6e8a18fb600625e850081"
+      "integratedSha256": "2bdf25958a138724d354990756143db9aab3f7d0e7404a77990ec0fd5fe9a1da"
     },
     {
       "path": "test/m11-scale-campaign.test.ts",
