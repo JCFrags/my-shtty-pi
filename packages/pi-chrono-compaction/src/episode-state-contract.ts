@@ -18,6 +18,8 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
   sourceBytesPerJob: 8 * 1024 * 1024,
   nativeSqliteBytes: 64 * 1024 * 1024,
   materializeCapsules: 8,
+  /** Existing retained-state batch size, not a per-envelope truncation limit. */
+  stateItemsPerBatch: 32,
   wholeBodyUtf16Units: 32_768,
   clauseUtf16Units: 1_024,
   recallUtf8Bytes: 8 * 1024,
@@ -92,6 +94,23 @@ export interface EpisodeStateSupersessionDecision {
   readonly scope: "repository-and-chrono";
   readonly action: "revoke-prior-user-restrictions-and-approval-holds";
   readonly rationale: string;
+}
+
+/** Internal reducer continuation. Callers cannot supply this to materializeState. */
+export interface EpisodeStateBatchCursor {
+  readonly afterState: number;
+  /** SHA-256 of the exact ordered stable-key prefix in the same decoded window. */
+  readonly prefixHash: string;
+}
+
+/** Scalar progress only. A pending envelope never advances the completed body cut. */
+export interface EpisodeStateBodyCheckpoint {
+  readonly eventSeq: number;
+  readonly descriptor: number;
+  readonly sourceViewHash: string;
+  readonly nextDecoded: number;
+  readonly endDecoded: number;
+  readonly afterState: number;
 }
 
 export interface EpisodeStateAfter {

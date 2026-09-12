@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { isScopedBodySourceRef, sourceRefWithinViewBounds, type CapsuleWorkerResponse, type ReducerEnvelope,
+import { isCapsuleCatalogView, isScopedBodySourceRef, sourceRefWithinViewBounds, type CapsuleWorkerResponse, type ReducerEnvelope,
   type ScopedBodySourceRef, type ScopedRawSourceRef } from "./capsule-contract.js";
 import { bodySource, type CatalogBlockShape } from "./capsule-derive.js";
 import { executeCapsuleRequest } from "./capsule-store.js";
@@ -16,6 +16,8 @@ import {
   EPISODE_STATE_SCHEMA_VERSION,
   isEpisodeStateRequest,
   type EpisodeStateAfter,
+  type EpisodeStateBatchCursor,
+  type EpisodeStateBodyCheckpoint,
   type EpisodeStateRequest,
   type EpisodeStateResponse,
   type EpisodeStateSelection,
@@ -473,13 +475,57 @@ function insertReduced(store: Store, request: EpisodeStateRequest, reduced: Redu
       `${item.resourceKind} ${item.resourceKey} ${item.relation} ${item.revision ?? "unknown"}`);
   }
 }
+const STATE_BATCH_CHECKPOINT = "state-clause-batch-v1";
+interface StateBodyCheckpoint {
+  readonly format: typeof STATE_BATCH_CHECKPOINT;
+  readonly view: EpisodeStateRequest["view"];
+  readonly envelope: ReducerEnvelope;
+  /** A processed legacy prefix used window-relative span keys and is not repaired here. */
+  readonly legacyPrefixUnverified?: true;
+  readonly batch?: { readonly cursor: EpisodeStateBatchCursor; readonly start: number; readonly end: number; readonly windowHash: string };
+}
+function decodeStateCheckpoint(request: EpisodeStateRequest, row: SqlRow, indexed: EpisodeStateRequest["view"]): StateBodyCheckpoint {
+  let parsed: any;
+  try { parsed = JSON.parse(str(row, "envelope")); } catch { return fail("search-v3-state-checkpoint-corrupt"); }
+  // Legacy checkpoints contain a bare envelope. Preserve their already accumulated gaps.
+  // New checkpoints deliberately lack .source, so an old writer refuses before its first mutation.
+  const checkpoint: StateBodyCheckpoint = parsed?.format === undefined
+    ? { format: STATE_BATCH_CHECKPOINT, view: indexed, envelope: parsed } : parsed;
+  if (checkpoint?.format !== STATE_BATCH_CHECKPOINT || Object.hasOwn(checkpoint, "source")
+    || !isCapsuleCatalogView(checkpoint.view) || !extendsView(request.view, checkpoint.view) || !extendsView(indexed, checkpoint.view)
+    || lineage({ ...request, view: checkpoint.view }) !== lineage(request)
+    || !isScopedBodySourceRef(checkpoint.envelope?.source)
+    || !sourceRefWithinViewBounds(checkpoint.envelope.source, checkpoint.view)) fail("search-v3-state-checkpoint-corrupt");
+  const source = checkpoint.envelope.source, nextDecoded = num(row, "nextDecoded");
+  if (!Number.isSafeInteger(nextDecoded) || nextDecoded < source.decodedUtf16.start || nextDecoded >= source.decodedUtf16.end)
+    fail("search-v3-state-checkpoint-corrupt");
+  const batch = checkpoint.batch;
+  if (parsed?.format !== undefined && ((!batch && nextDecoded === source.decodedUtf16.start)
+    || Object.hasOwn(parsed, "batch") && !batch)) fail("search-v3-state-checkpoint-corrupt");
+  if (batch) {
+    const start = nextDecoded === source.decodedUtf16.start ? nextDecoded
+      : Math.max(source.decodedUtf16.start, nextDecoded - EPISODE_STATE_LIMITS.largeBodyOverlapUnits);
+    if (!Number.isSafeInteger(batch.cursor?.afterState) || batch.cursor.afterState < 1
+      || batch.cursor.afterState > EPISODE_STATE_LIMITS.wholeBodyUtf16Units
+      || batch.cursor.afterState % EPISODE_STATE_LIMITS.stateItemsPerBatch !== 0
+      || !/^[a-f0-9]{64}$/u.test(batch.cursor.prefixHash) || !/^[a-f0-9]{64}$/u.test(batch.windowHash)
+      || batch.start !== start || batch.end !== Math.min(source.decodedUtf16.end, start + EPISODE_STATE_LIMITS.wholeBodyUtf16Units))
+      fail("search-v3-state-checkpoint-corrupt");
+  }
+  return parsed?.format === undefined && nextDecoded > source.decodedUtf16.start
+    ? { ...checkpoint, legacyPrefixUnverified: true } : checkpoint;
+}
+function bodyCheckpointProgress(checkpoint: StateBodyCheckpoint, nextDecoded: number): EpisodeStateBodyCheckpoint {
+  const source = checkpoint.envelope.source;
+  return { eventSeq: source.eventSeq, descriptor: source.descriptor, sourceViewHash: sha(canonicalJson(checkpoint.view)),
+    nextDecoded, endDecoded: source.decodedUtf16.end, afterState: checkpoint.batch?.cursor.afterState ?? 0 };
+}
+
 async function materialize(request: Extract<EpisodeStateRequest, { op: "materializeState" }>, store: Store, executor: CapsuleExecutor,
   catalogExecutor: CatalogExecutor, budget: { bytes: number }): Promise<Record<string, unknown>> {
   const line = lineage(request), head = store.get("SELECT * FROM heads WHERE lineage=?", line);
-  if (head) {
-    const old = JSON.parse(str(head, "view")) as EpisodeStateRequest["view"];
-    if (!extendsView(request.view, old)) fail("search-v3-state-view-incompatible");
-  }
+  const indexed = head ? JSON.parse(str(head, "view")) as EpisodeStateRequest["view"] : request.view;
+  if (!extendsView(request.view, indexed)) fail("search-v3-state-view-incompatible");
   const afterEventSeq = request.after?.eventSeq ?? (head ? num(head, "afterEventSeq") : 0);
   const afterDescriptor = request.after?.descriptor ?? (head ? num(head, "afterDescriptor") : 0);
   const metadataAfterEventSeq = head ? num(head, "metadataAfterEventSeq") : 0;
@@ -487,77 +533,84 @@ async function materialize(request: Extract<EpisodeStateRequest, { op: "material
   if (request.after && head && (afterEventSeq !== num(head, "afterEventSeq") || afterDescriptor !== num(head, "afterDescriptor")))
     fail("search-v3-state-cursor-invalid");
 
-  let active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
-  let envelope: ReducerEnvelope | undefined, verified: VerifiedEventStructuralFacts | undefined;
+  const active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
+  let checkpoint: StateBodyCheckpoint | undefined, verified: VerifiedEventStructuralFacts | undefined;
   let pageComplete = false;
   if (active) {
-    try { envelope = JSON.parse(str(active, "envelope")); verified = JSON.parse(str(active, "structural")); }
-    catch { return fail("search-v3-state-checkpoint-corrupt"); }
+    checkpoint = decodeStateCheckpoint(request, active, indexed);
+    try { verified = JSON.parse(str(active, "structural")); } catch { return fail("search-v3-state-checkpoint-corrupt"); }
   } else {
     const page = await capsuleCall(request, executor, budget, { op: "capsulePage", view: request.view, afterEventSeq, afterDescriptor, limit: 1 });
-    envelope = (page.capsules ?? [])[0] as ReducerEnvelope | undefined;
+    const envelope = (page.capsules ?? [])[0] as ReducerEnvelope | undefined;
     pageComplete = page.complete === true;
-    if (envelope && envelope.source.decodedUtf16.end - envelope.source.decodedUtf16.start > EPISODE_STATE_LIMITS.wholeBodyUtf16Units) {
+    if (envelope) {
       verified = await exactStructural(request, envelope, catalogExecutor, budget);
-      store.run("INSERT INTO large_bodies VALUES(?,?,?,?,?,?,?)", line, canonicalJson(envelope), canonicalJson(verified ?? {}),
-        envelope.source.decodedUtf16.start, 0, 0, 0);
-      active = store.get("SELECT * FROM large_bodies WHERE lineage=?", line);
+      checkpoint = { format: STATE_BATCH_CHECKPOINT, view: request.view, envelope };
     }
   }
 
   let generation = num(store.get("SELECT generation FROM meta WHERE singleton=1")!, "generation");
-  let nextEventSeq = afterEventSeq, nextDescriptor = afterDescriptor, bodyPartial = 0;
-  if (envelope && active) {
-    const sourceStart = envelope.source.decodedUtf16.start, sourceEnd = envelope.source.decodedUtf16.end;
-    const nextDecoded = num(active, "nextDecoded");
+  let nextEventSeq = afterEventSeq, nextDescriptor = afterDescriptor, bodyPartial = 0, stateItems = 0, decodedChunks = 0;
+  if (checkpoint) {
+    const { envelope, batch } = checkpoint, source = envelope.source;
+    if (!isScopedBodySourceRef(source) || !sourceRefWithinViewBounds(source, checkpoint.view)
+      || source.eventSeq < afterEventSeq || source.eventSeq === afterEventSeq && source.descriptor <= afterDescriptor
+      || metadataAfterEventSeq >= source.eventSeq) fail("search-v3-state-checkpoint-corrupt");
+    // This is append continuation, never an implicit repair of an older publication.
+    if (store.get("SELECT 1 AS found WHERE EXISTS(SELECT 1 FROM coverage WHERE lineage=? AND eventSeq=? AND descriptor=?) OR EXISTS(SELECT 1 FROM cuts WHERE lineage=? AND eventSeq=? AND descriptor=?)",
+      line, source.eventSeq, source.descriptor, line, source.eventSeq, source.descriptor)) fail("search-v3-state-checkpoint-corrupt");
+    const sourceStart = source.decodedUtf16.start, sourceEnd = source.decodedUtf16.end;
+    const nextDecoded = active ? num(active, "nextDecoded") : sourceStart;
     const decodedStart = nextDecoded === sourceStart ? sourceStart : Math.max(sourceStart, nextDecoded - EPISODE_STATE_LIMITS.largeBodyOverlapUnits);
-    const length = Math.min(EPISODE_STATE_LIMITS.wholeBodyUtf16Units, sourceEnd - decodedStart);
-    const chunk = await capsuleCall(request, executor, budget, { op: "chunkRange", view: request.view, source: envelope.source,
-      decodedStart, decodedLength: length, limit: 2 });
+    const length = Math.min(EPISODE_STATE_LIMITS.wholeBodyUtf16Units, sourceEnd - decodedStart), through = decodedStart + length;
+    const chunk = length ? await capsuleCall(request, executor, budget, { op: "chunkRange", view: checkpoint.view, source,
+      decodedStart, decodedLength: length, limit: 2 }) : { data: "" };
     const bytes = Buffer.from(String(chunk.data), "base64"), text = bytes.toString("utf16le");
     if (bytes.length !== length * 2 || text.length !== length) fail("search-v3-state-source-invalid");
-    const through = decodedStart + length, final = through === sourceEnd;
-    const reduced = reduceEpisodeStateEnvelope(envelope, text, verified, { decodedStart, final });
-    generation++; bodyPartial = reduced.partial ? 1 : 0;
-    const restrictionGap = num(active, "restrictionGap") === 1 || reduced.coverage.restrictionGap;
-    const openWorkGap = num(active, "openWorkGap") === 1 || reduced.coverage.openWorkGap;
-    const partial = num(active, "partial") === 1 || reduced.partial;
+    const windowHash = createHash("sha256").update(bytes).digest("hex");
+    if (batch && batch.windowHash !== windowHash) fail("search-v3-state-checkpoint-corrupt");
+    const reduced = reduceEpisodeStateEnvelope(envelope, text, verified, { decodedStart, final: through === sourceEnd, after: batch?.cursor });
+    const windowComplete = reduced.nextBatch === undefined, final = through === sourceEnd && windowComplete;
+    // A pending batch is not a permanent gap. The final batch repeats the same exact
+    // window and retains any intrinsic qualifier. Earlier completed-window gaps stay set.
+    const legacyPrefix = checkpoint.legacyPrefixUnverified === true;
+    const restrictionGap = active?.restrictionGap === 1 || legacyPrefix || windowComplete && reduced.coverage.restrictionGap;
+    const openWorkGap = active?.openWorkGap === 1 || legacyPrefix || windowComplete && reduced.coverage.openWorkGap;
+    const partial = active?.partial === 1 || legacyPrefix || windowComplete && reduced.partial;
+    const nextCheckpoint: StateBodyCheckpoint = { format: STATE_BATCH_CHECKPOINT, view: checkpoint.view, envelope,
+      ...(legacyPrefix ? { legacyPrefixUnverified: true as const } : {}),
+      ...(reduced.nextBatch ? { batch: { cursor: reduced.nextBatch, start: decodedStart, end: through, windowHash } } : {}) };
+    const nextWindow = windowComplete ? through : nextDecoded;
+    generation++; stateItems = reduced.states.length; decodedChunks = length ? 1 : 0; bodyPartial = final && partial ? 1 : 0;
+    if (final) { nextEventSeq = source.eventSeq; nextDescriptor = source.descriptor; }
     store.transaction(() => {
-      insertReduced(store, request, reduced, generation, nextDecoded !== sourceStart);
+      insertReduced(store, request, reduced, generation, nextDecoded !== sourceStart || batch !== undefined);
       store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
       if (final) {
         store.run("DELETE FROM large_bodies WHERE lineage=?", line);
-        store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor,
+        store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, source.eventSeq, source.descriptor,
           generation, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0);
-        store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor, generation);
-      } else store.run("UPDATE large_bodies SET nextDecoded=?,restrictionGap=?,openWorkGap=?,partial=? WHERE lineage=?",
-        through, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0, line);
+        store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, source.eventSeq, source.descriptor, generation);
+      } else store.run("INSERT OR REPLACE INTO large_bodies VALUES(?,?,?,?,?,?,?)", line, JSON.stringify(nextCheckpoint),
+        canonicalJson(verified ?? {}), nextWindow, restrictionGap ? 1 : 0, openWorkGap ? 1 : 0, partial ? 1 : 0);
+      // Commit the body head with its rows/checkpoint, including the final batch.
+      // A later metadata read failure cannot replay the completed envelope.
+      store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?,?,?)", line, canonicalJson(request.view), nextEventSeq, nextDescriptor,
+        metadataAfterEventSeq, generation, 0, 0, priorPartial + bodyPartial);
     });
     if (!final) {
-      store.run("INSERT OR REPLACE INTO heads VALUES(?,?,?,?,?,?,?,?,?)", line, canonicalJson(request.view), afterEventSeq, afterDescriptor,
-        metadataAfterEventSeq, generation, 0, 0, priorPartial);
       const known = Math.max(0, Math.min(request.view.eventCut, afterEventSeq - 1, metadataAfterEventSeq));
       return { stateGeneration: generation, branchKey: request.view.branchKey, knownThroughCut: known, knownThrough: known, partial: true, complete: false,
         next: { eventSeq: afterEventSeq, descriptor: afterDescriptor, generation }, metadata: { afterEventSeq: metadataAfterEventSeq, complete: false,
-          processedEvents: 0, acceptedMemoryEvents: 0, acceptedRetentionHints: 0 }, largeBody: { checkpointed: true, nextDecoded: through, endDecoded: sourceEnd },
-        metrics: { capsules: 1, decodedChunks: 1, partialRecords: bodyPartial, sqliteStatements: store.statements } };
+          processedEvents: 0, acceptedMemoryEvents: 0, acceptedRetentionHints: 0 }, bodyCheckpoint: bodyCheckpointProgress(nextCheckpoint, nextWindow),
+        ...(sourceEnd - sourceStart > EPISODE_STATE_LIMITS.wholeBodyUtf16Units
+          ? { largeBody: { checkpointed: true, nextDecoded: nextWindow, endDecoded: sourceEnd } } : {}),
+        metrics: { capsules: 1, decodedChunks, stateItems, stateItemsPerBatch: EPISODE_STATE_LIMITS.stateItemsPerBatch,
+          partialRecords: 0, sqliteStatements: store.statements } };
     }
-    nextEventSeq = envelope.source.eventSeq; nextDescriptor = envelope.source.descriptor;
-  } else if (envelope) {
-    verified = await exactStructural(request, envelope, catalogExecutor, budget);
-    const reduced = reduceEpisodeStateEnvelope(envelope, await body(request, envelope, executor, budget), verified);
-    generation++; bodyPartial = reduced.partial ? 1 : 0;
-    nextEventSeq = envelope.source.eventSeq; nextDescriptor = envelope.source.descriptor;
-    store.transaction(() => {
-      insertReduced(store, request, reduced, generation);
-      store.run("UPDATE meta SET generation=? WHERE singleton=1", generation);
-      store.run("INSERT OR REPLACE INTO coverage VALUES(?,?,?,?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor, generation,
-        reduced.coverage.restrictionGap ? 1 : 0, reduced.coverage.openWorkGap ? 1 : 0, reduced.partial ? 1 : 0);
-      store.run("INSERT OR REPLACE INTO cuts VALUES(?,?,?,?)", line, envelope!.source.eventSeq, envelope!.source.descriptor, generation);
-    });
   }
 
-  const bodyComplete = !envelope && pageComplete;
+  const bodyComplete = !checkpoint && pageComplete;
   const metadata = await materializeMetadata(request, store, catalogExecutor, budget, metadataAfterEventSeq, generation,
     bodyComplete ? request.view.eventCut : Math.max(0, nextEventSeq - 1));
   generation = metadata.generation;
@@ -571,8 +624,8 @@ async function materialize(request: Extract<EpisodeStateRequest, { op: "material
   return { stateGeneration: generation, branchKey: request.view.branchKey, knownThroughCut, knownThrough: knownThroughCut, partial: !complete || partialCount > 0,
     complete, next: { eventSeq: nextEventSeq, descriptor: nextDescriptor, generation }, metadata: { afterEventSeq: metadata.afterEventSeq,
       complete: metadata.complete, processedEvents: metadata.processedEvents, acceptedMemoryEvents: metadata.acceptedMemoryEvents,
-      acceptedRetentionHints: metadata.acceptedRetentionHints }, metrics: { capsules: envelope ? 1 : 0, decodedChunks: envelope && active ? 1 : 0,
-      partialRecords: bodyPartial + metadata.partial, sqliteStatements: store.statements } };
+      acceptedRetentionHints: metadata.acceptedRetentionHints }, metrics: { capsules: checkpoint ? 1 : 0, decodedChunks, stateItems,
+      stateItemsPerBatch: EPISODE_STATE_LIMITS.stateItemsPerBatch, partialRecords: bodyPartial + metadata.partial, sqliteStatements: store.statements } };
 }
 function pin(request: Extract<EpisodeStateRequest, { op: "recallState" }>, store: Store): number {
   const cut = store.get("SELECT MAX(generation) AS generation FROM cuts WHERE lineage=? AND eventSeq<=?", lineage(request), request.view.eventCut);
@@ -1007,10 +1060,14 @@ function status(request: Extract<EpisodeStateRequest, { op: "stateStatus" }>, st
   const complete = compatible && num(head, "complete") === 1 && num(head, "metadataComplete") === 1 && indexed.eventCut >= request.view.eventCut;
   const knownThroughCut = complete ? request.view.eventCut : Math.max(0, Math.min(knownThrough - 1, num(head, "metadataAfterEventSeq")));
   const partial = !complete || knownThroughCut < request.view.eventCut || num(head, "partialCount") > 0;
+  const active = store.get("SELECT * FROM large_bodies WHERE lineage=?", lineage(request));
+  const checkpoint = active && compatible ? decodeStateCheckpoint({ ...request, view: indexed }, active, indexed) : undefined;
   return { identity: request.identity, ruleset: EPISODE_STATE_RULESET_VERSION, stateGeneration: generation, knownThroughCut, knownThrough: knownThroughCut, complete, partial,
     readiness: compatible ? partial ? "partial" : "ready" : "incompatible", requestedView: { branchKey: request.view.branchKey, eventCut: request.view.eventCut, hash: viewHash(request) },
     indexedView: { branchKey: indexed.branchKey, eventCut: indexed.eventCut, complete },
     cursor: { eventSeq: num(head, "afterEventSeq"), descriptor: num(head, "afterDescriptor"), generation: num(head, "generation") },
+    ...(checkpoint && sourceRefWithinViewBounds(checkpoint.envelope.source, request.view)
+      ? { bodyCheckpoint: bodyCheckpointProgress(checkpoint, num(active!, "nextDecoded")) } : {}),
     metadata: { afterEventSeq: num(head, "metadataAfterEventSeq"), complete: num(head, "metadataComplete") === 1 }, metrics: { sqliteStatements: store.statements } };
 }
 

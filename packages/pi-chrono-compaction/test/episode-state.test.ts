@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ import { reduceEpisodeStateEnvelope } from "../src/episode-state-reducer.js";
 import { executeEpisodeStateRequest } from "../src/episode-state-store.js";
 import { createMemoryEvent } from "../src/memory-store.js";
 import { composeStoredSelection, persistPrivateCompositionArtifact } from "../src/context-composer.js";
-import type { EpisodeStateSelection } from "../src/episode-state-contract.js";
+import { EPISODE_STATE_LIMITS, type EpisodeStateSelection } from "../src/episode-state-contract.js";
 import type { SearchV3Identity } from "../src/search-v3-contract.js";
 
 const message = (id: string, parentId: string | null, role: string, text: string, extra: Record<string, unknown> = {}): string =>
@@ -453,5 +454,166 @@ test("M09 actual producer selection preserves obligations and successive experie
     assert.equal(typeof persisted.validation, "object", "shared validation references must not serialize as Circular");
     assert.ok(!JSON.stringify(persisted).includes("[Circular]"));
     if (process.env.CHRONO_SYNTHETIC_OUTPUT) writeFileSync(process.env.CHRONO_SYNTHETIC_OUTPUT, result.text + "\n", { mode: 0o600 });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const mode of ["whole", "large"] as const) test(`state clause continuation: ${mode} body preserves exact recovery and old pins`, async t => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-state-batches-"));
+  const catalogDirectory = join(directory, "catalog"), capsuleDirectory = join(directory, "capsules"), searchDirectory = join(directory, "search");
+  const sourcePath = join(directory, "main.jsonl"), sessionKey = `state-batches-${mode}`;
+  mkdirSync(searchDirectory, { mode: 0o700 });
+  const authorizationText = "I authorize retiring the prior repository restriction.";
+  const authorizationRaw = message("u2", "u1", "user", authorizationText);
+  writeFileSync(sourcePath, message("u1", null, "user", "Never deploy /Repo/Pinned.ts.") + authorizationRaw, { mode: 0o600 });
+  const catalog = async (extra: Record<string, unknown>): Promise<any> => {
+    const response = await executeCatalogStoreRequest({ v: 1, catalogDirectory, sessionKey, ...extra });
+    assert.equal(response.ok, true, JSON.stringify(response)); return response.ok ? response.result : {};
+  };
+  const database = <T>(fn: (db: CatalogSqlite) => T): T => {
+    const db = CatalogSqlite.open(join(searchDirectory, "state-v4.sqlite"));
+    try { return fn(db); } finally { db.close(); }
+  };
+  try {
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const oldView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "u1" } })).view as CapsuleCatalogView;
+    const capsuleIdentity: DerivedStoreIdentity = { storeKey: randomUUID(), sessionKey, catalogStoreKey: oldView.storeKey, catalogGeneration: oldView.generation,
+      derivedSchemaVersion: DERIVED_SCHEMA_VERSION, capsuleSchemaVersion: CAPSULE_SCHEMA_VERSION, chunkSchemaVersion: CHUNK_SCHEMA_VERSION,
+      reducerSetVersion: CAPSULE_REDUCER_PIPELINE_VERSION, configHash: createHash("sha256").update("state-batches").digest("hex") };
+    const identity: SearchV3Identity = { storeKey: randomUUID(), capsule: capsuleIdentity, schemaVersion: 1,
+      configHash: createHash("sha256").update("state-batches-search").digest("hex") };
+    const request = (view: CapsuleCatalogView, extra: Record<string, unknown>) => ({ v: 1, catalogDirectory, capsuleDirectory, searchDirectory, identity, view, ...extra });
+    const run = async (view: CapsuleCatalogView, extra: Record<string, unknown>): Promise<any> => {
+      const response = await executeEpisodeStateRequest(request(view, extra));
+      assert.equal(response.ok, true, JSON.stringify(response));
+      assert.ok(response.sourceBytes <= EPISODE_STATE_LIMITS.sourceBytesPerJob);
+      assert.equal(response.sqliteNativeLimitBytes, EPISODE_STATE_LIMITS.nativeSqliteBytes);
+      if (!response.ok) return {};
+      if (extra.op === "materializeState") assert.ok(Number((response.result.metrics as any).stateItems) <= 32);
+      return response.result;
+    };
+    const settle = async (view: CapsuleCatalogView): Promise<any> => {
+      for (let step = 0; step < 16; step++) {
+        const result = await run(view, { op: "materializeState" });
+        if (result.complete) return result;
+      }
+      assert.fail("finite state batch continuation did not complete");
+    };
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, oldView);
+    const oldReady = await settle(oldView), oldPin = { eventSeq: 1, descriptor: 0, stableKey: "", generation: oldReady.stateGeneration };
+    const oldRecall = await run(oldView, { op: "recallState", after: oldPin });
+    const authorizationView = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "u2" } })).view as CapsuleCatalogView;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, authorizationView);
+    const authorizedReady = await settle(authorizationView), states = (await run(authorizationView, { op: "recallState" })).items;
+    const target = states.find((item: any) => item.evidence.source.eventSeq === 1);
+    const authorization = states.find((item: any) => item.evidence.source.eventSeq === 2).evidence;
+    await run(authorizationView, { op: "supersedeState", expectedGeneration: authorizedReady.stateGeneration,
+      authorization: { source: authorization.source, decodedUtf16: authorization.decodedUtf16,
+        spanHash: createHash("sha256").update(Buffer.from(authorizationText, "utf16le")).digest("hex"),
+        rawEventHash: createHash("sha256").update(authorizationRaw.slice(0, -1)).digest("hex") },
+      decision: { actor: "agent", basis: "direct-original-user-instruction", scope: "repository-and-chrono",
+        action: "revoke-prior-user-restrictions-and-approval-holds", rationale: "The fixture authorizes this exact prior restriction." },
+      targets: [{ stableKey: target.stableKey, propositionKey: target.propositionKey, spanKey: target.spanKey,
+        createdGeneration: target.createdGeneration, evidenceHash: target.evidenceHash, kind: "restriction", authority: "user",
+        scope: "repository", category: "restriction" }] });
+    const oldRows = () => database(db => [...db.prepare("SELECT * FROM state_items WHERE eventSeq<=2 ORDER BY stableKey LIMIT 8").iterate(8)]);
+    const preservedRows = oldRows();
+    assert.ok(preservedRows.some(row => row.resolutionEvidence !== null));
+    const count = mode === "whole" ? 70 : 96, width = mode === "whole" ? 64 : 512;
+    const clauses = Array.from({ length: count }, (_, index) => index % 2
+      ? "Goal: verify /Repo/Batch.ts before any release." : "Never deploy /Repo/Batch.ts without approval.");
+    const text = clauses.map(clause => clause.padEnd(width - 1, " ") + "\n").join("");
+    appendFileSync(sourcePath, message("u3", "u2", "user", text));
+    const sourceHash = createHash("sha256").update(readFileSync(sourcePath)).digest("hex");
+    await catalog({ op: "ingestStep", shardKey: "main", sourcePath, branchKey: "main", shardOrdinal: 0 });
+    const view = (await catalog({ op: "pin", branchKey: "main", leaf: { shardKey: "main", eventId: "u3" } })).view as CapsuleCatalogView;
+    await deriveAll(capsuleDirectory, catalogDirectory, capsuleIdentity, view);
+    let result = await run(view, { op: "materializeState" }), jobs = 1;
+    assert.equal(result.bodyCheckpoint.afterState, 32);
+    assert.equal(result.next.eventSeq, 2);
+    assert.equal(result.metadata.afterEventSeq, 2);
+    const pendingStatus = await run(view, { op: "stateStatus" });
+    assert.deepEqual(pendingStatus.bodyCheckpoint, result.bodyCheckpoint);
+    assert.equal(pendingStatus.complete, false);
+    const pendingSelection = await executeEpisodeStateRequest(request(view, { op: "composeStateSelection" }));
+    if (pendingSelection.ok) {
+      const coverage = pendingSelection.result.coverage as any;
+      assert.equal(coverage.bodyComplete, false);
+      assert.equal(coverage.restrictionsComplete, false);
+      assert.equal(coverage.openWorkComplete, false);
+    } else {
+      // The separate delta path currently requests 64 metadata rows from a 16-row API.
+      // Its refusal is also fail-closed; this extraction change must not weaken it.
+      assert.equal(pendingSelection.code, "search-v3-state-catalog-unavailable");
+    }
+    const checkpointRow = database(db => db.prepare("SELECT * FROM large_bodies LIMIT 1").get()!);
+    const checkpoint = JSON.parse(String(checkpointRow.envelope));
+    assert.equal(checkpoint.format, "state-clause-batch-v1");
+    assert.equal(checkpoint.source, undefined, "old writers cannot treat this payload as a bare envelope");
+    assert.deepEqual(checkpoint.view, view);
+    const snapshot = () => database(db => ({ head: db.prepare("SELECT * FROM heads LIMIT 1").get(),
+      checkpoint: db.prepare("SELECT * FROM large_bodies LIMIT 1").get(),
+      meta: db.prepare("SELECT generation FROM meta").get(),
+      rows: [...db.prepare("SELECT * FROM state_items ORDER BY eventSeq,stableKey LIMIT 256").iterate(256)],
+      cuts: [...db.prepare("SELECT * FROM cuts ORDER BY eventSeq,descriptor LIMIT 16").iterate(16)],
+      coverage: [...db.prepare("SELECT * FROM coverage ORDER BY eventSeq,descriptor LIMIT 16").iterate(16)] }));
+    // A release-validation run can also invoke the actual previous built executor.
+    let previousRefused = false;
+    if (process.env.CHRONO_PREVIOUS_STATE_EXECUTOR) {
+      const previous = await import(pathToFileURL(process.env.CHRONO_PREVIOUS_STATE_EXECUTOR).href);
+      const before = snapshot(), refusal = await previous.executeEpisodeStateRequest(request(view, { op: "materializeState" }));
+      assert.equal(refusal.ok, false, "a downlevel writer must refuse the new checkpoint");
+      assert.deepEqual(snapshot(), before, "downlevel refusal cannot publish, erase, or restart a batch");
+      previousRefused = true;
+    }
+    const badCursor = structuredClone(checkpoint);
+    badCursor.batch.cursor.afterState = 64;
+    database(db => db.prepare("UPDATE large_bodies SET envelope=?").run(JSON.stringify(badCursor)));
+    const beforeBad = snapshot(), bad = await executeEpisodeStateRequest(request(view, { op: "materializeState" }));
+    assert.equal(bad.ok, false);
+    if (!bad.ok) assert.equal(bad.code, "search-v3-state-checkpoint-corrupt");
+    assert.deepEqual(snapshot(), beforeBad, "an unbound cursor cannot skip source clauses or move the head");
+    database(db => db.prepare("UPDATE large_bodies SET envelope=?").run(String(checkpointRow.envelope)));
+    let legacyCheckpointResumed = false;
+    for (; jobs < 12 && !result.complete; jobs++) {
+      result = await run(view, { op: "materializeState" });
+      if (result.bodyCheckpoint) {
+        assert.equal(result.next.eventSeq, 2, "the body cut stays behind the entire envelope");
+        assert.equal(result.metadata.afterEventSeq, 2, "metadata cannot pass a pending body");
+        if (mode === "large" && !legacyCheckpointResumed && result.bodyCheckpoint.afterState === 0) {
+          // A legacy checkpoint has no state cursor and may carry earlier unrepaired gaps.
+          database(db => {
+            const row = db.prepare("SELECT envelope FROM large_bodies LIMIT 1").get()!;
+            const legacy = JSON.parse(String(row.envelope));
+            db.prepare("UPDATE large_bodies SET envelope=?,restrictionGap=0,openWorkGap=1,partial=1").run(JSON.stringify(legacy.envelope));
+          });
+          legacyCheckpointResumed = true;
+        }
+      }
+    }
+    assert.equal(result.complete, true, "the fixed-size batches reach a finite completed body and metadata cut");
+    assert.equal(result.knownThroughCut, view.eventCut);
+    assert.equal(database(db => db.prepare("SELECT 1 AS found FROM large_bodies LIMIT 1").get()), undefined);
+    const recovered = database(db => [...db.prepare("SELECT * FROM state_items WHERE eventSeq=3 ORDER BY stableKey LIMIT 256").iterate(256)]);
+    assert.equal(recovered.length, count, "overlap is deduplicated without collapsing repeated text at distinct positions");
+    for (let index = 0; index < count; index++) {
+      const start = index * width, end = start + clauses[index]!.length;
+      const spanKey = createHash("sha256").update(`${JSON.stringify(checkpoint.envelope.source)}\n${start}\n${end}`).digest("hex");
+      const row = recovered.find(item => item.spanKey === spanKey);
+      assert.ok(row, `exact source-relative span ${index} is recovered`);
+      const evidence = JSON.parse(String(row.evidence));
+      assert.equal(evidence.exactText, text.slice(start, end));
+      assert.deepEqual(evidence.decodedUtf16, { start, end });
+      assert.equal(row.authority, "user");
+      assert.equal(row.confidence, "verified");
+      assert.equal(row.kind, index % 2 ? "goal" : "restriction");
+    }
+    assert.deepEqual(oldRows(), preservedRows, "prior rows and explicit supersession records stay byte-identical");
+    assert.deepEqual((await run(oldView, { op: "recallState", after: oldPin })).items, oldRecall.items);
+    const coverage = database(db => db.prepare("SELECT restrictionGap,openWorkGap,optionalGap FROM coverage WHERE eventSeq=3").get()!);
+    assert.deepEqual(coverage, mode === "whole" ? { restrictionGap: 0, openWorkGap: 0, optionalGap: 0 }
+      : { restrictionGap: 1, openWorkGap: 1, optionalGap: 1 }, "legacy gaps remain and the old span-key prefix is not certified");
+    assert.equal(createHash("sha256").update(readFileSync(sourcePath)).digest("hex"), sourceHash);
+    t.diagnostic(JSON.stringify({ mode, recovered: recovered.length, materializeJobs: jobs, stateBatchLimit: 32,
+      previousRefused, legacyCheckpointResumed, oldPinPreserved: true, supersessionPreserved: true }));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
