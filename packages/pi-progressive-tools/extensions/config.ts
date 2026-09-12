@@ -33,6 +33,7 @@ const DEFAULT_CONFIG: ProgressiveToolsConfig = {
 	managed: [],
 	blocked: [],
 	aliases: [],
+	summaries: {},
 	search: DEFAULT_SEARCH,
 	audit: DEFAULT_AUDIT,
 };
@@ -44,6 +45,7 @@ interface PartialConfig {
 	managed?: unknown;
 	blocked?: unknown;
 	aliases?: unknown;
+	summaries?: unknown;
 	search?: unknown;
 	audit?: unknown;
 }
@@ -69,6 +71,15 @@ function uniqueStrings(values: string[]): string[] {
 function normalizeStringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return uniqueStrings(value.filter((item): item is string => typeof item === "string"));
+}
+
+function normalizeSummaries(value: unknown): Record<string, string> {
+	if (!isRecord(value)) return {};
+	return Object.fromEntries(
+		Object.entries(value)
+			.filter((entry): entry is [string, string] => Boolean(entry[0].trim()) && typeof entry[1] === "string" && Boolean(entry[1].trim()))
+			.map(([name, summary]) => [name, summary.trim()]),
+	);
 }
 
 function normalizePattern(value: unknown): PatternValue | undefined {
@@ -172,6 +183,7 @@ function appendLayer(target: ProgressiveToolsConfig, layer: PartialConfig, path:
 	target.managed.push(...normalizeRuleArray(layer.managed));
 	target.blocked.push(...normalizeRuleArray(layer.blocked));
 	target.aliases.push(...normalizeAliasArray(layer.aliases));
+	target.summaries = { ...target.summaries, ...normalizeSummaries(layer.summaries) };
 	target.search = { ...target.search, ...normalizeSearch(layer.search) };
 	target.audit = { ...target.audit, ...normalizeAudit(layer.audit) };
 }
@@ -197,6 +209,7 @@ export function loadConfig(cwd: string, options: LoadConfigOptions = {}): Loaded
 		managed: [],
 		blocked: [],
 		aliases: [],
+		summaries: {},
 		search: { ...DEFAULT_SEARCH },
 		audit: { ...DEFAULT_AUDIT },
 	};

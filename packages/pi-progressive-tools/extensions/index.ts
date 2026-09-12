@@ -1,16 +1,17 @@
-import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildAuditReport, type AuditEntryData } from "./audit.ts";
 import { loadConfig } from "./config.ts";
+import { buildCatalog, cleanText, formatHelp, formatToolList, permittedInventory, toolSummary } from "./catalog.ts";
 import {
 	buildDesiredActiveTools,
 	buildInventory,
 	isSameToolList,
-	SEARCH_TOOL_NAME,
+	HELP_TOOL_NAME,
+	LIST_TOOL_NAME,
 	toolIdentity,
 } from "./policy.ts";
-import { rankInventory, selectManagedSearchResults } from "./search.ts";
 import type { InventoryItem, LoadedConfig } from "./types.ts";
 
 const AUDIT_ENTRY_TYPE = "pi-progressive-tools:audit";
@@ -28,26 +29,6 @@ interface PolicySnapshot {
 
 function unique(values: string[]): string[] {
 	return [...new Set(values)];
-}
-
-function cleanText(value: string): string {
-	return value.replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim();
-}
-
-function describeTool(tool: ToolInfo): string {
-	const text = cleanText(tool.description);
-	return text.length <= 140 ? text : `${text.slice(0, 139)}…`;
-}
-
-function searchToolDescription(): string {
-	const loaded = loadConfig(process.cwd(), { includeProject: false });
-	const areas = loaded.config.areas
-		.map(cleanText)
-		.filter(Boolean)
-		.slice(0, 12);
-	const base =
-		"Find and enable approved hidden Pi tools for a task or service. Search before declaring a specialized capability unavailable.";
-	return areas.length > 0 ? `${base} Configured areas: ${areas.join(", ")}.` : base;
 }
 
 function createInventory(pi: ExtensionAPI, ctx: ExtensionContext, state: BrokerState): PolicySnapshot {
@@ -88,41 +69,6 @@ function enforcePolicy(pi: ExtensionAPI, ctx: ExtensionContext, state: BrokerSta
 	return createInventory(pi, ctx, state);
 }
 
-function formatSearchResult(options: {
-	query: string;
-	matches: InventoryItem[];
-	added: string[];
-	unmanagedHints: InventoryItem[];
-	configErrorCount: number;
-}): string {
-	const lines: string[] = [];
-	if (options.matches.length > 0) {
-		if (options.added.length > 0) lines.push(`Loaded tools: ${options.added.map(cleanText).join(", ")}`);
-		const alreadyActive = options.matches
-			.map((item) => item.tool.name)
-			.filter((name) => !options.added.includes(name));
-		if (alreadyActive.length > 0) {
-			lines.push(`Matching tools already active: ${alreadyActive.map(cleanText).join(", ")}`);
-		}
-		lines.push("Matches:");
-		for (const item of options.matches) lines.push(`- ${cleanText(item.tool.name)}: ${describeTool(item.tool)}`);
-	} else {
-		lines.push(`No approved hidden tools matched: ${cleanText(options.query)}`);
-	}
-
-	if (options.unmanagedHints.length > 0) {
-		lines.push(
-			`${options.unmanagedHints.length} matching unmanaged tool(s) exist. Their metadata was not added to model context.`,
-		);
-		lines.push("The user can inspect them with /tool-audit and approve them in progressive-tools.json.");
-	}
-
-	if (options.configErrorCount > 0) {
-		lines.push(`Configuration has ${options.configErrorCount} error(s). The user can run /tool-audit.`);
-	}
-	return lines.join("\n");
-}
-
 export default function progressiveToolsExtension(pi: ExtensionAPI): void {
 	const state: BrokerState = {
 		activatedManaged: new Set<string>(),
@@ -131,77 +77,65 @@ export default function progressiveToolsExtension(pi: ExtensionAPI): void {
 	};
 
 	pi.registerTool({
-		name: SEARCH_TOOL_NAME,
-		label: "Search Tools",
-		description: searchToolDescription(),
+		name: HELP_TOOL_NAME,
+		label: "Tool Help",
+		description: "Get concise usage guidance for exact registered tool names and enable managed tools. This does not run tool operations or return schemas. Call newly enabled tools on the next model response.",
+		promptSnippet: "Get tool guidance and enable managed tools by exact name",
 		parameters: Type.Object({
-			query: Type.String({
-				description: "Task, service, or missing capability. Do not guess a tool name.",
+			names: Type.Array(Type.String({ minLength: 1 }), {
+				minItems: 1,
+				maxItems: 20,
+				description: "Exact native tool names from the tool catalog or list_tools. No aliases or task queries.",
 			}),
-			limit: Type.Optional(
-				Type.Integer({
-					minimum: 1,
-					maximum: 20,
-					description: "Maximum number of approved tools to load.",
-				}),
-			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const snapshot = createInventory(pi, ctx, state);
-			const ranked = rankInventory(params.query, snapshot.inventory);
-			const configuredLimit = params.limit ?? snapshot.loadedConfig.config.search.defaultLimit;
-			const limit = Math.max(1, Math.min(configuredLimit, snapshot.loadedConfig.config.search.maxLimit));
-			const minimumScore = snapshot.loadedConfig.config.search.minimumScore;
-
-			const selection = selectManagedSearchResults(ranked, { limit, minimumScore });
-			const toActivate = selection.toActivate.map((match) => match.item);
-			const alreadyActive = selection.alreadyActive.map((match) => match.item);
-			const matches = [...toActivate, ...alreadyActive];
-			for (const item of toActivate) state.activatedManaged.add(item.tool.name);
-
+			const byName = new Map(snapshot.inventory.map((item) => [item.tool.name, item]));
+			// Validate the whole request before changing activation. A failed execute
+			// must not leave partial additions without Pi's deferred-loading marker.
+			const matches = unique(params.names).map((name) => {
+				const item = byName.get(name);
+				if (!item) throw new Error(`Tool "${cleanText(name)}" is not registered or is unavailable in this session. Use list_tools for exact names.`);
+				if (item.decision.state === "blocked") throw new Error(`Tool "${cleanText(name)}" is blocked by policy.`);
+				if (!item.active && item.decision.state !== "managed") {
+					throw new Error(`Tool "${cleanText(name)}" is inactive and is not managed by this extension. The user can inspect it with /tool-audit.`);
+				}
+				return item;
+			});
 			const active = pi.getActiveTools();
-			const added = toActivate.map((item) => item.tool.name);
+			const added = matches.filter((item) => !active.includes(item.tool.name)).map((item) => item.tool.name);
+			const text = formatHelp(matches, snapshot.loadedConfig.config, added);
 			if (added.length > 0) {
-				// Keep this change purely additive so Pi can use native deferred loading when supported.
+				// Keep this change inside execute and purely additive for native loading.
 				pi.setActiveTools(unique([...active, ...added]));
 			}
-
-			const unmanagedHints =
-				matches.length === 0 && snapshot.loadedConfig.config.search.showUnmanagedHints
-					? ranked
-							.filter(
-								(match) =>
-									match.item.decision.state === "unmanaged" &&
-									match.item.tool.sourceInfo.source !== "builtin" &&
-									match.score >= minimumScore,
-							)
-							.slice(0, Math.min(3, limit))
-							.map((match) => match.item)
-					: [];
-
+			for (const item of matches) {
+				if (item.decision.state === "managed") state.activatedManaged.add(item.tool.name);
+			}
 			return {
-				content: [
-					{
-						type: "text",
-						text: formatSearchResult({
-							query: params.query,
-							matches,
-							added,
-							unmanagedHints,
-							configErrorCount: snapshot.loadedConfig.errors.length,
-						}),
-					},
-				],
+				content: [{ type: "text", text }],
+				details: { names: matches.map((item) => item.tool.name), added },
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: LIST_TOOL_NAME,
+		label: "List Tools",
+		description: "List exact registered names and short usage hints for active or policy-managed tools. Does not return schemas, enable tools, or run operations.",
+		promptSnippet: "List tool names and short usage hints without schemas",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			const snapshot = createInventory(pi, ctx, state);
+			const inventory = permittedInventory(snapshot.inventory);
+			return {
+				content: [{ type: "text", text: formatToolList(inventory, snapshot.loadedConfig.config, true) || "No permitted tools are registered." }],
 				details: {
-					query: params.query,
-					matches: [...selection.toActivate, ...selection.alreadyActive].map((match) => ({
-						name: match.item.tool.name,
-						score: match.score,
-						matchedTerms: match.matchedTerms,
-						wasActive: match.item.active,
+					tools: inventory.map((item) => ({
+						name: item.tool.name,
+						active: item.active,
+						summary: toolSummary(item.tool, snapshot.loadedConfig.config),
 					})),
-					added,
-					unmanagedHintCount: unmanagedHints.length,
 				},
 			};
 		},
@@ -212,7 +146,7 @@ export default function progressiveToolsExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("tool-audit", {
-		description: "Show active, hidden, managed, unmanaged, and blocked tools. Use 'all' to include built-ins.",
+		description: "Show active, inactive, managed, unmanaged, and blocked tools. Use 'all' to include built-ins.",
 		handler: async (args, ctx) => {
 			const snapshot = createInventory(pi, ctx, state);
 			const report = buildAuditReport({
@@ -228,7 +162,7 @@ export default function progressiveToolsExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("tool-reset", {
-		description: "Hide tools loaded by search_tools and return to the configured base tool set.",
+		description: "Hide managed tools enabled by tool_help and return to the configured base tool set.",
 		handler: async (_args, ctx) => {
 			state.activatedManaged.clear();
 			enforcePolicy(pi, ctx, state);
@@ -244,6 +178,13 @@ export default function progressiveToolsExtension(pi: ExtensionAPI): void {
 		if (snapshot.loadedConfig.errors.length > 0) {
 			ctx.ui.notify("Progressive Tools found configuration errors. Run /tool-audit.", "warning");
 		}
+	});
+
+	pi.on("before_agent_start", (event, ctx) => {
+		const snapshot = createInventory(pi, ctx, state);
+		return {
+			systemPrompt: `${event.systemPrompt}\n\n${buildCatalog(snapshot.inventory, snapshot.loadedConfig.config)}`,
+		};
 	});
 
 	pi.on("input", (_event, ctx) => {

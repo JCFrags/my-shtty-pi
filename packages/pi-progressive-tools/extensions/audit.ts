@@ -19,7 +19,7 @@ function countByPolicy(inventory: InventoryItem[], state: PolicyState): number {
 }
 
 function stateLabel(item: InventoryItem): string {
-	const active = item.active ? "active" : "hidden";
+	const active = item.active ? "active" : "inactive";
 	return `${item.decision.state}/${active}`;
 }
 
@@ -85,16 +85,16 @@ export function buildAuditReport(options: {
 	});
 
 	const active = options.inventory.filter((item) => item.active);
-	const hidden = options.inventory.filter((item) => !item.active);
+	const inactive = options.inventory.filter((item) => !item.active);
 	const activeTokens = active.reduce((sum, item) => sum + item.estimatedTokens, 0);
-	const hiddenTokens = hidden.reduce((sum, item) => sum + item.estimatedTokens, 0);
+	const inactiveTokens = inactive.reduce((sum, item) => sum + item.estimatedTokens, 0);
 
 	const lines: string[] = [
 		"Progressive Tools audit",
 		"",
-		`Tools: ${options.inventory.length} total; ${active.length} active; ${hidden.length} hidden`,
+		`Tools: ${options.inventory.length} total; ${active.length} active; ${inactive.length} inactive`,
 		`Policy: ${countByPolicy(options.inventory, "core")} core; ${countByPolicy(options.inventory, "managed")} managed; ${countByPolicy(options.inventory, "unmanaged")} unmanaged; ${countByPolicy(options.inventory, "blocked")} blocked`,
-		`Approximate tool-schema cost: ${activeTokens} active tokens; ${hiddenTokens} hidden tokens`,
+		`Approximate tool-schema cost: ${activeTokens} active tokens; ${inactiveTokens} inactive tokens`,
 		`Project config: ${options.projectConfigAllowed ? "allowed (project is trusted)" : "ignored (project is not trusted)"}`,
 		"",
 		...buildPromptSection(options.promptOptions),
@@ -130,7 +130,10 @@ export function buildAuditReport(options: {
 		"Limits:",
 		"  getAllTools() exposes tool descriptions, schemas, prompt guidelines, and source data.",
 		"  It does not expose promptSnippet or direct system-prompt text added by another extension.",
+		"  The model catalog and list_tools show active and managed tools without schemas. Blocked names are omitted.",
+		"  tool_help enables managed names and returns their usage hints and prompt guidelines.",
 		"  Unknown tools stay unmanaged. This extension does not hide or activate them.",
+		"  Policy is applied at session start and user input, not continuously during a run.",
 	);
 
 	return lines.join("\n");

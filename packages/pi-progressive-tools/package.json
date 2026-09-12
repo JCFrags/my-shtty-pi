@@ -1,7 +1,7 @@
 {
   "name": "pi-progressive-tools",
-  "version": "0.1.2",
-  "description": "Conservative progressive discovery and lazy activation for Pi tools.",
+  "version": "0.2.0",
+  "description": "A concise tool catalog, exact-name help, and policy-managed activation for Pi tools.",
   "type": "module",
   "license": "MIT",
   "keywords": [
