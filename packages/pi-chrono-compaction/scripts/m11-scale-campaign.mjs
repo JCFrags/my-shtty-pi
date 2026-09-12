@@ -84,8 +84,12 @@ function percentile(values, p) {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.ceil((sorted.length - 1) * p)];
 }
+function maximum(values, initial = -Infinity) {
+  for (const value of values) initial = Math.max(initial, value);
+  return initial;
+}
 function distribution(values, includeP99 = true) {
-  return { count: values.length, p50: percentile(values, .5), p95: percentile(values, .95), ...(includeP99 ? { p99: percentile(values, .99) } : {}), maximum: values.length ? Math.max(...values) : null };
+  return { count: values.length, p50: percentile(values, .5), p95: percentile(values, .95), ...(includeP99 ? { p99: percentile(values, .99) } : {}), maximum: values.length ? maximum(values) : null };
 }
 function safeObservation(response) {
   const observation = response?.result?.workerObservation;
@@ -396,7 +400,7 @@ async function runCampaign(args) {
   assert.equal(currentSha(), args.candidateSha, "candidate SHA must equal checkout HEAD");
   const startedAt = Date.now(), started = performance.now();
   const delay = monitorEventLoopDelay({ resolution: 20 }); delay.enable();
-  let rootCreated = false, passed = false, report, preparedCandidateSha = args.preparedCandidateSha ?? args.candidateSha;
+  let rootCreated = false, report, preparedCandidateSha = args.preparedCandidateSha ?? args.candidateSha;
   try {
     if (args.mode === "run") { await mkdir(args.campaignRoot, { mode: 0o700 }); rootCreated = true; }
     const meta = await lstat(args.campaignRoot); assert.ok(meta.isDirectory() && !meta.isSymbolicLink() && (meta.mode & 0o077) === 0, "campaign root must be owner-only");
@@ -432,11 +436,11 @@ async function runCampaign(args) {
     const diskBytes = await directoryBytes(args.campaignRoot); assert.ok(diskBytes <= c.diskLimitBytes, "campaign disk ceiling");
     const largest = Math.max(...generated.sessions.map(item => item.estimatedTokens));
     if (profile === "full") { assert.ok(largest >= 200_000_000); assert.ok(generated.totals.estimatedTokens >= 1_000_000_000); assert.ok(generated.totals.compactions >= 100); assert.ok(Math.max(...generated.sessions.map(item => item.shards.length)) >= 10); }
-    delay.disable(); passed = true;
+    delay.disable();
     report = { schemaVersion: SCHEMA_VERSION, kind: "chrono-m11-scale-campaign", status: "completed", qualificationStatus: "partial-core-evidence", profile, candidateSha: args.candidateSha,
       generated: { totals: generated.totals, sessions: generated.sessions.map(item => ({ session: item.session, decodedUnits: item.decodedUnits, estimatedTokens: item.estimatedTokens,
         sourceBytes: item.sourceBytes, events: item.events, physicalShards: item.shards.length, compositionRecords: item.compactions })) }, lanes,
-      measurements: { mainProcess: { baseline, final: processMemory() }, worker: { peakRssBytes: Math.max(0, ...m.workerPeaks.map(item => item.processPeakRssBytes ?? 0)), peakCgroupBytes: Math.max(0, ...m.workerPeaks.map(item => item.cgroupMemoryPeakBytes ?? 0)) },
+      measurements: { mainProcess: { baseline, final: processMemory() }, worker: { peakRssBytes: maximum(m.workerPeaks.map(item => item.processPeakRssBytes ?? 0), 0), peakCgroupBytes: maximum(m.workerPeaks.map(item => item.cgroupMemoryPeakBytes ?? 0), 0) },
         workstationProcessRss: { baseline: workstationBaseline, final: await workstationRss() },
         eventLoopDelayMs: { p50: delay.percentile(50) / 1e6, p95: delay.percentile(95) / 1e6, p99: delay.percentile(99) / 1e6, maximum: delay.max / 1e6 },
         appendIngestionLagMs: distribution(m.latencies.appendIngestionLag), searchMs: distribution(m.latencies.search), recallMs: distribution(m.latencies.recall, false), exactMs: distribution(m.latencies.exact),
@@ -464,11 +468,14 @@ async function runCampaign(args) {
       failureCode: /^[A-Za-z0-9_-]{1,80}$/.test(error?.code ?? "") ? error.code : "m11-campaign-failed", failureMessage: String(error?.message ?? "failure").replaceAll(args.campaignRoot ?? "", "<campaign-root>"),
       retainedCampaignRoot: rootCreated || args.mode === "resume", wallMs: performance.now() - started };
   }
-  await mkdir(resolve(args.output, ".."), { recursive: true, mode: 0o700 }); await writeFile(args.output, `${JSON.stringify(report)}\n`, { mode: 0o600 }); await chmod(args.output, 0o600);
-  console.log(JSON.stringify({ status: report.status, profile: report.profile, output: basename(args.output), wallMs: report.wallMs }));
-  if (!passed) process.exitCode = 1;
+  await writeReport(args.output, report);
 }
-export { FULL, SMOKE, config, distribution, exerciseLane, faultCampaign, metrics, parseArgs, runtimeModules, sessionTargets };
+async function writeReport(output, report) {
+  await mkdir(resolve(output, ".."), { recursive: true, mode: 0o700 }); await writeFile(output, `${JSON.stringify(report)}\n`, { mode: 0o600 }); await chmod(output, 0o600);
+  console.log(JSON.stringify({ status: report.status, profile: report.profile, output: basename(output), wallMs: report.wallMs }));
+  process.exitCode = report.status === "completed" ? 0 : 1;
+}
+export { FULL, SMOKE, config, distribution, exerciseLane, faultCampaign, maximum, metrics, parseArgs, runtimeModules, sessionTargets, writeReport };
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv); if (args.mode === "help") return console.log(HELP);
   assert.equal(currentSha(), args.candidateSha, "candidate SHA must equal checkout HEAD");

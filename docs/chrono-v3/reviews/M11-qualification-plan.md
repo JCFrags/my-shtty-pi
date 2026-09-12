@@ -1,6 +1,6 @@
 # M11 qualification evidence plan
 
-Status: the first full campaign prepared all catalog, capsule, and search stores, then failed after 28,693,015 ms with `search-v3-query-budget` before state materialization, faults, matrix lanes, or composition. Its retained data and failure report are not a pass.
+Status: the first full campaign prepared all catalog, capsule, and search stores, then failed after 28,693,015 ms with `search-v3-query-budget` before state materialization, faults, matrix lanes, or composition. Its retained data and failure report are not a pass. The later [report correction and recovery design](M11-report-correction.md) addresses a reproduced final-aggregation failure without changing the retained runtime or certifying a completed campaign.
 
 ## Run boundary
 
@@ -15,9 +15,9 @@ Reference host inspection before implementation found 2.1 TiB free under `/home`
 1. Build the exact integrated candidate through the repository's accepted native/build procedure. For the retained main build, `better-sqlite3@12.9.0` on Node 24.18.0 uses `better_sqlite3.node` SHA-256 `baac38739b5e4c5137ea0514c451df58423c2e626f43cddcfb4542206f93d013`. Verify both package version and hash before reuse. A later final candidate must repeat its own accepted dependency/native verification.
 2. Confirm the candidate SHA and exclusive campaign ownership.
 3. Put the campaign root on `/home`, not the 16 GiB `/tmp` filesystem.
-4. Launch the parent in an owner-only systemd user scope with these ceilings:
-   - wall time: 36 hours;
-   - campaign disk: 48 GiB, enforced again by the harness;
+4. Launch the parent in an owner-only systemd user service with these resource settings and a separate disk acceptance check:
+   - wall time: 36 hours, enforced externally by systemd `RuntimeMaxSec`. The harness reports `wallLimitMs` but has no internal wall-time watchdog;
+   - campaign disk: 48 GiB, checked by the harness after the qualification work. This is not a continuous disk quota or a systemd limit;
    - parent V8 heap: 512 MiB;
    - parent operating-system memory: 1 GiB;
    - swap: disabled for the campaign scope;
@@ -25,15 +25,15 @@ Reference host inspection before implementation found 2.1 TiB free under `/home`
    - workers: existing 128 MiB V8 and 256 MiB operating-system limits;
    - admitted workers: at most four.
 5. Retain a failed synthetic root for diagnosis. Copy and hash the safe aggregate report before removing a successful root.
-6. For process-restart evidence, stop only the campaign parent after a completed checkpoint and invoke `resume` against the same owner-only root. A real system reboot is a separate operator step and must be recorded directly. Process resume is not system-restart evidence.
+6. For process-restart evidence, invoke `resume` against the same owner-only root only after the parent confirms that the campaign process and its separately contained workers have settled. `prepared-state.json` is a data checkpoint, not a safe pause point. The harness starts fault injection immediately after writing it, so a polling stop can interrupt corruption restoration. Do not stop merely because that file appears. A real system reboot is a separate operator step and must be recorded directly. Process resume is not system-restart evidence.
 
 Estimated resources, based on the prior M05 136 MiB campaign duration and the current 32 KiB decoded chunk route:
 
 - source generation: approximately 4–8 GiB of real JSONL bytes;
 - derived stores and bounded evidence: approximately 12–30 GiB;
-- hard disk stop: 48 GiB;
+- end-of-run disk acceptance threshold: 48 GiB, without a continuous hard quota;
 - expected wall time: 18–30 hours;
-- hard wall stop: 36 hours.
+- external systemd wall cutoff: 36 hours.
 
 These are planning estimates, not tested results.
 
@@ -88,7 +88,7 @@ systemd-run --user --wait --pipe --collect \
 
 A resumed report must record both candidate SHAs and that 16 prepared stores were reused. Initial preparation latency, request, process-I/O, and worker-peak measurements were not persisted by the failed process. They remain unavailable and resumed measurements must not replace them.
 
-Current M07 materialization processes one large-body chunk per worker job. The first chunk covers 32,768 decoded UTF-16 units and each later overlapped chunk advances by at least 24,576 units. Applying that contract to the retained indexed source ranges projects 164,170 body-step calls across 16 sessions, plus final completion work. This is a calculation from retained metadata, not measured runtime. The harness uses a finite per-session upper guard derived from decoded units, record count, the 24,576-unit minimum progress, and eight-event metadata pages: 34,322 calls for the largest session and 9,262 for each other session. These guards do not increase any worker, source, output, memory, or wall-time cap. If the 36-hour wall limit expires, the result remains a bounded failure and must not be reported as a pass.
+The retained M07 runtime at `09a8e9147095079668689546ae85146d787d8b68` processes one large-body chunk per worker job. The first chunk covers 32,768 decoded UTF-16 units and each later overlapped chunk advances by at least 24,576 units. Applying that contract to the retained indexed source ranges projects 164,170 body-step calls across 16 sessions, plus final completion work. This is a calculation from retained metadata, not measured runtime. The harness uses a finite per-session upper guard derived from decoded units, record count, the 24,576-unit minimum progress, and eight-event metadata pages: 34,322 calls for the largest session and 9,262 for each other session. These guards do not increase any worker, source, output, memory, or externally enforced wall-time cap. If systemd reaches the 36-hour cutoff, the campaign has not passed and might not write a result JSON. The parent must also establish that the separately contained workers have settled.
 
 ## Actual scale represented by the full profile
 
