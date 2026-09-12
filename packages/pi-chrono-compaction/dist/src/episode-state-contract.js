@@ -10,6 +10,8 @@ export const EPISODE_STATE_LIMITS = Object.freeze({
     sourceBytesPerJob: 8 * 1024 * 1024,
     nativeSqliteBytes: 64 * 1024 * 1024,
     materializeCapsules: 8,
+    /** Existing retained-state batch size, not a per-envelope truncation limit. */
+    stateItemsPerBatch: 32,
     wholeBodyUtf16Units: 32_768,
     clauseUtf16Units: 1_024,
     recallUtf8Bytes: 8 * 1024,
@@ -109,6 +111,15 @@ export function isEpisodeStateRequest(value) {
         case "materializeState": return stateCommon;
         case "stateStatus": return value.limit === undefined && value.after === undefined;
         case "supersedeState": return supersession(value, value.view);
+        case "repairState": return ["start", "step", "status", "publish"].includes(String(value.action))
+            && typeof value.repairId === "string" && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.repairId)
+            && isScopedBodySourceRef(value.source) && sourceRefWithinViewBounds(value.source, value.view)
+            && value.source.eventSeq < value.view.eventCut
+            && value.limit === undefined && value.after === undefined && value.query === undefined
+            && (value.action === "status" ? value.expectedGeneration === undefined && value.priorCoverage === undefined
+                : positive(value.expectedGeneration) && value.expectedGeneration < Number.MAX_SAFE_INTEGER - 1
+                    && object(value.priorCoverage) && positive(value.priorCoverage.generation)
+                    && value.priorCoverage.generation <= value.expectedGeneration && hash(value.priorCoverage.hash));
         case "composeStateSelection": return value.limit === undefined && value.after === undefined;
         case "recallState": return stateCommon && (value.query === undefined || typeof value.query === "string" && value.query.trim().length > 0
             && value.query.length <= EPISODE_STATE_LIMITS.queryUnits)

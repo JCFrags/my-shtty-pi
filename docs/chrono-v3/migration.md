@@ -8,7 +8,7 @@ When explicitly enabled, startup validates configuration, the exact session roll
 
 Catalog, capsule, search, state, and rollup stores own their progress. The [migration status function](../../packages/pi-chrono-compaction/src/session-migration.ts) projects those checkpoints into `disabled`, `unavailable`, `startup`, `catalog`, `capsules`, `index`, `memory`, `rollup`, or `awaiting-cut-validation`. There is no second lifetime migration cursor to reset or reconcile.
 
-Follow the phase meanings in [operations](operations.md#migration-phases) and exclusion precedence in [configuration](configuration.md#session-specific-search-inclusion-and-exclusion). Restart resumes existing checkpoints. Ready layers still require actual cut/category and rendered-budget validation. The original large-session mandatory overflow remains unresolved.
+Follow the phase meanings in [operations](operations.md#migration-phases) and exclusion precedence in [configuration](configuration.md#session-specific-search-inclusion-and-exclusion). Restart resumes existing checkpoints. State clause continuation also keeps a cursor within one exact decoded window, without moving the body or metadata cut past that pending envelope. Ready layers still require actual cut/category and rendered-budget validation. The original large-session mandatory overflow remains unresolved.
 
 ## Different recovery cases
 
@@ -19,12 +19,20 @@ Follow the phase meanings in [operations](operations.md#migration-phases) and ex
 | Corrupt physical catalog | Create a separately identified store through explicit recovery, ingest declared sources, and validate before pointer publication. Do not repair the corrupt database in place. |
 | Incompatible capsule/reducer identity | Derive into a new physical identity. Do not relabel old immutable bytes or import a lifetime candidate map. |
 | Missing state or rollup | The materializer can create its supported store. A corrupt or incompatible existing store is not equivalent to a missing one. |
+| Pending state clause batch | Resume its exact versioned checkpoint with a compatible writer. Keep prior gaps. An older writer must refuse rather than discard or reinterpret the checkpoint. |
+| Completed state extraction gap | Explicit exact-descriptor `repairState` stages bounded recovery and publishes later coverage. Old rows, coverage, cuts, and valid pins remain unchanged. |
 | Rollup repair | Stage and step a new store, then explicitly publish it with the expected prior active route. |
 | Invalid routing or source identity | Refuse and preserve evidence. Do not discover a replacement by directory scanning or path similarity. |
 
 The [catalog contract](catalog-contract.md), [catalog publication](catalog-store-publication.md), [capsule publication ADR](adr/ADR-003-immutable-segments-and-manifest-publication.md), and [rollup repair](rollups.md#explicit-repair-surface) own the specific protocols. No general `/chrono-repair` interface is implied by the charter's proposed command name.
 
+See [state continuation](episodes-and-state.md#bounded-clause-continuation) and [historical repair](episodes-and-state.md#explicit-historical-state-gap-repair) for cursor binding, legacy evidence reconciliation, and publication limits.
+
 ## Rollback
+
+A `state-clause-batch-v1` checkpoint requires a compatible materializer. An older package can still use supported historical reads, but it cannot resume that pending write. Preserve the checkpoint and do not let an older writer restart its batch. Finish the pending work with a compatible writer or leave that writer disabled. This does not authorize a reload, a new campaign, or checkpoint removal.
+
+Starting `repairState` opts the existing store into `episode-state-exact-v4-gap-repair-v1`. Pre-repair binaries that require the exact v4 marker, including 2.0.32, refuse both reads and writes on that store. The repair-aware reader preserves valid historical state pins and rollup handles at their original ruleset, generation, and cut. Old-binary refusal is not rollback qualification. Do not discard a pending repair, relabel its ruleset, or expose its unpublished rows through an older writer.
 
 Disable only the selected feature or restore its recorded compatible route/package through the scoped [recovery runbook](recovery.md). Preserve logical manifests, every source shard, old healthy pins, and failed derived evidence. An older package can ignore unsupported stores; it need not convert or delete them. There is no automatic shard deletion or broad garbage collection.
 
