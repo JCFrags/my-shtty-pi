@@ -127,10 +127,14 @@ function transitionOf(kind: EpisodeStateKind, text: string): ReducedStateItem["t
   const action = /replace|supersed/iu.test(match[1]!) ? "replace" : "revoke";
   return { action, targetPropositionKey: propositionOf("restriction", match[2]!) };
 }
-function revisionOf(text: string): string {
+// Absence differs from an explicit declaration whose value is "unspecified".
+export function explicitRevisionOf(text: string): string | undefined {
   const explicit = text.match(/\b(?:revision|rev|commit|version|sha(?:256)?)\s*[:=#]?\s*([A-Za-z0-9_.+-]{3,128})\b/iu)?.[1]
     ?? text.match(/\b[a-f0-9]{40,64}\b/iu)?.[0];
-  return explicit?.toLowerCase() ?? "unspecified";
+  return explicit?.toLowerCase();
+}
+function revisionOf(text: string): string {
+  return explicitRevisionOf(text) ?? "unspecified";
 }
 function classifyUser(text: string): EpisodeStateKind | undefined {
   if (/\b(?:do not|don't|must|never|only|constraint|restriction|except|unless|required|preserve|keep)\b/iu.test(text)) return "restriction";

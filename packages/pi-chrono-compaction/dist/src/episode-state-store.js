@@ -10,7 +10,7 @@ import { canonicalJson } from "./capsule-segment.js";
 import { stableStringify } from "./utils.js";
 import { CatalogSqlite } from "./catalog-sqlite.js";
 import { EPISODE_STATE_LIMITS, EPISODE_STATE_RULESET_VERSION, EPISODE_STATE_SCHEMA_VERSION, isEpisodeStateRequest, } from "./episode-state-contract.js";
-import { isVerifiedCustomMessage, reduceEpisodeStateEnvelope } from "./episode-state-reducer.js";
+import { explicitRevisionOf, isVerifiedCustomMessage, reduceEpisodeStateEnvelope } from "./episode-state-reducer.js";
 import { withRuntimeMutex } from "./worker-runtime-mutex.js";
 const fail = (code) => { throw Object.assign(new Error(code), { code }); };
 const sha = (text) => createHash("sha256").update(text).digest("hex");
@@ -717,7 +717,10 @@ function repairEvidenceKey(source, evidence) {
     return sha(canonicalJson({ source, decodedUtf16: evidence.decodedUtf16, exactText: evidence.exactText }));
 }
 function repairItemMatches(row, item) {
-    return ["propositionKey", "subject", "revision", "kind", "authority", "confidence", "status"].every(key => str(row, key) === item[key]);
+    // Callers first bind identical exact evidence. Keep the existing row's contextual
+    // revision when overlapping windows differ, but never waive a clause-local revision.
+    return ["propositionKey", "subject", "kind", "authority", "confidence", "status"].every(key => str(row, key) === item[key])
+        && (str(row, "revision") === item.revision || explicitRevisionOf(item.evidence.exactText) === undefined);
 }
 /** Repair-only body verification. Descriptor zero is not itself evidence of a body. */
 async function originalRepairSource(request, executor, budget) {
