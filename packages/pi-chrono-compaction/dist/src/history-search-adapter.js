@@ -202,11 +202,20 @@ export class HistorySearchAdapter {
             sessionKey: source.sessionKey, branchKey: "pi-session", leaf: { shardKey: source.shardKey, eventId: prefixLeafId } }, { ...this.options, signal });
         if (signal?.aborted || this.key !== key || !this.enabled)
             return fail("search-v3-worker-aborted");
+        // An event-ID pin uses catalog-parent-missing for a leaf not yet ingested.
+        // Normalize only this lookup, not ingestion's missing-parent safeguard.
         if (!response.ok)
-            return fail(response.code);
+            return fail(response.code === "catalog-parent-missing" ? "catalog-event-missing" : response.code);
         const view = response.result.view;
-        if (!isCapsuleCatalogView(view) || !this.within(view, current.view))
+        if (!isCapsuleCatalogView(view))
             return fail("search-v3-view-incompatible");
+        if (!this.within(view, current.view)) {
+            // A validated extension of the maintained view is ordinary catch-up lag.
+            // Different ancestry or catalog identity must still refuse stored reads.
+            if (this.within(current.view, view))
+                return fail("search-v3-index-not-ready");
+            return fail("search-v3-view-incompatible");
+        }
         return structuredClone(this.makeTarget(source, view));
     }
     /** Resolve an explicit historical compaction through current catalog membership
@@ -470,6 +479,42 @@ export class HistorySearchAdapter {
             if (indexed === null) {
                 if (this.expectedLogicalCut)
                     return fail("logical-session-route-unavailable");
+                // A new branch can share a long prefix with a newer committed ancestor
+                // head. Reuse that covered prefix instead of deriving cut 16 against a
+                // head that cannot rewind. Inspect only the bounded catalog ancestry.
+                for (let length = requested.view.segments.length - 1; length > 0; length--) {
+                    const segments = requested.view.segments.slice(0, length);
+                    const view = { ...requested.view, eventCut: segments.at(-1).cut, segments };
+                    const ancestor = this.makeTarget(t, view);
+                    const saved = await runSearchV3Worker({ ...ancestor, op: "status" }, options);
+                    valid();
+                    if (!saved.ok)
+                        return fail(saved.code);
+                    if (saved.result.error === "search-v3-indexed-view-incompatible")
+                        return fail("search-v3-resume-invalid");
+                    const readiness = saved.result.readiness;
+                    if (readiness?.cue !== "ready" || readiness.raw !== "ready")
+                        continue;
+                    const head = saved.result.indexedView;
+                    const expected = saved.result.requestedView;
+                    if (!head || head.branchKey !== view.branchKey || !Number.isSafeInteger(head.eventCut) || Number(head.eventCut) < view.eventCut
+                        || head.complete !== true || typeof head.hash !== "string" || !/^[a-f0-9]{64}$/.test(head.hash)
+                        || expected?.branchKey !== view.branchKey || expected.eventCut !== view.eventCut || expected.hash !== hash(canonicalJson(view)))
+                        return fail("search-v3-resume-invalid");
+                    const storedView = { ...view, eventCut: Number(head.eventCut), segments: segments.map((segment, index) => index === segments.length - 1 ? { ...segment, cut: Number(head.eventCut) } : { ...segment }) };
+                    if (!isCapsuleCatalogView(storedView) || hash(canonicalJson(storedView)) !== head.hash)
+                        return fail("search-v3-resume-invalid");
+                    // Catalog reconstructs the committed head and verifies its hash and
+                    // ancestry. Serve only its common prefix from the requested branch.
+                    const authorized = await runCatalogWorker({ v: 1, op: "page", catalogDirectory: t.catalogDirectory,
+                        sessionKey: t.sessionKey, view: storedView, after: storedView.eventCut, limit: 1 }, options);
+                    valid();
+                    if (!authorized.ok)
+                        return fail(authorized.code);
+                    this.lastReady = ancestor;
+                    this.readyValidated = true;
+                    break;
+                }
                 this.resumeChecked = true;
                 return { ...this.progress };
             }

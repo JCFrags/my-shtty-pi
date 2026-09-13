@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { SEARCH_V3_LIMITS, isSearchV3Request } from "./search-v3-contract.js";
 import { isEpisodeStateRequest } from "./episode-state-contract.js";
 import { runBoundedWorker, WorkerRuntimeError } from "./worker-runtime.js";
+import { WaiterCancellationError } from "./worker-runtime-rendezvous.js";
 export const SEARCH_V3_WORKER_CAPS = Object.freeze({
     requestBytes: SEARCH_V3_LIMITS.requestBytes,
     responseBytes: SEARCH_V3_LIMITS.responseBytes,
@@ -49,8 +50,9 @@ export async function runSearchV3Worker(request, options = {}) {
         return value;
     }
     catch (error) {
-        const code = error instanceof WorkerRuntimeError && /^[a-z0-9-]{1,64}$/.test(error.code) ? `search-v3-${error.code}`
-            : options.signal?.aborted ? "search-v3-worker-aborted" : "search-v3-worker-failed";
+        const code = error instanceof WaiterCancellationError && error.message === "worker-timeout" ? "search-v3-worker-timeout"
+            : error instanceof WorkerRuntimeError && /^[a-z0-9-]{1,64}$/.test(error.code) ? `search-v3-${error.code}`
+                : options.signal?.aborted ? "search-v3-worker-aborted" : "search-v3-worker-failed";
         return { v: 1, ok: false, code, sourceBytes: 0, sqliteNativeLimitBytes: SEARCH_V3_LIMITS.nativeSqliteBytes, resumable: true };
     }
 }

@@ -12,6 +12,7 @@ import { getActiveBranch, readSessionJsonl } from "../src/jsonl.js";
 import { candidateSegmentStorePath } from "../src/candidate-segment-store.js";
 import { sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
 import { rollupShadowSidecarPath } from "../src/history-rollup-shadow.js";
+import { HistorySearchAdapter } from "../src/history-search-adapter.js";
 
 type Hook = (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, context: Record<string, unknown>) => unknown | Promise<unknown>;
@@ -834,6 +835,138 @@ test("uniform continuation follows unresolved turns across successful compaction
   if (previousTriggerTokens === undefined) delete process.env.PI_CHRONO_TRIGGER_TOKENS;
   else process.env.PI_CHRONO_TRIGGER_TOKENS = previousTriggerTokens;
   rmSync(configPath, { force: true });
+});
+
+test("owned guarded refusal resumes once, respects cancellation, and fences native tree changes", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-failure-continuation-"));
+  const names = ["PI_CHRONO_CONFIG_PATH", "PI_CHRONO_SEARCH_INDEX", "PI_CHRONO_PI_SUMMARY", "PI_CHRONO_TRIGGER_TOKENS"] as const;
+  const previous = new Map(names.map(name => [name, process.env[name]]));
+  process.env.PI_CHRONO_CONFIG_PATH = join(directory, "config.json");
+  process.env.PI_CHRONO_SEARCH_INDEX = "true";
+  process.env.PI_CHRONO_PI_SUMMARY = "false";
+  process.env.PI_CHRONO_TRIGGER_TOKENS = "8000";
+  const hooks = new Map<string, Hook>();
+  const tools = new Map<string, () => Promise<any>>();
+  const messages: Array<{ content: string; triggerTurn?: boolean }> = [];
+  const notifications: string[] = [], scheduled: string[] = [];
+  const requests: Array<{ onError: (error: Error) => void }> = [];
+  let cancels = 0, aborts = 0, leafId = "tail", idle = false;
+  let agentController = new AbortController(), compactController = new AbortController();
+  let mode: "refuse" | "abort" | "fallback" | "tree" = "refuse";
+  let rejectSelection: ((error: Error) => void) | undefined;
+  let selectionCalls = 0;
+  t.mock.method(HistorySearchAdapter.prototype, "schedule", (target: { leafId: string }) => { scheduled.push(target.leafId); });
+  t.mock.method(HistorySearchAdapter.prototype, "cancel", () => { cancels++; });
+  t.mock.method(HistorySearchAdapter.prototype, "compositionSelection", async (_entryId: string, signal?: AbortSignal) => {
+    selectionCalls++;
+    assert.equal(signal, compactController.signal);
+    assert.notEqual(signal, agentController.signal, "manual compaction must use its fresh signal");
+    if (mode === "abort") compactController.abort();
+    if (mode === "tree") return new Promise<never>((_resolve, reject) => { rejectSelection = reject; });
+    if (mode === "fallback") return { stateGeneration: 0 } as Awaited<ReturnType<HistorySearchAdapter["compositionSelection"]>>;
+    throw Object.assign(new Error("private fixture detail must not reach status"), { code: "search-v3-view-incompatible" });
+  });
+  const branchEntries = [
+    { type: "message", id: "prefix", parentId: null, message: { role: "user", content: "Preserve the earlier goal." } },
+    { type: "message", id: "tail", parentId: "prefix", message: { role: "user", content: "Continue the unresolved work." } },
+  ];
+  const context = { hasUI: true, model: { contextWindow: 128_000 },
+    getContextUsage: () => ({ tokens: 120_000, contextWindow: 128_000 }), isIdle: () => idle,
+    hasPendingMessages: () => false,
+    abort() { aborts++; agentController.abort(); },
+    compact(options: typeof requests[number]) { requests.push(options); idle = false; },
+    sessionManager: { getSessionId: () => "failure-fixture", getSessionFile: () => join(directory, "session.jsonl"),
+      getLeafId: () => leafId, getBranch: () => branchEntries, getEntry: (id: string) => branchEntries.find(entry => entry.id === id) },
+    ui: { notify: (text: string) => { notifications.push(text); }, getEditorText: () => "" },
+    modelRegistry: { getApiKeyAndHeaders() { throw new Error("model call forbidden"); } },
+  };
+  const pi = { registerTool(tool: { name: string; execute: () => Promise<any> }) { tools.set(tool.name, tool.execute); },
+    registerCommand() {}, appendEntry() { throw new Error("session mutation forbidden"); },
+    on(name: string, hook: Hook) { setUniqueHook(hooks, name, hook); },
+    sendMessage(message: { content: string }, options?: { triggerTurn?: boolean }) { messages.push({ ...message, ...options }); },
+    events: { emit() {} }, getAllTools: () => [],
+  };
+  extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime") });
+  const event = () => ({ branchEntries, reason: "manual", willRetry: false, signal: compactController.signal,
+    preparation: { firstKeptEntryId: "tail", tokensBefore: 120_000, messagesToSummarize: [], turnPrefixMessages: [],
+      settings: { reserveTokens: 16_384 } } });
+  const begin = async () => {
+    await hooks.get("before_agent_start")!({ prompt: "User requested more work." }, context);
+    agentController = new AbortController(); compactController = new AbortController(); idle = false;
+    await tools.get("request_compaction")!();
+    await hooks.get("turn_end")!({ message: { role: "assistant", usage: { totalTokens: 120_000 } } }, context);
+    assert.equal(agentController.signal.aborted, true);
+    idle = true;
+    await hooks.get("agent_settled")!({}, context);
+  };
+  const fail = async () => {
+    // Native Pi clears compaction state, emits this event, then invokes onError.
+    idle = true;
+    await hooks.get("session_compact_failed")!({ reason: "manual", aborted: true, willRetry: false, fromExtension: false }, context);
+    requests.at(-1)!.onError(new Error("Compaction cancelled"));
+  };
+  try {
+    await begin();
+    assert.deepEqual(await hooks.get("session_before_compact")!(event(), context), { cancel: true });
+    assert.equal(messages.length, 0, "the hook must wait for native terminal cleanup");
+    await fail();
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0]!.triggerTurn, true);
+    assert.match(messages[0]!.content, /Compaction failed \(selection: search-v3-view-incompatible\).*context is unchanged/s);
+    assert.doesNotMatch(messages[0]!.content, /Compaction completed|private fixture/);
+    const status = await tools.get("history_status")!();
+    assert.deepEqual(status.details.composition.lastFailure, { stage: "selection", code: "search-v3-view-incompatible" });
+    assert.doesNotMatch(JSON.stringify(status), /private fixture/);
+    requests[0]!.onError(new Error("Compaction cancelled"));
+    assert.equal(messages.length, 1, "duplicate callbacks cannot resume twice");
+    assert.equal((await tools.get("request_compaction")!()).details.scheduled, false);
+    await hooks.get("turn_end")!({ message: { role: "assistant", usage: { totalTokens: 120_000 } } }, context);
+    await hooks.get("agent_settled")!({}, context);
+    await hooks.get("agent_settled")!({}, context);
+    assert.equal(aborts, 1, "the failure handoff cannot trip the same circuit breaker");
+    assert.equal(requests.length, 1, "neither a model retry nor settlement may loop");
+    assert.deepEqual(await hooks.get("session_before_compact")!({ ...event(), reason: "threshold" }, context), { cancel: true });
+    assert.equal(selectionCalls, 1, "native automatic compaction cannot repeat failed work in the handoff");
+
+    mode = "abort";
+    await begin();
+    const beforeAbortNotifications = notifications.length;
+    assert.deepEqual(await hooks.get("session_before_compact")!(event(), context), { cancel: true });
+    await fail();
+    assert.equal(messages.length, 1, "a real abort signal must never resume");
+    assert.equal(notifications.length, beforeAbortNotifications, "actual cancellation stays quiet");
+
+    mode = "fallback";
+    await begin();
+    const prepared = await hooks.get("session_before_compact")!(event(), context) as { compaction?: unknown };
+    assert.ok(prepared.compaction);
+    const beforeExplicitCancel = notifications.length;
+    await fail(); // Another extension explicitly cancels after Chrono returned content.
+    assert.equal(messages.length, 1, "a cancellation without an owned refusal must not resume");
+    assert.equal(notifications.length, beforeExplicitCancel);
+
+    mode = "tree";
+    await begin();
+    const pending = hooks.get("session_before_compact")!(event(), context);
+    await waitFor(() => !!rejectSelection);
+    const beforeTreeCancel = cancels;
+    leafId = "new-native-branch";
+    await hooks.get("session_tree")!({ oldLeafId: "tail", newLeafId: leafId, fromExtension: false }, context);
+    assert.ok(cancels > beforeTreeCancel);
+    assert.equal(scheduled.at(-1), leafId, "tree completion retargets without waiting for agent_settled");
+    const beforeStaleNotifications = notifications.length;
+    rejectSelection!(new Error("stale selection must not resume"));
+    assert.deepEqual(await pending, { cancel: true });
+    await fail();
+    assert.equal(messages.length, 1, "an abandoned branch cannot receive the old continuation");
+    assert.equal(notifications.length, beforeStaleNotifications);
+  } finally {
+    await hooks.get("session_shutdown")!({ reason: "quit" }, context);
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("exact history tools reuse an existing ledger but never create one alone", async () => {

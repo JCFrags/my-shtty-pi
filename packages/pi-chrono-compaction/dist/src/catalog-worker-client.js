@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { isCatalogStoreRequest } from "./catalog-store-contract.js";
 import { runBoundedWorker, WorkerRuntimeError } from "./worker-runtime.js";
+import { WaiterCancellationError } from "./worker-runtime-rendezvous.js";
 /** Per-catalog-job bounds, not changes to the shared M03 scheduler policy.
  * Source access has its own stricter 8MiB cumulative cap. The filesystem cap
  * also reserves space for trusted module and binding-provenance reads.
@@ -38,7 +39,9 @@ export async function runCatalogWorker(request, options = {}) {
         return value;
     }
     catch (error) {
-        const code = error instanceof WorkerRuntimeError && /^[a-z0-9-]{1,64}$/.test(error.code) ? `catalog-${error.code}` : options.signal?.aborted ? "catalog-worker-aborted" : "catalog-worker-failed";
+        const code = error instanceof WaiterCancellationError && error.message === "worker-timeout" ? "catalog-worker-timeout"
+            : error instanceof WorkerRuntimeError && /^[a-z0-9-]{1,64}$/.test(error.code) ? `catalog-${error.code}`
+                : options.signal?.aborted ? "catalog-worker-aborted" : "catalog-worker-failed";
         return { v: 1, ok: false, code, sourceBytes: 0 };
     }
 }

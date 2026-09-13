@@ -11,6 +11,7 @@ import { HistorySearchAdapter } from "../src/history-search-adapter.js";
 import { CAPSULE_REDUCER_PIPELINE_VERSION, type CapsuleCatalogView, type DerivedStoreIdentity } from "../src/capsule-contract.js";
 import { runCatalogWorker } from "../src/catalog-worker-client.js";
 import { runCapsuleWorker } from "../src/capsule-worker-client.js";
+import { runSearchV3Worker } from "../src/search-v3-worker-client.js";
 import { line } from "./capsule-storage-fixture.js";
 
 const hash = (s: string): string => createHash("sha256").update(s).digest("hex");
@@ -302,6 +303,91 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
     assert.equal(adapter.status().lag, 0);
     const tail = await adapter.search({ query: "eventual tail needle", mode: "exact", limit: 1 });
     assert.equal((tail.details.hits as unknown[]).length, 1, JSON.stringify(tail.details));
+  } finally {
+    adapter.dispose(); await adapter.scheduler.drain();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("long common prefix resumes after a fork without rewinding committed ancestor heads", { timeout: 100_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-long-branch-"));
+  const sourcePath = join(directory, "source.jsonl"), schedulerDirectory = join(directory, "scheduler");
+  mkdirSync(schedulerDirectory, { mode: 0o700 });
+  const ancestorText = "exact common ancestor evidence", siblingText = "abandoned sibling evidence";
+  const records = Array.from({ length: 24 }, (_, index) => line(`event-${index + 1}`, index ? `event-${index}` : null,
+    index === 19 ? ancestorText : index === 23 ? siblingText : `ordinary branch history ${index + 1}`));
+  writeFileSync(sourcePath, records.join(""), { mode: 0o600 });
+  const target = { sourcePath, catalogDirectory: join(directory, "catalog"), sessionKey: hash("long-branch-session"), shardKey: hash("long-branch-shard") };
+  const options = { schedulerDirectory, slots: 1 }, adapter = new HistorySearchAdapter(options);
+  // One overall bound covers both cold indexing and branch catch-up. Do not
+  // restart the deadline when a prefix becomes ready.
+  const deadline = Date.now() + 90_000;
+  const waitForCut = async (cut: number): Promise<void> => {
+    while (adapter.status().indexedCut !== cut) {
+      assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
+      assert.ok(Date.now() < deadline, `branch cut did not settle: ${JSON.stringify(adapter.status())}`);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  };
+  const ingest = async (): Promise<void> => {
+    const response = await runCatalogWorker({ v: 1, op: "ingestStep", ...target, branchKey: "pi-session", shardOrdinal: 0 }, options);
+    assert.ok(response.ok && response.result.caughtUp === true, JSON.stringify(response));
+  };
+  try {
+    adapter.schedule({ ...target, leafId: "event-24" });
+    await waitForCut(24);
+    const oldTarget = await adapter.compositionTarget("event-24");
+    const oldSearch = await runSearchV3Worker({ ...oldTarget, op: "status" }, options);
+    const capsuleRequest = { v: 1 as const, op: "status" as const, derivedDirectory: oldTarget.capsuleDirectory,
+      catalogDirectory: oldTarget.catalogDirectory, identity: oldTarget.identity.capsule, view: oldTarget.view };
+    const oldCapsules = await runCapsuleWorker(capsuleRequest, options);
+    if (!oldSearch.ok || !oldCapsules.ok) assert.fail(JSON.stringify({ oldSearch, oldCapsules }));
+    assert.equal((oldSearch.result.indexedView as { complete: boolean }).complete, true);
+    const foundSibling = await adapter.search({ query: siblingText, mode: "exact" });
+    const siblingHandle = (foundSibling.details.hits as { handle: string }[])[0]?.handle;
+    assert.ok(siblingHandle, JSON.stringify(foundSibling.details));
+
+    await assert.rejects(adapter.compositionTarget("unknown-entry"), { code: "catalog-event-missing" });
+    appendFileSync(sourcePath, line("linear-extension", "event-24", "later uncataloged extension"));
+    await assert.rejects(adapter.compositionTarget("linear-extension"), { code: "catalog-event-missing" });
+    await ingest();
+    await assert.rejects(adapter.compositionTarget("linear-extension"), { code: "search-v3-index-not-ready" });
+    appendFileSync(sourcePath, line("fork", "event-20", "selected fork evidence"));
+    await ingest();
+    await assert.rejects(adapter.compositionTarget("fork"), { code: "search-v3-view-incompatible" });
+    const forkPin = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: target.catalogDirectory,
+      sessionKey: target.sessionKey, branchKey: "pi-session", leaf: { shardKey: target.shardKey, eventId: "fork" } }, options);
+    if (!forkPin.ok) assert.fail(JSON.stringify(forkPin));
+    const forkView = forkPin.result.view as CapsuleCatalogView;
+    assert.equal(forkView.eventCut, 26);
+    assert.equal(forkView.segments[0]!.cut, 20, "the common prefix must be longer than the first 16-event page");
+    const unindexedFork = await runSearchV3Worker({ ...oldTarget, view: forkView, op: "status" }, options);
+    if (!unindexedFork.ok) assert.fail(JSON.stringify(unindexedFork));
+    assert.equal(unindexedFork.result.indexedView, null, "the selected branch must not have a prior head");
+
+    adapter.schedule({ ...target, leafId: "fork" });
+    assert.equal(adapter.status().servingLastReady, false, "the sibling view must not be served before branch validation");
+    await waitForCut(20);
+    assert.equal(adapter.status().servingLastReady, true, "reuse the committed common prefix during branch catch-up");
+    assert.equal(adapter.status().lag, 6);
+    assert.equal((await adapter.getBlock("event-20", 0)).details.text, ancestorText);
+    assert.equal((await adapter.getRaw("event-20", {})).details.text, records[19]);
+    assert.deepEqual((await adapter.recall(siblingHandle)).details, { status: "unavailable", code: "search-v3-reference-scope-mismatch" });
+    await waitForCut(26);
+    assert.equal(adapter.status().lag, 0);
+    const ancestor = await adapter.search({ query: ancestorText, mode: "exact" });
+    const ancestorHandle = (ancestor.details.hits as { handle: string }[])[0]?.handle;
+    assert.ok(ancestorHandle, JSON.stringify(ancestor.details));
+    assert.equal((await adapter.recall(ancestorHandle)).details.text, ancestorText);
+    assert.equal((await adapter.getRaw("event-24", {})).details.status, "unavailable");
+    const absent = await adapter.search({ query: siblingText, mode: "exact" });
+    assert.equal(absent.details.status, "ok", JSON.stringify(absent.details));
+    assert.deepEqual(absent.details.hits, []);
+    const preservedSearch = await runSearchV3Worker({ ...oldTarget, op: "status" }, options);
+    const preservedCapsules = await runCapsuleWorker(capsuleRequest, options);
+    if (!preservedSearch.ok || !preservedCapsules.ok) assert.fail(JSON.stringify({ preservedSearch, preservedCapsules }));
+    assert.deepEqual(preservedSearch.result.indexedView, oldSearch.result.indexedView, "the old search head must not rewind");
+    assert.deepEqual(preservedCapsules.result.readiness, oldCapsules.result.readiness, "the old capsule readiness must remain intact");
   } finally {
     adapter.dispose(); await adapter.scheduler.drain();
     rmSync(directory, { recursive: true, force: true });
