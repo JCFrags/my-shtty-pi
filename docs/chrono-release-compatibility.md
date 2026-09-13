@@ -1,16 +1,30 @@
 # ChronoCompact release compatibility
 
-## Current promotion
+## Current 3.0.0 release
 
-The owner now directs promotion of the finished M09/M10 stack and all-live-session
-adoption. See [the promotion report](chrono-v3/reviews/main-promotion.md) for the
-2.0.23 integration delta, approval boundary and rollout policy. Its candidate
-identity replaces the current verifier pins only after explicit reconciliation.
-No approval, merge or loaded adoption is implied by this document change.
+Version `3.0.0` enables programmatic memory and safe-idle physical rollover by
+default. The [current overview](chrono-v3/README.md) describes useful selective
+chronology, bounded recall, native tool-state transfer, and measured limits.
+The current source has 137 compiled runtime JavaScript files and 138 startup
+pins, including `package.json`. Read the exact package tree and file hashes from
+`scripts/verify-chrono-v3-baseline.mjs`, not the historical tables below.
 
-The sections below record the earlier 2.0.15 release. Their version, file counts,
-peer range and campaign commands are historical, not instructions to repeat
-those campaigns for the new promotion.
+Use the root [verification workflow](../README.md#verification) and installed-Pi
+loader checks for a changed release. The explicit native build and matching
+Node 24.18.0 header prerequisites below still apply. Do not repeat the historical
+normal, fixed-heap, and independent-client campaigns as extra release gates.
+Focused checks have exercised the current source on installed Pi 0.85.1. The
+package's older declared peer range is not a claim of broader compatibility.
+
+A version or documentation change does not establish remote integration or
+loaded local adoption. Follow [activation and rollback](activation.md), preserve
+all source shards, and retain checkpoint-aware Grounded providers after physical
+rollover. Older providers cannot reconstruct the new native checkpoints.
+
+The [2.0.23 promotion report](chrono-v3/reviews/main-promotion.md) and the remaining
+2.0.15 sections record earlier releases. Their counts, candidate identities,
+permission boundaries, and campaign commands are historical, not current release
+instructions.
 
 ## Prior 2.0.15 release boundary
 
