@@ -191,6 +191,17 @@ export default function groundedProcess(pi: ExtensionAPI) {
   });
   pi.events.emit(SESSION_OPERATION_SERVICE_V2_READY_EVENT, sessionOperationServiceV2);
 
+  const transitionReadiness = () => ({
+    protocolVersion: 1 as const,
+    runningProcesses: manager.runningCount(),
+    openSessions: sessions.list().length,
+  });
+  pi.events.on("grounded:session-transition-readiness:v1", (value) => {
+    const event = value as { protocolVersion?: unknown; accept?: unknown } | undefined;
+    if (event?.protocolVersion !== 1 || typeof event.accept !== "function") return;
+    event.accept(transitionReadiness());
+  });
+
   const refreshStatus = () => {
     const processCount = manager.runningCount();
     const sessionCount = sessions.list().length;
@@ -206,6 +217,18 @@ export default function groundedProcess(pi: ExtensionAPI) {
     currentContext = ctx;
     await Promise.all([manager.cleanupOldLogs(), cleanupOldSessionLogs()]);
     refreshStatus();
+  });
+  pi.on("session_before_switch", (_event, ctx) => {
+    // A switch shuts down these resources, including during automatic rollover.
+    const { runningProcesses, openSessions } = transitionReadiness();
+    if (runningProcesses === 0 && openSessions === 0) return;
+    if (ctx.hasUI) {
+      ctx.ui.notify(
+        `Session switch deferred: ${runningProcesses} running process(es), ${openSessions} open shell session(s). Settle processes and close shell sessions before switching.`,
+        "warning",
+      );
+    }
+    return { cancel: true };
   });
   pi.on("session_tree", async () => {
     await sessions.shutdown();
