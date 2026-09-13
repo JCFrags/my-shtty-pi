@@ -1,16 +1,22 @@
 {
   "name": "pi-context-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Independent native context and telemetry components for the Chrono V4 foundation",
+  "description": "Independent native state, memory, context, and telemetry components",
   "license": "MIT",
   "workspaces": [
     "protocol",
+    "state-store",
+    "memory",
+    "todo",
+    "notes",
+    "workplan",
     "recall",
     "telemetry"
   ],
   "scripts": {
-    "test": "node --experimental-transform-types --test recall/test/recall.test.ts telemetry/test/telemetry.test.ts"
-  }
+    "test": "node --experimental-transform-types --test memory/test/memory.test.ts memory/test/reverse-export.test.ts recall/test/recall.test.ts telemetry/test/telemetry.test.ts"
+  },
+  "files": ["protocol", "state-store", "memory", "todo", "notes", "workplan", "recall", "telemetry", "README.md"]
 }

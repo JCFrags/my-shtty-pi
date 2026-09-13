@@ -6,9 +6,10 @@ import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
 import { logicalBootstrapBytes, persistNewShardBootstrap } from "./logical-session-persistence.js";
-import { captureLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
-import { previewStoredCompaction, composeStoredCompactionForNormalReturn } from "./composition-preview.js";
-import { composeBoundedMemory } from "./bounded-memory.js";
+import { captureLogicalStateCheckpointsAsync } from "./logical-session-checkpoints.js";
+import { previewStoredCompaction, composeStoredCompactionForNormalReturn, captureContextCompilation } from "./composition-preview.js";
+import { compileContext, contextReceiptLocator, CONTEXT_COMPILER_LIMITS } from "./context-compiler.js";
+import { composeBoundedMemory, prepareBoundedMemory } from "./bounded-memory.js";
 import { SessionCanary } from "./session-canary.js";
 import { sessionMigrationStatus } from "./session-migration.js";
 import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
@@ -40,7 +41,7 @@ import { appendMemoryEvent, listMemories, memorySidecarPath, readMemoryEvents, r
 import { decideRegularSummaryRebase } from "./summary-rebase.js";
 import { RAW_TAIL_PRESET_TOKENS, isSafeCompactionCut, selectDynamicRawTail, selectRawTail, selectRawTailWithinMaximum, } from "./tail-selection.js";
 import { decideCompactionTrigger } from "./trigger.js";
-import { applyConfigCommand, defaultUserConfigPath, loadUserConfig, saveUserConfig, } from "./user-config.js";
+import { applyConfigCommand, defaultUserConfigPath, loadUserConfig, saveUserConfig, validateMemoryOwner, validateContextCompiler, } from "./user-config.js";
 import { emptyRetrievalFeedback, recordRetrievalFeedback } from "./telemetry.js";
 import { estimateTokensFromText, hashText, safeErrorMessage, stableStringify, truncateToTokens } from "./utils.js";
 import { replayWorkerDiagnosticPath, runCompactionWorker } from "./compaction-worker-client.js";
@@ -53,7 +54,7 @@ import { resolveLogicalActivation, resolveAdoptedLogicalActivation } from "./log
 import { buildManualContinuationCandidate, buildBoundedContinuationCandidate, consumeProvisionalLogicalReplacement, markProvisionalLogicalReplacement, recordedLogicalBinding, recordedLogicalAdoptionBinding, logicalAdoptionBinding, replacementContainsOnlyContinuation, replacementContainsOnlyBootstrap, } from "./logical-session-integration.js";
 import { logicalSessionStatus } from "./logical-session-status.js";
 import { CHRONO_VERSION, captureRuntimeIdentity } from "./runtime-identity.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling } from "./context-budget.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling, captureContextBudget, chargeRawTail } from "./context-budget.js";
 const EXTENSION_VERSION = CHRONO_VERSION;
 const LOADED_RUNTIME_IDENTITY = captureRuntimeIdentity(import.meta.url);
 /** Default only. Each operation uses the configured, model-validated ceiling. */
@@ -118,6 +119,8 @@ export function resolveExtensionSettings(overrides = {}) {
     const triggerThresholdTokens = optionalNumberSetting("PI_CHRONO_TRIGGER_TOKENS", 8_000, 250_000, overrides.triggerThresholdTokens);
     const replayTargetTokens = optionalNumberSetting("PI_CHRONO_REPLAY_TARGET", 256, 25_000, overrides.replayTargetTokens);
     return {
+        memoryOwner: validateMemoryOwner(configuredValue("PI_CHRONO_MEMORY_OWNER", overrides.memoryOwner) ?? "chrono"),
+        contextCompiler: validateContextCompiler(configuredValue("PI_CHRONO_CONTEXT_COMPILER", overrides.contextCompiler) ?? "v3"),
         targetContextTokens: numberSetting("PI_CHRONO_TARGET_CONTEXT", 32_000, 8_000, 250_000, overrides.targetContextTokens),
         ...(replayTargetTokens === undefined ? {} : { replayTargetTokens }),
         ...(triggerThresholdTokens === undefined ? {} : { triggerThresholdTokens }),
@@ -216,10 +219,51 @@ export function effectiveContextCeiling(ctx, settings, responseReserveTokens = D
     const systemTokens = estimateTokensFromText(ctx.getSystemPrompt?.() ?? "");
     return resolveContextCeiling(settings.targetContextTokens, window ?? 0, systemTokens + settings.contextReserveTokens, responseReserveTokens);
 }
+/** Public-hook preparation shared with isolated SDK preview. All runtime inputs
+ * are checked after each await. The result performs no append or model call. */
+export async function capturePreparedV4Context(pi, ctx, event, options) {
+    const settings = options.settings(), settingsKey = stableStringify(settings), epoch = options.epoch();
+    const sessionId = ctx.sessionManager.getSessionId(), leafId = ctx.sessionManager.getLeafId() ?? null;
+    const sourcePath = ctx.sessionManager.getSessionFile();
+    if (!leafId || event.branchEntries.at(-1)?.id !== leafId)
+        throw new Error("context-v4-branch-leaf-mismatch");
+    const captureBudget = () => {
+        const model = ctx.model;
+        if (!model)
+            throw new Error("context-v4-model-unavailable");
+        return captureContextBudget({ model: { provider: model.provider, id: model.id, api: model.api,
+                contextWindow: model.contextWindow, maxTokens: model.maxTokens, thinkingLevel: ctx.thinkingLevel ?? "off" },
+            configuredTokens: settings.targetContextTokens, responseReserveTokens: event.preparation.settings.reserveTokens,
+            systemPrompt: ctx.getSystemPrompt(), activeTools: pi.getActiveTools(), allTools: pi.getAllTools(), framingTokens: settings.contextReserveTokens });
+    };
+    const budget = captureBudget(), budgetKey = stableStringify(budget);
+    const revalidate = () => {
+        if (event.signal?.aborted || options.epoch() !== epoch || ctx.sessionManager.getSessionId() !== sessionId
+            || ctx.sessionManager.getLeafId() !== leafId || ctx.sessionManager.getSessionFile() !== sourcePath
+            || stableStringify(options.settings()) !== settingsKey || stableStringify(captureBudget()) !== budgetKey)
+            throw new Error("context-v4-input-changed");
+    };
+    revalidate();
+    const maximum = Math.min(settings.dynamicRawTailMaxTokens, budget.effectiveCeilingTokens - 3000);
+    const adaptive = prepareAdaptiveChronoTail(event.branchEntries, event.preparation, Math.min(settings.dynamicRawTailMinTokens, maximum), maximum, false);
+    const sourceCutEntryId = event.branchEntries[adaptive.tail.cutIndex - 1]?.id;
+    if (!sourceCutEntryId || event.branchEntries[adaptive.tail.cutIndex]?.parentId !== sourceCutEntryId)
+        throw new Error("context-v4-history-cut-invalid");
+    const rawTail = { ...chargeRawTail(event.branchEntries.slice(adaptive.tail.cutIndex)), toolPairSafe: true };
+    const fallback = prepareBoundedMemory({ branchEntries: event.branchEntries, cutIndex: adaptive.tail.cutIndex,
+        firstKeptEntryId: adaptive.tail.firstKeptEntryId, rawTailTokens: rawTail.tokens, combinedCeilingTokens: budget.effectiveCeilingTokens,
+        previousSummary: event.preparation.previousSummary, reason: "indexed memory unavailable, uncommitted or not ready", wholeRecords: true });
+    const input = await captureContextCompilation(pi, { scope: { sessionId, leafId }, sourceCutEntryId,
+        firstKeptEntryId: adaptive.tail.firstKeptEntryId, memoryOwner: options.memoryOwner, budget, rawTail, fallback,
+        ...(options.reader ? { reader: options.reader } : {}) }, { getScope: () => ({ sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId() ?? null }),
+        epoch: options.epoch, signal: event.signal, revalidate, allowHistoricalFallback: isOptionalCompositionUnavailable });
+    revalidate();
+    return { input, tail: adaptive.tail, revalidate };
+}
 function safeCompositionFailureCode(error) {
     const value = error;
     const code = value?.code ?? value?.message;
-    if (typeof code === "string" && /^(?:catalog|capsule|search-v3|worker|bounded-memory)-[a-z0-9-]{1,80}$/.test(code))
+    if (typeof code === "string" && /^(?:catalog|capsule|search-v3|worker|bounded-memory|context-v4)-[a-z0-9-]{1,80}$/.test(code))
         return code;
     const preparationErrors = {
         "Pi compaction preparation omitted firstKeptEntryId or tokensBefore.": "pi-preparation-incomplete",
@@ -809,12 +853,14 @@ function registerHistoryTools(pi, settings, retrievalFeedback, availableLedger, 
             const path = ctx.sessionManager.getSessionFile();
             const response = await dispatchHistoryWorker(path, {
                 kind: "recall", query: params.query, options: { level: params.level, limit: params.limit, tokenBudget: params.tokenBudget },
-                ...(path && settings().editableMemoryEnabled ? { promotion: { toolCallId, leafId: ctx.sessionManager.getLeafId?.() } } : {}),
+                ...(path && settings().memoryOwner === "chrono" && settings().editableMemoryEnabled ? { promotion: { toolCallId, leafId: ctx.sessionManager.getLeafId?.() } } : {}),
             }, transport, _signal);
             // A refusal can include bounded receipts for earlier committed promotions.
             // Mirror those once without retrying the failed recall or sidecar append.
-            for (const event of response.promotionEvents ?? [])
-                pi.appendEntry("chrono-memory-v2-event", event);
+            if (settings().memoryOwner === "chrono") {
+                for (const event of response.promotionEvents ?? [])
+                    pi.appendEntry("chrono-memory-v2-event", event);
+            }
             if (response.status === "ok" && response.feedback)
                 updateRetrievalFeedback(retrievalFeedback, ctx, response.feedback);
             return historyWorkerToolResult(response);
@@ -1003,6 +1049,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     const loadedUserConfig = loadUserConfig(userConfigPath);
     let userConfig = loadedUserConfig.config;
     let userConfigWarning = loadedUserConfig.warning;
+    // Registration, promotion dispatch/mirroring and pinned reads share ONE owner.
+    // Settings changes cannot hand this ownership over until extension reload.
+    const memoryOwner = resolveExtensionSettings(userConfig).memoryOwner;
     const search = new HistorySearchAdapter({ schedulerDirectory: adapters.schedulerDirectory, slots: resolveExtensionSettings(userConfig).hostWorkerSlots });
     // Only an exact session/source sidecar can opt this session in persistently.
     // Ordinary extension loading reads it; history queries never read or write it.
@@ -1012,6 +1061,26 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let logicalSwitchActive = false;
     let automaticRolloverStatus = { state: "idle" };
     let lastCompositionFailure;
+    let committedReceipt;
+    let receiptLookupEntries = 0, receiptLookupComplete = false;
+    let compilerTerminal;
+    let pendingCompiler;
+    const restoreReceiptLocator = (ctx) => {
+        committedReceipt = undefined;
+        receiptLookupEntries = 0;
+        let id = ctx.sessionManager.getLeafId();
+        while (id && receiptLookupEntries < CONTEXT_COMPILER_LIMITS.locatorEntries) {
+            receiptLookupEntries++;
+            const entry = ctx.sessionManager.getEntry(id);
+            if (!entry)
+                break;
+            committedReceipt = contextReceiptLocator(entry, ctx.sessionManager.getSessionId());
+            if (committedReceipt)
+                break;
+            id = entry.parentId;
+        }
+        receiptLookupComplete = !!committedReceipt || !id;
+    };
     let automaticRolloverTimer;
     let automaticRolloverTicket;
     let automaticRolloverAttemptedLeaf;
@@ -1024,21 +1093,26 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let startupStatus = { state: adapters.schedulerDirectory && !readOnlyStartupVerifier ? "ready" : "pending" };
     let startupContext;
     let deferredCompactionSearch;
-    const usesStoredComposition = (ctx) => resolveExtensionSettings(userConfig).memoryEngineEnabled
+    const usesStoredComposition = (ctx) => resolveExtensionSettings(userConfig).contextCompiler === "v4" || resolveExtensionSettings(userConfig).memoryEngineEnabled
         || canary.requested(ctx.sessionManager.getSessionId()) || !!(adapters.schedulerDirectory && adapters.normalCompositionFixture);
     const searchSettings = () => {
         const settings = resolveExtensionSettings(userConfig);
         // An explicit environment/config disable takes precedence over rollout.
         const explicit = configuredValue("PI_CHRONO_SEARCH_INDEX", userConfig.searchIndexEnabled);
         const disabled = explicit !== undefined && !booleanSetting("PI_CHRONO_SEARCH_INDEX", false, userConfig.searchIndexEnabled);
-        return { ...settings, searchIndexEnabled: disabled ? false : (sessionSearchOverride ?? (settings.memoryEngineEnabled || settings.searchIndexEnabled)) };
+        return { ...settings, memoryOwner, editableMemoryEnabled: memoryOwner === "chrono" && settings.editableMemoryEnabled,
+            searchIndexEnabled: disabled ? false : (sessionSearchOverride ?? (settings.memoryEngineEnabled || settings.searchIndexEnabled)) };
     };
     const searchStatus = () => ({ ...search.status(),
         migration: sessionMigrationStatus({ enabled: searchSettings().memoryEngineEnabled,
             searchEnabled: searchSettings().searchIndexEnabled, startup: startupStatus.state,
             unsafe: !!rolloutError, progress: search.status() }),
-        composition: { mode: searchSettings().memoryEngineEnabled ? "v3" : "compatibility", lastRefusal: canary.refusal ?? null,
-            lastFailure: lastCompositionFailure ?? null },
+        composition: { mode: searchSettings().contextCompiler === "v4" ? "v4" : searchSettings().memoryEngineEnabled ? "v3" : "compatibility",
+            memoryOwner: { captured: memoryOwner, configured: resolveExtensionSettings(userConfig).memoryOwner,
+                reloadRequired: resolveExtensionSettings(userConfig).memoryOwner !== memoryOwner },
+            lastRefusal: canary.refusal ?? null, lastFailure: lastCompositionFailure ?? null,
+            committedReceipt: committedReceipt ?? null, terminal: compilerTerminal ?? null,
+            receiptLookup: { entries: receiptLookupEntries, complete: receiptLookupComplete } },
         automaticRollover: { ...automaticRolloverStatus, enabled: searchSettings().automaticRolloverEnabled,
             sourceByteThreshold: searchSettings().rolloverSourceBytes, bootstrapBytes: automaticRolloverBootstrapBytes,
             effectiveSourceByteThreshold: automaticRolloverBootstrapBytes + searchSettings().rolloverSourceBytes },
@@ -1212,7 +1286,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
     };
     registerHistoryTools(pi, searchSettings, retrievalFeedback, availableHistoryLedger, adapters.historyTransport ?? createHistoryRuntimeTransport({ slots: () => resolveExtensionSettings(userConfig).hostWorkerSlots, schedulerDirectory: adapters.schedulerDirectory }), feedbackAdmission.reserve, search);
-    registerMemoryTools(pi, () => resolveExtensionSettings(userConfig));
+    if (memoryOwner === "chrono")
+        registerMemoryTools(pi, searchSettings);
     registerRetentionHintTool(pi);
     const incrementalConfig = (settings) => resolveCompactorConfig({
         ...settings.config,
@@ -1587,6 +1662,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     };
     pi.on("session_start", async (event, ctx) => {
         const epoch = ++rolloutEpoch;
+        pendingCompiler = undefined;
+        compilerTerminal = undefined;
+        restoreReceiptLocator(ctx);
         const nextSearchSessionId = ctx.sessionManager.getSessionId();
         const sourcePath = ctx.sessionManager.getSessionFile();
         if (!canaryControlInitialized) {
@@ -1676,6 +1754,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         // A native tree move replaces the active branch, not the logical session.
         // Fence old requests before retargeting the existing derived-store scheduler.
         rolloutEpoch++;
+        pendingCompiler = undefined;
+        compilerTerminal = undefined;
+        restoreReceiptLocator(ctx);
         ownedCompaction = undefined;
         deferredCompactionSearch = undefined;
         triggerPending = false;
@@ -1902,19 +1983,39 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 scheduleAutomaticRollover(ctx);
         }
     });
-    pi.on("session_compact_failed", () => {
+    pi.on("session_compact_failed", (_event, ctx) => {
+        if (pendingCompiler && pendingCompiler.epoch === rolloutEpoch && pendingCompiler.sessionId === ctx.sessionManager.getSessionId()
+            && pendingCompiler.sourcePath === ctx.sessionManager.getSessionFile()) {
+            compilerTerminal = { state: "failed", receiptId: pendingCompiler.receiptId, code: lastCompositionFailure?.code ?? "pi-compaction-failed" };
+        }
+        pendingCompiler = undefined;
         valueWorkerCompactionGate = false;
         triggerPending = false;
         forcedContinuationPending = false;
         continueAfterSuccessfulCompaction = false;
     });
-    pi.on("session_compact", (event) => {
+    pi.on("session_compact", (event, ctx) => {
+        let correlated = true;
+        if (pendingCompiler) {
+            const locator = contextReceiptLocator(event.compactionEntry, ctx.sessionManager.getSessionId());
+            correlated = pendingCompiler.epoch === rolloutEpoch && pendingCompiler.sessionId === ctx.sessionManager.getSessionId()
+                && pendingCompiler.sourcePath === ctx.sessionManager.getSessionFile() && event.compactionEntry.parentId === pendingCompiler.leafId
+                && locator?.receiptId === pendingCompiler.receiptId && locator.summaryHash === pendingCompiler.summaryHash
+                && createHash("sha256").update(event.compactionEntry.summary).digest("hex") === pendingCompiler.summaryHash && event.fromExtension;
+            compilerTerminal = { state: correlated ? "committed" : "uncorrelated", receiptId: pendingCompiler.receiptId };
+            if (correlated) {
+                committedReceipt = locator;
+                receiptLookupEntries = 1;
+                receiptLookupComplete = true;
+            }
+            pendingCompiler = undefined;
+        }
         if (ownedCompaction)
-            ownedCompaction.succeeded = true;
+            ownedCompaction.succeeded = correlated;
         valueWorkerCompactionGate = false;
         cancelIncrementalWork(true);
         projectionSeenToolCallIds = new Set();
-        const shouldContinue = continueAfterSuccessfulCompaction && !event.willRetry;
+        const shouldContinue = correlated && continueAfterSuccessfulCompaction && !event.willRetry;
         triggerPending = false;
         forcedCompactionReason = undefined;
         forcedContinuationPending = false;
@@ -1947,7 +2048,15 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         valueWorkerCompactionGate = true;
         cancelValueWorker();
         cancelIncrementalWork(false);
-        const settings = resolveExtensionSettings(userConfig);
+        let settings;
+        try {
+            settings = searchSettings();
+        }
+        catch (error) {
+            recordFailure(error);
+            valueWorkerCompactionGate = false;
+            return { cancel: true };
+        }
         try {
             // Pi already owns this branch array. The default path must not copy or
             // parse lifetime entries before selecting its bounded suffix.
@@ -1963,14 +2072,38 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             if (typeof preparedFirstKeptEntryId !== "string" || typeof tokensBefore !== "number") {
                 throw new Error("Pi compaction preparation omitted firstKeptEntryId or tokensBefore.");
             }
-            const normalFixture = adapters.schedulerDirectory ? adapters.normalCompositionFixture : undefined;
             const canaryRequested = canary.requested(ctx.sessionManager.getSessionId());
+            if (canaryRequested && !canary.active(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile()))
+                return canary.refuse("session-ineligible");
+            if (settings.contextCompiler === "v4") {
+                failureStage = "v4-capture";
+                pendingCompiler = undefined;
+                const prepared = await capturePreparedV4Context(pi, ctx, { branchEntries, preparation: event.preparation, signal: event.signal }, {
+                    settings: searchSettings, memoryOwner, epoch: () => rolloutEpoch,
+                    ...(searchSettings().searchIndexEnabled && startupStatus.state === "ready" && !rolloutError ? { reader: {
+                            getEntry: (id) => ctx.sessionManager.getEntry(id),
+                            select: (id) => search.compositionSelection(id, event.signal),
+                            pin: async (id) => (await search.compositionTarget(id, event.signal)).view,
+                            recovery: encodeCompositionRecovery,
+                        } } : {}),
+                });
+                failureStage = "v4-compile";
+                prepared.revalidate();
+                const compiled = compileContext(prepared.input);
+                prepared.revalidate();
+                pendingCompiler = { epoch: rolloutEpoch, sessionId: prepared.input.scope.sessionId,
+                    sourcePath: ctx.sessionManager.getSessionFile(), leafId: prepared.input.scope.leafId,
+                    receiptId: compiled.receipt.receiptId, summaryHash: compiled.receipt.summaryHash };
+                compilerTerminal = { state: "returned", receiptId: compiled.receipt.receiptId };
+                lastCompositionFailure = undefined;
+                return { compaction: { summary: compiled.summary, firstKeptEntryId: compiled.firstKeptEntryId, tokensBefore,
+                        details: { kind: "chrono-v4-composed-context", contextReceipt: compiled.receipt, retainedTail: prepared.tail } } };
+            }
+            const normalFixture = adapters.schedulerDirectory ? adapters.normalCompositionFixture : undefined;
             // V3 adapts only Pi's bounded prepared tail. Never construct the
             // compatibility lifetime-body estimator on the snapshot path.
             const estimateTailTokens = settings.memoryEngineEnabled || canaryRequested || normalFixture
                 ? estimateEntryTokens : createTailTokenEstimator(branchEntries);
-            if (canaryRequested && !canary.active(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile()))
-                return canary.refuse("session-ineligible");
             if (settings.memoryEngineEnabled || canaryRequested || normalFixture) {
                 failureStage = "context-budget";
                 const combinedCeilingTokens = effectiveContextCeiling(ctx, settings, event.preparation.settings.reserveTokens);
@@ -2139,7 +2272,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             const sessionPath = ctx.sessionManager.getSessionFile();
             const useIsolatedWorker = settings.isolatedWorkerEnabled && !!sessionPath;
             const currentRetrievalFeedback = sessionPath ? retrievalFeedback.get(sessionPath) : undefined;
-            const memory = settings.editableMemoryEnabled && sessionPath
+            const memory = memoryOwner === "chrono" && settings.editableMemoryEnabled && sessionPath
                 ? await readMemoryEvents(memorySidecarPath(sessionPath))
                 : undefined;
             if (memory?.status === "corrupt-rebuild-required" && ctx.hasUI) {
@@ -2385,7 +2518,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                         },
                         historyEditor: result.details.historyEditor,
                         summaryRebase,
-                        editableMemory: { enabled: settings.editableMemoryEnabled, status: memory?.status ?? "unavailable", generationHash: memory?.generationHash, pinnedTokens: estimateTokensFromText(pinnedMemoryText) },
+                        editableMemory: { owner: memoryOwner, enabled: memoryOwner === "chrono" && settings.editableMemoryEnabled, status: memory?.status ?? "unavailable", generationHash: memory?.generationHash, pinnedTokens: estimateTokensFromText(pinnedMemoryText) },
                         incrementalPrecompute: officialIncremental,
                         isolatedWorker: workerExecution === undefined ? { enabled: settings.isolatedWorkerEnabled, used: false }
                             : { enabled: true, used: true, client: workerExecution.clientMetrics, runtime: workerExecution.response.metrics },
@@ -2425,8 +2558,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         catch (error) {
             if (event.signal?.aborted || compositionEpoch !== rolloutEpoch)
                 return { cancel: true };
-            if (settings.memoryEngineEnabled || canary.requested(ctx.sessionManager.getSessionId())) {
+            if (settings.contextCompiler === "v4" || settings.memoryEngineEnabled || canary.requested(ctx.sessionManager.getSessionId())) {
                 const failure = recordFailure(error);
+                if (settings.contextCompiler === "v4") {
+                    compilerTerminal = { state: "failed", code: failure.code };
+                    pendingCompiler = undefined;
+                }
                 if (ctx.hasUI)
                     ctx.ui.notify(`Guarded composition failed (${failure.stage}: ${failure.code}); current context is unchanged.`, "warning");
                 return canary.refuse("operation-failed");
@@ -2568,7 +2705,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 compactionActive: triggerPending || valueWorkerCompactionGate, sessionSwitchActive: logicalSwitchActive,
                 // Both reads above require the lifecycle to be caught up to this exact leaf. A partial JSONL tail cannot produce that pin.
                 catalogCaughtUp: true, incompleteSourceTail: false, sourceLeafEntryId: leafId, trigger: automatic ? "threshold" : "manual" };
-            const checkpoints = captureLogicalStateCheckpoints(pi, ctx);
+            const checkpoints = await captureLogicalStateCheckpointsAsync(pi, ctx, { includeMemory: memoryOwner === "context-kit" });
             const port = commandSessionPort(ctx, checkpoints);
             logicalSwitchActive = true;
             try {

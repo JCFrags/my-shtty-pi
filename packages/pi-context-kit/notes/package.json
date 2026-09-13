@@ -1,0 +1,38 @@
+{
+  "name": "@context-kit/notes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./store": "./store.ts",
+    "./legacy": "./legacy.ts",
+    "./operations": "./operations.ts"
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@context-kit/protocol": "*",
+    "@context-kit/state-store": "*",
+    "@grounded/pi-core": "*"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

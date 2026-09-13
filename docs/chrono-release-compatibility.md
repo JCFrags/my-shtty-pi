@@ -1,8 +1,31 @@
 # ChronoCompact release compatibility
 
-## Current 3.0.4 release
+## Current 4.0.0 release
 
-Version `3.0.4` keeps programmatic memory and safe-idle physical rollover enabled by
+Version `4.0.0` adds the opt-in V4 compiler and independent Context Kit ownership.
+Set `contextCompiler: "v4"` to select the existing public compaction hook's new
+path. It freezes bounded native pages and historical cuts, fits whole records,
+and persists an exact recovery receipt. Complete request costs are estimates,
+not exact tokenizer counts. A required summary model is not part of this path.
+The default compiler remains `v3`.
+
+Independent Memory requires `memoryOwner: "context-kit"` before factory loading.
+This startup choice suppresses legacy registration, automatic promotion writes,
+and pinned reads together. It does not import data. Todo, Notes, and Workplan
+also require one selected writer each. Complete asynchronous rollover uses their
+native checkpoints and Memory's verified same-store binding. It refuses missing
+or oversized state rather than substituting Recall cards. See the
+[V4 scope](chrono-v4/completion-scope.md) and
+[Context Kit](../packages/pi-context-kit/README.md) for migration, rollback, and
+provider-specific limits.
+
+Prepare the repository-root lock before the package-local Chrono lock. Chrono
+now depends on the sibling `pi-context-kit/protocol` library through a local file
+dependency. Its tracked JavaScript and declarations must match the clean protocol
+build. A Chrono-only tarball without that sibling is not a standalone install.
+The supported retained installation contains the accepted repository checkout.
+
+Version `4.0.0` keeps programmatic memory and safe-idle physical rollover enabled by
 default. The [current overview](chrono-v3/README.md) describes useful selective
 chronology, bounded recall, native tool-state transfer, and measured limits.
 The 3.0.1 corrections remain in place. A Chrono-owned compaction refusal resumes
@@ -48,7 +71,7 @@ deadlines include admission wait. A stopped live owner retains its reservation.
 This correction does not recover admission, remove leases, resume owners, change
 worker limits, or modify source history or stores.
 
-The current source has 137 compiled runtime JavaScript files and 138 startup
+The current source has 138 compiled runtime JavaScript files and 139 startup
 pins, including `package.json`. Read the exact package tree and file hashes from
 `scripts/verify-chrono-v3-baseline.mjs`, not the historical tables below.
 

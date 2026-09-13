@@ -85,6 +85,10 @@
         "slug": "pi-context-kit",
         "status": "active",
         "entrypoints": [
+          "memory/src/index.ts",
+          "todo/index.ts",
+          "notes/index.ts",
+          "workplan/index.ts",
           "recall/src/index.ts",
           "telemetry/index.ts"
         ]
@@ -178,7 +182,12 @@
     "packages/grounded-tools/workplan",
     "packages/pi-context-kit/protocol",
     "packages/pi-context-kit/recall",
-    "packages/pi-context-kit/telemetry"
+    "packages/pi-context-kit/telemetry",
+    "packages/pi-context-kit/state-store",
+    "packages/pi-context-kit/memory",
+    "packages/pi-context-kit/todo",
+    "packages/pi-context-kit/notes",
+    "packages/pi-context-kit/workplan"
   ],
   "devDependencies": {
     "@earendil-works/pi-ai": "0.85.1",

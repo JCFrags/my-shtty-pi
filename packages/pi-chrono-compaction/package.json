@@ -1,6 +1,6 @@
 {
   "name": "pi-chrono-compact",
-  "version": "3.0.4",
+  "version": "4.0.0",
   "description": "Progressive chronological event compaction for long-running Pi sessions.",
   "type": "module",
   "license": "MIT",
@@ -56,6 +56,7 @@
     "test:fixed-heap": "rm -rf dist-test && tsc -p tsconfig.test-build.json && node scripts/fixed-heap-suite.mjs"
   },
   "dependencies": {
+    "@context-kit/protocol": "file:../pi-context-kit/protocol",
     "better-sqlite3": "12.9.0"
   }
 }

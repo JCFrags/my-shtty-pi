@@ -1,0 +1,15 @@
+{
+  "name": "@context-kit/state-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Independent immutable state objects and verified branch anchors for Pi providers",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts"
+  },
+  "engines": {
+    "node": ">=24.18.0 <25"
+  }
+}
