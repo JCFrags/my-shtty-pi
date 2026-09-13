@@ -765,6 +765,29 @@ export class HistorySearchAdapter {
     };
     return { scope, execute };
   }
+  /** Raw entries need the lifecycle-pinned catalog view, not a derived search
+   * head. The requested entry's own pin never authorizes branch membership. */
+  private rawCatalogScope(signal?: AbortSignal): { scope: CatalogHistoryScope; execute: CatalogHistoryExecutor } {
+    const target = this.target, source = this.sourceTarget, key = this.key;
+    if (!this.enabled || !source || !target || this.progress.catalog !== "ready") return fail("search-v3-index-not-ready");
+    if (this.expectedLogicalCut && (target.view.storeKey !== this.expectedLogicalCut.catalogStoreKey
+      || target.view.generation !== this.expectedLogicalCut.catalogGeneration
+      || target.view.sessionKey !== this.expectedLogicalCut.sessionKey || target.view.branchKey !== this.expectedLogicalCut.branchKey
+      || target.view.eventCut !== this.expectedLogicalCut.eventCut)) return fail("logical-session-route-scope-mismatch");
+    const scope: CatalogHistoryScope = { catalogDirectory: target.catalogDirectory, sessionKey: target.view.sessionKey,
+      shardKey: source.shardKey, view: { ...target.view, segments: target.view.segments.map(segment => ({ ...segment })) } };
+    const valid = (): void => {
+      if (signal?.aborted || !this.enabled || this.key !== key || this.target !== target) fail("search-v3-worker-aborted");
+    };
+    const execute: CatalogHistoryExecutor = async request => {
+      valid();
+      const response = await runCatalogWorker(request, { ...this.options, signal });
+      valid();
+      if (!response.ok) return fail(response.code);
+      return response.result;
+    };
+    return { scope, execute };
+  }
   async getBlock(entryId: string, blockIndex: number, startChar?: number, maxChars?: number, signal?: AbortSignal, shardId?: string): Promise<SearchToolResult> {
     try {
       if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
@@ -784,7 +807,7 @@ export class HistorySearchAdapter {
       if (shardId && !this.logicalGrant) return result({ status: "unavailable", code: "logical-session-route-unavailable" });
       if (shardId && this.logicalGrant && shardId !== this.logicalGrant.activeShardId) return (this.logicalAdapters.get(shardId) ?? fail("logical-session-route-unavailable")).getRaw(entryId, options, signal);
       if (options.contextBefore || options.contextAfter) return fail("search-v3-option-unsupported");
-      const { scope, execute } = this.catalogScope(signal);
+      const { scope, execute } = this.rawCatalogScope(signal);
       const event = await resolveCatalogHistory(scope, entryId, execute);
       const maximum = Math.min(12000, options.maxChars ?? 8192);
       if (!Number.isSafeInteger(maximum) || maximum < 1) return fail("catalog-history-range-invalid");

@@ -3,11 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readSessionRollout, writeSessionRollout } from "../src/session-rollout.js";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { HistorySearchAdapter } from "../src/history-search-adapter.js";
+import type { LogicalActivationGrant } from "../src/logical-session-routing.js";
 import { CAPSULE_REDUCER_PIPELINE_VERSION, type CapsuleCatalogView, type DerivedStoreIdentity } from "../src/capsule-contract.js";
 import { runCatalogWorker } from "../src/catalog-worker-client.js";
 import { runCapsuleWorker } from "../src/capsule-worker-client.js";
@@ -73,6 +74,101 @@ test("unlisted logical shards return a structured refusal without starting work"
     ]) assert.deepEqual(response.details, { status: "unavailable", code: "logical-session-route-unavailable" });
     assert.deepEqual(adapter.scheduler.status(), before);
   } finally { adapter.dispose(); }
+});
+
+test("exact raw logical predecessor recovery uses its catalog when the final search branch is absent", { timeout: 60_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-exact-logical-"));
+  const sourcePath = join(directory, "closed.jsonl"), activePath = join(directory, "active.jsonl"), schedulerDirectory = join(directory, "scheduler");
+  mkdirSync(schedulerDirectory, { mode: 0o700 });
+  const common = line("common", null, "Shared exact source."), sibling = line("sibling", "common", "Unselected sibling source.");
+  const final = line("final", "common", "Exact predecessor source: β, quoted \"evidence\".");
+  writeFileSync(sourcePath, common + sibling, { mode: 0o600 });
+  writeFileSync(activePath, line("active", null, "Replacement source."), { mode: 0o600 });
+  const sessionKey = hash("exact-logical-session"), shardKey = hash(`pi-jsonl-v1\0${sourcePath}`);
+  const catalogDirectory = join(directory, ".chrono-catalog", sessionKey), options = { schedulerDirectory, slots: 1 };
+  const seed = new HistorySearchAdapter(options), adapter = new HistorySearchAdapter(options);
+  let child: HistorySearchAdapter | undefined;
+  const deadline = Date.now() + 50_000;
+  const waitFor = async (check: () => boolean, status: () => unknown): Promise<void> => {
+    while (!check()) {
+      assert.ok(Date.now() < deadline, JSON.stringify(status()));
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  };
+  try {
+    seed.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "sibling" });
+    await waitFor(() => seed.status().index === "ready", () => seed.status());
+    const oldTarget = await seed.compositionTarget("sibling");
+    seed.dispose(); await seed.scheduler.drain();
+    appendFileSync(sourcePath, final);
+    const ingested = await runCatalogWorker({ v: 1, op: "ingestStep", sourcePath, catalogDirectory, sessionKey, shardKey,
+      branchKey: "pi-session", shardOrdinal: 0 }, options);
+    assert.ok(ingested.ok && ingested.result.caughtUp === true, JSON.stringify(ingested));
+    const pinned = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory, sessionKey, branchKey: "pi-session",
+      leaf: { shardKey, eventId: "final" } }, options);
+    if (!pinned.ok) assert.fail(JSON.stringify(pinned));
+    const view = pinned.result.view as CapsuleCatalogView;
+    assert.deepEqual(view.segments.map(segment => segment.cut), [1, 3]);
+    const before = await runSearchV3Worker({ ...oldTarget, view, op: "status" }, options);
+    if (!before.ok) assert.fail(JSON.stringify(before));
+    assert.equal(before.result.indexedView, null);
+
+    const logicalSessionId = randomUUID(), closedShardId = randomUUID(), activeShardId = randomUUID();
+    const grant: LogicalActivationGrant = { logicalSessionId, manifestRevision: 4, manifestHash: hash("exact-logical-manifest"),
+      branchId: "main", activeShardId, composerCanaryInherited: false, searchRoutes: [
+        { logicalSessionId, manifestRevision: 4, branchId: "main", shardId: closedShardId, piSessionId: randomUUID(), sourcePath, ordinal: 0,
+          catalog: { catalogStoreKey: view.storeKey, catalogGeneration: view.generation, sessionKey, branchKey: view.branchKey,
+            eventCut: view.eventCut, entryId: "final" } },
+        { logicalSessionId, manifestRevision: 4, branchId: "main", shardId: activeShardId, piSessionId: randomUUID(), sourcePath: activePath,
+          ordinal: 1, catalog: undefined },
+      ] };
+    const activeKey = hash("exact-logical-active-session");
+    adapter.schedule({ sourcePath: activePath, catalogDirectory: join(directory, ".chrono-catalog", activeKey),
+      sessionKey: activeKey, shardKey: hash(`pi-jsonl-v1\0${activePath}`), leafId: "active" });
+    assert.deepEqual((await adapter.getRaw("active", {})).details, { status: "unavailable", code: "search-v3-index-not-ready" },
+      "an unvalidated active catalog must still refuse");
+    adapter.scheduleLogical(grant);
+    // Observe the real child scheduler only to await its terminal missing-index
+    // result and drain it during cleanup. Do not manufacture adapter readiness.
+    child = (adapter as unknown as { logicalAdapters: Map<string, HistorySearchAdapter> }).logicalAdapters.get(closedShardId)!;
+    assert.ok(child);
+    await waitFor(() => child!.scheduler.status().state === "error", () => child!.status());
+    assert.equal(child.status().catalog, "ready");
+    assert.equal(child.status().indexedCut, null);
+    assert.equal(child.status().servingLastReady, false);
+
+    const recovered = await adapter.getRaw("final", { maxChars: 1500 }, undefined, closedShardId);
+    assert.equal(recovered.details.status, "ok", JSON.stringify(recovered.details));
+    assert.equal(recovered.details.complete, true);
+    assert.deepEqual(Buffer.from(String(recovered.details.text)), Buffer.from(final));
+    assert.deepEqual((await adapter.getRaw("sibling", {}, undefined, closedShardId)).details,
+      { status: "unavailable", code: "catalog-history-scope-mismatch" });
+    assert.deepEqual((await adapter.getRaw("final", {}, undefined, "unlisted")).details,
+      { status: "unavailable", code: "logical-session-route-unavailable" });
+    for (const indexed of [
+      await child.search({ query: "predecessor", mode: "exact" }),
+      await adapter.getBlock("final", 0, undefined, undefined, undefined, closedShardId),
+      await adapter.range("common", "final", 16, undefined, undefined, closedShardId),
+    ]) assert.deepEqual(indexed.details, { status: "unavailable", code: "search-v3-index-not-ready" });
+    const after = await runSearchV3Worker({ ...oldTarget, view, op: "status" }, options);
+    if (!after.ok) assert.fail(JSON.stringify(after));
+    assert.equal(after.result.indexedView, null, "raw recovery must not create the missing search branch");
+    assert.equal(after.result.indexGeneration, before.result.indexGeneration);
+    assert.equal(readFileSync(sourcePath, "utf8"), common + sibling + final);
+
+    writeFileSync(sourcePath, common + sibling + final.replace("predecessor", "replacement"));
+    assert.deepEqual((await adapter.getRaw("final", {}, undefined, closedShardId)).details,
+      { status: "unavailable", code: "catalog-source-changed" });
+    const staleRead = adapter.getRaw("final", {}, undefined, closedShardId);
+    child.cancel();
+    assert.deepEqual((await staleRead).details, { status: "unavailable", code: "search-v3-worker-aborted" });
+    assert.deepEqual((await adapter.getRaw("final", {}, undefined, closedShardId)).details,
+      { status: "unavailable", code: "search-v3-index-not-ready" }, "a discarded catalog target must not remain readable");
+  } finally {
+    seed.dispose(); adapter.dispose();
+    await Promise.all([seed.scheduler.drain(), adapter.scheduler.drain(), child?.scheduler.drain()]);
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("real lifecycle search, decoded block and exact raw range survive append with branch isolation", async () => {
