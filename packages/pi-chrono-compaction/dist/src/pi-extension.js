@@ -215,6 +215,20 @@ export function effectiveContextCeiling(ctx, settings, responseReserveTokens = D
     const systemTokens = estimateTokensFromText(ctx.getSystemPrompt?.() ?? "");
     return resolveContextCeiling(settings.targetContextTokens, window ?? 0, systemTokens + settings.contextReserveTokens, responseReserveTokens);
 }
+function safeCompositionFailureCode(error) {
+    const value = error;
+    const code = value?.code ?? value?.message;
+    if (typeof code === "string" && /^(?:catalog|capsule|search-v3|worker|bounded-memory)-[a-z0-9-]{1,80}$/.test(code))
+        return code;
+    const preparationErrors = {
+        "Pi compaction preparation omitted firstKeptEntryId or tokensBefore.": "pi-preparation-incomplete",
+        "Pi prepared boundary is unavailable.": "pi-boundary-unavailable",
+        "No complete tool-safe raw tail fits the dynamic maximum.": "raw-tail-unavailable",
+        "Selected model context capacity or reserved token budget is unavailable.": "context-budget-unavailable",
+    };
+    return typeof value?.message === "string" && Object.hasOwn(preparationErrors, value.message)
+        ? preparationErrors[value.message] : "composition-operation-failed";
+}
 function isOptionalCompositionUnavailable(error) {
     // A first catalog pin can precede creation of the optional state file, which
     // reports state-storage-io. Fallback reads no bytes from that unavailable store.
@@ -996,6 +1010,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let logicalGrant;
     let logicalSwitchActive = false;
     let automaticRolloverStatus = { state: "idle" };
+    let lastCompositionFailure;
     let automaticRolloverTimer;
     let automaticRolloverTicket;
     let automaticRolloverAttemptedLeaf;
@@ -1020,7 +1035,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         migration: sessionMigrationStatus({ enabled: searchSettings().memoryEngineEnabled,
             searchEnabled: searchSettings().searchIndexEnabled, startup: startupStatus.state,
             unsafe: !!rolloutError, progress: search.status() }),
-        composition: { mode: searchSettings().memoryEngineEnabled ? "v3" : "compatibility", lastRefusal: canary.refusal ?? null },
+        composition: { mode: searchSettings().memoryEngineEnabled ? "v3" : "compatibility", lastRefusal: canary.refusal ?? null,
+            lastFailure: lastCompositionFailure ?? null },
         automaticRollover: { ...automaticRolloverStatus, enabled: searchSettings().automaticRolloverEnabled,
             sourceByteThreshold: searchSettings().rolloverSourceBytes, bootstrapBytes: automaticRolloverBootstrapBytes,
             effectiveSourceByteThreshold: automaticRolloverBootstrapBytes + searchSettings().rolloverSourceBytes },
@@ -1138,6 +1154,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let forcedCompactionReason;
     let forcedContinuationPending = false;
     let continueAfterSuccessfulCompaction = false;
+    let ownedCompaction;
+    // A failed handoff may run once, but cannot start another compaction before new user input.
+    let compactionRetryPaused = false;
     let warningLevel = 0;
     let incrementalStore;
     let historyLedger;
@@ -1384,10 +1403,14 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }, 0);
     };
     const launchCompaction = (ctx, reason, currentTokens, resumeAfter = false) => {
-        if (triggerPending)
+        if (triggerPending || compactionRetryPaused)
             return;
         triggerPending = true;
         forcedContinuationPending = resumeAfter;
+        const attempt = { epoch: rolloutEpoch,
+            sessionId: ctx.sessionManager.getSessionId(), sourcePath: ctx.sessionManager.getSessionFile(),
+            leafId: ctx.sessionManager.getLeafId?.(), resumeAfter };
+        ownedCompaction = attempt;
         if (currentTokens !== undefined)
             lastTriggerAttemptTokens = currentTokens;
         if (ctx.hasUI)
@@ -1407,16 +1430,40 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         ctx.compact({
             customInstructions: `ChronoCompact trigger: ${reason}. Preserve direct user restrictions, decisive failures, and unresolved work.`,
             onComplete: () => {
+                if (ownedCompaction !== attempt)
+                    return;
+                ownedCompaction = undefined;
                 triggerPending = false;
                 resumeSearch();
+                refreshAutomaticRolloverStatus(ctx);
             },
             onError: (error) => {
+                if (ownedCompaction !== attempt)
+                    return;
+                ownedCompaction = undefined;
                 triggerPending = false;
+                forcedCompactionReason = undefined;
                 forcedContinuationPending = false;
                 continueAfterSuccessfulCompaction = false;
                 resumeSearch();
-                if (ctx.hasUI)
-                    ctx.ui.notify(`ChronoCompact request failed: ${error.message}`, "warning");
+                const unchanged = attempt.epoch === rolloutEpoch && attempt.sessionId === ctx.sessionManager.getSessionId()
+                    && attempt.sourcePath === ctx.sessionManager.getSessionFile() && attempt.leafId === ctx.sessionManager.getLeafId?.();
+                // Pi labels extension refusals as aborted too. Only the actual hook signal
+                // distinguishes a user abort from our non-user cancel:true result.
+                const cancelled = attempt.signal?.aborted === true || (!attempt.failure
+                    && (error.name === "AbortError" || error.message === "Compaction cancelled"));
+                if (unchanged && !cancelled && !attempt.succeeded) {
+                    const failure = attempt.failure ?? { stage: "compaction", code: safeCompositionFailureCode(error) };
+                    if (ctx.hasUI)
+                        ctx.ui.notify(`ChronoCompact request failed (${failure.stage}: ${failure.code}); current context is unchanged.`, "warning");
+                    if (attempt.resumeAfter && attempt.signal && attempt.failure && ctx.isIdle?.() && !ctx.hasPendingMessages?.()) {
+                        compactionRetryPaused = true;
+                        pi.sendMessage({ customType: CONTEXT_RESUME_CUSTOM_TYPE, display: false,
+                            content: `Compaction failed (${failure.stage}: ${failure.code}). Current context is unchanged. Continue the unresolved task from the existing context. Do not retry compaction in this continuation. If context capacity prevents safe progress, report the blocker and wait for user input.`,
+                        }, { triggerTurn: true });
+                    }
+                }
+                refreshAutomaticRolloverStatus(ctx);
             },
         });
     };
@@ -1426,6 +1473,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         description: "Request ChronoCompact at a natural work boundary. Use when context warnings appear or when the current atomic operation is complete; record any important retention hint first.",
         parameters: Type.Object({}),
         async execute() {
+            if (compactionRetryPaused)
+                return toolText("Compaction failed earlier. Automatic retries are paused until new user input; current context is unchanged.", { scheduled: false });
             forcedCompactionReason = "the model requested compaction at a natural boundary";
             return toolText("Compaction is scheduled for the end of this turn. Do not begin another operation.", { scheduled: true });
         },
@@ -1613,7 +1662,38 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
         scheduleIncrementalWork(ctx);
     });
+    pi.on("session_tree", (_event, ctx) => {
+        // A native tree move replaces the active branch, not the logical session.
+        // Fence old requests before retargeting the existing derived-store scheduler.
+        rolloutEpoch++;
+        ownedCompaction = undefined;
+        deferredCompactionSearch = undefined;
+        triggerPending = false;
+        forcedCompactionReason = undefined;
+        forcedContinuationPending = false;
+        continueAfterSuccessfulCompaction = false;
+        compactionRetryPaused = false;
+        valueWorkerCompactionGate = false;
+        if (automaticRolloverTimer)
+            clearTimeout(automaticRolloverTimer);
+        automaticRolloverTimer = undefined;
+        automaticRolloverTicket = undefined;
+        automaticRolloverStatus = { state: "idle" };
+        search.cancel();
+        capsuleShadow.cancel();
+        catalogShadow.cancel();
+        cancelIncrementalWork(true);
+        cancelShadowWork();
+        cancelValueWorker();
+        historyLedger = undefined;
+        projectionSeenToolCallIds = new Set();
+        scheduleSearch(ctx);
+        scheduleCapsuleShadow(ctx);
+        scheduleCatalogShadow(ctx);
+        scheduleIncrementalWork(ctx);
+    });
     pi.on("session_before_switch", () => {
+        ownedCompaction = undefined;
         canary.stop();
         startupContext = undefined;
         logicalGrant = undefined;
@@ -1628,6 +1708,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_before_fork", () => {
+        ownedCompaction = undefined;
         canary.stop();
         startupContext = undefined;
         logicalGrant = undefined;
@@ -1642,6 +1723,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_shutdown", () => {
+        ownedCompaction = undefined;
         if (automaticRolloverTimer)
             clearTimeout(automaticRolloverTimer);
         automaticRolloverTimer = undefined;
@@ -1660,7 +1742,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         historyLedger = undefined;
         projectionSeenToolCallIds = new Set();
     });
+    // sendMessage(triggerTurn:true) does not emit before_agent_start in Pi 0.85.1.
+    // New user input, unlike the owned failure continuation, permits another attempt.
+    pi.on("before_agent_start", () => { compactionRetryPaused = false; });
     pi.on("turn_end", (event, ctx) => {
+        if (compactionRetryPaused)
+            return;
         const usage = ctx.getContextUsage();
         const reportedTokens = event.message.role === "assistant" ? (event.message.usage?.totalTokens ?? 0) : 0;
         const currentTokens = Math.max(usage?.tokens ?? 0, reportedTokens);
@@ -1696,6 +1783,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             blockers.push("editor-draft");
         if (triggerPending || valueWorkerCompactionGate || logicalSwitchActive || forcedCompactionReason)
             blockers.push("compaction-or-switch-active");
+        if (compactionRetryPaused)
+            blockers.push("compaction-retry-paused");
         let processGuardPresent = false;
         pi.events.emit("grounded:session-transition-readiness:v1", { protocolVersion: 1, accept: (reply) => {
                 const value = reply;
@@ -1710,6 +1799,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             blockers.push("process-safety-guard-unavailable");
         }
         return blockers;
+    };
+    const refreshAutomaticRolloverStatus = (ctx) => {
+        if (automaticRolloverStatus.state !== "deferred")
+            return;
+        const blockers = automaticRolloverBlockers(ctx);
+        automaticRolloverStatus = blockers.length ? { state: "deferred", blockers } : { state: "idle" };
     };
     const scheduleAutomaticRollover = (ctx) => {
         const settings = resolveExtensionSettings(userConfig);
@@ -1766,6 +1861,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             scheduleSearch(ctx);
         scheduleIncrementalWork(ctx);
         try {
+            if (compactionRetryPaused)
+                return;
             const usage = ctx.getContextUsage();
             if (forcedCompactionReason) {
                 const reason = forcedCompactionReason;
@@ -1802,6 +1899,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         continueAfterSuccessfulCompaction = false;
     });
     pi.on("session_compact", (event) => {
+        if (ownedCompaction)
+            ownedCompaction.succeeded = true;
         valueWorkerCompactionGate = false;
         cancelIncrementalWork(true);
         projectionSeenToolCallIds = new Set();
@@ -1820,6 +1919,21 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
     });
     pi.on("session_before_compact", async (event, ctx) => {
+        if (compactionRetryPaused && event.reason !== "manual")
+            return { cancel: true };
+        compactionRetryPaused = false; // An explicit /compact may retry after a failed handoff.
+        const compositionEpoch = rolloutEpoch;
+        const attempt = event.reason === "manual" ? ownedCompaction : undefined;
+        if (attempt)
+            attempt.signal = event.signal;
+        let failureStage = "preparation";
+        const recordFailure = (error) => {
+            const failure = { stage: failureStage, code: safeCompositionFailureCode(error) };
+            lastCompositionFailure = failure;
+            if (attempt)
+                attempt.failure = failure;
+            return failure;
+        };
         valueWorkerCompactionGate = true;
         cancelValueWorker();
         cancelIncrementalWork(false);
@@ -1832,6 +1946,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 return { cancel: true };
             continueAfterSuccessfulCompaction =
                 !event.willRetry && (forcedContinuationPending || hasUnresolvedTurn(branchEntries.slice(-256)));
+            if (attempt)
+                attempt.resumeAfter ||= continueAfterSuccessfulCompaction;
             const preparedFirstKeptEntryId = event.preparation?.firstKeptEntryId;
             const tokensBefore = event.preparation?.tokensBefore;
             if (typeof preparedFirstKeptEntryId !== "string" || typeof tokensBefore !== "number") {
@@ -1846,7 +1962,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             if (canaryRequested && !canary.active(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile()))
                 return canary.refuse("session-ineligible");
             if (settings.memoryEngineEnabled || canaryRequested || normalFixture) {
+                failureStage = "context-budget";
                 const combinedCeilingTokens = effectiveContextCeiling(ctx, settings, event.preparation.settings.reserveTokens);
+                failureStage = "raw-tail-selection";
                 const maximumTailTokens = Math.min(settings.dynamicRawTailMaxTokens, combinedCeilingTokens - 3_000);
                 const adaptive = prepareAdaptiveChronoTail(branchEntries, event.preparation, Math.min(settings.dynamicRawTailMinTokens, maximumTailTokens), maximumTailTokens, settings.hybridSummaryEnabled);
                 const selectedEntry = branchEntries[adaptive.tail.cutIndex];
@@ -1854,6 +1972,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 const availableSummaryTokens = combinedCeilingTokens - adaptive.tail.actualTokens;
                 if (typeof sourceCutEntryId !== "string" || selectedEntry?.parentId !== sourceCutEntryId
                     || availableSummaryTokens < 512) {
+                    recordFailure({ code: "search-v3-composition-boundary-invalid" });
                     if (ctx.hasUI)
                         ctx.ui.notify("Stored composition refused the adaptive boundary; compaction was cancelled.", "warning");
                     return { cancel: true };
@@ -1865,6 +1984,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 const fallback = (reason) => {
                     if (identityChanged() || event.signal?.aborted)
                         return { cancel: true };
+                    failureStage = "bounded-fallback";
                     const result = composeBoundedMemory({ branchEntries, cutIndex: adaptive.tail.cutIndex,
                         firstKeptEntryId: adaptive.tail.firstKeptEntryId, rawTailTokens: adaptive.tail.actualTokens,
                         combinedCeilingTokens, previousSummary: event.preparation.previousSummary, reason });
@@ -1879,6 +1999,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 let pinnedSelection;
                 if (!normalFixture) {
                     try {
+                        failureStage = "selection";
                         pinnedSelection = await search.compositionSelection(sourceCutEntryId, event.signal);
                         if (identityChanged() || event.signal?.aborted)
                             return { cancel: true };
@@ -1910,6 +2031,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     return { cancel: true };
                 }
                 try {
+                    failureStage = "composition";
                     const composed = await (normalFixture?.compose ?? composeStoredCompactionForNormalReturn)({
                         regularPiSummary: regularPiSummary?.text ?? "", sourceCutEntryId,
                         firstKeptEntryId: adaptive.tail.firstKeptEntryId, rawTailTokens: adaptive.tail.actualTokens, toolPairSafe: true,
@@ -1932,8 +2054,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     }
                     if (isOptionalCompositionUnavailable(error))
                         return fallback("optional composition detail is unavailable");
+                    const failure = recordFailure(error);
                     if (ctx.hasUI) {
-                        ctx.ui.notify(`Stored composition refused; current context is unchanged: ${safeErrorMessage(error)}`, "warning");
+                        ctx.ui.notify(`Stored composition refused (${failure.stage}: ${failure.code}); current context is unchanged.`, "warning");
                     }
                     return canary.refuse("composition-refused");
                 }
@@ -2290,9 +2413,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             });
         }
         catch (error) {
+            if (event.signal?.aborted || compositionEpoch !== rolloutEpoch)
+                return { cancel: true };
             if (settings.memoryEngineEnabled || canary.requested(ctx.sessionManager.getSessionId())) {
+                const failure = recordFailure(error);
                 if (ctx.hasUI)
-                    ctx.ui.notify("Guarded composition failed; current context is unchanged.", "warning");
+                    ctx.ui.notify(`Guarded composition failed (${failure.stage}: ${failure.code}); current context is unchanged.`, "warning");
                 return canary.refuse("operation-failed");
             }
             const noSavings = error instanceof CompactionValidationError && error.report.issues.some((issue) => issue.code === "no-net-savings");

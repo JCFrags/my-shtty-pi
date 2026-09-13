@@ -1,10 +1,17 @@
 # ChronoCompact release compatibility
 
-## Current 3.0.0 release
+## Current 3.0.1 release
 
-Version `3.0.0` enables programmatic memory and safe-idle physical rollover by
+Version `3.0.1` keeps programmatic memory and safe-idle physical rollover enabled by
 default. The [current overview](chrono-v3/README.md) describes useful selective
 chronology, bounded recall, native tool-state transfer, and measured limits.
+A Chrono-owned compaction refusal now resumes unresolved work once with a truthful
+failure notice and pauses automatic retries until new user input. User cancellation
+does not resume work. Tree navigation invalidates the old search target. Indexing
+can reuse a verified common prefix without rewinding its existing checkpoint.
+Missing composition inputs and typed worker timeouts use bounded fallback. Source
+identity and corruption failures still refuse stored composition.
+
 The current source has 137 compiled runtime JavaScript files and 138 startup
 pins, including `package.json`. Read the exact package tree and file hashes from
 `scripts/verify-chrono-v3-baseline.mjs`, not the historical tables below.
