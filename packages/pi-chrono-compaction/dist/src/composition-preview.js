@@ -1,6 +1,7 @@
 import { composeStoredSelection, persistPrivateCompositionArtifact } from "./context-composer.js";
 import { isSafeCompactionCut } from "./tail-selection.js";
 import { byteCount, estimateTokensFromText, getRecord, getString, stableStringify } from "./utils.js";
+import { validateContextCeiling } from "./context-budget.js";
 export const COMPOSITION_PREVIEW_LIMITS = { tailEntries: 256, tailBytes: 512 * 1024, comparisonBytes: 512 * 1024 };
 /** Global activation is not supported. The extension uses an exact fresh-session canary control. */
 export const M09_AUTHORITATIVE_REPLACEMENT_ENABLED = false;
@@ -9,18 +10,16 @@ export const M09_AUTHORITATIVE_REPLACEMENT_ENABLED = false;
 export async function previewStoredCompaction(compaction, reader, artifactDirectory, combinedCeilingTokens, requireCompleteMandatoryCoverage = false, activeContextChanged = false) {
     if (compaction.type !== "compaction")
         throw new Error("preview requires an actual recorded compaction");
-    // Match the existing authoritative ceiling; callers may request less, never more.
-    if (!Number.isSafeInteger(combinedCeilingTokens) || combinedCeilingTokens > 30_000 || combinedCeilingTokens < 512) {
-        throw new Error("preview ceiling must remain within the existing 30000-token limit");
-    }
+    // The caller supplies the same model-validated settings budget as normal use.
+    validateContextCeiling(combinedCeilingTokens);
     const record = compaction;
     const details = getRecord(record.details);
-    const regularPiSummary = getString(details?.piSummary);
+    const regularPiSummary = getString(details?.piSummary) ?? "";
     const baseline = getString(record.summary);
     const firstKeptEntryId = getString(record.firstKeptEntryId);
     const retained = getRecord(details?.retainedTail);
     const recordedTailTokens = retained?.actualTokens;
-    if (!regularPiSummary || !baseline || !firstKeptEntryId || retained?.firstKeptEntryId !== firstKeptEntryId
+    if (!baseline || !firstKeptEntryId || retained?.firstKeptEntryId !== firstKeptEntryId
         || !Number.isSafeInteger(recordedTailTokens) || recordedTailTokens < 0) {
         throw new Error("recorded separate Pi summary or retained-tail evidence is unavailable");
     }
@@ -81,15 +80,15 @@ export async function previewStoredCompaction(compaction, reader, artifactDirect
     const stored = await persistPrivateCompositionArtifact(artifactDirectory, artifact);
     return { summary: result.text, envelope: { ...result.envelope, artifactHash: stored.artifactHash }, artifactRef: stored.artifactRef };
 }
-/** Compose the current Pi-prepared boundary directly. Unlike preview, this path
- * has no recorded compaction or comparison baseline. The extension must gate
- * every production call on explicit fresh-session canary authorization. */
+/** Compose the current validated boundary directly. Unlike preview, this path
+ * has no recorded compaction or comparison baseline. Artifact persistence is
+ * optional and does not control whether useful memory can enter context. */
 export async function composeStoredCompactionForNormalReturn(input, reader, artifactDirectory, combinedCeilingTokens) {
-    if (!input.regularPiSummary || !input.sourceCutEntryId || !input.firstKeptEntryId) {
+    if (typeof input.regularPiSummary !== "string" || !input.sourceCutEntryId || !input.firstKeptEntryId) {
         throw new Error("normal composition requires the actual Pi summary and prepared boundary");
     }
-    if (!Number.isSafeInteger(combinedCeilingTokens) || combinedCeilingTokens > 30_000 || combinedCeilingTokens < 512
-        || !Number.isSafeInteger(input.rawTailTokens) || input.rawTailTokens < 0) {
+    validateContextCeiling(combinedCeilingTokens);
+    if (!Number.isSafeInteger(input.rawTailTokens) || input.rawTailTokens < 0) {
         throw new Error("normal composition exceeds the existing bounded context limits");
     }
     const first = reader.getEntry(input.firstKeptEntryId);
@@ -107,13 +106,20 @@ export async function composeStoredCompactionForNormalReturn(input, reader, arti
         cut: { sourceCutEntryId: input.sourceCutEntryId, sourceCutSeq: selection.requestedCut,
             firstKeptEntryId: input.firstKeptEntryId, firstKeptSeq: firstView.eventCut,
             rawTailTokens: input.rawTailTokens, toolPairSafe: input.toolPairSafe } }, selection, source => reader.recovery(selection.sourceView, source));
-    if (!result.envelope.validation.protectedCoverageComplete
-        || !result.envelope.validation.openWorkCoverageComplete || !result.envelope.validation.safeTail
+    if (!result.envelope.validation.safeTail
         || !result.envelope.validation.withinCombinedCeiling || result.status !== "composed") {
-        throw new Error("normal composition requires complete mandatory coverage and a valid bounded result");
+        throw new Error("normal composition requires a source-validated, tool-safe bounded result");
     }
-    const stored = await persistPrivateCompositionArtifact(artifactDirectory, result.artifact);
-    return { summary: result.text, firstKeptEntryId: result.firstKeptEntryId,
-        envelope: { ...result.envelope, artifactHash: stored.artifactHash, artifactRef: stored.artifactRef } };
+    try {
+        const stored = await persistPrivateCompositionArtifact(artifactDirectory, result.artifact);
+        return { summary: result.text, firstKeptEntryId: result.firstKeptEntryId,
+            envelope: { ...result.envelope, artifactHash: stored.artifactHash, artifactRef: stored.artifactRef, artifactStored: true } };
+    }
+    catch {
+        // Keep the source-validated composition. An absent/unsafe diagnostic path
+        // must not create an endless compaction refusal or loosen directory policy.
+        return { summary: result.text, firstKeptEntryId: result.firstKeptEntryId,
+            envelope: { ...result.envelope, artifactStored: false } };
+    }
 }
 //# sourceMappingURL=composition-preview.js.map

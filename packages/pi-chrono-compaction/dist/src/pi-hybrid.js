@@ -1,5 +1,43 @@
-import { compact as compactWithPi, generateSummaryWithUsage, sessionEntryToContextMessages, } from "@earendil-works/pi-coding-agent";
+import { compact as compactWithPi, generateSummaryWithUsage, estimateTokens, sessionEntryToContextMessages, } from "@earendil-works/pi-coding-agent";
 import { estimateTokensFromText } from "./utils.js";
+import { selectDynamicRawTail } from "./tail-selection.js";
+export const ADAPTIVE_PREPARATION_LIMITS = { tailEntries: 256, tailTokens: 128_000 };
+/** Extend Pi's already-prepared prefix to the exact small Chrono cut. Never read
+ * lifetime history or copy the prior composed replay into the independent summary. */
+export function prepareAdaptiveChronoTail(branchEntries, preparation, minimumTokens, maximumTokens, includeSummary = true) {
+    const windowStart = Math.max(0, branchEntries.length - ADAPTIVE_PREPARATION_LIMITS.tailEntries);
+    const bounded = branchEntries.slice(windowStart);
+    const preparedOffset = bounded.findIndex(entry => entry.id === preparation.firstKeptEntryId);
+    if (windowStart === 0 && preparedOffset < 1)
+        throw new Error("Pi prepared boundary is unavailable.");
+    // A Pi-prepared boundary outside the bounded suffix precedes the selected cut.
+    // Do not traverse the lifetime prefix merely to recover its array offset.
+    const start = windowStart + Math.max(0, preparedOffset - 1);
+    const preparedIndex = preparedOffset >= 0 ? windowStart + preparedOffset : undefined;
+    const window = branchEntries.slice(start);
+    // Estimate each visible message once. Pi's estimator includes image costs and
+    // full tool results. No result text is shortened or replaced in the raw tail.
+    const suffix = new Array(window.length + 1).fill(0);
+    for (let index = window.length - 1; index >= 0; index--) {
+        const entry = window[index];
+        const tokens = index === 0 || entry.type === "compaction" || suffix[index + 1] > ADAPTIVE_PREPARATION_LIMITS.tailTokens ? 0
+            : sessionEntryToContextMessages(entry).reduce((sum, message) => sum + estimateTokens(message), 0);
+        suffix[index] = Math.min(ADAPTIVE_PREPARATION_LIMITS.tailTokens + 1, suffix[index + 1] + tokens);
+    }
+    const tail = selectDynamicRawTail(window, minimumTokens, maximumTokens, entries => suffix[window.length - entries.length]);
+    if (!tail || tail.actualTokens > maximumTokens)
+        throw new Error("No complete tool-safe raw tail fits the dynamic maximum.");
+    const cutIndex = start + tail.cutIndex;
+    const summaryInputComplete = includeSummary && preparedIndex !== undefined
+        && cutIndex - preparedIndex <= ADAPTIVE_PREPARATION_LIMITS.tailEntries;
+    // An unusually long Pi tail must not force a foreground lifetime traversal.
+    // Optional summary generation is skipped if its extra input exceeds this bound.
+    const messages = summaryInputComplete ? [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages,
+        ...rawSourceMessages(branchEntries.slice(preparedIndex, cutIndex))] : [];
+    return { tail: { ...tail, cutIndex }, summaryInputComplete, preparation: { ...preparation,
+            firstKeptEntryId: tail.firstKeptEntryId, messagesToSummarize: messages,
+            turnPrefixMessages: [], isSplitTurn: false } };
+}
 export function rawSourceMessages(sourceEntries) {
     return sourceEntries
         .filter((entry) => entry.type !== "compaction")
@@ -69,7 +107,7 @@ export async function createPiRegularSummary(ctx, preparation, options) {
     };
 }
 export function previousRegularPiSummary(branchEntries, preparedPreviousSummary) {
-    const previousCompaction = [...branchEntries].reverse().find((entry) => entry.type === "compaction");
+    const previousCompaction = branchEntries.slice(-256).reverse().find((entry) => entry.type === "compaction");
     if (!previousCompaction)
         return preparedPreviousSummary;
     const details = previousCompaction.details;
@@ -79,6 +117,15 @@ export function previousRegularPiSummary(branchEntries, preparedPreviousSummary)
             return piSummary.trim();
     }
     const summary = typeof previousCompaction.summary === "string" ? previousCompaction.summary : "";
+    if (summary.startsWith("# CHRONOCOMPACT CONTEXT")) {
+        // Read older composed records that predate the separate piSummary receipt.
+        const description = summary.indexOf("Pi generated this regular compaction summary independently.");
+        if (description < 0)
+            return undefined;
+        const start = summary.indexOf("\n\n", description);
+        const end = summary.lastIndexOf("\n\n---\n\n## CHRONOCOMPACT EVENT REPLAY\n\n");
+        return start >= 0 && end > start ? summary.slice(start + 2, end).trim() : undefined;
+    }
     if (summary.startsWith("# HYBRID RETROSPECTIVE CONTEXT")) {
         const goalAt = summary.indexOf("\n\n## Goal");
         const replayAt = summary.indexOf("\n\n---\n\n## DETERMINISTIC CHRONOLOGICAL REPLAY");

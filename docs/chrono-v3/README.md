@@ -25,7 +25,9 @@ The V3 path uses incremental catalogs, event capsules, episodes, current state, 
 
 ## Release and evidence boundary
 
-V3 architecture is present in the 2.x development line. A package version, an enabled setting, ready indexes, and a loaded working installation are different facts. This overview is not a release or activation receipt. It does not claim active `3.0.0`, perfect recall, or billion-token qualification.
+Version `3.0.0` enables programmatic V3 memory and safe-idle physical rollover by default. Focused checks exercise composition without model calls, useful bounded recall, complete native tool-state transfer, and real Pi physical replacement with restart. This supersedes the disabled-by-default 2.x development configuration.
+
+A package version, an enabled setting, ready indexes, and a loaded working installation remain different facts. This overview describes source behavior, not an activation receipt. The retained scale campaign failed before completing its matrix, as recorded in the [settled evidence](reviews/M11-report-correction.md#actual-settled-campaign). Neither architectural limits nor prepared data establish perfect recall or billion-token normal-use qualification.
 
 Read versioned reports and older ADRs as evidence for their recorded revisions. Earlier pending work is not automatically a current failure, and an earlier pass does not validate later code. Use [configuration](configuration.md), [operations](operations.md), and [deployment](deployment.md) for effective policy and loaded-use checks.
 
@@ -46,7 +48,7 @@ Use these subject owners for implementation details. The map also preserves the 
 | Episodes and state | [Episodes and state](episodes-and-state.md) | Implemented boundaries, conservative lifecycle, provenance, and category readiness. |
 | Rollups | [Rollups](rollups.md) | Closed intervals, fanout, omitted detail, staged recall, and explicit bounded repair. |
 | Context composer | [Context composer](context-composer.md) | Selective chronological context, source recovery, adaptive raw tail, and effective token limits. |
-| Logical sessions | [Logical sessions](logical-sessions.md) | Shard/branch model, manual continuation, Pi lifecycle, and recovery routing. |
+| Logical sessions | [Logical sessions](logical-sessions.md) and [operations](operations.md) | Shard/branch model, safe-idle automatic continuation, manual controls, and recovery routing. |
 | Workers | [Workers](workers.md) | Kernel mutexes, queue metadata, fixed systemd slots, resource limits, and privacy. |
 | Migration | [Migration](migration.md) | Adoption and store-owned progress; lag, incompatible schema, and corruption are separate cases. |
 | Configuration | [Configuration](configuration.md) | Effective setting precedence, defaults, and session exclusions. |

@@ -373,6 +373,21 @@ function compileRegex(query, caseSensitive = false, global = false) {
         return fail("search-v3-query-invalid");
     }
 }
+function indexedWindow(store, request) {
+    if (request.cursor) {
+        const value = cursorDecode(request.cursor).indexed;
+        if (!value || !Number.isSafeInteger(value.cueBefore) || value.cueBefore < 0
+            || !Number.isSafeInteger(value.rawBefore) || value.rawBefore < 0 || typeof value.rawLexical !== "boolean")
+            return fail("search-v3-cursor-invalid");
+        return value;
+    }
+    // Descending rowids pin a finite postings prefix without counting matches.
+    const before = (table) => {
+        const row = store.get(`SELECT rowid FROM ${table} ORDER BY rowid DESC LIMIT 1`);
+        return row ? num(row, "rowid") + 1 : 0;
+    };
+    return { cueBefore: before("cue_fts"), rawBefore: before("raw_fts"), rawLexical: false };
+}
 function query(request, store) {
     if ((request.filters?.currentState !== undefined && request.filters.currentState !== "any") || request.filters?.unresolved !== undefined)
         fail("search-v3-filter-unsupported");
@@ -387,33 +402,56 @@ function query(request, store) {
     if (mode === "literal" && !match && !request.scan)
         fail("search-v3-scan-required");
     const queryHash = sha256(canonicalJson({ op: "query", view: request.view, query: request.query, mode,
-        caseSensitive: request.caseSensitive ?? false, filters: request.filters ?? null, scan: request.scan ?? null }));
+        caseSensitive: request.caseSensitive ?? false, filters: request.filters ?? null, scan: request.scan ?? null,
+        ...(match ? { candidatePaging: "fts-rowid-window-v1" } : {}) }));
     const pin = pinnedGeneration(store, request, queryHash), lineage = LINEAGE(request.view), maximum = SEARCH_V3_LIMITS.candidates;
     const caseSensitive = request.caseSensitive ?? false;
     let candidates = [], scanOffset = pin.scanOffset, scanComplete = true;
     let scanLast = { eventSeq: pin.afterEventSeq, descriptor: pin.afterDescriptor, sourceKey: pin.afterSourceKey, chunkIndex: pin.afterChunkIndex };
-    let regexIsBounded = false;
+    let regexIsBounded = false, indexed, nextIndexed, postingsVisited = 0;
     if (match) {
+        indexed = indexedWindow(store, request);
+        nextIndexed = { ...indexed };
+        const perIndex = mode === "ranked" ? Math.floor(maximum / 2) : maximum;
+        const window = (table, expression, before) => {
+            if (!before)
+                return { rows: [], nextBefore: 0, matched: 0 };
+            const raw = table === "raw_fts";
+            // Bound FTS postings before view/filter joins. Even a filter that rejects
+            // every posting returns a finite empty page with a progressing cursor.
+            const rows = store.rows(`WITH matches AS MATERIALIZED (SELECT rowid AS matchRowid,sourceKey${raw ? ",chunkIndex" : ""} FROM ${table}
+        WHERE ${table} MATCH ? AND rowid<? ORDER BY rowid DESC LIMIT ?)
+        SELECT matches.matchRowid,d.*${raw ? ",c.decodedStart,c.decodedEnd,c.text,c.chunkIndex" : ""} FROM matches
+        LEFT JOIN documents d ON d.sourceKey=matches.sourceKey AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql}
+          AND EXISTS (SELECT 1 FROM membership m WHERE m.lineage=? AND m.sourceKey=d.sourceKey)
+        ${raw ? "LEFT JOIN chunks c ON c.sourceKey=d.sourceKey AND c.chunkIndex=matches.chunkIndex" : ""}
+        ORDER BY matches.matchRowid DESC`, perIndex + 1, expression, before, perIndex + 1, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, lineage);
+            postingsVisited += rows.length;
+            const consumed = rows.slice(0, perIndex);
+            return { rows: consumed.filter(row => row.sourceKey !== null), matched: rows.length,
+                nextBefore: rows.length > perIndex ? num(consumed.at(-1), "matchRowid") : 0 };
+        };
         if (mode === "ranked") {
-            const cueRows = store.rows(`SELECT d.* FROM cue_fts JOIN documents d ON d.sourceKey=cue_fts.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE cue_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`, maximum + 1, lineage, match, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
-            if (cueRows.length > maximum)
-                fail("search-v3-query-budget");
-            candidates.push(...cueRows.map(row => ({ row, score: relevance(request.query, str(row, "cue"), "generated-cue", caseSensitive),
+            const cues = window("cue_fts", match, indexed.cueBefore);
+            nextIndexed.cueBefore = cues.nextBefore;
+            candidates.push(...cues.rows.map(row => ({ row, score: relevance(request.query, str(row, "cue"), "generated-cue", caseSensitive),
                 evidence: "generated-cue", reason: "bounded capsule cue relevance" })));
         }
-        const rawCandidates = (expression) => store.rows(`SELECT d.*,c.decodedStart,c.decodedEnd,c.text,c.chunkIndex FROM raw_fts JOIN chunks c ON c.sourceKey=raw_fts.sourceKey AND c.chunkIndex=raw_fts.chunkIndex JOIN documents d ON d.sourceKey=c.sourceKey JOIN membership m ON m.sourceKey=d.sourceKey AND m.lineage=? WHERE raw_fts MATCH ? AND d.eventSeq<=? AND d.indexGeneration<=?${bounds.sql}${filter.sql} LIMIT ?`, maximum + 1, lineage, expression, request.view.eventCut, pin.generation, ...bounds.values, ...filter.values, maximum + 1);
-        let rawRows = rawCandidates(match);
-        // A literal can start inside an indexed token, such as violet in İviolet.
-        // If phrase lookup is empty, retain bounded lexical candidate recovery.
-        // This remains non-exhaustive; explicit scans cover arbitrary substrings.
-        if (mode === "literal" && rawRows.length === 0) {
+        else
+            nextIndexed.cueBefore = 0;
+        let raw = window("raw_fts", indexed.rawLexical ? ftsQuery(request.query) : match, indexed.rawBefore);
+        // Keep the existing literal fallback, but pin its expression for paging.
+        // It is not an exhaustive substring search. Explicit scans provide that route.
+        if (mode === "literal" && !request.cursor && raw.matched === 0) {
             const lexical = ftsQuery(request.query);
-            if (lexical && lexical !== match)
-                rawRows = rawCandidates(lexical);
+            if (lexical && lexical !== match) {
+                indexed.rawLexical = nextIndexed.rawLexical = true;
+                raw = window("raw_fts", lexical, indexed.rawBefore);
+            }
         }
-        if (rawRows.length > maximum)
-            fail("search-v3-query-budget");
-        for (const row of rawRows) {
+        nextIndexed.rawBefore = raw.nextBefore;
+        scanComplete = nextIndexed.cueBefore === 0 && nextIndexed.rawBefore === 0;
+        for (const row of raw.rows) {
             const text = str(row, "text");
             const found = mode === "literal" ? firstMatch(text, [request.query], caseSensitive)
                 : firstMatch(text, [request.query, ...terms(request.query).sort((a, b) => b.length - a.length)], caseSensitive);
@@ -468,7 +506,8 @@ function query(request, store) {
     const nextOffset = pin.offset + selected.length, hasMore = nextOffset < diverse.length || !scanComplete;
     const nextCursor = hasMore ? cursorEncode({ storeKey: request.identity.storeKey, viewHash: VIEW(request.view), queryHash, generation: pin.generation,
         offset: nextOffset < diverse.length ? nextOffset : 0, scanOffset, afterEventSeq: scanLast.eventSeq, afterDescriptor: scanLast.descriptor,
-        afterSourceKey: scanLast.sourceKey, afterChunkIndex: scanLast.chunkIndex }) : undefined;
+        afterSourceKey: scanLast.sourceKey, afterChunkIndex: scanLast.chunkIndex,
+        ...(indexed ? { indexed: nextOffset < diverse.length ? indexed : nextIndexed } : {}) }) : undefined;
     const exhaustiveRoute = Boolean(request.scan) && (mode === "literal" || regexIsBounded);
     const coverage = !request.scan ? (mode === "literal" ? "indexed-token-candidates" : "indexed-cue-and-token-candidates")
         : mode === "literal" ? "explicit-bounded-literal-scan"
@@ -479,6 +518,9 @@ function query(request, store) {
             patternSupport: mode === "literal" || regexIsBounded ? "bounded" : "window-only",
             ...(mode === "regex" && !regexIsBounded ? { unsupported: "unbounded-regex-exhaustiveness" } : {}),
             overlapUnits: SEARCH_V3_LIMITS.queryUnits - 1 } : undefined,
+        ...(indexed ? { ranking: "within-bounded-postings-window", candidateWindow: { complete: scanComplete, partial: !scanComplete,
+                order: "newest-indexed-first", candidateLimit: maximum, postingsVisited, postingsLimit: maximum + (mode === "ranked" ? 2 : 1) },
+            omissions: "Not globally ranked or exhaustive. Windows can repeat a source when its cue or another chunk is encountered. Continue nextCursor, including on empty pages." } : {}),
         cache: { hit: false, bytes: 0, limitBytes: SEARCH_V3_LIMITS.cacheBytes }, metrics: { candidates: diverse.length, sqliteStatements: store.statements } };
 }
 async function recall(request, store, executor, sourceBudget) {

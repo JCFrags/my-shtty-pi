@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { composeStoredSelection } from "./context-composer.js";
+import { composeBoundedMemory } from "./bounded-memory.js";
+import { LOGICAL_CHECKPOINT_TYPE, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
 import { resolveLogicalShardRoutes } from "./logical-session-routing.js";
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -68,13 +70,24 @@ export function replacementContainsOnlyBootstrap(entries) {
 }
 export function replacementContainsOnlyContinuation(entries, binding) {
     let continuationCount = 0;
+    const checkpoints = [];
     for (const entry of entries) {
+        if (entry.type === "custom" && entry.customType === LOGICAL_CHECKPOINT_TYPE && continuationCount === 0) {
+            checkpoints.push({ customType: entry.customType, data: entry.data });
+            continue;
+        }
         if (entry.type === "custom_message" && entry.customType === "chrono-logical-continuation") {
             continuationCount += 1;
             continue;
         }
         if (!["model_change", "thinking_level_change", "session_info"].includes(entry.type))
             return false;
+    }
+    try {
+        validateLogicalStateCheckpoints(checkpoints);
+    }
+    catch {
+        return false;
     }
     return continuationCount === 1 && recordedLogicalBinding(entries)?.continuationHash === binding.continuationHash;
 }
@@ -88,18 +101,37 @@ const coveredPropositions = (item) => {
     }
     return [item, ...item.coveredPropositions];
 };
+/** Reuse the existing M10 continuation contract when optional derived stores lag.
+ * The caller must still independently pin the exact source leaf and safe idle. */
+export function buildBoundedContinuationCandidate(input) {
+    const branch = input.manifest.branches.find(value => value.branchId === input.branchId);
+    const shard = branch && input.manifest.shards.find(value => value.shardId === branch.activeShardId);
+    if (!shard || input.entries.at(-1)?.id !== input.sourceLeafEntryId)
+        throw new Error("logical-session-continuation-evidence-invalid");
+    const firstKeptEntryId = "chrono-logical-new-shard";
+    const bounded = composeBoundedMemory({ branchEntries: [...input.entries,
+            { type: "message", id: firstKeptEntryId, parentId: input.sourceLeafEntryId }], cutIndex: input.entries.length,
+        firstKeptEntryId, rawTailTokens: 0, combinedCeilingTokens: input.combinedCeilingTokens,
+        previousSummary: input.previousSummary, reason: "derived memory unavailable; exact catalog cut retained" });
+    const source = { catalogStoreKey: input.sourceView.storeKey, catalogGeneration: input.sourceView.generation,
+        sessionKey: input.sourceView.sessionKey, branchKey: input.sourceView.branchKey,
+        eventCut: input.sourceView.eventCut, entryId: input.sourceLeafEntryId };
+    const coveredShards = resolveLogicalShardRoutes(input.manifest, input.branchId).map(route => ({ shardId: route.shardId,
+        ...(route.shardId === shard.shardId ? source : route.catalog ?? (() => { throw new Error("logical-session-route-unpinned"); })()) }));
+    const payloadHash = hash(JSON.stringify(bounded.receipt));
+    return { logicalSessionId: input.manifest.logicalSessionId, branchId: input.branchId, fromShardId: shard.shardId,
+        source, coveredShards, summary: bounded.summary, composition: { schemaVersion: 1, payloadHash, artifactHash: payloadHash,
+            combinedTokens: bounded.receipt.combinedTokens, combinedCeilingTokens: input.combinedCeilingTokens,
+            validation: { safeTail: true, withinCombinedCeiling: true, protectedCoverageComplete: false, openWorkCoverageComplete: false } },
+        mandatory: { protectedEligible: 0, protectedCovered: 0, openWorkEligible: 0, openWorkCovered: 0, omittedMandatory: [] } };
+}
 /** Build continuation evidence from the exact pinned selection and rendered artifact. No caller supplies completeness flags or counts. */
 export function buildManualContinuationCandidate(input) {
     const branch = input.manifest.branches.find(value => value.branchId === input.branchId);
     if (!branch)
         throw new Error("logical-session-branch-scope-mismatch");
     const shard = input.manifest.shards.find(value => value.shardId === branch.activeShardId);
-    if (!shard || input.selection.sourceView.eventCut !== input.selection.requestedCut || !input.regularPiSummary.trim()
-        || input.selection.coverage.restrictionsComplete !== true || input.selection.coverage.openWorkComplete !== true
-        || input.selection.coverage.restrictionsScanComplete !== true || input.selection.coverage.openWorkScanComplete !== true
-        || input.selection.omissions.protectedAtLeastOne || input.selection.omissions.openWorkAtLeastOne
-        || input.selection.omissions.restrictionWorkExhausted || input.selection.omissions.openWorkExhausted
-        || input.selection.omissions.renderedOverflowAtLeastOne || input.selection.omissions.responseBudgetAtLeastOne) {
+    if (!shard || input.selection.sourceView.eventCut !== input.selection.requestedCut) {
         throw new Error("logical-session-continuation-evidence-invalid");
     }
     const composed = composeStoredSelection({ regularPiSummary: input.regularPiSummary, combinedCeilingTokens: input.combinedCeilingTokens,
