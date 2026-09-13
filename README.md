@@ -94,7 +94,7 @@ Programmatic V3 memory is enabled by default. The default combined context targe
 
 If Chrono refuses its own requested compaction, it keeps the current context and reports a bounded failure code. It can resume unresolved work once at safe idle, but it does not retry compaction until new user input. User cancellation does not resume work.
 
-Raw `history_get` can recover an exact cataloged entry before the derived search index is ready. After rollover, use the predecessor's explicit `shardId`. Branch and source validation still apply. Ranked search, decoded blocks, ranges, and derived memory retain their existing readiness requirements. This correction does not rebuild history or change its stores.
+Raw `history_get` can recover an exact cataloged entry before the derived search index is ready. After rollover, use the predecessor's explicit `shardId`. Branch and source validation still apply. The focused adapter check recovered identical predecessor bytes without creating its missing search head. Ranked search, decoded blocks, ranges, and derived memory retain their existing readiness requirements. This correction does not rebuild history or change its stores.
 
 The 3.0.2 stopped-owner and admission-wait diagnostics remain read-only. An inactive worker unit does not prove that its scheduler reservation is free. These diagnostics do not resume owners, remove reservations, or recover blocked admission.
 

@@ -288,7 +288,9 @@ test("default shared display edit propagates, history stays bounded, invalid fil
 	const sharedEdit = applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "standard.fiveHourUsage", "on"); assert.equal(await a.updatePreferences({ pollIntervalMs: 300_000, historyLimit: 16, display: sharedEdit }), true); await waitFor(() => bLatest?.preferences?.revision === 1);
 	assert.equal((migrateDisplayPreferences(bLatest?.preferences?.display))?.standard.fiveHourUsage, true, "a no-choice session consumes the shared edit");
 	for (let index = 0; index < 20; index += 1) { now += 1; await a.publishHeaders({ "x-codex-primary-used-percent": String(index), "x-codex-primary-window-minutes": "10080" }); } assert.equal(aLatest?.history.length, 16);
-	const lastGood = bLatest; const cacheFile = join(cacheRoot, `${identity.accountKey}.json`); await writeFile(cacheFile, "{ invalid", { mode: 0o600 }); await b.tick(); assert.equal(bLatest, lastGood); assert.equal(await b.updatePreferences({ pollIntervalMs: 1234 }), false);
+	await waitFor(() => bLatest?.history.at(-1)?.observedAt === now);
+	// Watcher reads can replace an object with equal validated cache contents.
+	const lastGood = structuredClone(bLatest); const cacheFile = join(cacheRoot, `${identity.accountKey}.json`); await writeFile(cacheFile, "{ invalid", { mode: 0o600 }); await b.tick(); assert.deepEqual(bLatest, lastGood); assert.equal(await b.updatePreferences({ pollIntervalMs: 1234 }), false);
 });
 
 test("stale lock recovery and failed polling preserve last good history", async (t) => {
