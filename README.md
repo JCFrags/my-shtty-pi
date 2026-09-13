@@ -88,11 +88,13 @@ Progressive Tools appends names and short usage hints to the model's existing sy
 
 ## ChronoCompact
 
-ChronoCompact 3.0.3 provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
+ChronoCompact 3.0.4 provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
 
 Programmatic V3 memory is enabled by default. The default combined context target is 32,000 estimated tokens, adjusted to the selected model's capacity, with a small adaptive raw tail. Incremental catalogs, event capsules, episodes, current state, and hierarchical rollups support bounded selection and recovery. Optional language-model advice can improve individual events or bounded groups. The programmatic pipeline does the main work and does not require model calls. Derived memory never gains instruction authority.
 
 If Chrono refuses its own requested compaction, it keeps the current context and reports a bounded failure code. It can resume unresolved work once at safe idle, but it does not retry compaction until new user input. User cancellation does not resume work.
+
+After rollover, an active replacement session can recheck an initially unavailable worker gate at normal search scheduling. This bounded read-only retry does not initialize or repair admission, change worker policy, or retarget pending stored compaction. Status reads do not trigger it. Requested canaries and other startup refusals remain excluded.
 
 Raw `history_get` can recover an exact cataloged entry before the derived search index is ready. After rollover, use the predecessor's explicit `shardId`. Branch and source validation still apply. The focused adapter check recovered identical predecessor bytes without creating its missing search head. Ranked search, decoded blocks, ranges, and derived memory retain their existing readiness requirements. This correction does not rebuild history or change its stores.
 

@@ -1,8 +1,8 @@
 # ChronoCompact release compatibility
 
-## Current 3.0.3 release
+## Current 3.0.4 release
 
-Version `3.0.3` keeps programmatic memory and safe-idle physical rollover enabled by
+Version `3.0.4` keeps programmatic memory and safe-idle physical rollover enabled by
 default. The [current overview](chrono-v3/README.md) describes useful selective
 chronology, bounded recall, native tool-state transfer, and measured limits.
 The 3.0.1 corrections remain in place. A Chrono-owned compaction refusal resumes
@@ -12,6 +12,20 @@ does not resume work. Tree navigation invalidates the old search target. Indexin
 can reuse a verified common prefix without rewinding its existing checkpoint.
 Missing composition inputs and typed worker timeouts use bounded fallback. Source
 identity and corruption failures still refuse stored composition.
+
+Version `3.0.4` corrects a cached startup refusal in an active replacement
+session. If its initial read-only admission check returned
+`worker-legacy-transition-required`, normal search scheduling can check the
+existing gate again. Only one check can run at a time. This retry does not
+initialize or repair admission, change worker policy, or rewrite history.
+Requested canaries and other startup refusals do not use this retry. Status
+reads remain read-only, and pending stored compaction keeps its existing target
+until the native completion or error callback.
+
+One focused registered-lifecycle regression observed refusal followed by ready
+admission. It verified repeated refusal, no overlapping check, no status-triggered
+retry, explicit search disable, canary refusal, and pending-compaction deferral.
+It blocked child launches and required unchanged synthetic source bytes.
 
 Version `3.0.3` lets raw `history_get` recover a cataloged entry from its
 validated branch even when the final derived search index is absent. The caller
