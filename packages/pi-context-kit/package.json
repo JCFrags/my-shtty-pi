@@ -1,0 +1,16 @@
+{
+  "name": "pi-context-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent native context and telemetry components for the Chrono V4 foundation",
+  "license": "MIT",
+  "workspaces": [
+    "protocol",
+    "recall",
+    "telemetry"
+  ],
+  "scripts": {
+    "test": "node --experimental-transform-types --test recall/test/recall.test.ts telemetry/test/telemetry.test.ts"
+  }
+}

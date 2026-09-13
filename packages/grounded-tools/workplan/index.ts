@@ -14,6 +14,7 @@ import {
   type WorkplanEvent,
 } from "@grounded/pi-core/workplan";
 import { registerStateCheckpointProvider, restoreStateCheckpoint } from "@grounded/pi-core/state-transfer";
+import { registerNativeContextProvider } from "@grounded/pi-core/context-adapters";
 import {
   boundedStateOutput,
   cancelled,
@@ -130,6 +131,9 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
     state, sessionId: currentContext?.sessionManager.getSessionId(), leafId: currentContext?.sessionManager.getLeafId(),
     corrupt: corruptEntryId !== undefined, pending: executing > 0 || pendingMutations.size > 0,
   }), validateWorkplanState);
+  const removeContextProvider = registerNativeContextProvider(pi, "workplan", () => ({
+    context: currentContext, state, corrupt: corruptEntryId !== undefined, pending: executing > 0 || pendingMutations.size > 0,
+  }));
 
   const eventKey = (event: WorkplanEvent): string => {
     const data = event.data as Record<string, unknown>;
@@ -243,6 +247,7 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
     lifecycleEpoch += 1;
     pendingMutations.clear();
     currentContext = undefined;
+    removeContextProvider();
     removeSummaryListener();
     removeCheckpointProvider();
   });

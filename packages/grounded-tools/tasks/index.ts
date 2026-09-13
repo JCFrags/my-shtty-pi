@@ -21,6 +21,7 @@ import {
 } from "@grounded/pi-core/tasks";
 import { requireExactObject, requirePlainJson, StateToolError } from "@grounded/pi-core/state";
 import { registerStateCheckpointProvider, restoreStateCheckpoint } from "@grounded/pi-core/state-transfer";
+import { registerNativeContextProvider } from "@grounded/pi-core/context-adapters";
 
 const ReplacementTaskSchema = Type.Object({
   id: Type.Optional(Type.String()),
@@ -215,6 +216,9 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
     state, sessionId: currentContext?.sessionManager.getSessionId(), leafId: currentContext?.sessionManager.getLeafId(),
     corrupt: corruptEntryId !== undefined, pending: pendingMutations.size > 0,
   }), validateTaskCheckpointState);
+  const removeContextProvider = registerNativeContextProvider(pi, "todo", () => ({
+    context: currentContext, state, corrupt: corruptEntryId !== undefined, pending: pendingMutations.size > 0,
+  }));
   const requireHealthyState = () => {
     if (corruptEntryId) throw new StateToolError("STATE_CORRUPT", `Todo state is corrupt at entry ${corruptEntryId}`);
   };
@@ -373,6 +377,7 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
   pi.on("session_shutdown", () => {
     currentContext?.ui.setWidget("grounded-tasks", undefined);
     pendingMutations.clear();
+    removeContextProvider();
     removeCheckpointProvider();
     removeSummaryListener?.();
     removeSummaryListener = undefined;
