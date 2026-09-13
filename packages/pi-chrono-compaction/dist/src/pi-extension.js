@@ -1020,7 +1020,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let sessionRolloutPersisted = false;
     let rolloutEpoch = 0;
     let rolloutError;
-    let startupStatus = { state: adapters.schedulerDirectory ? "ready" : "pending" };
+    const readOnlyStartupVerifier = adapters.schedulerDirectory ? adapters.readOnlyStartupVerifier : undefined;
+    let startupStatus = { state: adapters.schedulerDirectory && !readOnlyStartupVerifier ? "ready" : "pending" };
     let startupContext;
     let deferredCompactionSearch;
     const usesStoredComposition = (ctx) => resolveExtensionSettings(userConfig).memoryEngineEnabled
@@ -1047,12 +1048,20 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         rollout: { persisted: sessionRolloutPersisted, enabled: searchSettings().searchIndexEnabled },
         startup: { ...startupStatus },
         ...((rolloutError ?? startupStatus.errorCode) ? { lastSafeError: rolloutError ?? startupStatus.errorCode } : {}) });
+    const canRetryReadOnlyStartup = (ctx) => startupStatus.state === "unavailable"
+        && startupStatus.errorCode === "worker-legacy-transition-required"
+        && !canary.requested(ctx.sessionManager.getSessionId())
+        && !!logicalGrant?.searchRoutes.some(route => route.shardId === logicalGrant?.activeShardId && route.ordinal > 0);
     const scheduleSearch = (ctx) => {
         if (!searchSettings().searchIndexEnabled) {
             search.disable();
             return;
         }
         if (startupStatus.state !== "ready") {
+            // A follower can observe admission established after its initial check.
+            // Pending replacements, canaries, and other startup refusals cannot retry.
+            if (canRetryReadOnlyStartup(ctx))
+                beginStartup(ctx);
             search.cancel();
             return;
         }
@@ -1073,7 +1082,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     };
     const beginStartup = (ctx) => {
         startupContext = ctx;
-        if (startupStatus.state !== "pending")
+        if (startupStatus.state !== "pending" && !canRetryReadOnlyStartup(ctx))
             return;
         startupStatus = { state: "running" };
         // A logical replacement or isolated canary can reuse an existing host policy.
@@ -1081,7 +1090,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         const readOnlyStartup = !!logicalGrant?.searchRoutes.some(route => route.shardId === logicalGrant?.activeShardId && route.ordinal > 0)
             || canary.requested(ctx.sessionManager.getSessionId());
         const startup = readOnlyStartup
-            ? verifyLegacyAdmissionGate().then(ready => ready
+            ? (readOnlyStartupVerifier ?? verifyLegacyAdmissionGate)().then(ready => ready
                 ? { state: "ready", changed: false }
                 : { state: "unavailable", errorCode: "worker-legacy-transition-required" })
             : startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath));

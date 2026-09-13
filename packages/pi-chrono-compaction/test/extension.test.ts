@@ -1,5 +1,7 @@
 import { installSyntheticHistoryExtension } from "./synthetic-history-adapter.js";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
@@ -13,6 +15,8 @@ import { candidateSegmentStorePath } from "../src/candidate-segment-store.js";
 import { sourceLedgerPath, updateSourceLedger } from "../src/source-ledger.js";
 import { rollupShadowSidecarPath } from "../src/history-rollup-shadow.js";
 import { HistorySearchAdapter } from "../src/history-search-adapter.js";
+import { isLogicalSessionManifest, sealLogicalManifest } from "../src/logical-session-contract.js";
+import { LogicalSessionStore } from "../src/logical-session-store.js";
 
 type Hook = (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, context: Record<string, unknown>) => unknown | Promise<unknown>;
@@ -91,6 +95,151 @@ test("experimental high-impact features default off and environment overrides ha
     else process.env.PI_CHRONO_ROLLUP_SHADOW = previous.shadow;
     if (previous.projection === undefined) delete process.env.PI_CHRONO_TOOL_RESULT_PROJECTION;
     else process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = previous.projection;
+  }
+});
+
+test("logical follower observes ready admission after an initial read-only refusal", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-startup-follower-"));
+  const sourcePath = join(directory, "session.jsonl"), sessionId = "startup-follower";
+  const sourceBytes = "synthetic source must remain unchanged\n";
+  writeFileSync(sourcePath, sourceBytes, { mode: 0o600 });
+  const environment = {
+    PI_CHRONO_CONFIG_PATH: join(directory, "config.json"), PI_CHRONO_MEMORY_ENGINE: "true",
+    PI_CHRONO_SEARCH_INDEX: "true", PI_CHRONO_AUTOMATIC_ROLLOVER: "false",
+    PI_CHRONO_CATALOG_SHADOW: "false", PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false",
+    PI_CHRONO_VALUE_WORKER_MODE: "off",
+  };
+  writeFileSync(environment.PI_CHRONO_CONFIG_PATH, "{}", { mode: 0o600 });
+  const previous = new Map(Object.keys(environment).map(name => [name, process.env[name]]));
+  Object.assign(process.env, environment);
+  const logicalSessionId = randomUUID(), oldShardId = randomUUID(), activeShardId = randomUUID();
+  const continuationHash = "a".repeat(64), timestamp = "2026-01-01T00:00:00.000Z";
+  const manifest = sealLogicalManifest({ schemaVersion: 1, revision: 2, logicalSessionId,
+    ownerKey: "b".repeat(64), createdAt: timestamp,
+    branches: [{ branchId: "main", shardIds: [oldShardId, activeShardId], activeShardId, createdAt: timestamp }],
+    shards: [
+      { shardId: oldShardId, branchId: "main", ordinal: 0, piSessionId: "old-session",
+        sourcePath: join(directory, "old.jsonl"), state: "closed", openedAt: timestamp, closedAt: timestamp,
+        finalCut: { catalogStoreKey: randomUUID(), catalogGeneration: 1, sessionKey: "old-session",
+          branchKey: "pi-session", eventCut: 1, entryId: "old-leaf" } },
+      { shardId: activeShardId, branchId: "main", ordinal: 1, piSessionId: sessionId, sourcePath,
+        state: "active", openedAt: timestamp, continuationHash },
+    ] });
+  assert.equal(isLogicalSessionManifest(manifest), true);
+  const content = "Continue the synthetic task.";
+  const branch = [{ type: "custom_message", id: "continuation", parentId: null,
+    customType: "chrono-logical-continuation", content,
+    details: { schemaVersion: 1, operationId: randomUUID(), logicalSessionId, branchId: "main",
+      fromShardId: oldShardId, toShardId: activeShardId, continuationHash,
+      summaryHash: createHash("sha256").update(content).digest("hex") } }];
+  let leafId = "tail";
+  const compactRequests: Array<{ onComplete?: (result: unknown) => void; onError?: (error: Error) => void }> = [];
+  const scheduledLeaves: string[] = [], scheduledGrants: string[] = [];
+  const ctx = { hasUI: false, getContextUsage: () => undefined, isIdle: () => true,
+    hasPendingMessages: () => false, compact: (options: typeof compactRequests[number]) => { compactRequests.push(options); },
+    sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sourcePath, getLeafId: () => leafId,
+      getBranch: () => branch, getHeader: () => ({ type: "session", version: 3, id: sessionId }) } };
+  const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("initializer and workers must not start"); });
+  syncBuiltinESMExports();
+  t.mock.method(LogicalSessionStore.prototype, "read", async function(this: LogicalSessionStore) {
+    assert.equal(this.root, join(directory, "chrono-logical-sessions"));
+    assert.equal(this.logicalSessionId, logicalSessionId);
+    return manifest;
+  });
+  t.mock.method(LogicalSessionStore.prototype, "create", () => { throw new Error("manifest writes forbidden"); });
+  t.mock.method(LogicalSessionStore.prototype, "update", () => { throw new Error("manifest writes forbidden"); });
+  t.mock.method(HistorySearchAdapter.prototype, "schedule", (target: Parameters<HistorySearchAdapter["schedule"]>[0]) => { scheduledLeaves.push(target.leafId); });
+  t.mock.method(HistorySearchAdapter.prototype, "scheduleLogical", (grant: Parameters<HistorySearchAdapter["scheduleLogical"]>[0]) => {
+    assert.equal(grant.searchRoutes.find(route => route.shardId === grant.activeShardId)?.ordinal, 1);
+    scheduledGrants.push(grant.activeShardId);
+  });
+  const instances: Array<{ hooks: Map<string, Hook>; verifications: Array<(ready: boolean) => void> }> = [];
+  const load = (requestedCanary = false) => {
+    const hooks = new Map<string, Hook>(), tools = new Map<string, { execute: () => Promise<any> }>();
+    const verifications: Array<(ready: boolean) => void> = [];
+    const pi = { registerFlag() {}, getFlag: () => requestedCanary ? sessionId : undefined,
+      registerTool(tool: { name: string; execute: () => Promise<any> }) { tools.set(tool.name, tool); },
+      registerCommand() {}, on(name: string, hook: Hook) { setUniqueHook(hooks, name, hook); },
+      appendEntry() { throw new Error("session writes forbidden"); },
+      sendMessage() { throw new Error("model messages forbidden"); } };
+    extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime"),
+      readOnlyStartupVerifier: () => new Promise(resolveVerification => { verifications.push(resolveVerification); }) });
+    instances.push({ hooks, verifications });
+    return { hooks, tools, verifications,
+      status: async () => (await tools.get("history_status")!.execute()).details,
+      settle: () => hooks.get("agent_settled")!({}, ctx) };
+  };
+  const refused = { state: "unavailable", errorCode: "worker-legacy-transition-required" };
+  try {
+    const follower = load();
+    await follower.hooks.get("session_start")!({ reason: "resume" }, ctx);
+    assert.equal(follower.verifications.length, 1);
+    assert.equal((await follower.status()).startup.state, "running");
+    follower.verifications[0]!(false);
+    await waitFor(async () => (await follower.status()).startup.state === "unavailable");
+    assert.deepEqual((await follower.status()).startup, refused);
+    await follower.status(); await follower.status();
+    assert.equal(follower.verifications.length, 1, "status reads cannot retry startup");
+
+    process.env.PI_CHRONO_SEARCH_INDEX = "false";
+    await follower.settle();
+    assert.equal(follower.verifications.length, 1, "explicit search disable must prevent the recheck");
+    process.env.PI_CHRONO_SEARCH_INDEX = "true";
+    await follower.settle();
+    await follower.settle();
+    assert.equal(follower.verifications.length, 2, "only one recheck can be in flight");
+    assert.equal((await follower.status()).startup.state, "running");
+    follower.verifications[1]!(false);
+    await waitFor(async () => (await follower.status()).startup.state === "unavailable");
+    assert.deepEqual((await follower.status()).startup, refused, "a false verifier must remain refused");
+    assert.deepEqual(scheduledLeaves, []);
+
+    await follower.tools.get("request_compaction")!.execute();
+    await follower.settle();
+    await follower.settle();
+    assert.equal(compactRequests.length, 1);
+    assert.equal(follower.verifications.length, 3);
+    follower.verifications[2]!(true);
+    await waitFor(async () => (await follower.status()).startup.state === "ready");
+    const ready = await follower.status();
+    assert.deepEqual(ready.startup, { state: "ready", changed: false });
+    assert.notEqual(ready.lastSafeError, refused.errorCode);
+    await follower.settle();
+    assert.deepEqual(scheduledLeaves, [], "a ready probe must not retarget pending stored compaction");
+    assert.equal(follower.verifications.length, 3, "ready startup must not be checked again");
+    leafId = "compacted";
+    await follower.hooks.get("session_compact")!({ willRetry: false }, ctx);
+    compactRequests[0]!.onComplete?.({});
+    assert.deepEqual(scheduledLeaves, ["compacted"], "the native callback must schedule the current leaf");
+    assert.deepEqual(scheduledGrants, [activeShardId]);
+    await follower.hooks.get("session_shutdown")!({}, ctx);
+
+    const canary = load(true);
+    await canary.hooks.get("session_start")!({ reason: "resume" }, ctx);
+    assert.equal(canary.verifications.length, 1, "a requested canary still uses the initial read-only check");
+    canary.verifications[0]!(false);
+    await waitFor(async () => (await canary.status()).startup.state === "unavailable");
+    await canary.settle(); await canary.settle();
+    assert.equal(canary.verifications.length, 1, "a requested canary cannot use the follower retry");
+    assert.deepEqual((await canary.status()).startup, refused);
+    assert.equal((await canary.status()).canary.active, false, "continuation history cannot become a fresh canary");
+    assert.equal(spawn.mock.callCount(), 0, "neither initial follower startup nor retries may launch the initializer");
+    assert.deepEqual(scheduledLeaves, ["compacted"]);
+    assert.equal(readFileSync(sourcePath, "utf8"), sourceBytes);
+    for (const name of ["runtime", ".chrono-catalog", "chrono-logical-sessions"]) {
+      assert.equal(existsSync(join(directory, name)), false, "startup observation must not create stores or policy");
+    }
+  } finally {
+    for (const instance of instances) {
+      await instance.hooks.get("session_shutdown")!({}, ctx);
+      for (const resolveVerification of instance.verifications) resolveVerification(false);
+    }
+    spawn.mock.restore();
+    syncBuiltinESMExports();
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

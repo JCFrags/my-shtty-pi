@@ -1078,6 +1078,9 @@ export interface HistoryRuntimeAdapters {
   readonly sessionRolloutDirectory?: string;
   /** Explicit isolated namespace for synthetic integration callers only. */
   readonly schedulerDirectory?: string;
+  /** Synthetic startup fixture only. Requires schedulerDirectory and starts
+   * pending instead of bypassing startup. No runtime configuration can set it. */
+  readonly readOnlyStartupVerifier?: () => Promise<boolean>;
   /** Synthetic-only, synchronous prepared target. Caller retains the physical
    * identity and actual pinned M04 view; this callback must not ingest or read
    * source bodies. Requires an explicit isolated schedulerDirectory. */
@@ -1115,7 +1118,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   let sessionRolloutPersisted = false;
   let rolloutEpoch = 0;
   let rolloutError: string | undefined;
-  let startupStatus: WorkerStartupStatus = { state: adapters.schedulerDirectory ? "ready" : "pending" };
+  const readOnlyStartupVerifier = adapters.schedulerDirectory ? adapters.readOnlyStartupVerifier : undefined;
+  let startupStatus: WorkerStartupStatus = { state: adapters.schedulerDirectory && !readOnlyStartupVerifier ? "ready" : "pending" };
   let startupContext: ExtensionContext | undefined;
   let deferredCompactionSearch: { epoch: number; sessionId: string; sourcePath: string | undefined } | undefined;
   const usesStoredComposition = (ctx: ExtensionContext): boolean => resolveExtensionSettings(userConfig).memoryEngineEnabled
@@ -1142,9 +1146,19 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     rollout: { persisted: sessionRolloutPersisted, enabled: searchSettings().searchIndexEnabled },
     startup: { ...startupStatus },
     ...((rolloutError ?? startupStatus.errorCode) ? { lastSafeError: rolloutError ?? startupStatus.errorCode } : {}) });
+  const canRetryReadOnlyStartup = (ctx: ExtensionContext): boolean => startupStatus.state === "unavailable"
+    && startupStatus.errorCode === "worker-legacy-transition-required"
+    && !canary.requested(ctx.sessionManager.getSessionId())
+    && !!logicalGrant?.searchRoutes.some(route => route.shardId === logicalGrant?.activeShardId && route.ordinal > 0);
   const scheduleSearch = (ctx: ExtensionContext): void => {
     if (!searchSettings().searchIndexEnabled) { search.disable(); return; }
-    if (startupStatus.state !== "ready") { search.cancel(); return; }
+    if (startupStatus.state !== "ready") {
+      // A follower can observe admission established after its initial check.
+      // Pending replacements, canaries, and other startup refusals cannot retry.
+      if (canRetryReadOnlyStartup(ctx)) beginStartup(ctx);
+      search.cancel();
+      return;
+    }
     const sourcePath = ctx.sessionManager.getSessionFile();
     const leafId = ctx.sessionManager.getLeafId?.();
     if (!sourcePath || !leafId) { search.cancel(); return; }
@@ -1157,14 +1171,14 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   };
   const beginStartup = (ctx: ExtensionContext): void => {
     startupContext = ctx;
-    if (startupStatus.state !== "pending") return;
+    if (startupStatus.state !== "pending" && !canRetryReadOnlyStartup(ctx)) return;
     startupStatus = { state: "running" };
     // A logical replacement or isolated canary can reuse an existing host policy.
     // Neither path initializes a second pool or recovers admission state as a load side effect.
     const readOnlyStartup = !!logicalGrant?.searchRoutes.some(route => route.shardId === logicalGrant?.activeShardId && route.ordinal > 0)
       || canary.requested(ctx.sessionManager.getSessionId());
     const startup: Promise<WorkerStartupStatus> = readOnlyStartup
-      ? verifyLegacyAdmissionGate().then(ready => ready
+      ? (readOnlyStartupVerifier ?? verifyLegacyAdmissionGate)().then(ready => ready
         ? { state: "ready", changed: false }
         : { state: "unavailable", errorCode: "worker-legacy-transition-required" })
       : startAuthorizedWorkerRuntime(startupAuthorizationPath(userConfigPath));
