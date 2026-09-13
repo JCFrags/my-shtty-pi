@@ -157,7 +157,7 @@ async function runSingle(request, options, progress = () => { }) {
                         return;
                     }
                     try {
-                        const response = validateWorkerResponse(value, request.jobId);
+                        const response = validateWorkerResponse(value, request.jobId, request.jobType === "replay-compaction" ? request.hardOutputTokens : undefined);
                         if (response.jobType !== request.jobType)
                             throw new Error();
                         finish(response);
@@ -236,7 +236,7 @@ export async function runCompactionWorker(requestValue, options = {}) {
             const hardMs = WORKER_LIMITS.timeoutSeconds.max * 1000;
             return runSingle({ ...request, deadlineMs: Date.now() + hardMs }, { ...options, signal, workerTimeoutMs: hardMs, schedulerTimeoutMs: hardMs }, progress);
         }, MAX_WORKER_RESPONSE_BYTES + 4096, { deadlineMs, onProgress: options.onProgress });
-        return { ...result, response: validateWorkerResponse({ ...result.response, jobId: request.jobId }, request.jobId) };
+        return { ...result, response: validateWorkerResponse({ ...result.response, jobId: request.jobId }, request.jobId, request.jobType === "replay-compaction" ? request.hardOutputTokens : undefined) };
     }
     catch (error) {
         const message = error.message;

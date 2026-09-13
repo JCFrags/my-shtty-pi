@@ -123,7 +123,7 @@ async function runSingle(request: CompactionWorkerRequest, options: WorkerClient
             if (Object.keys(value).some(key => !["kind", "stage", "context"].includes(key)) || !ROLLUP_SHADOW_FAILURE_STAGES.includes(value.stage)) { finish(safeFailure(request, "worker-protocol-error", "response-validation")); return; }
             latestStage = value.stage; latestContext = safeFailureContext(value.context); stage(value.stage); return;
           }
-          try { const response = validateWorkerResponse(value, request.jobId); if (response.jobType !== request.jobType) throw new Error(); finish(response); }
+          try { const response = validateWorkerResponse(value, request.jobId, request.jobType === "replay-compaction" ? request.hardOutputTokens : undefined); if (response.jobType !== request.jobType) throw new Error(); finish(response); }
           catch { finish(safeFailure(request, "worker-protocol-error", "response-validation")); }
         });
         running.on("worker-exit", (code: number | null, signal: NodeJS.Signals | null) => {
@@ -178,7 +178,7 @@ export async function runCompactionWorker(requestValue: unknown, options: Worker
       const hardMs = WORKER_LIMITS.timeoutSeconds.max * 1000;
       return runSingle({ ...request, deadlineMs: Date.now() + hardMs }, { ...options, signal, workerTimeoutMs: hardMs, schedulerTimeoutMs: hardMs }, progress);
     }, MAX_WORKER_RESPONSE_BYTES + 4096, { deadlineMs, onProgress: options.onProgress });
-    return { ...result, response: validateWorkerResponse({ ...result.response, jobId: request.jobId }, request.jobId) };
+    return { ...result, response: validateWorkerResponse({ ...result.response, jobId: request.jobId }, request.jobId, request.jobType === "replay-compaction" ? request.hardOutputTokens : undefined) };
   } catch (error) {
     const message = (error as Error).message;
     const result = fail(message === "worker-aborted" ? "worker-aborted" : message === "worker-timeout" ? "worker-timeout" : message === "scheduler-queue-full" ? "scheduler-queue-full" : message === "worker-response-too-large" ? "worker-response-too-large" : "worker-containment-unavailable");

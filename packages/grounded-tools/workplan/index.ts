@@ -10,8 +10,10 @@ import {
   renderWorkplanMutation,
   renderWorkplanStatus,
   workplanContextLine,
+  validateWorkplanState,
   type WorkplanEvent,
 } from "@grounded/pi-core/workplan";
+import { registerStateCheckpointProvider, restoreStateCheckpoint } from "@grounded/pi-core/state-transfer";
 import {
   boundedStateOutput,
   cancelled,
@@ -81,6 +83,8 @@ export function prepareWorkplanArguments(args: unknown): Static<typeof WorkplanP
 interface EntryLike {
   id?: string;
   type?: string;
+  customType?: string;
+  data?: unknown;
   message?: { role?: string; toolName?: string; details?: unknown };
 }
 
@@ -111,6 +115,8 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
   let corruptEntryId: string | undefined;
   let currentBranchId = "root";
   let lifecycleEpoch = 0;
+  let currentContext: ExtensionContext | undefined;
+  let executing = 0;
   const eventBus = pi.events;
   const pendingMutations = new Map<string, {
     event: WorkplanEvent;
@@ -119,6 +125,11 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
     branchId: string;
     epoch: number;
   }>();
+
+  const removeCheckpointProvider = registerStateCheckpointProvider(eventBus, "workplan", () => ({
+    state, sessionId: currentContext?.sessionManager.getSessionId(), leafId: currentContext?.sessionManager.getLeafId(),
+    corrupt: corruptEntryId !== undefined, pending: executing > 0 || pendingMutations.size > 0,
+  }), validateWorkplanState);
 
   const eventKey = (event: WorkplanEvent): string => {
     const data = event.data as Record<string, unknown>;
@@ -133,12 +144,26 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
   };
 
   const restore = (ctx: ExtensionContext) => {
+    currentContext = ctx;
     lifecycleEpoch += 1;
     pendingMutations.clear();
     currentBranchId = workplanBranchId(ctx.sessionManager.getLeafId());
     state = emptyWorkplanState();
     corruptEntryId = undefined;
+    let seenState = false;
     for (const raw of ctx.sessionManager.getBranch() as EntryLike[]) {
+      try {
+        const checkpoint = restoreStateCheckpoint(raw, "workplan", validateWorkplanState);
+        if (checkpoint) {
+          if (seenState) throw new StateToolError("STATE_CORRUPT", "Workplan checkpoint follows existing state");
+          state = checkpoint;
+          seenState = true;
+          continue;
+        }
+      } catch {
+        corruptEntryId = raw.id ?? "unknown";
+        break;
+      }
       if (raw.type !== "message" || raw.message?.role !== "toolResult" || raw.message.toolName !== "workplan") continue;
       const details = raw.message.details;
       if (!details || typeof details !== "object" || Array.isArray(details)) continue;
@@ -150,6 +175,7 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
       if (envelope.protocol !== STATE_EVENT_PROTOCOL || envelope.tool !== "workplan") continue;
       try {
         state = applyWorkplanEvent(state, event);
+        seenState = true;
       } catch {
         corruptEntryId = raw.id ?? "unknown";
         break;
@@ -188,7 +214,7 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
     const envelope = candidate as Record<string, unknown>;
     if (envelope.protocol !== STATE_EVENT_PROTOCOL || envelope.tool !== "workplan") return;
     const pending = pendingMutations.get(eventKey(candidate as WorkplanEvent));
-    if (!pending) return;
+    if (!pending || JSON.stringify(candidate) !== JSON.stringify(pending.event)) return;
     const persistedActivity = details.activity;
     let activity: WorkplanActivityV1 | undefined;
     if (persistedActivity !== undefined) {
@@ -216,7 +242,9 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     lifecycleEpoch += 1;
     pendingMutations.clear();
+    currentContext = undefined;
     removeSummaryListener();
+    removeCheckpointProvider();
   });
   pi.on("context", (event) => {
     const text = corruptEntryId ? `[workplan state] corrupt entry=${corruptEntryId}` : workplanContextLine(state, latestVisibleRecovery(event.messages));
@@ -236,6 +264,7 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal) {
       if (corruptEntryId) throw new StateToolError("STATE_CORRUPT", `Workplan state is corrupt at entry ${corruptEntryId}`);
       cancelled(signal);
+      const epoch = lifecycleEpoch;
       const operation = performWorkplanAction(state, params);
       cancelled(signal);
       let text: string;
@@ -246,7 +275,14 @@ export default function groundedWorkplan(pi: ExtensionAPI) {
         if (!plan) throw new StateToolError("STATE_NOT_FOUND", `Workplan ${params.planId} does not exist`);
         text = renderWorkplanStatus(plan);
       } else text = typeof operation.result === "string" ? operation.result : JSON.stringify(operation.result, null, 2);
-      const bounded = await boundedStateOutput(text, "grounded-workplan", signal, params.action === "read" ? {} : { maxBytes: 48 * 1024, maxLines: 1500 });
+      executing += 1;
+      let bounded: Awaited<ReturnType<typeof boundedStateOutput>>;
+      try {
+        bounded = await boundedStateOutput(text, "grounded-workplan", signal, params.action === "read" ? {} : { maxBytes: 48 * 1024, maxLines: 1500 });
+      } finally {
+        executing -= 1;
+      }
+      if (epoch !== lifecycleEpoch) throw new StateToolError("STATE_CONFLICT", "Workplan branch changed during the operation");
       text = bounded.text;
       const fullOutputPath = bounded.fullOutputPath;
       cancelled(signal);

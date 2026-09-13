@@ -3,10 +3,29 @@ import { constants } from "node:fs";
 import { link, lstat, open, realpath, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { LOGICAL_SESSION_LIMITS } from "./logical-session-contract.js";
+import { LOGICAL_CHECKPOINT_LIMITS, LOGICAL_CHECKPOINT_TYPE, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
 const fail = (code) => { throw Object.assign(new Error(code), { code }); };
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const MAX_BOOTSTRAP_ENTRIES = 8;
-const MAX_BOOTSTRAP_BYTES = LOGICAL_SESSION_LIMITS.continuationBytes * 2;
+const MAX_BOOTSTRAP_BYTES = LOGICAL_SESSION_LIMITS.continuationBytes * 2 + LOGICAL_CHECKPOINT_LIMITS.aggregateBytes;
+/** Reconstruct only the finite initial bootstrap size, not lifetime growth.
+ * This prevents a large state checkpoint from immediately causing another rollover. */
+export function logicalBootstrapBytes(header, entries) {
+    let bytes = Buffer.byteLength(JSON.stringify(header)) + 1;
+    for (const value of entries.slice(0, MAX_BOOTSTRAP_ENTRIES)) {
+        if (!object(value))
+            return fail("logical-session-source-persistence-invalid");
+        bytes += Buffer.byteLength(JSON.stringify(value)) + 1;
+        if (bytes > MAX_BOOTSTRAP_BYTES)
+            return fail("logical-session-source-persistence-invalid");
+        if (value.type === "custom_message" && value.customType === "chrono-logical-continuation")
+            return bytes;
+        if (!(value.type === "custom" && value.customType === LOGICAL_CHECKPOINT_TYPE)
+            && !["model_change", "thinking_level_change", "session_info"].includes(String(value.type)))
+            return 0;
+    }
+    return 0;
+}
 async function verifyExistingSource(path, expected) {
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => fail("logical-session-source-persistence-invalid"));
     try {
@@ -24,7 +43,7 @@ async function verifyExistingSource(path, expected) {
     }
 }
 /** Persist only a fresh Pi replacement's exact header and continuation-only bootstrap entries. */
-export async function persistNewShardBootstrap(manager, expectedParentSession, continuationEntryId) {
+export async function persistNewShardBootstrap(manager, expectedParentSession, continuationEntryId, expectedSourceSessionId) {
     const sourcePath = manager.getSessionFile(), sessionDirectory = manager.getSessionDir();
     if (!manager.isPersisted() || !sourcePath || !isAbsolute(sourcePath) || resolve(sourcePath) !== sourcePath
         || !isAbsolute(sessionDirectory) || resolve(sessionDirectory) !== sessionDirectory || dirname(sourcePath) !== sessionDirectory
@@ -43,7 +62,7 @@ export async function persistNewShardBootstrap(manager, expectedParentSession, c
         || entries.length < 1 || entries.length > MAX_BOOTSTRAP_ENTRIES) {
         return fail("logical-session-source-persistence-invalid");
     }
-    const seen = new Set();
+    const seen = new Set(), checkpoints = [];
     let parentId = null, continuationCount = 0;
     for (const value of entries) {
         if (!object(value) || typeof value.id !== "string" || value.id.length < 1 || value.id.length > 128 || seen.has(value.id)
@@ -56,6 +75,9 @@ export async function persistNewShardBootstrap(manager, expectedParentSession, c
             if (value.id !== continuationEntryId)
                 return fail("logical-session-source-persistence-invalid");
         }
+        else if (value.type === "custom" && value.customType === LOGICAL_CHECKPOINT_TYPE) {
+            checkpoints.push({ customType: value.customType, data: value.data });
+        }
         else if (!["model_change", "thinking_level_change", "session_info"].includes(String(value.type))) {
             return fail("logical-session-source-persistence-invalid");
         }
@@ -65,6 +87,13 @@ export async function persistNewShardBootstrap(manager, expectedParentSession, c
     const continuation = entries.at(-1);
     if (typeof continuation.content !== "string" || Buffer.byteLength(continuation.content) > LOGICAL_SESSION_LIMITS.continuationBytes) {
         return fail("logical-session-source-persistence-invalid");
+    }
+    if (checkpoints.length) {
+        const details = object(continuation.details) ? continuation.details : undefined;
+        const source = object(details?.source) ? details.source : undefined;
+        if (!expectedSourceSessionId || typeof source?.entryId !== "string")
+            return fail("logical-session-source-persistence-invalid");
+        validateLogicalStateCheckpoints(checkpoints, { sourceSessionId: expectedSourceSessionId, sourceLeafId: source.entryId });
     }
     let lines, serializedBytes = 0;
     try {

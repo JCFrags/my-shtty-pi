@@ -36,6 +36,7 @@ test("partial promotion refusal mirrors each committed event and never repeats t
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const mirrored: MemoryEvent[] = [];
   let runs = 0;
+  await writeFile(join(directory, "synthetic-history-config.json"), JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const shutdown = installSyntheticHistoryExtension({ registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry(kind: string, event: MemoryEvent) { assert.equal(kind, "chrono-memory-v2-event"); mirrored.push(event); }, sendMessage() {} } as unknown as ExtensionAPI, directory, () => { runs++; });
   t.after(shutdown);
   const response = await tools.get("history_recall")!("test", { query: "alpha" }, undefined, undefined, {

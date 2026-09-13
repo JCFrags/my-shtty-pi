@@ -1,7 +1,7 @@
 import { parseHistoricalBlocks } from "./blocks.js";
 import { applyHistoryEditor, DEFAULT_HISTORY_EDITOR_MAX_INPUT_TOKENS, } from "./history-editor.js";
 import { buildCandidateUnits } from "./candidates.js";
-import { buildCausalMemory, renderCurrentStateRegisterWithinTokens } from "./causal-memory.js";
+import { buildCausalMemory, chronologicalStateAnnotations } from "./causal-memory.js";
 import { mergeOldCompletedEpisodes, mergeRoutineActivitySegments } from "./episodes.js";
 import { planCompression } from "./planner.js";
 import { addRepeatedObservationCandidates } from "./repeated-observations.js";
@@ -225,9 +225,10 @@ export async function compactEntries(entries, options = {}) {
     const currentStateTokenBudget = Math.max(128, Math.min(5_000, Math.floor(hardOutputTokens * 0.2)));
     const lineage = buildResourceLineage(blocks);
     const causal = buildCausalMemory(blocks, lineage);
-    const derivedState = renderCurrentStateRegisterWithinTokens(causal, 250, currentStateTokenBudget);
-    const pinnedMemoryText = [options.pinnedMemoryText?.trim(), derivedState.trim()].filter(Boolean).join("\n\n");
-    const pinnedMemoryTokens = estimateTokensFromText(pinnedMemoryText);
+    const annotations = chronologicalStateAnnotations(causal, blocks, currentStateTokenBudget);
+    const pinnedMemoryText = options.pinnedMemoryText?.trim() ?? "";
+    const pinnedMemoryTokens = estimateTokensFromText(pinnedMemoryText)
+        + annotations.reduce((sum, item) => sum + estimateTokensFromText(item.text), 0);
     const generationHash = computeGenerationHash(entries, config, options.retentionHints, options.futureEntries, pinnedMemoryText, options.retrievalFeedback);
     const rawTokens = blocks.reduce((sum, block) => sum + block.rawTokens, 0);
     const analysisBlocks = options.futureEntries?.length
@@ -295,7 +296,7 @@ export async function compactEntries(entries, options = {}) {
         signal: options.signal,
     });
     plan = edited.plan;
-    rendered = renderCompressionPlan(plan, generationHash, config.includeHeader);
+    rendered = renderCompressionPlan(plan, generationHash, config.includeHeader, annotations);
     const summary = pinnedMemoryText ? `${pinnedMemoryText}\n\n${rendered.text}` : rendered.text;
     const combinedRenderedTokens = estimateTokensFromText(summary);
     let validation = validatePlan(plan, blocks, Math.min(replayRenderedTarget, Math.max(128, hardOutputTokens - pinnedMemoryTokens)), {

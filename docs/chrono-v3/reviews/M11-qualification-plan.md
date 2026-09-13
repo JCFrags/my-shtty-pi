@@ -1,6 +1,6 @@
 # M11 qualification evidence plan
 
-Status: the first full campaign prepared all catalog, capsule, and search stores, then failed after 28,693,015 ms with `search-v3-query-budget` before state materialization, faults, matrix lanes, or composition. Its retained data and failure report are not a pass. The later [report correction and retained-tail command](M11-report-correction.md) addresses a reproduced final-aggregation failure without changing the retained runtime or certifying a completed campaign. The separate recovery command is implemented but has not run. It requires natural settlement and a new parent exact-go after implementation delivery.
+Status: historical qualification plan, not the current release checklist. The first full campaign prepared catalog, capsule, and search stores, then failed after 28,693,015 ms with `search-v3-query-budget`. The later frozen run completed body/metadata preparation but failed after 72,159,177.94 ms with `catalog-worker-failed` during the partial 16-session, one-slot lane. See the [actual settled result](M11-report-correction.md#actual-settled-campaign) for retained evidence and unavailable measurements. Neither run is a full pass. The separate final-aggregation recovery command does not apply to this earlier failure and has not run. The [current priorities](../README.md#current-priorities) permit useful V3 delivery without repeating these historical campaigns.
 
 ## Run boundary
 
@@ -94,7 +94,7 @@ The retained M07 runtime at `09a8e9147095079668689546ae85146d787d8b68` processes
 
 ## Separate retained-tail recovery
 
-Use `scripts/m11-retained-tail-recovery.mjs`, not ordinary `resume`, for the anticipated natural final-aggregation failure under exact frozen runtime `09a8e9147095079668689546ae85146d787d8b68`. The [command documentation](M11-report-correction.md#exact-go-input-and-invocation) defines the hash-bound approval file, unchanged runtime/dependencies, original parent identity receipt, existing nonblocking lock, all worker namespaces, exclusive output, and external two-hour guard.
+Historical procedure only: `scripts/m11-retained-tail-recovery.mjs` supports the anticipated final-aggregation failure under exact frozen runtime `09a8e9147095079668689546ae85146d787d8b68`. The actual earlier catalog-worker failure is outside that boundary. Do not use this command or ordinary `resume` to reinterpret it as a completed matrix. The [command documentation](M11-report-correction.md#exact-go-input-and-invocation) defines the hash-bound approval file, unchanged runtime/dependencies, original parent identity receipt, existing nonblocking lock, all worker namespaces, exclusive output, and external two-hour guard.
 
 It validates completed retained state and exactly one original matrix suffix. It then permits only three fault worker calls, nine lanes/504 calls, 39 lease probes, 84 new tiny appends, and 128 double compositions. The 80 validation worker calls, 64 read-only database opens, bounded source reads, and validation time are separate measurements. Missing original metrics remain unavailable. A completed frozen tail does not qualify the final runtime or close the remaining M11 gaps.
 

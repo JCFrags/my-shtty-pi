@@ -39,6 +39,8 @@ export interface UserConfig {
   readonly searchIndexEnabled?: boolean;
   /** Normal V3 architecture. Every composition still validates its actual cut. */
   readonly memoryEngineEnabled?: boolean;
+  readonly automaticRolloverEnabled?: boolean;
+  readonly rolloverSourceBytes?: number;
   readonly hostWorkerSlots?: number;
   readonly workerTimeoutSeconds?: number;
   readonly workerNiceLevel?: number;
@@ -74,6 +76,8 @@ const CONFIG_KEYS = [
   "catalogShadowEnabled",
   "searchIndexEnabled",
   "memoryEngineEnabled",
+  "automaticRolloverEnabled",
+  "rolloverSourceBytes",
   "hostWorkerSlots",
   "workerTimeoutSeconds",
   "workerNiceLevel",
@@ -105,6 +109,8 @@ const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
   "catalog-shadow": "catalogShadowEnabled",
   "search-index": "searchIndexEnabled",
   "memory-engine": "memoryEngineEnabled",
+  "automatic-rollover": "automaticRolloverEnabled",
+  "rollover-bytes": "rolloverSourceBytes",
   "worker-slots": "hostWorkerSlots",
   "worker-timeout": "workerTimeoutSeconds",
   "worker-nice": "workerNiceLevel",
@@ -183,6 +189,8 @@ export function validateUserConfig(value: unknown): UserConfig {
   if (input.rollupShadowEnabled !== undefined) config.rollupShadowEnabled = booleanValue(input.rollupShadowEnabled, "rollupShadowEnabled");
   if (input.searchIndexEnabled !== undefined) config.searchIndexEnabled = booleanValue(input.searchIndexEnabled, "searchIndexEnabled");
   if (input.memoryEngineEnabled !== undefined) config.memoryEngineEnabled = booleanValue(input.memoryEngineEnabled, "memoryEngineEnabled");
+  if (input.automaticRolloverEnabled !== undefined) config.automaticRolloverEnabled = booleanValue(input.automaticRolloverEnabled, "automaticRolloverEnabled");
+  if (input.rolloverSourceBytes !== undefined) config.rolloverSourceBytes = boundedInteger(input.rolloverSourceBytes, "rolloverSourceBytes", 1024 * 1024, 64 * 1024 * 1024);
   if (input.catalogShadowEnabled !== undefined) config.catalogShadowEnabled = booleanValue(input.catalogShadowEnabled, "catalogShadowEnabled");
   if (input.hostWorkerSlots !== undefined) config.hostWorkerSlots = boundedInteger(input.hostWorkerSlots, "hostWorkerSlots", WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max);
   if (input.workerTimeoutSeconds !== undefined) config.workerTimeoutSeconds = boundedInteger(input.workerTimeoutSeconds, "workerTimeoutSeconds", WORKER_LIMITS.timeoutSeconds.min, WORKER_LIMITS.timeoutSeconds.max);
@@ -289,7 +297,9 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     case "rollupShadowEnabled": value = booleanValue(raw, command); break;
     case "searchIndexEnabled":
     case "memoryEngineEnabled":
+    case "automaticRolloverEnabled":
     case "catalogShadowEnabled": value = booleanValue(raw, command); break;
+    case "rolloverSourceBytes": value = boundedInteger(raw, command, 1024 * 1024, 64 * 1024 * 1024); break;
     case "hostWorkerSlots": value = boundedInteger(raw, command, WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max); break;
     case "workerTimeoutSeconds": value = boundedInteger(raw, command, WORKER_LIMITS.timeoutSeconds.min, WORKER_LIMITS.timeoutSeconds.max); break;
     case "workerNiceLevel": value = boundedInteger(raw, command, WORKER_LIMITS.nice.min, WORKER_LIMITS.nice.max); break;

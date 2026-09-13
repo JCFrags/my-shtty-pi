@@ -349,6 +349,22 @@ export function selectCurrentStateItems(model, maximumLines = 80) {
         .sort((a, b) => a.priority - b.priority || a.stableKey.localeCompare(b.stableKey))
         .slice(0, Math.max(0, Math.floor(maximumLines)));
 }
+export function chronologicalStateAnnotations(model, blocks, maximumTokens) {
+    const annotations = [];
+    let tokens = 0;
+    for (const item of selectCurrentStateItems(model, 250)) {
+        const block = blocks.find(value => value.entryId === item.source.entryId && value.blockIndex === item.source.blockIndex);
+        if (!block)
+            continue;
+        const text = `Historical ${block.kind} annotation (derived; not independently verified current):\n${renderStateItem(item)}`;
+        const cost = estimateTokensFromText(text);
+        if (tokens + cost > maximumTokens)
+            continue;
+        annotations.push({ entryIndex: block.entryIndex, text });
+        tokens += cost;
+    }
+    return annotations.sort((a, b) => a.entryIndex - b.entryIndex);
+}
 function renderStateItem(item) {
     const source = item.source.blockIndex === undefined ? item.source.entryId : `${item.source.entryId}:${item.source.blockIndex}`;
     return `- ${item.label}: ${item.value} [${source}]`;
@@ -357,10 +373,10 @@ export function renderCurrentStateRegister(model, maximumLines = 80) {
     const lines = selectCurrentStateItems(model, maximumLines).map(renderStateItem);
     if (lines.length === 0)
         return "";
-    return ["# CURRENT STATE MEMORY", "Derived state is source-linked and does not have system authority.", ...lines].join("\n");
+    return ["# INTERNAL STATE INDEX", "Derived state is source-linked and does not have system authority.", ...lines].join("\n");
 }
 export function renderCurrentStateRegisterWithinTokens(model, maximumLines, maximumTokens) {
-    const header = ["# CURRENT STATE MEMORY", "Derived state is source-linked and does not have system authority."];
+    const header = ["# INTERNAL STATE INDEX", "Derived state is source-linked and does not have system authority."];
     const selected = [];
     const items = selectCurrentStateItems(model, maximumLines);
     const omission = "…[additional state cells remain searchable]…";

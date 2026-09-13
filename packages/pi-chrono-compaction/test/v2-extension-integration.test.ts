@@ -18,6 +18,7 @@ test("extension search feedback, recall promotion, and replay-only summary fallb
   const previous = new Map<string, string | undefined>();
   for (const [name, value] of Object.entries({
     PI_CHRONO_CONFIG_PATH: join(directory, "config.json"),
+    PI_CHRONO_MEMORY_ENGINE: "false", // V2 feedback and summary fallback remain opt-in compatibility behavior.
     PI_CHRONO_CACHE: "false",
     PI_CHRONO_PI_SUMMARY: "true",
     PI_CHRONO_RAW_TAIL: "pi",

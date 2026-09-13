@@ -73,8 +73,11 @@ function renderUnit(unit) {
         sections.push(recovery);
     return sections.filter(Boolean).join("\n");
 }
-export function renderCompressionPlan(plan, generationHash, includeHeader = true) {
-    const renderedUnits = plan.units.map(renderUnit).filter((value) => value !== undefined);
+export function renderCompressionPlan(plan, generationHash, includeHeader = true, annotations = []) {
+    const renderedUnits = [...plan.units.flatMap(unit => {
+            const text = renderUnit(unit);
+            return text === undefined ? [] : [{ entryIndex: unit.startEntryIndex, text }];
+        }), ...annotations].sort((a, b) => a.entryIndex - b.entryIndex).map(item => item.text);
     const absentCount = plan.units.filter((unit) => unit.selected.level === "absent").length;
     const sections = [];
     if (includeHeader) {

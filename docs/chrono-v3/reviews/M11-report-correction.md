@@ -1,8 +1,18 @@
 # M11 report correction and retained-tail recovery
 
-Status: the report correction and a separate, operator-gated `m11-retained-tail-recovery.mjs` command are implemented. Recovery has not run. Execution requires natural campaign settlement and a new explicit parent approval after implementation delivery. The retained runtime is unchanged. See the [qualification plan](M11-qualification-plan.md) for the campaign boundary and final-runtime checks.
+Status: historical report correction and recovery procedure. The retained campaign settled with an earlier catalog-worker failure during the partial 16-session, one-slot lane, not the anticipated final-aggregation failure. The recovery command has not run and does not apply to this result. Preserve its data and failure evidence. The [current priorities](../README.md#current-priorities) do not require repeating this campaign to ship usable V3.
 
-## Reproduced failure and correction
+## Actual settled campaign
+
+The frozen `09a8e9147095079668689546ae85146d787d8b68` run exited with status 1 on September 12, 2026 (UTC). Its failed report records `ERR_ASSERTION`, `catalog-worker-failed`, `sourceBytes: 0`, and 72,159,177.94 ms wall time. The wrapper did not preserve the originating cause or exact catalog operation. A later inactive unit's `Result=success` does not override the failed report and journal exit.
+
+The retained manifest contains 4,091,773,721 source bytes, 4,000,000,000 decoded UTF-16 units, 3,839 events plus 128 compaction records, and 72 shards across 16 sessions. Its 1,000,000,010 token count is a character-based estimate, not a model tokenizer measurement. The saved preparation checkpoint records all 16 completed body/metadata cuts and 72 shard search/recall checks. Its selections are partial because they omit recent context.
+
+Retained control flow and directories support six completed lanes (four/eight sessions with one/two/four slots), then a partial 16-session, one-slot lane. There is no completed 16-session two/four-slot result or final 128-composition result. This is useful preparation evidence, not billion-token normal-use qualification.
+
+The campaign parent/launcher service recorded 1,069,006,848 bytes peak memory, 89,688,246,731,000 ns CPU time, and zero peak swap. These are not main-Pi or whole-host measurements. Sixteen saved selection-worker observations have maximum RSS 68,599,808 bytes and combined user/system CPU of 118.684–145.541 ms per job. Full-run latency, worker-peak, I/O, and event-loop arrays were not persisted and remain unavailable. All 20 configured slots in the nine created namespaces settled.
+
+## Separately reproduced reporting defect
 
 The retained harness at `09a8e9147095079668689546ae85146d787d8b68` calls `Math.max(...values)` for metric distributions and spreads all worker observations into two more `Math.max` calls. On Node 24.18.0, its `distribution` function throws `RangeError: Maximum call stack size exceeded` for both 135,179 and 164,170 samples. The latter is the retained preparation's calculated body-step count, not an invented stress-test scale.
 
@@ -28,7 +38,7 @@ The harness awaits writing `prepared-state.json` before faults, matrix lanes, co
 
 There is no persisted metric accumulator or post-matrix results checkpoint. The failure report retains candidate identities, the error, a retained-root flag, and wall time. Original latency distributions, worker peaks, per-operation I/O, queue measurements, fault timings, composition observations, process baselines, and event-loop measurements remain in memory and are lost on exit. Scheduler files and appended source records cannot reconstruct them.
 
-The failure is still anticipated until a naturally settled process emits its actual result. A timeout or earlier failure does not prove that `prepared-state.json` exists or that later phases ran.
+The aggregation defect was anticipated when this procedure was written. The actual run failed earlier, as recorded above. A checkpoint alone does not prove that all later phases ran.
 
 ## Why current-main recovery is not implemented
 

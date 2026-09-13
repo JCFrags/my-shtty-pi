@@ -31,7 +31,7 @@ export function isLogicalContinuation(value) {
         || value.composition.schemaVersion !== 1 || !hash(value.composition.payloadHash) || !hash(value.composition.artifactHash)
         || !positive(value.composition.combinedTokens) || !positive(value.composition.combinedCeilingTokens)
         || Number(value.composition.combinedTokens) > Number(value.composition.combinedCeilingTokens)
-        || value.composition.mandatoryCoverageComplete !== true || value.composition.safeTail !== true)
+        || typeof value.composition.mandatoryCoverageComplete !== "boolean" || value.composition.safeTail !== true)
         return false;
     const seen = new Set();
     return value.coveredShards.every(item => object(item) && uuid(item.shardId) && !seen.has(item.shardId)

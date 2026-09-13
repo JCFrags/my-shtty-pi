@@ -203,15 +203,18 @@ function nodeBytes(node) { return Buffer.byteLength(canonicalJson(node)); }
 /** Keep structural recovery routes intact. If optional material does not fit,
  * remove it deterministically and make every protected/metadata gap explicit. */
 function boundedNode(node) {
-    const summary = [...node.summary], protectedReferences = [...node.protectedReferences], metadataHints = [...node.metadataHints];
+    // Reserve compact navigation cues before optional copied detail. The exact
+    // source and child routes remain authoritative when any copy is omitted.
+    let summary = [...node.summary];
+    const protectedReferences = [...node.protectedReferences], metadataHints = [...node.metadataHints];
     let omittedProtectedCount = node.omittedProtectedCount, omittedMetadataCount = node.omittedMetadataCount;
     while (true) {
         const candidate = nodeWithIdentity({ ...node, summary, protectedReferences, omittedProtectedCount,
             metadataHints, omittedMetadataCount });
         if (nodeBytes(candidate) <= EPISODE_STATE_LIMITS.rollupNodeUtf8Bytes)
             return candidate;
-        if (summary.length) {
-            summary.pop();
+        if (summary.some(text => text.length > 240)) {
+            summary = summary.map(text => text.slice(0, 240));
             continue;
         }
         if (metadataHints.length) {
@@ -222,6 +225,10 @@ function boundedNode(node) {
         if (protectedReferences.length) {
             protectedReferences.pop();
             omittedProtectedCount++;
+            continue;
+        }
+        if (summary.length) {
+            summary.pop();
             continue;
         }
         return fail("search-v3-rollup-node-limit");
@@ -274,7 +281,8 @@ function boundedUnique(items, key, maximum) {
 function leafFrom(page) {
     const sources = page.members.map(member => ({ eventSeq: member.eventSeq, descriptor: member.descriptor, sourceKey: member.sourceKey,
         source: member.source, exactBodyHash: member.exactBody === undefined ? undefined : sha(member.exactBody), exactBodyOmitted: member.exactBodyOmitted }));
-    const summary = [page.objective, ...page.members.map(member => member.exactBody ?? member.cue)].filter(Boolean).map(text => String(text).slice(0, 2048));
+    const summary = page.members.map(member => `event ${member.eventSeq}:${member.descriptor}: ${member.exactBody ?? member.cue}`)
+        .map(text => text.replace(/\s+/gu, " ").trim().slice(0, 2048));
     const base = { schemaVersion: 1, ruleset: EPISODE_ROLLUP_RULESET_VERSION, nodeType: "episode-fragment", level: 0,
         orderedChildren: [], sourceCoverageHash: sha(canonicalJson(sources.map(source => ({ sourceKey: source.sourceKey, exactBodyHash: source.exactBodyHash })))),
         range: page.start.eventSeq <= page.end.eventSeq ? { start: page.start, end: page.end } : fail("search-v3-rollup-input-invalid"),
@@ -294,7 +302,9 @@ function parentFrom(children) {
         level: Math.max(...children.map(child => child.level)) + 1, orderedChildren: children.map(child => child.nodeId),
         sourceCoverageHash: sha(canonicalJson(children.map(child => child.sourceCoverageHash))),
         range: { start: children[0].range.start, end: children.at(-1).range.end },
-        summary: children.flatMap(child => child.summary).slice(0, EPISODE_STATE_LIMITS.rollupFanout).map(text => text.slice(0, 2048)),
+        // Keep a cue from each child, rather than spending every slot on the first
+        // child's descendants. This is a navigation sample, not a full summary.
+        summary: children.map(child => recallSummary(child)[0]).map(text => text.slice(0, 2048)),
         protectedReferences: protectedSelected.kept,
         omittedProtectedCount: children.reduce((sum, child) => sum + child.omittedProtectedCount, 0) + protectedSelected.omitted,
         metadataHints: metadataSelected.kept,
@@ -467,6 +477,27 @@ function matchScore(node, query) {
     const text = canonicalJson({ summary: node.summary, protected: node.protectedReferences, metadata: node.metadataHints }).toLowerCase();
     return terms.reduce((score, term) => score + Number(text.includes(term)), 0);
 }
+function recallSummary(node) {
+    const stored = node.summary.filter(text => text.trim().length > 0);
+    if (stored.length)
+        return stored;
+    // Old immutable nodes can have an evicted summary. Reuse only their own
+    // bounded source-linked evidence. This read path never rewrites a node.
+    const excerpts = [];
+    if (node.nodeType === "episode-fragment" && node.objective.trim())
+        excerpts.push(node.objective);
+    for (const item of [...node.protectedReferences, ...node.metadataHints]) {
+        const evidence = item.evidence;
+        if (typeof evidence?.exactText !== "string" || !evidence.exactText.trim())
+            continue;
+        const source = evidence.source;
+        const at = typeof source?.eventSeq === "number" ? `event ${source.eventSeq}:${source.descriptor ?? 0}: ` : "";
+        excerpts.push(`${at}${evidence.exactText}`.replace(/\s+/gu, " ").trim().slice(0, 240));
+        if (excerpts.length >= EPISODE_STATE_LIMITS.rollupFanout)
+            break;
+    }
+    return excerpts.length ? excerpts : [`Historical events ${node.range.start.eventSeq}..${node.range.end.eventSeq}. Topic cue unavailable; expand for source detail.`];
+}
 function nodeReference(h, node, path) {
     return { kind: "rollup-node", handle: h, nodeId: node.nodeId, path, nodeType: node.nodeType, level: node.level,
         range: node.range, sourceCoverageHash: node.sourceCoverageHash };
@@ -491,7 +522,7 @@ function verifiedPath(store, rootId, targetId, supplied) {
 function episodeItem(h, node, path) {
     return { reference: { kind: "episode", handle: h, nodeId: node.nodeId, path, episodeKey: node.episodeKey,
             fragmentIndex: node.fragmentIndex, episodeFragment: node.episodeFragment, closure: node.closure, boundaries: node.range },
-        summary: node.summary, objective: node.objective, protectedReferences: node.protectedReferences,
+        summary: recallSummary(node), cuePartial: true, objective: node.objective, protectedReferences: node.protectedReferences,
         omittedProtectedCount: node.omittedProtectedCount, metadataHints: node.metadataHints, omittedMetadataCount: node.omittedMetadataCount,
         remainingDetail: node.remainingDetail };
 }
@@ -605,7 +636,7 @@ function recall(request, store) {
     let allItems;
     if (level === "root" || level === "child")
         allItems = candidates.map(item => ({ reference: nodeReference(h, item.node, item.path),
-            summary: item.node.summary, episodeCount: item.node.episodeCount, memberCount: item.node.memberCount,
+            summary: recallSummary(item.node), cuePartial: true, episodeCount: item.node.episodeCount, memberCount: item.node.memberCount,
             protectedCount: item.node.protectedReferences.length, omittedProtectedCount: item.node.omittedProtectedCount,
             metadataHintCount: item.node.metadataHints.length, omittedMetadataCount: item.node.omittedMetadataCount,
             remainingDetail: item.node.remainingDetail }));
@@ -615,18 +646,21 @@ function recall(request, store) {
     else if (target.nodeType === "episode-fragment")
         allItems = target.sources.map(source => ({ reference: { kind: "exact-source",
                 parentReference: episodeItem(h, target, route.path).reference, sourceKey: source.sourceKey }, source: source.source,
-            exactBodyHash: source.exactBodyHash, exactBodyOmitted: source.exactBodyOmitted }));
+            cue: target.summary.find(text => text.startsWith(`event ${source.eventSeq}:${source.descriptor}: `)) ?? "Exact source; use recovery for text.",
+            cuePartial: true, exactBodyHash: source.exactBodyHash, exactBodyOmitted: source.exactBodyOmitted }));
     else
         allItems = candidates.filter((item) => item.node.nodeType === "episode-fragment")
             .flatMap(item => item.node.sources.map(source => ({ reference: { kind: "exact-source", parentReference: episodeItem(h, item.node, item.path).reference,
-                sourceKey: source.sourceKey }, source: source.source, exactBodyHash: source.exactBodyHash, exactBodyOmitted: source.exactBodyOmitted })))
+                sourceKey: source.sourceKey }, source: source.source,
+            cue: item.node.summary.find(text => text.startsWith(`event ${source.eventSeq}:${source.descriptor}: `)) ?? "Exact source; use recovery for text.",
+            cuePartial: true, exactBodyHash: source.exactBodyHash, exactBodyOmitted: source.exactBodyOmitted })))
             .slice(0, EPISODE_STATE_LIMITS.rollupNodesPerRecall);
     const selected = allItems.slice(start, start + limit);
     const build = () => {
         const more = start + selected.length < allItems.length;
         const partialReasons = [...(more ? ["pagination"] : []), ...(traversalLimited ? ["bounded-node-traversal"] : [])];
         return { handle: h, parentReference: { ...nodeReference(h, target, route.path), requestedLevel: level, query: request.query },
-            level, node: { summary: target.summary, episodeCount: target.episodeCount, memberCount: target.memberCount,
+            level, node: { summary: recallSummary(target), cuePartial: true, episodeCount: target.episodeCount, memberCount: target.memberCount,
                 protectedCount: target.protectedReferences.length, omittedProtectedCount: target.omittedProtectedCount,
                 metadataHintCount: target.metadataHints.length, omittedMetadataCount: target.omittedMetadataCount, remainingDetail: target.remainingDetail },
             items: selected, ...(more ? { next: { nodeId: target.nodeId, itemIndex: start + selected.length, generation: h.rollupGeneration,

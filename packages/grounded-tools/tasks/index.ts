@@ -19,6 +19,8 @@ import {
   updateTask,
   validateTaskState,
 } from "@grounded/pi-core/tasks";
+import { requireExactObject, requirePlainJson, StateToolError } from "@grounded/pi-core/state";
+import { registerStateCheckpointProvider, restoreStateCheckpoint } from "@grounded/pi-core/state-transfer";
 
 const ReplacementTaskSchema = Type.Object({
   id: Type.Optional(Type.String()),
@@ -43,6 +45,24 @@ const TodoParams = Type.Object({
 interface TodoDetails {
   action: string;
   state: TaskState;
+}
+
+function validateTaskCheckpointState(state: TaskState): void {
+  requirePlainJson(state, "todo state");
+  requireExactObject(state, ["tasks", "nextId"], [], "todo state", "STATE_CORRUPT");
+  validateTaskState(state);
+  let maximum = 0;
+  for (const task of state.tasks) {
+    requireExactObject(task, ["id", "text", "status", "blockedBy", "createdAt", "updatedAt"],
+      ["description", "waitReason"], "todo task", "STATE_CORRUPT");
+    if (/^T\d+$/.test(task.id)) maximum = Math.max(maximum, Number(task.id.slice(1)));
+  }
+  if (state.nextId <= maximum) throw new StateToolError("STATE_CORRUPT", "The next task number is not monotonic");
+  const refreshed = cloneTaskState(state);
+  refreshBlockedStatuses(refreshed);
+  if (refreshed.tasks.some((task, index) => task.status !== state.tasks[index]!.status)) {
+    throw new StateToolError("STATE_CORRUPT", "Todo dependency status is inconsistent");
+  }
 }
 
 export const TODO_SUMMARY_REQUEST_EVENT = "pi-todo:request-summary-v1" as const;
@@ -189,6 +209,15 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
   let currentContext: ExtensionContext | undefined;
   let displayMode: TodoDisplayMode = "compact";
   let currentBranchId = "root";
+  let corruptEntryId: string | undefined;
+  const pendingMutations = new Map<string, string>();
+  const removeCheckpointProvider = registerStateCheckpointProvider(pi.events, "todo", () => ({
+    state, sessionId: currentContext?.sessionManager.getSessionId(), leafId: currentContext?.sessionManager.getLeafId(),
+    corrupt: corruptEntryId !== undefined, pending: pendingMutations.size > 0,
+  }), validateTaskCheckpointState);
+  const requireHealthyState = () => {
+    if (corruptEntryId) throw new StateToolError("STATE_CORRUPT", `Todo state is corrupt at entry ${corruptEntryId}`);
+  };
 
   const snapshot = () => cloneTaskState(state);
   const eventBus = pi.events;
@@ -233,11 +262,13 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
     const action = request.action;
     if (!requestId || !taskId || (action !== "start" && action !== "done" && action !== "clear_wait")) return;
     try {
+      requireHealthyState();
       const working = cloneTaskState(state);
       let message: string;
       if (action === "start") message = `Started ${startTask(working, taskId).id}: ${taskById(working, taskId).text}`;
       else if (action === "done") message = `Completed ${completeTask(working, taskId).id}: ${taskById(working, taskId).text}`;
       else message = `Cleared external wait for ${updateTask(working, taskId, { waitReason: "" }).id}`;
+      pi.appendEntry("grounded-tasks-state", cloneTaskState(working));
       state = working;
       emitSummary(TODO_SUMMARY_CHANGED_EVENT);
       renderWidget();
@@ -250,21 +281,34 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
   const restore = (ctx: ExtensionContext) => {
     currentBranchId = summaryBranchId(ctx.sessionManager.getLeafId());
     state = emptyTaskState();
+    corruptEntryId = undefined;
+    pendingMutations.clear();
+    let seenState = false;
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "todo") {
-        const details = entry.message.details as TodoDetails | undefined;
-        if (details?.state) state = cloneTaskState(details.state);
-      } else if (entry.type === "custom" && entry.customType === "grounded-tasks-state") {
-        const candidate = entry.data as TaskState;
-        try {
-          validateTaskState(candidate);
-          state = cloneTaskState(candidate);
-        } catch {
-          // Ignore malformed historical snapshots.
+      try {
+        const checkpoint = restoreStateCheckpoint(entry, "todo", validateTaskCheckpointState);
+        if (checkpoint) {
+          if (seenState) throw new StateToolError("STATE_CORRUPT", "Todo checkpoint follows existing state");
+          state = checkpoint;
+          seenState = true;
+          continue;
         }
+        let candidate: TaskState | undefined;
+        if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "todo") {
+          candidate = (entry.message.details as TodoDetails | undefined)?.state;
+        } else if (entry.type === "custom" && entry.customType === "grounded-tasks-state") {
+          candidate = entry.data as TaskState;
+        }
+        if (candidate !== undefined) {
+          validateTaskCheckpointState(candidate);
+          state = cloneTaskState(candidate);
+          seenState = true;
+        }
+      } catch {
+        corruptEntryId = entry.id ?? "unknown";
+        break;
       }
     }
-    refreshBlockedStatuses(state);
   };
 
   const renderWidget = () => {
@@ -321,8 +365,15 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
     renderWidget();
     emitSummary(TODO_SUMMARY_CHANGED_EVENT);
   });
+  pi.on("message_end", (event) => {
+    const message = event.message as { role?: string; toolName?: string; toolCallId?: string; details?: TodoDetails };
+    if (message.role !== "toolResult" || message.toolName !== "todo" || !message.toolCallId) return;
+    if (pendingMutations.get(message.toolCallId) === JSON.stringify(message.details?.state)) pendingMutations.delete(message.toolCallId);
+  });
   pi.on("session_shutdown", () => {
     currentContext?.ui.setWidget("grounded-tasks", undefined);
+    pendingMutations.clear();
+    removeCheckpointProvider();
     removeSummaryListener?.();
     removeSummaryListener = undefined;
     removeActionListener();
@@ -342,6 +393,7 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
     parameters: TodoParams,
     executionMode: "sequential",
     async execute(_id, params) {
+      requireHealthyState();
       let message: string;
       let working = cloneTaskState(state);
       if (params.action === "list") {
@@ -410,6 +462,7 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
         message = `Replaced task plan with ${working.tasks.length} task(s)`;
       }
       if (params.action !== "list") {
+        pendingMutations.set(_id, JSON.stringify(cloneTaskState(working)));
         state = working;
         emitSummary(TODO_SUMMARY_CHANGED_EVENT);
       }
@@ -487,8 +540,11 @@ export default function groundedTasks(pi: ExtensionAPI, options: GroundedTasksOp
         ctx.ui.notify("Usage: /todo-add <text>", "warning");
         return;
       }
-      const task = addTask(state, { text: args });
-      pi.appendEntry("grounded-tasks-state", snapshot());
+      requireHealthyState();
+      const working = cloneTaskState(state);
+      const task = addTask(working, { text: args });
+      pi.appendEntry("grounded-tasks-state", cloneTaskState(working));
+      state = working;
       emitSummary(TODO_SUMMARY_CHANGED_EVENT);
       renderWidget();
       ctx.ui.notify(`Added ${task.id}: ${task.text}`, "info");

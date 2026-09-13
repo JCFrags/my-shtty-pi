@@ -1,7 +1,10 @@
 # ChronoCompact V3 / Chrono Memory Engine
 ## Master Goal, Architecture Charter, and Ultra-Detailed Work Plan
 
-**Document status:** Authoritative working charter  
+> **Historical guide:** This document records the original design and milestone plan, not the current release checklist. The owner's later direction takes priority: deliver useful fuzzy chronological memory and recall for short and extremely long lifetime tasks, with bounded, responsive RAM, CPU, and optional GPU use. The [current overview](README.md#current-priorities) replaces the old fixed token allocations, required whole-summary path, milestone gates, and exhaustive test campaigns as delivery guidance. Preserve exact source and privacy, use focused verification, and ship usable V3 without claiming perfect recall or unmeasured scale. The original plan below remains for design context and historical evidence.
+
+**Document status:** Historical working charter, superseded where it conflicts with current owner direction
+
 **Date established:** September 2, 2026  
 **Repository:** `JCFrags/my-shtty-pi`  
 **Primary package:** `packages/pi-chrono-compaction`  

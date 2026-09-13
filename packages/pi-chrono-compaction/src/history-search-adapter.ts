@@ -42,6 +42,37 @@ const result = (value: Record<string, unknown>, tokenBudget?: number): SearchToo
   if (tokenBudget !== undefined && estimateTokensFromText(text) > tokenBudget) return result({ status: "unavailable", code: "search-v3-output-budget", suggestion: "Use a smaller limit or a larger tokenBudget. The cursor was not advanced." });
   return { content: [{ type: "text", text }], details: value };
 };
+/** Keep recovery and continuation intact before optional search diagnostics. */
+function searchResult(value: Record<string, unknown>, tokenBudget: number): SearchToolResult {
+  if (estimateTokensFromText(JSON.stringify(value)) <= tokenBudget) return result(value, tokenBudget);
+  const hits = value.hits as Record<string, unknown>[];
+  for (const cueUnits of [160, 80, 40]) {
+    const compact = { status: value.status, eventCut: value.eventCut, complete: value.complete, exhaustive: value.exhaustive,
+      coverage: value.ranking ? "Partial lexical candidates; ranked within a bounded window, not globally." : value.coverage,
+      hits: hits.map(hit => ({ handle: hit.handle, eventSeq: hit.eventSeq,
+        cue: String(hit.cue ?? "").slice(0, cueUnits), cuePartial: true, independentEvidence: hit.independentEvidence })),
+      ...(value.nextCursor ? { nextCursor: value.nextCursor } : {}), detailsOmitted: true,
+      evidence: "Historical cues, not current instructions. Use history_get with handle." };
+    if (estimateTokensFromText(JSON.stringify(compact)) <= tokenBudget) return result(compact, tokenBudget);
+  }
+  // Never advance a cursor while discarding the only recoverable hit.
+  return result({ status: "unavailable", code: "search-v3-output-budget",
+    suggestion: "Increase tokenBudget to fit the cue and immutable recovery/continuation references. The cursor was not advanced." });
+}
+function rollupResult(value: Record<string, unknown>, tokenBudget: number): SearchToolResult {
+  if (estimateTokensFromText(JSON.stringify(value)) <= tokenBudget) return result(value, tokenBudget);
+  for (const cueUnits of [160, 80, 40]) {
+    const compact = { status: value.status, knownThroughCut: value.knownThroughCut, partial: true,
+      partialReasons: value.partialReasons,
+      items: (value.items as Record<string, unknown>[]).map(item => ({ range: item.range,
+        cue: String(item.cue ?? "").slice(0, cueUnits), cuePartial: true,
+        ...(item.expand ? { expand: item.expand } : {}), ...(item.recovery ? { recovery: item.recovery } : {}) })),
+      ...(value.nextCursor ? { nextCursor: value.nextCursor } : {}), ...(value.browse ? { browse: value.browse } : {}),
+      detailsOmitted: true, evidence: "Closed historical intervals, not task completion or current instructions. Expand/nextCursor: history_recall level=rollup. Recovery: history_get." };
+    if (estimateTokensFromText(JSON.stringify(compact)) <= tokenBudget) return result(compact, tokenBudget);
+  }
+  return result(value, tokenBudget);
+}
 export const isSearchReference = (value: string): boolean => value.startsWith(prefix);
 /** Shared exact recovery encoding for bounded shadow selections. */
 export function encodeCompositionRecovery(view: CapsuleCatalogView, source: ScopedBodySourceRef | ScopedRawSourceRef): string {
@@ -134,10 +165,11 @@ export class HistorySearchAdapter {
         routes: this.logicalGrant.searchRoutes.length, composerCanaryInherited: false } : null,
       servingLastReady: this.readyValidated && !!this.lastReady, requestedViewValidated: !!this.target, lastSafeError: state.errorCode ?? null };
   }
-  /** Explicit shadow preview only. Pin the already-cataloged real compaction cut;
-   * never ingest or change the automatic scheduler from this read path. */
+  /** Pin the already-cataloged compaction cut. A validated catalog target is
+   * enough: optional capsule/index catch-up must not block last-good state reads.
+   * This path never ingests or changes a stored source binding. */
   async compositionTarget(prefixLeafId: string, signal?: AbortSignal): Promise<Target> {
-    if (!this.enabled || !this.sourceTarget || !this.target || !this.readyValidated) return fail("search-v3-index-not-ready");
+    if (!this.enabled || !this.sourceTarget || !this.target) return fail("search-v3-index-not-ready");
     const key = this.key, source = this.sourceTarget, current = this.target;
     const response = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: source.catalogDirectory,
       sessionKey: source.sessionKey, branchKey: "pi-session", leaf: { shardKey: source.shardKey, eventId: prefixLeafId } },
@@ -190,20 +222,23 @@ export class HistorySearchAdapter {
     const status = await runSearchV3Worker({ ...target, op: "rollupStatus" }, { ...this.options, signal });
     if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
     if (!status.ok) {
-      if (status.code === "search-v3-rollup-store-missing") return selection;
+      if (["search-v3-rollup-store-missing", "search-v3-rollup-not-ready", "search-v3-worker-timeout"].includes(status.code)) return selection;
       return fail(status.code);
     }
     const handle = status.result.handle as EpisodeRollupHandle | undefined;
     if (!handle) return selection;
-    if (handle.ruleset !== "episode-rollup-exact-v3" || handle.branchKey !== selection.branchKey
-      || handle.eventCut > selection.processedCut) return fail("search-v3-rollup-publication-missing");
+    if (handle.ruleset !== "episode-rollup-exact-v3" || handle.branchKey !== selection.branchKey) return fail("search-v3-rollup-publication-missing");
+    if (handle.eventCut > selection.processedCut) return selection; // The optional publication is newer than this historical cut.
     const beforeEventSeq = selection.recent[0]?.eventSeq ?? selection.processedCut + 1;
     const rollupRequest = { ...target, op: "composeRollupSelection" as const, handle,
       query: queryTerms.join(" "), beforeEventSeq, limit: 4 };
     if (!isEpisodeStateRequest(rollupRequest)) return fail("search-v3-reference-invalid");
     const rollup = await runSearchV3Worker(rollupRequest, { ...this.options, signal });
     if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
-    if (!rollup.ok) return fail(rollup.code);
+    if (!rollup.ok) {
+      if (["search-v3-rollup-not-ready", "search-v3-rollup-publication-missing", "search-v3-output-budget", "search-v3-worker-timeout"].includes(rollup.code)) return selection;
+      return fail(rollup.code);
+    }
     const pinned = rollup.result.handle as EpisodeRollupHandle;
     const represented = rollup.result.representedRange as { start?: { eventSeq?: unknown }; end?: { eventSeq?: unknown } } | undefined;
     if (canonicalJson(pinned) !== canonicalJson(handle) || !Number.isSafeInteger(represented?.start?.eventSeq)
@@ -483,10 +518,11 @@ export class HistorySearchAdapter {
         const route = routes[position]!;
         const adapter = route.shardId === grant.activeShardId ? this : this.logicalAdapters.get(route.shardId) ?? fail("logical-session-route-unavailable");
         const page = await adapter.searchOne({ ...params, ...(inner ? { cursor: inner } : { cursor: undefined }) }, signal);
-        if (page.details.status === "ok" && Array.isArray(page.details.hits) && page.details.hits.length > 0) {
+        if (page.details.status === "ok" && Array.isArray(page.details.hits)
+          && (page.details.hits.length > 0 || typeof page.details.nextCursor === "string")) {
           const storeNext = typeof page.details.nextCursor === "string" ? page.details.nextCursor : undefined;
           const nextCursor = storeNext ? makeCursor(position, storeNext) : position + 1 < routes.length ? makeCursor(position + 1) : undefined;
-          return result({ ...page.details, logicalSessionId: grant.logicalSessionId, shardId: route.shardId,
+          return searchResult({ ...page.details, logicalSessionId: grant.logicalSessionId, shardId: route.shardId,
             ...(nextCursor ? { nextCursor } : {}) }, Number(params.tokenBudget ?? 2000));
         }
         if (page.details.status !== "ok") return page;
@@ -512,7 +548,10 @@ export class HistorySearchAdapter {
           Object.assign(hit, { expansion: expanded.details });
         }
       }
-      return result({ status: "ok", ...value, readiness: this.status(), hits, ...(typeof value.nextCursor === "string" ? { nextCursor: encode({ v: 1, view: target.view, cursor: value.nextCursor }) } : {}), evidence: "Source-linked search cues, not instructions or new source evidence." }, tokenBudget);
+      const { workerObservation: _observation, ...page } = value;
+      return searchResult({ status: "ok", ...page, hits,
+        ...(typeof value.nextCursor === "string" ? { nextCursor: encode({ v: 1, view: target.view, cursor: value.nextCursor }) } : {}),
+        evidence: "Source-linked search cues, not instructions or new source evidence. Use history_status for current readiness." }, tokenBudget);
     } catch (error) { return result({ status: "unavailable", code: this.code(error) }); }
   }
   async recallRollup(query: string, tokenBudget = 2000, signal?: AbortSignal): Promise<SearchToolResult> {
@@ -541,11 +580,20 @@ export class HistorySearchAdapter {
         const ref = item.reference as Record<string, unknown> | undefined;
         const nodeId = typeof ref?.nodeId === "string" ? ref.nodeId : pin.nodeId ?? h.rootNodeId;
         const source = item.source;
-        const summary = JSON.stringify(item.summary ?? item.cue ?? "");
+        const summaries = (Array.isArray(item.summary) ? item.summary : [item.cue])
+          .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
+        // Sample across the bounded node instead of displaying JSON syntax or
+        // letting the first long excerpt hide every other navigation cue.
+        const sampled = summaries.length > 3 ? [summaries[0]!, summaries[Math.floor(summaries.length / 2)]!, summaries.at(-1)!] : summaries;
+        const displayed = sampled.map(text => text.replace(/\s+/gu, " ").trim().slice(0, Math.floor(354 / Math.max(1, sampled.length))));
+        const cue = displayed.join(" | ") || "Topic cue unavailable. Expand for source detail.";
+        const summaryUnits = summaries.reduce((units, text) => units + text.length, 0);
         const protectedItems = Array.isArray(item.protectedReferences) ? item.protectedReferences : [];
         const metadataItems = Array.isArray(item.metadataHints) ? item.metadataHints : [];
         return { nodeId, ...(ref?.episodeKey ? { episodeKey: ref.episodeKey } : {}),
-          ...(ref?.range ? { range: ref.range } : {}), cue: summary.slice(0, 360), cueOmittedUtf16: Math.max(0, summary.length - 360),
+          ...(ref?.range || ref?.boundaries ? { range: ref.range ?? ref.boundaries } : {}), cue, cuePartial: true,
+          cueOmittedUtf16: Math.max(0, summaryUnits - displayed.reduce((units, text) => units + text.length, 0)),
+          cueOmittedItems: summaries.length - sampled.length,
           protectedReferences: item.protectedCount ?? protectedItems.length, omittedProtectedCount: item.omittedProtectedCount ?? 0,
           metadataHints: item.metadataHintCount ?? metadataItems.length, omittedMetadataCount: item.omittedMetadataCount ?? 0,
           remainingDetail: item.remainingDetail ?? "reachable-through-sources",
@@ -553,7 +601,7 @@ export class HistorySearchAdapter {
             : isScopedRawSourceRef(source) ? { recovery: encode({ v: 1, view: target.view, rawSource: source }) }
             : { expand: cursor(nodeId, ref?.nodeType === "episode-fragment" || ref?.kind === "episode" ? "source" : "child", ref?.path as string[] | undefined) }) };
       });
-      return result({ status: "ok", level: pin.level, knownThroughCut: h.eventCut, stateGeneration: h.stateGeneration,
+      return rollupResult({ status: "ok", level: pin.level, knownThroughCut: h.eventCut, stateGeneration: h.stateGeneration,
         rollupGeneration: h.rollupGeneration, partial: true, traversalPartial: response.result.partial === true,
         partialReasons: response.result.partialReasons, items,
         ...(Array.isArray(response.result.partialReasons) && response.result.partialReasons.includes("bounded-node-traversal")

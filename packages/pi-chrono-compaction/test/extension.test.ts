@@ -93,7 +93,7 @@ test("experimental high-impact features default off and environment overrides ha
   }
 });
 
-test("incremental lifecycle schedules, validates, falls back when stale, cancels, and resets", async () => {
+test("compatibility incremental lifecycle schedules, validates, falls back when stale, cancels, and resets", async () => {
   const names = [
     "PI_CHRONO_CONFIG_PATH",
     "PI_CHRONO_INCREMENTAL_PRECOMPUTE",
@@ -114,7 +114,7 @@ test("incremental lifecycle schedules, validates, falls back when stale, cancels
   const incrementalPath = join(candidateSegmentStorePath(sessionPath), "manifest.json");
   const sourceSessionBytes = readFileSync(resolve("test/fixtures/session.jsonl"));
   writeFileSync(sessionPath, sourceSessionBytes, { mode: 0o600 });
-  writeFileSync(configPath, `${JSON.stringify({ incrementalPrecomputeEnabled: true })}\n`, { mode: 0o600 });
+  writeFileSync(configPath, `${JSON.stringify({ memoryEngineEnabled: false, incrementalPrecomputeEnabled: true })}\n`, { mode: 0o600 });
   process.env.PI_CHRONO_CONFIG_PATH = configPath;
   delete process.env.PI_CHRONO_INCREMENTAL_PRECOMPUTE;
   process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = "off";
@@ -341,7 +341,7 @@ test("request-local projection integrates with the context hook and fails closed
   }
 });
 
-test("Pi extension hook returns a validated deterministic replay through the normal test suite", async (t) => {
+test("Pi extension hook returns a validated compatibility replay through the normal test suite", async (t) => {
   const runtimeDirectory = mkdtempSync(join(tmpdir(), "chrono-extension-runtime-"));
   t.after(() => rmSync(runtimeDirectory, { recursive: true, force: true }));
   const hooks = new Map<string, Hook>();
@@ -349,7 +349,8 @@ test("Pi extension hook returns a validated deterministic replay through the nor
   const commandNames: string[] = [];
   const commandHandlers = new Map<string, CommandHandler>();
   const sentMessages: Array<{ customType: string; content: string; triggerTurn?: boolean }> = [];
-  const configPath = join(tmpdir(), `chrono-extension-${process.pid}.json`);
+  const configPath = join(runtimeDirectory, "compatibility-config.json");
+  writeFileSync(configPath, JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const previousConfigPath = process.env.PI_CHRONO_CONFIG_PATH;
   process.env.PI_CHRONO_CONFIG_PATH = configPath;
   const pi = {
@@ -388,7 +389,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
     "request_compaction",
     "history_status",
   ]);
-  assert.deepEqual(commandNames, ["chrono-logical-session", "chrono-rollup-repair", "chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["chrono-logical-session", "chrono-auto-rollover", "chrono-rollup-repair", "chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
@@ -455,7 +456,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
   const rawResult = await hook(
     {
       branchEntries: branch,
-      preparation: { firstKeptEntryId: "e133", tokensBefore: 16_000 },
+      preparation: { firstKeptEntryId: "e133", tokensBefore: 16_000, settings: { reserveTokens: 16_384 } },
       customInstructions: "Preserve the public API restriction and activeRequests assertion.",
       reason: "manual",
       willRetry: false,
@@ -506,7 +507,7 @@ test("Pi extension hook returns a validated deterministic replay through the nor
   rmSync(configPath, { force: true });
 });
 
-test("default-off and explicitly disabled classifier paths make zero classifier provider calls", async () => {
+test("compatibility default-off and explicitly disabled classifier paths make zero classifier provider calls", async () => {
   const previous = {
     config: process.env.PI_CHRONO_CONFIG_PATH,
     hybrid: process.env.PI_CHRONO_PI_SUMMARY,
@@ -524,11 +525,12 @@ test("default-off and explicitly disabled classifier paths make zero classifier 
       rmSync(configPath, { force: true });
       if (mode === "default") {
         delete process.env.PI_CHRONO_HISTORY_EDITOR;
+        writeFileSync(configPath, JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
       } else if (mode === "persistent-disabled") {
         delete process.env.PI_CHRONO_HISTORY_EDITOR;
-        writeFileSync(configPath, `${JSON.stringify({ historyEditorEnabled: false })}\n`, { mode: 0o600 });
+        writeFileSync(configPath, `${JSON.stringify({ memoryEngineEnabled: false, historyEditorEnabled: false })}\n`, { mode: 0o600 });
       } else {
-        writeFileSync(configPath, `${JSON.stringify({ historyEditorEnabled: true })}\n`, { mode: 0o600 });
+        writeFileSync(configPath, `${JSON.stringify({ memoryEngineEnabled: false, historyEditorEnabled: true })}\n`, { mode: 0o600 });
         process.env.PI_CHRONO_HISTORY_EDITOR = "false";
       }
       const hooks = new Map<string, Hook>();
@@ -590,6 +592,7 @@ test("Pi-prepared tail mode moves the cut after an orphan function output", asyn
   const names = ["PI_CHRONO_CONFIG_PATH", "PI_CHRONO_RAW_TAIL", "PI_CHRONO_PI_SUMMARY", "PI_CHRONO_HISTORY_EDITOR", "PI_CHRONO_CACHE"] as const;
   const previous = new Map(names.map((name) => [name, process.env[name]]));
   const configPath = join(tmpdir(), `chrono-orphan-tail-${process.pid}.json`);
+  writeFileSync(configPath, JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   try {
     process.env.PI_CHRONO_CONFIG_PATH = configPath;
     process.env.PI_CHRONO_RAW_TAIL = "pi";
@@ -651,6 +654,7 @@ test("V1 hard ceiling bounds regular summary, Chrono history, and raw tail to 30
     editor: process.env.PI_CHRONO_HISTORY_EDITOR,
   };
   const configPath = join(tmpdir(), `chrono-ceiling-${process.pid}.json`);
+  writeFileSync(configPath, JSON.stringify({ memoryEngineEnabled: false, targetContextTokens: 30_000 }), { mode: 0o600 });
   process.env.PI_CHRONO_CONFIG_PATH = configPath;
   process.env.PI_CHRONO_RAW_TAIL = "50000";
   process.env.PI_CHRONO_PI_SUMMARY = "false";
@@ -838,6 +842,7 @@ test("exact history tools reuse an existing ledger but never create one alone", 
   writeFileSync(sessionPath, readFileSync(resolve("test/fixtures/session.jsonl")), { mode: 0o600 });
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
+  writeFileSync(join(directory, "synthetic-history-config.json"), JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory);
   try {
     const session = await readSessionJsonl(sessionPath), entries = session.entries;
@@ -869,6 +874,7 @@ test("oversized history refuses before dispatch and concurrent search retains no
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
   let dispatches = 0;
+  writeFileSync(join(directory, "synthetic-history-config.json"), JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory, () => {
     dispatches++;
     const status = historySearchIndexCacheStatus();
@@ -933,6 +939,7 @@ test("shadow-on extension output equals shadow-off output and completes after re
   const previous = new Map(names.map(name => [name, process.env[name]]));
   const execute = async (enabled: boolean) => {
     process.env.PI_CHRONO_CONFIG_PATH = join(directory, `config-${enabled}.json`);
+    writeFileSync(process.env.PI_CHRONO_CONFIG_PATH, JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
     process.env.PI_CHRONO_ROLLUP_SHADOW = String(enabled);
     process.env.PI_CHRONO_CACHE = "false";
     process.env.PI_CHRONO_PI_SUMMARY = "false";
@@ -943,7 +950,7 @@ test("shadow-on extension output equals shadow-off output and completes after re
     const branch = getActiveBranch(session);
     const hook = hooks.get("session_before_compact");
     assert.ok(hook);
-    return hook({ branchEntries: branch, preparation: { firstKeptEntryId: "e133", tokensBefore: 16_000 }, customInstructions: "Preserve the public API restriction.", reason: "manual", willRetry: false, signal: new AbortController().signal }, { hasUI: true, model: { contextWindow: 272_000 }, sessionManager: { getSessionFile: () => sessionPath, getSessionId: () => "synthetic-shadow", getEntries: () => branch, getBranch: () => branch }, ui: { notify() {} }, modelRegistry: {} }) as Promise<{ compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number } }>;
+    return hook({ branchEntries: branch, preparation: { firstKeptEntryId: "e133", tokensBefore: 16_000, settings: { reserveTokens: 16_384 } }, customInstructions: "Preserve the public API restriction.", reason: "manual", willRetry: false, signal: new AbortController().signal }, { hasUI: true, model: { contextWindow: 272_000 }, sessionManager: { getSessionFile: () => sessionPath, getSessionId: () => "synthetic-shadow", getEntries: () => branch, getBranch: () => branch }, ui: { notify() {} }, modelRegistry: {} }) as Promise<{ compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number } }>;
   };
   try {
     const off = await execute(false);
@@ -970,6 +977,7 @@ test("shadow-on extension output equals shadow-off output and completes after re
 
 test("isolated worker extension path uses persisted source and returns exact bounded replay", async () => {
   const directory=mkdtempSync(join(tmpdir(),"chrono-extension-worker-"));const sessionPath=join(directory,"session.jsonl");writeFileSync(sessionPath,readFileSync(resolve("test/fixtures/session.jsonl")),{mode:0o600});
+  writeFileSync(join(directory,"config.json"),JSON.stringify({memoryEngineEnabled:false}),{mode:0o600});
   const names=["PI_CHRONO_CONFIG_PATH","PI_CHRONO_ISOLATED_WORKER","PI_CHRONO_CACHE"];const previous=new Map(names.map(name=>[name,process.env[name]]));process.env.PI_CHRONO_CONFIG_PATH=join(directory,"config.json");process.env.PI_CHRONO_ISOLATED_WORKER="true";process.env.PI_CHRONO_CACHE="false";
-  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime") });const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getSessionId:()=>"synthetic-worker",getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result?.compaction, notifications.join("\n"));assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
+  try{const hooks=new Map<string,Hook>();const pi={registerTool(){},registerCommand(){},on(name:string,handler:Hook){setUniqueHook(hooks,name,handler);},appendEntry(){},sendMessage(){}};extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(directory, "runtime") });const session=await readSessionJsonl(sessionPath);const branch=getActiveBranch(session);const hook=hooks.get("session_before_compact");assert.ok(hook);const notifications:string[]=[];const raw=await hook({branchEntries:branch,preparation:{firstKeptEntryId:"e133",tokensBefore:16_000,settings:{reserveTokens:16_384}},customInstructions:"Preserve the public API restriction.",reason:"manual",willRetry:false,signal:new AbortController().signal},{hasUI:true,model:{contextWindow:272_000},sessionManager:{getSessionFile:()=>sessionPath,getSessionId:()=>"synthetic-worker",getEntries:()=>branch,getBranch:()=>branch},ui:{notify(message:string){notifications.push(message);}},modelRegistry:{}});const result=raw as {compaction?:{summary:string;details?:{isolatedWorker?:{used?:boolean;client?:{mainProcessMaximumTimerDelayMs?:number}}}}};assert.ok(result?.compaction, notifications.join("\n"));assert.equal(result.compaction.details?.isolatedWorker?.used,true);assert.ok((result.compaction.details?.isolatedWorker?.client?.mainProcessMaximumTimerDelayMs??999)<250);assert.match(result.compaction.summary,/public API/);assert.doesNotMatch(notifications.join("\n"),/\/home\/|session\.jsonl/);}finally{for(const name of names){const value=previous.get(name);if(value===undefined)delete process.env[name];else process.env[name]=value;}rmSync(directory,{recursive:true,force:true});}
 });

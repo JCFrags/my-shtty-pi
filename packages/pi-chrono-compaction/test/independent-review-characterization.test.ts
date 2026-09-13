@@ -38,8 +38,17 @@ test("plan validation rejects nested source ranges but allows distinct blocks in
   assert.equal(validatePlan(sameEntry, blocks).issues.some((issue) => issue.code === "chronology"), false);
 });
 
-test("legacy false regular-summary input cannot disable the required Pi summary", () => {
-  assert.equal(resolveExtensionSettings({ hybridSummaryEnabled: false }).hybridSummaryEnabled, true);
+test("regular Pi summary is optional, defaults off, and honors explicit opt-in", () => {
+  const previous = process.env.PI_CHRONO_PI_SUMMARY;
+  delete process.env.PI_CHRONO_PI_SUMMARY;
+  try {
+    assert.equal(resolveExtensionSettings().hybridSummaryEnabled, false);
+    assert.equal(resolveExtensionSettings({ hybridSummaryEnabled: false }).hybridSummaryEnabled, false);
+    assert.equal(resolveExtensionSettings({ hybridSummaryEnabled: true }).hybridSummaryEnabled, true);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CHRONO_PI_SUMMARY;
+    else process.env.PI_CHRONO_PI_SUMMARY = previous;
+  }
 });
 
 test("compaction closes the value-worker gate before any summary or replay work", async () => {

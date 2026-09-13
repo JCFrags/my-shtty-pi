@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -244,7 +244,9 @@ test("V1.1 extension default tail and all three context layers stay under the ha
   const hooks = new Map<string, (event: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>>();
   const names = ["PI_CHRONO_CONFIG_PATH", "PI_CHRONO_RAW_TAIL", "PI_CHRONO_PI_SUMMARY", "PI_CHRONO_HISTORY_EDITOR", "PI_CHRONO_CACHE"] as const;
   const previous = new Map(names.map((name) => [name, process.env[name]]));
-  process.env.PI_CHRONO_CONFIG_PATH = join(tmpdir(), `chrono-v11-focused-${process.pid}.json`);
+  const configPath = join(tmpdir(), `chrono-v11-focused-${process.pid}.json`);
+  process.env.PI_CHRONO_CONFIG_PATH = configPath;
+  await writeFile(configPath, JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   delete process.env.PI_CHRONO_RAW_TAIL;
   process.env.PI_CHRONO_PI_SUMMARY = "false";
   process.env.PI_CHRONO_HISTORY_EDITOR = "false";
@@ -296,5 +298,6 @@ test("V1.1 extension default tail and all three context layers stay under the ha
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+    await rm(configPath, { force: true });
   }
 });

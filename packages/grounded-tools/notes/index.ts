@@ -9,7 +9,9 @@ import {
   type Note,
   type NotesState,
   applyNoteEvent,
+  validateNotesState,
 } from "@grounded/pi-core/notes";
+import { registerStateCheckpointProvider, restoreStateCheckpoint } from "@grounded/pi-core/state-transfer";
 import {
   boundedStateOutput,
   cancelled,
@@ -40,6 +42,8 @@ export const NOTES_GUIDELINES = [
 interface EntryLike {
   id?: string;
   type?: string;
+  customType?: string;
+  data?: unknown;
   message?: { role?: string; toolName?: string; details?: unknown };
 }
 
@@ -64,11 +68,35 @@ function renderResult(action: string, result: unknown): string {
 export default function groundedNotes(pi: ExtensionAPI) {
   let state = emptyNotesState();
   let corruptEntryId: string | undefined;
+  let currentContext: ExtensionContext | undefined;
+  let lifecycleEpoch = 0;
+  let executing = 0;
+  const pendingEvents = new Map<number, string>();
+  const removeCheckpointProvider = registerStateCheckpointProvider(pi.events, "notes", () => ({
+    state, sessionId: currentContext?.sessionManager.getSessionId(), leafId: currentContext?.sessionManager.getLeafId(),
+    corrupt: corruptEntryId !== undefined, pending: executing > 0 || pendingEvents.size > 0,
+  }), validateNotesState);
 
   const restore = (ctx: ExtensionContext) => {
+    currentContext = ctx;
+    lifecycleEpoch += 1;
+    pendingEvents.clear();
     state = emptyNotesState();
     corruptEntryId = undefined;
+    let seenState = false;
     for (const raw of ctx.sessionManager.getBranch() as EntryLike[]) {
+      try {
+        const checkpoint = restoreStateCheckpoint(raw, "notes", validateNotesState);
+        if (checkpoint) {
+          if (seenState) throw new StateToolError("STATE_CORRUPT", "Notes checkpoint follows existing state");
+          state = checkpoint;
+          seenState = true;
+          continue;
+        }
+      } catch {
+        corruptEntryId = raw.id ?? "unknown";
+        break;
+      }
       if (raw.type !== "message" || raw.message?.role !== "toolResult" || raw.message.toolName !== "notes") continue;
       const details = raw.message.details;
       if (!details || typeof details !== "object" || Array.isArray(details)) continue;
@@ -81,6 +109,7 @@ export default function groundedNotes(pi: ExtensionAPI) {
       if (envelope.protocol !== STATE_EVENT_PROTOCOL || envelope.tool !== "notes") continue;
       try {
         state = applyNoteEvent(state, event);
+        seenState = true;
       } catch {
         corruptEntryId = raw.id ?? "unknown";
         break;
@@ -90,6 +119,18 @@ export default function groundedNotes(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
+  pi.on("session_shutdown", () => {
+    lifecycleEpoch += 1;
+    pendingEvents.clear();
+    currentContext = undefined;
+    removeCheckpointProvider();
+  });
+  pi.on("message_end", (event) => {
+    const message = event.message as { role?: string; toolName?: string; details?: StateToolDetails };
+    if (message.role !== "toolResult" || message.toolName !== "notes" || message.details?.protocol !== STATE_RESULT_PROTOCOL) return;
+    const persisted = message.details.event;
+    if (persisted && pendingEvents.get(persisted.stateRevision) === JSON.stringify(persisted)) pendingEvents.delete(persisted.stateRevision);
+  });
   pi.on("context", (event) => {
     const text = corruptEntryId
       ? `[notes state] corrupt entry=${corruptEntryId}`
@@ -111,6 +152,7 @@ export default function groundedNotes(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal) {
       if (corruptEntryId) throw new StateToolError("STATE_CORRUPT", `Notes state is corrupt at entry ${corruptEntryId}`);
       cancelled(signal);
+      const epoch = lifecycleEpoch;
       const operation = performNotesAction(state, params);
       cancelled(signal);
       let text: string;
@@ -118,12 +160,21 @@ export default function groundedNotes(pi: ExtensionAPI) {
       else text = renderResult(params.action, operation.result);
       let fullOutputPath: string | undefined;
       if (params.action === "read" || params.action === "search") {
-        const bounded = await boundedStateOutput(text, "grounded-notes", signal);
-        text = bounded.text;
-        fullOutputPath = bounded.fullOutputPath;
+        executing += 1;
+        try {
+          const bounded = await boundedStateOutput(text, "grounded-notes", signal);
+          text = bounded.text;
+          fullOutputPath = bounded.fullOutputPath;
+        } finally {
+          executing -= 1;
+        }
       }
       cancelled(signal);
-      if (operation.event) state = cloneNotesState(operation.state);
+      if (epoch !== lifecycleEpoch) throw new StateToolError("STATE_CONFLICT", "Notes branch changed during the operation");
+      if (operation.event) {
+        state = cloneNotesState(operation.state);
+        pendingEvents.set(operation.event.stateRevision, JSON.stringify(operation.event));
+      }
       const details: StateToolDetails = {
         protocol: STATE_RESULT_PROTOCOL,
         action: params.action,

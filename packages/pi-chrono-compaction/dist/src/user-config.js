@@ -20,6 +20,8 @@ const CONFIG_KEYS = [
     "catalogShadowEnabled",
     "searchIndexEnabled",
     "memoryEngineEnabled",
+    "automaticRolloverEnabled",
+    "rolloverSourceBytes",
     "hostWorkerSlots",
     "workerTimeoutSeconds",
     "workerNiceLevel",
@@ -48,6 +50,8 @@ const COMMAND_TO_KEY = {
     "catalog-shadow": "catalogShadowEnabled",
     "search-index": "searchIndexEnabled",
     "memory-engine": "memoryEngineEnabled",
+    "automatic-rollover": "automaticRolloverEnabled",
+    "rollover-bytes": "rolloverSourceBytes",
     "worker-slots": "hostWorkerSlots",
     "worker-timeout": "workerTimeoutSeconds",
     "worker-nice": "workerNiceLevel",
@@ -177,6 +181,10 @@ export function validateUserConfig(value) {
         config.searchIndexEnabled = booleanValue(input.searchIndexEnabled, "searchIndexEnabled");
     if (input.memoryEngineEnabled !== undefined)
         config.memoryEngineEnabled = booleanValue(input.memoryEngineEnabled, "memoryEngineEnabled");
+    if (input.automaticRolloverEnabled !== undefined)
+        config.automaticRolloverEnabled = booleanValue(input.automaticRolloverEnabled, "automaticRolloverEnabled");
+    if (input.rolloverSourceBytes !== undefined)
+        config.rolloverSourceBytes = boundedInteger(input.rolloverSourceBytes, "rolloverSourceBytes", 1024 * 1024, 64 * 1024 * 1024);
     if (input.catalogShadowEnabled !== undefined)
         config.catalogShadowEnabled = booleanValue(input.catalogShadowEnabled, "catalogShadowEnabled");
     if (input.hostWorkerSlots !== undefined)
@@ -358,8 +366,12 @@ export function applyConfigCommand(config, args) {
             break;
         case "searchIndexEnabled":
         case "memoryEngineEnabled":
+        case "automaticRolloverEnabled":
         case "catalogShadowEnabled":
             value = booleanValue(raw, command);
+            break;
+        case "rolloverSourceBytes":
+            value = boundedInteger(raw, command, 1024 * 1024, 64 * 1024 * 1024);
             break;
         case "hostWorkerSlots":
             value = boundedInteger(raw, command, WORKER_LIMITS.slots.min, WORKER_LIMITS.slots.max);

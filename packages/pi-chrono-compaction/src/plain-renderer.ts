@@ -75,8 +75,12 @@ export interface RenderedPlan {
   readonly tokens: number;
 }
 
-export function renderCompressionPlan(plan: CompressionPlan, generationHash: string, includeHeader = true): RenderedPlan {
-  const renderedUnits = plan.units.map(renderUnit).filter((value): value is string => value !== undefined);
+export function renderCompressionPlan(plan: CompressionPlan, generationHash: string, includeHeader = true,
+  annotations: readonly { entryIndex: number; text: string }[] = []): RenderedPlan {
+  const renderedUnits = [...plan.units.flatMap(unit => {
+    const text = renderUnit(unit);
+    return text === undefined ? [] : [{ entryIndex: unit.startEntryIndex, text }];
+  }), ...annotations].sort((a, b) => a.entryIndex - b.entryIndex).map(item => item.text);
   const absentCount = plan.units.filter((unit) => unit.selected.level === "absent").length;
   const sections: string[] = [];
   if (includeHeader) {

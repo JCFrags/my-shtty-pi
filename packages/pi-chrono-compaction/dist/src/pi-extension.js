@@ -5,8 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } from "./history-search-adapter.js";
-import { persistNewShardBootstrap } from "./logical-session-persistence.js";
+import { logicalBootstrapBytes, persistNewShardBootstrap } from "./logical-session-persistence.js";
+import { captureLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
 import { previewStoredCompaction, composeStoredCompactionForNormalReturn } from "./composition-preview.js";
+import { composeBoundedMemory } from "./bounded-memory.js";
 import { SessionCanary } from "./session-canary.js";
 import { sessionMigrationStatus } from "./session-migration.js";
 import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
@@ -24,7 +26,7 @@ import { projectToolResultContext, projectionSourcesFromBranch, } from "./contex
 import { createCandidateSegmentStore, loadCandidateRecordsForBranch, loadCandidateSegmentManifest, updateCandidateSegmentStore, } from "./candidate-segment-store.js";
 import { getSourceEntriesBefore } from "./jsonl.js";
 import { loadSourceLedger, sourceLedgerIsBusy, sourceLedgerMatchesSource, sourceLedgerPath } from "./source-ledger.js";
-import { createPiRegularSummary, previousRegularPiSummary, regularSummaryMessagesForCut, renderHybridCompaction, } from "./pi-hybrid.js";
+import { createPiRegularSummary, prepareAdaptiveChronoTail, previousRegularPiSummary, regularSummaryMessagesForCut, renderHybridCompaction, } from "./pi-hybrid.js";
 import { DEFAULT_VALUE_WORKER_SETTINGS } from "./value-worker-types.js";
 import { runValueWorker, loadCompatibleAdvice, valueWorkerConfigurationHash } from "./value-worker.js";
 import { readValueAdviceManifest, resetAdviceCircuit, valueAdviceStorePath } from "./value-advice-store.js";
@@ -47,13 +49,14 @@ import { returnAuthoritativeAfterShadowSchedule } from "./post-result-shadow.js"
 import { LogicalSessionStore } from "./logical-session-store.js";
 import { ManualLogicalRollover, adoptExistingSessionAsShardZero } from "./logical-session-rollover.js";
 import { resolveLogicalActivation, resolveAdoptedLogicalActivation } from "./logical-session-routing.js";
-import { buildManualContinuationCandidate, consumeProvisionalLogicalReplacement, markProvisionalLogicalReplacement, recordedLogicalBinding, recordedLogicalAdoptionBinding, logicalAdoptionBinding, replacementContainsOnlyContinuation, replacementContainsOnlyBootstrap, } from "./logical-session-integration.js";
+import { buildManualContinuationCandidate, buildBoundedContinuationCandidate, consumeProvisionalLogicalReplacement, markProvisionalLogicalReplacement, recordedLogicalBinding, recordedLogicalAdoptionBinding, logicalAdoptionBinding, replacementContainsOnlyContinuation, replacementContainsOnlyBootstrap, } from "./logical-session-integration.js";
 import { logicalSessionStatus } from "./logical-session-status.js";
 import { CHRONO_VERSION, captureRuntimeIdentity } from "./runtime-identity.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling } from "./context-budget.js";
 const EXTENSION_VERSION = CHRONO_VERSION;
 const LOADED_RUNTIME_IDENTITY = captureRuntimeIdentity(import.meta.url);
-export const HARD_COMBINED_CONTEXT_CAP_TOKENS = 30_000;
-const MAX_RAW_TAIL_WITH_HISTORY_TOKENS = 27_000;
+/** Default only. Each operation uses the configured, model-validated ceiling. */
+export const HARD_COMBINED_CONTEXT_CAP_TOKENS = DEFAULT_CONTEXT_TOKENS;
 const RETENTION_HINT_CUSTOM_TYPE = "chrono-compact-retention-hint";
 const CONTEXT_WARNING_CUSTOM_TYPE = "chrono-compact-context-warning";
 const CONTEXT_RESUME_CUSTOM_TYPE = "chrono-compact-resume";
@@ -125,9 +128,9 @@ export function resolveExtensionSettings(overrides = {}) {
         ...(rawTail.tokens === undefined ? {} : { rawTailTokens: rawTail.tokens }),
         dynamicRawTailMinTokens: numberSetting("PI_CHRONO_RAW_TAIL_MIN", 3_000, 1_000, 200_000, overrides.dynamicRawTailMinTokens),
         dynamicRawTailMaxTokens: numberSetting("PI_CHRONO_RAW_TAIL_MAX", 6_000, 1_000, 200_000, overrides.dynamicRawTailMaxTokens),
-        // Retained as a compatibility-shaped field. The regular Pi summary is required.
-        hybridSummaryEnabled: true,
-        legacyPiSummaryDisabled: !booleanSetting("PI_CHRONO_PI_SUMMARY", true, overrides.hybridSummaryEnabled),
+        // Independent Pi summary is optional. Deterministic history remains usable without it.
+        hybridSummaryEnabled: booleanSetting("PI_CHRONO_PI_SUMMARY", false, overrides.hybridSummaryEnabled),
+        legacyPiSummaryDisabled: false,
         hybridSummaryTargetTokens: numberSetting("PI_CHRONO_PI_SUMMARY_TOKENS", 2_500, 512, 16_000, overrides.hybridSummaryTargetTokens),
         legacyHistoryEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
         historyEditorEnabled: false,
@@ -155,7 +158,9 @@ export function resolveExtensionSettings(overrides = {}) {
         isolatedWorkerEnabled: booleanSetting("PI_CHRONO_ISOLATED_WORKER", false, overrides.isolatedWorkerEnabled),
         rollupShadowEnabled: booleanSetting("PI_CHRONO_ROLLUP_SHADOW", false, overrides.rollupShadowEnabled),
         searchIndexEnabled: booleanSetting("PI_CHRONO_SEARCH_INDEX", false, overrides.searchIndexEnabled),
-        memoryEngineEnabled: booleanSetting("PI_CHRONO_MEMORY_ENGINE", false, overrides.memoryEngineEnabled),
+        memoryEngineEnabled: booleanSetting("PI_CHRONO_MEMORY_ENGINE", true, overrides.memoryEngineEnabled),
+        automaticRolloverEnabled: booleanSetting("PI_CHRONO_AUTOMATIC_ROLLOVER", true, overrides.automaticRolloverEnabled),
+        rolloverSourceBytes: numberSetting("PI_CHRONO_ROLLOVER_BYTES", 8 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024, overrides.rolloverSourceBytes),
         catalogShadowEnabled: booleanSetting("PI_CHRONO_CATALOG_SHADOW", false, overrides.catalogShadowEnabled),
         hostWorkerSlots: numberSetting("PI_CHRONO_HOST_WORKER_SLOTS", 1, 1, 4, overrides.hostWorkerSlots),
         workerTimeoutSeconds: numberSetting("PI_CHRONO_WORKER_TIMEOUT_SECONDS", 900, 30, 3_600, overrides.workerTimeoutSeconds),
@@ -205,6 +210,20 @@ async function workerSourceExpectation(sessionPath) {
         throw new Error("source-changed");
     return { deviceId: String(before.dev), inodeId: String(before.ino), size: before.size, mtimeMs: before.mtimeMs, prefixHash: createHash("sha256").update(bytes).digest("hex"), prefixBytes };
 }
+export function effectiveContextCeiling(ctx, settings, responseReserveTokens = DEFAULT_RESPONSE_RESERVE_TOKENS) {
+    const window = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow;
+    const systemTokens = estimateTokensFromText(ctx.getSystemPrompt?.() ?? "");
+    return resolveContextCeiling(settings.targetContextTokens, window ?? 0, systemTokens + settings.contextReserveTokens, responseReserveTokens);
+}
+function isOptionalCompositionUnavailable(error) {
+    // A first catalog pin can precede creation of the optional state file, which
+    // reports state-storage-io. Fallback reads no bytes from that unavailable store.
+    const code = error?.code ?? error?.message;
+    return typeof code === "string" && ["search-v3-index-not-ready", "search-v3-state-not-ready",
+        "search-v3-state-store-missing", "search-v3-state-storage-io", "search-v3-rollup-store-missing", "search-v3-rollup-not-ready",
+        "catalog-event-missing", "search-v3-worker-timeout", "catalog-worker-timeout", "worker-timeout",
+        "scheduler-queue-full", "search-v3-output-budget"].includes(code);
+}
 function rawTailDescription(settings) {
     if (settings.rawTailMode === "dynamic") {
         return `dynamic ${settings.dynamicRawTailMinTokens.toLocaleString()}–${settings.dynamicRawTailMaxTokens.toLocaleString()}`;
@@ -239,9 +258,10 @@ async function openChronoCompactSettings(ctx, initial) {
             `Threshold retry growth · ${settings.triggerMinimumGrowthTokens.toLocaleString()} tokens`,
             `Raw history retained · ${rawTailDescription(settings)}`,
             `Dynamic tail bounds · ${settings.dynamicRawTailMinTokens.toLocaleString()}–${settings.dynamicRawTailMaxTokens.toLocaleString()} tokens`,
-            `Active context target · ${settings.targetContextTokens.toLocaleString()} tokens`,
+            `Combined context hard limit · ${settings.targetContextTokens.toLocaleString()} tokens (model headroom can lower it)`,
             `Chronological replay maximum · ${settings.replayTargetTokens === undefined ? "automatic" : `${settings.replayTargetTokens.toLocaleString()} tokens`}`,
             `Regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
+            `Automatic physical-shard rollover · ${settings.automaticRolloverEnabled ? `${settings.rolloverSourceBytes.toLocaleString()} source bytes at safe idle` : "disabled"}`,
             `Background value worker · ${settings.valueWorker.mode} · ${settings.valueWorker.model} · thinking ${settings.valueWorker.thinking}`,
             "Retrospective only. Bounded assistant and tool excerpts can be sent only after enablement. Protected exact, user, and project instruction text is never sent. Final replay remains deterministic. Compaction never waits. Shadow does not change replay.",
             `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
@@ -258,10 +278,18 @@ async function openChronoCompactSettings(ctx, initial) {
         ]);
         if (choice === undefined || choice === "Cancel")
             return undefined;
-        if (choice === "Save and close")
-            return draft;
+        if (choice === "Save and close") {
+            try {
+                effectiveContextCeiling(ctx, settings);
+                return draft;
+            }
+            catch (error) {
+                ctx.ui.notify(safeErrorMessage(error), "warning");
+                continue;
+            }
+        }
         if (choice.startsWith("Loaded version")) {
-            ctx.ui.notify(`ChronoCompact ${EXTENSION_VERSION} is loaded. Hard replay cap: ${HARD_REPLAY_CAP_TOKENS.toLocaleString()} tokens. Hard combined cap: ${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} tokens.`, "info");
+            ctx.ui.notify(`ChronoCompact ${EXTENSION_VERSION} is loaded. Compatibility replay cap: ${HARD_REPLAY_CAP_TOKENS.toLocaleString()} tokens. Effective combined cap: ${effectiveContextCeiling(ctx, settings).toLocaleString()} tokens.`, "info");
             continue;
         }
         if (choice.startsWith("Compaction timing")) {
@@ -330,8 +358,8 @@ async function openChronoCompactSettings(ctx, initial) {
             }
             continue;
         }
-        if (choice.startsWith("Active context target")) {
-            draft = await tokenInput(ctx, "Target active context after compaction", settings.targetContextTokens, "target-context", draft);
+        if (choice.startsWith("Combined context hard limit")) {
+            draft = await tokenInput(ctx, "Hard combined context tokens (limited by selected model capacity)", settings.targetContextTokens, "target-context", draft);
             continue;
         }
         if (choice.startsWith("Chronological replay maximum")) {
@@ -341,6 +369,14 @@ async function openChronoCompactSettings(ctx, initial) {
             if (selected === "Use a fixed maximum") {
                 draft = await tokenInput(ctx, "Maximum replay tokens", settings.replayTargetTokens ?? 10_000, "replay-target", draft);
             }
+            continue;
+        }
+        if (choice.startsWith("Automatic physical-shard rollover")) {
+            const selected = await ctx.ui.select("Automatic physical-shard rollover", ["Enabled", "Disabled"]);
+            if (selected)
+                draft = applyConfigCommand(draft, `automatic-rollover ${selected === "Enabled" ? "on" : "off"}`).config;
+            if (selected === "Enabled")
+                draft = await tokenInput(ctx, "Source bytes before safe-idle rollover", settings.rolloverSourceBytes, "rollover-bytes", draft);
             continue;
         }
         if (choice.startsWith("Regular Pi summary")) {
@@ -506,6 +542,21 @@ function createTailTokenEstimator(entries) {
         return startIndex >= 0 && startIndex <= entries.length ? (suffixTokens[startIndex] ?? 0) : estimateEntryTokens(tail);
     };
 }
+function boundedBranchEntries(ctx, maximum = 256) {
+    const entries = [], seen = new Set();
+    let id = ctx.sessionManager.getLeafId();
+    while (id && entries.length < maximum) {
+        if (seen.has(id))
+            throw new Error("source-changed");
+        seen.add(id);
+        const entry = ctx.sessionManager.getEntry(id);
+        if (!entry || entry.id !== id)
+            throw new Error("source-changed");
+        entries.push(entry);
+        id = entry.parentId;
+    }
+    return entries.reverse();
+}
 function unmatchedToolCallCount(entries) {
     const pending = new Set();
     for (const entry of entries) {
@@ -535,7 +586,8 @@ function logicalErrorCode(error) {
 function validLogicalCommandId(value) {
     return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 }
-function commandSessionPort(ctx) {
+function commandSessionPort(ctx, checkpoints = []) {
+    const sourceSessionId = ctx.sessionManager.getSessionId(), sourceLeafId = ctx.sessionManager.getLeafId();
     const identity = (manager) => ({
         getSessionId: () => manager.getSessionId(),
         getSessionFile: () => manager.getSessionFile(),
@@ -543,15 +595,22 @@ function commandSessionPort(ctx) {
     });
     const setup = (manager) => ({ ...identity(manager),
         appendCustomMessageEntry: (customType, content, display, details) => manager.appendCustomMessageEntry(customType, content, display, details),
-        persistNewShardBootstrap: (expectedParentSession, continuationEntryId) => persistNewShardBootstrap(manager, expectedParentSession, continuationEntryId),
+        persistNewShardBootstrap: (expectedParentSession, continuationEntryId) => persistNewShardBootstrap(manager, expectedParentSession, continuationEntryId, sourceSessionId),
     });
     return {
         sessionManager: identity(ctx.sessionManager),
         newSession: async (options) => {
+            if (ctx.sessionManager.getSessionId() !== sourceSessionId || ctx.sessionManager.getLeafId() !== sourceLeafId
+                || ctx.sessionManager.getSessionFile() !== options.parentSession)
+                throw new Error("source-changed");
             const clearProvisional = markProvisionalLogicalReplacement(options.parentSession);
             try {
                 return await ctx.newSession({ parentSession: options.parentSession,
-                    setup: manager => options.setup(setup(manager)),
+                    setup: manager => {
+                        for (const checkpoint of checkpoints)
+                            manager.appendCustomEntry(checkpoint.customType, checkpoint.data);
+                        return options.setup(setup(manager));
+                    },
                     withSession: replacement => options.withSession({
                         sessionManager: identity(replacement.sessionManager),
                         reload: () => replacement.reload(),
@@ -936,6 +995,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     const logicalSessionRoot = join(dirname(userConfigPath), "chrono-logical-sessions");
     let logicalGrant;
     let logicalSwitchActive = false;
+    let automaticRolloverStatus = { state: "idle" };
+    let automaticRolloverTimer;
+    let automaticRolloverTicket;
+    let automaticRolloverAttemptedLeaf;
+    let automaticRolloverBootstrapBytes = 0;
     let sessionSearchOverride;
     let sessionRolloutPersisted = false;
     let rolloutEpoch = 0;
@@ -957,6 +1021,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             searchEnabled: searchSettings().searchIndexEnabled, startup: startupStatus.state,
             unsafe: !!rolloutError, progress: search.status() }),
         composition: { mode: searchSettings().memoryEngineEnabled ? "v3" : "compatibility", lastRefusal: canary.refusal ?? null },
+        automaticRollover: { ...automaticRolloverStatus, enabled: searchSettings().automaticRolloverEnabled,
+            sourceByteThreshold: searchSettings().rolloverSourceBytes, bootstrapBytes: automaticRolloverBootstrapBytes,
+            effectiveSourceByteThreshold: automaticRolloverBootstrapBytes + searchSettings().rolloverSourceBytes },
         loaded: LOADED_RUNTIME_IDENTITY,
         enabled: searchSettings().searchIndexEnabled,
         canary: { active: startupContext ? canary.active(startupContext.sessionManager.getSessionId(), startupContext.sessionManager.getSessionFile()) : false, refusal: canary.refusal },
@@ -1088,7 +1155,6 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let valueWorkerRerun = false;
     let valueWorkerCompactionGate = false;
     let legacyHistoryEditorWarningShown = false;
-    let legacyPiSummaryWarningShown = false;
     let projectionSeenToolCallIds = new Set();
     let lastProjectionMetrics;
     let replayWorkerStatus = { state: "idle" };
@@ -1404,6 +1470,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     const resolveStartedLogicalSession = async (ctx) => {
         const entries = asEntries(ctx.sessionManager.getBranch());
         const binding = recordedLogicalBinding(entries);
+        automaticRolloverBootstrapBytes = binding ? logicalBootstrapBytes(ctx.sessionManager.getHeader(), entries) : 0;
         const sourcePath = ctx.sessionManager.getSessionFile();
         if (!sourcePath)
             return undefined;
@@ -1544,10 +1611,6 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             legacyHistoryEditorWarningShown = true;
             ctx.ui.notify("The old ChronoCompact history-classifier setting is retired and cannot start a model call. Use the background value-worker settings for explicit opt-in.", "warning");
         }
-        if (settings.legacyPiSummaryDisabled && !legacyPiSummaryWarningShown && ctx.hasUI) {
-            legacyPiSummaryWarningShown = true;
-            ctx.ui.notify("PI_CHRONO_PI_SUMMARY=false is retired. The required regular Pi summary remains active; no configuration was changed.", "warning");
-        }
         scheduleIncrementalWork(ctx);
     });
     pi.on("session_before_switch", () => {
@@ -1579,6 +1642,10 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         projectionSeenToolCallIds = new Set();
     });
     pi.on("session_shutdown", () => {
+        if (automaticRolloverTimer)
+            clearTimeout(automaticRolloverTimer);
+        automaticRolloverTimer = undefined;
+        automaticRolloverTicket = undefined;
         startupContext = undefined;
         logicalGrant = undefined;
         rolloutEpoch++;
@@ -1621,6 +1688,75 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             : `Context is ${percent.toFixed(1)}% full. At the next natural checkpoint, consider preserving unresolved state and calling request_compaction. Continue the current atomic operation if interruption would be unsafe.`;
         pi.sendMessage({ customType: CONTEXT_WARNING_CUSTOM_TYPE, content, display: false }, { deliverAs: "steer" });
     });
+    const automaticRolloverBlockers = (ctx) => {
+        const blockers = [];
+        if (!ctx.isIdle() || ctx.hasPendingMessages())
+            blockers.push("session-busy");
+        if (ctx.hasUI && ctx.ui.getEditorText().length > 0)
+            blockers.push("editor-draft");
+        if (triggerPending || valueWorkerCompactionGate || logicalSwitchActive || forcedCompactionReason)
+            blockers.push("compaction-or-switch-active");
+        let processGuardPresent = false;
+        pi.events.emit("grounded:session-transition-readiness:v1", { protocolVersion: 1, accept: (reply) => {
+                const value = reply;
+                if (value?.protocolVersion !== 1 || !Number.isSafeInteger(value.runningProcesses) || Number(value.runningProcesses) < 0
+                    || !Number.isSafeInteger(value.openSessions) || Number(value.openSessions) < 0)
+                    return;
+                processGuardPresent = true;
+                if (Number(value.runningProcesses) > 0 || Number(value.openSessions) > 0)
+                    blockers.push("grounded-process-active");
+            } });
+        if (pi.getAllTools().some(tool => tool.name === "process" || tool.name === "session") && !processGuardPresent) {
+            blockers.push("process-safety-guard-unavailable");
+        }
+        return blockers;
+    };
+    const scheduleAutomaticRollover = (ctx) => {
+        const settings = resolveExtensionSettings(userConfig);
+        if (!settings.memoryEngineEnabled || !settings.automaticRolloverEnabled || !logicalGrant || automaticRolloverTimer || automaticRolloverTicket)
+            return;
+        const sourcePath = ctx.sessionManager.getSessionFile(), sessionId = ctx.sessionManager.getSessionId();
+        const epoch = rolloutEpoch, leafId = ctx.sessionManager.getLeafId();
+        if (!sourcePath || !leafId || automaticRolloverAttemptedLeaf === leafId)
+            return;
+        const deadline = Date.now() + 60_000;
+        const check = async () => {
+            automaticRolloverTimer = undefined;
+            if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== leafId)
+                return;
+            const blockers = automaticRolloverBlockers(ctx);
+            if (blockers.length) {
+                automaticRolloverStatus = { state: "deferred", blockers };
+                return;
+            }
+            const source = await historySourceState(sourcePath);
+            if (source.size < automaticRolloverBootstrapBytes + settings.rolloverSourceBytes) {
+                automaticRolloverStatus = { state: "below-threshold", sourceBytes: source.size };
+                return;
+            }
+            // Poll only cached readiness, with one finite deadline. The command pins
+            // the exact catalog cut and may use bounded fallback if optional state lags.
+            if (!search.status().requestedViewValidated) {
+                automaticRolloverStatus = { state: "waiting-for-catalog", sourceBytes: source.size };
+                if (Date.now() < deadline)
+                    automaticRolloverTimer = setTimeout(() => { void check().catch(() => { automaticRolloverStatus = { state: "source-unavailable" }; }); }, 1000);
+                return;
+            }
+            if (epoch !== rolloutEpoch || ctx.sessionManager.getLeafId() !== leafId || automaticRolloverBlockers(ctx).length)
+                return;
+            if (!pi.getCommands().some(command => command.name === "chrono-auto-rollover" && command.source === "extension")) {
+                automaticRolloverStatus = { state: "dispatch-unavailable" };
+                return;
+            }
+            automaticRolloverAttemptedLeaf = leafId;
+            automaticRolloverTicket = { nonce: randomUUID(), sessionId, sourcePath, leafId, epoch };
+            automaticRolloverStatus = { state: "dispatched", sourceBytes: source.size };
+            // Pi 0.85.1 dispatches extension commands before model preflight when this
+            // option is true. This never writes editor text or sends a model prompt.
+            pi.sendUserMessage(`/chrono-auto-rollover ${automaticRolloverTicket.nonce}`, { expandPromptTemplates: true });
+        };
+        automaticRolloverTimer = setTimeout(() => { void check().catch(() => { automaticRolloverStatus = { state: "source-unavailable" }; }); }, 0);
+    };
     pi.on("agent_settled", (_event, ctx) => {
         scheduleCapsuleShadow(ctx);
         scheduleCatalogShadow(ctx);
@@ -1655,7 +1791,15 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             // A pending V3 request defers this retarget until onComplete or onError.
             if (storedComposition)
                 scheduleSearch(ctx);
+            if (storedComposition)
+                scheduleAutomaticRollover(ctx);
         }
+    });
+    pi.on("session_compact_failed", () => {
+        valueWorkerCompactionGate = false;
+        triggerPending = false;
+        forcedContinuationPending = false;
+        continueAfterSuccessfulCompaction = false;
     });
     pi.on("session_compact", (event) => {
         valueWorkerCompactionGate = false;
@@ -1681,105 +1825,125 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         cancelIncrementalWork(false);
         const settings = resolveExtensionSettings(userConfig);
         try {
-            const branchEntries = asEntries(event.branchEntries);
+            // Pi already owns this branch array. The default path must not copy or
+            // parse lifetime entries before selecting its bounded suffix.
+            const branchEntries = event.branchEntries;
+            if (event.signal?.aborted)
+                return { cancel: true };
             continueAfterSuccessfulCompaction =
-                !event.willRetry && (forcedContinuationPending || hasUnresolvedTurn(branchEntries));
+                !event.willRetry && (forcedContinuationPending || hasUnresolvedTurn(branchEntries.slice(-256)));
             const preparedFirstKeptEntryId = event.preparation?.firstKeptEntryId;
             const tokensBefore = event.preparation?.tokensBefore;
             if (typeof preparedFirstKeptEntryId !== "string" || typeof tokensBefore !== "number") {
                 throw new Error("Pi compaction preparation omitted firstKeptEntryId or tokensBefore.");
             }
-            const preparedCutIndex = branchEntries.findIndex((entry) => entry.id === preparedFirstKeptEntryId);
-            if (preparedCutIndex < 0)
-                throw new Error(`Pi prepared cut entry ${preparedFirstKeptEntryId} was not present on the active branch.`);
             const normalFixture = adapters.schedulerDirectory ? adapters.normalCompositionFixture : undefined;
             const canaryRequested = canary.requested(ctx.sessionManager.getSessionId());
-            // V3 needs only Pi's retained tail. The compatibility estimator parses
-            // historical bodies, so never construct it on the snapshot path.
+            // V3 adapts only Pi's bounded prepared tail. Never construct the
+            // compatibility lifetime-body estimator on the snapshot path.
             const estimateTailTokens = settings.memoryEngineEnabled || canaryRequested || normalFixture
                 ? estimateEntryTokens : createTailTokenEstimator(branchEntries);
-            const preparedTailTokens = estimateTailTokens(branchEntries.slice(preparedCutIndex));
             if (canaryRequested && !canary.active(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile()))
                 return canary.refuse("session-ineligible");
             if (settings.memoryEngineEnabled || canaryRequested || normalFixture) {
-                if (!normalFixture && (!searchSettings().searchIndexEnabled || startupStatus.state !== "ready" || rolloutError)) {
-                    if (ctx.hasUI)
-                        ctx.ui.notify("V3 migration is unavailable or disabled; current context is unchanged.", "warning");
-                    return canary.refuse("selection-unavailable");
-                }
-                const preparedEntry = branchEntries[preparedCutIndex];
-                const sourceCutEntryId = preparedCutIndex > 0 ? branchEntries[preparedCutIndex - 1]?.id : undefined;
-                const preparedTailSafe = isSafeCompactionCut(branchEntries, preparedCutIndex);
-                const availableSummaryTokens = HARD_COMBINED_CONTEXT_CAP_TOKENS - preparedTailTokens;
-                if (!preparedTailSafe || typeof sourceCutEntryId !== "string" || preparedEntry?.parentId !== sourceCutEntryId
+                const combinedCeilingTokens = effectiveContextCeiling(ctx, settings, event.preparation.settings.reserveTokens);
+                const maximumTailTokens = Math.min(settings.dynamicRawTailMaxTokens, combinedCeilingTokens - 3_000);
+                const adaptive = prepareAdaptiveChronoTail(branchEntries, event.preparation, Math.min(settings.dynamicRawTailMinTokens, maximumTailTokens), maximumTailTokens, settings.hybridSummaryEnabled);
+                const selectedEntry = branchEntries[adaptive.tail.cutIndex];
+                const sourceCutEntryId = branchEntries[adaptive.tail.cutIndex - 1]?.id;
+                const availableSummaryTokens = combinedCeilingTokens - adaptive.tail.actualTokens;
+                if (typeof sourceCutEntryId !== "string" || selectedEntry?.parentId !== sourceCutEntryId
                     || availableSummaryTokens < 512) {
                     if (ctx.hasUI)
-                        ctx.ui.notify("Stored composition refused Pi's prepared boundary; compaction was cancelled.", "warning");
+                        ctx.ui.notify("Stored composition refused the adaptive boundary; compaction was cancelled.", "warning");
                     return { cancel: true };
                 }
                 const sessionId = ctx.sessionManager.getSessionId(), epoch = rolloutEpoch;
-                const branchLeaf = ctx.sessionManager.getLeafId();
+                const sourcePath = ctx.sessionManager.getSessionFile(), branchLeaf = ctx.sessionManager.getLeafId();
                 const identityChanged = () => epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId
-                    || ctx.sessionManager.getLeafId() !== branchLeaf;
+                    || ctx.sessionManager.getSessionFile() !== sourcePath || ctx.sessionManager.getLeafId() !== branchLeaf;
+                const fallback = (reason) => {
+                    if (identityChanged() || event.signal?.aborted)
+                        return { cancel: true };
+                    const result = composeBoundedMemory({ branchEntries, cutIndex: adaptive.tail.cutIndex,
+                        firstKeptEntryId: adaptive.tail.firstKeptEntryId, rawTailTokens: adaptive.tail.actualTokens,
+                        combinedCeilingTokens, previousSummary: event.preparation.previousSummary, reason });
+                    if (ctx.hasUI)
+                        ctx.ui.notify(`ChronoCompact used bounded programmatic memory (${reason}); coverage is incomplete.`, "info");
+                    return { compaction: { summary: result.summary, firstKeptEntryId: adaptive.tail.firstKeptEntryId, tokensBefore,
+                            details: { kind: "chrono-v3-composed-context", fallback: result.receipt, retainedTail: adaptive.tail } } };
+                };
+                if (!normalFixture && (!searchSettings().searchIndexEnabled || startupStatus.state !== "ready" || rolloutError)) {
+                    return fallback("indexed memory unavailable; only the active Pi branch was used");
+                }
                 let pinnedSelection;
                 if (!normalFixture) {
                     try {
                         pinnedSelection = await search.compositionSelection(sourceCutEntryId, event.signal);
-                        if (!pinnedSelection.coverage.restrictionsComplete || !pinnedSelection.coverage.openWorkComplete
-                            || pinnedSelection.omissions.protectedAtLeastOne || pinnedSelection.omissions.openWorkAtLeastOne
-                            || identityChanged() || event.signal?.aborted)
-                            return canary.refuse("mandatory-coverage-incomplete");
+                        if (identityChanged() || event.signal?.aborted)
+                            return { cancel: true };
+                        if (pinnedSelection.stateGeneration === 0)
+                            return fallback("no committed memory generation is available");
                     }
-                    catch {
-                        if (ctx.hasUI)
-                            ctx.ui.notify("Stored composition coverage is unavailable; current context is unchanged.", "warning");
-                        return canary.refuse("selection-unavailable");
+                    catch (error) {
+                        if (isOptionalCompositionUnavailable(error))
+                            return fallback("indexed memory is not ready");
+                        throw error;
                     }
                 }
                 let regularPiSummary;
                 try {
-                    regularPiSummary = await (normalFixture?.createPiSummary ?? createPiRegularSummary)(ctx, event.preparation, {
+                    regularPiSummary = settings.hybridSummaryEnabled && adaptive.summaryInputComplete ? await (normalFixture?.createPiSummary ?? createPiRegularSummary)(ctx, adaptive.preparation, {
                         targetTokens: Math.min(settings.hybridSummaryTargetTokens, availableSummaryTokens),
                         customInstructions: event.customInstructions,
                         signal: event.signal,
-                        previousSummary: event.preparation.previousSummary,
-                    });
+                        previousSummary: previousRegularPiSummary(branchEntries, event.preparation.previousSummary),
+                        messages: adaptive.preparation.messagesToSummarize,
+                    }) : undefined;
                 }
                 catch (error) {
                     if (!event.signal?.aborted && ctx.hasUI) {
-                        ctx.ui.notify(`Regular Pi summary failed; compaction was cancelled: ${safeErrorMessage(error)}`, "warning");
+                        ctx.ui.notify(`Regular Pi summary unavailable; deterministic history will continue: ${safeErrorMessage(error)}`, "warning");
                     }
-                    return canary.refuse("summary-unavailable");
                 }
-                if (!regularPiSummary || identityChanged() || event.signal?.aborted) {
-                    return canary.refuse("summary-unavailable");
+                if (identityChanged() || event.signal?.aborted) {
+                    return { cancel: true };
                 }
                 try {
                     const composed = await (normalFixture?.compose ?? composeStoredCompactionForNormalReturn)({
-                        regularPiSummary: regularPiSummary.text, sourceCutEntryId,
-                        firstKeptEntryId: preparedFirstKeptEntryId, rawTailTokens: preparedTailTokens, toolPairSafe: true,
+                        regularPiSummary: regularPiSummary?.text ?? "", sourceCutEntryId,
+                        firstKeptEntryId: adaptive.tail.firstKeptEntryId, rawTailTokens: adaptive.tail.actualTokens, toolPairSafe: true,
                     }, {
                         getEntry: entryId => ctx.sessionManager.getEntry(entryId),
                         select: entryId => pinnedSelection && entryId === sourceCutEntryId ? Promise.resolve(pinnedSelection) : search.compositionSelection(entryId, event.signal),
                         pin: async (entryId) => (await search.compositionTarget(entryId, event.signal)).view,
                         recovery: encodeCompositionRecovery,
-                    }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
+                    }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), combinedCeilingTokens);
                     if (identityChanged() || event.signal?.aborted)
                         return { cancel: true };
                     return { compaction: { summary: composed.summary, firstKeptEntryId: composed.firstKeptEntryId, tokensBefore,
-                            ...(regularPiSummary.usage === undefined ? {} : { usage: regularPiSummary.usage }),
-                            details: { kind: "chrono-v3-composed-context", composition: composed.envelope } } };
+                            ...(regularPiSummary?.usage === undefined ? {} : { usage: regularPiSummary.usage }),
+                            details: { kind: "chrono-v3-composed-context", composition: composed.envelope,
+                                ...(regularPiSummary ? { piSummary: regularPiSummary.text } : {}), retainedTail: adaptive.tail } } };
                 }
                 catch (error) {
                     if (event.signal?.aborted || identityChanged()) {
                         return { cancel: true };
                     }
+                    if (isOptionalCompositionUnavailable(error))
+                        return fallback("optional composition detail is unavailable");
                     if (ctx.hasUI) {
                         ctx.ui.notify(`Stored composition refused; current context is unchanged: ${safeErrorMessage(error)}`, "warning");
                     }
                     return canary.refuse("composition-refused");
                 }
             }
+            const preparedCutIndex = branchEntries.findIndex(entry => entry.id === preparedFirstKeptEntryId);
+            if (preparedCutIndex < 0)
+                throw new Error("Pi prepared cut entry was not present on the active branch.");
+            const preparedTailTokens = estimateTailTokens(branchEntries.slice(preparedCutIndex));
+            const combinedCeilingTokens = ctx.model ? effectiveContextCeiling(ctx, settings, event.preparation.settings.reserveTokens) : settings.targetContextTokens;
+            const maximumRawTailTokens = Math.max(256, combinedCeilingTokens - 3_000);
             let tailSelection = {
                 mode: "pi",
                 actualTokens: preparedTailTokens,
@@ -1797,14 +1961,14 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 if (selected)
                     tailSelection = { ...selected, mode: settings.rawTailMode };
             }
-            if (tailSelection.actualTokens > MAX_RAW_TAIL_WITH_HISTORY_TOKENS) {
-                const bounded = selectRawTailWithinMaximum(branchEntries, MAX_RAW_TAIL_WITH_HISTORY_TOKENS, estimateTailTokens);
+            if (tailSelection.actualTokens > maximumRawTailTokens) {
+                const bounded = selectRawTailWithinMaximum(branchEntries, maximumRawTailTokens, estimateTailTokens);
                 if (!bounded)
-                    throw new Error("No valid raw-tail cut can satisfy the 30,000-token combined ceiling.");
+                    throw new Error("No valid raw-tail cut can satisfy the configured combined ceiling.");
                 tailSelection = { ...bounded, mode: tailSelection.mode };
             }
             if (!isSafeCompactionCut(branchEntries, tailSelection.cutIndex)) {
-                const repaired = selectRawTailWithinMaximum(branchEntries, Math.min(MAX_RAW_TAIL_WITH_HISTORY_TOKENS, tailSelection.actualTokens), estimateTailTokens);
+                const repaired = selectRawTailWithinMaximum(branchEntries, Math.min(maximumRawTailTokens, tailSelection.actualTokens), estimateTailTokens);
                 if (!repaired)
                     throw new Error("No raw-tail cut can exclude an orphan function output.");
                 tailSelection = {
@@ -1824,7 +1988,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 maxSummaryTokens: settings.maxSummaryTokens,
                 contextReserveTokens: settings.contextReserveTokens,
             });
-            const historicalCeilingTokens = HARD_COMBINED_CONTEXT_CAP_TOKENS - retainedTailTokens;
+            const historicalCeilingTokens = combinedCeilingTokens - retainedTailTokens;
             const targetTokens = Math.min(historicalCeilingTokens, selectReplayTarget({
                 derivedTargetTokens,
                 fixedTargetTokens: settings.replayTargetTokens,
@@ -1862,7 +2026,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 historyEditorMaxInputTokens: 0,
                 historyEditorMaxOutputTokens: 0,
                 historyEditorModel: undefined,
-                hardCombinedContextCapTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS,
+                hardCombinedContextCapTokens: combinedCeilingTokens,
                 rawTailMode: settings.rawTailMode,
                 rawTailTokens: settings.rawTailTokens,
                 dynamicRawTailMinTokens: settings.dynamicRawTailMinTokens,
@@ -1889,7 +2053,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 const cached = await readCompactionCache(cachePath);
                 if (cached && cached.sourceHash === generationHash &&
                     cached.configHash === configHash &&
-                    cached.renderedTokens + retainedTailTokens <= HARD_COMBINED_CONTEXT_CAP_TOKENS) {
+                    cached.renderedTokens + retainedTailTokens <= combinedCeilingTokens) {
                     ctx.ui.notify(`ChronoCompact reused generation ${cached.generation}: ${cached.rawTokens.toLocaleString()}→${cached.renderedTokens.toLocaleString()} estimated tokens.`, "info");
                     const cachedShadowLeafId = sourceEntries.at(-1)?.id;
                     if (settings.rollupShadowEnabled && sessionPath && typeof cachedShadowLeafId === "string") {
@@ -1922,7 +2086,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                                     chronoHistoryTokens: cached.details.renderedTokens,
                                     rawTailTokens: retainedTailTokens,
                                     combinedContextTokens: cached.renderedTokens + retainedTailTokens,
-                                    hardCeilingTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS,
+                                    hardCeilingTokens: combinedCeilingTokens,
                                 },
                                 hybrid: {
                                     enabled: settings.hybridSummaryEnabled,
@@ -1939,15 +2103,15 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             let piSummary;
             try {
                 const piSummaryTargetTokens = Math.min(settings.hybridSummaryTargetTokens, Math.max(512, targetTokens - 512));
-                piSummary = await createPiRegularSummary(ctx, event.preparation, {
+                piSummary = settings.hybridSummaryEnabled ? await createPiRegularSummary(ctx, event.preparation, {
                     targetTokens: piSummaryTargetTokens,
                     customInstructions: event.customInstructions,
                     signal: event.signal,
                     ...(summaryRebase.rebase ? {} : { previousSummary: previousPiSummary }),
                     messages: regularSummaryMessagesForCut(branchEntries, firstKeptEntryId, summaryRebase.rebase),
-                });
+                }) : undefined;
                 if (piSummary && piSummary.tokens > piSummaryTargetTokens) {
-                    const text = truncateToTokens(piSummary.text, piSummaryTargetTokens, "\n\n[Regular Pi summary deterministically bounded for the 30,000-token combined ceiling.]");
+                    const text = truncateToTokens(piSummary.text, piSummaryTargetTokens, "\n\n[Regular Pi summary deterministically bounded for the configured combined ceiling.]");
                     piSummary = { ...piSummary, text, tokens: estimateTokensFromText(text) };
                 }
                 if (!piSummary && ctx.hasUI) {
@@ -2038,8 +2202,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 : result.summary;
             const combinedTokens = estimateTokensFromText(combinedSummary);
             const combinedContextTokens = combinedTokens + retainedTailTokens;
-            if (combinedContextTokens > HARD_COMBINED_CONTEXT_CAP_TOKENS) {
-                throw new Error(`Combined context ${combinedContextTokens} exceeds the hard ${HARD_COMBINED_CONTEXT_CAP_TOKENS}-token ceiling.`);
+            if (combinedContextTokens > combinedCeilingTokens) {
+                throw new Error(`Combined context ${combinedContextTokens} exceeds the hard ${combinedCeilingTokens}-token ceiling.`);
             }
             let generation;
             if (!useIsolatedWorker && settings.cacheEnabled && settings.valueWorker.mode !== "advisory" && cachePath) {
@@ -2063,7 +2227,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     ctx.ui.notify(`ChronoCompact cache write failed: ${safeErrorMessage(cacheError)}`, "warning");
                 }
             }
-            ctx.ui.notify(`ChronoCompact ${EXTENSION_VERSION} candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${HARD_COMBINED_CONTEXT_CAP_TOKENS.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`, "info");
+            ctx.ui.notify(`ChronoCompact ${EXTENSION_VERSION} candidate: ${result.rawTokens.toLocaleString()}→${combinedTokens.toLocaleString()} historical tokens; ${combinedContextTokens.toLocaleString()}/${combinedCeilingTokens.toLocaleString()} combined; background value worker ${settings.valueWorker.mode}; compaction model jobs 0.`, "info");
             const shadowBranchLeafId = sourceEntries.at(-1)?.id;
             const authoritativeResponse = {
                 compaction: {
@@ -2084,7 +2248,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                             chronoHistoryTokens: result.renderedTokens,
                             rawTailTokens: retainedTailTokens,
                             combinedContextTokens,
-                            hardCeilingTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS,
+                            hardCeilingTokens: combinedCeilingTokens,
                         },
                         historyEditor: result.details.historyEditor,
                         summaryRebase,
@@ -2148,129 +2312,179 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         parameters: Type.Object({}),
         async execute() { const status = searchStatus(); return toolText(JSON.stringify(status), status); },
     });
-    pi.registerCommand("chrono-logical-session", {
-        description: "Manually adopt, inspect, roll over, fork, recover, or roll back one owner-only logical session",
-        handler: async (args, ctx) => {
-            const parts = args.trim().split(/\s+/).filter(Boolean);
-            const action = parts[0];
-            const sourcePath = ctx.sessionManager.getSessionFile();
-            try {
-                if (action === "adopt") {
-                    const branchId = parts[1] ?? "main";
-                    if (!sourcePath || parts.length > 2)
-                        throw new Error("Usage: /chrono-logical-session adopt [branch-id]");
-                    const existing = await resolveStartedLogicalSession(ctx);
-                    if (existing && existing.branchId !== branchId)
-                        throw new Error("logical-session-adoption-conflict");
-                    logicalGrant = existing ?? await adoptStartedSession(ctx, branchId);
-                    ctx.ui.notify(`Logical session adopted: ${logicalGrant.logicalSessionId} on branch ${branchId}. No rollover occurred.`, "info");
+    const runLogicalSessionCommand = async (args, ctx, automatic = false) => {
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const action = parts[0];
+        const sourcePath = ctx.sessionManager.getSessionFile();
+        try {
+            if (action === "adopt") {
+                const branchId = parts[1] ?? "main";
+                if (!sourcePath || parts.length > 2)
+                    throw new Error("Usage: /chrono-logical-session adopt [branch-id]");
+                const existing = await resolveStartedLogicalSession(ctx);
+                if (existing && existing.branchId !== branchId)
+                    throw new Error("logical-session-adoption-conflict");
+                logicalGrant = existing ?? await adoptStartedSession(ctx, branchId);
+                ctx.ui.notify(`Logical session adopted: ${logicalGrant.logicalSessionId} on branch ${branchId}. No rollover occurred.`, "info");
+                return;
+            }
+            if (!sourcePath || !validLogicalCommandId(parts[1]))
+                throw new Error("Usage: /chrono-logical-session status|rollover|fork|recover|rollback <logical-session-id> [branch-id]");
+            const store = new LogicalSessionStore(logicalSessionRoot, parts[1]);
+            const rollover = new ManualLogicalRollover(store);
+            const manifest = await store.read();
+            if (!manifest)
+                throw new Error("logical-session-manifest-missing");
+            if (action === "status") {
+                const branch = manifest.branches.find(value => value.activeShardId && manifest.shards.some(shard => shard.shardId === value.activeShardId && shard.piSessionId === ctx.sessionManager.getSessionId() && shard.sourcePath === sourcePath));
+                if (!branch)
+                    throw new Error("logical-session-branch-scope-mismatch");
+                const entries = ctx.sessionManager.getBranch();
+                const measurements = { sourceBytes: (await stat(sourcePath)).size, records: entries.length,
+                    compactions: entries.reduce((count, entry) => count + (entry.type === "compaction" ? 1 : 0), 0) };
+                ctx.ui.notify(JSON.stringify({ ...logicalSessionStatus(manifest, branch.branchId, measurements), measurements }), "info");
+                return;
+            }
+            if (action === "recover") {
+                const pending = manifest.pendingRollover;
+                if (!pending)
+                    throw new Error("logical-session-recovery-unavailable");
+                const old = manifest.shards.find(value => value.shardId === pending.oldShardId);
+                if (pending.phase === "close-prepared" && old?.piSessionId === ctx.sessionManager.getSessionId() && old.sourcePath === sourcePath) {
+                    await rollover.abortPrepared(pending.operationId);
+                    ctx.ui.notify("Prepared rollover was reopened. No shard was deleted.", "info");
                     return;
                 }
-                if (!sourcePath || !validLogicalCommandId(parts[1]))
-                    throw new Error("Usage: /chrono-logical-session status|rollover|fork|recover|rollback <logical-session-id> [branch-id]");
-                const store = new LogicalSessionStore(logicalSessionRoot, parts[1]);
-                const rollover = new ManualLogicalRollover(store);
-                const manifest = await store.read();
-                if (!manifest)
-                    throw new Error("logical-session-manifest-missing");
-                if (action === "status") {
-                    const branch = manifest.branches.find(value => value.activeShardId && manifest.shards.some(shard => shard.shardId === value.activeShardId && shard.piSessionId === ctx.sessionManager.getSessionId() && shard.sourcePath === sourcePath));
-                    if (!branch)
-                        throw new Error("logical-session-branch-scope-mismatch");
-                    const entries = ctx.sessionManager.getBranch();
-                    const measurements = { sourceBytes: (await stat(sourcePath)).size, records: entries.length,
-                        compactions: entries.reduce((count, entry) => count + (entry.type === "compaction" ? 1 : 0), 0) };
-                    ctx.ui.notify(JSON.stringify({ ...logicalSessionStatus(manifest, branch.branchId, measurements), measurements }), "info");
-                    return;
-                }
-                if (action === "recover") {
-                    const pending = manifest.pendingRollover;
-                    if (!pending)
-                        throw new Error("logical-session-recovery-unavailable");
-                    const old = manifest.shards.find(value => value.shardId === pending.oldShardId);
-                    if (pending.phase === "close-prepared" && old?.piSessionId === ctx.sessionManager.getSessionId() && old.sourcePath === sourcePath) {
-                        await rollover.abortPrepared(pending.operationId);
-                        ctx.ui.notify("Prepared rollover was reopened. No shard was deleted.", "info");
-                        return;
-                    }
-                    const recoveryEntries = asEntries(ctx.sessionManager.getBranch());
-                    if (pending.phase === "close-prepared" && replacementContainsOnlyBootstrap(recoveryEntries)) {
-                        logicalSwitchActive = true;
-                        try {
-                            await rollover.reopenPreparedFromEmptyReplacement(commandSessionPort(ctx), true);
-                        }
-                        finally {
-                            logicalSwitchActive = false;
-                        }
-                        return;
-                    }
-                    const binding = recordedLogicalBinding(recoveryEntries);
-                    if (!binding || binding.operationId !== pending.operationId || binding.logicalSessionId !== manifest.logicalSessionId
-                        || binding.branchId !== pending.branchId || binding.fromShardId !== pending.oldShardId || binding.shardId !== pending.newShardId) {
-                        throw new Error("logical-session-recovery-binding-missing");
-                    }
-                    if (pending.phase === "close-prepared")
-                        await rollover.bindRecordedNewShard(pending.operationId, ctx.sessionManager, binding.continuationHash);
-                    await rollover.activateNewShard(pending.operationId, ctx.sessionManager);
-                    return;
-                }
-                if (action === "rollback") {
-                    const binding = recordedLogicalBinding(asEntries(ctx.sessionManager.getBranch()));
-                    if (!binding || binding.logicalSessionId !== manifest.logicalSessionId)
-                        throw new Error("logical-session-rollback-ineligible");
+                const recoveryEntries = asEntries(ctx.sessionManager.getBranch());
+                if (pending.phase === "close-prepared" && replacementContainsOnlyBootstrap(recoveryEntries)) {
                     logicalSwitchActive = true;
                     try {
-                        await rollover.rollbackLast(commandSessionPort(ctx), replacementContainsOnlyContinuation(asEntries(ctx.sessionManager.getBranch()), binding));
+                        await rollover.reopenPreparedFromEmptyReplacement(commandSessionPort(ctx), true);
                     }
                     finally {
                         logicalSwitchActive = false;
                     }
                     return;
                 }
-                if (!["rollover", "fork"].includes(action ?? "") || !parts[2]
-                    || parts.length !== (action === "fork" ? 4 : 3)) {
-                    throw new Error("Usage: /chrono-logical-session rollover <logical-session-id> <branch-id>; fork <logical-session-id> <source-branch-id> <new-branch-id>");
+                const binding = recordedLogicalBinding(recoveryEntries);
+                if (!binding || binding.operationId !== pending.operationId || binding.logicalSessionId !== manifest.logicalSessionId
+                    || binding.branchId !== pending.branchId || binding.fromShardId !== pending.oldShardId || binding.shardId !== pending.newShardId) {
+                    throw new Error("logical-session-recovery-binding-missing");
                 }
-                const branchEntries = asEntries(ctx.sessionManager.getBranch());
-                const leafId = ctx.sessionManager.getLeafId?.();
-                if (!leafId || !ctx.isIdle())
-                    throw new Error("logical-session-rollover-ineligible");
-                const before = await historySourceState(sourcePath);
-                const pinned = await search.compositionTarget(leafId);
-                const selection = await search.compositionSelection(leafId);
-                const regularPiSummary = previousRegularPiSummary(branchEntries, undefined);
-                if (!regularPiSummary || pinned.view.eventCut !== selection.requestedCut || pinned.view.eventCut !== selection.sourceView.eventCut
-                    || pinned.view.storeKey !== selection.sourceView.storeKey || pinned.view.generation !== selection.sourceView.generation) {
-                    throw new Error("logical-session-continuation-evidence-invalid");
-                }
-                const unmatched = unmatchedToolCallCount(branchEntries);
-                const candidate = buildManualContinuationCandidate({ manifest, branchId: parts[2], sourceLeafEntryId: leafId,
-                    regularPiSummary, selection, recover: encodeCompositionRecovery,
-                    combinedCeilingTokens: HARD_COMBINED_CONTEXT_CAP_TOKENS, toolPairSafe: unmatched === 0 });
-                const after = await historySourceState(sourcePath);
-                if (stableStringify(before) !== stableStringify(after) || ctx.sessionManager.getSessionFile() !== sourcePath
-                    || ctx.sessionManager.getLeafId?.() !== leafId)
-                    throw new Error("source-changed");
-                const idle = ctx.isIdle();
-                const eligibility = { persisted: true, idle, streaming: !idle,
-                    activeToolCalls: idle ? 0 : unmatched, unmatchedToolPairs: unmatched, pendingMessages: hasUnresolvedTurn(branchEntries),
-                    compactionActive: triggerPending || valueWorkerCompactionGate, sessionSwitchActive: logicalSwitchActive,
-                    // Both reads above require the lifecycle to be caught up to this exact leaf. A partial JSONL tail cannot produce that pin.
-                    catalogCaughtUp: true, incompleteSourceTail: false, sourceLeafEntryId: leafId, trigger: "manual" };
+                if (pending.phase === "close-prepared")
+                    await rollover.bindRecordedNewShard(pending.operationId, ctx.sessionManager, binding.continuationHash);
+                await rollover.activateNewShard(pending.operationId, ctx.sessionManager);
+                return;
+            }
+            if (action === "rollback") {
+                const binding = recordedLogicalBinding(asEntries(ctx.sessionManager.getBranch()));
+                if (!binding || binding.logicalSessionId !== manifest.logicalSessionId)
+                    throw new Error("logical-session-rollback-ineligible");
                 logicalSwitchActive = true;
                 try {
-                    if (action === "fork")
-                        await rollover.fork({ sourceBranchId: parts[2], targetBranchId: parts[3] }, candidate, eligibility, commandSessionPort(ctx));
-                    else
-                        await rollover.rollover(candidate, eligibility, commandSessionPort(ctx));
+                    await rollover.rollbackLast(commandSessionPort(ctx), replacementContainsOnlyContinuation(asEntries(ctx.sessionManager.getBranch()), binding));
                 }
                 finally {
                     logicalSwitchActive = false;
                 }
+                return;
+            }
+            if (!["rollover", "fork"].includes(action ?? "") || !parts[2]
+                || parts.length !== (action === "fork" ? 4 : 3)) {
+                throw new Error("Usage: /chrono-logical-session rollover <logical-session-id> <branch-id>; fork <logical-session-id> <source-branch-id> <new-branch-id>");
+            }
+            const branchEntries = automatic ? boundedBranchEntries(ctx) : asEntries(ctx.sessionManager.getBranch());
+            const leafId = ctx.sessionManager.getLeafId?.();
+            if (!leafId || !ctx.isIdle())
+                throw new Error("logical-session-rollover-ineligible");
+            const before = await historySourceState(sourcePath);
+            const pinned = await search.compositionTarget(leafId);
+            let selection;
+            try {
+                selection = await search.compositionSelection(leafId);
             }
             catch (error) {
+                if (!isOptionalCompositionUnavailable(error))
+                    throw error;
+            }
+            const regularPiSummary = previousRegularPiSummary(branchEntries, undefined) ?? "";
+            if (selection && (pinned.view.eventCut !== selection.requestedCut || pinned.view.eventCut !== selection.sourceView.eventCut
+                || pinned.view.storeKey !== selection.sourceView.storeKey || pinned.view.generation !== selection.sourceView.generation)) {
+                throw new Error("logical-session-continuation-evidence-invalid");
+            }
+            const unmatched = unmatchedToolCallCount(branchEntries);
+            const combinedCeilingTokens = effectiveContextCeiling(ctx, resolveExtensionSettings(userConfig));
+            const candidate = selection && selection.stateGeneration > 0
+                ? buildManualContinuationCandidate({ manifest, branchId: parts[2], sourceLeafEntryId: leafId,
+                    regularPiSummary, selection, recover: encodeCompositionRecovery, combinedCeilingTokens, toolPairSafe: unmatched === 0 })
+                : buildBoundedContinuationCandidate({ manifest, branchId: parts[2], sourceLeafEntryId: leafId,
+                    sourceView: pinned.view, entries: branchEntries.slice(-256), combinedCeilingTokens,
+                    previousSummary: branchEntries.slice(-256).reverse().find(entry => entry.type === "compaction")?.summary });
+            const after = await historySourceState(sourcePath);
+            if (stableStringify(before) !== stableStringify(after) || ctx.sessionManager.getSessionFile() !== sourcePath
+                || ctx.sessionManager.getLeafId?.() !== leafId)
+                throw new Error("source-changed");
+            if (automatic && automaticRolloverBlockers(ctx).length)
+                throw new Error("logical-session-rollover-ineligible");
+            const idle = ctx.isIdle();
+            const eligibility = { persisted: true, idle, streaming: !idle,
+                activeToolCalls: idle ? 0 : unmatched, unmatchedToolPairs: unmatched, pendingMessages: hasUnresolvedTurn(branchEntries),
+                compactionActive: triggerPending || valueWorkerCompactionGate, sessionSwitchActive: logicalSwitchActive,
+                // Both reads above require the lifecycle to be caught up to this exact leaf. A partial JSONL tail cannot produce that pin.
+                catalogCaughtUp: true, incompleteSourceTail: false, sourceLeafEntryId: leafId, trigger: automatic ? "threshold" : "manual" };
+            const checkpoints = captureLogicalStateCheckpoints(pi, ctx);
+            const port = commandSessionPort(ctx, checkpoints);
+            logicalSwitchActive = true;
+            try {
+                const result = action === "fork"
+                    ? await rollover.fork({ sourceBranchId: parts[2], targetBranchId: parts[3] }, candidate, eligibility, port)
+                    : await rollover.rollover(candidate, eligibility, port);
+                if (result.cancelled) {
+                    // A later before-switch guard or user cancellation can run after
+                    // this instance released its old target. Restore that exact source.
+                    logicalGrant = await resolveStartedLogicalSession(ctx);
+                    beginStartup(ctx);
+                    scheduleSearch(ctx);
+                    if (automatic)
+                        automaticRolloverStatus = { state: "cancelled" };
+                }
+            }
+            finally {
+                logicalSwitchActive = false;
+            }
+        }
+        catch (error) {
+            if (automatic)
+                automaticRolloverStatus = { state: "refused", code: logicalErrorCode(error) };
+            try {
                 ctx.ui.notify(`Logical session command refused: ${logicalErrorCode(error)}`, "warning");
             }
+            catch {
+                throw error;
+            } // Do not hide an original replacement failure behind a stale UI context.
+        }
+    };
+    pi.registerCommand("chrono-logical-session", {
+        description: "Adopt, inspect, roll over, fork, recover, or roll back one owner-only logical session",
+        handler: (args, ctx) => runLogicalSessionCommand(args, ctx),
+    });
+    pi.registerCommand("chrono-auto-rollover", {
+        description: "Internal one-shot safe-idle logical rollover dispatch",
+        handler: async (args, ctx) => {
+            const ticket = automaticRolloverTicket;
+            automaticRolloverTicket = undefined;
+            const settings = resolveExtensionSettings(userConfig);
+            if (!ticket || args !== ticket.nonce || ticket.epoch !== rolloutEpoch
+                || ticket.sessionId !== ctx.sessionManager.getSessionId() || ticket.sourcePath !== ctx.sessionManager.getSessionFile()
+                || ticket.leafId !== ctx.sessionManager.getLeafId() || !logicalGrant
+                || !settings.memoryEngineEnabled || !settings.automaticRolloverEnabled)
+                return;
+            const blockers = automaticRolloverBlockers(ctx);
+            if (blockers.length) {
+                automaticRolloverStatus = { state: "deferred", blockers };
+                return;
+            }
+            await runLogicalSessionCommand(`rollover ${logicalGrant.logicalSessionId} ${logicalGrant.branchId}`, ctx, true);
         },
     });
     pi.registerCommand("chrono-rollup-repair", {
@@ -2339,7 +2553,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     select: entryId => search.compositionSelection(entryId, ctx.signal),
                     pin: async (entryId) => (await search.compositionTarget(entryId, ctx.signal)).view,
                     recovery: encodeCompositionRecovery,
-                }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), HARD_COMBINED_CONTEXT_CAP_TOKENS);
+                }, join(dirname(userConfigPath), "chrono-compositions", createHash("sha256").update(sessionId).digest("hex")), effectiveContextCeiling(ctx, resolveExtensionSettings(userConfig)));
                 if (epoch !== rolloutEpoch || ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== branchLeaf)
                     return;
                 // UI-only receipt: neither comparison prose nor a replacement context is appended.
