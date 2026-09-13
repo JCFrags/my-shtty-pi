@@ -14,6 +14,7 @@ import { resolveAdoptedLogicalActivation, resolveExactLogicalRoute, resolveLogic
 import { evaluateLogicalRolloverThresholds, logicalSessionStatus } from "../src/logical-session-status.js";
 import {
   ManualLogicalRollover,
+  buildLogicalContinuation,
   adoptExistingSessionAsShardZero,
   createInitialLogicalManifest,
   type ContinuationCandidate,
@@ -176,7 +177,7 @@ test("fractional-importance producer artifact reaches a manual continuation with
   assert.match(candidate.composition.artifactHash, /^[a-f0-9]{64}$/u);
 });
 
-test("manual logical rollover is owner-only, coverage-gated, recoverable, and ancestor-routed", async () => {
+test("manual logical rollover is owner-only, source-gated, selective, recoverable, and ancestor-routed", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "chrono-logical-test-"));
   const root = join(temporary, "logical");
   const logicalSessionId = randomUUID(), oldPath = join(temporary, "old.jsonl");
@@ -210,7 +211,14 @@ test("manual logical rollover is owner-only, coverage-gated, recoverable, and an
     pendingMessages: false, compactionActive: false, sessionSwitchActive: false, catalogCaughtUp: true,
     incompleteSourceTail: false, sourceLeafEntryId: "leaf-7", trigger: "manual" as const };
   const rollover = new ManualLogicalRollover(store);
-  await assert.rejects(() => rollover.prepare({ ...candidate, mandatory: { ...candidate.mandatory, protectedCovered: 1 } }, eligibility),
+  const selective = buildLogicalContinuation(manifest, { ...candidate,
+    composition: { ...candidate.composition, combinedCeilingTokens: 60_000 },
+    mandatory: { ...candidate.mandatory, protectedCovered: 1 } });
+  assert.equal(selective.composition.mandatoryCoverageComplete, false,
+    "selective history does not require a global verbatim inventory or claim full coverage");
+  assert.equal(selective.composition.combinedCeilingTokens, 60_000);
+  await assert.rejects(() => rollover.prepare({ ...candidate, composition: { ...candidate.composition,
+    validation: { ...candidate.composition.validation, safeTail: false } } }, eligibility),
     (error: any) => error.code === "logical-session-continuation-incomplete");
 
   const commands = new FakeCommands(new FakeSession("pi-old", oldPath));

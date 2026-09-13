@@ -10,6 +10,61 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import extension from "../src/pi-extension.js";
 import type { SessionEntryLike } from "../src/types.js";
 import { HistorySearchAdapter } from "../src/history-search-adapter.js";
+import { composeBoundedMemory } from "../src/bounded-memory.js";
+import { resolveExtensionSettings } from "../src/pi-extension.js";
+
+test("default V3 compaction remains model-free and bounded when optional memory is unavailable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "chrono-programmatic-"));
+  const priorConfig = process.env.PI_CHRONO_CONFIG_PATH;
+  const priorSummary = process.env.PI_CHRONO_PI_SUMMARY;
+  process.env.PI_CHRONO_CONFIG_PATH = join(root, "config.json");
+  delete process.env.PI_CHRONO_PI_SUMMARY;
+  try {
+    const settings = resolveExtensionSettings({});
+    assert.equal(settings.memoryEngineEnabled, true);
+    assert.equal(settings.hybridSummaryEnabled, false);
+    assert.equal(settings.automaticRolloverEnabled, true);
+    assert.equal(settings.rolloverSourceBytes, 8 * 1024 * 1024);
+    const hooks = new Map<string, (event: any, ctx: any) => any>();
+    extension({ on: (name: string, hook: any) => hooks.set(name, hook), registerTool() {}, registerCommand() {},
+      appendEntry() {}, sendMessage() {} } as unknown as ExtensionAPI, { schedulerDirectory: join(root, "runtime") });
+    const tail: SessionEntryLike[] = [
+      { type: "message", id: "request", parentId: "old-999", message: { role: "user", content: "Goal: retain this request." } },
+      { type: "message", id: "answer", parentId: "request", message: { role: "assistant", content: [{ type: "text", text: "Decision: use the bounded path." }] } },
+      { type: "message", id: "tail", parentId: "answer", message: { role: "user", content: "Continue the open work." } },
+    ];
+    const entries = Array.from({ length: 1000 }, (_, index) => ({ type: "session_info", id: `old-${index}` })) as SessionEntryLike[];
+    entries.push(...tail);
+    for (let index = 0; index < entries.length - 256; index++) {
+      Object.defineProperty(entries, index, { get() { throw new Error("lifetime prefix visited"); } });
+    }
+    const context = { hasUI: false, model: { contextWindow: 128_000 }, getContextUsage: () => undefined,
+      modelRegistry: { getApiKeyAndHeaders() { throw new Error("model call attempted"); } },
+      sessionManager: { getSessionId: () => "session", getSessionFile: () => join(root, "session.jsonl"), getLeafId: () => "tail",
+        getEntry: (id: string) => tail.find(entry => entry.id === id), getBranch() { throw new Error("lifetime branch copied"); } } };
+    const event = { branchEntries: entries, preparation: { firstKeptEntryId: "old-2", tokensBefore: 80_000,
+      previousSummary: "Historical restriction: do not remove the recovery source.", messagesToSummarize: [], turnPrefixMessages: [],
+      settings: { reserveTokens: 16_384 } }, reason: "manual", willRetry: false, signal: new AbortController().signal };
+    const result = await hooks.get("session_before_compact")!(event, context);
+    assert.ok(result.compaction, JSON.stringify(result));
+    assert.equal(result.compaction.details.fallback.mode, "bounded-programmatic-fallback");
+    assert.ok(result.compaction.details.fallback.inspectedEntries <= 128);
+    assert.ok(result.compaction.details.fallback.combinedTokens <= 32_000);
+    assert.match(result.compaction.summary, /No summary model call was required/);
+    assert.match(result.compaction.summary, /Historical restriction/);
+    const controller = new AbortController(); controller.abort();
+    assert.deepEqual(await hooks.get("session_before_compact")!({ ...event, signal: controller.signal }, context), { cancel: true });
+    const sequential = [tail[0]!, { type: "compaction", id: "summary", firstKeptEntryId: "request" }, tail[1]!, tail[2]!] as SessionEntryLike[];
+    const memory = composeBoundedMemory({ branchEntries: sequential, cutIndex: 3, firstKeptEntryId: "tail", rawTailTokens: 10,
+      combinedCeilingTokens: 3000, previousSummary: "Earlier memory.", reason: "fixture" });
+    assert.match(memory.summary, /Earlier memory[\s\S]*Goal: retain[\s\S]*Decision: use/);
+    assert.equal(memory.receipt.complete, false);
+  } finally {
+    if (priorConfig === undefined) delete process.env.PI_CHRONO_CONFIG_PATH; else process.env.PI_CHRONO_CONFIG_PATH = priorConfig;
+    if (priorSummary === undefined) delete process.env.PI_CHRONO_PI_SUMMARY; else process.env.PI_CHRONO_PI_SUMMARY = priorSummary;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("recorded same-cut preview and normal hooks preserve selection readiness until compaction settles", async (t) => {
   assert.equal(M09_AUTHORITATIVE_REPLACEMENT_ENABLED, false);
@@ -58,9 +113,17 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
     entries.push({ id: "orphan", parentId: "tail", type: "message", message: { role: "toolResult", toolCallId: "missing", content: [] } });
     await assert.rejects(previewStoredCompaction({ ...compaction, parentId: "orphan" }, reader, join(root, "artifacts"), 3000), /tool-pair/);
     assert.equal(reads, 1, "unsafe tail must refuse before contained selection");
+    await chmod(join(root, "artifacts"), 0o755);
+    const withoutArtifact = await composeStoredCompactionForNormalReturn({ regularPiSummary: "", sourceCutEntryId: "prefix",
+      firstKeptEntryId: "tail", rawTailTokens: 30, toolPairSafe: true }, reader, join(root, "artifacts"), 3000);
+    assert.equal(withoutArtifact.envelope.artifactStored, false, "unavailable diagnostics must not block validated memory");
+    assert.equal(withoutArtifact.envelope.artifactRef, undefined);
+    assert.equal((await stat(join(root, "artifacts"))).mode & 0o777, 0o755, "normal return must not weaken or repair storage policy");
 
     const previousConfigPath = process.env.PI_CHRONO_CONFIG_PATH;
     const previousSearchIndex = process.env.PI_CHRONO_SEARCH_INDEX;
+    const previousPiSummary = process.env.PI_CHRONO_PI_SUMMARY;
+    process.env.PI_CHRONO_PI_SUMMARY = "true";
     process.env.PI_CHRONO_CONFIG_PATH = join(root, "config.json");
     process.env.PI_CHRONO_SEARCH_INDEX = "true";
     try {
@@ -86,15 +149,18 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
         on(name: string, handler: Hook) { hooks.set(name, handler); } };
       extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(root, "runtime"),
         normalCompositionFixture: {
-          createPiSummary: async (_ctx, preparation) => {
+          createPiSummary: async (_ctx, preparation, options) => {
             summaryCalls++;
             assert.equal(preparation.firstKeptEntryId, "tail");
+            assert.equal(options.previousSummary, "Prior Pi summary.");
+            assert.deepEqual(options.messages, preparation.messagesToSummarize);
             return { text: "Independent Pi summary.", tokens: 6, model: "fixture/model" };
           },
-          compose: async (input, maintained) => {
+          compose: async (input, maintained, _directory, ceiling) => {
             composeCalls++;
+            assert.equal(ceiling, 32_000);
             await maintained.select(input.sourceCutEntryId);
-            if (refuseComposition) throw new Error("mandatory coverage incomplete");
+            if (refuseComposition) throw new Error("unsafe source boundary");
             assert.equal(input.sourceCutEntryId, "prefix");
             assert.equal(input.firstKeptEntryId, "tail");
             assert.equal(input.toolPairSafe, true);
@@ -115,7 +181,7 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
                 protected: [item("restriction", "Protected obligation remains exact.")],
                 current: [item("openwork", "Open work remains unresolved.")] }),
               pin: async () => ({ ...healthyView, eventCut: 2 }), recovery: () => "opaque:fixture",
-            }, join(root, "normal-artifacts"), 30000);
+            }, join(root, "normal-artifacts"), ceiling);
           },
         } });
       const hook = hooks.get("session_before_compact");
@@ -126,7 +192,7 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
       }, reason: "manual", willRetry: false, signal: new AbortController().signal };
       let leafId = "prefix";
       const compactContext = {
-        hasUI: true, ui: { notify() {} }, getContextUsage: () => undefined,
+        hasUI: true, model: { contextWindow: 128_000 }, ui: { notify() {} }, getContextUsage: () => undefined,
         compact(options: typeof compactRequests[number]) { compactRequests.push(options); },
         sessionManager: { getSessionId: () => "fixture-session", getLeafId: () => leafId, getEntry: (id: string) => entries.find(entry => entry.id === id),
           getSessionFile: () => join(root, "session.jsonl"),
@@ -147,9 +213,11 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
       assert.equal(summaryCalls, 1);
       assert.equal(composeCalls, 1);
       assert.equal(result.compaction.firstKeptEntryId, "tail");
-      assert.match(result.compaction.summary, /Independent Pi summary[\s\S]*Protected obligation[\s\S]*Open work/);
-      assert.deepEqual(Object.keys(result.compaction.details).sort(), ["composition", "kind"]);
-      assert.equal(result.compaction.details.piSummary, undefined);
+      assert.match(result.compaction.summary, /Independent Pi summary[\s\S]*Open work[\s\S]*Protected obligation/);
+      assert.deepEqual(Object.keys(result.compaction.details).sort(), ["composition", "kind", "piSummary", "retainedTail"]);
+      assert.equal(result.compaction.details.piSummary, "Independent Pi summary.");
+      assert.equal(result.compaction.details.retainedTail.mode, "dynamic");
+      assert.equal(result.compaction.details.composition.combinedCeilingTokens, 32_000);
       assert.deepEqual(result.compaction.details.composition.validation, { safeTail: true, withinCombinedCeiling: true,
         protectedCoverageComplete: true, openWorkCoverageComplete: true });
       leafId = "compacted";
@@ -164,7 +232,7 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
       await settle();
       assert.equal(compactRequests.length, 2);
       assert.deepEqual(await hook(compactEvent, compactContext), { cancel: true },
-        "coverage refusal must preserve context, not publish a summary-only success");
+        "source refusal must preserve context, not publish an unsafe result");
       compactRequests[1]!.onError?.(new Error("Compaction cancelled"));
       assert.deepEqual(scheduledLeaves, ["prefix", "compacted", "later-tail"], "refusal resumes background catch-up");
       await settle();
@@ -175,6 +243,8 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
       else process.env.PI_CHRONO_CONFIG_PATH = previousConfigPath;
       if (previousSearchIndex === undefined) delete process.env.PI_CHRONO_SEARCH_INDEX;
       else process.env.PI_CHRONO_SEARCH_INDEX = previousSearchIndex;
+      if (previousPiSummary === undefined) delete process.env.PI_CHRONO_PI_SUMMARY;
+      else process.env.PI_CHRONO_PI_SUMMARY = previousPiSummary;
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

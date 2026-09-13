@@ -79,6 +79,9 @@ test("bounded shadow composition preserves Pi bytes and source order, keeps hist
   assert.equal(composed.text.slice(summaryAt, summaryAt + regularPiSummary.length), regularPiSummary);
   assert.ok(composed.text.indexOf("Older rollup detail.") < composed.text.indexOf("Earlier low-importance event."));
   assert.ok(composed.text.indexOf("Earlier low-importance event.") < composed.text.indexOf("Later high-importance event."));
+  assert.ok(composed.text.indexOf("Later high-importance event.") < composed.text.indexOf("Composer integration remains open."));
+  assert.doesNotMatch(composed.text, /CURRENT STATE|CURRENT OPEN WORK|PROTECTED CONTRACT/);
+  assert.match(composed.text, /CHRONOLOGICAL HISTORY/);
   assert.ok(composed.envelope.combinedTokens <= fixture.combinedCeilingTokens);
   assert.equal(composed.envelope.memoryLag, 0);
   assert.deepEqual(composed.envelope.rollupRepresentedRange, [1, 40]);
@@ -99,12 +102,18 @@ test("bounded shadow composition preserves Pi bytes and source order, keeps hist
     mandatoryCoverage: { protectedComplete: false, openWorkComplete: false } });
   assert.equal(historical.degradation, "last-good-state-and-recent");
   assert.match(historical.text, /Never publish this preview/);
-  assert.match(historical.text, /KNOWN PROTECTED ITEMS \(INCOMPLETE COVERAGE\)/);
+  assert.match(historical.text, /Restriction coverage: incomplete/);
   assert.equal(historical.envelope.validation.protectedCoverageComplete, false);
   const obligation = "Keep this condition intact. ".repeat(80) + "Do not proceed unless approved.";
   const exactObligation = composeShadowContext({ ...fixture, combinedCeilingTokens: 5000,
     selected: { ...fixture.selected, protected: [row("long-obligation", obligation, 4, 0, "restriction", "exact", "current")] } });
-  assert.ok(exactObligation.text.includes(obligation), "mandatory prose must not lose a trailing condition to detail truncation");
+  assert.ok(!exactObligation.text.includes(obligation), "important history is graded, not a global verbatim inventory");
+  assert.match(exactObligation.text, /source excerpt; incomplete wording/);
+  assert.match(exactObligation.text, /opaque:long-obligation/);
+  assert.equal(exactObligation.envelope.validation.protectedCoverageComplete, false);
+  const larger = composeShadowContext({ ...fixture, combinedCeilingTokens: 60_000 });
+  assert.equal(larger.envelope.combinedCeilingTokens, 60_000);
+  assert.throws(() => composeShadowContext({ ...fixture, combinedCeilingTokens: 250_001 }), /Context ceiling/);
   const refused = composeShadowContext({ ...fixture, combinedCeilingTokens: 512,
     selected: { ...fixture.selected, protected: [row("long-obligation", obligation, 4, 0, "restriction", "exact", "current")] } });
   assert.equal(refused.envelope.validation.protectedCoverageComplete, false);

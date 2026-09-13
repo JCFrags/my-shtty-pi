@@ -3,6 +3,7 @@ import type { LogicalCatalogCut, LogicalContinuation, LogicalSessionManifest, Lo
 import { logicalContinuationHash } from "./logical-session-contract.js";
 import { resolveLogicalShardRoutes } from "./logical-session-routing.js";
 import { LogicalSessionStore } from "./logical-session-store.js";
+import { MAX_CONTEXT_TOKENS } from "./context-budget.js";
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 export interface RolloverEligibility {
@@ -134,12 +135,10 @@ export function buildLogicalContinuation(manifest: LogicalSessionManifest, candi
     || shard.state !== "active" || candidate.source.entryId.length < 1 || candidate.summary.length < 1
     || candidate.composition.schemaVersion !== 1 || !Number.isSafeInteger(candidate.composition.combinedTokens)
     || !Number.isSafeInteger(candidate.composition.combinedCeilingTokens) || candidate.composition.combinedTokens < 1
-    || candidate.composition.combinedCeilingTokens < 1 || candidate.composition.combinedCeilingTokens > 30_000
+    || candidate.composition.combinedCeilingTokens < 1 || candidate.composition.combinedCeilingTokens > MAX_CONTEXT_TOKENS
     || candidate.composition.combinedTokens > candidate.composition.combinedCeilingTokens
     || !candidate.composition.validation.safeTail || !candidate.composition.validation.withinCombinedCeiling
-    || !candidate.composition.validation.protectedCoverageComplete || !candidate.composition.validation.openWorkCoverageComplete
-    || candidate.mandatory.protectedEligible !== candidate.mandatory.protectedCovered
-    || candidate.mandatory.openWorkEligible !== candidate.mandatory.openWorkCovered || candidate.mandatory.omittedMandatory.length !== 0) {
+) {
     return fail("logical-session-continuation-incomplete");
   }
   const routes = resolveLogicalShardRoutes(manifest, candidate.branchId);
@@ -156,7 +155,12 @@ export function buildLogicalContinuation(manifest: LogicalSessionManifest, candi
     fromShardId: shard.shardId, source: candidate.source, coveredShards: candidate.coveredShards.map(value => ({ ...value })),
     summary: candidate.summary, summaryHash, composition: { schemaVersion: 1, payloadHash: candidate.composition.payloadHash,
       artifactHash: candidate.composition.artifactHash, combinedTokens: candidate.composition.combinedTokens,
-      combinedCeilingTokens: candidate.composition.combinedCeilingTokens, mandatoryCoverageComplete: true, safeTail: true } };
+      combinedCeilingTokens: candidate.composition.combinedCeilingTokens,
+      mandatoryCoverageComplete: candidate.composition.validation.protectedCoverageComplete
+        && candidate.composition.validation.openWorkCoverageComplete
+        && candidate.mandatory.protectedEligible === candidate.mandatory.protectedCovered
+        && candidate.mandatory.openWorkEligible === candidate.mandatory.openWorkCovered
+        && candidate.mandatory.omittedMandatory.length === 0, safeTail: true } };
 }
 
 export class ManualLogicalRollover {
@@ -281,6 +285,18 @@ export class ManualLogicalRollover {
   async activateNewShard(operationId: string, manager: SessionIdentityPort): Promise<void> {
     const manifest = await this.store.read() ?? fail("logical-session-manifest-missing");
     const operation = manifest.pendingRollover;
+    // Pi can start the replacement after setup and before withSession. Startup
+    // recovery may already have activated this exact operation. Accept only that
+    // committed binding, not an arbitrary missing or superseded operation.
+    if (!operation && manifest.lastRollover?.operationId === operationId) {
+      const receipt = manifest.lastRollover;
+      const next = currentShard(manifest, receipt.branchId);
+      if (next.shardId !== receipt.newShardId || next.state !== "active" || next.continuationHash !== receipt.continuationHash
+        || manager.getSessionId() !== next.piSessionId || manager.getSessionFile() !== next.sourcePath) {
+        return fail("logical-session-active-shard-mismatch");
+      }
+      return;
+    }
     if (!operation || operation.operationId !== operationId || operation.phase !== "new-shard-bound" || !operation.newShardId) return fail("logical-session-operation-mismatch");
     const next = manifest.shards.find(value => value.shardId === operation.newShardId) ?? fail("logical-session-shard-missing");
     if (manager.getSessionId() !== next.piSessionId || manager.getSessionFile() !== next.sourcePath) return fail("logical-session-active-shard-mismatch");

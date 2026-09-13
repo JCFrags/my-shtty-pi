@@ -1,11 +1,48 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  prepareAdaptiveChronoTail,
   previousRegularPiSummary,
   rawSourceMessages,
   regularSummaryMessagesForCut,
   renderHybridCompaction,
 } from "../src/pi-hybrid.js";
+
+import { resolveContextCeiling } from "../src/context-budget.js";
+import { resolveExtensionSettings } from "../src/pi-extension.js";
+import { applyConfigCommand } from "../src/user-config.js";
+import type { compact } from "@earendil-works/pi-coding-agent";
+import type { SessionEntryLike } from "../src/types.js";
+
+test("adaptive prepared tail shares an exact Pi cut and adjustable model-validated budgets", () => {
+  const settings = resolveExtensionSettings(applyConfigCommand({}, "target-context 60000").config);
+  assert.equal(settings.targetContextTokens, 60_000);
+  assert.equal(resolveContextCeiling(settings.targetContextTokens, 128_000, 1500), 60_000);
+  assert.equal(resolveContextCeiling(settings.targetContextTokens, 48_000, 1500), 30_116);
+  assert.throws(() => resolveContextCeiling(60_000, 0), /capacity/);
+  const entries: SessionEntryLike[] = [
+    { type: "message", id: "prefix", message: { role: "user", content: "Earlier prefix" } },
+    { type: "message", id: "pi-cut", message: { role: "user", content: "Earlier retained work. ".repeat(2800) } },
+    { type: "message", id: "call", message: { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }] } },
+    { type: "message", id: "result", message: { role: "toolResult", toolCallId: "read-1", content: [{ type: "text", text: "Exact read result. ".repeat(700) }] } },
+    { type: "message", id: "current", message: { role: "user", content: "Continue the unresolved task." } },
+  ];
+  const original = JSON.stringify(entries);
+  const preparation = { firstKeptEntryId: "pi-cut", messagesToSummarize: rawSourceMessages(entries.slice(0, 1)),
+    turnPrefixMessages: [], previousSummary: "Old independent summary", isSplitTurn: false, tokensBefore: 40_000,
+    settings: { enabled: true, keepRecentTokens: 20_000, reserveTokens: 16_384 }, fileOps: { read: new Set(), written: new Set(), edited: new Set() } } as Parameters<typeof compact>[0];
+  const result = prepareAdaptiveChronoTail(entries, preparation, 3000, 6000);
+  assert.equal(result.tail.firstKeptEntryId, "call");
+  assert.ok(result.tail.actualTokens >= 3000 && result.tail.actualTokens <= 6000);
+  assert.equal(result.preparation.firstKeptEntryId, result.tail.firstKeptEntryId);
+  assert.match(JSON.stringify(result.preparation.messagesToSummarize), /Earlier retained work/);
+  assert.doesNotMatch(JSON.stringify(result.preparation.messagesToSummarize), /Exact read result|unresolved task/);
+  assert.equal(JSON.stringify(entries), original, "full tool results must remain unchanged");
+  assert.equal(preparation.firstKeptEntryId, "pi-cut", "Pi's input preparation is not mutated");
+  assert.throws(() => prepareAdaptiveChronoTail(entries.slice(0, 4), preparation, 1000, 2000), /No complete tool-safe/);
+  const prior = renderHybridCompaction("Independent prior Pi summary", "CHRONO HISTORY MUST NOT BE SUMMARY INPUT");
+  assert.equal(previousRegularPiSummary([{ type: "compaction", summary: prior }], prior), "Independent prior Pi summary");
+});
 
 test("ChronoCompact raw replay input excludes prior generated compaction summaries", () => {
   const messages = rawSourceMessages([

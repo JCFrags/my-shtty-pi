@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, link, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { renderHybridCompaction } from "./pi-hybrid.js";
+import { validateContextCeiling } from "./context-budget.js";
 import { isScopedBodySourceRef, sourceRefWithinViewBounds, type ScopedBodySourceRef, type ScopedRawSourceRef } from "./capsule-contract.js";
 import type {
   EpisodeStateAuthority,
@@ -22,7 +23,7 @@ export const SHADOW_COMPOSER_LIMITS = {
   minCombinedCeilingTokens: 512,
 } as const;
 
-export type ComposerRowKind = "restriction" | "open-work" | "episode" | "capsule" | "rollup" | "delta";
+export type ComposerRowKind = "restriction" | "open-work" | "goal" | "blocker" | "decision" | "episode" | "capsule" | "rollup" | "delta";
 export type ComposerAuthority = "exact" | "derived";
 export type ComposerStatus = "current" | "unresolved" | "resolved" | "superseded" | "uncertain";
 
@@ -108,6 +109,7 @@ export interface ShadowCompositionEnvelope {
   readonly renderedTokens: number;
   readonly rawTailTokens: number;
   readonly combinedTokens: number;
+  readonly combinedCeilingTokens: number;
   readonly validation: {
     readonly safeTail: boolean;
     readonly withinCombinedCeiling: boolean;
@@ -158,6 +160,7 @@ interface SectionRow {
   readonly row: ComposerSelectionRow;
   readonly text: string;
   readonly renderedTokens: number;
+  readonly completeText: boolean;
 }
 
 /** Adapt one contained selection. Missing/lagging rollups and delta deliberately
@@ -207,7 +210,8 @@ export function composeStoredSelection(
         || omission.afterUtf16 !== evidence.source.decodedUtf16.end - (decoded.end as number)
         || ((omission.beforeUtf16 as number) > 0 || (omission.afterUtf16 as number) > 0) && evidence.contextComplete !== true)) return undefined;
     return { id: item.stableKey, text: evidence.exactText, startSeq: evidence.source.eventSeq, endSeq: evidence.source.eventSeq,
-      recovery: recovery(evidence.source), kind: item.kind === "restriction" ? "restriction" : "open-work",
+      recovery: recovery(evidence.source), kind: item.kind === "restriction" || item.kind === "goal" || item.kind === "blocker" || item.kind === "decision"
+        ? item.kind : "open-work",
       authority: "exact", sourceAuthority: item.authority, status: item.status, importance: 1 };
   };
   const addState = (item: EpisodeStateSelectionItem, maximumCut: number, delta: boolean): void => {
@@ -219,7 +223,7 @@ export function composeStoredSelection(
     }
     if (item.kind === "restriction") protectedRows.push(row);
     else if (item.kind === "openwork" || item.kind === "blocker" || item.kind === "goal") openWork.push(row);
-    else (delta ? deltaRows : recent).push({ ...row, kind: "capsule" });
+    else (delta ? deltaRows : recent).push({ ...row, kind: item.kind === "decision" ? "decision" : "capsule" });
   };
   const addMember = (member: EpisodeStateSelectionMember, maximumCut: number, target: ComposerSelectionRow[], kind: "episode" | "rollup"): void => {
     if (!member.cue) return;
@@ -350,11 +354,11 @@ function assertRows(rows: readonly ComposerSelectionRow[], delta: boolean): void
 }
 
 function validateInput(input: ShadowComposerInput): void {
-  if (!input.regularPiSummary) throw new Error("regular Pi summary must be present as a separate input");
+  if (typeof input.regularPiSummary !== "string") throw new Error("regular Pi summary must be text or an empty unavailable input");
   if (byteCount(input.regularPiSummary) > SHADOW_COMPOSER_LIMITS.maxRegularSummaryBytes) {
     throw new Error("regular Pi summary exceeds the bounded composer byte cap");
   }
-  assertInteger("combinedCeilingTokens", input.combinedCeilingTokens, SHADOW_COMPOSER_LIMITS.minCombinedCeilingTokens);
+  validateContextCeiling(input.combinedCeilingTokens);
   assertInteger("cut.sourceCutSeq", input.cut.sourceCutSeq);
   assertInteger("cut.firstKeptSeq", input.cut.firstKeptSeq);
   assertInteger("cut.rawTailTokens", input.cut.rawTailTokens);
@@ -376,7 +380,7 @@ function validateInput(input: ShadowComposerInput): void {
   if (input.selected.protected.some((row) => row.kind !== "restriction" || row.authority !== "exact")) {
     throw new Error("protected selections must be exact restriction rows");
   }
-  if (input.selected.openWork.some((row) => row.kind !== "open-work")) {
+  if (input.selected.openWork.some((row) => !["open-work", "goal", "blocker"].includes(row.kind))) {
     throw new Error("open-work selections must use the open-work kind");
   }
   for (const row of groups.flatMap((rows) => rows).concat(input.delta.records)) {
@@ -393,11 +397,11 @@ function chronological(rows: readonly ComposerSelectionRow[]): ComposerSelection
 
 function renderRow(section: SectionRow["section"], row: ComposerSelectionRow, pinnedSnapshot: boolean): SectionRow {
   const detailTokens = Math.max(48, Math.round(72 + row.importance * 184));
-  // Never shorten a mandatory proposition: its final condition or negation may
-  // change the obligation. A budget failure must take the explicit fallback.
-  const body = section === "protected" || section === "open-work" ? row.text
-    : truncateToTokens(row.text, detailTokens, "\n…[detail reduced; use recovery reference]…");
-  const fidelity = row.authority === "exact" ? "exact copied source words" : "derived memory; verify against exact source";
+  const body = truncateToTokens(row.text, detailTokens, "\n…[detail reduced; recover exact source before relying on conditions]…");
+  const completeText = body === row.text;
+  const fidelity = row.authority === "exact"
+    ? completeText ? "exact copied source words" : "source excerpt; incomplete wording, not a complete instruction"
+    : "derived memory; verify against exact source";
   const semanticAuthority = row.sourceAuthority ? `source authority: ${row.sourceAuthority}` : "source authority: not asserted";
   const status = pinnedSnapshot
     ? `${row.status} at historical snapshot; not verified current at source cut`
@@ -407,7 +411,7 @@ function renderRow(section: SectionRow["section"], row: ComposerSelectionRow, pi
     `  ${body.replaceAll("\n", "\n  ")}`,
     `  Recovery: ${row.recovery}`,
   ].join("\n");
-  return { section, row, text, renderedTokens: estimateTokensFromText(text) };
+  return { section, row, text, renderedTokens: estimateTokensFromText(text), completeText };
 }
 
 function degradationFor(input: ShadowComposerInput): { level: ShadowDegradationLevel; reasons: string[] } {
@@ -420,8 +424,8 @@ function degradationFor(input: ShadowComposerInput): { level: ShadowDegradationL
   if (!input.mandatoryCoverage.protectedComplete || !input.mandatoryCoverage.openWorkComplete) {
     if (!input.mandatoryCoverage.protectedComplete) reasons.push("protected-restriction coverage is incomplete");
     if (!input.mandatoryCoverage.openWorkComplete) reasons.push("open-work coverage is incomplete");
-    // Preserve bounded supported history, but never label an incomplete
-    // snapshot a complete current contract. Pi's separate summary remains.
+    // Selective history is useful even when extraction or selection is incomplete.
+    // Coverage is a disclosure, not a global verbatim inventory requirement.
     return { level: input.memory.committed ? "last-good-state-and-recent" : "pi-summary-and-tail", reasons };
   }
   if (!input.memory.committed) return { level: "pi-summary-and-tail", reasons: [...reasons, "no compatible committed memory generation is available"] };
@@ -466,29 +470,34 @@ function replayText(input: ShadowComposerInput, level: ShadowDegradationLevel, r
     ? `Rollups: generation ${input.rollups.generation}, represented sequence ${input.rollups.representedStartSeq}–${input.rollups.representedEndSeq}, source-cut lag ${Math.max(0, input.cut.sourceCutSeq - input.rollups.representedEndSeq)}.`
     : "Rollups: unavailable; no rollup-derived state is presented as current.";
   const intro = [
-    "Source-linked bounded memory. Immutable Pi history remains authoritative.",
+    "Source-linked approximate historical memory, not a complete instruction inventory. Recover exact source before relying on a condition or unresolved status. Immutable Pi history remains authoritative.",
     `Composition mode: ${level}.`,
+    ...(!input.regularPiSummary ? ["Regular Pi summary unavailable or disabled. This history was composed programmatically without an LLM summary."] : []),
     `${input.memory.committed ? "Committed memory" : "Memory candidate (not committed; excluded)"}: generation ${input.memory.generation}, represented sequence ${input.memory.representedStartSeq}–${input.memory.representedEndSeq}, source-cut lag ${memoryLag}.`,
     rollupLine,
     reasons.length ? `Degradation: ${reasons.join("; ")}. Partial derived state is not presented as current.` : "Validation: committed memory and bounded delta cover the source cut.",
     `Retained raw tail begins at ${input.cut.firstKeptEntryId} (sequence ${input.cut.firstKeptSeq}); it is outside this text but included in the combined ceiling.`,
   ];
-  const grouped: Array<[SectionRow["section"], string]> = [
-    ["protected", input.mandatoryCoverage.protectedComplete ? "PROTECTED CONTRACT" : "KNOWN PROTECTED ITEMS (INCOMPLETE COVERAGE)"],
-    ["open-work", input.mandatoryCoverage.openWorkComplete ? "CURRENT OPEN WORK" : "KNOWN OPEN WORK (INCOMPLETE COVERAGE)"],
-    ["older", "OLDER SELECTED MEMORY (CHRONOLOGICAL)"],
-    ["recent", "RECENT CHRONOLOGICAL MEMORY"],
-    ["delta", "BOUNDED UNINDEXED DELTA (CHRONOLOGICAL)"],
-  ];
-  const sections = grouped.flatMap(([key, title]) => {
-    const selected = rows.filter((row) => row.section === key);
-    return selected.length ? [`## ${title}\n\n${selected.map((row) => row.text).join("\n\n")}`] : [];
-  });
-  sections.push("## RECOVERY\n\nUse each opaque Recovery reference through the session adapter. Memory text is not exact evidence unless marked exact source.");
+  // Selection categories are internal indexes, not separate model-facing state.
+  // Important events receive more detail at their original source position.
+  const timeline = [...rows].sort((a, b) => a.row.startSeq - b.row.startSeq
+    || a.row.endSeq - b.row.endSeq || a.row.id.localeCompare(b.row.id));
+  const represented = (items: readonly ComposerSelectionRow[]) => items.every(item => rows.some(kept => kept.row.id === item.id && kept.completeText));
+  const coverage = `Restriction coverage: ${input.mandatoryCoverage.protectedComplete && represented(input.selected.protected) ? "complete" : "incomplete"}. Open-work coverage: ${input.mandatoryCoverage.openWorkComplete && represented(input.selected.openWork) ? "complete" : "incomplete"}.`;
+  const sections = timeline.length
+    ? [`## CHRONOLOGICAL HISTORY\n\n${coverage}\n\n${timeline.map(row => row.text).join("\n\n")}`] : [];
+  const omitted = [...input.selected.protected, ...input.selected.openWork, ...input.selected.older,
+    ...input.selected.recent, ...input.delta.records].filter(row => !rows.some(item => item.row.id === row.id));
+  if (omitted.length) {
+    const cue = [...omitted].sort((a, b) => b.importance - a.importance || a.startSeq - b.startSeq)[0]!;
+    sections.push(`## OMITTED HISTORY\n\n${omitted.length} selected row(s) remain outside context. This is budget/selection loss, not source deletion. Representative retrieval cue [${cue.startSeq}]: ${truncateToTokens(cue.text, 32)}\nExact recovery for this cue: ${cue.recovery}`);
+  }
+  sections.push("## RECOVERY\n\nUse history_search with remembered topics or the cues above, history_recall to expand, then history_get with the opaque Recovery reference for exact source. Omitted history remains retrievable. Memory excerpts are not complete instructions.");
   return [...intro, ...sections].join("\n\n");
 }
 
 function hybridPreservingSummary(regularPiSummary: string, replay: string): string {
+  if (!regularPiSummary) return `# CHRONOCOMPACT CONTEXT\n\n## CHRONOCOMPACT EVENT REPLAY\n\n${replay}`;
   let marker = `__CHRONO_PI_SUMMARY_${createHash("sha256").update(regularPiSummary).digest("hex")}__`;
   while (regularPiSummary.includes(marker) || replay.includes(marker)) marker += "_";
   return renderHybridCompaction(marker, replay).replace(marker, regularPiSummary);
@@ -497,7 +506,6 @@ function hybridPreservingSummary(regularPiSummary: string, replay: string): stri
 function optionalDropOrder(rows: readonly SectionRow[]): SectionRow[] {
   const sectionRank = (section: SectionRow["section"]): number => section === "older" ? 0 : section === "delta" ? 1 : 2;
   return [...rows]
-    .filter((item) => item.section === "recent" || item.section === "older" || item.section === "delta")
     .sort((a, b) => a.row.importance - b.row.importance || sectionRank(a.section) - sectionRank(b.section) || a.row.startSeq - b.row.startSeq);
 }
 
@@ -519,7 +527,7 @@ export function composeShadowContext(input: ShadowComposerInput): ShadowComposit
     renderedTokens = estimateTokensFromText(text);
   }
   if (omittedRowIds.length > 0) {
-    reasons = [...reasons, `render loss: hard ceiling omitted ${omittedRowIds.length} optional row(s), selected by importance without reordering retained rows`];
+    reasons = [...reasons, `render loss: hard ceiling omitted ${omittedRowIds.length} row(s), selected by importance without reordering retained history`];
     replay = replayText(input, level, reasons, rows);
     text = hybridPreservingSummary(input.regularPiSummary, replay);
     renderedTokens = estimateTokensFromText(text);
@@ -556,8 +564,8 @@ export function composeShadowContext(input: ShadowComposerInput): ShadowComposit
   const validation = {
     safeTail: input.cut.toolPairSafe,
     withinCombinedCeiling: renderedTokens + input.cut.rawTailTokens <= input.combinedCeilingTokens,
-    protectedCoverageComplete: input.mandatoryCoverage.protectedComplete && input.selected.protected.every(item => rows.some(kept => kept.section === "protected" && kept.row.id === item.id)),
-    openWorkCoverageComplete: input.mandatoryCoverage.openWorkComplete && input.selected.openWork.every(item => rows.some(kept => kept.section === "open-work" && kept.row.id === item.id)),
+    protectedCoverageComplete: input.mandatoryCoverage.protectedComplete && input.selected.protected.every(item => rows.some(kept => kept.section === "protected" && kept.row.id === item.id && kept.completeText)),
+    openWorkCoverageComplete: input.mandatoryCoverage.openWorkComplete && input.selected.openWork.every(item => rows.some(kept => kept.section === "open-work" && kept.row.id === item.id && kept.completeText)),
   } as const;
   const artifactBase: Omit<ShadowCompositionArtifact, "validation"> & { readonly validation: ShadowCompositionArtifact["validation"] } = {
     schemaVersion: 1,
@@ -594,6 +602,7 @@ export function composeShadowContext(input: ShadowComposerInput): ShadowComposit
     renderedTokens,
     rawTailTokens: input.cut.rawTailTokens,
     combinedTokens: renderedTokens + input.cut.rawTailTokens,
+    combinedCeilingTokens: input.combinedCeilingTokens,
     validation,
     payloadHash: artifactHash,
     artifactHash,

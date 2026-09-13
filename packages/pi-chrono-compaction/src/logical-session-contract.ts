@@ -53,7 +53,8 @@ export interface LogicalContinuation {
     readonly artifactHash: string;
     readonly combinedTokens: number;
     readonly combinedCeilingTokens: number;
-    readonly mandatoryCoverageComplete: true;
+    /** Historical in-context coverage disclosure, not a source-integrity verdict. */
+    readonly mandatoryCoverageComplete: boolean;
     readonly safeTail: true;
   };
 }
@@ -120,7 +121,7 @@ export function isLogicalContinuation(value: unknown): value is LogicalContinuat
     || value.composition.schemaVersion !== 1 || !hash(value.composition.payloadHash) || !hash(value.composition.artifactHash)
     || !positive(value.composition.combinedTokens) || !positive(value.composition.combinedCeilingTokens)
     || Number(value.composition.combinedTokens) > Number(value.composition.combinedCeilingTokens)
-    || value.composition.mandatoryCoverageComplete !== true || value.composition.safeTail !== true) return false;
+    || typeof value.composition.mandatoryCoverageComplete !== "boolean" || value.composition.safeTail !== true) return false;
   const seen = new Set<string>();
   return value.coveredShards.every(item => object(item) && uuid(item.shardId) && !seen.has(item.shardId as string)
     && (seen.add(item.shardId as string), true) && isCut(item));

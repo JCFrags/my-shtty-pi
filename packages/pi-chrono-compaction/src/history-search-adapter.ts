@@ -165,10 +165,11 @@ export class HistorySearchAdapter {
         routes: this.logicalGrant.searchRoutes.length, composerCanaryInherited: false } : null,
       servingLastReady: this.readyValidated && !!this.lastReady, requestedViewValidated: !!this.target, lastSafeError: state.errorCode ?? null };
   }
-  /** Explicit shadow preview only. Pin the already-cataloged real compaction cut;
-   * never ingest or change the automatic scheduler from this read path. */
+  /** Pin the already-cataloged compaction cut. A validated catalog target is
+   * enough: optional capsule/index catch-up must not block last-good state reads.
+   * This path never ingests or changes a stored source binding. */
   async compositionTarget(prefixLeafId: string, signal?: AbortSignal): Promise<Target> {
-    if (!this.enabled || !this.sourceTarget || !this.target || !this.readyValidated) return fail("search-v3-index-not-ready");
+    if (!this.enabled || !this.sourceTarget || !this.target) return fail("search-v3-index-not-ready");
     const key = this.key, source = this.sourceTarget, current = this.target;
     const response = await runCatalogWorker({ v: 1, op: "pin", catalogDirectory: source.catalogDirectory,
       sessionKey: source.sessionKey, branchKey: "pi-session", leaf: { shardKey: source.shardKey, eventId: prefixLeafId } },
@@ -221,20 +222,23 @@ export class HistorySearchAdapter {
     const status = await runSearchV3Worker({ ...target, op: "rollupStatus" }, { ...this.options, signal });
     if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
     if (!status.ok) {
-      if (status.code === "search-v3-rollup-store-missing") return selection;
+      if (["search-v3-rollup-store-missing", "search-v3-rollup-not-ready", "search-v3-worker-timeout"].includes(status.code)) return selection;
       return fail(status.code);
     }
     const handle = status.result.handle as EpisodeRollupHandle | undefined;
     if (!handle) return selection;
-    if (handle.ruleset !== "episode-rollup-exact-v3" || handle.branchKey !== selection.branchKey
-      || handle.eventCut > selection.processedCut) return fail("search-v3-rollup-publication-missing");
+    if (handle.ruleset !== "episode-rollup-exact-v3" || handle.branchKey !== selection.branchKey) return fail("search-v3-rollup-publication-missing");
+    if (handle.eventCut > selection.processedCut) return selection; // The optional publication is newer than this historical cut.
     const beforeEventSeq = selection.recent[0]?.eventSeq ?? selection.processedCut + 1;
     const rollupRequest = { ...target, op: "composeRollupSelection" as const, handle,
       query: queryTerms.join(" "), beforeEventSeq, limit: 4 };
     if (!isEpisodeStateRequest(rollupRequest)) return fail("search-v3-reference-invalid");
     const rollup = await runSearchV3Worker(rollupRequest, { ...this.options, signal });
     if (signal?.aborted || this.key !== key || !this.enabled) return fail("search-v3-worker-aborted");
-    if (!rollup.ok) return fail(rollup.code);
+    if (!rollup.ok) {
+      if (["search-v3-rollup-not-ready", "search-v3-rollup-publication-missing", "search-v3-output-budget", "search-v3-worker-timeout"].includes(rollup.code)) return selection;
+      return fail(rollup.code);
+    }
     const pinned = rollup.result.handle as EpisodeRollupHandle;
     const represented = rollup.result.representedRange as { start?: { eventSeq?: unknown }; end?: { eventSeq?: unknown } } | undefined;
     if (canonicalJson(pinned) !== canonicalJson(handle) || !Number.isSafeInteger(represented?.start?.eventSeq)
