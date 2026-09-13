@@ -12,6 +12,7 @@ import {
   validateNotesState,
 } from "@grounded/pi-core/notes";
 import { registerStateCheckpointProvider, restoreStateCheckpoint } from "@grounded/pi-core/state-transfer";
+import { registerNativeContextProvider } from "@grounded/pi-core/context-adapters";
 import {
   boundedStateOutput,
   cancelled,
@@ -76,6 +77,9 @@ export default function groundedNotes(pi: ExtensionAPI) {
     state, sessionId: currentContext?.sessionManager.getSessionId(), leafId: currentContext?.sessionManager.getLeafId(),
     corrupt: corruptEntryId !== undefined, pending: executing > 0 || pendingEvents.size > 0,
   }), validateNotesState);
+  const removeContextProvider = registerNativeContextProvider(pi, "notes", () => ({
+    context: currentContext, state, corrupt: corruptEntryId !== undefined, pending: executing > 0 || pendingEvents.size > 0,
+  }));
 
   const restore = (ctx: ExtensionContext) => {
     currentContext = ctx;
@@ -123,6 +127,7 @@ export default function groundedNotes(pi: ExtensionAPI) {
     lifecycleEpoch += 1;
     pendingEvents.clear();
     currentContext = undefined;
+    removeContextProvider();
     removeCheckpointProvider();
   });
   pi.on("message_end", (event) => {

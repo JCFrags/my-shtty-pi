@@ -153,6 +153,20 @@ $ACTIVATION/registration-backup/rollback.sh --apply
 
 Rollback exchanges only the Codex alias and preserves settings and unrelated extensions. Existing Pi processes need a safe `/reload` or restart after activation or rollback. Do not send `/reload` into an editor that contains an unsent draft.
 
+## Context Kit foundation
+
+Recall and Telemetry have separate source-loaded entrypoints at `packages/pi-context-kit/recall` and `packages/pi-context-kit/telemetry`. The protocol package is a pure library, not a Pi registration. Prepare their workspace dependencies from the accepted repository-root lock.
+
+To enable native current-state recall, select the accepted Grounded Tasks, Notes, and Workplan packages with their matching shared core and protocol dependencies. Preserve their native state and checkpoint formats. No migration or archive rewrite is part of this activation. Keep unrelated Grounded, Glance, orchestration, browser, and research registrations unchanged.
+
+Put Telemetry before Chrono or another extension that can cancel `session_before_compact`. Pi 0.85.1 stops before-event dispatch at `cancel: true`. Loading Telemetry later can leave the terminal event unpaired. Keep the relative order of existing packages, and identify scoped replacements by their verified source rather than historical numeric slots after insertion.
+
+Before changing live selection, back up settings and affected aliases. Use the complete installed resource loader against an isolated candidate. Require the intended provider replacements, one `context_recall`, one `telemetry_status`, one `/context-telemetry`, and unchanged unrelated tool/command owners and Ask User state. Factory loading must not start Telemetry collection. Then update only the scoped selections and repeat the loader comparison.
+
+After managed jobs and agents settle, reload safely. Invoke both new tools and follow a Recall recovery reference through its native tool. Verify a current revision without changing state. Quality remains unknown until a caller supplies observations, and supplied observations remain unverified by the collector. A fresh loader or a passing component test does not prove that an existing session uses the code.
+
+Rollback removes only the two Context Kit registrations and returns the three providers and shared core alias to their preserved sources. Keep unrelated subsequent settings changes, all native history, and local telemetry files. A separately included Chrono patch needs its own compatible scoped rollback. Do not restore an entire old settings document.
+
 ## Rollback
 
 Restore only the exact settings entries and links changed by this activation from the owner-only backup. Verify their pre-change hashes and realpaths first. Do not restore a complete old settings file over subsequent unrelated edits. Relink the previous package root with its matching built output, run the loader and doctor checks, then request a safe `/reload`.
