@@ -20,6 +20,7 @@
     "./session-logs": "./src/session-logs.ts",
     "./session-registry": "./src/session-registry.ts",
     "./state": "./src/state.ts",
+    "./state-transfer": "./src/state-transfer.ts",
     "./notes": "./src/notes.ts",
     "./workplan": "./src/workplan.ts",
     "./workplan-summary": "./src/workplan-summary.ts",
