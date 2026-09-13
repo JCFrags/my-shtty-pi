@@ -18,6 +18,7 @@ import { createContainedCapsuleShadow } from "./capsule-shadow-worker.js";
 import { runCatalogWorker } from "./catalog-worker-client.js";
 import { createHistoryRuntimeTransport } from "./history-runtime-transport.js";
 import { runtimeHostStatus } from "./worker-runtime.js";
+import { runtimeAdmissionStatusText } from "./worker-runtime-status.js";
 import { verifyLegacyAdmissionGate } from "./worker-runtime-legacy-gate.js";
 import { cachePathForSession, hashCompactionConfig, nextCacheGeneration, readCompactionCache, writeCompactionCache, } from "./cache.js";
 import { compactEntries, CompactionValidationError, computeGenerationHash, computeSummaryBudget, HARD_REPLAY_CAP_TOKENS, resolveCompactorConfig, selectReplayTarget, } from "./compactor.js";
@@ -2740,6 +2741,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 `Kernel containment: ${host.containmentAvailable ? "available" : "unavailable; unsafe jobs refused"}`,
                 `Legacy admission inhibitor: ${host.legacyAdmissionBlocked ? "verified" : "not verified; transition required"}`,
                 `Host jobs: ${host.active} active, ${host.queued} queued; malformed artifacts ${host.malformedArtifacts}`,
+                runtimeAdmissionStatusText(host),
                 `Host memory limit: ${host.limits.hostMemoryBytes} bytes; source-read ceiling ${host.limits.sourceBytes} bytes`,
                 `Host progress: ${host.jobs.map((job) => `${job.category}:${job.stage}`).join(", ") || "idle"}`,
                 `Scheduler artifacts: ${artifacts.slots} slot(s), ${artifacts.tickets} ticket(s)`,
@@ -2772,6 +2774,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 `Kernel containment: ${host.containmentAvailable ? "available" : "unavailable; unsafe jobs refused"}`,
                 `Legacy admission inhibitor: ${host.legacyAdmissionBlocked ? "verified" : "not verified; transition required"}`,
                 `Host jobs: ${host.active} active, ${host.queued} queued; memory ceiling ${host.limits.hostMemoryBytes} bytes`,
+                runtimeAdmissionStatusText(host),
                 "History indexes: child-only; no full index retained by Pi.",
                 `History memory admission: ${memory.admission.totalBytes}/${memory.admission.byteLimit} bytes`,
                 `History retained accounting: index ${memory.admission.components.liveIndex}, query ${memory.admission.components.queryResults}, references ${memory.admission.components.retainedReferences}`,

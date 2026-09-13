@@ -8,6 +8,7 @@
     "./ask-user-v1": "./src/ask-user-v1.ts",
     "./anchors": "./src/anchors.ts",
     "./atomic": "./src/atomic.ts",
+    "./context-adapters": "./src/context-adapters.ts",
     "./exec": "./src/exec.ts",
     "./local-session": "./src/local-session.ts",
     "./lsp-client": "./src/lsp-client.ts",
@@ -27,6 +28,9 @@
     "./syntax": "./src/syntax.ts",
     "./tasks": "./src/tasks.ts",
     "./text": "./src/text.ts"
+  },
+  "dependencies": {
+    "@context-kit/protocol": "0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

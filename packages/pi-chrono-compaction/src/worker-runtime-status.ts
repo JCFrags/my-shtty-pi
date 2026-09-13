@@ -6,6 +6,7 @@ import { defaultRuntimeDirectory } from "./worker-runtime-namespace.js";
 import { WORKER_LIMITS } from "./worker-runtime-limits.js";
 import { runtimeUnitName, runtimeUnitState } from "./worker-runtime-systemd.js";
 import { verifyLegacyAdmissionGate } from "./worker-runtime-legacy-gate.js";
+import { schedulerReservationObservations, type SchedulerReservationObservation } from "./host-worker-scheduler.js";
 
 const CATEGORIES = ["replay-compaction", "candidate-store-update", "rollup-shadow", "history-search", "other"] as const;
 export type RuntimeCategory = typeof CATEGORIES[number];
@@ -18,6 +19,8 @@ export interface RuntimeHostStatus {
   readonly queued: number;
   readonly malformedArtifacts: number;
   readonly jobs: readonly { readonly slot: number; readonly category: RuntimeCategory; readonly stage: string }[];
+  /** Current metadata observations, separate from contained execution. */
+  readonly reservations: readonly (SchedulerReservationObservation & { readonly unitState: "active" | "inactive" | "failed" | "unknown" })[];
   readonly limits: { readonly hostMemoryBytes: number; readonly sourceBytes: number; readonly queueTickets: number; readonly perSessionTickets: number; readonly waitersPerJob: number; readonly starvationMs: number };
 }
 async function boundedJson(path: string, maxBytes = 4096): Promise<unknown> {
@@ -44,6 +47,11 @@ export async function publishRuntimeStage(directory: string, slot: number, categ
   const handle = await open(temporary, "wx", 0o600);
   try { await handle.writeFile(JSON.stringify({ schemaVersion: 1, category, stage })); } finally { await handle.close(); }
   try { await rename(temporary, path); } finally { await rm(temporary, { force: true }); }
+}
+/** Operator wording does not reinterpret a caller's historical timeout. */
+export function runtimeAdmissionStatusText(host: RuntimeHostStatus): string {
+  const reservations = host.reservations.map(value => `slot ${value.slot} owner ${value.ownerState}, unit ${value.unitState}`).join(". ") || "none";
+  return `Scheduler reservations: ${reservations}. Indexed-history deadlines include admission wait, not only worker execution. Stopped live owners retain their reservations.`;
 }
 /** Bounded read-only host view. Active counts come from systemd, never owner JSON. */
 export async function runtimeHostStatus(options: { readonly schedulerDirectory?: string } = {}): Promise<RuntimeHostStatus> {
@@ -74,5 +82,11 @@ export async function runtimeHostStatus(options: { readonly schedulerDirectory?:
     } catch {}
     jobs.push({ slot, category, stage });
   }
-  return { schemaVersion: 1, containmentAvailable: process.platform === "linux" && states.every(state => state !== "unknown"), legacyAdmissionBlocked: await verifyLegacyAdmissionGate(directory), configuredSlots, active: jobs.length, queued, malformedArtifacts, jobs, limits: { hostMemoryBytes: WORKER_LIMITS.hostMemoryBytes, sourceBytes: WORKER_LIMITS.sourceBytes, queueTickets: WORKER_LIMITS.queueTickets, perSessionTickets: WORKER_LIMITS.sessionTickets, waitersPerJob: WORKER_LIMITS.waitersPerJob, starvationMs: WORKER_LIMITS.starvationMs } };
+  const reservations: RuntimeHostStatus["reservations"] = (await schedulerReservationObservations(directory)).map(value => {
+    const state = states[value.slot];
+    const unitState = ["active", "activating", "deactivating", "reloading"].includes(state!) ? "active"
+      : state === "inactive" || state === "failed" ? state : "unknown";
+    return { ...value, unitState };
+  });
+  return { schemaVersion: 1, containmentAvailable: process.platform === "linux" && states.every(state => state !== "unknown"), legacyAdmissionBlocked: await verifyLegacyAdmissionGate(directory), configuredSlots, active: jobs.length, queued, malformedArtifacts, jobs, reservations, limits: { hostMemoryBytes: WORKER_LIMITS.hostMemoryBytes, sourceBytes: WORKER_LIMITS.sourceBytes, queueTickets: WORKER_LIMITS.queueTickets, perSessionTickets: WORKER_LIMITS.sessionTickets, waitersPerJob: WORKER_LIMITS.waitersPerJob, starvationMs: WORKER_LIMITS.starvationMs } };
 }

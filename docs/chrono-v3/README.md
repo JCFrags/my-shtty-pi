@@ -25,7 +25,7 @@ The V3 path uses incremental catalogs, event capsules, episodes, current state, 
 
 ## Release and evidence boundary
 
-Version `3.0.1` enables programmatic V3 memory and safe-idle physical rollover by default. Focused checks exercise composition without model calls, useful bounded recall, complete native tool-state transfer, and real Pi physical replacement with restart. This supersedes the disabled-by-default 2.x development configuration. The [patch corrections](../chrono-release-compatibility.md#current-301-release) cover failed-compaction continuation, tree navigation, and verified common-prefix reuse.
+Version `3.0.2` keeps programmatic V3 memory and safe-idle physical rollover enabled by default. Earlier focused checks exercised composition without model calls, useful bounded recall, complete native tool-state transfer, and real Pi physical replacement with restart. This supersedes the disabled-by-default 2.x development configuration. The [patch corrections](../chrono-release-compatibility.md#current-302-release) retain failed-compaction continuation, tree navigation, and verified common-prefix reuse. Version `3.0.2` adds stopped-owner and admission-wait diagnostics only. It does not recover blocked admission.
 
 A package version, an enabled setting, ready indexes, and a loaded working installation remain different facts. This overview describes source behavior, not an activation receipt. The retained scale campaign failed before completing its matrix, as recorded in the [settled evidence](reviews/M11-report-correction.md#actual-settled-campaign). Neither architectural limits nor prepared data establish perfect recall or billion-token normal-use qualification.
 

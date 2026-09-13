@@ -25,6 +25,35 @@ function ownerAlive(owner: Owner): boolean | undefined {
 }
 export function defaultSchedulerDirectory(): string { return `/run/user/${process.getuid?.()}/chrono-runtime`; }
 async function readOwner(path:string):Promise<Owner|undefined>{try{const metadata=await lstat(path);const uid=typeof process.getuid==="function"?process.getuid():metadata.uid;if(!metadata.isFile()||metadata.isSymbolicLink()||metadata.uid!==uid||(metadata.mode&0o777)!==0o600||metadata.size<2||metadata.size>1_000)return undefined;const value=JSON.parse(await readFile(path,"utf8")) as Owner;const keys=Object.keys(value).sort().join(",");return value&&(keys==="createdAtMs,jobType,nonce,pid,priority,processStartIdentity,schemaVersion"||keys==="createdAtMs,jobType,key,nonce,pid,priority,processStartIdentity,schemaVersion")&&(value.key===undefined||/^[a-f0-9]{64}$/.test(value.key))&&value.schemaVersion===1&&Number.isSafeInteger(value.pid)&&value.pid>0&&typeof value.processStartIdentity==="string"&&value.processStartIdentity.length>0&&value.processStartIdentity.length<=64&&/^[a-f0-9]{32}$/.test(value.nonce)&&Number.isSafeInteger(value.createdAtMs)&&value.createdAtMs>0&&(value.priority==="high"||value.priority==="low")&&(value.jobType==="replay-compaction"||value.jobType==="candidate-store-update"||value.jobType==="rollup-shadow")?value:undefined;}catch{return undefined;}}
+export interface SchedulerReservationObservation { readonly slot: number; readonly ownerState: "present" | "stopped" | "gone" | "unverified"; }
+/** Read-only diagnosis, not admission authority. A stopped matching owner is
+ * still live. Neither process state nor an inactive unit permits lease removal. */
+export async function schedulerReservationObservations(directory = defaultSchedulerDirectory()): Promise<SchedulerReservationObservation[]> {
+  const observations: SchedulerReservationObservation[] = [];
+  for (let slot = 0; slot < WORKER_LIMITS.slots.max; slot++) {
+    const path = join(directory, `slot-${slot}.json`), owner = await readOwner(path);
+    if (!owner) {
+      try { await lstat(path); observations.push({ slot, ownerState: "unverified" }); } catch {}
+      continue;
+    }
+    let ownerState: SchedulerReservationObservation["ownerState"] = "unverified";
+    try {
+      const handle = await open(`/proc/${owner.pid}/stat`, "r");
+      try {
+        const bytes = Buffer.alloc(4097), { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+        if (bytesRead <= 4096) {
+          const text = bytes.subarray(0, bytesRead).toString("utf8"), identity = startIdentity(text);
+          if (identity !== undefined) ownerState = identity !== owner.processStartIdentity ? "gone"
+            : /^[Tt]$/.test(text.slice(text.lastIndexOf(") ") + 2).split(/\s+/)[0]!) ? "stopped" : "present";
+        }
+      } finally { await handle.close(); }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") ownerState = "gone"; }
+    const current = await readOwner(path);
+    if (current?.nonce !== owner.nonce || current.pid !== owner.pid || current.processStartIdentity !== owner.processStartIdentity) ownerState = "unverified";
+    observations.push({ slot, ownerState });
+  }
+  return observations;
+}
 const malformedArtifacts = new Map<string,{fingerprint:string;firstSeenMs:number}>();
 async function removeDead(path:string,malformedStableMs:number):Promise<boolean>{const owner=await readOwner(path);if(!owner){try{const value=await lstat(path);const fingerprint=`${String(value.dev)}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;const prior=malformedArtifacts.get(path);if(!prior||prior.fingerprint!==fingerprint){malformedArtifacts.set(path,{fingerprint,firstSeenMs:Date.now()});return false;}if(Date.now()-prior.firstSeenMs<malformedStableMs)return false;const again=await lstat(path);const current=`${String(again.dev)}:${String(again.ino)}:${again.size}:${again.mtimeMs}`;if(current!==fingerprint||await readOwner(path))return false;await rm(path,{force:true});malformedArtifacts.delete(path);return true;}catch{malformedArtifacts.delete(path);return false;}}malformedArtifacts.delete(path);const alive=ownerAlive(owner);if(alive===false){const again=await readOwner(path);if(again?.nonce===owner.nonce){await rm(path,{force:true});return true;}}return false;}
 async function cleanup(directory:string,malformedStableMs:number):Promise<void>{

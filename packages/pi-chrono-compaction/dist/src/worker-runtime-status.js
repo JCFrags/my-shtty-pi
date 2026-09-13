@@ -6,6 +6,7 @@ import { defaultRuntimeDirectory } from "./worker-runtime-namespace.js";
 import { WORKER_LIMITS } from "./worker-runtime-limits.js";
 import { runtimeUnitName, runtimeUnitState } from "./worker-runtime-systemd.js";
 import { verifyLegacyAdmissionGate } from "./worker-runtime-legacy-gate.js";
+import { schedulerReservationObservations } from "./host-worker-scheduler.js";
 const CATEGORIES = ["replay-compaction", "candidate-store-update", "rollup-shadow", "history-search", "other"];
 async function boundedJson(path, maxBytes = 4096) {
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -52,6 +53,11 @@ export async function publishRuntimeStage(directory, slot, category, stage) {
         await rm(temporary, { force: true });
     }
 }
+/** Operator wording does not reinterpret a caller's historical timeout. */
+export function runtimeAdmissionStatusText(host) {
+    const reservations = host.reservations.map(value => `slot ${value.slot} owner ${value.ownerState}, unit ${value.unitState}`).join(". ") || "none";
+    return `Scheduler reservations: ${reservations}. Indexed-history deadlines include admission wait, not only worker execution. Stopped live owners retain their reservations.`;
+}
 /** Bounded read-only host view. Active counts come from systemd, never owner JSON. */
 export async function runtimeHostStatus(options = {}) {
     const directory = options.schedulerDirectory ?? defaultRuntimeDirectory();
@@ -95,6 +101,12 @@ export async function runtimeHostStatus(options = {}) {
         catch { }
         jobs.push({ slot, category, stage });
     }
-    return { schemaVersion: 1, containmentAvailable: process.platform === "linux" && states.every(state => state !== "unknown"), legacyAdmissionBlocked: await verifyLegacyAdmissionGate(directory), configuredSlots, active: jobs.length, queued, malformedArtifacts, jobs, limits: { hostMemoryBytes: WORKER_LIMITS.hostMemoryBytes, sourceBytes: WORKER_LIMITS.sourceBytes, queueTickets: WORKER_LIMITS.queueTickets, perSessionTickets: WORKER_LIMITS.sessionTickets, waitersPerJob: WORKER_LIMITS.waitersPerJob, starvationMs: WORKER_LIMITS.starvationMs } };
+    const reservations = (await schedulerReservationObservations(directory)).map(value => {
+        const state = states[value.slot];
+        const unitState = ["active", "activating", "deactivating", "reloading"].includes(state) ? "active"
+            : state === "inactive" || state === "failed" ? state : "unknown";
+        return { ...value, unitState };
+    });
+    return { schemaVersion: 1, containmentAvailable: process.platform === "linux" && states.every(state => state !== "unknown"), legacyAdmissionBlocked: await verifyLegacyAdmissionGate(directory), configuredSlots, active: jobs.length, queued, malformedArtifacts, jobs, reservations, limits: { hostMemoryBytes: WORKER_LIMITS.hostMemoryBytes, sourceBytes: WORKER_LIMITS.sourceBytes, queueTickets: WORKER_LIMITS.queueTickets, perSessionTickets: WORKER_LIMITS.sessionTickets, waitersPerJob: WORKER_LIMITS.waitersPerJob, starvationMs: WORKER_LIMITS.starvationMs } };
 }
 //# sourceMappingURL=worker-runtime-status.js.map

@@ -82,6 +82,14 @@
         ]
       },
       {
+        "slug": "pi-context-kit",
+        "status": "active",
+        "entrypoints": [
+          "recall/src/index.ts",
+          "telemetry/index.ts"
+        ]
+      },
+      {
         "slug": "pi-herdr-orchestrator",
         "status": "active",
         "entrypoints": [
@@ -167,7 +175,10 @@
     "packages/grounded-tools/notes",
     "packages/grounded-tools/process",
     "packages/grounded-tools/tasks",
-    "packages/grounded-tools/workplan"
+    "packages/grounded-tools/workplan",
+    "packages/pi-context-kit/protocol",
+    "packages/pi-context-kit/recall",
+    "packages/pi-context-kit/telemetry"
   ],
   "devDependencies": {
     "@earendil-works/pi-ai": "0.85.1",

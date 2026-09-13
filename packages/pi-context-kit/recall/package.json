@@ -1,0 +1,14 @@
+{
+  "name": "@context-kit/recall",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "files": ["src", "README.md"],
+  "license": "MIT",
+  "keywords": ["pi-package"],
+  "pi": { "extensions": ["./src/index.ts"] },
+  "dependencies": { "@context-kit/protocol": "*" },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typebox": "*" },
+  "scripts": { "test": "node --experimental-transform-types --test test/recall.test.ts" }
+}
