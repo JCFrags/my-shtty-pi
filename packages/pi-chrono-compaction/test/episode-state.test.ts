@@ -315,6 +315,9 @@ test("persisted metadata lifecycle, historical pin, and episode-source recall re
     }
     assert.ok(boundedEpisode, "oversized optional protected copies become an explicit omission instead of blocking publication");
     assert.equal(boundedEpisode.remainingDetail, "reachable-through-sources");
+    assert.ok(boundedEpisode.summary.some((text: string) => text.includes("Capacity-")),
+      "node pressure keeps a short source-linked topic cue before optional copied detail");
+    assert.equal(boundedEpisode.cuePartial, true, "a navigation cue is not complete source coverage");
     const boundedSources = await run(capacityView, { op: "recallRollup", level: "source", nodeId: boundedEpisode.reference.nodeId,
       path: boundedEpisode.reference.path, limit: 12, handle: capacityRollup.handle });
     assert.equal(boundedSources.ok, true, JSON.stringify(boundedSources));

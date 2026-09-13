@@ -224,8 +224,33 @@ test("literal phrase planning bounds common-token candidates and preserves exact
     assert.equal(nonToken.ok, false);
     if (!nonToken.ok) assert.equal(nonToken.code, "search-v3-scan-required");
     const ranked = await run({ ...base, query: literal, mode: "ranked" });
-    assert.equal(ranked.ok, false);
-    if (!ranked.ok) assert.equal(ranked.code, "search-v3-query-budget");
+    assert.equal(ranked.ok, true, JSON.stringify(ranked));
+    if (!ranked.ok) return;
+    assert.equal((ranked.result as any).hits.length, 2, "common queries return a useful bounded page rather than refusing");
+    assert.equal((ranked.result as any).candidateWindow.partial, true);
+    assert.equal((ranked.result as any).ranking, "within-bounded-postings-window");
+    const rejected = await run({ ...base, query: "another query", mode: "ranked", cursor: (ranked.result as any).nextCursor });
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) assert.equal(rejected.code, "search-v3-cursor-invalid");
+    const seen = new Set<string>(); let page: any = ranked.result;
+    for (let calls = 0; calls < 16; calls++) {
+      assert.ok(page.metrics.candidates <= 128);
+      assert.ok(page.candidateWindow.postingsVisited <= 130);
+      assert.equal(page.exhaustive, false);
+      for (const hit of page.hits) seen.add(hit.handle.source.entryId);
+      if (!page.nextCursor) break;
+      const next = await run({ ...base, query: literal, mode: "ranked", limit: 12, cursor: page.nextCursor });
+      assert.equal(next.ok, true, JSON.stringify(next)); if (!next.ok) return;
+      page = next.result;
+    }
+    assert.equal(page.nextCursor, undefined, "the finite pinned postings prefix terminates");
+    assert.equal(seen.size, 130, "bounded windows can recover the old target after common recent matches");
+    const filteredRanked = await run({ ...base, query: literal, mode: "ranked", filters: { identifier: "uniqueneedle" } });
+    assert.equal(filteredRanked.ok, true, JSON.stringify(filteredRanked));
+    if (filteredRanked.ok) {
+      assert.equal((filteredRanked.result as any).hits.length, 0, "filters do not make SQLite scan beyond the postings window");
+      assert.ok((filteredRanked.result as any).nextCursor, "even an empty filtered page preserves continuation");
+    }
   } finally { fixture.cleanup(); }
 });
 
