@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   fitProviderPage, registerContextProvider, sameScope,
-  type Category, type ContextCard, type ContextRequest, type ProviderId, type ProviderPage,
+  type Category, type ContextCard, type ContextRequest, type ProviderPage,
 } from "@context-kit/protocol";
 import type { Note, NotesState } from "./notes.ts";
 import type { Task, TaskState } from "./tasks.ts";
@@ -189,8 +189,45 @@ function page<T>(request: ContextRequest, records: readonly T[], project: (recor
     coverage: { scanned: count, matched, excluded: matched - selected.length, scanComplete: complete } });
 }
 
+/** Plain, bounded metadata. Persist this separately from a complete native plan. */
+export interface WorkplanContextRecord {
+  id: string; revision: string; status: string; title: string;
+  fields: { values: Field[]; omitted: string[]; complete: boolean };
+  relations?: Relations;
+}
+export function createWorkplanContextRecord(plan: Workplan): WorkplanContextRecord {
+  const view = planView(plan);
+  const title = prefix(view.title.slice(0, 256), 256);
+  if (title.length !== view.title.length) view.fields.omit("title");
+  return { id: view.id, revision: view.revision, status: view.status, title,
+    fields: { values: view.fields.values, omitted: [...view.fields.omitted], complete: view.fields.complete },
+    ...(view.relations?.length ? { relations: view.relations } : {}) };
+}
+export function projectWorkplanPage(request: ContextRequest, records: readonly WorkplanContextRecord[]): ProviderPage {
+  if (request.providerId !== "workplan") throw new Error("Invalid Workplan context request");
+  return page(request, records, (record) => {
+    const fields = new Fields();
+    fields.values = record.fields.values.map((field) => ({ ...field }));
+    fields.omitted = new Set(record.fields.omitted);
+    fields.complete = record.fields.complete;
+    return { ...record, fields, ...(record.relations ? { relations: record.relations.map((link) => ({ ...link })) } : {}) };
+  });
+}
+export function projectTodoPage(request: ContextRequest, state: TaskState, revisionForTask?: (task: Task) => string): ProviderPage {
+  if (request.providerId !== "todo") throw new Error("Invalid Todo context request");
+  return page(request, state.tasks, (task) => {
+    const view = taskView(task, request);
+    if (revisionForTask) view.revision = revisionForTask(task);
+    return view;
+  });
+}
+export function projectNotesPage(request: ContextRequest, state: NotesState): ProviderPage {
+  if (request.providerId !== "notes") throw new Error("Invalid Notes context request");
+  return page(request, state.notes, noteView);
+}
+
 type States = { todo: TaskState; notes: NotesState; workplan: WorkplanState };
-interface Snapshot<P extends ProviderId> {
+interface Snapshot<P extends keyof States> {
   context: Pick<ExtensionContext, "sessionManager"> | undefined;
   state: States[P]; pending: boolean; corrupt: boolean;
 }
@@ -199,7 +236,7 @@ function refusal(readiness: Exclude<ProviderPage["readiness"], "ready">): Provid
 }
 
 /** Optional read-only adapter. It never restores, persists, or mutates native state. */
-export function registerNativeContextProvider<P extends ProviderId>(
+export function registerNativeContextProvider<P extends keyof States>(
   pi: Pick<ExtensionAPI, "events" | "getActiveTools">, providerId: P, snapshot: () => Snapshot<P>,
 ): () => void {
   try {

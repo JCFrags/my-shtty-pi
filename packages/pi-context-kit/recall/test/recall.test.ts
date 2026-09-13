@@ -7,7 +7,7 @@ import {
 } from "@context-kit/protocol";
 import { createRecallTool, type RecallInput, type RecallResult } from "../src/index.ts";
 
-function card(providerId: ProviderId, index = 1, text = "Source-known current fact"): ContextCard {
+function card(providerId: Exclude<ProviderId, "memory">, index = 1, text = "Source-known current fact"): ContextCard {
   const id = `${providerId}-${index}`;
   return {
     id, revision: "1", status: providerId === "todo" ? "pending" : "active",
@@ -38,16 +38,16 @@ test("real Recall factory preserves a healthy peer across malformed, missing, la
   const stopTodo = registerContextProvider(h.events, "todo", () => page([card("todo")]));
   let getterCalls = 0;
   let notesCalls = 0;
-  const stopNotes = h.events.on(requestChannel("notes"), (value) => {
+  const stopNotes = h.events.on(requestChannel("notes", 2), (value) => {
     notesCalls++;
     const request = value as ContextRequest;
-    h.events.emit(responseChannel("notes"), {
-      version: 1, requestId: request.requestId, providerId: "notes", scope: request.scope,
+    h.events.emit(responseChannel("notes", 2), {
+      version: 2, requestId: request.requestId, providerId: "notes", scope: request.scope,
       readiness: "ready", coverage: { scanned: 1, matched: 1, excluded: 0, scanComplete: true },
       get cards() { getterCalls++; throw new Error("must not invoke provider getters"); },
     });
   });
-  const first = decoded(await h.run({ waitMs: 20 }));
+  const first = decoded(await h.run({ providers: ["todo", "notes", "workplan"], waitMs: 20 }));
   assert.deepEqual(first.providers.map((item) => item.status), ["ok", "malformed", "missing_or_timeout"]);
   assert.equal(first.providers[0]!.page!.cards[0]!.status, "pending");
   assert.equal(first.providers[0]!.page!.cards[0]!.text, "Source-known current fact");
@@ -79,7 +79,7 @@ test("real Recall factory charges complete metadata and escaping, preserves whol
   const stops = (["todo", "notes", "workplan"] as const).map((providerId) => registerContextProvider(
     h.events, providerId, () => page(Array.from({ length: 16 }, (_, index) => card(providerId, index, body))),
   ));
-  const bounded = await h.run({ records: 16, scan: 32, providerBytes: 16384, maxBytes: 4096 });
+  const bounded = await h.run({ providers: ["todo", "notes", "workplan"], records: 16, scan: 32, providerBytes: 16384, maxBytes: 4096 });
   assert.ok(jsonBytes(bounded) <= 4096, "budget includes content, escaping, details, and all provider metadata");
   const result = decoded(bounded);
   assert.equal(result.complete, false);

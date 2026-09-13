@@ -21,7 +21,7 @@ Use Node.js 24.18.0, npm, Git, and Python 3 for the repository verification work
 
 The root lock prepares Grounded Tools, Context Kit, and root development dependencies. Other products have package-local locks. ChronoCompact, Pi Herdr Orchestrator, and Pi Project Glance use compiled entrypoints: install their locked dependencies and run their declared build steps before registration. Chrono also needs the explicit native SQLite build described under [verification](#verification).
 
-Grounded Tools has seven separately loadable subpackages. Register selected paths such as `packages/grounded-tools/files`, not the grouping directory. Context Kit also has separate `recall` and `telemetry` registrations. Its `protocol` library has no Pi entrypoint. Do not install dependencies separately inside these workspace subpackages.
+Grounded Tools has seven separately loadable subpackages. Register selected paths such as `packages/grounded-tools/files`, not the grouping directory. Context Kit has six separate registrations: `memory`, `todo`, `notes`, `workplan`, `recall`, and `telemetry`. Its `protocol` and `state-store` libraries have no Pi entrypoint. Do not install dependencies separately inside these workspace subpackages. Replace a legacy state provider rather than load both writers.
 
 For an existing installation, preserve package order and replace only the intended registration. Do not append duplicates. Follow [activation and rollback](docs/activation.md) for loader checks, retained package roots, safe reloads, and scoped rollback. A build or link does not update an existing process. Reload only when work is settled and the editor has no unsent draft, then verify the loaded identity. Reload can terminate managed jobs.
 
@@ -41,7 +41,7 @@ The [registry](package.json) contains 17 owned products: 15 active and two inact
 | [Herdr Status](packages/herdr-status/README.md) | Publish display-only model and activity metadata without replacing lifecycle integration. | `/herdr-status` |
 | [Pi Agent Context](packages/pi-agent-context/README.md) | Maintain stable date/environment snapshots and inspect prompt, context, and tool costs. | `/context-refresh`, `/context-audit` |
 | [ChronoCompact](packages/pi-chrono-compaction/README.md) | Select chronological memory and recover source-linked history. | [History, memory, and operator interfaces below](#chronocompact) |
-| [Context Kit](packages/pi-context-kit/README.md) | Independent current-state recall and local runtime/quality observations for the V4 foundation. | `context_recall`, `telemetry_status`, `/context-telemetry` |
+| [Context Kit](packages/pi-context-kit/README.md) | Independent Memory, Todo, Notes, Workplan, current-state recall, and local runtime/quality observations. | `memory_*`, `todo`, `notes`, `workplan`, `context_recall`, `telemetry_status`, native import commands, `/context-telemetry` |
 | [Pi Herdr Orchestrator](packages/pi-herdr-orchestrator/README.md) | Run direct-Herdr agents and retain authenticated broker configuration. | Root `orchestrate`, child-only `subagent_channel`, `/agent-settings` |
 | [Pi Native SSH](packages/pi-native-ssh/README.md) | Use configured OpenSSH routes, persistent sessions, and bounded file transfers with remote-write rollback. | `ssh_transfer`, Grounded `session`, `/remote`. Route mode also binds `read`, `ls`, `write`, `edit`, and `bash`. |
 | [Pi Pixel CUA Portal](packages/pi-pixel-cua/README.md) | Observe and control one explicitly granted native GNOME Wayland window through pixels. | `cua_portal_start`, `cua_portal_observe`, `cua_portal_act`, `cua_portal_stop`, `/pixel-cua-status`, `/pixel-cua-stop` |
@@ -88,9 +88,11 @@ Progressive Tools appends names and short usage hints to the model's existing sy
 
 ## ChronoCompact
 
-ChronoCompact 3.0.4 provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
+ChronoCompact 4.0.0 provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
 
-Programmatic V3 memory is enabled by default. The default combined context target is 32,000 estimated tokens, adjusted to the selected model's capacity, with a small adaptive raw tail. Incremental catalogs, event capsules, episodes, current state, and hierarchical rollups support bounded selection and recovery. Optional language-model advice can improve individual events or bounded groups. The programmatic pipeline does the main work and does not require model calls. Derived memory never gains instruction authority.
+The V3 compiler remains enabled by default. The default combined context target is 32,000 estimated tokens, adjusted to the selected model's capacity, with a small adaptive raw tail. Incremental catalogs, event capsules, episodes, current state, and hierarchical rollups support bounded selection and recovery. Optional language-model advice can improve individual events or bounded groups. The programmatic pipeline does the main work and does not require model calls. Derived memory never gains instruction authority.
+
+Select `contextCompiler: "v4"` to combine bounded native state with historical evidence through the same public compaction hook. V4 freezes captured card revisions, source cuts, whole-record selections, omissions, recovery descriptors, and estimated resource charges in a persisted receipt. It accounts for the raw tail, system text, active tool schemas, framing, and response reserve. Missing optional history can use the bounded loaded-prefix fallback. It does not require a summary model. Preview and active compaction use the same compiler. See [V4 implementation evidence](docs/chrono-v4/completion-evidence.md).
 
 If Chrono refuses its own requested compaction, it keeps the current context and reports a bounded failure code. It can resume unresolved work once at safe idle, but it does not retry compaction until new user input. User cancellation does not resume work.
 
@@ -100,7 +102,7 @@ Raw `history_get` can recover an exact cataloged entry before the derived search
 
 The 3.0.2 stopped-owner and admission-wait diagnostics remain read-only. An inactive worker unit does not prove that its scheduler reservation is free. These diagnostics do not resume owners, remove reservations, or recover blocked admission.
 
-At safe idle, automatic rollover starts a smaller physical session after 8 MiB of new source growth beyond its bootstrap data. It preserves the old JSONL and transfers Notes, Tasks, and Workplan state through bounded native checkpoints. Running managed processes or open shell sessions block the switch. Arbitrary third-party extension state is not automatically migrated. Use checkpoint-aware providers when resuming a replacement session.
+At safe idle, automatic rollover starts a smaller physical session after 8 MiB of new source growth beyond its bootstrap data. It preserves the old JSONL and transfers complete Notes, Todo, and Workplan state through bounded native checkpoints. Owned providers use the asynchronous transfer contract. Independent Memory transfers a verified logical binding and still needs its retained store. Unavailable or oversized complete state refuses the switch instead of being shortened. Running managed processes or open shell sessions block the switch. Arbitrary third-party extension state is not automatically migrated. Use checkpoint-aware providers when resuming a replacement session.
 
 Focused checks exercised model-free composition, bounded recall, native state preservation, and actual Pi physical replacement with restart. These checks do not establish perfect recall or billion-token normal-use qualification. Search ranks a bounded lexical candidate window, not the entire archive at once. Loading a pre-existing large Pi session can still incur its initial memory cost. See the [release and evidence boundary](docs/chrono-v3/README.md#release-and-evidence-boundary) and [settled scale results](docs/chrono-v3/reviews/M11-report-correction.md#actual-settled-campaign).
 
@@ -115,6 +117,8 @@ Focused checks exercised model-free composition, bounded recall, native state pr
 | `memory_remember`, `memory_update` | Save or revise ordinary source-linked working knowledge without rewriting its event history. |
 | `memory_forget`, `memory_promote` | Remove ordinary knowledge from active working memory or return it to working use. Source history is not deleted. |
 | `memory_list`, `memory_get`, `memory_search` | Inspect current or archived remembered knowledge and its provenance. |
+
+Memory tools belong to Chrono by default. With the startup choice `memoryOwner: "context-kit"`, the independent Memory extension owns them and adds `memory_proposal`. That choice also stops Chrono's legacy promotion writes and pinned Memory reads. It does not import a sidecar or change an already loaded writer without a safe reload.
 
 ### Operator commands
 
@@ -132,20 +136,30 @@ The extension dispatches `/chrono-auto-rollover` internally with a one-use bindi
 
 Start with the [Chrono overview](docs/chrono-v3/README.md), [configuration](docs/chrono-v3/configuration.md), [operations](docs/chrono-v3/operations.md), and [recovery](docs/chrono-v3/recovery.md). Old plans and reports are historical guides, not the current release checklist.
 
-## Context Kit and the V4 foundation
+## Context Kit and V4
 
-[Context Kit](packages/pi-context-kit/README.md) supplies two independent source-loaded extensions:
+[Context Kit](packages/pi-context-kit/README.md) supplies six independent source-loaded extensions. Each state provider owns its persistence. Shared libraries supply pure contracts and storage code, not a shared database or mutable store instance.
 
-- `context_recall` queries active Todo, Notes, and Workplan providers for bounded current-state cards. It returns native IDs, revisions, status, categories, omitted fields, typed task links, and read-only recovery instructions. It does not scan archives, change state, enable hidden tools, inject context, or compact the session.
-- `telemetry_status` and `/context-telemetry` report local content-free runtime counters and separate caller-reported quality observations. Telemetry works without Recall, Chrono, Grounded Tools, or a model. No quality observations means unknown, not success.
+| Extension | State and interface |
+| --- | --- |
+| [Memory](packages/pi-context-kit/memory/README.md) | Accepted source-linked knowledge, revisions, temporal reads, and separate proposals through `memory_*`. Accepted knowledge survives tree moves within its logical session, not across all projects. |
+| [Todo](packages/pi-context-kit/todo/README.md) | Branch-local immediate tasks, dependencies, blocking, and existing Glance actions through `todo`. |
+| [Notes](packages/pi-context-kit/notes/README.md) | Branch-local scratchpad state and native revision checks through `notes`. Notes are not automatically accepted knowledge. |
+| [Workplan](packages/pi-context-kit/workplan/README.md) | Branch-local goals, decisions, milestones, evidence, and recovery through `workplan`. Target mutations do not load unrelated plan bodies. |
+| [Recall](packages/pi-context-kit/recall/README.md) | `context_recall` reads bounded current cards from active Memory, Todo, Notes, and Workplan providers. It does not scan archives, mutate state, enable hidden tools, or compact the session. |
+| [Telemetry](packages/pi-context-kit/telemetry/README.md) | `telemetry_status` and `/context-telemetry` report local content-free runtime counters and separate caller-reported quality observations. No quality observations means unknown. |
 
-Recall defaults to six cards and 128 scanned records per provider, a 150 ms common wait, and a 16 KiB complete result. Coverage can be incomplete. A native recovery call can return a newer revision, so current cards are not immutable historical handles.
+Recall defaults to six cards and 128 scanned records per provider, a 150 ms common wait, and a 16 KiB complete result. Cards retain native IDs, revisions, lifecycle, categories, explicit relations, omitted fields, and read-only recovery. Missing or failed providers do not erase healthy results. Proposals require an explicit category selection and remain separate from accepted knowledge. Memory recovery pins an exact revision. Other native reads can return a newer record. Coverage can be incomplete, and cards are not complete transfer snapshots.
 
-Telemetry has a 16 MiB managed-storage ceiling and does not delete or reuse old slots automatically. Full or failed storage stops disk collection, not agent work. Load it before Chrono or another compactor that can cancel the before-event. Follow the [scoped activation procedure](docs/activation.md#context-kit-foundation).
+Replace only the selected legacy Todo, Notes, and Workplan registrations. Existing branches require explicit bounded `/todo-import`, `/notes-import`, and `/workplan-import`. Memory uses `/memory-import-v2` for the chosen sidecar after the startup ownership handoff. Preserve source bytes and compare complete state before new writes. New owned writes require a persisted Pi session and a verified disk anchor. Failed or incomplete import never means empty state.
 
-The [small practical scenario](docs/chrono-v4/foundation-evidence.md) exercised native recovery, unchanged state, and real Pi session reopening. Two controlled model calls scored 0/4 current facts with an old excerpt and 4/4 with actual current cards. The baseline safely requested missing evidence. The inputs differed in available evidence, so this does not establish general accuracy, token savings, or faster performance.
+After new writes, data rollback needs a fresh replacement with the latest complete native checkpoints. Memory also needs a verified reverse V2 export to that target's actual sidecar. Keep original sessions and independent stores. A code-selection rollback alone does not preserve later data. Follow the [scoped activation and rollback procedure](docs/activation.md#context-kit-owned-providers-and-v4-compilation).
 
-The [V4 design](docs/chrono-v4/README.md) covers independent Memory, Notes, Todo, Workplan, deterministic context selection, and replacement compaction. Those new state implementations and the replacement compactor remain planned. The current foundation preserves existing native state and keeps V3 compaction selected.
+Telemetry has a 16 MiB managed-storage ceiling and does not delete or reuse old slots automatically. Full or failed storage stops disk collection, not agent work. Load it before Chrono or another compactor that can cancel the before-event. It works without the state providers, Recall, Chrono, or a model.
+
+The [installed implementation scenario](docs/chrono-v4/completion-evidence.md) exercised import, new writes, branch visibility, Recall, complete transfer, post-write rollback, and exactly one preview-matched compaction. An affected receipt-recovery check read two exact raw pages while the derived index was pending. It did not recover the complete receipt through the tool. These source-known scripted checks are not a new model-based quality evaluation.
+
+The earlier [foundation comparison](docs/chrono-v4/foundation-evidence.md) scored 0/4 current facts with an old excerpt and 4/4 with actual current cards in two controlled model calls. The baseline safely requested missing evidence. The inputs differed in available evidence, so this does not establish general accuracy, token savings, or faster performance. The [V4 design](docs/chrono-v4/README.md) separates implemented components, future relation/discovery work, and unqualified lifetime scale.
 
 ## Integration boundaries
 
@@ -220,7 +234,7 @@ This checks historical Git objects only. Keep session files, credentials, runtim
 - [Activation and rollback](docs/activation.md): registration ownership and loaded-process checks.
 - [Project Glance archive operations](packages/pi-project-glance/docs/archive.md): import, backup, restore, and compatible rollback.
 - [Chrono documentation](docs/chrono-v3/README.md): memory architecture, configuration, recovery, and revision-bound evidence.
-- [V4 foundation](docs/chrono-v4/README.md): independent component design, source-pinned research, native connectors, telemetry, and practical evidence.
+- [V4 ecosystem](docs/chrono-v4/README.md): independent state owners, deterministic compaction, source-pinned research, native connectors, telemetry, and practical evidence.
 - [Browser documentation](vendor/terminal-browser/README.md): the separately managed browser workflow.
 
 The root [MIT license](LICENSE) applies with retained package notices. Imported code keeps its attribution. The [browser license](vendor/terminal-browser/LICENSE), [font license](vendor/terminal-browser/assets/fonts/LICENSE.txt), and [bundled dependency notices](vendor/terminal-browser/assets/licenses/) retain their separate terms and are not replaced by the root license.

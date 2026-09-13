@@ -1,7 +1,10 @@
 /** Versioned, current-state data exchange. Importing this module starts no resources. */
-export const PROVIDER_IDS = Object.freeze(["todo", "notes", "workplan"] as const);
+export const V1_PROVIDER_IDS = Object.freeze(["todo", "notes", "workplan"] as const);
+export const PROVIDER_IDS = Object.freeze([...V1_PROVIDER_IDS, "memory"] as const);
 export type ProviderId = typeof PROVIDER_IDS[number];
-export const CATEGORIES = Object.freeze(["task", "note", "plan", "decision", "constraint", "blocker"] as const);
+export type ProtocolVersion = 1 | 2;
+export const V1_CATEGORIES = Object.freeze(["task", "note", "plan", "decision", "constraint", "blocker"] as const);
+export const CATEGORIES = Object.freeze([...V1_CATEGORIES, "knowledge", "proposal"] as const);
 export type Category = typeof CATEGORIES[number];
 export const DEFAULT_LIMITS = Object.freeze({ records: 6, scan: 128, bytes: 8192, waitMs: 150, outputBytes: 16384 });
 export const HARD_LIMITS = Object.freeze({ records: 16, scan: 512, bytes: 16384, waitMs: 1000, outputBytes: 32768, queryBytes: 512 });
@@ -11,7 +14,7 @@ export interface ContextEventBus {
 }
 export interface ContextScope { sessionId: string; leafId: string | null }
 export interface ContextRequest {
-  version: 1;
+  version: ProtocolVersion;
   requestId: string;
   providerId: ProviderId;
   scope: ContextScope;
@@ -23,7 +26,10 @@ export interface ContextRequest {
 export type NativeRecovery =
   | { tool: "todo"; args: { action: "list" } }
   | { tool: "notes"; args: { action: "read"; id: string } }
-  | { tool: "workplan"; args: { action: "recover"; planId: string } };
+  | { tool: "workplan"; args: { action: "recover"; planId: string } }
+  | { tool: "memory_get"; args: { memoryId: string; revision?: string } };
+export const nativeTool = (provider: ProviderId): NativeRecovery["tool"] => provider === "memory" ? "memory_get" : provider;
+export interface ContextVisibility { kind: "logical_session"; namespaceId: string; branchBehavior: "shared" }
 export interface ContextCard {
   id: string;
   revision: string;
@@ -33,7 +39,8 @@ export interface ContextCard {
   text: string;
   omittedFields: string[];
   recovery: NativeRecovery;
-  relations?: { type: "blocked_by" | "linked_todo"; providerId: ProviderId; id: string }[];
+  relations?: { type: "blocked_by" | "linked_todo" | "supports" | "contradicts" | "supersedes" | "derived_from"; providerId: ProviderId; id: string }[];
+  visibility?: ContextVisibility;
 }
 export interface ProviderPage {
   readiness: "ready" | "unavailable" | "pending" | "corrupt" | "scope_changed";
@@ -42,8 +49,8 @@ export interface ProviderPage {
 }
 export type ResponseEnvelope = Pick<ContextRequest, "version" | "requestId" | "providerId" | "scope">;
 export type ContextResponse = ResponseEnvelope & (ProviderPage | { error: "provider_error" | "malformed" | "response_budget" });
-export const requestChannel = (provider: ProviderId): string => `context-kit:request:v1:${provider}`;
-export const responseChannel = (provider: ProviderId): string => `context-kit:response:v1:${provider}`;
+export const requestChannel = (provider: ProviderId, version: ProtocolVersion = provider === "memory" ? 2 : 1): string => `context-kit:request:v${version}:${provider}`;
+export const responseChannel = (provider: ProviderId, version: ProtocolVersion = provider === "memory" ? 2 : 1): string => `context-kit:response:v${version}:${provider}`;
 export const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
 
 function fail(): never { throw new Error("Invalid Context Kit data"); }
@@ -124,13 +131,13 @@ export function sameScope(a: ContextScope, b: ContextScope): boolean {
 }
 export function validateRequest(value: unknown): ContextRequest {
   const request = object(copyPlainData(value, 4096), ["version", "requestId", "providerId", "scope", "query", "categories", "limits", "deadlineMs"]);
-  if (request.version !== 1) fail();
+  if (request.version !== 1 && request.version !== 2) fail();
   text(request.requestId, 128);
-  member(request.providerId, PROVIDER_IDS);
+  member(request.providerId, request.version === 1 ? V1_PROVIDER_IDS : PROVIDER_IDS);
   request.scope = validateScope(request.scope);
   text(request.query, HARD_LIMITS.queryBytes, true);
   if (!Array.isArray(request.categories) || request.categories.length > CATEGORIES.length) fail();
-  request.categories.forEach((category: unknown) => member(category, CATEGORIES));
+  request.categories.forEach((category: unknown) => member(category, request.version === 1 ? V1_CATEGORIES : CATEGORIES));
   if (new Set(request.categories).size !== request.categories.length) fail();
   const limits = object(request.limits, ["records", "scan", "bytes"]);
   integer(limits.records, 1, HARD_LIMITS.records);
@@ -139,28 +146,39 @@ export function validateRequest(value: unknown): ContextRequest {
   integer(request.deadlineMs, 0, Number.MAX_SAFE_INTEGER);
   return request as ContextRequest;
 }
-function validateCard(value: unknown, providerId: ProviderId): ContextCard {
-  const card = object(value, ["id", "revision", "status", "category", "title", "text", "omittedFields", "recovery"], ["relations"]);
+function validateCard(value: unknown, providerId: ProviderId, version: ProtocolVersion): ContextCard {
+  const card = object(value, ["id", "revision", "status", "category", "title", "text", "omittedFields", "recovery"], version === 1 ? ["relations"] : ["relations", "visibility"]);
   text(card.id, 128); text(card.revision, 128); text(card.status, 32); text(card.title, 256, true); text(card.text, 2048, true);
-  member(card.category, CATEGORIES);
+  member(card.category, version === 1 ? V1_CATEGORIES : CATEGORIES);
+  if (card.visibility !== undefined) {
+    if (version !== 2 || providerId !== "memory") fail();
+    const visibility = object(card.visibility, ["kind", "namespaceId", "branchBehavior"]);
+    if (visibility.kind !== "logical_session" || visibility.branchBehavior !== "shared") fail();
+    text(visibility.namespaceId, 128);
+  }
   if (!Array.isArray(card.omittedFields) || card.omittedFields.length > 16) fail();
   card.omittedFields.forEach((field: unknown) => text(field, 64));
   const recovery = object(card.recovery, ["tool", "args"]);
-  if (recovery.tool !== providerId) fail();
+  if (recovery.tool !== nativeTool(providerId)) fail();
   if (providerId === "todo") {
     if (object(recovery.args, ["action"]).action !== "list") fail();
   } else if (providerId === "notes") {
     const args = object(recovery.args, ["action", "id"]);
     if (args.action !== "read" || args.id !== card.id) fail();
-  } else {
+  } else if (providerId === "workplan") {
     const args = object(recovery.args, ["action", "planId"]);
     if (args.action !== "recover" || args.planId !== card.id) fail();
+  } else {
+    if (version !== 2) fail();
+    const args = object(recovery.args, ["memoryId"], ["revision"]);
+    if (args.memoryId !== card.id || (args.revision !== undefined && args.revision !== card.revision)) fail();
   }
   if (card.relations !== undefined) {
     if (!Array.isArray(card.relations) || card.relations.length > 8) fail();
     for (const relation of card.relations) {
       const link = object(relation, ["type", "providerId", "id"]);
-      member(link.type, ["blocked_by", "linked_todo"]); member(link.providerId, PROVIDER_IDS); text(link.id, 128);
+      member(link.type, version === 1 ? ["blocked_by", "linked_todo"] : ["blocked_by", "linked_todo", "supports", "contradicts", "supersedes", "derived_from"]);
+      member(link.providerId, version === 1 ? V1_PROVIDER_IDS : PROVIDER_IDS); text(link.id, 128);
     }
   }
   return card as ContextCard;
@@ -174,7 +192,7 @@ function validatePage(value: unknown, request: ContextRequest): ProviderPage {
   integer(coverage.excluded, 0, coverage.matched);
   if (typeof coverage.scanComplete !== "boolean" || !Array.isArray(page.cards) || page.cards.length > HARD_LIMITS.records) fail();
   page.cards.forEach((card: unknown) => {
-    const valid = validateCard(card, request.providerId);
+    const valid = validateCard(card, request.providerId, request.version);
     if (request.categories.length && !request.categories.includes(valid.category)) fail();
   });
   if (coverage.matched !== page.cards.length + coverage.excluded) fail();
@@ -182,7 +200,7 @@ function validatePage(value: unknown, request: ContextRequest): ProviderPage {
   return page as ProviderPage;
 }
 function envelope(request: ContextRequest): ResponseEnvelope {
-  return { version: 1, requestId: request.requestId, providerId: request.providerId, scope: { ...request.scope } };
+  return { version: request.version, requestId: request.requestId, providerId: request.providerId, scope: { ...request.scope } };
 }
 /** Remove whole cards until both record and complete wire-byte budgets fit. */
 export function fitProviderPage(request: ContextRequest, value: ProviderPage): ProviderPage {
@@ -197,7 +215,7 @@ export function fitProviderPage(request: ContextRequest, value: ProviderPage): P
 export function validateResponse(value: unknown, request: ContextRequest): ContextResponse {
   // Conservative structural accounting has a separate ceiling from exact wire bytes.
   const response = object(copyPlainData(value, HARD_LIMITS.bytes * 2), ["version", "requestId", "providerId", "scope"], ["readiness", "coverage", "cards", "error"]);
-  if (response.version !== 1 || response.requestId !== request.requestId || response.providerId !== request.providerId || !sameScope(validateScope(response.scope), request.scope)) fail();
+  if (response.version !== request.version || response.requestId !== request.requestId || response.providerId !== request.providerId || !sameScope(validateScope(response.scope), request.scope)) fail();
   if (jsonBytes(response) > request.limits.bytes) fail();
   if (Object.hasOwn(response, "error")) {
     object(response, ["version", "requestId", "providerId", "scope", "error"]);
@@ -216,21 +234,22 @@ export function registerContextProvider(
 ): () => void {
   member(providerId, PROVIDER_IDS);
   let active = true;
-  const remove = events.on(requestChannel(providerId), (raw) => {
+  const versions: ProtocolVersion[] = providerId === "memory" ? [2] : [1, 2];
+  const removers = versions.map((version) => events.on(requestChannel(providerId, version), (raw) => {
     let request: ContextRequest;
     try { request = validateRequest(raw); } catch { return; }
     const remaining = request.deadlineMs - Date.now();
-    if (!active || request.providerId !== providerId || remaining < 0 || remaining > HARD_LIMITS.waitMs) return;
+    if (!active || request.version !== version || request.providerId !== providerId || remaining < 0 || remaining > HARD_LIMITS.waitMs) return;
     Object.freeze(request.scope); Object.freeze(request.limits); Object.freeze(request.categories); Object.freeze(request);
     const emit = (body: ProviderPage | { error: "provider_error" | "malformed" }) => {
       if (!active || Date.now() > request.deadlineMs) return;
-      try { events.emit(responseChannel(providerId), { ...envelope(request), ...body }); } catch { /* A peer cannot fail the provider. */ }
+      try { events.emit(responseChannel(providerId, version), { ...envelope(request), ...body }); } catch { /* A peer cannot fail the provider. */ }
     };
     // Defer each provider independently. Timers cannot interrupt synchronous work.
     void Promise.resolve().then(() => read(request)).then((page) => {
       if (!active || Date.now() > request.deadlineMs) return;
       try { emit(fitProviderPage(request, page)); } catch { emit({ error: "malformed" }); }
     }, () => emit({ error: "provider_error" }));
-  });
-  return () => { active = false; remove(); };
+  }));
+  return () => { active = false; for (const remove of removers) remove(); };
 }

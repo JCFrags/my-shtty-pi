@@ -313,10 +313,31 @@ export function chronoScriptEnvironment(root) {
   return { PATH: process.env.PATH, HOME: home, TMPDIR: temporary, PI_CODING_AGENT_DIR: join(home, 'agent'), LANG: 'C.UTF-8' };
 }
 
+// Protocol JavaScript and declarations are tracked nested workspace output.
+// Verify them before any product uses those bytes in a disposable indexed build.
+export function verifyContextProtocolBuild(root, files, env) {
+  if (existsSync(join(root, '.git'))) throw new Error('context-kit: rebuild requires disposable snapshot');
+  const prefix = 'packages/pi-context-kit/protocol/dist/';
+  const indexed = files.filter(path => path.startsWith(prefix)).sort();
+  if (!indexed.length) throw new Error('context-kit: missing indexed protocol output');
+  const expected = new Map(indexed.map(path => [path, readFileSync(join(root, path))]));
+  const dir = join(root, 'packages/pi-context-kit/protocol');
+  rmSync(join(dir, 'dist'), { recursive: true });
+  run('npm', ['run', '--ignore-scripts', 'build'], dir, { env });
+  const actual = walk(join(dir, 'dist')).map(path => relative(root, path)).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(indexed)) throw new Error('context-kit: protocol output inventory differs from index');
+  for (const [path, bytes] of expected) {
+    if (!readFileSync(join(root, path)).equals(bytes)) throw new Error(`${path}: tracked protocol output differs from build`);
+  }
+}
+
 export function executeProducts(root, files, state, selected) {
   const env = { ...process.env, PYTHONPYCACHEPREFIX: join(root, '.verify-python-cache'), PI_PROJECT_GLANCE_VERIFIER_COPY: '1', PI_PROJECT_GLANCE_PROVIDER_ROOT: root };
   run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], root, { env });
   const products = state.products.filter(p => !selected || p.slug === selected);
+  if (products.some(product => ['grounded-tools', 'pi-context-kit', 'pi-chrono-compaction'].includes(product.slug))) {
+    verifyContextProtocolBuild(root, files, env);
+  }
   for (const product of products) {
     const dir = join(root, 'packages', product.slug);
     const manifest = json(join(dir, 'package.json'));

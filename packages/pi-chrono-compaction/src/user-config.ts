@@ -5,7 +5,13 @@ import { dirname, join } from "node:path";
 
 export type ConfiguredRawTail = "pi" | "dynamic" | "short" | "medium" | "long" | number;
 
+export type MemoryOwner = "chrono" | "context-kit";
+export type ContextCompiler = "v3" | "v4";
 export interface UserConfig {
+  /** Startup-only. Reload after changing the single Memory writer/read owner. */
+  readonly memoryOwner?: MemoryOwner;
+  /** V4 is opt-in until preview and installed public-hook acceptance. */
+  readonly contextCompiler?: ContextCompiler;
   readonly targetContextTokens?: number;
   readonly replayTargetTokens?: number | null;
   readonly triggerThresholdTokens?: number | null;
@@ -59,6 +65,7 @@ export interface ConfigCommandResult {
 }
 
 const CONFIG_KEYS = [
+  "memoryOwner", "contextCompiler",
   "targetContextTokens",
   "replayTargetTokens",
   "triggerThresholdTokens",
@@ -92,6 +99,8 @@ const CONFIG_KEYS = [
 type ConfigKey = (typeof CONFIG_KEYS)[number];
 
 const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
+  "memory-owner": "memoryOwner",
+  "context-compiler": "contextCompiler",
   "target-context": "targetContextTokens",
   "replay-target": "replayTargetTokens",
   trigger: "triggerThresholdTokens",
@@ -155,10 +164,21 @@ function rawTailValue(raw: unknown): ConfiguredRawTail {
   return boundedInteger(value, "raw-tail", 1_000, 200_000);
 }
 
+export function validateMemoryOwner(value: unknown): MemoryOwner {
+  if (value === "chrono" || value === "context-kit") return value;
+  throw Object.assign(new Error("memoryOwner must be chrono or context-kit. Reload is required."), { code: "chrono-memory-owner-invalid" });
+}
+export function validateContextCompiler(value: unknown): ContextCompiler {
+  if (value === "v3" || value === "v4") return value;
+  throw new Error("contextCompiler must be v3 or v4.");
+}
+
 export function validateUserConfig(value: unknown): UserConfig {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("The configuration must be a JSON object.");
   const input = value as Record<string, unknown>;
   const config: Record<string, unknown> = {};
+  if (input.memoryOwner !== undefined) config.memoryOwner = validateMemoryOwner(input.memoryOwner);
+  if (input.contextCompiler !== undefined) config.contextCompiler = validateContextCompiler(input.contextCompiler);
   if (input.targetContextTokens !== undefined) config.targetContextTokens = boundedInteger(input.targetContextTokens, "targetContextTokens", 8_000, 250_000);
   if (input.replayTargetTokens !== undefined) config.replayTargetTokens = input.replayTargetTokens === null ? null : boundedInteger(input.replayTargetTokens, "replayTargetTokens", 256, 25_000);
   if (input.triggerThresholdTokens !== undefined) config.triggerThresholdTokens = input.triggerThresholdTokens === null ? null : boundedInteger(input.triggerThresholdTokens, "triggerThresholdTokens", 8_000, 250_000);
@@ -212,6 +232,8 @@ export function loadUserConfig(path = defaultUserConfigPath()): { config: UserCo
   try {
     return { config: validateUserConfig(JSON.parse(readFileSync(path, "utf8"))) };
   } catch (error) {
+    // An invalid writer selection must not silently register the legacy owner.
+    if ((error as NodeJS.ErrnoException).code === "chrono-memory-owner-invalid") throw error;
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { config: {} };
     return { config: {}, warning: `Could not load ${path}: ${error instanceof Error ? error.message : String(error)}` };
   }
@@ -267,6 +289,8 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
   const raw = words[1] ?? "";
   let value: unknown;
   switch (key) {
+    case "memoryOwner": value = validateMemoryOwner(raw); break;
+    case "contextCompiler": value = validateContextCompiler(raw); break;
     case "targetContextTokens": value = boundedInteger(raw, command, 8_000, 250_000); break;
     case "replayTargetTokens": value = ["auto", "derived", "pi"].includes(raw.toLowerCase()) ? null : boundedInteger(raw, command, 256, 25_000); break;
     case "triggerThresholdTokens": value = ["pi", "off", "disabled"].includes(raw.toLowerCase()) ? null : boundedInteger(raw, command, 8_000, 250_000); break;
@@ -311,5 +335,5 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     case "warmSourceTokens": value = boundedInteger(raw, command, 1_000, 500_000); break;
   }
   const next = validateUserConfig({ ...config, [key]: value });
-  return { config: next, changed: JSON.stringify(next) !== JSON.stringify(config), message: `Set ${command} to ${String(raw).toLowerCase()}.` };
+  return { config: next, changed: JSON.stringify(next) !== JSON.stringify(config), message: `Set ${command} to ${String(raw).toLowerCase()}.${key === "memoryOwner" ? " Reload is required. The captured owner does not change in this runtime." : ""}` };
 }

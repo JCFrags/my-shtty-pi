@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 const CONFIG_KEYS = [
+    "memoryOwner", "contextCompiler",
     "targetContextTokens",
     "replayTargetTokens",
     "triggerThresholdTokens",
@@ -33,6 +34,8 @@ const CONFIG_KEYS = [
     "warmSourceTokens",
 ];
 const COMMAND_TO_KEY = {
+    "memory-owner": "memoryOwner",
+    "context-compiler": "contextCompiler",
     "target-context": "targetContextTokens",
     "replay-target": "replayTargetTokens",
     trigger: "triggerThresholdTokens",
@@ -96,11 +99,25 @@ function rawTailValue(raw) {
         return value;
     return boundedInteger(value, "raw-tail", 1_000, 200_000);
 }
+export function validateMemoryOwner(value) {
+    if (value === "chrono" || value === "context-kit")
+        return value;
+    throw Object.assign(new Error("memoryOwner must be chrono or context-kit. Reload is required."), { code: "chrono-memory-owner-invalid" });
+}
+export function validateContextCompiler(value) {
+    if (value === "v3" || value === "v4")
+        return value;
+    throw new Error("contextCompiler must be v3 or v4.");
+}
 export function validateUserConfig(value) {
     if (value === null || typeof value !== "object" || Array.isArray(value))
         throw new Error("The configuration must be a JSON object.");
     const input = value;
     const config = {};
+    if (input.memoryOwner !== undefined)
+        config.memoryOwner = validateMemoryOwner(input.memoryOwner);
+    if (input.contextCompiler !== undefined)
+        config.contextCompiler = validateContextCompiler(input.contextCompiler);
     if (input.targetContextTokens !== undefined)
         config.targetContextTokens = boundedInteger(input.targetContextTokens, "targetContextTokens", 8_000, 250_000);
     if (input.replayTargetTokens !== undefined)
@@ -216,6 +233,9 @@ export function loadUserConfig(path = defaultUserConfigPath()) {
         return { config: validateUserConfig(JSON.parse(readFileSync(path, "utf8"))) };
     }
     catch (error) {
+        // An invalid writer selection must not silently register the legacy owner.
+        if (error.code === "chrono-memory-owner-invalid")
+            throw error;
         if (error.code === "ENOENT")
             return { config: {} };
         return { config: {}, warning: `Could not load ${path}: ${error instanceof Error ? error.message : String(error)}` };
@@ -276,6 +296,12 @@ export function applyConfigCommand(config, args) {
     const raw = words[1] ?? "";
     let value;
     switch (key) {
+        case "memoryOwner":
+            value = validateMemoryOwner(raw);
+            break;
+        case "contextCompiler":
+            value = validateContextCompiler(raw);
+            break;
         case "targetContextTokens":
             value = boundedInteger(raw, command, 8_000, 250_000);
             break;
@@ -402,6 +428,6 @@ export function applyConfigCommand(config, args) {
             break;
     }
     const next = validateUserConfig({ ...config, [key]: value });
-    return { config: next, changed: JSON.stringify(next) !== JSON.stringify(config), message: `Set ${command} to ${String(raw).toLowerCase()}.` };
+    return { config: next, changed: JSON.stringify(next) !== JSON.stringify(config), message: `Set ${command} to ${String(raw).toLowerCase()}.${key === "memoryOwner" ? " Reload is required. The captured owner does not change in this runtime." : ""}` };
 }
 //# sourceMappingURL=user-config.js.map

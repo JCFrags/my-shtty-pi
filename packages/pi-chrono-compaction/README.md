@@ -7,7 +7,17 @@
 - Build/check command: `npm run build`
 - Current package identity check: `node ../../scripts/verify-chrono-v3-baseline.mjs --static-only`
 
-## V3 direction and current architecture
+## V4 native context
+
+Version `4.0.0` adds deterministic context compilation through the existing public `session_before_compact` hook. Set `contextCompiler: "v4"` explicitly, or use `PI_CHRONO_CONTEXT_COMPILER=v4`. The default remains `v3`. V4 uses the shared Context Kit collector, freezes admitted native pages and historical cuts, fits whole records, and persists `details.contextReceipt` with the actual compaction entry. It does not require a model summary or patch private Pi methods.
+
+The budget includes estimated system text, tool schemas, message framing, response reserve, summary, and the adaptive raw tail. It is not an exact tokenizer measurement. Missing optional indexed history can use the bounded loaded-prefix fallback. Invalid source identity still refuses. `history_status.composition.committedReceipt` gives the native exact-recovery route after a successful commit. A receipt preserves captured records, exclusions, and individual revisions, not a transaction across providers.
+
+[Context Kit](../pi-context-kit/README.md) separately owns Memory, Todo, Notes, and Workplan. To select independent Memory, set `memoryOwner: "context-kit"` before factory loading. This stops legacy Memory tool registration, automatic promotion writes, and pinned legacy reads together. It is a startup-only ownership choice, not a data migration. Select one writer per provider and follow each provider's explicit import and rollback procedure.
+
+Physical rollover still requires complete native state, not Recall cards. Asynchronous transfer preserves complete Todo, Notes, and Workplan checkpoints and a verified same-store Memory binding. Pending, unavailable, or oversized transfer refuses rather than shortens state. Keep source shards, provider stores, and previous installations. See [V4 scope](../../docs/chrono-v4/completion-scope.md) and [release compatibility](../../docs/chrono-release-compatibility.md) for limits and verification. Implementation, protected-main integration, and local loaded use are separate boundaries.
+
+## Preserved V3 architecture
 
 V3 prioritizes useful fuzzy chronological memory and recall, from short tasks to extremely long lifetime tasks, while keeping RAM, CPU, and optional GPU use bounded. The programmatic core keeps selective chronological short-term memory, gives important events more detail, and uses a small adaptive raw tail with model-aware, configurable token limits. Optional language-model assistance may improve individual events or bounded groups. It must not replace whole history or become required processing.
 

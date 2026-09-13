@@ -37,11 +37,21 @@ export interface ComposerSelectionRow {
   /** Text fidelity. This is not the speaker's semantic authority. */
   readonly authority: ComposerAuthority;
   readonly sourceAuthority?: EpisodeStateAuthority;
+  /** Bounded extraction omissions are separate from whole-row compiler fitting. */
+  readonly sourceOmissions?: { readonly beforeUtf16: number; readonly afterUtf16: number };
+  readonly sourceContextComplete?: boolean;
   readonly status: ComposerStatus;
   readonly importance: number;
 }
 
 export interface ShadowComposerInput {
+  /** V4 keeps each supplied bounded representation intact and drops whole rows. */
+  readonly wholeRecords?: boolean;
+  /** Counted native-state rendering and receipt locator, supplied by the V4 compiler. */
+  readonly prefixText?: string;
+  readonly omissionReceipt?: string;
+  /** Frozen source identity and bounded selection coverage, including empty pages. */
+  readonly storedEvidence?: Pick<EpisodeStateSelection, "sourceView" | "stateGeneration" | "requestedCut" | "processedCut" | "processedMemoryCut" | "coverage" | "omissions">;
   readonly regularPiSummary: string;
   readonly combinedCeilingTokens: number;
   readonly cut: {
@@ -127,6 +137,7 @@ export interface ShadowCompositionArtifact {
   readonly createdFrom: "bounded-shadow-composer-input";
   readonly degradation: ShadowDegradationLevel;
   readonly degradationReasons: readonly string[];
+  readonly storedEvidence?: ShadowComposerInput["storedEvidence"];
   readonly cut: ShadowComposerInput["cut"];
   readonly memory: ShadowComposerInput["memory"];
   readonly rollups?: ShadowComposerInput["rollups"];
@@ -136,6 +147,8 @@ export interface ShadowCompositionArtifact {
     readonly renderedTokens: number;
   }[];
   readonly omittedRowIds: readonly string[];
+  /** Complete bounded descriptors, including exact recovery, for composer exclusions. */
+  readonly omittedRows: readonly ComposerSelectionRow[];
   readonly validation: ShadowCompositionEnvelope["validation"];
 }
 
@@ -170,6 +183,15 @@ export function composeStoredSelection(
   selection: EpisodeStateSelection,
   recovery: (source: ScopedBodySourceRef | ScopedRawSourceRef) => string,
 ): ShadowCompositionResult {
+  return composeShadowContext(storedSelectionInput(input, selection, recovery));
+}
+
+/** Adapt the same pinned V3 selection without rendering or another store read. */
+export function storedSelectionInput(
+  input: Pick<ShadowComposerInput, "regularPiSummary" | "combinedCeilingTokens" | "cut">,
+  selection: EpisodeStateSelection,
+  recovery: (source: ScopedBodySourceRef | ScopedRawSourceRef) => string,
+): ShadowComposerInput {
   if (selection.requestedCut !== input.cut.sourceCutSeq || selection.sourceView.eventCut !== selection.requestedCut
     || selection.processedCut > selection.requestedCut || selection.processedMemoryCut < selection.processedCut) {
     throw new Error("stored selection does not match the actual composition cut");
@@ -212,7 +234,9 @@ export function composeStoredSelection(
     return { id: item.stableKey, text: evidence.exactText, startSeq: evidence.source.eventSeq, endSeq: evidence.source.eventSeq,
       recovery: recovery(evidence.source), kind: item.kind === "restriction" || item.kind === "goal" || item.kind === "blocker" || item.kind === "decision"
         ? item.kind : "open-work",
-      authority: "exact", sourceAuthority: item.authority, status: item.status, importance: 1 };
+      authority: "exact", sourceAuthority: item.authority, status: item.status, importance: 1,
+      ...(omission ? { sourceOmissions: { beforeUtf16: omission.beforeUtf16 as number, afterUtf16: omission.afterUtf16 as number },
+        sourceContextComplete: evidence.contextComplete === true } : {}) };
   };
   const addState = (item: EpisodeStateSelectionItem, maximumCut: number, delta: boolean): void => {
     const row = exactRow(item, maximumCut);
@@ -319,7 +343,10 @@ export function composeStoredSelection(
     represented.add(key); return true;
   });
   const selectedRecent = uniqueOptional(recent), selectedOlder = uniqueOptional(older), selectedDelta = uniqueOptional(deltaRows);
-  return composeShadowContext({ ...input,
+  return { ...input,
+    storedEvidence: { sourceView: selection.sourceView, stateGeneration: selection.stateGeneration,
+      requestedCut: selection.requestedCut, processedCut: selection.processedCut, processedMemoryCut: selection.processedMemoryCut,
+      coverage: selection.coverage, omissions: selection.omissions },
     memory: { generation: String(selection.stateGeneration), representedStartSeq: 0,
       representedEndSeq: selection.processedCut, committed: selection.stateGeneration > 0 },
     ...(selection.rollups ? { rollups: { generation: String(selection.rollups.handle.rollupGeneration),
@@ -330,7 +357,7 @@ export function composeStoredSelection(
     delta: { records: selectedDelta, completeThroughCut: selection.processedCut === selection.requestedCut
       || Boolean(verifiedDelta && delta?.throughCut === selection.requestedCut && unsupportedProtected.length === 0 && unsupportedOpenWork.length === 0) },
     limitations: { unsupportedExtraction, selectionLoss, lag },
-  });
+  };
 }
 
 function assertInteger(name: string, value: number, minimum = 0): void {
@@ -395,9 +422,9 @@ function chronological(rows: readonly ComposerSelectionRow[]): ComposerSelection
   return [...rows].sort((a, b) => a.startSeq - b.startSeq || a.endSeq - b.endSeq || a.id.localeCompare(b.id));
 }
 
-function renderRow(section: SectionRow["section"], row: ComposerSelectionRow, pinnedSnapshot: boolean): SectionRow {
+function renderComposerRow(section: SectionRow["section"], row: ComposerSelectionRow, pinnedSnapshot: boolean, wholeRecords = false): SectionRow {
   const detailTokens = Math.max(48, Math.round(72 + row.importance * 184));
-  const body = truncateToTokens(row.text, detailTokens, "\n…[detail reduced; recover exact source before relying on conditions]…");
+  const body = wholeRecords ? row.text : truncateToTokens(row.text, detailTokens, "\n…[detail reduced; recover exact source before relying on conditions]…");
   const completeText = body === row.text;
   const fidelity = row.authority === "exact"
     ? completeText ? "exact copied source words" : "source excerpt; incomplete wording, not a complete instruction"
@@ -409,6 +436,7 @@ function renderRow(section: SectionRow["section"], row: ComposerSelectionRow, pi
   const text = [
     `- [${row.startSeq}${row.endSeq === row.startSeq ? "" : `–${row.endSeq}`}] ${row.kind}; ${status}; ${fidelity}; ${semanticAuthority}`,
     `  ${body.replaceAll("\n", "\n  ")}`,
+    ...(row.sourceOmissions ? [`  Source extraction omissions (UTF-16 units): ${JSON.stringify(row.sourceOmissions)}. Complete surrounding context reported by extractor: ${row.sourceContextComplete === true}. This is not a full source event.`] : []),
     `  Recovery: ${row.recovery}`,
   ].join("\n");
   return { section, row, text, renderedTokens: estimateTokensFromText(text), completeText };
@@ -445,6 +473,8 @@ function degradationFor(input: ShadowComposerInput): { level: ShadowDegradationL
 function sectionsFor(input: ShadowComposerInput, level: ShadowDegradationLevel): SectionRow[] {
   if (level === "pi-summary-and-tail" || level === "pi-default-required") return [];
   const rows: SectionRow[] = [];
+  const renderRow = (section: SectionRow["section"], row: ComposerSelectionRow, pinned: boolean): SectionRow =>
+    renderComposerRow(section, row, pinned, input.wholeRecords);
   const snapshotLags = input.memory.representedEndSeq < input.cut.sourceCutSeq && !input.delta.completeThroughCut;
   rows.push(...chronological(input.selected.protected).map((row) => renderRow("protected", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
   rows.push(...chronological(input.selected.openWork).map((row) => renderRow("open-work", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
@@ -490,10 +520,12 @@ function replayText(input: ShadowComposerInput, level: ShadowDegradationLevel, r
     ...input.selected.recent, ...input.delta.records].filter(row => !rows.some(item => item.row.id === row.id));
   if (omitted.length) {
     const cue = [...omitted].sort((a, b) => b.importance - a.importance || a.startSeq - b.startSeq)[0]!;
-    sections.push(`## OMITTED HISTORY\n\n${omitted.length} selected row(s) remain outside context. This is budget/selection loss, not source deletion. Representative retrieval cue [${cue.startSeq}]: ${truncateToTokens(cue.text, 32)}\nExact recovery for this cue: ${cue.recovery}`);
+    sections.push(input.wholeRecords
+      ? `## OMITTED HISTORY\n\n${omitted.length} admitted historical representation(s) were omitted whole. Exact descriptors and recovery references are in receipt ${input.omissionReceipt ?? "details"}. Earlier extraction/selection exclusions remain incomplete coverage, not known omitted IDs.`
+      : `## OMITTED HISTORY\n\n${omitted.length} selected row(s) remain outside context. This is budget/selection loss, not source deletion. Representative retrieval cue [${cue.startSeq}]: ${truncateToTokens(cue.text, 32)}\nExact recovery for this cue: ${cue.recovery}`);
   }
   sections.push("## RECOVERY\n\nUse history_search with remembered topics or the cues above, history_recall to expand, then history_get with the opaque Recovery reference for exact source. Omitted history remains retrievable. Memory excerpts are not complete instructions.");
-  return [...intro, ...sections].join("\n\n");
+  return [input.prefixText, ...intro, ...sections].filter(Boolean).join("\n\n");
 }
 
 function hybridPreservingSummary(regularPiSummary: string, replay: string): string {
@@ -572,6 +604,7 @@ export function composeShadowContext(input: ShadowComposerInput): ShadowComposit
     createdFrom: "bounded-shadow-composer-input",
     degradation: level,
     degradationReasons: reasons,
+    ...(input.storedEvidence ? { storedEvidence: input.storedEvidence } : {}),
     cut: input.cut,
     memory: input.memory,
     ...(input.rollups ? { rollups: input.rollups } : {}),
@@ -579,6 +612,8 @@ export function composeShadowContext(input: ShadowComposerInput): ShadowComposit
     omittedRowIds: [...new Set([...omittedRowIds, ...[...input.selected.protected, ...input.selected.openWork,
       ...input.selected.older, ...input.selected.recent, ...input.delta.records]
       .filter(item => !rows.some(kept => kept.row.id === item.id)).map(item => item.id)])],
+    omittedRows: [...input.selected.protected, ...input.selected.openWork, ...input.selected.older,
+      ...input.selected.recent, ...input.delta.records].filter(item => !rows.some(kept => kept.row.id === item.id)),
     validation,
   };
   const artifact: ShadowCompositionArtifact = artifactBase;

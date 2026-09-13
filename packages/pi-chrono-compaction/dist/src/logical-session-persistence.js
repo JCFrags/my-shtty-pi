@@ -3,10 +3,11 @@ import { constants } from "node:fs";
 import { link, lstat, open, realpath, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { LOGICAL_SESSION_LIMITS } from "./logical-session-contract.js";
-import { LOGICAL_CHECKPOINT_LIMITS, LOGICAL_CHECKPOINT_TYPE, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
+import { LOGICAL_CHECKPOINT_LIMITS, isLogicalCheckpointType, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
 const fail = (code) => { throw Object.assign(new Error(code), { code }); };
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-const MAX_BOOTSTRAP_ENTRIES = 8;
+// Seven native/binding entries, the continuation, and bounded Pi metadata.
+const MAX_BOOTSTRAP_ENTRIES = 12;
 const MAX_BOOTSTRAP_BYTES = LOGICAL_SESSION_LIMITS.continuationBytes * 2 + LOGICAL_CHECKPOINT_LIMITS.aggregateBytes;
 /** Reconstruct only the finite initial bootstrap size, not lifetime growth.
  * This prevents a large state checkpoint from immediately causing another rollover. */
@@ -20,7 +21,7 @@ export function logicalBootstrapBytes(header, entries) {
             return fail("logical-session-source-persistence-invalid");
         if (value.type === "custom_message" && value.customType === "chrono-logical-continuation")
             return bytes;
-        if (!(value.type === "custom" && value.customType === LOGICAL_CHECKPOINT_TYPE)
+        if (!(value.type === "custom" && isLogicalCheckpointType(value.customType))
             && !["model_change", "thinking_level_change", "session_info"].includes(String(value.type)))
             return 0;
     }
@@ -75,7 +76,7 @@ export async function persistNewShardBootstrap(manager, expectedParentSession, c
             if (value.id !== continuationEntryId)
                 return fail("logical-session-source-persistence-invalid");
         }
-        else if (value.type === "custom" && value.customType === LOGICAL_CHECKPOINT_TYPE) {
+        else if (value.type === "custom" && isLogicalCheckpointType(value.customType)) {
             checkpoints.push({ customType: value.customType, data: value.data });
         }
         else if (!["model_change", "thinking_level_change", "session_info"].includes(String(value.type))) {
