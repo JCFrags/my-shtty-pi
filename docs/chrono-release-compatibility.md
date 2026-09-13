@@ -1,8 +1,8 @@
 # ChronoCompact release compatibility
 
-## Current 3.0.2 release
+## Current 3.0.3 release
 
-Version `3.0.2` keeps programmatic memory and safe-idle physical rollover enabled by
+Version `3.0.3` keeps programmatic memory and safe-idle physical rollover enabled by
 default. The [current overview](chrono-v3/README.md) describes useful selective
 chronology, bounded recall, native tool-state transfer, and measured limits.
 The 3.0.1 corrections remain in place. A Chrono-owned compaction refusal resumes
@@ -13,7 +13,21 @@ can reuse a verified common prefix without rewinding its existing checkpoint.
 Missing composition inputs and typed worker timeouts use bounded fallback. Source
 identity and corruption failures still refuse stored composition.
 
-Version `3.0.2` adds read-only scheduler reservation diagnostics to
+Version `3.0.3` lets raw `history_get` recover a cataloged entry from its
+validated branch even when the final derived search index is absent. The caller
+must use the predecessor's explicit `shardId` after rollover. Branch membership,
+source identity, span hashes, cancellation, and byte-page limits remain required.
+This does not make ranked search, decoded blocks, ranges, state, or rollups ready.
+An uncataloged current-turn entry can still be unavailable. No full-history
+catch-up or store rewrite is part of exact raw recovery.
+
+One focused adapter scenario recovered identical predecessor bytes with a
+cataloged final fork and no search head for that fork. Sibling, unlisted-shard,
+changed-source, stale-target, and unready-catalog cases refused. The missing
+search head and search generation stayed unchanged. Live-session adoption is a
+separate activation check.
+
+Version `3.0.2` added read-only scheduler reservation diagnostics to
 `/chrono-worker-status` and `/chrono-doctor`. The output separates a stopped
 reservation owner from active worker execution and explains that indexed-history
 deadlines include admission wait. A stopped live owner retains its reservation.

@@ -88,13 +88,15 @@ Progressive Tools appends names and short usage hints to the model's existing sy
 
 ## ChronoCompact
 
-ChronoCompact 3.0.2 provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
+ChronoCompact 3.0.3 provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
 
 Programmatic V3 memory is enabled by default. The default combined context target is 32,000 estimated tokens, adjusted to the selected model's capacity, with a small adaptive raw tail. Incremental catalogs, event capsules, episodes, current state, and hierarchical rollups support bounded selection and recovery. Optional language-model advice can improve individual events or bounded groups. The programmatic pipeline does the main work and does not require model calls. Derived memory never gains instruction authority.
 
 If Chrono refuses its own requested compaction, it keeps the current context and reports a bounded failure code. It can resume unresolved work once at safe idle, but it does not retry compaction until new user input. User cancellation does not resume work.
 
-Version 3.0.2 adds read-only stopped-owner and admission-wait diagnostics. An inactive worker unit does not prove that its scheduler reservation is free. The patch does not resume owners, remove reservations, or recover blocked admission.
+Raw `history_get` can recover an exact cataloged entry before the derived search index is ready. After rollover, use the predecessor's explicit `shardId`. Branch and source validation still apply. Ranked search, decoded blocks, ranges, and derived memory retain their existing readiness requirements. This correction does not rebuild history or change its stores.
+
+The 3.0.2 stopped-owner and admission-wait diagnostics remain read-only. An inactive worker unit does not prove that its scheduler reservation is free. These diagnostics do not resume owners, remove reservations, or recover blocked admission.
 
 At safe idle, automatic rollover starts a smaller physical session after 8 MiB of new source growth beyond its bootstrap data. It preserves the old JSONL and transfers Notes, Tasks, and Workplan state through bounded native checkpoints. Running managed processes or open shell sessions block the switch. Arbitrary third-party extension state is not automatically migrated. Use checkpoint-aware providers when resuming a replacement session.
 
