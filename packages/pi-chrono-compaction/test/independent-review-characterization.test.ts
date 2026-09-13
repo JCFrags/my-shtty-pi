@@ -54,9 +54,16 @@ test("regular Pi summary is optional, defaults off, and honors explicit opt-in",
 test("compaction closes the value-worker gate before any summary or replay work", async () => {
   const source = await readFile(resolve("src/pi-extension.ts"), "utf8");
   const start = source.indexOf('pi.on("session_before_compact"');
-  const body = source.slice(start, start + 500);
-  assert.match(body, /valueWorkerCompactionGate\s*=\s*true/);
-  assert.ok(body.indexOf("cancelValueWorker()") >= 0 && body.indexOf("cancelValueWorker()") < body.indexOf("cancelIncrementalWork"));
+  const end = source.indexOf("\n  });", start);
+  assert.ok(start >= 0 && end > start, "locate the complete compaction handler");
+  // Failure bookkeeping can precede the gate. Do not truncate at a fixed byte count.
+  const body = source.slice(start, end);
+  const gate = body.search(/valueWorkerCompactionGate\s*=\s*true/);
+  const cancelValue = body.indexOf("cancelValueWorker()");
+  const cancelIncremental = body.indexOf("cancelIncrementalWork");
+  const firstAwait = body.indexOf("await ");
+  assert.ok(gate >= 0 && gate < cancelValue);
+  assert.ok(cancelValue < cancelIncremental && cancelIncremental < firstAwait);
 });
 
 test("rollup-shadow benchmark compares a cloned extension response across the integration boundary", async () => {
