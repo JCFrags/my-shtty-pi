@@ -422,7 +422,12 @@ test("M09 actual producer selection preserves obligations and successive experie
         rawTailTokens: 100, toolPairSafe: true } }, selection, source => `synthetic-source:${source.eventSeq}:${source.descriptor}`);
     assert.ok(result.text.includes("never deploy /Repo/Parser-0.ts unless the owner authorizes it."), "nonempty zero-omission evidence is not discarded");
     assert.ok(result.text.includes("Next action:"), "pending work survives rendering");
-    assert.equal(result.envelope.validation.protectedCoverageComplete, true, "actual producer qualifies this synthetic cut, not the live session");
+    assert.equal(selection.coverage.restrictionsComplete, true, "actual producer covers this synthetic cut, not the live session");
+    assert.equal(result.envelope.validation.protectedCoverageComplete, false, "bounded rendering reduces the packed paragraph and must not certify complete wording");
+    assert.match(result.text, /source excerpt; incomplete wording, not a complete instruction/);
+    assert.match(result.text, /detail reduced; recover exact source before relying on conditions/);
+    assert.equal(result.artifact.selectedRows.find(item => item.row.id === packed?.stableKey)?.row.text,
+      (packed?.evidence as any).exactText, "private output retains the full stored paragraph for exact recovery");
     assert.equal(result.envelope.validation.openWorkCoverageComplete, false, "work overflow does not certify restrictions or work");
     const optional = result.artifact.selectedRows.filter(item => ["older", "recent", "delta"].includes(item.section));
     const mandatoryKeys = new Set(result.artifact.selectedRows.filter(item => ["protected", "open-work"].includes(item.section)).map(item => item.row.recovery));

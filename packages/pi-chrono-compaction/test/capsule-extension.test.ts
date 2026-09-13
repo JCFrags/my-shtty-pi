@@ -23,9 +23,11 @@ test("synthetic prepared capsule shadow exposes cached status without model chan
   const commands = new Map<string, (args: string, context: any) => any>();
   const notifications: string[] = [];
   let modelMutations = 0;
+  const metadataTypes: string[] = [];
   const pi = {
     registerTool() {}, registerCommand(name: string, command: any) { commands.set(name, command.handler); },
-    appendEntry() { modelMutations++; }, sendMessage() { modelMutations++; },
+    // Pi custom entries persist metadata but do not enter model context.
+    appendEntry(type: string) { metadataTypes.push(type); }, sendMessage() { modelMutations++; },
     on(name: string, hook: any) { hooks.set(name, [...(hooks.get(name) ?? []), hook]); },
   };
   const ctx = {
@@ -55,6 +57,7 @@ test("synthetic prepared capsule shadow exposes cached status without model chan
     } while (true);
     assert.match(notifications.at(-1)!, /Capsules: unsupported \(1\/2\); chunks: ready \(1\/1\)/);
     assert.equal(modelMutations, 0);
+    assert.deepEqual(metadataTypes, ["chrono-logical-adoption"], "V3 startup records only non-model adoption metadata");
     assert.ok(notifications.every(message => !message.includes(fixture.directory)));
     const before = await schedulerArtifactCounts(schedulerDirectory);
     for (let i = 0; i < 4; i++) await status("", ctx);

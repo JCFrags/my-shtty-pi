@@ -158,7 +158,8 @@ test("bounded append uses strict reread inside transaction and does not replace 
 test("registered tools keep synthetic persisted search, exact retrieval, and recall promotion connected; ephemeral never enumerates", async (t) => {
   const { directory, path } = await fixture(t);
   const saved = process.env.PI_CHRONO_CONFIG_PATH;
-  process.env.PI_CHRONO_CONFIG_PATH = join(directory, "missing-config.json");
+  process.env.PI_CHRONO_CONFIG_PATH = join(directory, "compatibility-config.json");
+  await writeFile(process.env.PI_CHRONO_CONFIG_PATH, JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   t.after(async () => { if (saved === undefined) delete process.env.PI_CHRONO_CONFIG_PATH; else process.env.PI_CHRONO_CONFIG_PATH = saved; });
   const tools = new Map<string, (...args: any[]) => Promise<any>>(), appended: any[] = [];
   const hooks = new Map<string, () => void>();

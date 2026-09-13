@@ -18,7 +18,9 @@ export function syntheticInProcessHistoryAdapter(beforeRun?: (wire: string) => v
 }
 
 /** Set only a synthetic config path for factory loading and retain shutdown for
- * tests whose mock Pi does not dispatch lifecycle events. */
+ * tests whose mock Pi does not dispatch lifecycle events. Production defaults stay
+ * unchanged. Compatibility fixtures must explicitly write memoryEngineEnabled:false
+ * to synthetic-history-config.json before installation. */
 export function installSyntheticHistoryExtension(pi: ExtensionAPI, directory: string, beforeRun?: (wire: string) => void | Promise<void>): () => void {
   const previous = process.env.PI_CHRONO_CONFIG_PATH;
   const shutdown: Array<() => void> = [];

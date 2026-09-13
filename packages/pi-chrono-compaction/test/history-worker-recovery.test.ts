@@ -194,6 +194,7 @@ test("extension responses page, repeat deterministically, and recover exact over
   const previous = new Map<string, string | undefined>();
   for (const [name, value] of Object.entries({
     PI_CHRONO_CONFIG_PATH: configPath,
+    PI_CHRONO_MEMORY_ENGINE: "false", // Exercise the persisted compatibility renderer.
     PI_CHRONO_CACHE: "false",
     PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false",
     PI_CHRONO_TOOL_RESULT_PROJECTION: "off",

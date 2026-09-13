@@ -78,6 +78,7 @@ test("ranked search and recall refuse a valid source above conservative index ad
   await writeFile(path, sessionText(payload), { mode: 0o600 });
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
+  await writeFile(join(directory, "synthetic-history-config.json"), JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory);
   t.after(shutdown);
   const context = { hasUI: false, model: undefined, thinkingLevel: "medium", sessionManager: { getSessionFile: () => path, getEntries: () => [], getBranch: () => [] }, getContextUsage: () => undefined, isIdle: () => true, abort() {}, compact() {}, ui: { notify() {} }, modelRegistry: {} };
@@ -102,6 +103,7 @@ test("isolated search admission accounts for child work, query results, and reta
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
   let during: ReturnType<typeof historySearchIndexCacheStatus> | undefined;
+  await writeFile(join(directory, "synthetic-history-config.json"), JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory, () => {
     during = historySearchIndexCacheStatus();
     assert.ok(during.admission.components.pendingLoad > 0, "child load/build/query envelope reserved before handler");
@@ -145,6 +147,7 @@ test("independent concurrent history jobs preserve aggregate admission with no P
   const directory = await temporary(t);
   const tools = new Map<string, (...args: any[]) => Promise<any>>();
   const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} };
+  await writeFile(join(directory, "synthetic-history-config.json"), JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const shutdown = installSyntheticHistoryExtension(pi as unknown as ExtensionAPI, directory);
   t.after(shutdown);
   const paths = Array.from({ length: 24 }, (_, i) => join(directory, `synthetic-${i}.jsonl`));
@@ -172,6 +175,7 @@ test("history callers reject growth and replacement after admission without read
   const previousRanked = process.env.PI_CHRONO_RANKED_SEARCH;
   process.env.PI_CHRONO_RANKED_SEARCH = "false";
   const admissions: ReturnType<typeof historySearchIndexCacheStatus>[] = [];
+  await writeFile(join(directory, "synthetic-history-config.json"), JSON.stringify({ memoryEngineEnabled: false }), { mode: 0o600 });
   const shutdown = installSyntheticHistoryExtension({ registerTool(tool: any) { tools.set(tool.name, tool.execute); }, registerCommand() {}, on() {}, appendEntry() {}, sendMessage() {} } as unknown as ExtensionAPI, directory, () => { admissions.push(historySearchIndexCacheStatus()); });
   t.after(shutdown);
   const originalOpen = fs.open;
