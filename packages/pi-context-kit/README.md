@@ -47,4 +47,4 @@ node --experimental-transform-types --test packages/grounded-tools/workplan/test
 
 Focused checks use real factories, the Pi event bus, and private fixture state. They do not prove live activation or general agent benefit. Telemetry runtime counters are not accuracy measurements. Without explicit quality observations, quality remains unknown. Caller-provided quality observations are not independently verified by the collector.
 
-See the [V4 design](../../docs/chrono-v4/README.md), [first-slice scope](../../docs/chrono-v4/foundation-scope.md), and [source-pinned research](../../docs/chrono-v4/research.md) for planned components, evidence limits, and change-course rules.
+See the [practical evidence](../../docs/chrono-v4/foundation-evidence.md), [V4 design](../../docs/chrono-v4/README.md), [first-slice scope](../../docs/chrono-v4/foundation-scope.md), and [source-pinned research](../../docs/chrono-v4/research.md) for measured results, planned components, and change-course rules.

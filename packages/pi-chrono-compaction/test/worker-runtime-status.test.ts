@@ -25,7 +25,10 @@ test("read-only status distinguishes a stopped reservation owner from active wor
     await writeFile(path, contents, { mode: 0o600 });
     const before = await runtimeHostStatus({ schedulerDirectory: directory });
     assert.equal(before.active, 0);
-    assert.deepEqual(before.reservations, [{ slot: 0, ownerState: "present", unitState: "inactive" }]);
+    const unitState = before.reservations[0]?.unitState;
+    assert.ok(unitState === "inactive" || unitState === "unknown", "The private unit is inactive, or the host has no user manager.");
+    assert.equal(before.containmentAvailable, unitState === "inactive");
+    assert.deepEqual(before.reservations, [{ slot: 0, ownerState: "present", unitState }]);
 
     child.kill("SIGSTOP");
     let status = before;
@@ -34,13 +37,13 @@ test("read-only status distinguishes a stopped reservation owner from active wor
       if (status.reservations[0]?.ownerState === "stopped") break;
       await pause(10);
     }
-    assert.deepEqual(status.reservations, [{ slot: 0, ownerState: "stopped", unitState: "inactive" }]);
+    assert.deepEqual(status.reservations, [{ slot: 0, ownerState: "stopped", unitState }]);
     assert.equal(status.active, 0);
     assert.deepEqual(status.jobs, []);
     assert.equal(await readFile(path, "utf8"), contents, "Status must not remove or change a live reservation.");
     assert.deepEqual(await readdir(directory), ["slot-0.json"]);
     const text = runtimeAdmissionStatusText(status);
-    assert.match(text, /owner stopped, unit inactive/);
+    assert.match(text, new RegExp(`owner stopped, unit ${unitState}`));
     assert.match(text, /deadlines include admission wait, not only worker execution/);
     assert.doesNotMatch(JSON.stringify(status) + text, /\/tmp|\/home|processStartIdentity|nonce|"pid"/);
 

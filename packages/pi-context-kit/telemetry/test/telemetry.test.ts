@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -171,7 +171,9 @@ test("bounded correlations, strict quality, concurrent global cap, queue pressur
   assert.equal(failed.snapshot().state, "failed");
   assert.equal(failed.snapshot().error, "storage_unavailable");
   assert.ok(!JSON.stringify(failed.snapshot()).includes(root));
-  await mkdir(join(root, "unsafe"), { mode: 0o755 });
+  await mkdir(join(root, "unsafe"), { mode: 0o700 });
+  // Set the deliberately unsafe fixture mode after creation, independent of umask.
+  await chmod(join(root, "unsafe"), 0o755);
   const unsafe = new LocalWriter({ directory: join(root, "unsafe", "telemetry", "v1") });
   unsafe.enqueue({ version: 1 });
   await unsafe.stop();

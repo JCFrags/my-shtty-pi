@@ -4,7 +4,7 @@
 
 V4 should make an LLM agent more effective inside Pi as its lifetime history grows, while the active context stays small. Code must perform the required ingestion, selection, recovery and compaction. A language model may improve a bounded event or group, but it must not drive whole-history processing or become necessary for continued operation.
 
-This is an evolving design and initial implementation, not a completed V4 release. Chrono 3.0.1 remains the compaction baseline. The first slice is a separately loadable Recall extension, an independent Telemetry extension, and native read-only adapters for the existing Todo, Notes and Workplan. See [foundation scope](foundation-scope.md) and [research findings](research.md).
+This is an evolving design and initial implementation, not a completed V4 release. Chrono 3.0.2 remains the compaction baseline. The first slice is a separately loadable Recall extension, an independent Telemetry extension, and native read-only adapters for the existing Todo, Notes and Workplan. See [foundation scope](foundation-scope.md), [research findings](research.md), and [practical evidence](foundation-evidence.md).
 
 The new native adapters are a migration boundary. They are not renamed wrappers presented as completed greenfield replacements. New Memory, Todo, Notes and Workplan implementations, a historical relation index and the replacement compactor remain planned work.
 
@@ -108,7 +108,7 @@ The first practical comparison is small and synthetic. It must disclose the mode
 
 | Stage | Deliverable | Current state |
 | --- | --- | --- |
-| Foundation | Native read-only provider records, Recall, independent Telemetry and a practical scenario. | In implementation. |
+| Foundation | Native read-only provider records, Recall, independent Telemetry and a practical scenario. | Implemented. The small installed-Pi scenario and two-call evidence comparison passed. Live activation is a separate check. |
 | Independent Memory | Revisable source-linked knowledge with standalone storage and legacy import. | Planned. |
 | First-class state tools | New Notes, Todo and Workplan, migrated individually through the connector boundary. | Planned. |
 | Context compiler | Frozen deterministic selection plans, model-aware fitting and exact omission recovery. | Planned. Reuse V3 mechanisms. |
