@@ -1,16 +1,24 @@
 # ChronoCompact release compatibility
 
-## Current 3.0.1 release
+## Current 3.0.2 release
 
-Version `3.0.1` keeps programmatic memory and safe-idle physical rollover enabled by
+Version `3.0.2` keeps programmatic memory and safe-idle physical rollover enabled by
 default. The [current overview](chrono-v3/README.md) describes useful selective
 chronology, bounded recall, native tool-state transfer, and measured limits.
-A Chrono-owned compaction refusal now resumes unresolved work once with a truthful
+The 3.0.1 corrections remain in place. A Chrono-owned compaction refusal resumes
+unresolved work once with a truthful
 failure notice and pauses automatic retries until new user input. User cancellation
 does not resume work. Tree navigation invalidates the old search target. Indexing
 can reuse a verified common prefix without rewinding its existing checkpoint.
 Missing composition inputs and typed worker timeouts use bounded fallback. Source
 identity and corruption failures still refuse stored composition.
+
+Version `3.0.2` adds read-only scheduler reservation diagnostics to
+`/chrono-worker-status` and `/chrono-doctor`. The output separates a stopped
+reservation owner from active worker execution and explains that indexed-history
+deadlines include admission wait. A stopped live owner retains its reservation.
+This correction does not recover admission, remove leases, resume owners, change
+worker limits, or modify source history or stores.
 
 The current source has 137 compiled runtime JavaScript files and 138 startup
 pins, including `package.json`. Read the exact package tree and file hashes from
@@ -20,8 +28,9 @@ Use the root [verification workflow](../README.md#verification) and installed-Pi
 loader checks for a changed release. The explicit native build and matching
 Node 24.18.0 header prerequisites below still apply. Do not repeat the historical
 normal, fixed-heap, and independent-client campaigns as extra release gates.
-Focused checks have exercised the current source on installed Pi 0.85.1. The
-package's older declared peer range is not a claim of broader compatibility.
+Earlier focused checks exercised the 3.0.1 source on installed Pi 0.85.1. The
+package declares Pi peers `>=0.85.1 <0.86.0` and locks development Pi dependencies
+to 0.85.1. Changed-release loader checks remain separate.
 
 A version or documentation change does not establish remote integration or
 loaded local adoption. Follow [activation and rollback](activation.md), preserve

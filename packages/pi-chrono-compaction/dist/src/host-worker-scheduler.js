@@ -38,6 +38,47 @@ async function readOwner(path) { try {
 catch {
     return undefined;
 } }
+/** Read-only diagnosis, not admission authority. A stopped matching owner is
+ * still live. Neither process state nor an inactive unit permits lease removal. */
+export async function schedulerReservationObservations(directory = defaultSchedulerDirectory()) {
+    const observations = [];
+    for (let slot = 0; slot < WORKER_LIMITS.slots.max; slot++) {
+        const path = join(directory, `slot-${slot}.json`), owner = await readOwner(path);
+        if (!owner) {
+            try {
+                await lstat(path);
+                observations.push({ slot, ownerState: "unverified" });
+            }
+            catch { }
+            continue;
+        }
+        let ownerState = "unverified";
+        try {
+            const handle = await open(`/proc/${owner.pid}/stat`, "r");
+            try {
+                const bytes = Buffer.alloc(4097), { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+                if (bytesRead <= 4096) {
+                    const text = bytes.subarray(0, bytesRead).toString("utf8"), identity = startIdentity(text);
+                    if (identity !== undefined)
+                        ownerState = identity !== owner.processStartIdentity ? "gone"
+                            : /^[Tt]$/.test(text.slice(text.lastIndexOf(") ") + 2).split(/\s+/)[0]) ? "stopped" : "present";
+                }
+            }
+            finally {
+                await handle.close();
+            }
+        }
+        catch (error) {
+            if (error.code === "ENOENT")
+                ownerState = "gone";
+        }
+        const current = await readOwner(path);
+        if (current?.nonce !== owner.nonce || current.pid !== owner.pid || current.processStartIdentity !== owner.processStartIdentity)
+            ownerState = "unverified";
+        observations.push({ slot, ownerState });
+    }
+    return observations;
+}
 const malformedArtifacts = new Map();
 async function removeDead(path, malformedStableMs) { const owner = await readOwner(path); if (!owner) {
     try {
