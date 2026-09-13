@@ -61,6 +61,12 @@ Rollback does not delete a shard or derived store. It does not prove that an ins
 
 A missing derived artifact reduces capability. It does not invalidate the exact source. A source replacement, truncation, prefix change, or missing pinned cut is different: stop and investigate the source identity mismatch.
 
+## Native state after rollover
+
+V3 transfers complete Notes, Todo, and Workplan state as native `grounded-state-checkpoint-v1` custom entries. This includes archived records, IDs, counters, and Workplan revision and checkpoint history. The transfer does not replace tool state with prose or replay old shards into the new active file. Invalid, pending, or over-budget state prevents rollover rather than being shortened or discarded.
+
+Install the checkpoint-aware Grounded providers with V3. A provider from before this change cannot restore these entries. After rollover, retain the new providers when changing Chrono code. To return to old provider code, first use a verified logical rollback to the preserved original source. Immediate logical rollback is unavailable after ordinary work begins in the replacement. Do not reopen an older source as if it included later work, or restore old providers over a checkpoint-bearing session.
+
 ## Deployment rollback
 
 An installed-package rollback requires a previously verified Chrono package and a safe process boundary:
@@ -69,7 +75,7 @@ An installed-package rollback requires a previously verified Chrono package and 
 2. Confirm all target Pi sessions are settled and editors are empty.
 3. Restore the prior Chrono package source slot or alias atomically.
 4. Restore only the compatible Chrono-owned configuration and startup authorization for that package.
-5. Preserve logical manifests, old source shards, catalogs, and derived stores. The prior package can ignore generations it does not support.
+5. Preserve logical manifests, old source shards, catalogs, and derived stores. Require the prior package to support the active source and bootstrap format. Retain checkpoint-aware Grounded providers after V3 rollover. An unsupported generation is a compatibility limit, not permission to discard it.
 6. Reload each target session safely.
 7. Verify loaded entrypoint and deployment-manifest hashes in each process.
 8. Run a small status and bounded exact-recovery check. If compaction is in scope, verify one safe compaction separately.
@@ -93,9 +99,11 @@ Stop activation and use the scoped rollback procedure for:
 - a migration that modifies source;
 - loaded runtime hashes that do not match the intended deployment.
 
-## Current evidence boundary
+## Historical evidence boundary
 
-At the documented revision, a `2.0.25` installed-Pi run completed one rollover and immediate logical rollback. It then found that Pi had not persisted the retained continuation-only replacement source. The source-persistence correction is implemented and focused with the actual Pi SessionManager, but the full installed-Pi scenario has not been rerun.
+This section records the original `2.0.25` check, not the current release status. Use the [current overview](README.md#current-documentation-boundary) for the release evidence boundary.
+
+At that revision, a `2.0.25` installed-Pi run completed one rollover and immediate logical rollback. It then found that Pi had not persisted the retained continuation-only replacement source. The source-persistence correction is implemented and focused with the actual Pi SessionManager, but the full installed-Pi scenario has not been rerun.
 
 Therefore:
 
