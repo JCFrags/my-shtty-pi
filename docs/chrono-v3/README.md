@@ -21,6 +21,8 @@ Optional language-model assistance may improve an individual event or a bounded 
 
 The V3 path uses incremental catalogs, event capsules, episodes, current state, and hierarchical rollups. Normal search and composition must use bounded selected data, not rebuild or materialize the complete lifetime archive. Logical sessions connect physical shards without deleting old source. See the subject pages for the implemented paths, configuration, and limits.
 
+<a id="current-documentation-boundary"></a>
+
 ## Release and evidence boundary
 
 V3 architecture is present in the 2.x development line. A package version, an enabled setting, ready indexes, and a loaded working installation are different facts. This overview is not a release or activation receipt. It does not claim active `3.0.0`, perfect recall, or billion-token qualification.
