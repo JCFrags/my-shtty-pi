@@ -41,6 +41,19 @@ export interface ToolResultProjectionOptions {
   readonly seenToolCallIds?: ReadonlySet<string>;
   readonly pinnedToolCallIds?: ReadonlySet<string>;
   readonly sourceByToolCallId?: ReadonlyMap<string, ProjectionSourceBinding>;
+  readonly snapshot?: ToolResultProjectionSnapshot;
+}
+
+interface FrozenToolResultProjection {
+  readonly source: ProjectionSourceBinding;
+  readonly replacement: Pick<ContextMessageLike, "content" | "details">;
+  readonly reducer: string;
+  readonly removedTokens: number;
+}
+
+export interface ToolResultProjectionSnapshot {
+  readonly mode: ToolResultProjectionMode;
+  readonly results: ReadonlyMap<string, FrozenToolResultProjection>;
 }
 
 export interface ToolResultProjectionMetrics {
@@ -64,6 +77,7 @@ export interface ToolResultProjectionResult<T extends ContextMessageLike = Conte
   readonly messages: readonly T[];
   readonly metrics: ToolResultProjectionMetrics;
   readonly newlySeenToolCallIds: ReadonlySet<string>;
+  readonly snapshot?: ToolResultProjectionSnapshot;
 }
 
 interface ResultInfo<T extends ContextMessageLike> {
@@ -290,7 +304,7 @@ export async function projectToolResultContext<T extends ContextMessageLike>(
   messages: readonly T[],
   options: ToolResultProjectionOptions = {},
 ): Promise<ToolResultProjectionResult<T>> {
-  const mode = options.mode ?? "off";
+  const mode = options.snapshot?.mode ?? options.mode ?? "off";
   const sourceTokens = messages.reduce((sum, message) => sum + estimateTokensFromText(contentText(message.content).text), 0);
   const newlySeen = new Set<string>();
   if (mode === "off") return { messages, metrics: emptyMetrics(mode, sourceTokens), newlySeenToolCallIds: newlySeen };
@@ -412,6 +426,42 @@ export async function projectToolResultContext<T extends ContextMessageLike>(
     );
   }
 
+  // Reuse the boundary's exact replacements. New results and changed recency or
+  // first-consumption state cannot select another representation in this epoch.
+  if (options.snapshot) {
+    const projected = [...messages];
+    const families: Record<string, { results: number; removedTokens: number }> = {};
+    let exactRecoveryCovered = 0;
+    for (const info of results) {
+      const frozen = options.snapshot.results.get(info.toolCallId);
+      if (!frozen) continue;
+      const source = validatedSources.get(info.toolCallId)!;
+      if (source.entryId !== frozen.source.entryId || source.sourceFingerprint !== frozen.source.sourceFingerprint) {
+        return requestRefusal(messages, mode, sourceTokens, results.length, newlySeen,
+          `frozen projection source mismatch for call ID ${info.toolCallId}`);
+      }
+      projected[info.index] = { ...info.message, ...structuredClone(frozen.replacement) } as T;
+      const prior = families[frozen.reducer] ?? { results: 0, removedTokens: 0 };
+      families[frozen.reducer] = { results: prior.results + 1, removedTokens: prior.removedTokens + frozen.removedTokens };
+      exactRecoveryCovered += 1;
+    }
+    const projectedTokens = projected.reduce((sum, message) => sum + estimateTokensFromText(contentText(message.content).text), 0);
+    return {
+      messages: projected,
+      metrics: {
+        ...emptyMetrics(mode, sourceTokens),
+        projectedTokens,
+        removedTokens: sourceTokens - projectedTokens,
+        totalToolResults: results.length,
+        projectedToolResults: exactRecoveryCovered,
+        exactRecoveryCovered,
+        reducerFamilies: families,
+      },
+      newlySeenToolCallIds: newlySeen,
+      snapshot: options.snapshot,
+    };
+  }
+
   const resultEntryIds = new Map(results.map((info) => [info.index, validatedSources.get(info.toolCallId)!.entryId] as const));
   const blocks = parseHistoricalBlocks(syntheticEntries(messages, resultEntryIds), {
     includeHistoricalCompactions: false,
@@ -450,6 +500,7 @@ export async function projectToolResultContext<T extends ContextMessageLike>(
   let exactRecoveryCovered = 0;
   const families: Record<string, { results: number; removedTokens: number }> = {};
   const projected = [...messages];
+  const frozenResults = new Map<string, FrozenToolResultProjection>();
 
   for (const info of results) {
     if (recentIndexes.has(info.index) || canonicalIndexes.has(info.index)) {
@@ -501,6 +552,12 @@ export async function projectToolResultContext<T extends ContextMessageLike>(
         },
       },
     } as T;
+    frozenResults.set(info.toolCallId, {
+      source: { ...source },
+      replacement: structuredClone({ content: projected[info.index]!.content, details: projected[info.index]!.details }),
+      reducer: family,
+      removedTokens,
+    });
     exactRecoveryCovered += 1;
   }
 
@@ -523,6 +580,7 @@ export async function projectToolResultContext<T extends ContextMessageLike>(
       reducerFamilies: families,
     },
     newlySeenToolCallIds: newlySeen,
+    snapshot: { mode, results: frozenResults },
   };
 }
 

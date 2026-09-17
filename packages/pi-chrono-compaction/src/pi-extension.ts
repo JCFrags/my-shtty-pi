@@ -46,6 +46,7 @@ import {
   type ContextMessageLike,
   type ToolResultProjectionMetrics,
   type ToolResultProjectionMode,
+  type ToolResultProjectionSnapshot,
 } from "./context-projection.js";
 import {
   createCandidateSegmentStore,
@@ -1398,6 +1399,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   let valueWorkerCompactionGate = false;
   let legacyHistoryEditorWarningShown = false;
   let projectionSeenToolCallIds = new Set<string>();
+  let projectionState: { pending: boolean; snapshot?: ToolResultProjectionSnapshot } = { pending: false };
   let lastProjectionMetrics: ToolResultProjectionMetrics | undefined;
   let replayWorkerStatus: Record<string, unknown> = { state: "idle" };
 
@@ -1660,25 +1662,38 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   });
 
   pi.on("context", async (event, ctx) => {
+    const seenToolCallIds = projectionSeenToolCallIds;
+    projectionSeenToolCallIds = new Set();
+    for (const message of event.messages) {
+      if (message.role === "toolResult") projectionSeenToolCallIds.add(message.toolCallId);
+    }
+    const state = projectionState;
+    if (!state.pending && !state.snapshot) return undefined;
+    const boundary = state.pending;
+    state.pending = false;
     const settings = resolveExtensionSettings(userConfig);
-    if (settings.toolResultProjectionMode === "off") return undefined;
+    // Settings apply at the next compaction, not to an already-sent prefix.
+    if (!state.snapshot && settings.toolResultProjectionMode === "off") return undefined;
     try {
       const branchEntries = asEntries(ctx.sessionManager.getBranch());
       const result = await projectToolResultContext(
         event.messages as unknown as readonly ContextMessageLike[],
         {
           mode: settings.toolResultProjectionMode,
-          seenToolCallIds: projectionSeenToolCallIds,
+          seenToolCallIds,
           sourceByToolCallId: projectionSourcesFromBranch(branchEntries),
+          snapshot: state.snapshot,
         },
       );
-      projectionSeenToolCallIds = new Set([...projectionSeenToolCallIds, ...result.newlySeenToolCallIds]);
+      if (projectionState !== state) return undefined;
+      if (boundary && result.metrics.projectedToolResults > 0) state.snapshot = result.snapshot;
       lastProjectionMetrics = result.metrics;
       if (result.metrics.projectedToolResults === 0) return undefined;
       return { messages: result.messages as unknown as typeof event.messages };
     } catch (error) {
+      if (projectionState !== state) return undefined;
       lastProjectionMetrics = {
-        mode: settings.toolResultProjectionMode,
+        mode: state.snapshot?.mode ?? settings.toolResultProjectionMode,
         sourceTokens: 0,
         projectedTokens: 0,
         removedTokens: 0,
@@ -1754,6 +1769,11 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   };
 
   pi.on("session_start", async (event, ctx) => {
+    // Snapshots are in-memory only. Reload/resume starts exact and waits for a
+    // new successful compaction rather than reconstructing a sent projection.
+    projectionState = { pending: false };
+    projectionSeenToolCallIds = new Set();
+    lastProjectionMetrics = undefined;
     const epoch = ++rolloutEpoch;
     const nextSearchSessionId = ctx.sessionManager.getSessionId();
     const sourcePath = ctx.sessionManager.getSessionFile();
@@ -1795,8 +1815,6 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       cancelShadowWork();
       cancelValueWorker();
       historyLedger = undefined;
-      projectionSeenToolCallIds = new Set();
-      lastProjectionMetrics = undefined;
       return;
     }
     try {
@@ -1827,8 +1845,6 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     cancelShadowWork();
     cancelValueWorker();
     historyLedger = undefined;
-    projectionSeenToolCallIds = new Set();
-    lastProjectionMetrics = undefined;
     const settings = resolveExtensionSettings(userConfig);
     if (settings.legacyHistoryEditorEnabled && !legacyHistoryEditorWarningShown && ctx.hasUI) { legacyHistoryEditorWarningShown = true; ctx.ui.notify("The old ChronoCompact history-classifier setting is retired and cannot start a model call. Use the background value-worker settings for explicit opt-in.", "warning"); }
     scheduleIncrementalWork(ctx);
@@ -1857,7 +1873,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     cancelShadowWork();
     cancelValueWorker();
     historyLedger = undefined;
+    projectionState = { pending: false };
     projectionSeenToolCallIds = new Set();
+    lastProjectionMetrics = undefined;
     scheduleSearch(ctx);
     scheduleCapsuleShadow(ctx);
     scheduleCatalogShadow(ctx);
@@ -1913,7 +1931,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     cancelShadowWork();
     cancelValueWorker();
     historyLedger = undefined;
+    projectionState = { pending: false };
     projectionSeenToolCallIds = new Set();
+    lastProjectionMetrics = undefined;
   });
 
   // sendMessage(triggerTurn:true) does not emit before_agent_start in Pi 0.85.1.
@@ -2055,7 +2075,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     if (ownedCompaction) ownedCompaction.succeeded = true;
     valueWorkerCompactionGate = false;
     cancelIncrementalWork(true);
-    projectionSeenToolCallIds = new Set();
+    projectionState = { pending: true };
+    lastProjectionMetrics = undefined;
     const shouldContinue = continueAfterSuccessfulCompaction && !event.willRetry;
     triggerPending = false;
     forcedCompactionReason = undefined;
