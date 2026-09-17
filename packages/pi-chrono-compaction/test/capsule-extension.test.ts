@@ -44,7 +44,7 @@ test("synthetic prepared capsule shadow exposes cached status without model chan
       capsuleShadowTarget: () => ({ v: 1, op: "derivePage", identity: fixture.identity, view,
         catalogDirectory: fixture.catalogDirectory, derivedDirectory: fixture.derivedDirectory }),
     });
-    const status = commands.get("chrono-capsules-status")!;
+    const status = (_args: string, context: typeof ctx) => commands.get("Chrono")!("capsules-status", context);
     await status("", ctx);
     assert.match(notifications.at(-1)!, /Capsule shadow: disabled/);
     await invoke("session_start");

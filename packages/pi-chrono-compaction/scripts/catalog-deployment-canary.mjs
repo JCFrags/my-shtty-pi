@@ -189,15 +189,15 @@ async function piCase(o, ordinal, enabled) {
   save(join(dir, "pi-result.json"), result);
   try {
     const commands = await r.send("get_commands");
-    for (const name of ["chrono-doctor", "chrono-worker-status", "chrono-catalog-status"]) assert(commands.commands.some(c => c.name === name), "missing-command");
+    assert(commands.commands.some(c => c.name === "Chrono"), "missing-command");
     result.checks.push("actual-manifest-loader");
-    for (const name of ["chrono-doctor", "chrono-worker-status", "chrono-catalog-status"]) await r.send("prompt", { message: "/" + name });
+    for (const name of ["doctor", "worker-status", "catalog-status"]) await r.send("prompt", { message: "/Chrono " + name });
     assert(r.notifications.some(n => n.includes("Isolated replay worker: enabled")), "isolated-worker-disabled");
     assert(r.notifications.some(n => n.includes("Kernel containment: available")), "kernel-containment-required");
     result.checks.push("doctor", "worker-status", "catalog-status");
     if (enabled) {
       let ready = false;
-      for (let i = 0; i < 150; i++) { await r.send("prompt", { message: "/chrono-catalog-status" }); if (/\bready\b/.test(r.notifications.at(-1))) { ready = true; break; } await sleep(100); }
+      for (let i = 0; i < 150; i++) { await r.send("prompt", { message: "/Chrono catalog-status" }); if (/\bready\b/.test(r.notifications.at(-1))) { ready = true; break; } await sleep(100); }
       assert(ready, "shadow-readiness-deadline");
     } else { assert(r.notifications.some(n => n.includes("disabled"))); assert(!existsSync(join(dir, ".chrono-catalog")), "off-created-catalog"); }
     await r.send("prompt", { message: "CANARY_FIRST_DELIVERY" });
@@ -233,13 +233,13 @@ async function piCase(o, ordinal, enabled) {
     const off = rpc(o, dir, f, false, false);
     try {
       await off.send("get_commands");
-      await off.send("prompt", { message: "/chrono-catalog-status" }); assert(off.notifications.at(-1).includes("disabled"));
+      await off.send("prompt", { message: "/Chrono catalog-status" }); assert(off.notifications.at(-1).includes("disabled"));
       await off.send("set_session_name", { name: "Synthetic off restart" });
       await off.send("prompt", { message: "CANARY_OFF_RESTART" });
       let idle = false;
       for (let i = 0; i < 100; i++) { const state = await off.send("get_state"); if (!state.isStreaming) { idle = true; break; } await sleep(50); }
       assert(idle, "off-restart-turn-deadline");
-      await off.send("prompt", { message: "/chrono-catalog-status" }); assert(off.notifications.at(-1).includes("disabled"));
+      await off.send("prompt", { message: "/Chrono catalog-status" }); assert(off.notifications.at(-1).includes("disabled"));
       await off.send("prompt", { message: "/canary-history" }); assert(off.notifications.includes("CANARY_HISTORY_OK"));
       await sleep(300); off.healthy();
     } finally { result.offRestart = { pid: off.pid, shutdown: await off.close() }; }

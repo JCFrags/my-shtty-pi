@@ -362,12 +362,12 @@ test("compatibility incremental lifecycle schedules, validates, falls back when 
       compaction?: { details?: { incrementalPrecompute?: { state?: string; reason?: string; cachedCandidates?: number; background?: { state?: string } } } };
     }>;
 
-    const statusCommand = commands.get("chrono-value-worker-status");
+    const statusCommand = commands.get("Chrono");
     assert.ok(statusCommand);
     let lastStatus = "";
     const readCompletionStatus = async () => {
       const before = notifications.length;
-      await statusCommand("", context);
+      await statusCommand("value-worker-status", context);
       lastStatus = notifications.slice(before).join("\n");
       return lastStatus.split("\n").includes("Candidate store: ready");
     };
@@ -427,7 +427,7 @@ test("compatibility incremental lifecycle schedules, validates, falls back when 
   }
 });
 
-test("request-local projection integrates with the context hook and fails closed on binding mismatch", async () => {
+test("request-local projection freezes at successful compaction boundaries and fails closed on binding mismatch", async () => {
   const names = ["PI_CHRONO_CONFIG_PATH", "PI_CHRONO_TOOL_RESULT_PROJECTION"] as const;
   const previous = new Map(names.map((name) => [name, process.env[name]]));
   const directory = mkdtempSync(join(tmpdir(), "chrono-projection-extension-"));
@@ -442,7 +442,7 @@ test("request-local projection integrates with the context hook and fails closed
     };
     extension(pi as unknown as ExtensionAPI);
     const messages: Array<Record<string, unknown>> = [{ role: "user", content: "Inspect the result set." }];
-    for (let index = 0; index < 5; index += 1) {
+    const appendResult = (index: number): void => {
       const callId = `projection-call-${index}`;
       messages.push({
         role: "assistant",
@@ -459,28 +459,58 @@ test("request-local projection integrates with the context hook and fails closed
           text: Array.from({ length: 180 }, (_, line) => `src/file-${index}-${line}.ts:${line + 1}: stable match`).join("\n"),
         }],
       });
-    }
-    const branch = messages.map((message, index) => ({
+    };
+    for (let index = 0; index < 5; index += 1) appendResult(index);
+    const context = { sessionManager: { getBranch: () => messages.map((message, index) => ({
       type: "message",
       id: `projection-entry-${index}`,
       parentId: index === 0 ? null : `projection-entry-${index - 1}`,
       message,
-    }));
+    })) } };
     const hook = hooks.get("context");
-    assert.ok(hook);
-    const context = { sessionManager: { getBranch: () => branch } };
-    const first = await hook({ messages }, context);
-    assert.equal(first, undefined, "first model consumption must remain exact");
-    const second = await hook({ messages }, context) as { messages?: Array<Record<string, unknown>> } | undefined;
-    assert.ok(second?.messages);
-    assert.notEqual(second.messages, messages);
-    assert.equal(JSON.stringify(second.messages).includes("request-local tool-result projection"), true);
+    const compact = hooks.get("session_compact");
+    const compactFailed = hooks.get("session_compact_failed");
+    assert.ok(hook && compact && compactFailed);
+    const request = () => hook({ messages }, context) as Promise<{ messages: Array<Record<string, unknown>> } | undefined>;
+    assert.equal(await request(), undefined, "first model consumption must remain exact");
+    assert.equal(await request(), undefined, "repeat requests must not start projection");
+    await compactFailed({}, context);
+    assert.equal(await request(), undefined, "failed compaction must not start projection");
+
+    await compact({}, context);
+    const sourceBefore = JSON.stringify(messages);
+    const first = await request();
+    assert.ok(first?.messages);
+    assert.notEqual(first.messages, messages);
+    assert.equal(JSON.stringify(first.messages).includes("request-local tool-result projection"), true);
+    assert.equal(JSON.stringify(messages), sourceBefore, "projection must not change source messages");
+    const frozenPrefix = structuredClone(first.messages);
+    const boundaryLength = messages.length;
+    for (let index = 5; index < 9; index += 1) appendResult(index);
+    // Even off mode takes effect only at the next compaction boundary.
+    process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = "off";
+    for (let requestIndex = 0; requestIndex < 2; requestIndex += 1) {
+      const next = await request();
+      assert.ok(next?.messages);
+      assert.deepEqual(next.messages.slice(0, boundaryLength), frozenPrefix, "appends and newly-seen changes must keep the sent prefix frozen");
+      assert.deepEqual(next.messages.slice(boundaryLength), messages.slice(boundaryLength), "new results stay exact until compaction");
+      next.messages[2]!.content = [{ type: "text", text: "downstream mutation" }];
+    }
 
     const mismatched = structuredClone(messages);
     const firstResult = mismatched.find((message) => message.role === "toolResult");
     assert.ok(firstResult);
     firstResult.details = { matchCount: 0 };
     assert.equal(await hook({ messages: mismatched }, context), undefined, "binding uncertainty must keep all messages unchanged");
+
+    await compact({}, context);
+    assert.equal(await request(), undefined, "off mode applies at the next boundary");
+    process.env.PI_CHRONO_TOOL_RESULT_PROJECTION = "safe";
+    assert.equal(await request(), undefined, "enabling projection must wait for compaction");
+    await compact({}, context);
+    const nextBoundary = await request();
+    assert.ok(nextBoundary?.messages);
+    assert.notDeepEqual(nextBoundary.messages[boundaryLength + 1], messages[boundaryLength + 1], "the next compaction may shorten previously exact results");
   } finally {
     for (const name of names) {
       const value = previous.get(name);
@@ -539,7 +569,7 @@ test("Pi extension hook returns a validated compatibility replay through the nor
     "request_compaction",
     "history_status",
   ]);
-  assert.deepEqual(commandNames, ["chrono-logical-session", "chrono-auto-rollover", "chrono-rollup-repair", "chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["Chrono"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
@@ -628,32 +658,41 @@ test("Pi extension hook returns a validated compatibility replay through the nor
   assert.doesNotMatch(result.compaction.summary, /FABRICATED_SUMMARY_SHOULD_NEVER_BE_RECOMPACTED/);
   assert.ok(notifications.some((notification) => /ChronoCompact/.test(notification.message)));
 
-  const workerStatus=commandHandlers.get("chrono-worker-status"),doctor=commandHandlers.get("chrono-doctor");assert.ok(workerStatus&&doctor);await workerStatus("",context);await doctor("",context);const commandOutput=notifications.slice(-2).map(item=>item.message).join("\n");assert.match(commandOutput,/Scheduler artifacts:/);assert.match(commandOutput,/Doctor mode: read-only/);assert.doesNotMatch(commandOutput,/\.jsonl|\/home\//);
+  const chrono = commandHandlers.get("Chrono");
+  assert.ok(chrono);
+  await chrono("worker-status", context);
+  await chrono("doctor", context);
+  const commandOutput = notifications.slice(-2).map(item => item.message).join("\n");
+  assert.match(commandOutput, /Scheduler artifacts:/);
+  assert.match(commandOutput, /Doctor mode: read-only/);
+  assert.doesNotMatch(commandOutput, /\.jsonl|\/home\//);
 
-  let settingsMenuVisits = 0;
+  let settingsMenuVisits = 0, mainVisits = 0, backgroundVisits = 0, customVisits = 0;
   (context.ui as { input?: () => Promise<string | undefined> }).input = async () => undefined;
+  (context.ui as { confirm?: () => Promise<boolean> }).confirm = async () => true;
   context.ui.select = async (title: string, choices: string[]) => {
-    if (title === "ChronoCompact settings") {
+    if (title.startsWith("Chrono settings: Custom")) {
       settingsMenuVisits += 1;
-      if (settingsMenuVisits === 1) return choices.find((choice) => choice.startsWith("Background value worker"));
-      if (settingsMenuVisits === 2) return choices.find((choice) => choice.startsWith("Hierarchical rollup shadow evaluation"));
-      if (settingsMenuVisits === 3) return choices.find((choice) => choice.startsWith("Raw history retained"));
-      return "Save and close";
+      if (settingsMenuVisits === 1) return choices.find(choice => choice.startsWith("Background LLM"));
+      if (settingsMenuVisits === 2) return choices.find(choice => choice.startsWith("Hierarchical rollup shadow evaluation"));
+      if (settingsMenuVisits === 3) return choices.find(choice => choice.startsWith("Raw history retained"));
+      return "Back";
     }
-    if (title === "Background value-worker mode") return "shadow";
-    if (title === "Value-model thinking level") return "inherit";
+    if (title.startsWith("Chrono settings")) return mainVisits++ === 0 ? "Custom settings (all options)" : "Back";
+    if (title.startsWith("Background LLM\n")) return backgroundVisits++ === 0 ? "Custom controls" : "Back";
+    if (title.startsWith("Background LLM: Custom")) return customVisits++ === 0 ? choices.find(choice => choice.startsWith("Mode")) : "Back";
+    if (title === "Background LLM mode") return "shadow";
     if (title === "Hierarchical rollup shadow evaluation") return "Enabled";
     if (title === "How much recent history should remain raw?") return "Short · 8,000 tokens";
     return undefined;
   };
-  const configure = commandHandlers.get("chrono-compact-settings");
-  assert.ok(configure);
-  await configure("", context);
+  await chrono("settings", context);
   const persisted = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
   assert.equal(persisted.rawTail, "short");
   assert.equal(persisted.valueWorkerMode, "shadow");
   assert.equal(persisted.rollupShadowEnabled, true);
-  assert.ok(notifications.some((notification) => /Background value worker: shadow/.test(notification.message)));
+  assert.equal(persisted.valueWorkerPreset, "custom");
+  assert.ok(!notifications.some(notification => /Saved ChronoCompact settings/.test(notification.message)), "settings do not print a transcript report");
   rmSync(configPath, { force: true });
 });
 

@@ -1,8 +1,29 @@
 # ChronoCompact release compatibility
 
-## Current 3.0.4 release
+## Current 3.0.5 source
 
-Version `3.0.4` keeps programmatic memory and safe-idle physical rollover enabled by
+Version `3.0.5` implements the single `/Chrono [action]` operator entrypoint.
+Settings, Status and diagnostics, Maintenance, and About share one menu. Valid
+settings changes save immediately, invalid input returns to the input, and
+terminal reports use a read-only scroller that returns to the menu. Direct RPC
+action output remains notifications. Lite, Medium, and Max bound optional paid
+background model work, with all controls and a provider/model picker available
+in Custom. The compatibility worker remains paused under the default V3 engine.
+Selecting a preset does not switch engines.
+
+Tool-result projection is selected only on the first request after successful
+compaction. Ordinary turns reuse frozen replacements, and new results remain
+exact until the next compaction. Reload, resume, and tree navigation reset to
+exact results. Safety binding refusals return the exact request rather than
+recomputing a reduction. This is not a general provider-cache hit guarantee.
+See [configuration](chrono-v3/configuration.md) and [operations](chrono-v3/operations.md)
+for limits and action names.
+
+These are source changes, not an acceptance or activation receipt. No new runtime
+validation is claimed here. The earlier evidence below remains specific to the
+versions it exercised.
+
+Version `3.0.5` keeps programmatic memory and safe-idle physical rollover enabled by
 default. The [current overview](chrono-v3/README.md) describes useful selective
 chronology, bounded recall, native tool-state transfer, and measured limits.
 The 3.0.1 corrections remain in place. A Chrono-owned compaction refusal resumes
@@ -41,16 +62,17 @@ changed-source, stale-target, and unready-catalog cases refused. The missing
 search head and search generation stayed unchanged. Live-session adoption is a
 separate activation check.
 
-Version `3.0.2` added read-only scheduler reservation diagnostics to
-`/chrono-worker-status` and `/chrono-doctor`. The output separates a stopped
+Version `3.0.2` added read-only scheduler reservation diagnostics, now available
+through `/Chrono worker-status` and `/Chrono doctor`. The output separates a stopped
 reservation owner from active worker execution and explains that indexed-history
 deadlines include admission wait. A stopped live owner retains its reservation.
 This correction does not recover admission, remove leases, resume owners, change
 worker limits, or modify source history or stores.
 
-The current source has 137 compiled runtime JavaScript files and 138 startup
-pins, including `package.json`. Read the exact package tree and file hashes from
-`scripts/verify-chrono-v3-baseline.mjs`, not the historical tables below.
+The 3.0.5 build adds `dist/src/chrono-ui.js`: 138 compiled runtime JavaScript files
+and 139 startup pins, including `package.json`. Read the exact package tree and
+file hashes from `scripts/verify-chrono-v3-baseline.mjs`, not the historical tables
+below.
 
 Use the root [verification workflow](../README.md#verification) and installed-Pi
 loader checks for a changed release. The explicit native build and matching

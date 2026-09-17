@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 
 export type ConfiguredRawTail = "pi" | "dynamic" | "short" | "medium" | "long" | number;
 
+export type ValueWorkerPreset = "lite" | "medium" | "max" | "custom";
+
 export interface UserConfig {
   readonly targetContextTokens?: number;
   readonly replayTargetTokens?: number | null;
@@ -18,6 +20,7 @@ export interface UserConfig {
   /** Retired. Kept only so old configuration files load safely. */
   readonly historyEditorEnabled?: boolean;
   readonly valueWorkerMode?: "off" | "shadow" | "advisory";
+  readonly valueWorkerPreset?: ValueWorkerPreset;
   readonly valueWorkerModel?: string;
   readonly valueWorkerThinking?: "inherit" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   readonly valueWorkerMaxInputTokensPerJob?: number;
@@ -52,6 +55,28 @@ export interface UserConfig {
   readonly warmSourceTokens?: number;
 }
 
+// Presets write ordinary settings so Custom and existing configuration readers stay compatible.
+export const VALUE_WORKER_PRESETS: Readonly<Record<Exclude<ValueWorkerPreset, "custom">, UserConfig>> = {
+  lite: {
+    valueWorkerThinking: "off", valueWorkerMaxInputTokensPerJob: 4_000, valueWorkerMaxOutputTokensPerJob: 1_000,
+    valueWorkerMaxItemsPerJob: 10, valueWorkerTimeoutSeconds: 90, valueWorkerRetries: 0, valueWorkerHostSlots: 1,
+    valueWorkerMaxCallsPerSession: 20, valueWorkerMaxInputTokensPerSession: 40_000, valueWorkerMaxOutputTokensPerSession: 8_000,
+    valueWorkerMaxEstimatedCostUsd: 0.25, valueWorkerCircuitFailureLimit: 3, valueWorkerCircuitCooldownSeconds: 1_800,
+  },
+  medium: {
+    valueWorkerThinking: "low", valueWorkerMaxInputTokensPerJob: 6_000, valueWorkerMaxOutputTokensPerJob: 1_500,
+    valueWorkerMaxItemsPerJob: 20, valueWorkerTimeoutSeconds: 120, valueWorkerRetries: 1, valueWorkerHostSlots: 1,
+    valueWorkerMaxCallsPerSession: 100, valueWorkerMaxInputTokensPerSession: 250_000, valueWorkerMaxOutputTokensPerSession: 50_000,
+    valueWorkerMaxEstimatedCostUsd: 2, valueWorkerCircuitFailureLimit: 3, valueWorkerCircuitCooldownSeconds: 1_800,
+  },
+  max: {
+    valueWorkerThinking: "medium", valueWorkerMaxInputTokensPerJob: 12_000, valueWorkerMaxOutputTokensPerJob: 4_000,
+    valueWorkerMaxItemsPerJob: 40, valueWorkerTimeoutSeconds: 180, valueWorkerRetries: 1, valueWorkerHostSlots: 1,
+    valueWorkerMaxCallsPerSession: 400, valueWorkerMaxInputTokensPerSession: 1_000_000, valueWorkerMaxOutputTokensPerSession: 200_000,
+    valueWorkerMaxEstimatedCostUsd: 10, valueWorkerCircuitFailureLimit: 3, valueWorkerCircuitCooldownSeconds: 1_800,
+  },
+};
+
 export interface ConfigCommandResult {
   readonly config: UserConfig;
   readonly changed: boolean;
@@ -69,7 +94,7 @@ const CONFIG_KEYS = [
   "hybridSummaryEnabled",
   "hybridSummaryTargetTokens",
   "historyEditorEnabled",
-  "valueWorkerMode", "valueWorkerModel", "valueWorkerThinking", "valueWorkerMaxInputTokensPerJob", "valueWorkerMaxOutputTokensPerJob", "valueWorkerMaxItemsPerJob", "valueWorkerTimeoutSeconds", "valueWorkerRetries", "valueWorkerHostSlots", "valueWorkerMaxCallsPerSession", "valueWorkerMaxInputTokensPerSession", "valueWorkerMaxOutputTokensPerSession", "valueWorkerMaxEstimatedCostUsd", "valueWorkerCircuitFailureLimit", "valueWorkerCircuitCooldownSeconds",
+  "valueWorkerPreset", "valueWorkerMode", "valueWorkerModel", "valueWorkerThinking", "valueWorkerMaxInputTokensPerJob", "valueWorkerMaxOutputTokensPerJob", "valueWorkerMaxItemsPerJob", "valueWorkerTimeoutSeconds", "valueWorkerRetries", "valueWorkerHostSlots", "valueWorkerMaxCallsPerSession", "valueWorkerMaxInputTokensPerSession", "valueWorkerMaxOutputTokensPerSession", "valueWorkerMaxEstimatedCostUsd", "valueWorkerCircuitFailureLimit", "valueWorkerCircuitCooldownSeconds",
   "incrementalPrecomputeEnabled",
   "isolatedWorkerEnabled",
   "rollupShadowEnabled",
@@ -169,6 +194,10 @@ export function validateUserConfig(value: unknown): UserConfig {
   if (input.hybridSummaryEnabled !== undefined) config.hybridSummaryEnabled = booleanValue(input.hybridSummaryEnabled, "hybridSummaryEnabled");
   if (input.hybridSummaryTargetTokens !== undefined) config.hybridSummaryTargetTokens = boundedInteger(input.hybridSummaryTargetTokens, "hybridSummaryTargetTokens", 512, 16_000);
   if (input.historyEditorEnabled !== undefined) config.historyEditorEnabled = booleanValue(input.historyEditorEnabled, "historyEditorEnabled");
+  if (input.valueWorkerPreset !== undefined) {
+    if (!["lite", "medium", "max", "custom"].includes(String(input.valueWorkerPreset))) throw new Error("valueWorkerPreset must be lite, medium, max, or custom.");
+    config.valueWorkerPreset = input.valueWorkerPreset;
+  }
   if (input.valueWorkerMode !== undefined) { const v=String(input.valueWorkerMode); if(!["off","shadow","advisory"].includes(v)) throw new Error("valueWorkerMode must be off, shadow, or advisory."); config.valueWorkerMode=v; }
   if (input.valueWorkerModel !== undefined) { const v=String(input.valueWorkerModel).trim(); if(!v||v.length>512) throw new Error("valueWorkerModel must be main or provider/model."); config.valueWorkerModel=v; }
   if (input.valueWorkerThinking !== undefined) { const v=String(input.valueWorkerThinking); if(!["inherit","off","minimal","low","medium","high","xhigh","max"].includes(v)) throw new Error("valueWorkerThinking is unsupported."); config.valueWorkerThinking=v; }
@@ -226,7 +255,7 @@ export function saveUserConfig(config: UserConfig, path = defaultUserConfigPath(
 }
 
 export function configCommandHelp(): string {
-  return "Use /chrono-compact-settings to open the interactive ChronoCompact settings screen.";
+  return "Use /Chrono and select Settings.";
 }
 
 function withoutKey(config: UserConfig, key: ConfigKey): UserConfig {
@@ -262,7 +291,7 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     return { config: withoutKey(config, key), changed: Object.prototype.hasOwnProperty.call(config, key), message: `Reset ${setting} to its environment or default value.` };
   }
   const key = COMMAND_TO_KEY[command];
-  if (!key) throw new Error(`Unknown setting: ${command}. Use the interactive /chrono-compact-settings screen.`);
+  if (!key) throw new Error(`Unknown setting: ${command}. Use /Chrono and select Settings.`);
   if (words.length !== 2) throw new Error(`${command} requires one value.`);
   const raw = words[1] ?? "";
   let value: unknown;

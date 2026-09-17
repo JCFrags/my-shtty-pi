@@ -203,7 +203,7 @@ function requestRefusal(messages, mode, sourceTokens, resultCount, newlySeenTool
     };
 }
 export async function projectToolResultContext(messages, options = {}) {
-    const mode = options.mode ?? "off";
+    const mode = options.snapshot?.mode ?? options.mode ?? "off";
     const sourceTokens = messages.reduce((sum, message) => sum + estimateTokensFromText(contentText(message.content).text), 0);
     const newlySeen = new Set();
     if (mode === "off")
@@ -283,6 +283,41 @@ export async function projectToolResultContext(messages, options = {}) {
     if (unsupported) {
         return requestRefusal(messages, mode, sourceTokens, results.length, newlySeen, `unsupported tool result content for call ID ${unsupported.toolCallId}`);
     }
+    // Reuse the boundary's exact replacements. New results and changed recency or
+    // first-consumption state cannot select another representation in this epoch.
+    if (options.snapshot) {
+        const projected = [...messages];
+        const families = {};
+        let exactRecoveryCovered = 0;
+        for (const info of results) {
+            const frozen = options.snapshot.results.get(info.toolCallId);
+            if (!frozen)
+                continue;
+            const source = validatedSources.get(info.toolCallId);
+            if (source.entryId !== frozen.source.entryId || source.sourceFingerprint !== frozen.source.sourceFingerprint) {
+                return requestRefusal(messages, mode, sourceTokens, results.length, newlySeen, `frozen projection source mismatch for call ID ${info.toolCallId}`);
+            }
+            projected[info.index] = { ...info.message, ...structuredClone(frozen.replacement) };
+            const prior = families[frozen.reducer] ?? { results: 0, removedTokens: 0 };
+            families[frozen.reducer] = { results: prior.results + 1, removedTokens: prior.removedTokens + frozen.removedTokens };
+            exactRecoveryCovered += 1;
+        }
+        const projectedTokens = projected.reduce((sum, message) => sum + estimateTokensFromText(contentText(message.content).text), 0);
+        return {
+            messages: projected,
+            metrics: {
+                ...emptyMetrics(mode, sourceTokens),
+                projectedTokens,
+                removedTokens: sourceTokens - projectedTokens,
+                totalToolResults: results.length,
+                projectedToolResults: exactRecoveryCovered,
+                exactRecoveryCovered,
+                reducerFamilies: families,
+            },
+            newlySeenToolCallIds: newlySeen,
+            snapshot: options.snapshot,
+        };
+    }
     const resultEntryIds = new Map(results.map((info) => [info.index, validatedSources.get(info.toolCallId).entryId]));
     const blocks = parseHistoricalBlocks(syntheticEntries(messages, resultEntryIds), {
         includeHistoricalCompactions: false,
@@ -320,6 +355,7 @@ export async function projectToolResultContext(messages, options = {}) {
     let exactRecoveryCovered = 0;
     const families = {};
     const projected = [...messages];
+    const frozenResults = new Map();
     for (const info of results) {
         if (recentIndexes.has(info.index) || canonicalIndexes.has(info.index)) {
             keptRecent += recentIndexes.has(info.index) ? 1 : 0;
@@ -370,6 +406,12 @@ export async function projectToolResultContext(messages, options = {}) {
                 },
             },
         };
+        frozenResults.set(info.toolCallId, {
+            source: { ...source },
+            replacement: structuredClone({ content: projected[info.index].content, details: projected[info.index].details }),
+            reducer: family,
+            removedTokens,
+        });
         exactRecoveryCovered += 1;
     }
     const projectedTokens = projected.reduce((sum, message) => sum + estimateTokensFromText(contentText(message.content).text), 0);
@@ -391,6 +433,7 @@ export async function projectToolResultContext(messages, options = {}) {
             reducerFamilies: families,
         },
         newlySeenToolCallIds: newlySeen,
+        snapshot: { mode, results: frozenResults },
     };
 }
 export function projectionSourcesFromBranch(entries) {
