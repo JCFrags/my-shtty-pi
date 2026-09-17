@@ -88,7 +88,7 @@ Progressive Tools appends names and short usage hints to the model's existing sy
 
 ## ChronoCompact
 
-ChronoCompact 3.0.4 provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
+ChronoCompact provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
 
 Programmatic V3 memory is enabled by default. The default combined context target is 32,000 estimated tokens, adjusted to the selected model's capacity, with a small adaptive raw tail. Incremental catalogs, event capsules, episodes, current state, and hierarchical rollups support bounded selection and recovery. Optional language-model advice can improve individual events or bounded groups. The programmatic pipeline does the main work and does not require model calls. Derived memory never gains instruction authority.
 
@@ -116,19 +116,21 @@ Focused checks exercised model-free composition, bounded recall, native state pr
 | `memory_forget`, `memory_promote` | Remove ordinary knowledge from active working memory or return it to working use. Source history is not deleted. |
 | `memory_list`, `memory_get`, `memory_search` | Inspect current or archived remembered knowledge and its provenance. |
 
-### Operator commands
+### Operator entrypoint
 
-| Commands | Purpose |
+The 3.0.5 source patch consolidates operator controls under one command. This description does not establish remote acceptance, local activation, or new runtime validation.
+
+| Command | Purpose |
 | --- | --- |
-| `/chrono-compact-settings` | Open configuration. |
-| `/chrono-search-status`, `/chrono-worker-status`, `/chrono-doctor` | Inspect bounded readiness, worker state, and read-only safety checks. |
-| `/chrono-search on\|off` | Change persistent indexed-history selection for the current session only. |
-| `/chrono-logical-session` | Guarded manual adoption, status, rollover, fork, recovery, and rollback alongside safe-idle automatic rollover. |
-| `/chrono-composition-preview`, `/chrono-rollup-repair` | Save a private shadow comparison or perform an explicit bounded rollup repair transition. |
-| `/chrono-capsules-status`, `/chrono-catalog-status`, `/chrono-rollup-shadow-status` | Inspect the retained capsule, catalog, and rollup diagnostic paths. These are not release or composition-eligibility certificates. |
-| `/chrono-value-worker-status`, `/chrono-value-worker-reset` | Inspect optional value-model work or cancel pending work and reset its persisted circuit without deleting stored advice or source. |
+| `/Chrono [action]` | Open Settings, Status and diagnostics, Maintenance, or About. Optional direct actions are listed in [operations](docs/chrono-v3/operations.md#operator-menu-and-actions). |
 
-The extension dispatches `/chrono-auto-rollover` internally with a one-use binding. Use `/chrono-logical-session` for operator controls.
+Valid settings changes save immediately. Invalid values return to the input with an error. In the terminal UI, status reports use a read-only scroller and return to the menu with Enter or Esc. RPC action output remains notifications.
+
+Background LLM is optional and can incur charges. Lite, Medium, and Max presets set bounded usage. Custom exposes all controls and the provider/model picker. This compatibility worker stays paused under the default V3 engine. Enabling it does not silently change engines. See [configuration](docs/chrono-v3/configuration.md#optional-background-llm-presets) for the first-exhausted-budget rule and preset limits.
+
+Optional tool-result shortening now runs only on the first request after successful compaction. Later turns reuse frozen replacements, and new results stay exact until the next compaction. Reload, resume, and tree changes reset to exact results. Source-binding refusals also return exact content. This preserves source history but does not guarantee provider-cache hits. See [projection timing and limits](docs/chrono-v3/configuration.md#tool-result-shortening-at-compaction).
+
+The extension dispatches `/Chrono _auto-rollover` internally with a one-use binding. Use Maintenance or `/Chrono logical-session` for operator controls.
 
 Start with the [Chrono overview](docs/chrono-v3/README.md), [configuration](docs/chrono-v3/configuration.md), [operations](docs/chrono-v3/operations.md), and [recovery](docs/chrono-v3/recovery.md). Old plans and reports are historical guides, not the current release checklist.
 

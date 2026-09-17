@@ -8,7 +8,7 @@ Before any recovery action:
 
 1. Stop new Chrono background work at a settled session boundary.
 2. Preserve the current package identity, Chrono-owned configuration, rollout records, logical manifests, source files, and derived stores.
-3. Run `history_status`, `/chrono-worker-status`, and `/chrono-doctor` where available.
+3. Run `history_status`, `/Chrono worker-status`, and `/Chrono doctor` where available.
 4. Record the public safe error without copying source text or private paths into Git.
 5. Select the narrow recovery below.
 
@@ -25,7 +25,7 @@ A ready older prefix can remain searchable while a newer requested cut catches u
 Use:
 
 ```text
-/chrono-logical-session recover <logical-session-id> [branch-id]
+/Chrono logical-session recover <logical-session-id> [branch-id]
 ```
 
 The command supports these current states:
@@ -43,7 +43,7 @@ The `30668f7` correction persists the exact continuation-only replacement source
 Use only from the continuation-only replacement at a settled boundary:
 
 ```text
-/chrono-logical-session rollback <logical-session-id> [branch-id]
+/Chrono logical-session rollback <logical-session-id> [branch-id]
 ```
 
 The current branch must contain the matching logical binding and only the allowed continuation/bootstrap records. The command switches to the exact old source. It preserves the replacement shard on an isolated `rollback.<operation-id>` branch so that later rollover cannot silently include that abandoned sibling.
@@ -66,6 +66,12 @@ A missing derived artifact reduces capability. It does not invalidate the exact 
 V3 transfers complete Notes, Todo, and Workplan state as native `grounded-state-checkpoint-v1` custom entries. This includes archived records, IDs, counters, and Workplan revision and checkpoint history. The transfer does not replace tool state with prose or replay old shards into the new active file. Invalid, pending, or over-budget state prevents rollover rather than being shortened or discarded.
 
 Install the checkpoint-aware Grounded providers with V3. A provider from before this change cannot restore these entries. After rollover, retain the new providers when changing Chrono code. To return to old provider code, first use a verified logical rollback to the preserved original source. Immediate logical rollback is unavailable after ordinary work begins in the replacement. Do not reopen an older source as if it included later work, or restore old providers over a checkpoint-bearing session.
+
+## Projection and background-model settings
+
+Tool-result projection snapshots are not persisted. Reload, resume, and tree navigation return to exact results until another successful compaction. This reset does not mean that source history was lost. A source-binding refusal also returns the exact request. Do not rewrite history or weaken binding checks to restore shortened output. Changing projection mode in Settings applies at the next compaction boundary, not to an already-sent snapshot. See [projection timing and limits](configuration.md#tool-result-shortening-at-compaction).
+
+For an unexpected background-model call, open `/Chrono`, select Settings, then Background LLM, and disable it before further diagnosis. This compatibility worker is paused under the default V3 engine. Preset selection does not change the engine. Resetting its circuit through Maintenance or `/Chrono value-worker-reset` preserves advice and source but can allow calls to resume when enabled and eligible. Do not use a reset as a substitute for disabling paid work.
 
 ## Deployment rollback
 

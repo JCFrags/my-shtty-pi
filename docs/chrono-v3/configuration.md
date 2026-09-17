@@ -16,7 +16,9 @@ For a runtime setting, precedence is:
 2. the value in `chrono-compact.json`;
 3. the compiled default.
 
-The interactive `/chrono-compact-settings` command writes only the JSON file. It cannot override an environment variable. The writer validates the complete object, creates an owner-only temporary file, and renames it into place. Use the settings screen instead of editing a running process's file when practical.
+Open `/Chrono` and select Settings, or use `/Chrono settings`. The settings interface writes only the JSON file. It cannot override an environment variable. The writer validates the complete object, creates an owner-only temporary file, and renames it into place. Use the settings screen instead of editing a running process's file when practical.
+
+Each completed valid change saves immediately. There is no final save step. A value rejected by input validation returns to the same input with an error. Cancel that input to keep its previous value. A failed save remains marked as unsaved until retried or discarded. Custom settings exposes all controls. These are 3.0.5 source behaviors, not evidence that an existing process has loaded the patch.
 
 ## V3 controls
 
@@ -58,9 +60,45 @@ When enabled and its input fits the bounded preparation window, the independent 
 
 `incrementalPrecomputeEnabled` and `PI_CHRONO_INCREMENTAL_PRECOMPUTE` control the V2 compatibility candidate store. When the memory engine is on, ChronoCompact cancels this work instead of maintaining both lifetime derivation paths.
 
+## Optional background LLM presets
+
+In Settings, select Background LLM. This optional language-model worker is off by default and can incur provider charges. Enabling it requires confirmation because it sends bounded assistant and tool excerpts to the selected model. User messages and protected instruction text are excluded. Enabling also selects local incremental precompute. Compaction does not wait for this work.
+
+This is the compatibility value worker, not the programmatic V3 memory pipeline. It remains paused while `memoryEngineEnabled` is true, which is the default. Selecting a preset, model, or enabled mode does not switch the memory engine off. Changing that engine selection is a separate explicit setting. V3 does not require this worker.
+
+Usage offers Lite (`lite`, the recommended starting preset), Medium (`medium`), Max (`max`), and Custom (`custom`). A preset writes ordinary worker settings. Selecting one does not by itself enable model calls. First enable uses Lite unless a preset or Custom configuration was already selected.
+
+| Preset | Calls per session | Input tokens per session | Output tokens per session | Estimated USD per session |
+| --- | ---: | ---: | ---: | ---: |
+| `lite` | 20 | 40,000 | 8,000 | $0.25 |
+| `medium` | 100 | 250,000 | 50,000 | $2 |
+| `max` | 400 | 1,000,000 | 200,000 | $10 |
+
+The first exhausted call, input-token, output-token, or enabled estimated-cost budget stops further work. These are ceilings, not guaranteed call counts or bill totals. Model prices and actual usage determine cost.
+
+| Preset | Preferred thinking | Input/output tokens per job | Items per job | Timeout | Retries |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `lite` | `off` | 4,000 / 1,000 | 10 | 90 seconds | 0 |
+| `medium` | `low` | 6,000 / 1,500 | 20 | 120 seconds | 1 |
+| `max` | `medium` | 12,000 / 4,000 | 40 | 180 seconds | 1 |
+
+All presets allow one concurrent model call and pause after three consecutive failures for 1,800 seconds. A preset uses a supported thinking level if its preference is unavailable for the selected model.
+
+Model offers the current main model or a provider/model picker. The picker uses Pi's scoped models when present, otherwise its available model registry. Custom controls exposes mode (`off`, `advisory`, or `shadow`), model, supported thinking levels or `inherit`, all per-job and per-session bounds above, concurrency, retries, timeout, estimated-cost limit or `off`, and failure-pause controls. Changing an individual limit selects Custom. Environment overrides still take priority.
+
+## Tool-result shortening at compaction
+
+`toolResultProjectionMode`, overridden by `PI_CHRONO_TOOL_RESULT_PROJECTION`, accepts `off`, `safe`, or `aggressive` and defaults to `off`. In Settings, select Tool-result shortening at compaction.
+
+When enabled, Chrono selects shortened representations only on the first model request after a successful compaction. The existing recent-result, first-consumption, protected-content, and source-validation rules still apply. Ordinary turns reuse the exact frozen replacements for unchanged source results. New results stay exact until the next successful compaction. A failed compaction does not start projection. A refused or empty boundary projection is not retried on later ordinary turns.
+
+Saving a different mode, including `off`, does not discard an already-sent snapshot. The new mode applies at the next compaction boundary. Snapshots exist only in memory. Reload, resume, a new or forked session, and tree navigation reset projection to exact results until another successful compaction.
+
+Safety checks take priority over reuse. Invalid tool pairs, unsupported content, or uncertain or changed source bindings return the exact unmodified request instead of recomputing a reduction. Source JSONL is never rewritten. Stable Chrono replacements are not a general provider-cache hit guarantee. Other context changes and lifecycle resets can still change the request prefix.
+
 ## Session-specific search inclusion and exclusion
 
-`/chrono-search on` and `/chrono-search off` write one owner-only record for the exact Pi session ID and source path. The default directory is adjacent to the configuration file under `chrono-session-rollouts/`. The file name contains only hashes.
+`/Chrono search on` and `/Chrono search off` write one owner-only record for the exact Pi session ID and source path. The default directory is adjacent to the configuration file under `chrono-session-rollouts/`. The file name contains only hashes.
 
 Precedence for effective indexed search is:
 
@@ -84,15 +122,17 @@ Because environment variables win, always inspect the loaded status in the proce
 - `historyEditorEnabled` and `PI_CHRONO_HISTORY_EDITOR` are retained only for configuration compatibility. The history editor cannot run.
 - `valueWorkerMode` defaults to `off`. Optional model advice is separate from the deterministic memory engine and is not required for catalog, search, state, rollup, or composition.
 - `rollupShadowEnabled` controls the older compatibility comparison path. It does not enable indexed `rollup-v3` composition.
-- `/chrono-compact-settings automatic-rollover off` disables automatic physical switching. `rollover-bytes <bytes>` changes its source-growth threshold. Manual logical rollover and fork remain available.
+- In `/Chrono`, select Settings, Custom settings (all options), then Automatic physical-shard rollover. Select Disabled to stop automatic switching, or Enabled to set the source-growth threshold. Manual logical rollover and fork remain available.
 
 ## Safe inspection
 
 Use these read-only views:
 
-- `history_status` or `/chrono-search-status` for indexed lifecycle, migration phase, loaded runtime identity, and the last safe error;
-- `/chrono-worker-status` for bounded worker and scheduler state;
-- `/chrono-doctor` for source, ledger, containment, scheduler, and memory-admission checks;
-- `/chrono-logical-session status <logical-session-id>` for one active logical branch.
+- `history_status` or `/Chrono search-status` for indexed lifecycle, migration phase, loaded runtime identity, and the last safe error;
+- `/Chrono worker-status` for bounded worker and scheduler state;
+- `/Chrono doctor` for source, ledger, containment, scheduler, and memory-admission checks;
+- `/Chrono logical-session status <logical-session-id>` for one active logical branch.
+
+Use Status and diagnostics for the search, worker, and health reports. Use Maintenance for logical-session operations. In the terminal UI, reports use a read-only scroller. Up/Down and PgUp/PgDn scroll. Enter or Esc returns to the menu. Reports do not enter model context. Direct RPC action output remains notifications.
 
 Do not infer cut eligibility from a ready migration phase. The actual compaction or continuation command performs mandatory cut validation.

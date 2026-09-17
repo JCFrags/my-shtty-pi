@@ -4,17 +4,40 @@
 
 These procedures describe the default-on V3 source behavior. They do not prove that an existing process loaded the accepted build. Use the runtime identity and practical checks below. The baseline needs no language-model call. Explicit search, session, and engine exclusions remain effective.
 
+## Operator menu and actions
+
+The 3.0.5 source uses `/Chrono` as its single operator entrypoint. Select Settings, Status and diagnostics, Maintenance, or About. Each valid settings change saves immediately. Invalid input returns to the input with an error. Custom settings (all options) exposes the less common controls.
+
+In the terminal UI, reports are read-only scrollers, not editor contents or model messages. Use Up/Down or PgUp/PgDn to scroll. Enter or Esc returns to the menu. Direct actions use `/Chrono <action>` with these names. RPC action output remains notifications.
+
+| Action | Purpose |
+| --- | --- |
+| `settings` | Open the settings interface. It does not accept inline setting/value commands. |
+| `search-status`, `worker-status`, `doctor` | Inspect indexed readiness, local workers, or read-only safety checks. |
+| `value-worker-status` | Inspect optional background-model usage and failure-pause state. |
+| `catalog-status`, `capsules-status`, `rollup-shadow-status` | Inspect the retained shadow paths. These do not certify composition eligibility. |
+| `search on\|off` | Persist indexed-history selection for the current session only. |
+| `composition-preview [compaction-entry-id]` | Save a bounded private preview without replacing context or activating a feature. |
+| `logical-session <operation> ...` | Adopt, inspect, roll over, fork, recover, or roll back a logical session. See the procedures below. |
+| `rollup-repair start\|step\|status <repair-id>` | Run one bounded repair transition or inspect its status. |
+| `rollup-repair publish <repair-id> <legacy\|expected-store-id>` | Publish the explicitly selected repair generation. |
+| `value-worker-reset` | Cancel pending work and reset the persisted failure pause without deleting advice or source. If enabled and eligible, model calls can resume. |
+
+`/Chrono _auto-rollover` is an internal one-use dispatch, not an operator action. Maintenance provides the guarded user-facing operations. Opening a menu or reading a report does not grant permission for a maintenance change.
+
+Background LLM offers Lite, Medium, Max, and Custom settings, with a provider/model picker. These optional model calls can incur charges, and the first exhausted call, token, or enabled estimated-cost budget stops further work. The compatibility worker is paused under the default V3 engine. Enabling it does not switch engines. Read the [preset limits and compatibility boundary](configuration.md#optional-background-llm-presets) before enabling it.
+
 ## Startup check
 
 After a safe session start or reload:
 
-1. Run `history_status` or `/chrono-search-status`.
+1. Run `history_status` or `/Chrono search-status`.
 2. Check `loaded.state`, version, entrypoint hash, and deployment-manifest hash. A captured identity proves loaded bytes, not a Git commit or coverage.
 3. Check `startup.state`. Indexed work is unavailable until startup is `ready`.
 4. Check `migration.phase`, each derived layer, `requestedCut`, `indexedCut`, and `lag`.
 5. Check `lastSafeError`, the exact session rollout state, and logical route count.
-6. Run `/chrono-worker-status` if startup or catch-up is blocked.
-7. Run `/chrono-doctor` for bounded read-only source, ledger, scheduler, containment, and memory-admission checks.
+6. Run `/Chrono worker-status` if startup or catch-up is blocked.
+7. Run `/Chrono doctor` for bounded read-only source, ledger, scheduler, containment, and memory-admission checks.
 
 `history_status` does not ingest, scan source, or query the databases. A value can become stale until a lifecycle event schedules more work.
 
@@ -69,7 +92,7 @@ Before replacement, installed Notes, Tasks (`todo`), and Workplan providers expo
 
 New shards require the configured source growth beyond their serialized bootstrap size. This prevents a large checkpoint from causing immediate repeated rollover. Restart reconstructs that baseline from at most eight bootstrap entries. Pi startup still loads the active physical file, and logical binding discovery reads its current branch once. An already oversized legacy physical file therefore still has a one-time load cost. Normal V3 compaction and automatic rollover do not rebuild or traverse lifetime history.
 
-To disable automatic switching, use `/chrono-compact-settings automatic-rollover off`. Check `automaticRollover` in `history_status` for the threshold, bootstrap bytes, and last deferral.
+To disable automatic switching, open `/Chrono`, select Settings, Custom settings (all options), then Automatic physical-shard rollover, and select Disabled. Check `automaticRollover` in `history_status` for the threshold, bootstrap bytes, and last deferral.
 
 ## Manual logical-session operations
 
@@ -80,7 +103,7 @@ Physical Pi `/fork` is not a logical fork.
 Use:
 
 ```text
-/chrono-logical-session adopt [branch-id]
+/Chrono logical-session adopt [branch-id]
 ```
 
 Adoption binds the current persisted source as shard zero. It does not roll over or grant composer eligibility. A conflicting prior binding refuses.
@@ -90,7 +113,7 @@ Adoption binds the current persisted source as shard zero. It does not roll over
 Use:
 
 ```text
-/chrono-logical-session status <logical-session-id> [branch-id]
+/Chrono logical-session status <logical-session-id> [branch-id]
 ```
 
 Status is valid only when the current Pi session and source match an active branch shard. Source bytes come from file metadata. Record and compaction counts come from Pi's already loaded physical branch. Status does not parse archived source.
@@ -100,7 +123,7 @@ Status is valid only when the current Pi session and source match an active bran
 Use only at an agent-settled boundary:
 
 ```text
-/chrono-logical-session rollover <logical-session-id> <branch-id>
+/Chrono logical-session rollover <logical-session-id> <branch-id>
 ```
 
 Before the command, confirm:
@@ -122,7 +145,7 @@ Pi can emit replacement `session_start` after setup but before `withSession`. St
 Use:
 
 ```text
-/chrono-logical-session fork <logical-session-id> <source-branch-id> <new-branch-id>
+/Chrono logical-session fork <logical-session-id> <source-branch-id> <new-branch-id>
 ```
 
 The fork uses the same cut and continuation gates as rollover. It creates an empty child physical shard with explicit parent catalog ancestry. Searches include ancestors by default and exclude siblings. Do not use Pi's physical `/fork` as a substitute.
@@ -139,7 +162,13 @@ When the memory engine is selected, Pi first prepares a cut and retained tail. C
 
 Source incompatibility, unsafe tool structure, cancellation, or unusable budgets leave current context unchanged. Missing optional memory, provider summary, or diagnostic artifact storage does not require refusal. Details identify `chrono-v3-composed-context`, the composition envelope or fallback receipt, optional `piSummary`, and `retainedTail`. No normal fallback uses legacy lifetime replay.
 
-`/chrono-composition-preview [compaction-entry-id]` is read-only with respect to source and activation. It resolves a recorded compaction through the catalog, saves a bounded private comparison artifact, and shows a receipt. It does not replace context.
+`/Chrono composition-preview [compaction-entry-id]` is read-only with respect to source and activation. It resolves a recorded compaction through the catalog, saves a bounded private comparison artifact, and shows a receipt. It does not replace context.
+
+## Tool-result projection
+
+Settings, Tool-result shortening at compaction controls optional projection. Selection runs only on the first request after successful compaction. Later ordinary turns reuse the frozen replacements for unchanged source results. New results remain exact until the next successful compaction. Mode changes, including off, do not replace an already-sent snapshot between boundaries.
+
+Reload, resume, and tree navigation discard the in-memory snapshot and return to exact results until another successful compaction. A safety binding refusal also returns the exact request rather than recomputing reductions. Source history remains unchanged. This does not guarantee provider-cache hits. See [configuration](configuration.md#tool-result-shortening-at-compaction) for the full timing and refusal rules.
 
 ## Deployment and reload safeguards
 
