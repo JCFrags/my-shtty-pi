@@ -308,16 +308,16 @@ export default function qualificationBridge(pi) {
   try {
     await client.send("get_commands");
     const adoptNotice = client.notify(value => value.startsWith("Logical session adopted:"));
-    await promptCommand(client, "/chrono-logical-session adopt main");
+    await promptCommand(client, "/Chrono logical-session adopt main");
     const logicalSessionId = (await adoptNotice).match(/[0-9a-f]{8}-[0-9a-f-]{27}/)?.[0];
     assert.ok(logicalSessionId);
     await probe(client, initialMarker, 1, firstId);
 
     const beforeFirst = (await client.send("get_state")).sessionFile;
-    await promptCommand(client, `/chrono-logical-session rollover ${logicalSessionId} main`, 180_000);
+    await promptCommand(client, `/Chrono logical-session rollover ${logicalSessionId} main`, 180_000);
     const replacement = (await client.send("get_state")).sessionFile;
     assert.notEqual(replacement, beforeFirst);
-    await promptCommand(client, `/chrono-logical-session rollback ${logicalSessionId}`, 120_000);
+    await promptCommand(client, `/Chrono logical-session rollback ${logicalSessionId}`, 120_000);
     assert.equal((await client.send("get_state")).sessionFile, beforeFirst, "rollback must reopen the exact old source");
     let manifest = await readManifest(agent, logicalSessionId);
     const rollbackBranch = manifest.branches.find(branch => branch.branchId.startsWith("rollback."));
@@ -332,7 +332,7 @@ export default function qualificationBridge(pi) {
     await probe(client, initialMarker, 1, firstId);
 
     for (let operation = 1; operation <= MAIN_ROLLOVERS; operation++) {
-      await promptCommand(client, `/chrono-logical-session rollover ${logicalSessionId} main`, 180_000);
+      await promptCommand(client, `/Chrono logical-session rollover ${logicalSessionId} main`, 180_000);
       const marker = `qualification-shard-${operation}-${sha(`${input.runtimeSha}:${operation}`).slice(0, 12)}`;
       markers.push(marker);
       const seeded = await seed(client, operation, marker);
@@ -342,7 +342,7 @@ export default function qualificationBridge(pi) {
     assert.equal(manifest.branches.find(branch => branch.branchId === "main").shardIds.length, MAIN_ROLLOVERS + 1);
     const mainActivePath = manifest.shards.find(shard => shard.shardId === manifest.branches.find(branch => branch.branchId === "main").activeShardId).sourcePath;
 
-    await promptCommand(client, `/chrono-logical-session fork ${logicalSessionId} main experiment`, 180_000);
+    await promptCommand(client, `/Chrono logical-session fork ${logicalSessionId} main experiment`, 180_000);
     const childMarker = `qualification-child-${sha(input.runtimeSha).slice(0, 12)}`;
     const childSeed = await seed(client, MAIN_ROLLOVERS + 1, childMarker);
     await probe(client, initialMarker, MAIN_ROLLOVERS + 2, firstId);

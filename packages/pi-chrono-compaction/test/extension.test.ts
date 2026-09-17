@@ -362,12 +362,12 @@ test("compatibility incremental lifecycle schedules, validates, falls back when 
       compaction?: { details?: { incrementalPrecompute?: { state?: string; reason?: string; cachedCandidates?: number; background?: { state?: string } } } };
     }>;
 
-    const statusCommand = commands.get("chrono-value-worker-status");
+    const statusCommand = commands.get("Chrono");
     assert.ok(statusCommand);
     let lastStatus = "";
     const readCompletionStatus = async () => {
       const before = notifications.length;
-      await statusCommand("", context);
+      await statusCommand("value-worker-status", context);
       lastStatus = notifications.slice(before).join("\n");
       return lastStatus.split("\n").includes("Candidate store: ready");
     };
@@ -539,7 +539,7 @@ test("Pi extension hook returns a validated compatibility replay through the nor
     "request_compaction",
     "history_status",
   ]);
-  assert.deepEqual(commandNames, ["chrono-logical-session", "chrono-auto-rollover", "chrono-rollup-repair", "chrono-composition-preview", "chrono-search-status", "chrono-search", "chrono-worker-status", "chrono-doctor", "chrono-capsules-status", "chrono-catalog-status", "chrono-rollup-shadow-status", "chrono-value-worker-status", "chrono-value-worker-reset", "chrono-compact-settings"]);
+  assert.deepEqual(commandNames, ["Chrono"]);
   assert.ok(hooks.has("context"));
   assert.ok(hooks.has("session_start"));
   assert.ok(hooks.has("session_shutdown"));
@@ -628,32 +628,41 @@ test("Pi extension hook returns a validated compatibility replay through the nor
   assert.doesNotMatch(result.compaction.summary, /FABRICATED_SUMMARY_SHOULD_NEVER_BE_RECOMPACTED/);
   assert.ok(notifications.some((notification) => /ChronoCompact/.test(notification.message)));
 
-  const workerStatus=commandHandlers.get("chrono-worker-status"),doctor=commandHandlers.get("chrono-doctor");assert.ok(workerStatus&&doctor);await workerStatus("",context);await doctor("",context);const commandOutput=notifications.slice(-2).map(item=>item.message).join("\n");assert.match(commandOutput,/Scheduler artifacts:/);assert.match(commandOutput,/Doctor mode: read-only/);assert.doesNotMatch(commandOutput,/\.jsonl|\/home\//);
+  const chrono = commandHandlers.get("Chrono");
+  assert.ok(chrono);
+  await chrono("worker-status", context);
+  await chrono("doctor", context);
+  const commandOutput = notifications.slice(-2).map(item => item.message).join("\n");
+  assert.match(commandOutput, /Scheduler artifacts:/);
+  assert.match(commandOutput, /Doctor mode: read-only/);
+  assert.doesNotMatch(commandOutput, /\.jsonl|\/home\//);
 
-  let settingsMenuVisits = 0;
+  let settingsMenuVisits = 0, mainVisits = 0, backgroundVisits = 0, customVisits = 0;
   (context.ui as { input?: () => Promise<string | undefined> }).input = async () => undefined;
+  (context.ui as { confirm?: () => Promise<boolean> }).confirm = async () => true;
   context.ui.select = async (title: string, choices: string[]) => {
-    if (title === "ChronoCompact settings") {
+    if (title.startsWith("Chrono settings: Custom")) {
       settingsMenuVisits += 1;
-      if (settingsMenuVisits === 1) return choices.find((choice) => choice.startsWith("Background value worker"));
-      if (settingsMenuVisits === 2) return choices.find((choice) => choice.startsWith("Hierarchical rollup shadow evaluation"));
-      if (settingsMenuVisits === 3) return choices.find((choice) => choice.startsWith("Raw history retained"));
-      return "Save and close";
+      if (settingsMenuVisits === 1) return choices.find(choice => choice.startsWith("Background LLM"));
+      if (settingsMenuVisits === 2) return choices.find(choice => choice.startsWith("Hierarchical rollup shadow evaluation"));
+      if (settingsMenuVisits === 3) return choices.find(choice => choice.startsWith("Raw history retained"));
+      return "Back";
     }
-    if (title === "Background value-worker mode") return "shadow";
-    if (title === "Value-model thinking level") return "inherit";
+    if (title.startsWith("Chrono settings")) return mainVisits++ === 0 ? "Custom settings (all options)" : "Back";
+    if (title.startsWith("Background LLM\n")) return backgroundVisits++ === 0 ? "Custom controls" : "Back";
+    if (title.startsWith("Background LLM: Custom")) return customVisits++ === 0 ? choices.find(choice => choice.startsWith("Mode")) : "Back";
+    if (title === "Background LLM mode") return "shadow";
     if (title === "Hierarchical rollup shadow evaluation") return "Enabled";
     if (title === "How much recent history should remain raw?") return "Short · 8,000 tokens";
     return undefined;
   };
-  const configure = commandHandlers.get("chrono-compact-settings");
-  assert.ok(configure);
-  await configure("", context);
+  await chrono("settings", context);
   const persisted = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
   assert.equal(persisted.rawTail, "short");
   assert.equal(persisted.valueWorkerMode, "shadow");
   assert.equal(persisted.rollupShadowEnabled, true);
-  assert.ok(notifications.some((notification) => /Background value worker: shadow/.test(notification.message)));
+  assert.equal(persisted.valueWorkerPreset, "custom");
+  assert.ok(!notifications.some(notification => /Saved ChronoCompact settings/.test(notification.message)), "settings do not print a transcript report");
   rmSync(configPath, { force: true });
 });
 

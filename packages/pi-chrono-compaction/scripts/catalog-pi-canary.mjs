@@ -38,9 +38,9 @@ for(const enabled of [false,true]){
  child.stdout.setEncoding('utf8');child.stdout.on('data',s=>{buffer+=s;assert(buffer.length<2*1024*1024);let nl;while((nl=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,nl);buffer=buffer.slice(nl+1);let e;try{e=JSON.parse(line)}catch{continue}if(e.type==='extension_error')errors.push(e.error);if(e.type==='extension_ui_request'&&e.method==='notify')notifications.push(e.message);if(e.type==='response'&&pending.has(e.id)){pending.get(e.id)(e);pending.delete(e.id)}}});
  const send=(type,extra={})=>new Promise((res,rej)=>{const id=String(++seq),timer=setTimeout(()=>{pending.delete(id);rej(new Error('canary-timeout:'+type+':'+stderr))},45000);pending.set(id,e=>{clearTimeout(timer);e.success?res(e.data):rej(new Error(e.error??'canary-response-failed'))});child.stdin.write(JSON.stringify({id,type,...extra})+'\n')});
  try{
-  const commands=await send('get_commands');for(const name of ['chrono-doctor','chrono-worker-status','chrono-catalog-status'])assert(commands.commands.some(c=>c.name===name));
-  for(const name of ['chrono-doctor','chrono-worker-status','chrono-catalog-status'])await send('prompt',{message:'/'+name});
-  if(enabled){let ready=false;for(let i=0;i<100;i++){await send('prompt',{message:'/chrono-catalog-status'});if(notifications.at(-1)?.includes('ready')){ready=true;break}await sleep(100)}assert(ready,'catalog readiness:'+notifications.at(-1));}
+  const commands=await send('get_commands');assert(commands.commands.some(c=>c.name==='Chrono'));
+  for(const name of ['doctor','worker-status','catalog-status'])await send('prompt',{message:'/Chrono '+name});
+  if(enabled){let ready=false;for(let i=0;i<100;i++){await send('prompt',{message:'/Chrono catalog-status'});if(notifications.at(-1)?.includes('ready')){ready=true;break}await sleep(100)}assert(ready,'catalog readiness:'+notifications.at(-1));}
   else{assert(notifications.some(s=>s.includes('disabled')));assert(!existsSync(join(dir,'.chrono-catalog')));}
   await send('prompt',{message:'/canary-history'});assert(notifications.includes('CANARY_HISTORY_OK'));
   const compact=await send('compact',{customInstructions:'Preserve synthetic acceptance and chronological order.'});

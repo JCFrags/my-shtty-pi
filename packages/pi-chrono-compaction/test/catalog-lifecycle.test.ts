@@ -24,7 +24,7 @@ for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in
   async function waitReady() {
     const deadline = Date.now() + 10_000;
     do {
-      await commands.get("chrono-catalog-status")!.handler("", context);
+      await commands.get("Chrono")!.handler("catalog-status", context);
       if (status.includes("shadow: ready.")) return;
       assert.ok(!status.includes("Safe refusal"), status);
       await pause();
@@ -55,7 +55,7 @@ for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in
     hooks.get("session_before_switch")!({}, context);
     hooks.get("session_before_fork")!({}, context);
     hooks.get("session_shutdown")!({}, context);
-    await commands.get("chrono-catalog-status")!.handler("", context);
+    await commands.get("Chrono")!.handler("catalog-status", context);
     assert.ok(status.includes("disabled"));
     completed = true;
   } finally {

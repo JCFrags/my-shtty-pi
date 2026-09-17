@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { showChronoReport } from "./chrono-ui.js";
 import { Type } from "typebox";
 import { env } from "node:process";
 import { createHash, randomUUID } from "node:crypto";
@@ -99,6 +100,8 @@ import {
   defaultUserConfigPath,
   loadUserConfig,
   saveUserConfig,
+  VALUE_WORKER_PRESETS,
+  type ValueWorkerPreset,
   type UserConfig,
 } from "./user-config.js";
 import { emptyRetrievalFeedback, recordRetrievalFeedback, type RetrievalFeedback } from "./telemetry.js";
@@ -349,6 +352,154 @@ function rawTailDescription(settings: RuntimeSettings): string {
   return "Pi prepared tail";
 }
 
+type SaveConfig = (config: UserConfig) => void;
+
+function valueModel(ctx: ExtensionCommandContext, specification: string) {
+  if (specification === "main") return ctx.model;
+  const slash = specification.indexOf("/");
+  return slash > 0 ? ctx.modelRegistry.find(specification.slice(0, slash), specification.slice(slash + 1)) : undefined;
+}
+
+function applyValuePreset(ctx: ExtensionCommandContext, config: UserConfig, preset: Exclude<ValueWorkerPreset, "custom">): UserConfig {
+  const values = VALUE_WORKER_PRESETS[preset];
+  const model = valueModel(ctx, config.valueWorkerModel ?? "main");
+  const supported = model ? getSupportedThinkingLevels(model) : ["off" as const];
+  const preferred = values.valueWorkerThinking as "off" | "low" | "medium";
+  const thinking = supported.includes(preferred) ? preferred : supported[0] ?? "off";
+  return { ...config, ...values, valueWorkerThinking: thinking, valueWorkerPreset: preset };
+}
+
+async function pickValueModel(ctx: ExtensionCommandContext, config: UserConfig): Promise<UserConfig> {
+  const available = ctx.scopedModels?.length
+    ? ctx.scopedModels.map(item => item.model)
+    : ctx.modelRegistry.getAvailable();
+  const providers = [...new Set(available.map(model => model.provider))].sort();
+  const provider = await ctx.ui.select("Background LLM model", ["Use current main model", ...providers, "Back"]);
+  if (!provider || provider === "Back") return config;
+  let specification = "main";
+  if (provider !== "Use current main model") {
+    const models = available.filter(model => model.provider === provider);
+    const labels = models.map(model => `${model.name} (${model.id})`);
+    const selected = await ctx.ui.select("Select background model", [...labels, "Back"]);
+    const model = models[labels.indexOf(selected ?? "")];
+    if (!model) return config;
+    specification = `${model.provider}/${model.id}`;
+  }
+  const next = { ...config, valueWorkerModel: specification };
+  const preset = next.valueWorkerPreset;
+  return preset && preset !== "custom" ? applyValuePreset(ctx, next, preset) : next;
+}
+
+async function configInput(ctx: ExtensionCommandContext, title: string, current: string, command: string, config: UserConfig): Promise<UserConfig> {
+  let error = "";
+  while (true) {
+    const value = await ctx.ui.input(`${title}${error ? `\nInvalid value: ${error}` : ""}`, current);
+    if (value === undefined) return config;
+    try { return applyConfigCommand(config, `${command} ${value.trim()}`).config; }
+    catch (cause) { error = safeErrorMessage(cause); current = value; }
+  }
+}
+
+async function customValueSettings(ctx: ExtensionCommandContext, initial: UserConfig, save: SaveConfig): Promise<UserConfig> {
+  let draft = initial;
+  let saved = initial;
+  let error = "";
+  while (true) {
+    try { if (draft !== saved) { save(draft); saved = draft; error = ""; } }
+    catch (cause) { error = `Not saved: ${safeErrorMessage(cause)}`; }
+    const worker = resolveExtensionSettings(draft).valueWorker;
+    const fields = [
+      ["Input tokens per job", "value-worker-job-input", worker.maxInputTokensPerJob],
+      ["Output tokens per job", "value-worker-job-output", worker.maxOutputTokensPerJob],
+      ["Items per job", "value-worker-job-items", worker.maxItemsPerJob],
+      ["Job timeout (seconds)", "value-worker-timeout", worker.timeoutSeconds],
+      ["Retries", "value-worker-retries", worker.retries],
+      ["Concurrent model calls", "value-worker-slots", worker.hostSlots],
+      ["Calls per session", "value-worker-session-calls", worker.maxCallsPerSession],
+      ["Input tokens per session", "value-worker-session-input", worker.maxInputTokensPerSession],
+      ["Output tokens per session", "value-worker-session-output", worker.maxOutputTokensPerSession],
+      ["Estimated USD per session (or off)", "value-worker-cost", worker.maxEstimatedCostMicroUsd === undefined ? "off" : worker.maxEstimatedCostMicroUsd / 1_000_000],
+      ["Failures before pause", "value-worker-circuit-failures", worker.circuitFailureLimit],
+      ["Failure pause (seconds)", "value-worker-circuit-cooldown", worker.circuitCooldownSeconds],
+    ] as const;
+    const labels = fields.map(([label, , value]) => `${label} · ${value}`);
+    const choice = await ctx.ui.select(`Background LLM: Custom\n${error || "Valid changes save immediately."}`, [
+      `Mode · ${worker.mode}`, `Model · ${worker.model}`, `Thinking · ${worker.thinking}`, ...labels,
+      ...(draft !== saved ? ["Discard unsaved changes"] : []), "Back",
+    ]);
+    if (choice === "Discard unsaved changes") { draft = saved; error = ""; continue; }
+    if (!choice || choice === "Back") { if (draft === saved) return draft; continue; }
+    try {
+      if (choice.startsWith("Mode")) {
+        const mode = await ctx.ui.select("Background LLM mode", ["off", "advisory", "shadow"]);
+        if (mode && (worker.mode !== "off" || mode === "off" || await confirmValueEnable(ctx))) {
+          draft = { ...draft, valueWorkerMode: mode as ValueWorkerSettings["mode"], valueWorkerPreset: "custom",
+            ...(mode === "off" ? {} : { incrementalPrecomputeEnabled: true }) };
+        }
+      } else if (choice.startsWith("Model")) draft = await pickValueModel(ctx, draft);
+      else if (choice.startsWith("Thinking")) {
+        const model = valueModel(ctx, worker.model);
+        const thinking = await ctx.ui.select("Background model thinking", ["inherit", ...(model ? getSupportedThinkingLevels(model) : ["off"])]);
+        if (thinking) draft = { ...applyConfigCommand(draft, `value-worker-thinking ${thinking}`).config, valueWorkerPreset: "custom" };
+      } else {
+        const field = fields[labels.indexOf(choice)];
+        if (field) {
+          const next = await configInput(ctx, field[0], String(field[2]), field[1], draft);
+          if (next !== draft) draft = { ...next, valueWorkerPreset: "custom" };
+        }
+      }
+    } catch (cause) { error = safeErrorMessage(cause); }
+  }
+}
+
+function confirmValueEnable(ctx: ExtensionCommandContext): Promise<boolean> {
+  return ctx.ui.confirm("Enable background LLM?", "This sends bounded assistant and tool excerpts to the selected model and can incur charges. User messages and protected instruction text are excluded. Local precompute is also enabled. Compaction never waits for this work.");
+}
+
+async function backgroundSettings(ctx: ExtensionCommandContext, initial: UserConfig, save: SaveConfig): Promise<UserConfig> {
+  let draft = initial;
+  let saved = initial;
+  let error = "";
+  while (true) {
+    try { if (draft !== saved) { save(draft); saved = draft; error = ""; } }
+    catch (cause) { error = `Not saved: ${safeErrorMessage(cause)}`; }
+    const runtime = resolveExtensionSettings(draft);
+    const worker = runtime.valueWorker;
+    const availability = runtime.memoryEngineEnabled ? "Compatibility worker is paused while the V3 memory engine is enabled." : "Valid changes save immediately. Environment overrides take priority.";
+    const choice = await ctx.ui.select(`Background LLM\n${error || availability}`, [
+      `Enabled · ${worker.mode === "off" ? "no" : "yes"}`,
+      `Usage · ${draft.valueWorkerPreset ?? (worker.mode === "off" ? "lite (on enable)" : "custom")}`,
+      `Model · ${worker.model}`,
+      "Custom controls",
+      ...(draft !== saved ? ["Discard unsaved changes"] : []), "Back",
+    ]);
+    if (choice === "Discard unsaved changes") { draft = saved; error = ""; continue; }
+    if (!choice || choice === "Back") { if (draft === saved) return draft; continue; }
+    try {
+      if (choice.startsWith("Enabled")) {
+        if (worker.mode !== "off") draft = { ...draft, valueWorkerMode: "off" };
+        else if (await confirmValueEnable(ctx)) {
+          const preset = draft.valueWorkerPreset ?? "lite";
+          if (preset !== "custom") draft = applyValuePreset(ctx, draft, preset);
+          draft = { ...draft, valueWorkerMode: "advisory", incrementalPrecomputeEnabled: true };
+        }
+      } else if (choice.startsWith("Model")) draft = await pickValueModel(ctx, draft);
+      else if (choice === "Custom controls") draft = await customValueSettings(ctx, draft, save);
+      else if (choice.startsWith("Usage")) {
+        const selected = await ctx.ui.select("Background LLM usage\nPer-session ceilings, not guaranteed bill totals. Model prices determine actual cost.", [
+          "lite · recommended · up to 20 calls / $0.25 estimated",
+          "medium · up to 100 calls / $2 estimated",
+          "max · up to 400 calls / $10 estimated",
+          "custom · edit individual limits",
+        ]);
+        const preset = selected?.split(" · ")[0] as ValueWorkerPreset | undefined;
+        if (preset === "custom") draft = await customValueSettings(ctx, { ...draft, valueWorkerPreset: "custom" }, save);
+        else if (preset) draft = applyValuePreset(ctx, draft, preset);
+      }
+    } catch (cause) { error = safeErrorMessage(cause); }
+  }
+}
+
 async function tokenInput(
   ctx: ExtensionCommandContext,
   title: string,
@@ -356,27 +507,26 @@ async function tokenInput(
   command: string,
   config: UserConfig,
 ): Promise<UserConfig> {
-  const value = await ctx.ui.input(title, current.toString());
-  if (value === undefined) return config;
-  try {
-    return applyConfigCommand(config, `${command} ${value.trim()}`).config;
-  } catch (error) {
-    ctx.ui.notify(safeErrorMessage(error), "warning");
-    return config;
-  }
+  return configInput(ctx, title, current.toString(), command, config);
 }
 
 async function openChronoCompactSettings(
   ctx: ExtensionCommandContext,
   initial: UserConfig,
-): Promise<UserConfig | undefined> {
+  save: SaveConfig,
+): Promise<UserConfig> {
   let draft = initial;
+  let saved = initial;
+  let custom = false;
+  let error = "";
   while (true) {
+    try { if (draft !== saved) { effectiveContextCeiling(ctx, resolveExtensionSettings(draft)); save(draft); saved = draft; error = ""; } }
+    catch (cause) { error = `Not saved: ${safeErrorMessage(cause)}`; }
     const settings = resolveExtensionSettings(draft);
     const timing = settings.triggerThresholdTokens === undefined
       ? "Pi context pressure"
       : `proactive at ${settings.triggerThresholdTokens.toLocaleString()} tokens`;
-    const choice = await ctx.ui.select("ChronoCompact settings", [
+    const choice = await ctx.ui.select(`Chrono settings${custom ? ": Custom" : ""}\n${error || "Valid changes save immediately. Environment overrides take priority."}`, custom ? [
       `Loaded version · ${EXTENSION_VERSION}`,
       `Compaction timing · ${timing}`,
       "Pi pressure safeguard · managed by Pi settings",
@@ -387,27 +537,39 @@ async function openChronoCompactSettings(
       `Chronological replay maximum · ${settings.replayTargetTokens === undefined ? "automatic" : `${settings.replayTargetTokens.toLocaleString()} tokens`}`,
       `Regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
       `Automatic physical-shard rollover · ${settings.automaticRolloverEnabled ? `${settings.rolloverSourceBytes.toLocaleString()} source bytes at safe idle` : "disabled"}`,
-      `Background value worker · ${settings.valueWorker.mode} · ${settings.valueWorker.model} · thinking ${settings.valueWorker.thinking}`,
-      "Retrospective only. Bounded assistant and tool excerpts can be sent only after enablement. Protected exact, user, and project instruction text is never sent. Final replay remains deterministic. Compaction never waits. Shadow does not change replay.",
+      `Background LLM · ${settings.valueWorker.mode}`,
       `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
       `Isolated local compaction worker · ${settings.isolatedWorkerEnabled ? `enabled · ${settings.hostWorkerSlots} host slot(s) · nice ${settings.workerNiceLevel}` : "disabled"}`,
       `Hierarchical rollup shadow evaluation · ${settings.rollupShadowEnabled ? "enabled · output does not reach the model · current replay authoritative · local isolated low-priority worker · metrics only" : "disabled"}`,
-      `Request-local tool-result projection · ${settings.toolResultProjectionMode}`,
+      `Tool-result shortening at compaction · ${settings.toolResultProjectionMode}`,
       `Ranked local history search · ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
       `Editable working memory · ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,
       `Source retention bands · hot ${settings.config.hotSourceTokens?.toLocaleString()} + warm ${settings.config.warmSourceTokens?.toLocaleString()}`,
       `Regular-summary rebase · every ${settings.summaryRebaseInterval} generations`,
+      `Programmatic memory engine · ${settings.memoryEngineEnabled ? "enabled" : "disabled"}`,
+      `Indexed history default · ${settings.searchIndexEnabled ? "enabled" : "disabled"}`,
+      `Source catalog shadow · ${settings.catalogShadowEnabled ? "enabled" : "disabled"}`,
       "Reset all to defaults",
-      "Save and close",
-      "Cancel",
+      "Discard unsaved changes",
+      "Back",
+    ] : [
+      `Background LLM · ${settings.valueWorker.mode === "off" ? "off" : `${draft.valueWorkerPreset ?? "custom"} · ${settings.valueWorker.model}`}`,
+      `Compaction timing · ${timing}`,
+      `Combined context hard limit · ${settings.targetContextTokens.toLocaleString()} tokens`,
+      `Tool-result shortening at compaction · ${settings.toolResultProjectionMode}`,
+      "Custom settings (all options)",
+      "Back",
     ]);
-    if (choice === undefined || choice === "Cancel") return undefined;
-    if (choice === "Save and close") {
-      try { effectiveContextCeiling(ctx, settings); return draft; }
-      catch (error) { ctx.ui.notify(safeErrorMessage(error), "warning"); continue; }
+    if (choice === undefined || choice === "Back") {
+      if (draft !== saved) continue;
+      if (custom) { custom = false; continue; }
+      return draft;
     }
+    if (choice === "Custom settings (all options)") { custom = true; continue; }
+    if (choice === "Discard unsaved changes") { draft = saved; error = ""; continue; }
+    try {
     if (choice.startsWith("Loaded version")) {
-      ctx.ui.notify(`ChronoCompact ${EXTENSION_VERSION} is loaded. Compatibility replay cap: ${HARD_REPLAY_CAP_TOKENS.toLocaleString()} tokens. Effective combined cap: ${effectiveContextCeiling(ctx, settings).toLocaleString()} tokens.`, "info");
+      await showChronoReport(ctx, "Chrono version", `Chrono ${EXTENSION_VERSION} is loaded. Compatibility replay cap: ${HARD_REPLAY_CAP_TOKENS.toLocaleString()} tokens. Effective combined cap: ${effectiveContextCeiling(ctx, settings).toLocaleString()} tokens.`);
       continue;
     }
     if (choice.startsWith("Compaction timing")) {
@@ -423,7 +585,7 @@ async function openChronoCompactSettings(
     }
     if (choice.startsWith("Pi pressure safeguard")) {
       const usage = ctx.getContextUsage();
-      ctx.ui.notify(
+      await showChronoReport(ctx, "Pi pressure safeguard",
         [
           "Pi pressure compaction is separate from the proactive ChronoCompact threshold.",
           "Pi default trigger: context window minus 16,384 reserved tokens.",
@@ -431,7 +593,6 @@ async function openChronoCompactSettings(
           usage ? `Current reported context: ${usage.tokens?.toLocaleString() ?? "unknown"}/${usage.contextWindow.toLocaleString()} tokens.` : "Current context usage is unavailable.",
           "Pi pressure can trigger earlier than a higher ChronoCompact threshold and remains the final safeguard.",
         ].join("\n"),
-        "info",
       );
       continue;
     }
@@ -459,15 +620,7 @@ async function openChronoCompactSettings(
       continue;
     }
     if (choice.startsWith("Dynamic tail bounds")) {
-      const minimum = await ctx.ui.input("Dynamic raw-tail minimum", settings.dynamicRawTailMinTokens.toString());
-      if (minimum === undefined) continue;
-      const maximum = await ctx.ui.input("Dynamic raw-tail maximum", settings.dynamicRawTailMaxTokens.toString());
-      if (maximum === undefined) continue;
-      try {
-        draft = applyConfigCommand(draft, `raw-tail-bounds ${minimum.trim()} ${maximum.trim()}`).config;
-      } catch (error) {
-        ctx.ui.notify(safeErrorMessage(error), "warning");
-      }
+      draft = await configInput(ctx, "Dynamic raw-tail bounds: minimum maximum", `${settings.dynamicRawTailMinTokens} ${settings.dynamicRawTailMaxTokens}`, "raw-tail-bounds", draft);
       continue;
     }
     if (choice.startsWith("Combined context hard limit")) {
@@ -497,29 +650,9 @@ async function openChronoCompactSettings(
       }
       continue;
     }
-    if (choice.startsWith("Background value worker")) {
-      const mode = await ctx.ui.select("Background value-worker mode", ["off", "shadow", "advisory"]);
-      if (!mode) continue;
-      draft = applyConfigCommand(draft, `value-worker-mode ${mode}`).config;
-      const model = await ctx.ui.input("Value model: main or provider/model", settings.valueWorker.model);
-      if (model !== undefined) draft = applyConfigCommand(draft, `value-worker-model ${model.trim()}`).config;
-      const selectedModel = settings.valueWorker.model === "main" ? ctx.model : (() => { const slash = settings.valueWorker.model.indexOf("/"); return slash > 0 ? ctx.modelRegistry.find(settings.valueWorker.model.slice(0, slash), settings.valueWorker.model.slice(slash + 1)) : undefined; })();
-      const thinkingOptions = selectedModel ? ["inherit", ...getSupportedThinkingLevels(selectedModel)] : ["inherit"];
-      const thinking = await ctx.ui.select("Value-model thinking level", thinkingOptions);
-      if (thinking) draft = applyConfigCommand(draft, `value-worker-thinking ${thinking}`).config;
-      draft = await tokenInput(ctx, "Maximum input tokens per value job", settings.valueWorker.maxInputTokensPerJob, "value-worker-job-input", draft);
-      draft = await tokenInput(ctx, "Maximum output tokens per value job", settings.valueWorker.maxOutputTokensPerJob, "value-worker-job-output", draft);
-      draft = await tokenInput(ctx, "Maximum items per value job", settings.valueWorker.maxItemsPerJob, "value-worker-job-items", draft);
-      draft = await tokenInput(ctx, "Value-job timeout seconds", settings.valueWorker.timeoutSeconds, "value-worker-timeout", draft);
-      draft = await tokenInput(ctx, "Value-job retries", settings.valueWorker.retries, "value-worker-retries", draft);
-      draft = await tokenInput(ctx, "Host-wide value-model slots", settings.valueWorker.hostSlots, "value-worker-slots", draft);
-      draft = await tokenInput(ctx, "Maximum value calls per session", settings.valueWorker.maxCallsPerSession, "value-worker-session-calls", draft);
-      draft = await tokenInput(ctx, "Maximum value input tokens per session", settings.valueWorker.maxInputTokensPerSession, "value-worker-session-input", draft);
-      draft = await tokenInput(ctx, "Maximum value output tokens per session", settings.valueWorker.maxOutputTokensPerSession, "value-worker-session-output", draft);
-      const cost = await ctx.ui.input("Maximum estimated value cost in USD, or off", draft.valueWorkerMaxEstimatedCostUsd == null ? "off" : String(draft.valueWorkerMaxEstimatedCostUsd));
-      if (cost !== undefined) draft = applyConfigCommand(draft, `value-worker-cost ${cost.trim()}`).config;
-      draft = await tokenInput(ctx, "Circuit failure limit", settings.valueWorker.circuitFailureLimit, "value-worker-circuit-failures", draft);
-      draft = await tokenInput(ctx, "Circuit cooldown seconds", settings.valueWorker.circuitCooldownSeconds, "value-worker-circuit-cooldown", draft);
+    if (choice.startsWith("Background LLM")) {
+      draft = await backgroundSettings(ctx, draft, save);
+      saved = draft;
       continue;
     }
     if (choice.startsWith("Segmented incremental deterministic precompute")) {
@@ -545,8 +678,8 @@ async function openChronoCompactSettings(
       }
       continue;
     }
-    if (choice.startsWith("Request-local tool-result projection")) {
-      const selected = await ctx.ui.select("Request-local tool-result projection", ["Off", "Safe", "Aggressive"]);
+    if (choice.startsWith("Tool-result shortening at compaction")) {
+      const selected = await ctx.ui.select("Shorten old tool results only at compaction boundaries\nLater turns keep the same shortened text. New results stay exact until the next compaction.", ["Off", "Safe", "Aggressive"]);
       if (selected) draft = applyConfigCommand(draft, `tool-result-projection ${selected.toLowerCase()}`).config;
       continue;
     }
@@ -569,9 +702,16 @@ async function openChronoCompactSettings(
       draft = await tokenInput(ctx, "Regular-summary rebase interval", settings.summaryRebaseInterval, "summary-rebase-interval", draft);
       continue;
     }
-    if (choice === "Reset all to defaults") {
-      if (await ctx.ui.confirm("Reset ChronoCompact settings?", "This removes all persistent overrides.")) draft = {};
+    const toggles: Array<[string, string]> = [["Programmatic memory engine", "memory-engine"], ["Indexed history default", "search-index"], ["Source catalog shadow", "catalog-shadow"]];
+    const toggle = toggles.find(([label]) => choice.startsWith(label));
+    if (toggle) {
+      const selected = await ctx.ui.select(toggle[0], ["Enabled", "Disabled"]);
+      if (selected) draft = applyConfigCommand(draft, `${toggle[1]} ${selected === "Enabled" ? "on" : "off"}`).config;
     }
+    if (choice === "Reset all to defaults") {
+      if (await ctx.ui.confirm("Reset Chrono settings?", "This removes all persistent overrides. Background LLM stays off by default.")) draft = {};
+    }
+    } catch (cause) { error = safeErrorMessage(cause); }
   }
 }
 
@@ -669,7 +809,7 @@ function unmatchedToolCallCount(entries: readonly SessionEntryLike[]): number {
 
 function logicalErrorCode(error: unknown): string {
   const candidate = (error as { code?: unknown })?.code ?? (error as { message?: unknown })?.message;
-  if (typeof candidate === "string" && candidate.startsWith("Usage: /chrono-logical-session ")) return candidate;
+  if (typeof candidate === "string" && candidate.startsWith("Usage: /Chrono logical-session ")) return candidate;
   return typeof candidate === "string" && /^(logical-session|search-v3|source-changed)[a-z0-9-]*$/.test(candidate)
     ? candidate : "logical-session-unavailable";
 }
@@ -1856,7 +1996,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         return;
       }
       if (epoch !== rolloutEpoch || ctx.sessionManager.getLeafId() !== leafId || automaticRolloverBlockers(ctx).length) return;
-      if (!pi.getCommands().some(command => command.name === "chrono-auto-rollover" && command.source === "extension")) {
+      if (!pi.getCommands().some(command => command.name === "Chrono" && command.source === "extension")) {
         automaticRolloverStatus = { state: "dispatch-unavailable" }; return;
       }
       automaticRolloverAttemptedLeaf = leafId;
@@ -1864,7 +2004,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       automaticRolloverStatus = { state: "dispatched", sourceBytes: source.size };
       // Pi 0.85.1 dispatches extension commands before model preflight when this
       // option is true. This never writes editor text or sends a model prompt.
-      pi.sendUserMessage(`/chrono-auto-rollover ${automaticRolloverTicket.nonce}`, { expandPromptTemplates: true });
+      pi.sendUserMessage(`/Chrono _auto-rollover ${automaticRolloverTicket.nonce}`, { expandPromptTemplates: true });
     };
     automaticRolloverTimer = setTimeout(() => { void check().catch(() => { automaticRolloverStatus = { state: "source-unavailable" }; }); }, 0);
   };
@@ -2473,14 +2613,14 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       try {
         if (action === "adopt") {
           const branchId = parts[1] ?? "main";
-          if (!sourcePath || parts.length > 2) throw new Error("Usage: /chrono-logical-session adopt [branch-id]");
+          if (!sourcePath || parts.length > 2) throw new Error("Usage: /Chrono logical-session adopt [branch-id]");
           const existing = await resolveStartedLogicalSession(ctx);
           if (existing && existing.branchId !== branchId) throw new Error("logical-session-adoption-conflict");
           logicalGrant = existing ?? await adoptStartedSession(ctx, branchId);
           ctx.ui.notify(`Logical session adopted: ${logicalGrant.logicalSessionId} on branch ${branchId}. No rollover occurred.`, "info");
           return;
         }
-        if (!sourcePath || !validLogicalCommandId(parts[1])) throw new Error("Usage: /chrono-logical-session status|rollover|fork|recover|rollback <logical-session-id> [branch-id]");
+        if (!sourcePath || !validLogicalCommandId(parts[1])) throw new Error("Usage: /Chrono logical-session status|rollover|fork|recover|rollback <logical-session-id> [branch-id]");
         const store = new LogicalSessionStore(logicalSessionRoot, parts[1]!);
         const rollover = new ManualLogicalRollover(store);
         const manifest = await store.read();
@@ -2529,7 +2669,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         }
         if (!["rollover", "fork"].includes(action ?? "") || !parts[2]
           || parts.length !== (action === "fork" ? 4 : 3)) {
-          throw new Error("Usage: /chrono-logical-session rollover <logical-session-id> <branch-id>; fork <logical-session-id> <source-branch-id> <new-branch-id>");
+          throw new Error("Usage: /Chrono logical-session rollover <logical-session-id> <branch-id>; fork <logical-session-id> <source-branch-id> <new-branch-id>");
         }
         const branchEntries = automatic ? boundedBranchEntries(ctx) : asEntries(ctx.sessionManager.getBranch());
         const leafId = ctx.sessionManager.getLeafId?.();
@@ -2584,11 +2724,13 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         catch { throw error; } // Do not hide an original replacement failure behind a stale UI context.
       }
   };
-  pi.registerCommand("chrono-logical-session", {
+  const chronoActions = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
+  const registerChronoAction = (name: string, action: Parameters<ExtensionAPI["registerCommand"]>[1]) => { chronoActions.set(name, action); };
+  registerChronoAction("logical-session", {
     description: "Adopt, inspect, roll over, fork, recover, or roll back one owner-only logical session",
     handler: (args, ctx) => runLogicalSessionCommand(args, ctx),
   });
-  pi.registerCommand("chrono-auto-rollover", {
+  registerChronoAction("_auto-rollover", {
     description: "Internal one-shot safe-idle logical rollover dispatch",
     handler: async (args, ctx) => {
       const ticket = automaticRolloverTicket;
@@ -2604,7 +2746,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-rollup-repair", {
+  registerChronoAction("rollup-repair", {
     description: "Run one bounded rollup repair transition: start, step, status, or publish.",
     handler: async (args, ctx) => {
       const parts = args.trim().split(/\s+/u), action = parts[0], repairId = parts[1], expected = parts[2];
@@ -2612,7 +2754,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         || !/^[A-Za-z0-9_.:-]{1,64}$/u.test(repairId) || (action === "publish"
           ? parts.length !== 3 || !expected || expected !== "legacy" && !/^[a-f0-9]{64}$/u.test(expected)
           : parts.length !== 2)) {
-        ctx.ui.notify("Usage: /chrono-rollup-repair start|step|status <repairId> OR publish <repairId> <legacy|expected-store-id>", "info"); return;
+        ctx.ui.notify("Usage: /Chrono rollup-repair start|step|status <repairId> OR publish <repairId> <legacy|expected-store-id>", "info"); return;
       }
       const leaf = ctx.sessionManager.getLeafId();
       if (!leaf) { ctx.ui.notify("Rollup repair requires a persisted branch leaf.", "warning"); return; }
@@ -2624,12 +2766,12 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-composition-preview", {
+  registerChronoAction("composition-preview", {
     description: "Save a bounded private shadow comparison for a recorded compaction ID, or the nearest compaction. Does not activate compaction.",
     handler: async (args, ctx) => {
       const requested = args.trim();
       if (requested && !/^[a-f0-9]{8}$/.test(requested)) {
-        ctx.ui.notify("Usage: /chrono-composition-preview [compaction-entry-id]", "info"); return;
+        ctx.ui.notify("Usage: /Chrono composition-preview [compaction-entry-id]", "info"); return;
       }
       const sessionId = ctx.sessionManager.getSessionId();
       const epoch = rolloutEpoch;
@@ -2666,14 +2808,14 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       }
     },
   });
-  pi.registerCommand("chrono-search-status", {
+  registerChronoAction("search-status", {
     description: "Read cached search readiness without ingestion or archive scans",
     handler: async (_args, ctx) => { ctx.ui.notify(JSON.stringify(searchStatus()), "info"); },
   });
-  pi.registerCommand("chrono-search", {
+  registerChronoAction("search", {
     description: "Persistently enable or disable indexed history for only this session: on|off. Normal startup needs no command.",
     handler: async (args, ctx) => {
-      if (args !== "on" && args !== "off") { ctx.ui.notify("Usage: /chrono-search on|off. This changes only this session's persistent rollout.", "info"); return; }
+      if (args !== "on" && args !== "off") { ctx.ui.notify("Usage: /Chrono search on|off. This changes only this session's persistent rollout.", "info"); return; }
       const sourcePath = ctx.sessionManager.getSessionFile();
       if (!sourcePath) { ctx.ui.notify("Search rollout requires a saved session.", "warning"); return; }
       const epoch = rolloutEpoch, sessionId = ctx.sessionManager.getSessionId();
@@ -2688,7 +2830,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-worker-status", {
+  registerChronoAction("worker-status", {
     description: "Show bounded isolated-worker and scheduler status",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
@@ -2715,7 +2857,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-doctor", {
+  registerChronoAction("doctor", {
     description: "Run read-only bounded ChronoCompact safety checks",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
@@ -2746,14 +2888,14 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-capsules-status", {
+  registerChronoAction("capsules-status", {
     description: "Show cached synthetic M05 capsule/chunk progress; no storage reads",
     handler: async (_args, ctx) => {
       if (ctx.hasUI) ctx.ui.notify(capsuleStatusText(), "info");
     },
   });
 
-  pi.registerCommand("chrono-catalog-status", {
+  registerChronoAction("catalog-status", {
     description: "Show local M04 catalog shadow state; no database or archive scan",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
@@ -2763,7 +2905,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-rollup-shadow-status", {
+  registerChronoAction("rollup-shadow-status", {
     description: "Show aggregate hierarchical rollup shadow metrics",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
@@ -2795,7 +2937,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-value-worker-status", {
+  registerChronoAction("value-worker-status", {
     description: "Show aggregate background value-worker status",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
@@ -2815,63 +2957,127 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     },
   });
 
-  pi.registerCommand("chrono-value-worker-reset", {
+  registerChronoAction("value-worker-reset", {
     description: "Cancel pending value work and reset its persisted circuit",
     handler: async (_args, ctx) => { cancelValueWorker(); const sessionPath = ctx.sessionManager.getSessionFile(); const reset = sessionPath ? await resetAdviceCircuit(valueAdviceStorePath(sessionPath)).catch(() => false) : false; valueWorkerStatus = { status: "off" }; ctx.ui.notify(`${reset ? "Reset the persisted circuit. " : "No compatible persisted circuit was found. "}Pending value work was cancelled. Stored advice and source files were preserved.`, "info"); },
   });
 
-  pi.registerCommand("chrono-compact-settings", {
-    description: "Open interactive ChronoCompact settings",
+  registerChronoAction("settings", {
+    description: "Background LLM presets, model selection, and Custom settings",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
-      if (userConfigWarning) ctx.ui.notify(userConfigWarning, "warning");
-      const selected = await openChronoCompactSettings(ctx, userConfig);
-      if (selected === undefined) {
-        ctx.ui.notify("ChronoCompact settings were not changed.", "info");
-        return;
-      }
-      try {
+      if (userConfigWarning) await showChronoReport(ctx, "Configuration warning", userConfigWarning);
+      await openChronoCompactSettings(ctx, userConfig, selected => {
+        if (stableStringify(selected) === stableStringify(userConfig)) return;
         saveUserConfig(selected, userConfigPath);
         userConfig = selected;
-        scheduleCatalogShadow(ctx);
-    scheduleSearch(ctx);
         userConfigWarning = undefined;
         lastTriggerAttemptTokens = undefined;
         cancelIncrementalWork(true);
         cancelShadowWork();
         cancelValueWorker();
-        projectionSeenToolCallIds = new Set();
-        const settings = resolveExtensionSettings(userConfig);
+        scheduleCatalogShadow(ctx);
+        scheduleSearch(ctx);
         scheduleIncrementalWork(ctx);
-        const cachePath = ctx.sessionManager.getSessionFile();
-        const cache = cachePath ? await readCompactionCache(cachePathForSession(cachePath)) : undefined;
-        ctx.ui.notify(
-          [
-            `Saved ChronoCompact settings to ${userConfigPath}.`,
-            `Timing: ${settings.triggerThresholdTokens === undefined ? "Pi context pressure" : `${settings.triggerThresholdTokens.toLocaleString()} tokens`}`,
-            `Raw tail: ${rawTailDescription(settings)}`,
-            `Active target: ${settings.targetContextTokens.toLocaleString()} tokens`,
-            `Replay maximum: ${settings.replayTargetTokens === undefined ? "automatic" : settings.replayTargetTokens.toLocaleString()}`,
-            `Regular Pi summary: ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
-            `Background value worker: ${settings.valueWorker.mode}; model ${settings.valueWorker.model}; thinking ${settings.valueWorker.thinking}`,
-            ...(settings.legacyHistoryEditorEnabled ? ["Warning: the old history classifier setting is retired and cannot start a model call. Use the value-worker controls."] : []),
-            `Segmented incremental deterministic precompute: ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
-            `Source catalog shadow: ${settings.catalogShadowEnabled ? catalogShadow.status().state : "disabled"}; ingestion only, pending storage review`,
-            capsuleStatusText(),
-            `Indexed history: ${JSON.stringify(search.scheduler.status())}`,
-            `Isolated local compaction worker: ${settings.isolatedWorkerEnabled ? `enabled, ${settings.hostWorkerSlots} host slot(s), ${settings.workerTimeoutSeconds}s timeout, nice ${settings.workerNiceLevel}; local deterministic work only, no model` : "disabled"}`,
-            `Hierarchical rollup shadow evaluation: ${settings.rollupShadowEnabled ? "enabled; output does not reach the model; current replay is authoritative; local isolated low-priority worker; metrics only" : "disabled"}`,
-            `Request-local tool-result projection: ${settings.toolResultProjectionMode}`,
-            `Ranked local history search: ${settings.rankedSearchEnabled ? "enabled" : "disabled"}`,
-            `Editable working memory: ${settings.editableMemoryEnabled ? "enabled" : "disabled"}`,
-            `Source retention bands: hot ${settings.config.hotSourceTokens?.toLocaleString()} + warm ${settings.config.warmSourceTokens?.toLocaleString()}`,
-            `Regular-summary rebase: every ${settings.summaryRebaseInterval} generations`,
-            cache ? `Latest cache generation: ${cache.generation}` : "Latest cache generation: none",
-          ].join("\n"),
-          "info",
-        );
-      } catch (error) {
-        ctx.ui.notify(`Could not save ChronoCompact settings: ${safeErrorMessage(error)}`, "error");
+      });
+    },
+  });
+
+  const invokeChronoAction = async (name: string, args: string, ctx: ExtensionCommandContext): Promise<boolean> => {
+    const action = chronoActions.get(name);
+    if (!action) { await showChronoReport(ctx, "Chrono", "Unknown action. Open /Chrono to select Settings, Status, or Maintenance."); return true; }
+    if (ctx.mode !== "tui" || name === "settings" || name === "_auto-rollover") {
+      await action.handler(args, ctx);
+      return true;
+    }
+    const reports: string[] = [];
+    const epoch = rolloutEpoch;
+    // Capture existing UI-only command output instead of adding it to the transcript.
+    const reportContext: ExtensionCommandContext = { ...ctx, ui: { ...ctx.ui, notify: message => { reports.push(message); } } };
+    try { await action.handler(args, reportContext); }
+    catch (error) { reports.push(safeErrorMessage(error)); }
+    if (epoch !== rolloutEpoch) return false; // A session replacement owns the next UI.
+    if (reports.length) {
+      const text = reports.map(report => {
+        try { return JSON.stringify(JSON.parse(report), null, 2); } catch { return report; }
+      }).join("\n\n");
+      await showChronoReport(ctx, `Chrono: ${name}`, text);
+    }
+    return true;
+  };
+
+  const statusMenu = async (ctx: ExtensionCommandContext): Promise<void> => {
+    const entries = [
+      ["Overview and search readiness", "search-status"],
+      ["Background LLM usage", "value-worker-status"],
+      ["Local workers", "worker-status"],
+      ["Read-only health check", "doctor"],
+      ["Source catalog shadow", "catalog-status"],
+      ["Capsule shadow", "capsules-status"],
+      ["Rollup shadow", "rollup-shadow-status"],
+    ] as const;
+    while (true) {
+      const choice = await ctx.ui.select("Chrono: Status and diagnostics", [...entries.map(([label]) => label), "Back"]);
+      const entry = entries.find(([label]) => label === choice);
+      if (!entry) return;
+      await invokeChronoAction(entry[1], "", ctx);
+    }
+  };
+
+  const maintenanceMenu = async (ctx: ExtensionCommandContext): Promise<boolean> => {
+    while (true) {
+      const choice = await ctx.ui.select("Chrono: Maintenance", [
+        "Search for this session", "Preview a compaction", "Logical session", "Repair a rollup", "Reset background LLM circuit", "Back",
+      ]);
+      if (!choice || choice === "Back") return true;
+      if (choice === "Search for this session") {
+        const mode = await ctx.ui.select("Persist indexed history for this session", ["on", "off", "Back"]);
+        if (mode === "on" || mode === "off") await invokeChronoAction("search", mode, ctx);
+      } else if (choice === "Preview a compaction") {
+        const id = await ctx.ui.input("Compaction entry ID (leave blank for nearest). Saves a private preview without changing context.");
+        if (id !== undefined) await invokeChronoAction("composition-preview", id.trim(), ctx);
+      } else if (choice === "Reset background LLM circuit") {
+        if (await ctx.ui.confirm("Reset background LLM circuit?", "This cancels pending work and clears the failure pause. If enabled, background model calls can resume. Stored advice and history are preserved.")) {
+          await invokeChronoAction("value-worker-reset", "", ctx);
+        }
+      } else {
+        const logical = choice === "Logical session";
+        const args = await ctx.ui.input(logical
+          ? "Logical session action and IDs: adopt [branch]; status|recover|rollback <session>; rollover <session> <branch>; fork <session> <branch> <new-branch>"
+          : "Rollup repair: start|step|status <repair-id>; publish <repair-id> <legacy|expected-store-id>");
+        if (args !== undefined && !await invokeChronoAction(logical ? "logical-session" : "rollup-repair", args.trim(), ctx)) return false;
+      }
+    }
+  };
+
+  pi.registerCommand("Chrono", {
+    description: "Chrono settings, background LLM presets, status, and maintenance",
+    getArgumentCompletions: prefix => {
+      const values = [...chronoActions.keys()].filter(name => !name.startsWith("_") && name.startsWith(prefix));
+      return values.length ? values.map(value => ({ value, label: value })) : null;
+    },
+    handler: async (args, ctx) => {
+      const [name, ...rest] = args.trim().split(/\s+/);
+      if (name) {
+        if (!await invokeChronoAction(name, rest.join(" "), ctx)) return;
+        if (name === "_auto-rollover" || ctx.mode !== "tui") return;
+      }
+      if (!ctx.hasUI) return;
+      while (true) {
+        const choice = await ctx.ui.select("Chrono", ["Settings", "Status and diagnostics", "Maintenance", "About", "Close"]);
+        if (!choice || choice === "Close") return;
+        try {
+          if (choice === "Settings") await invokeChronoAction("settings", "", ctx);
+          else if (choice === "Status and diagnostics") await statusMenu(ctx);
+          else if (choice === "Maintenance") { if (!await maintenanceMenu(ctx)) return; }
+          else if (choice === "About") await showChronoReport(ctx, "Chrono", [
+            `Version ${EXTENSION_VERSION}`,
+            "Settings: background LLM off by default. Lite is the recommended starting preset when enabled.",
+            "Tool-result shortening runs only at compaction boundaries. Later turns reuse the same shortened text.",
+            "Reports stay here. Enter or Esc returns to the menu. Settings save after each valid change.",
+            "Source history is preserved. Background model work is optional and can incur charges.",
+          ].join("\n\n"));
+        } catch (error) { await showChronoReport(ctx, "Chrono: action failed", safeErrorMessage(error)); }
       }
     },
   });
