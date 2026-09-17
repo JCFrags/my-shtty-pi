@@ -2,6 +2,27 @@ import { WORKER_LIMITS } from "./worker-runtime-limits.js";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+// Presets write ordinary settings so Custom and existing configuration readers stay compatible.
+export const VALUE_WORKER_PRESETS = {
+    lite: {
+        valueWorkerThinking: "off", valueWorkerMaxInputTokensPerJob: 4_000, valueWorkerMaxOutputTokensPerJob: 1_000,
+        valueWorkerMaxItemsPerJob: 10, valueWorkerTimeoutSeconds: 90, valueWorkerRetries: 0, valueWorkerHostSlots: 1,
+        valueWorkerMaxCallsPerSession: 20, valueWorkerMaxInputTokensPerSession: 40_000, valueWorkerMaxOutputTokensPerSession: 8_000,
+        valueWorkerMaxEstimatedCostUsd: 0.25, valueWorkerCircuitFailureLimit: 3, valueWorkerCircuitCooldownSeconds: 1_800,
+    },
+    medium: {
+        valueWorkerThinking: "low", valueWorkerMaxInputTokensPerJob: 6_000, valueWorkerMaxOutputTokensPerJob: 1_500,
+        valueWorkerMaxItemsPerJob: 20, valueWorkerTimeoutSeconds: 120, valueWorkerRetries: 1, valueWorkerHostSlots: 1,
+        valueWorkerMaxCallsPerSession: 100, valueWorkerMaxInputTokensPerSession: 250_000, valueWorkerMaxOutputTokensPerSession: 50_000,
+        valueWorkerMaxEstimatedCostUsd: 2, valueWorkerCircuitFailureLimit: 3, valueWorkerCircuitCooldownSeconds: 1_800,
+    },
+    max: {
+        valueWorkerThinking: "medium", valueWorkerMaxInputTokensPerJob: 12_000, valueWorkerMaxOutputTokensPerJob: 4_000,
+        valueWorkerMaxItemsPerJob: 40, valueWorkerTimeoutSeconds: 180, valueWorkerRetries: 1, valueWorkerHostSlots: 1,
+        valueWorkerMaxCallsPerSession: 400, valueWorkerMaxInputTokensPerSession: 1_000_000, valueWorkerMaxOutputTokensPerSession: 200_000,
+        valueWorkerMaxEstimatedCostUsd: 10, valueWorkerCircuitFailureLimit: 3, valueWorkerCircuitCooldownSeconds: 1_800,
+    },
+};
 const CONFIG_KEYS = [
     "targetContextTokens",
     "replayTargetTokens",
@@ -13,7 +34,7 @@ const CONFIG_KEYS = [
     "hybridSummaryEnabled",
     "hybridSummaryTargetTokens",
     "historyEditorEnabled",
-    "valueWorkerMode", "valueWorkerModel", "valueWorkerThinking", "valueWorkerMaxInputTokensPerJob", "valueWorkerMaxOutputTokensPerJob", "valueWorkerMaxItemsPerJob", "valueWorkerTimeoutSeconds", "valueWorkerRetries", "valueWorkerHostSlots", "valueWorkerMaxCallsPerSession", "valueWorkerMaxInputTokensPerSession", "valueWorkerMaxOutputTokensPerSession", "valueWorkerMaxEstimatedCostUsd", "valueWorkerCircuitFailureLimit", "valueWorkerCircuitCooldownSeconds",
+    "valueWorkerPreset", "valueWorkerMode", "valueWorkerModel", "valueWorkerThinking", "valueWorkerMaxInputTokensPerJob", "valueWorkerMaxOutputTokensPerJob", "valueWorkerMaxItemsPerJob", "valueWorkerTimeoutSeconds", "valueWorkerRetries", "valueWorkerHostSlots", "valueWorkerMaxCallsPerSession", "valueWorkerMaxInputTokensPerSession", "valueWorkerMaxOutputTokensPerSession", "valueWorkerMaxEstimatedCostUsd", "valueWorkerCircuitFailureLimit", "valueWorkerCircuitCooldownSeconds",
     "incrementalPrecomputeEnabled",
     "isolatedWorkerEnabled",
     "rollupShadowEnabled",
@@ -121,6 +142,11 @@ export function validateUserConfig(value) {
         config.hybridSummaryTargetTokens = boundedInteger(input.hybridSummaryTargetTokens, "hybridSummaryTargetTokens", 512, 16_000);
     if (input.historyEditorEnabled !== undefined)
         config.historyEditorEnabled = booleanValue(input.historyEditorEnabled, "historyEditorEnabled");
+    if (input.valueWorkerPreset !== undefined) {
+        if (!["lite", "medium", "max", "custom"].includes(String(input.valueWorkerPreset)))
+            throw new Error("valueWorkerPreset must be lite, medium, max, or custom.");
+        config.valueWorkerPreset = input.valueWorkerPreset;
+    }
     if (input.valueWorkerMode !== undefined) {
         const v = String(input.valueWorkerMode);
         if (!["off", "shadow", "advisory"].includes(v))
@@ -229,7 +255,7 @@ export function saveUserConfig(config, path = defaultUserConfigPath()) {
     renameSync(temporary, path);
 }
 export function configCommandHelp() {
-    return "Use /chrono-compact-settings to open the interactive ChronoCompact settings screen.";
+    return "Use /Chrono and select Settings.";
 }
 function withoutKey(config, key) {
     const next = { ...config };
@@ -270,7 +296,7 @@ export function applyConfigCommand(config, args) {
     }
     const key = COMMAND_TO_KEY[command];
     if (!key)
-        throw new Error(`Unknown setting: ${command}. Use the interactive /chrono-compact-settings screen.`);
+        throw new Error(`Unknown setting: ${command}. Use /Chrono and select Settings.`);
     if (words.length !== 2)
         throw new Error(`${command} requires one value.`);
     const raw = words[1] ?? "";
