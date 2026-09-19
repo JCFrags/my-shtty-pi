@@ -4,7 +4,13 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "exports": { ".": "./src/index.ts" },
-  "files": ["src", "README.md"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./collect": { "types": "./dist/collect.d.ts", "default": "./dist/collect.js" },
+    "./transfer": { "types": "./dist/transfer.d.ts", "default": "./dist/transfer.js" }
+  },
+  "files": ["src", "dist", "README.md"],
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "devDependencies": { "@types/node": "^24.12.4", "typescript": "^5.9.3" },
   "license": "MIT"
 }

@@ -4,9 +4,9 @@
 
 V4 should make an LLM agent more effective inside Pi as its lifetime history grows, while the active context stays small. Code must perform the required ingestion, selection, recovery and compaction. A language model may improve a bounded event or group, but it must not drive whole-history processing or become necessary for continued operation.
 
-This is an evolving design and initial implementation, not a completed V4 release. Chrono 3.0.3 remains the compaction baseline. The first slice is a separately loadable Recall extension, an independent Telemetry extension, and native read-only adapters for the existing Todo, Notes and Workplan. See [foundation scope](foundation-scope.md), [research findings](research.md), and [practical evidence](foundation-evidence.md).
+The implementation now includes independently owned Memory, Todo, Notes, and Workplan, the shared V2 collector, complete asynchronous state transfer, Recall, and Telemetry. Chrono 4.0.0 adds an explicit `contextCompiler: "v4"` path through its existing public compaction hook. The default remains `v3` until selected. Implementation, installed use, remote integration, and local activation are separate claims. See [implementation evidence](completion-evidence.md), [completion scope](completion-scope.md), [foundation scope](foundation-scope.md), [research findings](research.md), and the earlier [foundation evidence](foundation-evidence.md).
 
-The new native adapters are a migration boundary. They are not renamed wrappers presented as completed greenfield replacements. New Memory, Todo, Notes and Workplan implementations, a historical relation index and the replacement compactor remain planned work.
+The new state providers own their persistence and lifecycle. They reuse sufficient pure native reducers and projectors rather than wrap the old extension factories. The original Grounded providers remain available for compatible fresh-checkpoint rollback. A historical relation index beyond existing source-linked state remains future work. No lifetime-scale or general agent-benefit result follows from these implementations.
 
 ## What success means
 
@@ -30,11 +30,11 @@ Long lifetime histories require incremental work, not a promise of infinite capa
 
 Each state provider must start, read, write and recover without the others. It owns a separate store and lifecycle. A common pure library may define schemas and validation, but there is no required shared database, daemon or mutable singleton. Consumers can discard and rebuild their derived views without changing provider state.
 
-The first Context Kit groups separately installable subpackages under `packages/pi-context-kit`. The `protocol` library has no Pi startup behavior. `recall` and `telemetry` have independent Pi entrypoints. Existing Grounded providers keep their current persistence and standalone interfaces.
+[Context Kit](../../packages/pi-context-kit/README.md) groups six separately loadable extensions under `packages/pi-context-kit`. The `protocol` and `state-store` libraries register no Pi extensions. Shared code does not create a shared mutable store. Legacy Grounded providers retain their interfaces, but each native tool must have exactly one selected writer.
 
 ## Native connectors
 
-Connectors use versioned native messages with request correlation, provider identity, exact session view, revision, coverage and bounded records. A change event invalidates a consumer's view. It is not an authoritative replacement snapshot. Consumers request a fresh view after persistence.
+Connectors use versioned native messages with request correlation, provider identity, exact session view, revision, coverage, and bounded records. Consumers request fresh pages after persistence rather than treat a notification as a replacement snapshot. A captured page is not a transaction across providers.
 
 A useful record keeps these fields distinct:
 
@@ -47,9 +47,9 @@ A useful record keeps these fields distinct:
 
 A category does not establish agreement, truth or authority. Preserve directed relations and multiple predicates. Start with native task dependencies and explicit milestone-to-task links. Later add supported action/result and correction relations to the active indexed history path. Do not construct a second all-history graph or collapse repeated events by text hash.
 
-The first protocol supports only Todo, Notes and Workplan with a small fixed category vocabulary. Later versions can add provider descriptors and categories without forcing existing providers to adopt another component. Unsupported versions must be reported, not silently interpreted.
+Protocol V2 supports Memory, Todo, Notes, and Workplan with eight categories. Proposals are explicit opt-in and remain separate from accepted knowledge. The library retains the three-provider V1 listener for older clients. Dynamic provider discovery remains future work. Unsupported versions are reported, not silently interpreted.
 
-Queries cannot bypass native tool exclusions. The first Recall extension only asks providers whose native read tools are active. It does not enable tools or invoke recovery commands. A native read can return a newer revision than an earlier card. These current-state references are not immutable historical handles. Chrono's verified handles remain necessary for exact old content.
+Queries cannot bypass native tool exclusions. Recall only asks providers whose native read tools are active. It does not enable tools or invoke recovery commands. Memory cards have exact revision-bound recovery. Other native reads can return a newer current record. Chrono's verified historical handles serve original conversation source, not current tool state.
 
 ## Failure isolation
 
@@ -80,17 +80,19 @@ Notes remain scratchpad state even when a category matches Memory. Todo completi
 
 Use Pi's public `session_before_compact` contract rather than patch private AgentSession methods. Pi already supports between-turn compaction and bounded overflow recovery. A deterministic replacement does not require a new harness fork or another mandatory summary model.
 
-The proposed sequence is:
+The V4 path uses this sequence:
 
 1. Freeze an exact source cut, current provider revisions, selected model capacity and output reserve.
 2. Read bounded source/index pages and current native records. Missing optional providers remain explicitly unavailable.
 3. Produce a selection plan that names retained records, recovery references, omissions, source coverage and resource charges.
 4. Render whole records in chronological order where time matters. Keep the current goal and unresolved work distinguishable from historical instructions. Give important events more detail and retain a small adaptive raw tail.
-5. Count the whole result, including source references, notices, system/tool overhead and output reserve. Preserve tool-call/result pairing. Do not add uncounted headers after fitting.
+5. Estimate the whole result, including source references, notices, system/tool overhead, and output reserve. Label the estimator rather than claim exact model token counts. Preserve tool-call/result pairing. Do not add uncounted headers after fitting.
 6. Return the custom compaction through the public hook. Persist the selection receipt with the compaction entry. Keep immutable source and compatible fallback data.
 7. Correlate the attempt with `session_compact` or `session_compact_failed`, then observe whether the agent actually resumes useful work.
 
-Start with preview-only selection. Compare candidate context against V3 using a frozen input and source-known questions. Enable replacement only after the selected path is useful in actual Pi runs. Refusal must preserve context, state and cancellation intent. Do not add an automatic retry loop around an unchanged failure. Overflow needs an explicit safe outcome, not repeated attempts to publish a still-oversized context.
+The public preparation helper and preview use the same pure compiler as the active hook. Compare preview and active output with the same source route, frozen native state, model metadata, and real Pi preparation. For a persisted receipt comparison, first serialize the preview to JSON so optional `undefined` object fields are omitted as Pi omits them. Exclude only the diagnostic `native.requestId` from deterministic receipt equality. A loaded-prefix fallback and an indexed selection are different inputs, not a deterministic mismatch. Select the V4 compiler only after exercising its actual Pi path. Refusal must preserve context, state and cancellation intent. Do not add an automatic retry loop around an unchanged failure. Overflow needs an explicit safe outcome, not repeated attempts to publish a still-oversized context.
+
+For the first raw receipt read, pass its `entryId` without `startByte`. Later pages use the returned absolute `nextByte`. Raw recovery needs a validated catalog view, not a completed derived search index. `history_status` describes one cached observation. A completed agent turn can select a newer leaf and invalidate that view before the next call. Keep a bounded readiness check and its recovery call within the same agent run when verifying this path. Do not weaken branch validation or add an unbounded retry.
 
 Optional model workers receive one admitted event or bounded group with fixed input, output, concurrency and cost limits. Code attaches and validates provenance. Late or failed results cannot alter the frozen plan or claim unprocessed coverage. Compare assistance off and on only after the programmatic baseline works.
 
@@ -109,10 +111,10 @@ The first practical comparison is small and synthetic. It must disclose the mode
 | Stage | Deliverable | Current state |
 | --- | --- | --- |
 | Foundation | Native read-only provider records, Recall, independent Telemetry and a practical scenario. | Implemented. The small installed-Pi scenario and two-call evidence comparison passed. Live activation is a separate check. |
-| Independent Memory | Revisable source-linked knowledge with standalone storage and legacy import. | Planned. |
-| First-class state tools | New Notes, Todo and Workplan, migrated individually through the connector boundary. | Planned. |
-| Context compiler | Frozen deterministic selection plans, model-aware fitting and exact omission recovery. | Planned. Reuse V3 mechanisms. |
-| Replacement compaction | Public-hook activation after source-known and real-agent comparisons. | Planned. Not enabled. |
+| Independent Memory | Source-linked knowledge, separate proposals, temporal reads, owned persistence, and explicit legacy import. | Implemented with finite admission and separate logical visibility. |
+| First-class state tools | Owned Notes, Todo, and Workplan with branch-local state and explicit migration. | Implemented. Native reducers, interfaces, and complete transfer remain compatible. |
+| Context compiler | Frozen selection receipts, whole-record fitting, and exact omission recovery. | Implemented. Charges are estimates, not exact tokenizer measurements. |
+| Replacement compaction | Existing public-hook path with explicit V4 selection. | Implemented opt-in. No required summary model. Selection and loaded-use evidence remain separate. |
 | Long-run operation | Incremental rollover, fault recovery and bounded worker scheduling under actual use. | Continue V3 work and extend only where needed. |
 
 Change the plan when evidence requires it:

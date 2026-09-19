@@ -18,6 +18,10 @@ export const SHADOW_COMPOSER_LIMITS = {
 /** Adapt one contained selection. Missing/lagging rollups and delta deliberately
  * take the historical degradation path, never a synchronous reconstruction. */
 export function composeStoredSelection(input, selection, recovery) {
+    return composeShadowContext(storedSelectionInput(input, selection, recovery));
+}
+/** Adapt the same pinned V3 selection without rendering or another store read. */
+export function storedSelectionInput(input, selection, recovery) {
     if (selection.requestedCut !== input.cut.sourceCutSeq || selection.sourceView.eventCut !== selection.requestedCut
         || selection.processedCut > selection.requestedCut || selection.processedMemoryCut < selection.processedCut) {
         throw new Error("stored selection does not match the actual composition cut");
@@ -48,7 +52,9 @@ export function composeStoredSelection(input, selection, recovery) {
         return { id: item.stableKey, text: evidence.exactText, startSeq: evidence.source.eventSeq, endSeq: evidence.source.eventSeq,
             recovery: recovery(evidence.source), kind: item.kind === "restriction" || item.kind === "goal" || item.kind === "blocker" || item.kind === "decision"
                 ? item.kind : "open-work",
-            authority: "exact", sourceAuthority: item.authority, status: item.status, importance: 1 };
+            authority: "exact", sourceAuthority: item.authority, status: item.status, importance: 1,
+            ...(omission ? { sourceOmissions: { beforeUtf16: omission.beforeUtf16, afterUtf16: omission.afterUtf16 },
+                sourceContextComplete: evidence.contextComplete === true } : {}) };
     };
     const addState = (item, maximumCut, delta) => {
         const row = exactRow(item, maximumCut);
@@ -166,7 +172,10 @@ export function composeStoredSelection(input, selection, recovery) {
         return true;
     });
     const selectedRecent = uniqueOptional(recent), selectedOlder = uniqueOptional(older), selectedDelta = uniqueOptional(deltaRows);
-    return composeShadowContext({ ...input,
+    return { ...input,
+        storedEvidence: { sourceView: selection.sourceView, stateGeneration: selection.stateGeneration,
+            requestedCut: selection.requestedCut, processedCut: selection.processedCut, processedMemoryCut: selection.processedMemoryCut,
+            coverage: selection.coverage, omissions: selection.omissions },
         memory: { generation: String(selection.stateGeneration), representedStartSeq: 0,
             representedEndSeq: selection.processedCut, committed: selection.stateGeneration > 0 },
         ...(selection.rollups ? { rollups: { generation: String(selection.rollups.handle.rollupGeneration),
@@ -177,7 +186,7 @@ export function composeStoredSelection(input, selection, recovery) {
         delta: { records: selectedDelta, completeThroughCut: selection.processedCut === selection.requestedCut
                 || Boolean(verifiedDelta && delta?.throughCut === selection.requestedCut && unsupportedProtected.length === 0 && unsupportedOpenWork.length === 0) },
         limitations: { unsupportedExtraction, selectionLoss, lag },
-    });
+    };
 }
 function assertInteger(name, value, minimum = 0) {
     if (!Number.isSafeInteger(value) || value < minimum)
@@ -254,9 +263,9 @@ function validateInput(input) {
 function chronological(rows) {
     return [...rows].sort((a, b) => a.startSeq - b.startSeq || a.endSeq - b.endSeq || a.id.localeCompare(b.id));
 }
-function renderRow(section, row, pinnedSnapshot) {
+function renderComposerRow(section, row, pinnedSnapshot, wholeRecords = false) {
     const detailTokens = Math.max(48, Math.round(72 + row.importance * 184));
-    const body = truncateToTokens(row.text, detailTokens, "\n…[detail reduced; recover exact source before relying on conditions]…");
+    const body = wholeRecords ? row.text : truncateToTokens(row.text, detailTokens, "\n…[detail reduced; recover exact source before relying on conditions]…");
     const completeText = body === row.text;
     const fidelity = row.authority === "exact"
         ? completeText ? "exact copied source words" : "source excerpt; incomplete wording, not a complete instruction"
@@ -268,6 +277,7 @@ function renderRow(section, row, pinnedSnapshot) {
     const text = [
         `- [${row.startSeq}${row.endSeq === row.startSeq ? "" : `–${row.endSeq}`}] ${row.kind}; ${status}; ${fidelity}; ${semanticAuthority}`,
         `  ${body.replaceAll("\n", "\n  ")}`,
+        ...(row.sourceOmissions ? [`  Source extraction omissions (UTF-16 units): ${JSON.stringify(row.sourceOmissions)}. Complete surrounding context reported by extractor: ${row.sourceContextComplete === true}. This is not a full source event.`] : []),
         `  Recovery: ${row.recovery}`,
     ].join("\n");
     return { section, row, text, renderedTokens: estimateTokensFromText(text), completeText };
@@ -307,6 +317,7 @@ function sectionsFor(input, level) {
     if (level === "pi-summary-and-tail" || level === "pi-default-required")
         return [];
     const rows = [];
+    const renderRow = (section, row, pinned) => renderComposerRow(section, row, pinned, input.wholeRecords);
     const snapshotLags = input.memory.representedEndSeq < input.cut.sourceCutSeq && !input.delta.completeThroughCut;
     rows.push(...chronological(input.selected.protected).map((row) => renderRow("protected", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
     rows.push(...chronological(input.selected.openWork).map((row) => renderRow("open-work", row, snapshotLags && row.endSeq <= input.memory.representedEndSeq)));
@@ -352,10 +363,12 @@ function replayText(input, level, reasons, rows) {
         ...input.selected.recent, ...input.delta.records].filter(row => !rows.some(item => item.row.id === row.id));
     if (omitted.length) {
         const cue = [...omitted].sort((a, b) => b.importance - a.importance || a.startSeq - b.startSeq)[0];
-        sections.push(`## OMITTED HISTORY\n\n${omitted.length} selected row(s) remain outside context. This is budget/selection loss, not source deletion. Representative retrieval cue [${cue.startSeq}]: ${truncateToTokens(cue.text, 32)}\nExact recovery for this cue: ${cue.recovery}`);
+        sections.push(input.wholeRecords
+            ? `## OMITTED HISTORY\n\n${omitted.length} admitted historical representation(s) were omitted whole. Exact descriptors and recovery references are in receipt ${input.omissionReceipt ?? "details"}. Earlier extraction/selection exclusions remain incomplete coverage, not known omitted IDs.`
+            : `## OMITTED HISTORY\n\n${omitted.length} selected row(s) remain outside context. This is budget/selection loss, not source deletion. Representative retrieval cue [${cue.startSeq}]: ${truncateToTokens(cue.text, 32)}\nExact recovery for this cue: ${cue.recovery}`);
     }
     sections.push("## RECOVERY\n\nUse history_search with remembered topics or the cues above, history_recall to expand, then history_get with the opaque Recovery reference for exact source. Omitted history remains retrievable. Memory excerpts are not complete instructions.");
-    return [...intro, ...sections].join("\n\n");
+    return [input.prefixText, ...intro, ...sections].filter(Boolean).join("\n\n");
 }
 function hybridPreservingSummary(regularPiSummary, replay) {
     if (!regularPiSummary)
@@ -429,6 +442,7 @@ export function composeShadowContext(input) {
         createdFrom: "bounded-shadow-composer-input",
         degradation: level,
         degradationReasons: reasons,
+        ...(input.storedEvidence ? { storedEvidence: input.storedEvidence } : {}),
         cut: input.cut,
         memory: input.memory,
         ...(input.rollups ? { rollups: input.rollups } : {}),
@@ -436,6 +450,8 @@ export function composeShadowContext(input) {
         omittedRowIds: [...new Set([...omittedRowIds, ...[...input.selected.protected, ...input.selected.openWork,
                     ...input.selected.older, ...input.selected.recent, ...input.delta.records]
                     .filter(item => !rows.some(kept => kept.row.id === item.id)).map(item => item.id)])],
+        omittedRows: [...input.selected.protected, ...input.selected.openWork, ...input.selected.older,
+            ...input.selected.recent, ...input.delta.records].filter(item => !rows.some(kept => kept.row.id === item.id)),
         validation,
     };
     const artifact = artifactBase;

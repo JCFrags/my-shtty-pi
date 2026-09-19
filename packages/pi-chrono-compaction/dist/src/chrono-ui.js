@@ -5,6 +5,7 @@ export async function showChronoReport(ctx, title, content) {
         ctx.ui.notify(content, "info");
         return;
     }
+    // Fullscreen Pi reserves page keys for chat unless a focused overlay owns them.
     await ctx.ui.custom((tui, theme, _keys, done) => {
         const body = new Text(content, 1, 0);
         let offset = 0;
@@ -43,6 +44,6 @@ export async function showChronoReport(ctx, title, content) {
                 tui.requestRender();
             },
         };
-    });
+    }, { overlay: true, overlayOptions: { width: "100%" } });
 }
 //# sourceMappingURL=chrono-ui.js.map

@@ -1,4 +1,8 @@
-import { composeStoredSelection, persistPrivateCompositionArtifact, type ShadowCompositionEnvelope } from "./context-composer.js";
+import { composeStoredSelection, storedSelectionInput, persistPrivateCompositionArtifact, type ShadowCompositionEnvelope } from "./context-composer.js";
+import { collectContext, type ContextCollection, type ContextQuery } from "@context-kit/protocol/collect";
+import type { ContextEventBus, ContextScope } from "@context-kit/protocol";
+import { compileContext, freezeContextInput, type FrozenContextInput } from "./context-compiler.js";
+import type { BoundedMemorySelection } from "./bounded-memory.js";
 import type { CapsuleCatalogView, ScopedBodySourceRef, ScopedRawSourceRef } from "./capsule-contract.js";
 import type { EpisodeStateSelection } from "./episode-state-contract.js";
 import { isSafeCompactionCut } from "./tail-selection.js";
@@ -14,6 +18,59 @@ export interface CompositionPreviewReader {
   readonly select: (prefixEntryId: string) => Promise<EpisodeStateSelection>;
   readonly pin: (entryId: string) => Promise<CapsuleCatalogView>;
   readonly recovery: (view: CapsuleCatalogView, source: ScopedBodySourceRef | ScopedRawSourceRef) => string;
+}
+
+/** Read-only V4 preparation shared by SDK preview and the active public hook.
+ * The caller supplies Pi's actual cut/reserve and a live revalidation callback.
+ * This function does not write a session, artifact or provider store. */
+export async function captureContextCompilation(
+  host: { events: ContextEventBus; getActiveTools(): string[] },
+  input: Omit<FrozenContextInput, "native" | "history"> & {
+    readonly fallback: BoundedMemorySelection;
+    readonly reader?: CompositionPreviewReader;
+    readonly query?: ContextQuery;
+  },
+  view: { getScope(): ContextScope; epoch(): number; signal?: AbortSignal;
+    revalidate(): void; allowHistoricalFallback(error: unknown): boolean },
+): Promise<FrozenContextInput> {
+  view.revalidate();
+  const native: ContextCollection = await collectContext(host, input.query ?? {
+    records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150,
+  }, view);
+  view.revalidate();
+  let history: FrozenContextInput["history"] = { kind: "fallback", selection: input.fallback };
+  if (input.reader) {
+    try {
+      const selection = await input.reader.select(input.sourceCutEntryId);
+      view.revalidate();
+      if (selection.stateGeneration > 0) {
+        const first = input.reader.getEntry(input.firstKeptEntryId);
+        if (first?.parentId !== input.sourceCutEntryId || !input.reader.getEntry(input.sourceCutEntryId)) throw new Error("context-v4-history-cut-invalid");
+        const firstView = await input.reader.pin(input.firstKeptEntryId);
+        view.revalidate();
+        if (firstView.storeKey !== selection.sourceView.storeKey || firstView.generation !== selection.sourceView.generation
+          || firstView.branchKey !== selection.branchKey || firstView.sessionKey !== selection.sourceView.sessionKey
+          || firstView.eventCut <= selection.requestedCut) throw new Error("context-v4-history-view-invalid");
+        history = { kind: "stored", input: storedSelectionInput({ regularPiSummary: "", combinedCeilingTokens: input.budget.effectiveCeilingTokens,
+          cut: { sourceCutEntryId: input.sourceCutEntryId, sourceCutSeq: selection.requestedCut,
+            firstKeptEntryId: input.firstKeptEntryId, firstKeptSeq: firstView.eventCut,
+            rawTailTokens: input.rawTail.tokens, toolPairSafe: input.rawTail.toolPairSafe } },
+          selection, source => input.reader!.recovery(selection.sourceView, source)) };
+      }
+    } catch (error) {
+      view.revalidate();
+      if (!view.allowHistoricalFallback(error)) throw error;
+    }
+  }
+  view.revalidate();
+  return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
+    memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native, history });
+}
+
+/** The compiler returns the same receipt and bytes when the frozen input is used
+ * for active compaction. Preview adds no hidden fields to its deterministic hash. */
+export function previewContext(input: FrozenContextInput) {
+  return { ...compileContext(input), activeContextChanged: false as const };
 }
 
 export const COMPOSITION_PREVIEW_LIMITS = { tailEntries: 256, tailBytes: 512 * 1024, comparisonBytes: 512 * 1024 } as const;
