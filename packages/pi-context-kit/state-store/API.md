@@ -1,4 +1,16 @@
+---
+title: Owned state store API
+audience: [maintainers]
+status: implemented contract
+purpose: Specify provider-owned immutable state, source anchors, bounded resolution, and import boundaries.
+related:
+  - ../../../docs/chrono/state/persistence-and-transfer.md
+  - ../README.md
+---
+
 # Owned state store API
+
+Read the [persistence and complete-transfer guide](../../../docs/chrono/state/persistence-and-transfer.md) for the system-level contract. This page owns the storage integration API.
 
 Runtime target: Node 24.18.0 and Pi 0.85.1. No runtime dependency on another provider, Chrono, or a Pi extension factory. No global store, queue, or mutable singleton.
 

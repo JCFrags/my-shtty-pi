@@ -1,4 +1,16 @@
+---
+title: Independent Workplan native reference
+audience: [agents, maintainers, operators]
+status: implemented, selection-dependent
+purpose: Specify Workplan state, bounded per-plan persistence, import, and complete transfer.
+related:
+  - ../../../docs/chrono/state/todo-notes-workplan.md
+  - ../README.md
+---
+
 # Independent Workplan
+
+Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) for component roles and [activation and migration](../../../docs/chrono/operations/activation-and-migration.md) for the coordinated writer/import sequence.
 
 This package registers the native `workplan` tool. It owns branch-local persistence independently of Todo, Notes, Memory, Recall, and Chrono. It does not import the old Workplan extension factory or use a live tool to recover source state.
 

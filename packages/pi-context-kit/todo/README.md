@@ -1,4 +1,16 @@
+---
+title: Owned Todo native reference
+audience: [agents, maintainers, operators]
+status: implemented, selection-dependent
+purpose: Specify native Todo behavior, persistence, import, and complete transfer.
+related:
+  - ../../../docs/chrono/state/todo-notes-workplan.md
+  - ../README.md
+---
+
 # Owned Todo
+
+Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) for component roles and [activation and migration](../../../docs/chrono/operations/activation-and-migration.md) for the coordinated writer/import sequence.
 
 `@context-kit/todo` is a separately loadable Pi extension. It owns Todo persistence and branch recovery. It uses the validated Grounded task operations, not the legacy extension factory. It does not require Notes, Memory, Workplan, Recall, or Chrono.
 

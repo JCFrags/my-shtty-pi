@@ -1,4 +1,16 @@
+---
+title: Context Kit Recall native reference
+audience: [agents, maintainers]
+status: implemented, independently loadable
+purpose: Specify bounded current-state queries and recovery without historical ingestion or mutation.
+related:
+  - ../../../docs/chrono/context/recall.md
+  - ../protocol/README.md
+---
+
 # Context Kit Recall
+
+Read the [Recall subject guide](../../../docs/chrono/context/recall.md) for its role beside historical search and the compiler. The [Chrono index](../../../docs/chrono/README.md) connects the complete system.
 
 Separately source-loaded Pi extension, `src/index.ts`. Its only tool is `context_recall`. It reads one bounded page of current Memory, Todo, Notes, and Workplan cards, then returns native read-only recovery instructions. It does not replace Chrono's exact historical recall.
 

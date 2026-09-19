@@ -1,54 +1,44 @@
+---
+title: ChronoCompact package
+audience: [users, agents, maintainers]
+status: active canonical source
+purpose: Identify the package entrypoint, build boundary, and current subject documentation.
+related:
+  - ../../docs/chrono/README.md
+  - ../../docs/chrono/USER-GUIDE.md
+  - ../../docs/chrono-release-compatibility.md
+---
+
 # ChronoCompact
 
-- Purpose: Keep useful selective chronological memory and recover exact history in long-running Pi tasks.
-- Status: active canonical
-- Pi entrypoint(s): `dist/src/pi-extension.js`
-- Load form: compiled-loaded
-- Build/check command: `npm run build`
-- Current package identity check: `node ../../scripts/verify-chrono-v3-baseline.mjs --static-only`
+Chrono selects useful chronological context and provides source-linked historical recovery for long-running Pi tasks. The programmatic path needs no model call. Source history remains preserved when detail leaves active context.
 
-## V4 native context
+- Pi entrypoint: `dist/src/pi-extension.js`, compiled-loaded.
+- Build: `npm run build`, after the required locked dependencies and native SQLite preparation.
+- Identity check: `node ../../scripts/verify-chrono-v3-baseline.mjs --static-only`.
+- Operator interface: one `/Chrono` menu, with settings, status, reports, and maintenance.
 
-Version `4.0.0` adds deterministic context compilation through the existing public `session_before_compact` hook. Set `contextCompiler: "v4"` explicitly, or use `PI_CHRONO_CONTEXT_COMPILER=v4`. The default remains `v3`. V4 uses the shared Context Kit collector, freezes admitted native pages and historical cuts, fits whole records, and persists `details.contextReceipt` with the actual compaction entry. It does not require a model summary or patch private Pi methods.
+## Read the documentation
 
-The budget includes estimated system text, tool schemas, message framing, response reserve, summary, and the adaptive raw tail. It is not an exact tokenizer measurement. Missing optional indexed history can use the bounded loaded-prefix fallback. Invalid source identity still refuses. `history_status.composition.committedReceipt` gives the native exact-recovery route after a successful commit. A receipt preserves captured records, exclusions, and individual revisions, not a transaction across providers.
+| Need | Start here |
+| --- | --- |
+| Plain-language functions and practical controls | [User guide](../../docs/chrono/USER-GUIDE.md) |
+| Complete subject map | [Chrono documentation](../../docs/chrono/README.md) |
+| Architecture, contracts, and module ownership | [Architecture](../../docs/chrono/architecture/README.md) |
+| Historical search, exact recovery, chronology, and rollover | [History](../../docs/chrono/history/README.md) |
+| Compaction, budgets, receipts, retention, and Recall | [Context](../../docs/chrono/context/README.md) |
+| Independent Memory and native state | [State providers](../../docs/chrono/state/README.md) |
+| Configuration, workers, caches, migration, and rollback | [Operations](../../docs/chrono/operations/README.md) |
+| Version boundary, changes, evidence, and limitations | [Design and evidence](../../docs/chrono/design/README.md) |
 
-[Context Kit](../pi-context-kit/README.md) separately owns Memory, Todo, Notes, and Workplan. To select independent Memory, set `memoryOwner: "context-kit"` before factory loading. This stops legacy Memory tool registration, automatic promotion writes, and pinned legacy reads together. It is a startup-only ownership choice, not a data migration. Select one writer per provider and follow each provider's explicit import and rollback procedure.
+V4 is an explicit compiler choice, not a second compactor. Independent Memory also needs a startup ownership handoff. Existing legacy state requires explicit import. Background LLM presets belong to the compatibility advice worker, which is paused under the normal memory engine. They do not enrich V4 indexed compaction.
 
-Physical rollover still requires complete native state, not Recall cards. Asynchronous transfer preserves complete Todo, Notes, and Workplan checkpoints and a verified same-store Memory binding. Pending, unavailable, or oversized transfer refuses rather than shortens state. Keep source shards, provider stores, and previous installations. See [V4 scope](../../docs/chrono-v4/completion-scope.md) and [release compatibility](../../docs/chrono-release-compatibility.md) for limits and verification. Implementation, protected-main integration, and local loaded use are separate boundaries.
+## Build and installation boundary
 
-## Preserved V3 architecture
+Use the root [verification workflow](../../README.md#verification) and [release compatibility](../../docs/chrono-release-compatibility.md), not old campaign commands as new release gates. Chrono's native SQLite build must enforce allocation refusal. Prepare the root lock before the package-local lock because compiled Chrono imports the sibling Context Kit protocol. A lone package tarball is not the supported V4 retained installation.
 
-V3 prioritizes useful fuzzy chronological memory and recall, from short tasks to extremely long lifetime tasks, while keeping RAM, CPU, and optional GPU use bounded. The programmatic core keeps selective chronological short-term memory, gives important events more detail, and uses a small adaptive raw tail with model-aware, configurable token limits. Optional language-model assistance may improve individual events or bounded groups. It must not replace whole history or become required processing.
+A build, registration, effective setting, loaded identity, and practical use are separate checks. Follow [activation and migration](../../docs/chrono/operations/activation-and-migration.md). Preserve source shards, provider stores, and compatible rollback assets.
 
-The V3 path uses checkpointed catalog, capsule, search, state, and rollup stores. Source JSONL stays immutable and recoverable when detail leaves active context. Exact recovery validates source identity and bounded coordinates. Derived state retains its source role and does not become a user instruction. See the [current overview](../../docs/chrono-v3/README.md) for delivery priorities and evidence boundaries.
+The package-local `docs/` directory and the [V3](../../docs/chrono-v3/README.md)/[V4](../../docs/chrono-v4/README.md) directories retain detailed older contracts and revision-bound evidence. Their old defaults, command names, paths, and milestone status do not override the current subject guide. Runtime module boundaries remain unchanged.
 
-Version `3.0.0` enables the programmatic memory engine by default. `memoryEngineEnabled` selects this architecture, and `PI_CHRONO_MEMORY_ENGINE` overrides the JSON value. No model call is required. Missing optional memory uses an explicitly incomplete bounded fallback. Explicit search disable, per-source exclusion, unsafe private storage, and invalid logical bindings still prevent adoption.
-
-Enabled sessions adopt their existing physical file as logical shard zero. Resume reuses the binding and stored progress. `/chrono-search-status` and `history_status` distinguish migration readiness from composition eligibility. Ready indexes alone do not prove that selected context fits. The [context composer](../../docs/chrono-v3/context-composer.md) documents source coverage, token budgeting, retained-tail policy, and safe refusal.
-
-The V3 path does not run legacy incremental candidate reconstruction or whole-history token estimation. Its default combined context target is 32,000 estimated tokens, reduced to fit the selected model, with an adaptive 3,000–6,000-token raw tail. Important events receive more detail within chronological history. Compatibility paths remain available when V3 is disabled.
-
-Automatic rollover defaults on after 8 MiB of new source growth at a safe idle boundary. The threshold is configurable from 1 through 64 MiB. This is not a byte-perfect cap during active work. The system preserves old shards and transfers complete native Notes, Todo, and Workplan state with the matching Grounded providers. Managed jobs, open persistent sessions, unsafe state, or unavailable exact source pinning defer the switch. `/chrono-logical-session` retains manual adoption, status, rollover, fork, recovery, and rollback. See [operations](../../docs/chrono-v3/operations.md) and [compatible recovery](../../docs/chrono-v3/recovery.md#native-state-after-rollover).
-
-Focused checks exercise model-free composition, public history retrieval, and real Pi physical replacement with restart. They do not establish perfect recall or billion-token normal-use qualification. An existing oversized physical file still incurs Pi's initial file load. See the [current release evidence](../../docs/chrono-v3/README.md#current-documentation-boundary) for integration and activation separately. The [M12 migration report](../../docs/chrono-v3/reviews/M12-migration-report.md) and [M11 qualification plan](../../docs/chrono-v3/reviews/M11-qualification-plan.md) remain revision-bound historical evidence, not the current release checklist.
-
-## 2.0.3 memory-admission boundary
-
-- Legacy history loading reserves a conservative eight-times source charge before allocation, reads only the admitted bytes, and revalidates source identity before parsing; the 64 MiB source guard remains in force.
-- Exact retrieval from a larger session requires an existing verified source ledger; it does not create a ledger or fall back to a whole-file read.
-- Local search-index work reserves capacity before loading or parsing. It uses a measured 32-times source envelope, with explicit pending-load, pending-build, live-index, bounded-query-result, and retained-reference accounting.
-- The local history admission ceiling is 512 MiB. Retained indexes also remain within a strict 128 MiB cache ceiling, and only one current generation is retained per session. Work that does not fit returns a controlled refusal.
-- The deterministic fixed-heap characterization now fails unless the declared index envelope covers the measured retained-heap delta; the former eight-times charge did not.
-- Isolated workers bind an immutable source prefix, accept a verified pure append, and reject replacement, truncation, or prefix mutation.
-- Worker failures use stable protocol codes and write bounded, sanitized, owner-only diagnostics outside publication.
-- Scheduler ownership is published atomically and stable malformed artifacts are recovered conservatively.
-- `/chrono-worker-status` and `/chrono-doctor` show bounded aggregate state without session content or private paths.
-
-## Test-foundation commands
-
-- Complete normal suite and deterministic bounded report: `npm run test:normal`
-- Fixed-heap scale, fault, and memory lanes: `npm run test:fixed-heap`
-- Optional local 2 GiB lane: `npm run test:fixed-heap -- --heaps 2048`
-
-Machine-readable reports separate deterministic workload, byte, hash, code, and determinism fields from advisory time, CPU, RSS, heap, and derived-store metrics.
+[Repository](../../README.md) · [Context Kit](../pi-context-kit/README.md)

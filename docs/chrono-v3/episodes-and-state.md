@@ -1,4 +1,16 @@
+---
+title: Historical state extraction and repair reference
+audience: [agents, maintainers]
+status: versioned protocol reference
+purpose: Preserve detailed state continuation, exact repair, and supersession contracts.
+related:
+  - ../chrono/history/chronology-episodes-resources.md
+  - ../chrono/context/compaction-and-budgets.md
+---
+
 # Episodes, resource observations, and state
+
+> Read [current chronology](../chrono/history/chronology-episodes-resources.md) first. This page retains detailed versioned state protocols. Its older mandatory-overflow statement is not the current selective-context refusal rule. [Current composition](../chrono/context/compaction-and-budgets.md) discloses incomplete history while preserving source, structural, and budget safety checks.
 
 The indexed state layer supports chronological memory. It does not replace the timeline or act as a general truth engine. See [A-0004](amendments/A-0004-v3-timeline-and-catalog-scope.md) and the [candidate boundary](README.md#current-documentation-boundary).
 

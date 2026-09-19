@@ -1,6 +1,18 @@
+---
+title: ChronoCompact release compatibility
+audience: [operators, agents, maintainers]
+status: compatibility reference with historical release records
+purpose: Preserve build and compatibility requirements while separating source versions from local activation.
+related:
+  - chrono/design/evidence-and-roadmap.md
+  - chrono/operations/activation-and-migration.md
+---
+
 # ChronoCompact release compatibility
 
-## Current 4.0.0 release
+The [current status page](chrono/design/evidence-and-roadmap.md) identifies local integration `4.0.1-local.20260919` and its activation boundary. It combines the implemented V4 path below with main's 3.0.5 unified `/Chrono` menu, stable projections, and the local report-scroll correction. It is not a published release. The older `/chrono-*` names below describe earlier versions. Use [current configuration](chrono/operations/menu-and-configuration.md).
+
+## Implemented 4.0.0 compatibility boundary
 
 Version `4.0.0` adds the opt-in V4 compiler and independent Context Kit ownership.
 Set `contextCompiler: "v4"` to select the existing public compaction hook's new
@@ -50,6 +62,8 @@ admission. It verified repeated refusal, no overlapping check, no status-trigger
 retry, explicit search disable, canary refusal, and pending-compaction deferral.
 It blocked child launches and required unchanged synthetic source bytes.
 
+<a id="current-303-release"></a>
+
 Version `3.0.3` lets raw `history_get` recover a cataloged entry from its
 validated branch even when the final derived search index is absent. The caller
 must use the predecessor's explicit `shardId` after rollover. Branch membership,
@@ -71,9 +85,10 @@ deadlines include admission wait. A stopped live owner retains its reservation.
 This correction does not recover admission, remove leases, resume owners, change
 worker limits, or modify source history or stores.
 
-The current source has 138 compiled runtime JavaScript files and 139 startup
-pins, including `package.json`. Read the exact package tree and file hashes from
-`scripts/verify-chrono-v3-baseline.mjs`, not the historical tables below.
+The 4.0.0 completion had 138 compiled runtime JavaScript files and 139 startup
+pins, including `package.json`. Later integration can change this inventory. Read
+the selected package tree and file hashes from `scripts/verify-chrono-v3-baseline.mjs`,
+not this revision-bound count or the historical tables below.
 
 Use the root [verification workflow](../README.md#verification) and installed-Pi
 loader checks for a changed release. The explicit native build and matching
@@ -146,6 +161,8 @@ The complete Git tree includes tests, scripts, documentation, metadata, and the
 compiled distribution.
 
 ## Dependencies and checks
+
+The commands in this section retain the 2.0.15 reproduction, including its historical campaign and peer-version statements. For current checks, use the root [verification workflow](../README.md#verification) and current [activation procedure](chrono/operations/activation-and-migration.md). The explicit controlled native build and verified header prerequisite still apply. Do not run the old campaigns merely because this record lists them.
 
 Prepare dependencies from the package-local lock. The strict local route requires
 the exact Node 24.18.0 runtime and its already prepared, verified header root:

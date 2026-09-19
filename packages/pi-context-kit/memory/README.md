@@ -1,4 +1,16 @@
+---
+title: Independent Memory native reference
+audience: [agents, maintainers, operators]
+status: implemented, selection-dependent
+purpose: Specify native Memory operations, storage, provenance, import, and reverse export.
+related:
+  - ../../../docs/chrono/state/memory.md
+  - ../README.md
+---
+
 # Independent Memory
+
+For the connected system, read the [Memory subject guide](../../../docs/chrono/state/memory.md) and [activation and migration](../../../docs/chrono/operations/activation-and-migration.md). This page owns the detailed native import/export procedure.
 
 Memory owns accepted knowledge and extraction proposals for one logical Pi session. It does not need Chrono, Recall, Telemetry, or Grounded Tools at runtime. It does not ingest conversation history or assign instruction authority to stored text.
 

@@ -1,4 +1,16 @@
+---
+title: Chrono V4 design and implementation records
+audience: [agents, maintainers]
+status: revision-bound design and evidence
+purpose: Preserve V4 rationale and implementation records while routing current operation to the subject guide.
+related:
+  - ../chrono/README.md
+  - ../chrono/design/evidence-and-roadmap.md
+---
+
 # Chrono V4: an independent agent memory ecosystem
+
+> For current behavior, read the [subject documentation](../chrono/README.md) and [user guide](../chrono/USER-GUIDE.md). This directory retains V4 design, scope, research, and exact implementation evidence. The [current status owner](../chrono/design/evidence-and-roadmap.md) distinguishes the local integrated version, explicit selections, and loaded activation. References to 4.0.0 below describe the earlier implementation boundary, not a claim about every installed process. Current operation uses one `/Chrono` menu.
 
 ## Mission and current position
 

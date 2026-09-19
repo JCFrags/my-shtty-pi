@@ -1,4 +1,15 @@
+---
+title: Earlier Chrono configuration reference
+audience: [agents, operators]
+status: superseded operating interface
+purpose: Preserve earlier setting rationale while routing current menu and V4 selection to their owner.
+related:
+  - ../chrono/operations/menu-and-configuration.md
+---
+
 # ChronoCompact current configuration
+
+> Historical title retained. Use [current menu and configuration](../chrono/operations/menu-and-configuration.md). The old `/chrono-*` command spelling is replaced by one `/Chrono` menu. V4 compiler and Memory ownership choices are documented in the current guide, not this earlier table.
 
 ## Configuration source and precedence
 

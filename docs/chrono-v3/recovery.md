@@ -1,4 +1,15 @@
+---
+title: Earlier Chrono V3 recovery
+audience: [operators, agents]
+status: revision-bound recovery reference
+purpose: Preserve historical recovery behavior and failures without overriding current state-preserving rollback.
+related:
+  - ../chrono/operations/troubleshooting-and-rollback.md
+---
+
 # Chrono Memory Engine recovery
+
+> Start with [current troubleshooting and rollback](../chrono/operations/troubleshooting-and-rollback.md). Use `/Chrono` action arguments instead of the old separate commands. Independent provider rollback after new writes needs complete latest checkpoints and Memory reverse export. The historical evidence section below is not a current activation report.
 
 ## Recovery rules
 

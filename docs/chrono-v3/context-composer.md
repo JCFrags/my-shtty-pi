@@ -1,4 +1,15 @@
+---
+title: Earlier V3 context composition
+audience: [agents, maintainers]
+status: revision-bound V3 reference
+purpose: Preserve V3 composition rationale and finite bounds without substituting them for V4 request accounting.
+related:
+  - ../chrono/context/compaction-and-budgets.md
+---
+
 # Bounded context composition
+
+> Read [current compaction and budgets](../chrono/context/compaction-and-budgets.md) for V3/V4 selection, native captures, and request accounting. This page retains the V3 path. Its preview command spelling predates the unified `/Chrono` interface, and its evidence limits belong to the recorded revisions.
 
 The composer combines one chronological source-linked history with a small adaptive raw tail. An independent regular Pi summary can coexist when explicitly enabled. The baseline does not require a language model, rebuild lifetime history, or add a provider. Source implementation and local activation remain separate facts.
 
