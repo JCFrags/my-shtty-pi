@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>Chrono user guide</title>
+  <!-- Reading copy of USER-GUIDE.md. Source SHA-256: bbe894f143f6ccc5ba869f72b61a074cf957a1605126fd2293b1f71fcc47d85f -->
+  <!-- Source front matter, retained as document metadata:
+---
+title: Chrono user guide
+audience: [non-technical users]
+status: current guide with selection-dependent features
+purpose: Explain what Chrono does, how its parts work together, and which controls matter in ordinary use.
+related:
+  - README.md
+  - operations/menu-and-configuration.md
+  - design/evidence-and-roadmap.md
+---
+  -->
+  <style>
+    :root {
+      color-scheme: dark;
+      background: #161b22;
+      color: #dce3ed;
+      font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+      font-size: 20px;
+      line-height: 1.7;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: clamp(24px, 4vw, 56px) clamp(22px, 4vw, 48px) 88px;
+    }
+    h1, h2, h3 { color: #f0f4fa; line-height: 1.3; font-weight: 650; }
+    h1 { margin: 0 0 1.15em; font-size: 2rem; letter-spacing: -0.025em; }
+    h2 { margin: 2em 0 0.8em; padding-top: 0.85em; border-top: 1px solid #343e4c; font-size: 1.4rem; }
+    h1 + h2 { margin-top: 0; padding-top: 0; border-top: 0; }
+    h3 { margin: 1.65em 0 0.65em; font-size: 1.15rem; }
+    p { margin: 0 0 1.15em; }
+    strong { color: #f0f4fa; font-weight: 650; }
+    a { color: #9fc5ff; text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+    a:hover { color: #c5ddff; }
+    :focus-visible { outline: 2px solid #a7cbff; outline-offset: 5px; border-radius: 3px; }
+    ul, ol { margin: 0 0 1.3em; padding-left: 1.5em; }
+    li { padding-left: 0.15em; margin: 0.4em 0; }
+    li::marker { color: #a9b7ca; }
+    code {
+      font-family: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", monospace;
+      font-size: 0.9em;
+      padding: 0.1em 0.3em;
+      border: 1px solid #374252;
+      border-radius: 4px;
+      background: #232c39;
+      color: #e5edfa;
+      overflow-wrap: anywhere;
+    }
+    .table-scroll { overflow-x: auto; margin: 1.3em 0 1.5em; border: 1px solid #3a4555; border-radius: 7px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; line-height: 1.6; }
+    th, td { padding: 0.75em 0.9em; text-align: left; vertical-align: top; border-bottom: 1px solid #343e4c; }
+    th { color: #f0f4fa; background: #253040; font-weight: 650; }
+    th[align="right"], td[align="right"] { text-align: right; }
+    td { background: #1b232e; }
+    tbody tr:nth-child(even) td { background: #1f2834; }
+    tbody tr:last-child td { border-bottom: 0; }
+    th:first-child, td:first-child { min-width: 8.5em; }
+    ::selection { background: #385784; color: #fff; }
+    @media (max-width: 600px) {
+      :root { font-size: 19px; }
+      main { padding: 26px 22px 64px; }
+      table { min-width: 540px; }
+    }
+    @media print {
+      :root { color-scheme: light; background: white; color: #111; font-size: 12pt; }
+      main { max-width: none; padding: 0; }
+      h1, h2, h3, strong, a, code, th { color: #111; }
+      code, th, td, tbody tr:nth-child(even) td { background: white; }
+      .table-scroll { overflow: visible; }
+      table { min-width: 0; }
+      h1, h2, h3 { break-after: avoid; }
+      tr { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+<h1>Chrono user guide</h1>
+<h2>What Chrono is for</h2>
+<p>An AI model can read only a limited amount at once. In a long task, earlier messages eventually stop fitting. Chrono keeps a useful, smaller account of the work and provides tools to recover older evidence when needed.</p>
+<p>Chrono does not remember everything perfectly. It preserves the original conversation files, but the model sees a selection. Good use combines that selection with explicit tasks, notes, plans, and checks against original evidence.</p>
+<p>The <a href="design/evidence-and-roadmap.md">implementation and evidence page</a> identifies the version boundary. Independent Memory and the V4 context compiler must be selected and loaded. Their presence in the repository does not mean every existing session uses them.</p>
+<h2>The parts and their jobs</h2>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>What it does</th>
+<th>Simple mechanism</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Chrono compaction</td>
+<td>Makes room for continued work.</td>
+<td>Selects useful older events and keeps a small exact recent section. It records what was omitted.</td>
+</tr>
+<tr>
+<td>History tools</td>
+<td>Find what happened earlier and recover original wording.</td>
+<td>Search indexes point to preserved source records. Recovery checks the record&#39;s identity before returning it.</td>
+</tr>
+<tr>
+<td>Chronology, episodes, and resources</td>
+<td>Keep order, group related work, and show earlier resource observations.</td>
+<td>Code groups events and retains source links. A group ending does not mean the task succeeded.</td>
+</tr>
+<tr>
+<td>Memory</td>
+<td>Keeps ordinary knowledge that an agent explicitly accepts as useful.</td>
+<td>Corrections create new revisions. Earlier revisions and sources remain available.</td>
+</tr>
+<tr>
+<td>Todo</td>
+<td>Tracks immediate actions and blockers.</td>
+<td>Tasks have states, dependencies, and one in-progress item.</td>
+</tr>
+<tr>
+<td>Notes</td>
+<td>Holds scratchpad information for current work.</td>
+<td>The agent writes and revises notes explicitly. Notes do not automatically become accepted knowledge.</td>
+</tr>
+<tr>
+<td>Workplan</td>
+<td>Preserves a project&#39;s goal, decisions, progress, and next steps.</td>
+<td>Checkpoints let an agent recover project state after context loss.</td>
+</tr>
+<tr>
+<td>Recall</td>
+<td>Finds current saved state across the available tools.</td>
+<td>One small query returns matching cards and routes to fuller native records.</td>
+</tr>
+<tr>
+<td>Telemetry</td>
+<td>Shows operational counts and separately reported quality observations.</td>
+<td>It counts events locally without storing conversation text. A successful tool call is not proof of a correct answer.</td>
+</tr>
+</tbody></table></div>
+<p>In this guide, <strong>context</strong> means what the model can read now. <strong>History</strong> means the preserved record. <strong>Memory</strong> is the separate knowledge tool, not a name for all saved data.</p>
+<h2>How the parts work together</h2>
+<p>Consider a project whose original plan was corrected:</p>
+<ol>
+<li>History preserves both the old proposal and the later correction.</li>
+<li>Memory can store the corrected fact with its source. Workplan can record why the decision changed.</li>
+<li>Todo tracks the next action. Notes can hold temporary investigation details.</li>
+<li>Recall finds those current records without searching the entire conversation.</li>
+<li>The selected V4 compiler can include bounded current records alongside chronological evidence at compaction.</li>
+<li>If the short account is insufficient, the agent uses native reads or exact history recovery.</li>
+</ol>
+<p>The tools do not synchronize decisions silently. Completing a Todo does not complete a Workplan milestone. A note does not become Memory by itself. A saved plan does not authorize a new action.</p>
+<p>Independent Memory stays available across branch moves within its logical session. Todo, Notes, and Workplan follow the selected conversation branch. Memory is not a global store shared by every project.</p>
+<h2>What runs automatically</h2>
+<p>When the normal memory engine and its required worker support are available:</p>
+<ul>
+<li>Chrono incrementally prepares indexes and chronological records as the session changes.</li>
+<li>Pi&#39;s context-pressure mechanism can request compaction. Chrono supplies its selected replacement through Pi&#39;s normal extension interface.</li>
+<li>Recent raw messages remain available for continuity. Older detail can leave active context without being removed from history.</li>
+<li>At a safe idle boundary, automatic rollover can start a smaller physical conversation file after enough source growth. The old file remains part of the logical history.</li>
+</ul>
+<p>Rollover is different from compaction. Compaction reduces what the model sees. Rollover limits further growth of the active physical file. Rollover waits when work, a draft, managed processes, open shell sessions, or required state transfer makes switching unsafe.</p>
+<p>State tools remain explicit. An agent or user must request a Memory, Todo, Notes, or Workplan change. Recall runs when queried. Telemetry records only while its separate extension is loaded.</p>
+<h2>Everyday controls</h2>
+<p>Open <strong><code>/Chrono</code></strong>. There is one Chrono menu:</p>
+<ul>
+<li><strong>Settings</strong> controls compaction timing, context size, tool-result shortening, and optional background model work. Custom settings expose less common controls.</li>
+<li><strong>Status and diagnostics</strong> shows search readiness, worker state, background-model usage, and read-only health reports.</li>
+<li><strong>Maintenance</strong> contains session search selection, preview, logical-session operations, and explicit repair actions.</li>
+<li><strong>About</strong> shows a short description and loaded version.</li>
+</ul>
+<p>Valid settings save immediately. An environment override can still take priority over a saved value. Reports stay in the interface rather than entering the conversation. Use Up/Down or Page Up/Page Down to scroll a report. Enter or Esc returns. The local scrolling correction routes these keys to the report in fullscreen Pi.</p>
+<p>Most users should leave the default programmatic path enabled. Start with status rather than changing advanced settings. Do not run repair, import, or rollback merely because an index is still catching up.</p>
+<h3>Context size and shortening</h3>
+<p>The default combined context target is 32,000 estimated tokens. A token is a small piece of model input. The selected model&#39;s remaining capacity can lower that target. The recent exact section normally aims for 3,000–6,000 estimated tokens while keeping tool calls and results together.</p>
+<p>Raising the target retains more possible context, but it does not make recall complete or remove resource limits. Lowering it can omit useful evidence. Token counts are estimates, not a guarantee of the final provider request size.</p>
+<p>Optional tool-result shortening offers Off, Safe, and Aggressive. It selects eligible older results at a compaction boundary. Later turns reuse the same shortened text. New results stay exact until a later boundary. Original source remains unchanged. This avoids repeatedly changing already-sent text, but it does not guarantee a provider cache hit or a cost saving.</p>
+<h3>Background LLM controls</h3>
+<p>An LLM is a language model. Background model work is optional and off by default. The menu offers Lite, Medium, Max, Custom, and a model picker. Lite is the suggested starting preset if this work is enabled.</p>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>Preset</th>
+<th align="right">Maximum calls per session</th>
+<th align="right">Estimated cost ceiling</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Lite</td>
+<td align="right">20</td>
+<td align="right">$0.25</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td align="right">100</td>
+<td align="right">$2</td>
+</tr>
+<tr>
+<td>Max</td>
+<td align="right">400</td>
+<td align="right">$10</td>
+</tr>
+</tbody></table></div>
+<p>These are controls, not promised bills or quality levels. Token ceilings and model pricing also apply. Custom exposes individual limits. Selecting a different background model does not change the main conversation model.</p>
+<p>Important current limit: this value-advice worker belongs to the older compatibility pipeline. It is paused while the normal memory engine is enabled. Selecting a preset does not add model enrichment to V3 or V4 indexed compaction. Do not disable the normal engine just to make a preset run without first understanding that change.</p>
+<p>Where eligible and enabled, the worker sends bounded assistant/tool excerpts to the selected model and may incur charges. It does not send whole history or write final context. The deterministic system remains usable without it. An optional regular Pi summary is a separate setting, not this worker. The V4 compiler does not require that summary.</p>
+<h2>Useful things to ask the agent</h2>
+<ul>
+<li>&quot;Find the original decision and its later correction. Show the source for each.&quot;</li>
+<li>&quot;Recover the active Workplan and identify the next unblocked task.&quot;</li>
+<li>&quot;Save this confirmed fact in Memory with its source, not just in Notes.&quot;</li>
+<li>&quot;Check whether this Recall result is partial before concluding that nothing exists.&quot;</li>
+<li>&quot;Explain the current Chrono status without changing settings or repairing anything.&quot;</li>
+</ul>
+<p>You do not need to memorize the tool names. Agents can find them through the tool catalog. Tools that are hidden or excluded are not automatically enabled by Recall.</p>
+<h2>Limits to keep in mind</h2>
+<ul>
+<li>Search is bounded and mainly lexical. Different wording can be missed. An empty page with a continuation does not prove absence.</li>
+<li>A resource observation describes what was seen then. It does not prove what is on disk now.</li>
+<li>Current saved facts can be stale or wrong. A source link proves where a statement came from, not that it is true.</li>
+<li>Missing or slow components report incomplete coverage. They are not replaced with invented facts.</li>
+<li>Stores and archives use disk space. There is no promise of infinite memory or automatic broad cleanup.</li>
+<li>Large old physical sessions can still be expensive to open before rollover helps future growth.</li>
+<li>Telemetry without quality observations reports quality as unknown. Reported observations are not automatically verified.</li>
+<li>Backups must include source history and the selected state stores. A short Recall card or compaction summary is not a full backup.</li>
+</ul>
+<h2>When something goes wrong</h2>
+<p>Start with <code>/Chrono</code>, then <strong>Status and diagnostics</strong>. Ask the agent to distinguish disabled search, ordinary catch-up, an unavailable worker, an incompatible store, and a source mismatch.</p>
+<p>Do not delete the old conversation, clear locks, reset databases, or repeatedly force compaction. A controlled refusal preserves the current context. Follow <a href="operations/troubleshooting-and-rollback.md">troubleshooting and rollback</a> for a specific problem.</p>
+<p>Changing an installation path does not update an already-running Pi process. A safe reload requires settled work and no unsent draft. Reload can stop managed jobs. Returning to old code after new state writes also requires a compatible data transfer, not just an old setting.</p>
+<h2>Useful future choices</h2>
+<p>The next useful decision is usually based on actual work: did the agent recover the right fact, keep the correction, and continue safely? A smaller prompt alone is not success.</p>
+<p>Possible future improvements include better source-backed relations between actions and results, broader provider discovery, and bounded model assistance for the indexed pipeline. These are not current guarantees. Wider quality or long-history evaluations should answer a specific question with a limited scope, rather than imply perfect lifetime memory.</p>
+<p><a href="README.md">Documentation index</a> · <a href="operations/menu-and-configuration.md">Detailed configuration</a> · <a href="design/evidence-and-roadmap.md">Evidence and future work</a></p>
+</main>
+</body>
+</html>
