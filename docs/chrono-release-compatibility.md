@@ -1,27 +1,18 @@
+---
+title: ChronoCompact release compatibility
+audience: [operators, agents, maintainers]
+status: compatibility reference with historical release records
+purpose: Preserve build and compatibility requirements while separating source versions from local activation.
+related:
+  - chrono/design/evidence-and-roadmap.md
+  - chrono/operations/activation-and-migration.md
+---
+
 # ChronoCompact release compatibility
 
-## Current 4.0.1-local.20260919 source
+The [current status page](chrono/design/evidence-and-roadmap.md) identifies local integration `4.0.1-local.20260919` and its activation boundary. It combines the implemented V4 path below with main's 3.0.5 unified `/Chrono` menu, stable projections, and the local report-scroll correction. It is not a published release. The older `/chrono-*` names below describe earlier versions. Use [current configuration](chrono/operations/menu-and-configuration.md).
 
-Version `3.0.5` implements the single `/Chrono [action]` operator entrypoint.
-Settings, Status and diagnostics, Maintenance, and About share one menu. Valid
-settings changes save immediately, invalid input returns to the input, and
-terminal reports use a read-only scroller that returns to the menu. Direct RPC
-action output remains notifications. Lite, Medium, and Max bound optional paid
-background model work, with all controls and a provider/model picker available
-in Custom. The compatibility worker remains paused under the default V3 engine.
-Selecting a preset does not switch engines.
-
-Tool-result projection is selected only on the first request after successful
-compaction. Ordinary turns reuse frozen replacements, and new results remain
-exact until the next compaction. Reload, resume, and tree navigation reset to
-exact results. Safety binding refusals return the exact request rather than
-recomputing a reduction. This is not a general provider-cache hit guarantee.
-See [configuration](chrono-v3/configuration.md) and [operations](chrono-v3/operations.md)
-for limits and action names.
-
-These are source changes, not an acceptance or activation receipt. No new runtime
-validation is claimed here. The earlier evidence below remains specific to the
-versions it exercised.
+## Implemented 4.0.0 compatibility boundary
 
 Version `4.0.0` adds the opt-in V4 compiler and independent Context Kit ownership.
 Set `contextCompiler: "v4"` to select the existing public compaction hook's new
@@ -46,7 +37,7 @@ dependency. Its tracked JavaScript and declarations must match the clean protoco
 build. A Chrono-only tarball without that sibling is not a standalone install.
 The supported retained installation contains the accepted repository checkout.
 
-Version `4.0.1-local.20260919` keeps programmatic memory and safe-idle physical rollover enabled by
+Version `4.0.0` keeps programmatic memory and safe-idle physical rollover enabled by
 default. The [current overview](chrono-v3/README.md) describes useful selective
 chronology, bounded recall, native tool-state transfer, and measured limits.
 The 3.0.1 corrections remain in place. A Chrono-owned compaction refusal resumes
@@ -71,6 +62,8 @@ admission. It verified repeated refusal, no overlapping check, no status-trigger
 retry, explicit search disable, canary refusal, and pending-compaction deferral.
 It blocked child launches and required unchanged synthetic source bytes.
 
+<a id="current-303-release"></a>
+
 Version `3.0.3` lets raw `history_get` recover a cataloged entry from its
 validated branch even when the final derived search index is absent. The caller
 must use the predecessor's explicit `shardId` after rollover. Branch membership,
@@ -85,17 +78,18 @@ changed-source, stale-target, and unready-catalog cases refused. The missing
 search head and search generation stayed unchanged. Live-session adoption is a
 separate activation check.
 
-Version `3.0.2` added read-only scheduler reservation diagnostics, now available
-through `/Chrono worker-status` and `/Chrono doctor`. The output separates a stopped
+Version `3.0.2` added read-only scheduler reservation diagnostics to
+`/chrono-worker-status` and `/chrono-doctor`. The output separates a stopped
 reservation owner from active worker execution and explains that indexed-history
 deadlines include admission wait. A stopped live owner retains its reservation.
 This correction does not recover admission, remove leases, resume owners, change
 worker limits, or modify source history or stores.
 
-The reconciled local source includes `dist/src/chrono-ui.js` and the V4 compiler:
-139 compiled runtime JavaScript files and 140 startup pins, including `package.json`.
-Read the exact package tree and file hashes from `scripts/verify-chrono-v3-baseline.mjs`,
-not the historical tables below.
+The 4.0.0 completion had 138 compiled runtime JavaScript files and 139 startup
+pins, including `package.json`. The reconciled `4.0.1-local.20260919` source also
+includes `dist/src/chrono-ui.js`: 139 compiled runtime JavaScript files and 140
+startup pins. Read the selected package tree and file hashes from
+`scripts/verify-chrono-v3-baseline.mjs`, not the historical tables below.
 
 Use the root [verification workflow](../README.md#verification) and installed-Pi
 loader checks for a changed release. The explicit native build and matching
@@ -168,6 +162,8 @@ The complete Git tree includes tests, scripts, documentation, metadata, and the
 compiled distribution.
 
 ## Dependencies and checks
+
+The commands in this section retain the 2.0.15 reproduction, including its historical campaign and peer-version statements. For current checks, use the root [verification workflow](../README.md#verification) and current [activation procedure](chrono/operations/activation-and-migration.md). The explicit controlled native build and verified header prerequisite still apply. Do not run the old campaigns merely because this record lists them.
 
 Prepare dependencies from the package-local lock. The strict local route requires
 the exact Node 24.18.0 runtime and its already prepared, verified header root:

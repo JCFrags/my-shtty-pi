@@ -1,4 +1,16 @@
+---
+title: V4 completion scope
+audience: [agents, maintainers]
+status: historical implementation plan
+purpose: Preserve the planned completion contract and verification boundaries.
+related:
+  - completion-evidence.md
+  - ../chrono/design/evidence-and-roadmap.md
+---
+
 # V4 completion scope
+
+> This plan's "next implementation" is recorded in [completion evidence](completion-evidence.md). Use the [current subject guide](../chrono/README.md) for behavior and operating controls. This retained plan is not deployment evidence.
 
 ## Delivery target
 

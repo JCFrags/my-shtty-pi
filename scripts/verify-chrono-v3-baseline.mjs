@@ -15,7 +15,7 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "ce1fdf7c4f0902ab4a183880aa2d988e7efbb706",
+  "tree": "7b6b25a855cd7c0972f31be816edbc4ca869512b",
   "files": 443,
   "maps": 139,
   "package": "packages/pi-chrono-compaction",
@@ -29,7 +29,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "README.md",
       "upstreamSha256": "587b68f55d7770db1e226224804aa29d40d136a601d20dbe49c62da989405148",
-      "integratedSha256": "dd493183f19f0ada2b14dc7b44a31348bf47fac9a3c3b1dd4d4ad52ac1670a9e"
+      "integratedSha256": "ffb4e0d04f8258139a71bbc823d2fd4629c26d7cf625c3fcb57bb3d230db7d8a"
     },
     {
       "path": "dist/src/bounded-memory.js",

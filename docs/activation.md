@@ -1,4 +1,16 @@
+---
+title: Local activation and rollback
+audience: [operators, agents, maintainers]
+status: repository procedure with historical product receipts
+purpose: Preserve supported registration, loaded-use, and scoped rollback procedures across products.
+related:
+  - chrono/operations/activation-and-migration.md
+  - chrono/operations/troubleshooting-and-rollback.md
+---
+
 # Local activation and rollback
+
+For Chrono and Context Kit, start with [activation and explicit state migration](chrono/operations/activation-and-migration.md) and [data-preserving rollback](chrono/operations/troubleshooting-and-rollback.md). Current Chrono uses one `/Chrono` menu. Product counts and observed identities below belong to their recorded milestones, not a universal current loader inventory.
 
 ## Ownership
 

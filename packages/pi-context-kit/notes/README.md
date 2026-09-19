@@ -1,4 +1,16 @@
+---
+title: Owned Notes native reference
+audience: [agents, maintainers, operators]
+status: implemented, selection-dependent
+purpose: Specify native Notes behavior, persistence, import, and complete transfer.
+related:
+  - ../../../docs/chrono/state/todo-notes-workplan.md
+  - ../README.md
+---
+
 # Owned Notes
+
+Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) for component roles and [activation and migration](../../../docs/chrono/operations/activation-and-migration.md) for the coordinated writer/import sequence.
 
 `@context-kit/notes` owns a separate branch-local scratchpad store. It uses the validated Grounded Notes reducer and native result rendering. It does not import the legacy extension factory or share a namespace, store instance, or lock with Todo or Memory. Notes remain scratchpad state, not accepted durable knowledge or instruction authority.
 

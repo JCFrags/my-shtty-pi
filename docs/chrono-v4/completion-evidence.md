@@ -1,4 +1,16 @@
+---
+title: V4 implementation evidence
+audience: [agents, maintainers, evaluators]
+status: revision-bound evidence
+purpose: Preserve exact practical results, failures, corrections, and limits for the V4 completion.
+related:
+  - ../chrono/design/evidence-and-roadmap.md
+  - completion-scope.md
+---
+
 # V4 implementation evidence
+
+> These observations belong to the recorded V4 completion. The [current status page](../chrono/design/evidence-and-roadmap.md) identifies later integration and activation separately. Do not reinterpret this scenario as general quality or scale qualification.
 
 ## Scope
 

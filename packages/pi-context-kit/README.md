@@ -1,4 +1,16 @@
+---
+title: Context Kit
+audience: [users, agents, maintainers]
+status: implemented, independently loadable
+purpose: Route package selection and native contracts for independent state, Recall, and Telemetry.
+related:
+  - ../../docs/chrono/README.md
+  - ../../docs/chrono/USER-GUIDE.md
+---
+
 # Context Kit
+
+Start with the [Chrono user guide](../../docs/chrono/USER-GUIDE.md) or [subject documentation](../../docs/chrono/README.md) for the connected system. The [state guide](../../docs/chrono/state/README.md), [Recall guide](../../docs/chrono/context/recall.md), and [Telemetry guide](../../docs/chrono/operations/telemetry.md) explain ownership and limits. This package index and its child references own native package details. See [current implementation and activation status](../../docs/chrono/design/evidence-and-roadmap.md) before claiming loaded use.
 
 Context Kit contains six independently loadable Pi extensions. Each state provider owns its persistence and remains usable without Recall, Telemetry, or Chrono. The pure libraries share contracts and storage code, not a database or mutable store instance.
 
@@ -45,7 +57,7 @@ Queries match bounded case-insensitive terms, not semantic similarity. Cards inc
 
 Defaults are six cards and 128 scanned records per provider, 8 KiB per provider reply, a 150 ms common wait, and a 16 KiB complete serialized result. Provider-specific limits also apply. Check coverage and omissions before drawing conclusions from an empty or partial page. A Memory recovery request pins an exact revision. Other native recovery calls can return a later current record.
 
-Chrono 4.0.0 can use the same collector through explicit `contextCompiler: "v4"`. The existing public compaction hook freezes admitted native pages, historical cuts, omissions, recovery descriptors, and estimated request charges. It fits whole records with the raw tail, system text, tool schemas, and response reserve. Missing optional history can use the bounded loaded-prefix fallback. It does not require a summary model. The default compiler remains `v3` until explicitly selected. See the [completion scope](../../docs/chrono-v4/completion-scope.md).
+Chrono's implemented V4 path can use the same collector through explicit `contextCompiler: "v4"`. The existing public compaction hook freezes admitted native pages, historical cuts, omissions, recovery descriptors, and estimated request charges. It fits whole records with the raw tail, system text, tool schemas, and response reserve. Missing optional history can use the bounded loaded-prefix fallback. It does not require a summary model. The default compiler remains `v3` until explicitly selected. See the [completion scope](../../docs/chrono-v4/completion-scope.md).
 
 Recall cards are not rollover state. Complete native checkpoints remain mandatory for Todo, Notes, and Workplan. Memory transfers a verified same-store logical binding, not the store bytes. An unavailable or oversized complete transfer refuses rollover instead of shortening state. A rollback after new writes requires a fresh replacement with current complete native state. Keep original source, owned stores, and prior installations.
 

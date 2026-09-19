@@ -1,4 +1,16 @@
+---
+title: Context Kit protocol reference
+audience: [maintainers]
+status: implemented contract
+purpose: Specify native context collection and complete asynchronous state transfer.
+related:
+  - ../../../docs/chrono/architecture/contracts-and-trust.md
+  - ../../../docs/chrono/state/persistence-and-transfer.md
+---
+
 # Context Kit protocols
+
+Read the [contracts and trust guide](../../../docs/chrono/architecture/contracts-and-trust.md) and [persistence/transfer overview](../../../docs/chrono/state/persistence-and-transfer.md) for the connected architecture. This page retains the detailed protocol contract.
 
 Side-effect-free library with generated JavaScript and TypeScript declaration exports. Importing it registers no listeners, creates no stores, and starts no resources. Providers opt in with `registerContextProvider(events, providerId, read)`, which returns an unsubscribe function for their shutdown handler.
 
