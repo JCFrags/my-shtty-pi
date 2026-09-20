@@ -1845,7 +1845,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     if (previewDelivered) throw new Error("session-agent-summary-preview-already-delivered");
     if (sessionSummary || compactionRetryPaused || ctx.hasPendingMessages()) throw new Error("session-agent-summary-session-busy");
     const request = createSessionAgentSummaryRequest({ requestId: randomUUID(), scope: sessionSummaryScope(ctx, summaryEpoch), reason,
-      now: Date.now(), targetTokens: Math.min(4096, searchSettings().hybridSummaryTargetTokens),
+      now: Date.now(), targetTokens: Math.min(2000, searchSettings().hybridSummaryTargetTokens),
       ...(customInstructions?.trim() ? { customInstructions } : {}), ...(requestToolCallId ? { requestToolCallId } : {}) });
     summaryHeadroom(ctx, renderSessionAgentSummaryRequest(request), observedTokens);
     const state: ActiveSessionSummary = { request, delivery, deferrals: 0 };
