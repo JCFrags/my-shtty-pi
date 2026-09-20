@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEventBus, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider } from "@context-kit/protocol";
-import extension, { capturePreparedV4Context, resolveExtensionSettings, SESSION_AGENT_BOUNDARY_CUSTOM_TYPE } from "../src/pi-extension.js";
+import extension, { capturePreparedV4Context, resolveExtensionSettings, SESSION_AGENT_BOUNDARY_CUSTOM_TYPE,
+  type SessionAgentPreviewCapture } from "../src/pi-extension.js";
 import { previewContext } from "../src/composition-preview.js";
 import { validateMemoryOwner } from "../src/user-config.js";
 import { createSessionAgentSummaryRequest, consumeSessionAgentSummaryRequest, acceptSessionAgentSummary, settleSessionAgentSummary,
@@ -17,7 +18,8 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const environment = { PI_CHRONO_CONFIG_PATH: join(directory, "config.json"), PI_CHRONO_CONTEXT_COMPILER: "v4",
     PI_CHRONO_MEMORY_OWNER: "context-kit", PI_CHRONO_SEARCH_INDEX: "false", PI_CHRONO_MEMORY_ENGINE: "false",
     PI_CHRONO_AUTOMATIC_ROLLOVER: "false", PI_CHRONO_PI_SUMMARY: "true", PI_CHRONO_VALUE_WORKER_MODE: "off",
-    PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false", PI_CHRONO_TOOL_RESULT_PROJECTION: "off", PI_CHRONO_RAW_TAIL_MIN: "1000", PI_CHRONO_RAW_TAIL_MAX: "2000" };
+    PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false", PI_CHRONO_CATALOG_SHADOW: "false", PI_CHRONO_ROLLUP_SHADOW: "false",
+    PI_CHRONO_TOOL_RESULT_PROJECTION: "off", PI_CHRONO_RAW_TAIL_MIN: "1000", PI_CHRONO_RAW_TAIL_MAX: "2000" };
   const old = new Map(Object.keys(environment).map(key => [key, process.env[key]]));
   Object.assign(process.env, environment);
   writeFileSync(environment.PI_CHRONO_CONFIG_PATH, "{}", { mode: 0o600 });
@@ -28,7 +30,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const mirrors: unknown[] = [], requests: any[] = [], sent: any[] = [];
   let schemaDescription = "Independent task state", mutateDuringCollect = false, idle = true;
   let compactionTask: Promise<void> | undefined, returned: any, committedId: string | undefined, referenceReady: SessionAgentSummaryReady | undefined;
-  let checkPreview = true, aborts = 0;
+  let checkPreview = true, aborts = 0, previewMode = false, compactCalls = 0, authCalls = 0, commands = 0, flags = 0;
   const run = new AbortController();
   const remove = registerContextProvider(events, "todo", () => {
     if (mutateDuringCollect) { schemaDescription = "Changed active schema"; mutateDuringCollect = false; }
@@ -41,7 +43,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     events, getActiveTools: () => ["todo", "memory_get", "request_compaction"],
     getAllTools: () => [{ name: "todo", description: schemaDescription, parameters: { type: "object" } },
       { name: "memory_get", description: "Independent memory", parameters: { type: "object" } }, tools.get("request_compaction")],
-    registerTool(tool: any) { tools.set(tool.name, tool); }, registerCommand() {}, registerFlag() {},
+    registerTool(tool: any) { tools.set(tool.name, tool); }, registerCommand() { commands++; }, registerFlag() { flags++; },
     on(name: string, handler: any) { assert.ok(!hooks.has(name)); hooks.set(name, handler); },
     appendEntry(type: string, data: unknown) { mirrors.push({ type, data }); },
     sendMessage(message: any, options: any) {
@@ -69,8 +71,10 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     get signal() { return idle ? undefined : run.signal; }, abort() { aborts++; },
     model: { provider: "fixture", id: "fixture", api: "openai-completions", contextWindow: 32000, maxTokens: 2000 }, thinkingLevel: "off",
     getSystemPrompt: () => "Synthetic system prompt", getContextUsage: () => ({ contextWindow: 32000, tokens: 12000 }),
-    modelRegistry: { getApiKeyAndHeaders() { throw new Error("V4 must not request summary auth"); } },
+    modelRegistry: { getApiKeyAndHeaders() { authCalls++; throw new Error("V4 must not request summary auth"); } },
     compact(options: any) {
+      compactCalls++;
+      assert.equal(previewMode, false, "preview must never call ctx.compact");
       assert.equal(idle, true, "ctx.compact starts only at safe idle");
       idle = false;
       compactionTask = (async () => {
@@ -118,7 +122,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const view = () => ({ scope: { ...request.scope, leafId: sm.getLeafId()! }, now: Date.now(), getEntry: (id: string) => sm.getEntry(id) as SessionEntryLike | undefined });
     const messages = sm.buildSessionContext().messages;
     await hooks.get("context")!({ messages }, ctx);
-    assert.equal((await status()).sessionSummary.state, "consumed");
+    if (!previewMode) assert.equal((await status()).sessionSummary.state, "consumed");
     const consumed = reference ? consumeSessionAgentSummaryRequest(request, view(), messages) : undefined;
     const args = { requestId: request.requestId, summary: summaryText, relevanceHints: ["checksum", "isolated implementation"] };
     const message = assistant(submitCallId, "request_compaction", args);
@@ -217,6 +221,93 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal((await status()).lastFailure.code, "session-agent-summary-overflow-unavailable");
     assert.equal(sm.getLeafId(), leaf);
     assert.equal(sent.length, beforeSend + 1, "overflow did not start another model request");
+
+    // Load the private preview option through the same registration. Synthetic
+    // assistant entries exercise dispatch, not model-written summary evidence.
+    await hooks.get("session_shutdown")!({}, ctx);
+    hooks.clear(); tools.clear(); sent.length = 0; requests.length = 0;
+    previewMode = true;
+    const compactCallsBefore = compactCalls, commandsBefore = commands, flagsBefore = flags;
+    const privateFilesBefore = readdirSync(directory, { recursive: true });
+    let previewCapture: SessionAgentPreviewCapture | undefined, previewCalls = 0, backgroundCalls = 0;
+    const previewErrors: string[] = [];
+    let resolveCapture!: () => void;
+    const delivered = new Promise<void>(resolve => { resolveCapture = resolve; });
+    Object.assign(process.env, { PI_CHRONO_CONTEXT_COMPILER: "v4", PI_CHRONO_MEMORY_OWNER: "context-kit",
+      PI_CHRONO_SEARCH_INDEX: "true", PI_CHRONO_AUTOMATIC_ROLLOVER: "true", PI_CHRONO_VALUE_WORKER_MODE: "advisory",
+      PI_CHRONO_INCREMENTAL_PRECOMPUTE: "true", PI_CHRONO_CATALOG_SHADOW: "true", PI_CHRONO_ROLLUP_SHADOW: "true",
+      PI_CHRONO_TOOL_RESULT_PROJECTION: "aggressive" });
+    extension(pi as unknown as ExtensionAPI, { schedulerDirectory: directory,
+      capsuleShadowTarget() { backgroundCalls++; throw new Error("Preview scheduled capsule work"); },
+      readOnlyStartupVerifier: async () => { backgroundCalls++; return true; },
+      sessionAgentPreview: { sessionId: sm.getSessionId(), sessionFile: source, reserveTokens: 2000,
+        async onReady(capture) {
+          previewCalls++;
+          capture.revalidate();
+          await tick(); // Private artifact writers may be asynchronous.
+          capture.revalidate();
+          assert.equal(capture.compiled.summary, previewContext(capture.input).summary);
+          assert.equal(capture.ready.submission.summary, summaryText);
+          previewCapture = capture;
+          resolveCapture();
+        },
+        onError: code => { previewErrors.push(code); },
+      } });
+    assert.deepEqual([...tools.keys()], ["request_compaction"]);
+    assert.equal(JSON.stringify(tools.get("request_compaction").parameters), schema);
+    assert.equal(commands, commandsBefore);
+    assert.equal(flags, flagsBefore);
+    // Restoring a retained loader's environment cannot change candidate settings.
+    process.env.PI_CHRONO_CONTEXT_COMPILER = "v3";
+    process.env.PI_CHRONO_MEMORY_OWNER = "chrono";
+    const noLifecycleWork = new Proxy({}, { get(_target, key) { throw new Error(`Unexpected preview lifecycle access: ${String(key)}`); } });
+    for (const hook of ["session_start", "session_before_tree", "session_tree", "session_before_switch", "session_before_fork",
+      "session_shutdown", "before_agent_start", "turn_end", "agent_settled"]) await hooks.get(hook)!({}, noLifecycleWork);
+    for (const reason of ["manual", "threshold", "overflow"]) {
+      assert.deepEqual(await hooks.get("session_before_compact")!({ reason }, noLifecycleWork), { cancel: true });
+      await hooks.get("session_compact_failed")!({ reason, aborted: true }, noLifecycleWork);
+    }
+    await assert.rejects(tools.get("request_compaction").execute("wrong-target", {}, run.signal, undefined,
+      { ...ctx, sessionManager: { ...ctx.sessionManager, getSessionId: () => "another-session" } }), /preview-target-mismatch/);
+    sm.appendMessage({ role: "user", content: "Exercise the private preview only.", timestamp: Date.now() });
+    const previewSubmitted = await submit("private-preview");
+    const beforeCapture = sm.getBranch().map(entry => [entry.id, JSON.stringify(entry)] as const);
+    await hooks.get("agent_settled")!({}, ctx); // Deliberately still busy.
+    await tick();
+    assert.equal(sent.length, 0);
+    assert.equal(previewCalls, 0);
+    assert.deepEqual(await hooks.get("session_before_compact")!(event("threshold"), ctx), { cancel: true });
+    await hooks.get("session_compact_failed")!({ reason: "threshold", aborted: true }, ctx);
+    idle = true;
+    await hooks.get("agent_settled")!({}, ctx);
+    const timeout = setTimeout(() => resolveCapture(), 2000);
+    try { await delivered; } finally { clearTimeout(timeout); }
+    assert.ok(previewCapture, `preview callback did not succeed: ${previewErrors.join(", ")}`);
+    assert.equal(previewCalls, 1);
+    assert.equal(previewCapture.ready.submissionAssistantLeafId, previewSubmitted.submissionEntryId);
+    assert.equal(previewCapture.ready.submissionResultLeafId, previewSubmitted.resultId);
+    assert.equal(previewCapture.compiled.receipt.sourceCutEntryId, previewSubmitted.resultId);
+    assert.equal(previewCapture.input.memoryOwner, "context-kit");
+    assert.equal(previewCapture.input.budget.responseReserveTokens, 2000);
+    assert.equal(previewCapture.exactTail.length, 1);
+    assert.deepEqual(previewCapture.exactTail, [sm.getEntry(previewCapture.boundary.entryId)]);
+    assert.equal(previewCapture.tail.firstKeptEntryId, previewCapture.boundary.entryId);
+    assert.equal(sent.length, 1, "only the verified boundary is appended, not a resume or summary request");
+    assert.deepEqual(sent[0].options, { triggerTurn: false });
+    for (const [id, bytes] of beforeCapture) assert.equal(JSON.stringify(sm.getEntry(id)), bytes);
+    for (const reason of ["manual", "threshold", "overflow"]) {
+      assert.deepEqual(await hooks.get("session_before_compact")!({ reason }, noLifecycleWork), { cancel: true });
+    }
+    await hooks.get("agent_settled")!({}, noLifecycleWork);
+    await tick();
+    assert.equal(previewCalls, 1, "a settled event cannot redeliver or compact a consumed preview");
+    assert.equal(compactCalls, compactCallsBefore);
+    assert.equal(authCalls, 0);
+    assert.equal(backgroundCalls, 0);
+    assert.equal(requests.length, 0);
+    assert.equal(mirrors.length, 0);
+    assert.deepEqual(previewErrors, []);
+    assert.deepEqual(readdirSync(directory, { recursive: true }), privateFilesBefore, "candidate created no store, runtime or background files");
   } finally {
     remove();
     await hooks.get("session_shutdown")?.({}, ctx);

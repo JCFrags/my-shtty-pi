@@ -24,6 +24,8 @@ Supply a nonempty top-level `rationale` for `revise`, `record_decision`, `pause`
 
 Milestone status uses `pending`, `in_progress`, `blocked`, and `completed`, not Todo's `done`. Start a pending milestone before completing it. Completion requires evidence and completed dependencies.
 
+Question status uses `open` and `resolved`, not `answered`. `record_question` adds a new question. To resolve an existing question, use `revise` with `section: "openQuestions"`, retain every existing question and its ID, and update the selected question's `status` and `answer`.
+
 A checkpoint records project state. It does not grant new authorization. Linked Todo IDs are unverified external references, not synchronized tasks.
 
 ## Storage and bounds
