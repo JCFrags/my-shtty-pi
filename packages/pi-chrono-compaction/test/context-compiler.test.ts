@@ -4,8 +4,10 @@ import type { ContextCollection } from "@context-kit/protocol/collect";
 import { captureContextBudget, chargeCompactionSummary } from "../src/context-budget.js";
 import { compileContext, freezeContextInput, type FrozenContextInput } from "../src/context-compiler.js";
 import { previewContext } from "../src/composition-preview.js";
+import { captureChronologicalReplay } from "../src/chronological-replay.js";
+import type { SessionEntryLike } from "../src/types.js";
 
-test("V4 fits whole records, freezes exact captures and charges the complete public request", () => {
+test("session summary precedes bounded chronological events and charges the complete public request", () => {
   const condition = "Preserve the original until the checksum is verified. ".repeat(35) + "Do not replace the original without approval.";
   const native: ContextCollection = {
     version: 2, requestId: "transport-one", scope: { sessionId: "fixture-session", leafId: "full-native-leaf" },
@@ -25,18 +27,31 @@ test("V4 fits whole records, freezes exact captures and charges the complete pub
   const budget = captureContextBudget({ model: { provider: "fixture", id: "model", api: "fixture", contextWindow: 20000, maxTokens: 2000, thinkingLevel: "off" },
     configuredTokens: 4800, responseReserveTokens: 1500, systemPrompt: "Actual system prompt. ".repeat(30),
     activeTools: ["todo"], allTools: [{ name: "todo", description: "Task state", parameters: { type: "object", properties: { action: { type: "string" } } } }], framingTokens: 700 });
+  const entries: SessionEntryLike[] = [
+    { id: "old-checkpoint", type: "compaction", summary: "OLD RECEIPT MUST NOT BE NESTED" },
+    { id: "condition", type: "message", message: { role: "user", content: condition } },
+    { id: "read-call", type: "message", message: { role: "assistant", content: [
+      { type: "toolCall", id: "read-one", name: "read", arguments: { path: "src/checksum.ts", offset: 10, limit: 50 } },
+    ] } },
+    { id: "read-result", type: "message", message: { role: "toolResult", toolName: "read", toolCallId: "read-one", isError: false,
+      content: [{ type: "text", text: "export const checksumVerified = false;\n".repeat(400) }] } },
+    { id: "large-history", type: "message", message: { role: "assistant", content: "Optional historical detail. ".repeat(600) } },
+    { id: "summary-call", type: "message", message: { role: "assistant", content: [
+      { type: "toolCall", id: "submit-one", name: "request_compaction", arguments: { summary: "DUPLICATE SUMMARY MUST NOT BE REPLAYED" } },
+    ] } },
+    { id: "prefix-cut", type: "message", message: { role: "toolResult", toolName: "request_compaction", toolCallId: "submit-one",
+      isError: false, content: [{ type: "text", text: "Summary accepted." }] } },
+    { id: "tail-start", type: "custom_message", customType: "chrono-session-agent-summary-boundary", content: "Continue the unresolved task." },
+  ];
+  const original = JSON.stringify(entries);
   const input: FrozenContextInput = { scope: native.scope, sourceCutEntryId: "prefix-cut", firstKeptEntryId: "tail-start",
-    native, memoryOwner: "context-kit", budget, rawTail: { tokens: 400, messages: 3, toolPairSafe: true },
-    history: { kind: "stored", input: { regularPiSummary: "", combinedCeilingTokens: 4800,
-      cut: { sourceCutEntryId: "prefix-cut", sourceCutSeq: 10, firstKeptEntryId: "tail-start", firstKeptSeq: 11, rawTailTokens: 400, toolPairSafe: true },
-      memory: { generation: "1", representedStartSeq: 0, representedEndSeq: 10, committed: true },
-      mandatoryCoverage: { protectedComplete: true, openWorkComplete: true },
-      selected: { protected: [{ id: "condition", text: condition, startSeq: 1, endSeq: 1, recovery: "opaque:exact-condition",
-        kind: "restriction", authority: "exact", sourceAuthority: "user", status: "current", importance: 1 }], openWork: [], older: [],
-        recent: [{ id: "large-history", text: "Optional whole history representation. ".repeat(360), startSeq: 5, endSeq: 5,
-          recovery: "opaque:exact-large-history", kind: "episode", authority: "derived", status: "uncertain", importance: 0.1 }] },
-      delta: { records: [], completeThroughCut: true } } },
+    native, memoryOwner: "context-kit", budget, rawTail: { tokens: 49, messages: 1, toolPairSafe: true },
+    sessionSummary: { text: "Verify the checksum. Replacement has not been approved.", requestId: "fixture-request-id",
+      requestLeafId: "large-history", consumedBoundaryLeafId: "request-result", submissionEntryId: "summary-call",
+      submissionToolCallId: "submit-one", relevanceHints: ["checksum"] },
+    history: { kind: "events", selection: captureChronologicalReplay(entries, entries.length - 1, ["checksum"]) },
   };
+  assert.equal(JSON.stringify(entries), original, "capture does not mutate source entries");
   const frozen = freezeContextInput(input);
   const preview = previewContext(frozen), compiled = compileContext(frozen);
   assert.equal(preview.activeContextChanged, false);
@@ -46,17 +61,21 @@ test("V4 fits whole records, freezes exact captures and charges the complete pub
   assert.equal(compiled.receipt.scope.leafId, "full-native-leaf");
   assert.equal(compiled.receipt.sourceCutEntryId, "prefix-cut");
   assert.ok(compiled.receipt.omittedNative.length > 0);
-  assert.ok(compiled.receipt.unresolvedRelations.some(link => link.id === "T1"));
+  assert.deepEqual(compiled.receipt.selectedNative, []);
   assert.ok(!compiled.receipt.omittedNative.some(card => card.id === "T1"), "pre-collection omissions cannot invent identities");
-  assert.match(compiled.summary, /missing relation target never means that a dependency is satisfied/);
-  for (const selected of compiled.receipt.selectedNative) {
-    const card = native.providers.find(provider => provider.providerId === selected.providerId)!.page!.cards[selected.cardIndex]!;
-    assert.ok(compiled.summary.includes(JSON.stringify({ providerId: selected.providerId, ...card })));
-  }
-  assert.equal(compiled.receipt.history.kind, "stored");
-  if (compiled.receipt.history.kind !== "stored") throw new Error("Expected stored history");
-  assert.ok(compiled.summary.includes(condition), "long admitted conditions are not token-truncated");
-  assert.ok(compiled.receipt.history.artifact.omittedRows.some(row => row.recovery === "opaque:exact-large-history"));
+  assert.ok(!compiled.summary.includes("CAPTURED NATIVE STATE"));
+  assert.ok(!compiled.summary.includes("OLD RECEIPT"));
+  assert.ok(!compiled.summary.includes("DUPLICATE SUMMARY"));
+  assert.ok(!compiled.summary.includes("Complete T1 before T2."), "native cards remain in the receipt, not a second state dump");
+  assert.ok(compiled.summary.startsWith("# Continuation summary\n\nVerify the checksum."));
+  assert.equal(compiled.receipt.history.kind, "events");
+  if (compiled.receipt.history.kind !== "events") throw new Error("Expected chronological history");
+  assert.ok(compiled.summary.includes(condition), "relevant user conditions keep detail before optional history");
+  assert.ok(compiled.summary.includes('"path":"src/checksum.ts"'));
+  assert.ok(compiled.summary.indexOf("### User [condition]") < compiled.summary.indexOf("### Assistant [read-call]"));
+  assert.ok(compiled.summary.indexOf("### Assistant [read-call]") < compiled.summary.indexOf("### Tool result: read [read-result]"));
+  assert.ok(compiled.summary.includes('history_get entryId="read-result"'));
+  assert.ok(compiled.receipt.history.receipt.selected.some(row => row.detail !== "full"));
   const charges = compiled.receipt.budget;
   assert.equal(charges.summaryMessageTokens, chargeCompactionSummary(compiled.summary));
   assert.ok(charges.summaryFramingTokens > 0);
@@ -70,4 +89,5 @@ test("V4 fits whole records, freezes exact captures and charges the complete pub
   otherTransport.native.requestId = "transport-two";
   assert.equal(compileContext(otherTransport).receipt.inputHash, compiled.receipt.inputHash);
   assert.throws(() => compileContext({ ...frozen, rawTail: { tokens: 19000, messages: 3, toolPairSafe: true } }), /budget/);
+  assert.throws(() => compileContext({ ...frozen, sessionSummary: undefined }), /session-summary-required/);
 });

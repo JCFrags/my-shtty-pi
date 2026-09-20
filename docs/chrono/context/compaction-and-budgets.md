@@ -11,6 +11,8 @@ related:
 
 # Compaction and context budgets
 
+The [session-agent compaction contract](session-agent-compaction.md) supersedes the no-required-summary and state-first V4 design below. The correction is in isolated development. This page records the retained implementation until the replacement is exercised and its actual output is approved.
+
 ## Public Pi integration
 
 Pi requests compaction through `session_before_compact`. Chrono returns custom context through that public hook. It does not patch private AgentSession methods or create a second compactor.

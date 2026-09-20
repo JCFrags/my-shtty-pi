@@ -8,6 +8,7 @@ import type { Task, TaskState } from "./tasks.ts";
 import type { Workplan, WorkplanState } from "./workplan.ts";
 
 const SCAN_RECORDS = 128;
+const METADATA_RECORDS = 256;
 const SCAN_CHARS = 4096;
 const ARRAY_ITEMS = 8;
 const TEXT_BYTES = 1536;
@@ -166,15 +167,38 @@ function card(view: RecordView, request: ContextRequest, terms: string[]): { val
   } };
 }
 
-function page<T>(request: ContextRequest, records: readonly T[], project: (record: T) => RecordView): ProviderPage {
-  const allTerms = [...new Set(request.query.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [])];
+function queryTerms(query: string): string[] {
+  return [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [])];
+}
+
+/** Inspect only bounded lifecycle metadata before the content-scan budget applies.
+ * Termless browse excludes closed records and puts the current activity first.
+ * Text queries include retained closed records, without reading source history.
+ */
+export function selectContextRecords<T extends { status: string }>(request: ContextRequest, records: readonly T[]): { records: T[]; complete: boolean } {
+  const count = Math.min(records.length, METADATA_RECORDS);
+  const browse = queryTerms(request.query).length === 0;
+  const current: T[] = [], eligible: T[] = [];
+  for (let index = 0; index < count; index++) {
+    const record = records[index]!;
+    if (browse && (record.status === "done" || record.status === "completed" || record.status === "archived")) continue;
+    if (browse && ((request.providerId === "workplan" && record.status === "active")
+      || (request.providerId === "todo" && record.status === "in_progress"))) current.push(record);
+    else eligible.push(record);
+  }
+  return { records: [...current, ...eligible], complete: count === records.length };
+}
+
+function page<T extends { status: string }>(request: ContextRequest, records: readonly T[], project: (record: T) => RecordView): ProviderPage {
+  const allTerms = queryTerms(request.query);
   const terms = allTerms.slice(0, 16);
-  const count = Math.min(records.length, request.limits.scan, SCAN_RECORDS);
-  let complete = count === records.length && terms.length === allTerms.length;
+  const eligible = selectContextRecords(request, records);
+  const count = Math.min(eligible.records.length, request.limits.scan, SCAN_RECORDS);
+  let complete = eligible.complete && count === eligible.records.length && terms.length === allTerms.length;
   let matched = 0;
   const selected: { card: ContextCard; score: number; index: number }[] = [];
   for (let index = 0; index < count; index++) {
-    const view = project(records[index]!);
+    const view = project(eligible.records[index]!);
     const result = card(view, request, terms);
     complete &&= view.fields.complete;
     if (!result.matched) continue;

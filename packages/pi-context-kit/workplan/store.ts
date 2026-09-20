@@ -2,7 +2,7 @@ import {
   BranchStateOwner, type CommitOptions, type ObjectRef, type OwnedSnapshot, type OwnerResolution, type StateAnchorHost,
 } from "@context-kit/state-store";
 import {
-  createWorkplanContextRecord, projectWorkplanPage, type WorkplanContextRecord,
+  createWorkplanContextRecord, projectWorkplanPage, selectContextRecords, type WorkplanContextRecord,
 } from "@grounded/pi-core/context-adapters";
 import type { ContextRequest, ProviderPage } from "@context-kit/protocol";
 import {
@@ -206,13 +206,14 @@ export class WorkplanStore {
         const resolved = await this.resolve(host, signal);
         if (resolved.status === "pending" || resolved.status === "legacy") return refusal("pending");
         const root = resolved.status === "ready" ? resolved.snapshot.root as WorkplanRoot : emptyWorkplanRoot();
-        const count = Math.min(root.plans.length, request.limits.scan, 128);
+        const eligible = selectContextRecords(request, root.plans);
+        const count = Math.min(eligible.records.length, request.limits.scan, 128);
         const records: WorkplanContextRecord[] = [];
-        for (let index = 0; index < count; index++) records.push((await this.projection(root.plans[index]!, signal)).context);
+        for (let index = 0; index < count; index++) records.push((await this.projection(eligible.records[index]!, signal)).context);
         if (epoch !== this.epoch || !sameView(request.scope, host)) return refusal("scope_changed");
         if (this.pendingCount > 1) return refusal("pending");
         const page = projectWorkplanPage(request, records);
-        if (count < root.plans.length) page.coverage.scanComplete = false;
+        if (!eligible.complete || count < eligible.records.length) page.coverage.scanComplete = false;
         return page;
       } catch {
         return refusal(signal?.aborted ? "pending" : "corrupt");

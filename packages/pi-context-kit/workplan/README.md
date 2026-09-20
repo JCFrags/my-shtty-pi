@@ -39,7 +39,9 @@ The default private directory is `$XDG_STATE_HOME/pi-context-kit/workplan/`, or 
 
 `list` reads manifest metadata. Titles have a 512-byte preview and objectives have a 1024-byte preview. Omissions name the complete `read` route. `status` returns exact cached aggregate counts with a status preview of at most 32 KiB. It does not load the native plan. `read` and `recover` load exactly one native object and use the native renderers. Large complete output uses Grounded's private full-output file and exact truncation notice.
 
-Context requests load only bounded projection objects, scan at most 128 records, and retain native plan revisions in cards. The provider answers both protocol versions 1 and 2. Native-tool exclusions still apply. Context queries never start legacy import or create canonical state.
+Context requests inspect lifecycle metadata from at most 256 manifest entries before loading projection objects. A query with no searchable terms browses only open plans (`draft`, `active`, or `paused`). The active plan comes first. Other open plans retain manifest order. This selection happens before the content-scan, card-count, and wire-byte limits. Completed and archived plans remain unchanged and available through native `list`, `read`, and `recover`.
+
+A query with searchable terms includes retained closed plans, scans in manifest order, and ranks matches in bounded fields. It does not search revision history. Context requests scan at most 128 eligible projection records and retain native plan revisions in cards. Coverage counts only eligible content scans. Lifecycle-filtered records are not matches or budget exclusions. `scanComplete` can be true after all open plans were scanned even when closed plans remain. It stays false when metadata, content-scan, query-term, or field bounds prevent complete matching. The provider answers both protocol versions 1 and 2. Native-tool exclusions still apply. Context queries never start legacy import or create canonical state.
 
 ## Commit and branch lifecycle
 
