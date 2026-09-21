@@ -1831,6 +1831,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     if (signal.aborted) onAbort();
   };
   const summaryHeadroom = (ctx: ExtensionContext, prompt: string, observedTokens?: number): void => {
+    // A summary must be submitted immediately. Do not activate a managed tool
+    // here: reactivation can rewrite an earlier deferred-schema position.
+    if (!pi.getActiveTools().includes(SESSION_AGENT_SUMMARY_TOOL)) throw new Error("session-agent-summary-tool-unavailable");
     const usage = ctx.getContextUsage(), model = ctx.model;
     const tokens = Math.max(usage?.tokens ?? 0, observedTokens ?? 0);
     if (!model || !Number.isFinite(model.contextWindow) || !Number.isFinite(model.maxTokens)

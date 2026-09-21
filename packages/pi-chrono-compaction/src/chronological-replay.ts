@@ -179,10 +179,23 @@ export function captureChronologicalReplay(entries: readonly SessionEntryLike[],
     earlierPrefixOmitted: start > 0, omittedMetadata: metadata, relevanceTerms: terms };
 }
 
-/** Reduce detail before omitting events. Ranking never changes source order. */
+/** Choose useful detail before fitting the ceiling. Never expand to fill it.
+ * Reduce detail before omitting events. Ranking never changes source order. */
 export function renderChronologicalReplay(selection: ChronologicalReplaySelection, maxTokens: number) {
   if (!Number.isSafeInteger(maxTokens) || maxTokens < 128) throw new Error("context-v4-replay-budget-unavailable");
-  const rows = selection.events.map(event => ({ event, level: 0, omitted: false }));
+  const detailRank = { full: 0, reduced: 1, brief: 2 } as const;
+  const rows = selection.events.map(event => {
+    // Reuse the existing relevance, role, outcome and recency score. These are
+    // selection hints, not truth judgments. Small identical forms are deduped
+    // during capture, so keep the nearest available less-compressed form.
+    const preferredRank = event.priority >= 5 ? 0 : event.priority >= 2 ? 1 : 2;
+    let level = 0;
+    for (let index = 0; index < event.representations.length; index++) {
+      const rank = detailRank[event.representations[index]!.detail];
+      if (rank <= preferredRank && rank >= detailRank[event.representations[level]!.detail]) level = index;
+    }
+    return { event, level, omitted: false };
+  });
   const ranked = [...rows].sort((a, b) => a.event.priority - b.event.priority || a.event.index - b.event.index);
   const render = () => {
     const omitted = rows.filter(row => row.omitted).length;

@@ -75,7 +75,11 @@ test("session summary precedes bounded chronological events and charges the comp
   assert.ok(compiled.summary.indexOf("### User [condition]") < compiled.summary.indexOf("### Assistant [read-call]"));
   assert.ok(compiled.summary.indexOf("### Assistant [read-call]") < compiled.summary.indexOf("### Tool result: read [read-result]"));
   assert.ok(compiled.summary.includes('history_get entryId="read-result"'));
-  assert.ok(compiled.receipt.history.receipt.selected.some(row => row.detail !== "full"));
+  assert.notEqual(compiled.receipt.history.receipt.selected.find(row => row.id === "large-history")?.detail, "full",
+    "routine history stays compressed, including identical reduced/brief forms");
+  const roomy = compileContext({ ...frozen, budget: { ...frozen.budget, configuredTokens: 10000, effectiveCeilingTokens: 10000 } });
+  assert.equal(roomy.summary, compiled.summary, "spare capacity must not expand low-value history");
+  assert.ok(compiled.receipt.budget.contextTokens < compiled.receipt.budget.effectiveCeilingTokens);
   const charges = compiled.receipt.budget;
   assert.equal(charges.summaryMessageTokens, chargeCompactionSummary(compiled.summary));
   assert.ok(charges.summaryFramingTokens > 0);

@@ -1,7 +1,7 @@
 ---
 title: Session-agent compaction contract
 audience: [agents, maintainers]
-status: implemented in isolation, model output not yet accepted
+status: isolated candidate, preview shape reviewed, activation pending
 purpose: Preserve the required context shape and the evidence needed before activation.
 related:
   - compaction-and-budgets.md
@@ -31,7 +31,7 @@ The summary and chronological replay complement each other. A summary alone, det
 - Native Memory, Todo, Notes, and Workplan are fallible evidence. A saved record is not automatically current, relevant, true, or authoritative.
 - Default current-work selection must not let archived or completed records displace open work. Apply lifecycle selection before bounded record and byte fitting. Keep archive recovery available.
 - Keep full receipts, internal scores, classification labels, omitted-record inventories, and provider transport metadata outside the main context. Show only the short notices and recovery routes needed to interpret the content safely.
-- Keep the 32,000-token default for Chrono-owned context. Charge the complete summary, replay, exact tail, and required framing. Account separately for system text, tools, and response reserve. Label estimates as estimates.
+- Keep the 32,000-token default for Chrono-owned context. This is a maximum, not a target. Choose preferred event detail from relevance, role, outcome, and recency before fitting that ceiling. Reduce further when necessary, but do not expand routine history merely because space remains. Charge the complete summary, replay, exact tail, and required framing. Account separately for system text, tools, and response reserve. Label estimates as estimates.
 - Refuse a stale, mismatched, cancelled, or unusable compaction rather than silently return the rejected old representation. If a summary cannot be requested safely after overflow, preserve the source and report that limit.
 
 ## Session and cache behavior
@@ -42,11 +42,17 @@ Bind the requested summary to the session, consumed boundary, and actual assista
 
 Prompt-cache reuse is a verification goal, not a consequence that follows from using the same model. Compare the effective request prefix and provider usage. Report unsupported provider evidence, cold-cache behavior, or unrelated prefix changes honestly.
 
+Keep `request_compaction` active before normal requests begin. With Progressive Tools, add `{ "name": "request_compaction" }` to `alwaysActive`. Preserve other rules. A blocked rule still wins. Chrono refuses an unavailable submission tool before sending the summary request. It does not activate tools behind the policy or ask for help during the sole-submission exchange.
+
+Pi can insert a newly reactivated definition at its first historical `addedToolNames` marker. Reload removes managed activation but preserves those markers. Reactivation can therefore change an old input prefix while leaving the immediate tool-schema list unchanged. Stable activation avoids that transition within the exchange, but does not guarantee provider cache reuse.
+
 ## Pi 0.85.1 integration limits
 
 Use the installed declarations and implementation to check public-hook behavior. The installed `docs/session-format.md` describes `retainedTail`, but `CompactionResult`, `AgentSession.compact()`, and `SessionManager.appendCompaction()` in Pi 0.85.1 do not pass that field. Returning `retainedTail: []` from an extension therefore does not remove the old tail. Use a verified `firstKeptEntryId` boundary instead.
 
 `message_end` precedes persistence. `turn_end` sees the completed tool results in source order. A tool result with `terminate: true` ends the automatic continuation only when every result in its batch terminates. Require the summary submission to be the assistant's sole tool call, then settle it at `agent_settled` with no pending input.
+
+The current headroom guard reserves `model.maxTokens`, the request prompt, the Chrono reserve, and a safety allowance. The installed `openai-codex-responses` request builder does not serialize an output-token cap. [LiteLLM's ChatGPT documentation](https://docs.litellm.ai/docs/providers/chatgpt) and the [openai-codex-auth client documentation](https://pypi.org/project/openai-codex-auth/) report that the subscription backend rejects token-limit fields. Do not assume that changing model metadata or adding a public Responses API parameter enforces a Codex cap. A smaller practical headroom policy is a separate decision, not an enforced output limit. That decision remains pending, so this candidate preserves the existing guard.
 
 The request targets at most 2,000 tokens and asks the agent to stay below 8,000 characters. This leaves room below the unchanged 16,384-character and 24 KiB hard limits. A token target is not a character guarantee. Native schema validation can reject an oversized submission before the tool handler runs. The following `turn_end` then refuses the unaccepted ticket. Do not resubmit that ticket or weaken the guard. Preserve the failure and use a shorter summary in a new, deliberately initiated attempt within the approved scope.
 
@@ -74,8 +80,10 @@ Implementation is authorized in isolation. GitHub publication and live activatio
 
 ## Verification status
 
-Source typecheck and six focused offline tests pass. The checks cover the native current-state selection, pure summary guards, chronological compiler, and registered tool/hook exchange. The hook fixture uses Pi's in-memory SessionManager with synthetic messages. It does not run an AgentSession or call a model. The fixture preserves its original session entries. Preview and active compiler output match at the same captured input, and the retained tail has one small verified boundary message. The later post-commit resume message is separate from that pre-commit tail.
+The earlier isolated implementation passed six focused offline tests. The latest source typecheck and two affected compiler/hook tests pass. The hook fixture uses Pi's in-memory SessionManager with synthetic messages. It does not run an AgentSession or call a model. It verifies source preservation, preview/active compiler parity, a small retained boundary, and refusal when the submission tool is unavailable.
 
-These checks do not establish model-written summary quality, final request-prefix equality, cache reuse, live timing, or activation. The actual same-agent generated preview is still pending. The user approved a temporary same-session preview-only load because the installed old tool cannot accept the new submission fields. Do not substitute a manually supplied summary or a new summarizer agent for that missing evidence.
+A genuine same-session preview was generated and the user reviewed its overall shape. History compression can improve incrementally. That preview used the recent interval after housekeeping compaction, not the original pre-first-compaction fixture. Its configured ceiling was 40,000 tokens. Summary generation reported 11.17% cached input. The activation-related early prefix change was reproduced through Pi's offline serializer, but the cause of the later low reuse remains unknown.
+
+Recompiling the same saved input with relevance-based preferred detail reduced estimated context from 35,967 to 13,048 tokens. It kept the summary unchanged and all 82 captured events in source order. Ceilings of 32,000 and 40,000 produced identical text. This checks ceiling behavior on one captured input, not semantic completeness or a new live compaction. No additional model request was made. Normal high-context timing, the corrected live exchange, and activation remain unverified pending the headroom decision.
 
 The private `sessionAgentPreview` integration option uses the registered summary tool and the same capture and compiler functions. It pins the intended session, source, settings, and response reserve. It skips candidate background work and vetoes native compaction for the entire temporary load. Its callback receives the complete result after safe-idle settlement. Call `revalidate()` during the callback, including after an awaited file write. That function is no longer valid after the callback returns and the summary ticket is cleared. The adapter does not start a model turn, apply compaction, or send a continuation. The extended existing hook fixture verifies this dispatch without a model or live session.

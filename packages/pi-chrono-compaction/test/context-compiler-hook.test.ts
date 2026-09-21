@@ -28,7 +28,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const hooks = new Map<string, (event: any, ctx: any) => any>(), tools = new Map<string, any>();
   const events = createEventBus(), sm = SessionManager.inMemory(directory);
   const mirrors: unknown[] = [], requests: any[] = [], sent: any[] = [];
-  let schemaDescription = "Independent task state", mutateDuringCollect = false, idle = true;
+  let schemaDescription = "Independent task state", mutateDuringCollect = false, idle = true, summaryToolActive = true;
   let compactionTask: Promise<void> | undefined, returned: any, committedId: string | undefined, referenceReady: SessionAgentSummaryReady | undefined;
   let checkPreview = true, aborts = 0, previewMode = false, compactCalls = 0, authCalls = 0, commands = 0, flags = 0;
   const run = new AbortController();
@@ -40,7 +40,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     ] };
   });
   const pi = {
-    events, getActiveTools: () => ["todo", "memory_get", "request_compaction"],
+    events, getActiveTools: () => ["todo", "memory_get", ...(summaryToolActive ? ["request_compaction"] : [])],
     getAllTools: () => [{ name: "todo", description: schemaDescription, parameters: { type: "object" } },
       { name: "memory_get", description: "Independent memory", parameters: { type: "object" } }, tools.get("request_compaction")],
     registerTool(tool: any) { tools.set(tool.name, tool); }, registerCommand() { commands++; }, registerFlag() { flags++; },
@@ -116,7 +116,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const requestResult = await tools.get("request_compaction").execute(requestCallId, {}, run.signal, undefined, ctx);
     assert.equal(requestResult.terminate, undefined);
     const request = createSessionAgentSummaryRequest({ requestId: requestResult.details.requestId, reason: "tool", now: Date.now(),
-      targetTokens: Math.min(4096, resolveExtensionSettings().hybridSummaryTargetTokens), requestToolCallId: requestCallId, scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: requestLeafId, epoch: 0,
+      targetTokens: Math.min(2000, resolveExtensionSettings().hybridSummaryTargetTokens), requestToolCallId: requestCallId, scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: requestLeafId, epoch: 0,
         model: { provider: "fixture", id: "fixture", api: "openai-completions", thinkingLevel: "off" } } });
     sm.appendMessage({ role: "toolResult", toolCallId: requestCallId, toolName: "request_compaction", content: requestResult.content, details: requestResult.details, isError: false, timestamp: Date.now() });
     const view = () => ({ scope: { ...request.scope, leafId: sm.getLeafId()! }, now: Date.now(), getEntry: (id: string) => sm.getEntry(id) as SessionEntryLike | undefined });
@@ -201,6 +201,14 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.deepEqual(returned, { cancel: true });
     assert.equal((await status()).lastFailure.code, "context-v4-input-changed");
     assert.equal(sm.getBranch().filter(entry => entry.type === "compaction").length, 1);
+
+    await hooks.get("input")!({ text: "Check summary tool readiness", source: "interactive" }, ctx);
+    summaryToolActive = false;
+    const beforeUnavailable = sent.length;
+    assert.deepEqual(await hooks.get("session_before_compact")!(event(), ctx), { cancel: true });
+    assert.equal((await status()).lastFailure.code, "session-agent-summary-tool-unavailable");
+    assert.equal(sent.length, beforeUnavailable, "do not send a summary request with no callable submission tool");
+    summaryToolActive = true;
 
     await hooks.get("input")!({ text: "Manual retry", source: "interactive" }, ctx);
     const beforeSend = sent.length;
