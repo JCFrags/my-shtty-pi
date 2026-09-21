@@ -29,6 +29,13 @@ import type { SessionEntryLike } from "./types.js";
  */
 export const SESSION_AGENT_SUMMARY_CUSTOM_TYPE = "chrono-session-agent-summary-request";
 export const SESSION_AGENT_SUMMARY_TOOL = "request_compaction";
+/** Local planning allowances, not provider-enforced output limits. Keep the
+ * normal model request unchanged, including Codex routes without output caps. */
+export const SESSION_AGENT_SUMMARY_HEADROOM = Object.freeze({
+  planningTokens: 16_384,
+  safetyTokens: 1024,
+  proactiveMarginTokens: 4096,
+});
 export const SESSION_AGENT_SUMMARY_LIMITS = Object.freeze({
   summaryChars: 16_384,
   summaryBytes: 24 * 1024,

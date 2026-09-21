@@ -1,48 +1,22 @@
-import { composeStoredSelection, storedSelectionInput, persistPrivateCompositionArtifact } from "./context-composer.js";
+import { composeStoredSelection, persistPrivateCompositionArtifact } from "./context-composer.js";
 import { collectContext } from "@context-kit/protocol/collect";
 import { compileContext, freezeContextInput } from "./context-compiler.js";
 import { isSafeCompactionCut } from "./tail-selection.js";
 import { byteCount, estimateTokensFromText, getRecord, getString, stableStringify } from "./utils.js";
 import { validateContextCeiling } from "./context-budget.js";
-/** Read-only V4 preparation shared by SDK preview and the active public hook.
- * The caller supplies Pi's actual cut/reserve and a live revalidation callback.
- * This function does not write a session, artifact or provider store. */
+/** Read-only preparation shared by preview and the active public hook.
+ * The caller validates the session-agent submission and captures a bounded event
+ * suffix. Native pages remain diagnostic evidence, not the summary's authority.
+ * This function does not load history or write a session, artifact or store. */
 export async function captureContextCompilation(host, input, view) {
     view.revalidate();
     const native = await collectContext(host, input.query ?? {
         records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150,
     }, view);
     view.revalidate();
-    let history = { kind: "fallback", selection: input.fallback };
-    if (input.reader) {
-        try {
-            const selection = await input.reader.select(input.sourceCutEntryId);
-            view.revalidate();
-            if (selection.stateGeneration > 0) {
-                const first = input.reader.getEntry(input.firstKeptEntryId);
-                if (first?.parentId !== input.sourceCutEntryId || !input.reader.getEntry(input.sourceCutEntryId))
-                    throw new Error("context-v4-history-cut-invalid");
-                const firstView = await input.reader.pin(input.firstKeptEntryId);
-                view.revalidate();
-                if (firstView.storeKey !== selection.sourceView.storeKey || firstView.generation !== selection.sourceView.generation
-                    || firstView.branchKey !== selection.branchKey || firstView.sessionKey !== selection.sourceView.sessionKey
-                    || firstView.eventCut <= selection.requestedCut)
-                    throw new Error("context-v4-history-view-invalid");
-                history = { kind: "stored", input: storedSelectionInput({ regularPiSummary: "", combinedCeilingTokens: input.budget.effectiveCeilingTokens,
-                        cut: { sourceCutEntryId: input.sourceCutEntryId, sourceCutSeq: selection.requestedCut,
-                            firstKeptEntryId: input.firstKeptEntryId, firstKeptSeq: firstView.eventCut,
-                            rawTailTokens: input.rawTail.tokens, toolPairSafe: input.rawTail.toolPairSafe } }, selection, source => input.reader.recovery(selection.sourceView, source)) };
-            }
-        }
-        catch (error) {
-            view.revalidate();
-            if (!view.allowHistoricalFallback(error))
-                throw error;
-        }
-    }
-    view.revalidate();
     return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
-        memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native, history });
+        memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native,
+        sessionSummary: input.sessionSummary, history: { kind: "events", selection: input.replay } });
 }
 /** The compiler returns the same receipt and bytes when the frozen input is used
  * for active compaction. Preview adds no hidden fields to its deterministic hash. */

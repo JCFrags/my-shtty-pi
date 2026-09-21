@@ -14,7 +14,7 @@ import { compileContext, contextReceiptLocator, CONTEXT_COMPILER_LIMITS, type Co
 import { composeBoundedMemory } from "./bounded-memory.js";
 import { captureChronologicalReplay } from "./chronological-replay.js";
 import {
-  SESSION_AGENT_SUMMARY_CUSTOM_TYPE, SESSION_AGENT_SUMMARY_LIMITS, SESSION_AGENT_SUMMARY_TOOL,
+  SESSION_AGENT_SUMMARY_CUSTOM_TYPE, SESSION_AGENT_SUMMARY_HEADROOM, SESSION_AGENT_SUMMARY_LIMITS, SESSION_AGENT_SUMMARY_TOOL,
   createSessionAgentSummaryRequest, renderSessionAgentSummaryRequest, parseSessionAgentSummarySubmission,
   consumeSessionAgentSummaryRequest, acceptSessionAgentSummary, settleSessionAgentSummary, validateSessionAgentSummary,
   type SessionAgentSummaryScope, type SessionAgentSummaryRequest, type SessionAgentSummaryConsumedRequest,
@@ -1830,15 +1830,20 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     state.removeAbortListener = () => signal.removeEventListener("abort", onAbort);
     if (signal.aborted) onAbort();
   };
+  const summaryAdmissionLimit = (ctx: ExtensionContext, promptChars = SESSION_AGENT_SUMMARY_LIMITS.promptBytes): number => {
+    const model = ctx.model;
+    if (!model || !Number.isFinite(model.contextWindow) || !Number.isFinite(model.maxTokens)
+      || model.contextWindow <= 0 || model.maxTokens <= 0) throw new Error("session-agent-summary-headroom-unavailable");
+    return model.contextWindow - Math.ceil(promptChars / 4) - Math.min(model.maxTokens, SESSION_AGENT_SUMMARY_HEADROOM.planningTokens)
+      - searchSettings().contextReserveTokens - SESSION_AGENT_SUMMARY_HEADROOM.safetyTokens;
+  };
   const summaryHeadroom = (ctx: ExtensionContext, prompt: string, observedTokens?: number): void => {
     // A summary must be submitted immediately. Do not activate a managed tool
     // here: reactivation can rewrite an earlier deferred-schema position.
     if (!pi.getActiveTools().includes(SESSION_AGENT_SUMMARY_TOOL)) throw new Error("session-agent-summary-tool-unavailable");
-    const usage = ctx.getContextUsage(), model = ctx.model;
-    const tokens = Math.max(usage?.tokens ?? 0, observedTokens ?? 0);
-    if (!model || !Number.isFinite(model.contextWindow) || !Number.isFinite(model.maxTokens)
-      || model.contextWindow <= 0 || model.maxTokens <= 0 || !Number.isFinite(tokens) || tokens <= 0
-      || tokens + Math.ceil(prompt.length / 4) + model.maxTokens + searchSettings().contextReserveTokens + 1024 >= model.contextWindow) {
+    const limit = summaryAdmissionLimit(ctx, prompt.length);
+    const tokens = Math.max(ctx.getContextUsage()?.tokens ?? 0, observedTokens ?? 0);
+    if (!Number.isFinite(tokens) || tokens <= 0 || tokens >= limit) {
       throw new Error("session-agent-summary-headroom-unavailable");
     }
   };
@@ -1862,9 +1867,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   const summaryTrigger = (ctx: ExtensionContext, currentTokens: number): boolean => {
     const settings = searchSettings(), window = ctx.model?.contextWindow ?? 0;
     if (!window || currentTokens <= 0 || sessionSummary || compactionRetryPaused || triggerPending) return false;
-    // Request before the model's full output allowance can no longer fit. This is
-    // an estimate, not a promise about provider tokenization or cache behavior.
-    const headroomThreshold = Math.max(1, window - (ctx.model?.maxTokens ?? 0) - settings.contextReserveTokens - 4096);
+    // Use the same planning allowance as admission. The maximum prompt bound
+    // and an extra lead leave room before its strict admission limit. A large
+    // single turn can still cross that limit and must refuse, not weaken it.
+    const headroomThreshold = Math.max(1, summaryAdmissionLimit(ctx) - SESSION_AGENT_SUMMARY_HEADROOM.proactiveMarginTokens);
     return decideCompactionTrigger({ currentTokens, thresholdTokens: Math.min(settings.triggerThresholdTokens ?? Infinity,
       Math.floor(window * CONTEXT_WARNING_PERCENT / 100), headroomThreshold),
       minimumGrowthTokens: settings.triggerMinimumGrowthTokens, lastAttemptTokens: lastTriggerAttemptTokens, pending: false }).trigger;
@@ -2563,6 +2569,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     projectionState = { pending: correlated };
     lastProjectionMetrics = undefined;
     const shouldContinue = correlated && continueAfterSuccessfulCompaction && !event.willRetry;
+    // A successful V4 commit starts a new context cycle, not a failed retry.
+    // Keeping the old high-water count can defer the next summary past admission.
+    if (correlated && searchSettings().contextCompiler === "v4") lastTriggerAttemptTokens = undefined;
     clearSessionSummary();
     triggerPending = false;
     forcedCompactionReason = undefined;
