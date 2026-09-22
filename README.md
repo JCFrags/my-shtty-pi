@@ -27,7 +27,7 @@ For an existing installation, preserve package order and replace only the intend
 
 ## Products
 
-The [registry](package.json) contains 17 owned products: 15 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
+The [registry](package.json) contains 18 owned products: 16 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
 
 ### Active products
 
@@ -43,6 +43,7 @@ The [registry](package.json) contains 17 owned products: 15 active and two inact
 | [ChronoCompact](packages/pi-chrono-compaction/README.md) | Select chronological memory and recover source-linked history. | [History, memory, and operator interfaces below](#chronocompact) |
 | [Context Kit](packages/pi-context-kit/README.md) | Independent current-state recall and local runtime/quality observations for the V4 foundation. | `context_recall`, `telemetry_status`, `/context-telemetry` |
 | [Pi Herdr Orchestrator](packages/pi-herdr-orchestrator/README.md) | Run direct-Herdr agents and retain authenticated broker configuration. | Root `orchestrate`, child-only `subagent_channel`, `/agent-settings` |
+| [Pi-Notify](packages/pi-notify/README.md) | Standalone durable events and timers, software consumers, resource notes, and an optional exact-target Pi receiver. | `pi-notify` CLI, HTTP API, `/notify`, `notify`, `notify_complete`. |
 | [Pi Native SSH](packages/pi-native-ssh/README.md) | Use configured OpenSSH routes, persistent sessions, and bounded file transfers with remote-write rollback. | `ssh_transfer`, Grounded `session`, `/remote`. Route mode also binds `read`, `ls`, `write`, `edit`, and `bash`. |
 | [Pi Pixel CUA Portal](packages/pi-pixel-cua/README.md) | Observe and control one explicitly granted native GNOME Wayland window through pixels. | `cua_portal_start`, `cua_portal_observe`, `cua_portal_act`, `cua_portal_stop`, `/pixel-cua-status`, `/pixel-cua-stop` |
 | [Pi Progressive Tools](packages/pi-progressive-tools/README.md) | Keep a short tool catalog visible and enable permitted tools through exact-name help. | `list_tools`, `tool_help`, `/tool-audit`, `/tool-reset` |
