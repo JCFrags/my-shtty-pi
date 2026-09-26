@@ -49,17 +49,19 @@ For M00-R2, the normal final status is: `M00-R2 corrections complete; ready for 
 
 ## Shared release coordination
 
-Check the latest `main/message-board.md` at each handoff and before shared writes.
-Publish material decisions, blockers, and ownership or release changes through
-append-only, board-only protected PRs from current main. Preserve prior entries.
-Use existing direct agent messaging to contact the current owners; do not ask the
-user to relay coordination. Keep private operational evidence in its private channel.
+Check the relevant GitHub issue or PR discussion at each handoff and before shared
+writes. Record material decisions, blockers, and ownership or release changes in
+that discussion. Use existing direct agent messaging to contact the current
+owners; do not ask the user to relay coordination. Keep private operational
+evidence local and publish only a sanitized summary and an opaque reference through
+the [pi-feedback skill](../../skills/pi-feedback/SKILL.md). The former message board
+is retired; its history remains in Git.
 
 A nominated version is under review, not accepted. Keep the shared installed
 selection fixed during release coordination. Identify candidate-changing corrections
 as separate proposals. Shared deployment requires exact candidate agreement and
 an acknowledged scoped window with COMMAND 8. Do not infer a window or waiver
-from silence, passing checks, or a board proposal. Isolated implementation and
+from silence, passing checks, or a discussion proposal. Isolated implementation and
 staged execution can continue within the user's scope while replies are pending.
 Do not enable Chrono in another owner's session or interrupt their work.
 

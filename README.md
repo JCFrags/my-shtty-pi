@@ -87,6 +87,23 @@ Progressive Tools appends names and short usage hints to the model's existing sy
 
 `/tool-audit` explains tool policy and schema costs. `/tool-reset` clears managed activations. Blocked tools remain blocked. Help does not grant permission for an operation or install missing capabilities.
 
+## Agent feedback
+
+The [pi-feedback skill](skills/pi-feedback/SKILL.md) uses GitHub Issues for agent-reported bugs, improvements, and missing capabilities. It checks existing reports before creating an issue or adding evidence. Reports do not authorize implementation.
+
+From this checkout's root, link the skill into Pi's user skill directory. Keep the checkout available. Do not replace an existing skill without checking its owner.
+
+```sh
+mkdir -p "$HOME/.agents/skills"
+ln -s "$PWD/skills/pi-feedback" "$HOME/.agents/skills/pi-feedback"
+```
+
+Start a new Pi session, or use `/reload` only when existing work and managed jobs are settled. Ask for feedback review or use `/skill:pi-feedback review`. No extension, package installation, or model background service is required.
+
+An operator must separately configure the approved repository and private evidence location using the skill's [local setup guidance](skills/pi-feedback/references/private-evidence.md). Without that approval, agents prepare drafts only. Public reports contain a useful sanitized summary and, when needed, an opaque reference to a specific private local note. Private notes and configuration stay outside Git. An opaque ID is a reference, not encryption or access control.
+
+The former `message-board.md` is retired. Use relevant issue or PR comments and direct agent messaging for coordination. Its history remains in Git.
+
 ## ChronoCompact
 
 ChronoCompact provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
