@@ -27,7 +27,7 @@ For an existing installation, preserve package order and replace only the intend
 
 ## Products
 
-The [registry](package.json) contains 18 owned products: 16 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
+The [registry](package.json) contains 17 owned products: 15 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
 
 ### Active products
 
@@ -37,7 +37,6 @@ The [registry](package.json) contains 18 owned products: 16 active and two inact
 | [Files UI](packages/files-ui/README.md) | Browse files, preview content, and insert selected paths or bounded content into the editor. | `/files` |
 | [Grounded Tools](packages/grounded-tools/README.md) | Exact coding tools, questions, tasks, notes, and workplans. | [Seven tool groups below](#grounded-tools) |
 | [Herdr Agent State](packages/herdr-agent-state/README.md) | Report Pi session identity and working, blocked, or idle state to Herdr. | Automatic lifecycle integration. No tool or command. |
-| [Herdr Blocked Bridge](packages/herdr-blocked-bridge/README.md) | Report legacy `ask_user_question` waits as Herdr blocked state. | Automatic event bridge. No tool or command. |
 | [Herdr Status](packages/herdr-status/README.md) | Publish display-only model and activity metadata without replacing lifecycle integration. | `/herdr-status` |
 | [Pi Agent Context](packages/pi-agent-context/README.md) | Maintain stable date/environment snapshots and inspect prompt, context, and tool costs. | `/context-refresh`, `/context-audit` |
 | [ChronoCompact](packages/pi-chrono-compaction/README.md) | Select chronological memory and recover source-linked history. | [History, memory, and operator interfaces below](#chronocompact) |
@@ -68,14 +67,16 @@ One product supplies seven Pi entrypoints. The internal `core` subpackage suppli
 | `files` | `read`, `edit`, `write`, `local_search` | Verbatim reads, optional outline/symbol/anchor views, strict edits, atomic replacement where supported, and explicit text/file/fuzzy search. |
 | `process` | `bash`, `process`, `session` | Exact command output, complete logs, managed background processes, and explicit persistent local or SSH sessions. |
 | `lsp` | `lsp` | Language Server Protocol diagnostics and navigation, including a rename preview that does not edit files. |
-| `dialog` | `ask_user` when enabled, otherwise legacy `ask_user_question` | Structured blocking questions and a provider-based deferred question interface. |
+| `dialog` | `ask_user` when enabled, otherwise legacy `ask_user_question` | Structured blocking questions with Herdr state reporting and a provider-based deferred question interface. |
 | `tasks` | `todo` | Branch-aware immediate task plans with dependencies, blocking, and one in-progress task. |
 | `notes` | `notes` | Explicit branch-aware scratchpad notes, separate from remembered knowledge. |
 | `workplan` | `workplan` | Durable goals, constraints, milestones, decisions, checkpoints, and recovery after context loss. |
 
 `/grounded-files`, `/grounded-lsp`, and `/grounded-processes` report policy or status. `/todos` and `/todo-add` provide manual task controls. `GROUNDED_TRIAL_MODE=1` prefixes `read`, `edit`, `write`, `bash`, and `process` with `grounded_`; the other tool names stay unchanged.
 
-[Grounded Dialog](packages/grounded-tools/dialog/README.md) owns the single question facade. Set `askUserV1: true` in the Pi agent directory's `grounded-dialog.json` to select `ask_user`. Project Glance supplies the deferred provider. Deferred questions support preferences, information, and reversible choices, never authorization. Saved answers enter history at safe idle for the next natural turn. They do not steer busy work, start an automatic response, or escalate to blocking mode.
+[Grounded Dialog](packages/grounded-tools/dialog/README.md) owns the single question facade and reports its own blocking waits to Herdr Agent State. The standalone Herdr Blocked Bridge is retired. Remove its old registration when updating Dialog, as described in [activation guidance](docs/activation.md#dialog-herdr-blocking-state).
+
+Set `askUserV1: true` in the Pi agent directory's `grounded-dialog.json` to select `ask_user`. Project Glance supplies the deferred provider. Deferred questions support preferences, information, and reversible choices, never authorization. Saved answers enter history at safe idle for the next natural turn. They do not steer busy work, start an automatic response, or escalate to blocking mode.
 
 ## Find and use tools
 

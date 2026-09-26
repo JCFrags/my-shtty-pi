@@ -3,10 +3,29 @@
 Dialog owns the single `ask_user` registration. Its factory reads
 `getAgentDir()/grounded-dialog.json`; only `askUserV1: true` enables the facade.
 When enabled, Dialog does not register `ask_user_question`. When disabled, the
-legacy registration remains unchanged. The blocking provider is registered in
+legacy tool keeps its schema and UI. The blocking provider is registered in
 both cases. Providers must not register a second question facade or change this
 setting. A settings or source change requires an approved runtime reload; tool
 search alone does not refresh the factory or its schema.
+
+## Herdr blocking state
+
+Dialog reports its own blocking waits through `herdr:blocked`. Herdr Agent State
+consumes these events without a separate bridge. The modern `ask_user` blocking
+provider keeps its existing lifecycle. Deferred questions do not report a
+blocking wait.
+
+Legacy `ask_user_question` starts one span after UI availability and question
+validation, not one span per question. It releases that span once after an
+answer, user cancellation, UI error, abort, or session shutdown. Late completion
+or repeated cleanup does not release it again. Invalid, non-interactive, and
+already-aborted calls do not start a span. Abort releases the reporting span
+only; it does not change the legacy TUI or RPC interaction or its result.
+
+The standalone Herdr Blocked Bridge is retired. Remove its old package or
+auto-discovered extension registration when updating Dialog to avoid duplicate
+legacy reporting. Keep Herdr Agent State. Follow the scoped
+[activation and rollback guidance](../../../docs/activation.md#dialog-herdr-blocking-state).
 
 ## Deferred V1.1 behavior
 
@@ -57,6 +76,7 @@ node --experimental-transform-types --test packages/grounded-tools/dialog/test/f
 The tests use synthetic event buses and session contexts, real facade execution,
 and the real blocking provider with fake UI. They check registration, schema
 restrictions, stable correlations, conflict forwarding, deadlines, abort cleanup,
-and blocking timeout behavior. They do not load private settings or ask live
-questions. Production provider durability and active-session schema refresh need
-separate integration verification.
+blocking timeout behavior, and balanced legacy Herdr spans across TUI and RPC
+questions, cancellation, errors, abort, and shutdown. They do not load private
+settings or ask live questions. Production provider durability and active-session
+schema refresh need separate integration verification.

@@ -52,6 +52,10 @@ const blockingAsk = () => ({
   response: { kind: "single_or_text", options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }] },
   timeoutMs: 60_000,
 });
+const legacyAsk = () => ({ questions: ["first", "second"].map((id) => ({
+  id, prompt: `Choose ${id}`, options: [{ value: "yes", label: "Yes" }, { value: "no", label: "No" }],
+})) });
+const blockedSpan = [{ active: true, label: "Waiting for your answer" }, { active: false }];
 const reply = (request, state, extra = {}) => ({ schemaVersion: 1, correlationId: request.correlationId, mode: request.mode, state, ...extra });
 const receipt = (request) => reply(request, request.operation === "ask" ? "queued" : "cancelled", {
   operation: request.operation, questionId: "qst_11111111-1111-4111-8111-111111111111", displayId: "Q-1", revision: request.operation === "ask" ? 1 : 2,
@@ -80,6 +84,84 @@ test("V1 enablement registers exactly one question tool and keeps blocking provi
   registerGroundedDialog(disabled, { askUserV1Enabled: false });
   assert.deepEqual(disabled.tools.map((tool) => tool.name), ["ask_user_question"]);
   assert.equal(disabled.events.count(blockingRequest), 1);
+});
+
+test("legacy questionnaire uses one Herdr span across questions and releases on answer, cancel or UI error", async () => {
+  for (const mode of ["tui", "rpc"]) {
+    for (const outcome of ["answer", "cancel", "error"]) {
+      const pi = host();
+      registerGroundedDialog(pi);
+      const blocked = [];
+      pi.events.on("herdr:blocked", (event) => blocked.push(event));
+      let calls = 0;
+      const next = () => {
+        assert.deepEqual(blocked, blockedSpan.slice(0, 1));
+        calls++;
+        if (calls === 2 && outcome === "error") throw new Error("UI failed");
+        return calls === 1 || outcome === "answer";
+      };
+      const ctx = { hasUI: true, mode, ui: {
+        select: async (_title, options) => next() ? options[0] : undefined,
+        custom: (factory) => new Promise((resolve) => {
+          const answer = next();
+          const component = factory({ requestRender() {} }, { fg: (_color, text) => text }, undefined, resolve);
+          component.handleInput(answer ? "\r" : "\x1b");
+        }),
+      } };
+      const controller = new AbortController();
+      const pending = pi.tools[0].execute("legacy", legacyAsk(), controller.signal, undefined, ctx);
+      if (outcome === "error") await assert.rejects(pending, /UI failed/);
+      else {
+        const result = await pending;
+        assert.equal(result.details.cancelled, outcome === "cancel");
+        assert.equal(result.details.answers.length, outcome === "cancel" ? 1 : 2);
+        assert.ok(result.details.answers.every((answer) => answer.value === "yes" && !answer.custom));
+      }
+      assert.equal(calls, 2);
+      assert.deepEqual(blocked, blockedSpan);
+      assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+      await pi.lifecycle("session_shutdown", { reason: "quit" }, ctx);
+      assert.deepEqual(blocked, blockedSpan);
+    }
+  }
+});
+
+test("legacy no-UI and invalid requests never report a Herdr wait", async () => {
+  const pi = host();
+  registerGroundedDialog(pi);
+  const blocked = [];
+  pi.events.on("herdr:blocked", (event) => blocked.push(event));
+  const execute = (input, hasUI) => pi.tools[0].execute("legacy", input, undefined, undefined, { hasUI });
+  await assert.rejects(execute(legacyAsk(), false), /non-interactive/);
+  const invalid = legacyAsk();
+  invalid.questions[1].id = invalid.questions[0].id;
+  await assert.rejects(execute(invalid, true), /non-empty and unique/);
+  assert.deepEqual(blocked, []);
+});
+
+test("legacy abort and shutdown release a pending Herdr span once without changing late UI results", async () => {
+  for (const stop of ["pre-abort", "abort", "quit", "reload"]) {
+    const pi = host();
+    registerGroundedDialog(pi);
+    const blocked = [];
+    pi.events.on("herdr:blocked", (event) => blocked.push(event));
+    let finishUi;
+    const ctx = { hasUI: true, mode: "rpc", ui: { select: () => new Promise((resolve) => { finishUi = resolve; }) } };
+    const controller = new AbortController();
+    if (stop === "pre-abort") controller.abort();
+    const pending = pi.tools[0].execute("legacy", legacyAsk(), controller.signal, undefined, ctx);
+    assert.deepEqual(blocked, stop === "pre-abort" ? [] : blockedSpan.slice(0, 1));
+    if (stop === "abort") controller.abort();
+    else if (stop !== "pre-abort") await pi.lifecycle("session_shutdown", { reason: stop }, ctx);
+    const expected = stop === "pre-abort" ? [] : blockedSpan;
+    assert.deepEqual(blocked, expected);
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+    controller.abort();
+    finishUi(undefined);
+    assert.equal((await pending).details.cancelled, true);
+    await pi.lifecycle("session_shutdown", { reason: "quit" }, ctx);
+    assert.deepEqual(blocked, expected);
+  }
 });
 
 test("deferred correlation is stable across recreation, separated by session/call and independent of content", async () => {
@@ -249,18 +331,25 @@ test("enabled Dialog actual blocking provider answers and retains requested user
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const pi = host();
   registerGroundedDialog(pi, { askUserV1Enabled: true });
+  const blocked = [];
+  pi.events.on("herdr:blocked", (event) => blocked.push(event));
   const ctx = { ...context(), hasUI: true, ui: { select: async (_title, options) => options[0] } };
   await pi.lifecycle("session_start", {}, ctx);
   const answered = await pi.tools[0].execute("answer", blockingAsk(), undefined, undefined, ctx);
   assert.deepEqual(answered.details.answer, { kind: "option", optionId: "yes" });
+  assert.deepEqual(blocked, blockedSpan);
   ctx.ui.select = () => new Promise(() => {});
   const pending = pi.tools[0].execute("timeout", blockingAsk(), undefined, undefined, ctx);
   t.mock.timers.tick(59_999);
   assert.equal(pi.events.count(blockingResponse), 1);
   t.mock.timers.tick(1);
   assert.equal((await pending).details.status, "timed_out");
+  assert.deepEqual(blocked, [...blockedSpan, ...blockedSpan]);
+  queuedProvider(pi);
+  assert.equal((await pi.tools[0].execute("deferred", ask(), undefined, undefined, ctx)).details.status, "queued");
   await pi.lifecycle("session_shutdown", { reason: "reload" }, ctx);
   assert.equal(pi.events.count(blockingRequest), 0);
+  assert.deepEqual(blocked, [...blockedSpan, ...blockedSpan]);
 });
 
 test("V1.1 allows only next-natural-turn delivery and no automatic escalation", async () => {

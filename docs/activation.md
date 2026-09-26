@@ -102,6 +102,30 @@ After a pane-renderer change, close the existing Glance side pane in Herdr and r
 
 Herdr owns the pane title and border. Project Glance intentionally starts with one blue CURRENT card, followed by separate dark update cards collapsed to two preview lines by default. Its mouse controls use component-owned row/column targets in Pi/TUI 0.85.1, not live OSC 8 links. CURRENT remains outside the feed scroll region.
 
+## Dialog Herdr blocking state
+
+Grounded Dialog reports both modern `ask_user` and legacy `ask_user_question`
+blocking waits through `herdr:blocked`. The standalone Herdr Blocked Bridge is
+retired. Keep Herdr Agent State, which consumes these events. This change does
+not require a change to `askUserV1` or the question UI.
+
+1. Back up the existing Dialog selection and the exact standalone bridge package
+   registration or auto-discovered extension alias. Confirm their owners before
+   changing either.
+2. Select the accepted Dialog source and remove only the confirmed standalone
+   bridge registration or alias. Do not leave both active: legacy questions would
+   report each wait twice. Preserve unrelated registrations and their order.
+3. Use the installed resource loader to confirm that the standalone bridge is
+   absent, exactly one question tool remains, and unrelated owners are unchanged.
+   A loader check alone does not update a running session.
+4. After managed work settles and the editor has no unsent draft, reload safely.
+   Ask a harmless blocking question and confirm that Herdr shows blocked while
+   waiting, then working or idle after an answer or cancellation.
+
+If rollback restores a legacy Dialog source that depended on the bridge, restore
+its matching bridge registration as well. Do not restore the bridge alongside
+this self-contained Dialog. Preserve settings and session data during rollback.
+
 ## V1.1 deferred questions
 
 The existing Grounded Dialog facade owns the only `ask_user` tool. Its normal blocking provider remains unchanged. Glance provides deferred questions through the public `pi-ask-user:deferred-request-v1` and `pi-ask-user:deferred-response-v1` events; it imports no Grounded implementation and registers no question tools.
