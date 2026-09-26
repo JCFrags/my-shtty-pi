@@ -78,7 +78,50 @@ function argumentText(value: unknown): { text: string; limited: boolean } {
   return { text, limited };
 }
 
-function extractParts(entry: SessionEntryLike): { parts: Part[]; role: string; error: boolean } | undefined {
+interface ReplayContentEdit { readonly content: string | readonly unknown[] }
+
+/** The caller supplies Pi's complete active branch in source order, not all
+ * session entries. Pi 0.85.1 has no buildSessionProjection export. Match the
+ * later projection's retained-range/edit rules without copying lifetime bodies
+ * or allocating a projection for every source entry. */
+function captureReplayEdits(entries: readonly SessionEntryLike[], cutIndex: number) {
+  let firstContextIndex = 0;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.type !== "compaction") continue;
+    // Only edits retained by the latest compaction, or appended after it, apply.
+    // A missing firstKeptEntryId or a retain-none boundary keeps no older entries.
+    firstContextIndex = index + 1;
+    for (let kept = 0; kept < index; kept++) {
+      if (entries[kept]!.id === entry.firstKeptEntryId) { firstContextIndex = kept; break; }
+    }
+    break;
+  }
+  const pending = new Set<string>();
+  for (let index = cutIndex - 1; index >= Math.max(firstContextIndex, cutIndex - CHRONOLOGICAL_REPLAY_LIMITS.entries); index--) {
+    const entry = entries[index]!;
+    if (!safeId(entry.id)) continue;
+    if (entry.type === "compaction") break;
+    pending.add(entry.id);
+  }
+  const edits = new Map<string, ReplayContentEdit | null>();
+  // Edits after the replay cut still affect its targets. Store at most one edit
+  // per bounded candidate, and inspect replacement content only for those IDs.
+  for (let index = entries.length - 1; index >= firstContextIndex && pending.size > 0; index--) {
+    const entry = entries[index]!;
+    if (entry.type !== "context_edit" || typeof entry.targetId !== "string" || !pending.delete(entry.targetId)) continue;
+    if (entry.replacement === null) { edits.set(entry.targetId, null); continue; }
+    const replacement = getRecord(entry.replacement);
+    if (!replacement || typeof replacement.content !== "string" && !Array.isArray(replacement.content)) {
+      throw new Error("context-v4-replay-edit-invalid");
+    }
+    edits.set(entry.targetId, { content: replacement.content as string | unknown[] });
+  }
+  return { firstContextIndex, edits };
+}
+
+function extractParts(entry: SessionEntryLike, edit?: ReplayContentEdit | null): { parts: Part[]; role: string; error: boolean } | undefined {
+  if (edit === null) return;
   const message = entry.type === "message" ? getRecord(entry.message) : undefined;
   const role = typeof message?.role === "string" ? message.role : entry.type === "custom_message" ? "custom" : "";
   if (!["user", "assistant", "toolResult", "bashExecution", "custom"].includes(role) || message?.excludeFromContext === true) return;
@@ -95,7 +138,9 @@ function extractParts(entry: SessionEntryLike): { parts: Part[]; role: string; e
   };
   const kind: Part["kind"] = role === "user" ? "user" : role === "toolResult" ? "tool_result" : role === "custom" ? "custom_message" : "assistant_text";
   const name = typeof message?.toolName === "string" ? clip(message.toolName, 128) : undefined;
-  const content = message?.content ?? entry.content;
+  // Keep source role and metadata. Extraction accepts both strings and blocks,
+  // including Pi's string-to-text-block normalization for assistant/tool edits.
+  const content = edit && role !== "bashExecution" ? edit.content : message?.content ?? entry.content;
   let nonText = 0, controlCalls = 0;
   if (typeof content === "string") add("", content, kind, name);
   else if (Array.isArray(content)) {
@@ -138,13 +183,15 @@ function partRepresentation(part: Part, entry: SessionEntryLike, index: number, 
   return reduced.text + (reduced.lossy ? "\n[Reduced source excerpts; recover the entry for complete wording.]" : "");
 }
 
-/** Capture only a bounded suffix. Pi owns the input array; lifetime text is never copied. */
+/** Capture only a bounded suffix of the complete active branch. Edit/compaction
+ * metadata is checked through its full leaf; lifetime text is never copied. */
 export function captureChronologicalReplay(entries: readonly SessionEntryLike[], cutIndex: number, relevance: readonly string[] = []): ChronologicalReplaySelection {
   if (!Number.isSafeInteger(cutIndex) || cutIndex < 1 || cutIndex >= entries.length
     || !safeId(entries[cutIndex]?.id) || !safeId(entries[cutIndex - 1]?.id)) throw new Error("context-v4-replay-cut-invalid");
   const terms = [...new Set(relevance.slice(0, CHRONOLOGICAL_REPLAY_LIMITS.relevanceTerms)
     .filter(term => typeof term === "string").map(term => term.slice(0, CHRONOLOGICAL_REPLAY_LIMITS.termUnits).trim().toLowerCase()).filter(Boolean))];
   const events: ReplayEvent[] = [];
+  const { firstContextIndex, edits } = captureReplayEdits(entries, cutIndex);
   let inspected = 0, metadata = 0, bytes = 0, start = cutIndex;
   for (let index = cutIndex - 1; index >= 0 && inspected < CHRONOLOGICAL_REPLAY_LIMITS.entries; index--) {
     const entry = entries[index]!;
@@ -152,7 +199,7 @@ export function captureChronologicalReplay(entries: readonly SessionEntryLike[],
     if (!safeId(entry.id)) { metadata++; continue; }
     // A new session-agent summary carries prior context. Never nest its old receipt text.
     if (entry.type === "compaction") break;
-    const extracted = extractParts(entry);
+    const extracted = index < firstContextIndex ? undefined : extractParts(entry, edits.get(entry.id));
     if (!extracted) { metadata++; continue; }
     const matchText = extracted.parts.map(part => part.text).join("\n").toLowerCase();
     const matches = terms.reduce((sum, term) => sum + Number(matchText.includes(term)), 0);
