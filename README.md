@@ -104,6 +104,21 @@ An operator must separately configure the approved repository and private eviden
 
 The former `message-board.md` is retired. Use relevant issue or PR comments and direct agent messaging for coordination. Its history remains in Git.
 
+## Capability ideas
+
+The [capability-ideas skill](skills/capability-ideas/SKILL.md) keeps possible tools, integrations, shortcuts, and speculative improvements in a private local Markdown backlog. Successful tasks can reveal useful opportunities. Idea contents stay outside Git, separate from feedback evidence and confirmed procedural guidance.
+
+From this checkout's root, link the skill without replacing an existing installation:
+
+```sh
+mkdir -p "$HOME/.agents/skills"
+ln -s "$PWD/skills/capability-ideas" "$HOME/.agents/skills/capability-ideas"
+```
+
+Prepare the owner-only store only with user approval, following [local storage](skills/capability-ideas/references/local-store.md). Start a new Pi session for discovery. Agents can load the skill when work reveals an opportunity or when related saved ideas may help planning. Manual `/skill:capability-ideas capture <idea>` requests local capture. `/skill:capability-ideas review [topic]` requests a read-only review, not research or implementation.
+
+The workflow uses existing local file/search tools and a small Python 3 file-creation helper. It adds no extension, service, database, background task, or automatic publication. Recording an idea does not authorize installation, purchase, implementation, or promotion to a public issue.
+
 ## ChronoCompact
 
 ChronoCompact provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
