@@ -23,7 +23,7 @@ interface SourceRecoveryReceipt extends LegacySourceRecovery {
 }
 interface ViewKey { version: 1; scope: StateScope; sourceKey: string }
 interface Binding extends ViewKey { head: string; anchorId: string; commitRef: ObjectRef }
-interface Cursor extends ViewKey { nextEntryId: string | null; scanned: number; legacySeen: boolean }
+interface Cursor extends ViewKey { nextEntryId: string | null; scanned: number; legacySeen: boolean; head?: string }
 interface PendingCommit { record: CommitRecord; commitRef: ObjectRef; data: AnchorData; operationId: string }
 interface View<Root> { source: SourceIdentity; resolution: OwnerResolution<Root> }
 interface CapturedView { epoch: number; scope: StateScope; source: SourceIdentity }
@@ -259,9 +259,9 @@ export class BranchStateOwner<Root> {
     this.cacheBinding(hash, binding);
     return binding;
   }
-  private async saveBinding(location: ObjectLocation, key: ViewKey, head: SessionEntryView,
+  private async saveBinding(location: ObjectLocation, key: ViewKey, head: string,
     anchor: SessionEntryView, ref: ObjectRef): Promise<void> {
-    const binding: Binding = { ...key, head: nativeSignature(head), anchorId: anchor.id, commitRef: ref };
+    const binding: Binding = { ...key, head, anchorId: anchor.id, commitRef: ref };
     const hash = keyOf(key);
     await writePrivateRecord(join(location.root, "bindings", `${hash}.json`), binding);
     this.cacheBinding(hash, binding);
@@ -311,30 +311,34 @@ export class BranchStateOwner<Root> {
       const hash = keyOf(key), path = join(location.root, "resolutions", `${hash}.json`);
       let cursor = await readPrivateRecord<Cursor>(path);
       if (cursor) {
-        exact(cursor, ["version", "scope", "sourceKey", "nextEntryId", "scanned", "legacySeen"]);
+        exact(cursor, ["version", "scope", "sourceKey", "nextEntryId", "scanned", "legacySeen"], ["head"]);
         scope(cursor.scope); integer(cursor.scanned, 0, Number.MAX_SAFE_INTEGER);
         if (cursor.version !== 1 || !sameScope(cursor.scope, view.scope) || cursor.sourceKey !== key.sourceKey
-          || typeof cursor.legacySeen !== "boolean") fail("state-store-corrupt");
+          || typeof cursor.legacySeen !== "boolean" || cursor.head !== undefined && !isHash(cursor.head)) fail("state-store-corrupt");
         if (cursor.nextEntryId !== null) identifier(cursor.nextEntryId);
       } else cursor = { ...key, nextEntryId: view.scope.leafId, scanned: 0, legacySeen: false };
       let result: OwnerResolution<Root> | undefined;
-      let head: SessionEntryView | undefined;
       const seen = new Set<string>();
       let reads = 0;
       const getEntry = (id: string): SessionEntryView => { reads++; return checkedEntry(host.sessionManager, id); };
+      // Old cursors lack the original head signature. Recover it within this page's read budget.
+      // Persist it even for a one-entry page so the next call can advance ancestry.
+      if (!cursor.head && cursor.nextEntryId !== null && cursor.nextEntryId !== view.scope.leafId && view.scope.leafId !== null) {
+        cursor.head = nativeSignature(getEntry(view.scope.leafId));
+      }
       while (cursor.nextEntryId !== null && reads < this.pageEntries) {
         checkSignal(options.signal);
         const id = cursor.nextEntryId;
         if (seen.has(id)) fail("state-store-corrupt");
         seen.add(id);
         const entry = getEntry(id);
-        if (id === view.scope.leafId) head = entry;
+        if (id === view.scope.leafId) cursor.head = nativeSignature(entry);
         const ref = this.anchorRef(entry, location);
         if (ref && !cursor.legacySeen) {
           const snapshot = await this.snapshot(host, view, entry, ref, location, recovery, options.signal);
           result = { status: "ready", snapshot, coverage: { scanned: cursor.scanned + reads, complete: true, legacySeen: false } };
           await this.unchanged(host, view, options.signal);
-          if (head) await this.saveBinding(location, key, head, entry, ref);
+          if (cursor.head) await this.saveBinding(location, key, cursor.head, entry, ref);
           break;
         }
         if (this.options.isLegacyEntry(entry)) cursor.legacySeen = true;
@@ -348,7 +352,7 @@ export class BranchStateOwner<Root> {
             const snapshot = await this.snapshot(host, view, anchor, binding.commitRef, location, recovery, options.signal);
             result = { status: "ready", snapshot, coverage: { scanned: cursor.scanned + reads, complete: true, legacySeen: false } };
             await this.unchanged(host, view, options.signal);
-            if (head) await this.saveBinding(location, key, head, anchor, binding.commitRef);
+            if (cursor.head) await this.saveBinding(location, key, cursor.head, anchor, binding.commitRef);
             break;
           }
         }
@@ -447,7 +451,7 @@ export class BranchStateOwner<Root> {
       const snapshot: OwnedSnapshot<Root> = freezeJson({ commitId: operationId, parentCommitId: previous, rootRef,
         root, anchorId: anchor.id, scope: anchoredScope, origin: view.scope, durability: view.source.durability,
         ...(importReceipt ? { importReceipt } : {}) });
-      await this.saveBinding(location, this.viewKey(after), anchor, anchor, commitRef);
+      await this.saveBinding(location, this.viewKey(after), nativeSignature(anchor), anchor, commitRef);
       await this.unchanged(host, after, options.signal);
       this.pending = undefined;
       this.selected = { source: after.source, resolution: { status: "ready", snapshot,

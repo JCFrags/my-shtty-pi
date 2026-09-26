@@ -63,6 +63,73 @@ async function session(root) {
 const anchorHost = (manager) => ({ sessionManager: manager, appendEntry: (type, data) => manager.appendCustomEntry(type, data) });
 const scopeOf = (manager) => ({ sessionId: manager.getSessionId(), leafId: manager.getLeafId() });
 
+test("multi-page resolution retains bindings across normal appends and cold owners", async (t) => {
+  const root = await mkdtemp(join(process.cwd(), ".state-ancestry-fixture-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const manager = await session(root);
+  let providers = new ProviderHost(manager, root);
+  await providers.lifecycle("session_start");
+  await providers.execute("todo", { action: "add", text: "Retain task" });
+  await providers.execute("notes", { action: "add", title: "Retain note", body: "Exact body" });
+  await providers.execute("workplan", { action: "create", content: { title: "Retain plan", objective: "Stay ready", approach: "Resolve bounded pages" } });
+  const inputs = { todo: { action: "list" }, notes: { action: "read", id: "N1" }, workplan: { action: "read", planId: "WP1" } };
+  let reads = 0;
+  const getEntry = manager.getEntry.bind(manager);
+  t.mock.method(manager, "getEntry", (id) => { reads++; return getEntry(id); });
+  const read = async (name) => {
+    reads = 0;
+    try { return await providers.execute(name, inputs[name]); }
+    finally { assert.ok(reads <= 128, `${name} read ${reads} entries`); }
+  };
+  const expected = {};
+  for (const name of Object.keys(inputs)) expected[name] = await read(name);
+  const append = (text) => manager.appendMessage({ role: "user", content: text, timestamp: 0 });
+  for (let index = 0; index < 300; index++) append(`Ordinary message ${index}`);
+  await providers.lifecycle("session_shutdown");
+  providers = new ProviderHost(manager, root);
+  await providers.lifecycle("session_start");
+  const before = await readFile(manager.getSessionFile());
+  for (const name of Object.keys(inputs)) {
+    await assert.rejects(() => read(name), /STATE_CONFLICT.*pending/);
+    assert.equal(reads, 128);
+    assert.deepEqual(await read(name), expected[name]);
+  }
+  assert.deepEqual(await readFile(manager.getSessionFile()), before, "resolution must not append anchors");
+  for (let turn = 0; turn < 2; turn++) {
+    append(`Normal continuation ${turn}`);
+    for (const name of Object.keys(inputs)) {
+      assert.deepEqual(await read(name), expected[name]);
+      assert.ok(reads <= 6, `${name} restarted a completed ancestry walk`);
+      manager.appendMessage({ role: "toolResult", toolCallId: `fixture-${turn}-${name}`, toolName: name,
+        content: [{ type: "text", text: "Read complete" }], isError: false, timestamp: 0 });
+    }
+  }
+  await providers.lifecycle("session_shutdown");
+  providers = new ProviderHost(manager, root);
+  await providers.lifecycle("session_start");
+  for (const name of Object.keys(inputs)) assert.deepEqual(await read(name), expected[name]);
+  await providers.lifecycle("session_shutdown");
+
+  // A retained signature must also permit progress at the smallest supported page size.
+  const small = SessionManager.inMemory(), host = anchorHost(small);
+  const options = { providerId: "todo", storeRoot: join(root, "one-entry"), ancestryPageEntries: 1,
+    validateRoot: (value) => assert.deepEqual(value, { value: 7 }), isLegacyEntry: () => false };
+  let owner = new BranchStateOwner(options);
+  assert.equal((await owner.resolve(host)).status, "empty");
+  const committed = await owner.commit(host, { value: 7 }, { expectedCommitId: null, durability: "allow-volatile" });
+  for (let index = 0; index < 3; index++) small.appendMessage({ role: "user", content: "Ordinary message", timestamp: 0 });
+  const smallGetEntry = small.getEntry.bind(small);
+  t.mock.method(small, "getEntry", (id) => { reads++; return smallGetEntry(id); });
+  for (let page = 0; page < 4; page++) {
+    owner.close(); owner = new BranchStateOwner(options); reads = 0;
+    const result = await owner.resolve(host);
+    assert.equal(reads, 1);
+    assert.equal(result.status, page === 3 ? "ready" : "pending");
+    if (result.status === "ready") assert.equal(result.snapshot.commitId, committed.commitId);
+  }
+  owner.close();
+});
+
 // One focused scenario. The only simulated field is the session descriptor's st_dev.
 // The source bytes, Btrfs identity subprocess, immutable objects, Pi manager, and tools are real.
 test("Btrfs reboot identity preserves providers, proves legacy recovery, and refuses replacement", async (t) => {
