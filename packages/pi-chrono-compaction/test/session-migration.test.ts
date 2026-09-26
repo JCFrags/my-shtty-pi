@@ -33,8 +33,10 @@ test("existing V3 sessions retain exclusions and refuse compaction before legacy
         { id: "tail", parentId: "prefix", type: "message", message: { role: "assistant", content: [] } },
       ];
       const ctx = { hasUI: false, sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sourcePath,
-        getBranch: () => branch, getLeafId: () => "tail", getEntry() { throw new Error("historical reconstruction was entered"); } } };
+        getBranch: () => branch, getLeafId: () => "tail", getEntry: (id: string) => branch.find(entry => entry.id === id) } };
       await hooks.get("session_start")!({ reason: "resume" }, ctx);
+      // Startup restores the bounded receipt locator. Compaction must still refuse before reconstruction.
+      ctx.sessionManager.getEntry = () => { throw new Error("historical reconstruction was entered"); };
       const status = (await tools.get("history_status").execute("status", {}, undefined, undefined, ctx)).details;
       assert.equal(status.enabled, false, exclusion);
       assert.equal(status.migration.phase, "unavailable", exclusion);
