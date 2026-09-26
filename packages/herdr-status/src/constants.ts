@@ -4,6 +4,7 @@ export const TOKEN_NAMES = [
   "summary",
   "model",
   "context",
+  "model_context",
   "tool",
   "changed_files",
   "turn",
@@ -17,6 +18,10 @@ export const ACTIVITY_TTL_MS = 15_000;
 export const TTL_REFRESH_MS = 5_000;
 export const TOOL_UPDATE_REFRESH_MS = 3_000;
 export const TOOL_CLEAR_DEBOUNCE_MS = 350;
+export const HERDR_TITLE_FRAME_MS = 250;
+export const TERMINAL_TITLE_FRAME_MS = 120;
+export const IDLE_RECHECK_MS = 250;
+export const STARTUP_TITLE_RESTORE_MS = 50;
 export const COALESCE_MS = 150;
 export const MIN_REPORT_INTERVAL_MS = 250;
 export const PROCESS_TIMEOUT_MS = 1_500;

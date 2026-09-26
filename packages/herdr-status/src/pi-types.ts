@@ -13,12 +13,18 @@ export interface PiContextUsage {
 
 export interface PiUi {
   notify(message: string, type?: "info" | "warning" | "error"): void;
+  select(title: string, options: string[]): Promise<string | undefined>;
+  setTitle(title: string): void;
 }
 
 export interface PiExtensionContext {
   cwd: string;
   model: PiModel | undefined;
   ui: PiUi;
+  mode?: string;
+  hasUI?: boolean;
+  signal?: AbortSignal | undefined;
+  isIdle(): boolean;
   getContextUsage(): PiContextUsage | undefined;
 }
 
@@ -62,6 +68,22 @@ export interface ThinkingLevelSelectEvent {
   previousLevel?: string;
 }
 
+export interface MessageUpdateEvent {
+  message: { role: string };
+  assistantMessageEvent?: { type: string };
+}
+
+export interface SessionBeforeCompactEvent {
+  signal: AbortSignal;
+  reason?: string;
+  willRetry?: boolean;
+}
+
+export interface SessionCompactEvent {
+  reason?: string;
+  willRetry?: boolean;
+}
+
 export interface PiCommandDefinition {
   description?: string;
   handler(args: string, ctx: PiExtensionContext): void | Promise<void>;
@@ -74,7 +96,14 @@ export type PiEventHandler<TEvent = unknown> = (
 
 export interface PiEventMap {
   session_start: SessionStartEvent;
+  before_agent_start: Record<string, unknown>;
+  agent_start: Record<string, unknown>;
   turn_start: TurnStartEvent;
+  message_update: MessageUpdateEvent;
+  session_before_compact: SessionBeforeCompactEvent;
+  session_compact: SessionCompactEvent;
+  session_compact_failed: SessionCompactEvent;
+  session_info_changed: Record<string, unknown>;
   tool_execution_start: ToolExecutionStartEvent;
   tool_execution_update: ToolExecutionUpdateEvent;
   tool_execution_end: ToolExecutionEndEvent;
@@ -85,6 +114,7 @@ export interface PiEventMap {
 }
 
 export interface PiExtensionApi {
+  getSessionName?(): string | undefined;
   on<K extends keyof PiEventMap>(event: K, handler: PiEventHandler<PiEventMap[K]>): void;
   registerCommand(name: string, definition: PiCommandDefinition): void;
 }

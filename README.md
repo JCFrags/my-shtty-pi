@@ -27,7 +27,7 @@ For an existing installation, preserve package order and replace only the intend
 
 ## Products
 
-The [registry](package.json) contains 17 owned products: 15 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
+The [registry](package.json) contains 16 owned products: 14 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
 
 ### Active products
 
@@ -37,7 +37,7 @@ The [registry](package.json) contains 17 owned products: 15 active and two inact
 | [Files UI](packages/files-ui/README.md) | Browse files, preview content, and insert selected paths or bounded content into the editor. | `/files` |
 | [Grounded Tools](packages/grounded-tools/README.md) | Exact coding tools, questions, tasks, notes, and workplans. | [Seven tool groups below](#grounded-tools) |
 | [Herdr Agent State](packages/herdr-agent-state/README.md) | Report Pi session identity and working, blocked, or idle state to Herdr. | Automatic lifecycle integration. No tool or command. |
-| [Herdr Status](packages/herdr-status/README.md) | Publish display-only model and activity metadata without replacing lifecycle integration. | `/herdr-status` |
+| [Herdr Sidebar](packages/herdr-status/README.md) | Configure additive model/context fields and terminal title activity. Preserve native lifecycle reporting. | `/herdr-sidebar-settings` |
 | [Pi Agent Context](packages/pi-agent-context/README.md) | Maintain stable date/environment snapshots and inspect prompt, context, and tool costs. | `/context-refresh`, `/context-audit` |
 | [ChronoCompact](packages/pi-chrono-compaction/README.md) | Select chronological memory and recover source-linked history. | [History, memory, and operator interfaces below](#chronocompact) |
 | [Context Kit](packages/pi-context-kit/README.md) | Independent current-state recall and local runtime/quality observations for the V4 foundation. | `context_recall`, `telemetry_status`, `/context-telemetry` |
@@ -47,7 +47,6 @@ The [registry](package.json) contains 17 owned products: 15 active and two inact
 | [Pi Pixel CUA Portal](packages/pi-pixel-cua/README.md) | Observe and control one explicitly granted native GNOME Wayland window through pixels. | `cua_portal_start`, `cua_portal_observe`, `cua_portal_act`, `cua_portal_stop`, `/pixel-cua-status`, `/pixel-cua-stop` |
 | [Pi Progressive Tools](packages/pi-progressive-tools/README.md) | Keep a short tool catalog visible and enable permitted tools through exact-name help. | `list_tools`, `tool_help`, `/tool-audit`, `/tool-reset` |
 | [Pi Project Glance](packages/pi-project-glance/README.md) | Show current task state, a durable progress inbox and History, and deferred questions in a Herdr pane. | `/project-glance`. No model-facing tool. |
-| [Titlebar Spinner](packages/titlebar-spinner/README.md) | Show activity through selectable terminal title animations. | `/title-animation` |
 
 ### Inactive products
 
