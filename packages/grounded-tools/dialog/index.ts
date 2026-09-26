@@ -200,6 +200,27 @@ async function askRpc(question: Question, ctx: Parameters<Parameters<ExtensionAP
   return { option: question.options[index] };
 }
 
+function registerLegacyBlockingLifecycle(pi: ExtensionAPI) {
+  const activeCalls = new Set<() => void>();
+  pi.on("session_shutdown", () => {
+    for (const release of activeCalls) release();
+  });
+
+  return (signal: AbortSignal | undefined): (() => void) => {
+    const release = () => {
+      if (!activeCalls.delete(release)) return;
+      signal?.removeEventListener("abort", release);
+      pi.events.emit("herdr:blocked", { active: false });
+    };
+    if (!signal?.aborted) {
+      activeCalls.add(release);
+      signal?.addEventListener("abort", release, { once: true });
+      pi.events.emit("herdr:blocked", { active: true, label: "Waiting for your answer" });
+    }
+    return release;
+  };
+}
+
 export interface GroundedDialogRegistrationOptions {
   readonly askUserV1Enabled?: boolean;
 }
@@ -214,6 +235,7 @@ export function registerGroundedDialog(
     return;
   }
 
+  const beginBlocking = registerLegacyBlockingLifecycle(pi);
   pi.on("session_start", (_event, ctx) => {
     if (!ctx.hasUI) pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "ask_user_question"));
   });
@@ -229,7 +251,7 @@ export function registerGroundedDialog(
     ],
     parameters: AskParams,
     executionMode: "sequential",
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       if (!ctx.hasUI) throw new Error("ask_user_question is unavailable in non-interactive mode");
       const questionIds = new Set<string>();
       for (const question of params.questions) {
@@ -243,28 +265,33 @@ export function registerGroundedDialog(
           values.add(option.value);
         }
       }
-      const answers: Answer[] = [];
-      for (const question of params.questions) {
-        const result = ctx.mode === "tui" ? await askTui(question, ctx) : await askRpc(question, ctx);
-        if (!result) {
-          return {
-            content: [{ type: "text", text: "User cancelled the questionnaire" }],
-            details: { questions: params.questions, answers, cancelled: true },
-          };
+      const release = beginBlocking(signal);
+      try {
+        const answers: Answer[] = [];
+        for (const question of params.questions) {
+          const result = ctx.mode === "tui" ? await askTui(question, ctx) : await askRpc(question, ctx);
+          if (!result) {
+            return {
+              content: [{ type: "text", text: "User cancelled the questionnaire" }],
+              details: { questions: params.questions, answers, cancelled: true },
+            };
+          }
+          if (result.option) {
+            answers.push({ id: question.id, value: result.option.value, label: result.option.label, custom: false });
+          } else {
+            answers.push({ id: question.id, value: result.custom!, label: result.custom!, custom: true });
+          }
         }
-        if (result.option) {
-          answers.push({ id: question.id, value: result.option.value, label: result.option.label, custom: false });
-        } else {
-          answers.push({ id: question.id, value: result.custom!, label: result.custom!, custom: true });
-        }
+        return {
+          content: [{
+            type: "text",
+            text: answers.map((answer) => `${answer.id}: ${answer.custom ? "user wrote" : "user selected"}: ${answer.label}`).join("\n"),
+          }],
+          details: { questions: params.questions, answers, cancelled: false },
+        };
+      } finally {
+        release();
       }
-      return {
-        content: [{
-          type: "text",
-          text: answers.map((answer) => `${answer.id}: ${answer.custom ? "user wrote" : "user selected"}: ${answer.label}`).join("\n"),
-        }],
-        details: { questions: params.questions, answers, cancelled: false },
-      };
     },
     renderCall(args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold("ask_user_question ")) + theme.fg("muted", `${args.questions.length} question(s)`), 0, 0);

@@ -50,13 +50,6 @@
         ]
       },
       {
-        "slug": "herdr-blocked-bridge",
-        "status": "active",
-        "entrypoints": [
-          "extensions/herdr-blocked-bridge.ts"
-        ]
-      },
-      {
         "slug": "herdr-status",
         "status": "active",
         "entrypoints": [
