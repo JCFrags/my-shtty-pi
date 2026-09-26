@@ -52,7 +52,7 @@ Do not delete stores, remove reservations, stop another session's worker, raise 
 
 Ordinary lag resumes the same checkpoints. Missing derivations can be created by the owning materializer. An existing corrupt, incompatible, or unsafe store is not equivalent to missing data.
 
-Catalog recovery uses an explicitly identified replacement store and validated publication. Capsule/reducer identity changes create a new derived identity. Do not relabel immutable bytes, discover ownership by a directory scan, or overwrite a corrupted content-addressed object.
+Physical catalog corruption recovery uses an explicitly identified replacement store and validated publication. An intact legacy source binding with a confirmed reboot-only device change has a separate [in-place identity promotion](../../chrono-v3/catalog-source-identity.md). It requires complete bounded raw-span proof and an unchanged source window, not a rebuild or force option. Older code refuses the resulting snapshot v2 source operations, so retain compatible code and coherent backups. Capsule/reducer identity changes create a new derived identity. Do not relabel immutable bytes, discover ownership by a directory scan, or overwrite a corrupted content-addressed object.
 
 Historical state clause checkpoints require a compatible materializer. Exact state-gap repair has its own versioned ruleset. Older binaries can refuse repaired stores even for reads. Preserve pending repair and original coverage rather than downgrade its marker.
 

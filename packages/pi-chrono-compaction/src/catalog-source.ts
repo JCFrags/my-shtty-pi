@@ -1,6 +1,7 @@
 import { constants, openSync, closeSync, fstatSync, lstatSync, readSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve, sep } from "node:path";
+import { captureCatalogFileIdentity, isCatalogFileIdentity, sameCatalogFileIdentity, type CatalogFileIdentity } from "./catalog-file-identity.js";
 
 /** Worker-only source access. This counter does NOT include native SQLite I/O. */
 export const CATALOG_SOURCE_CHUNK_BYTES = 64 * 1024;
@@ -8,14 +9,37 @@ export const CATALOG_SOURCE_ANCHOR_BYTES = 16 * 1024;
 export const CATALOG_SOURCE_JOB_BYTES = 8 * 1024 * 1024;
 export interface CatalogSourceIdentity { readonly device: string; readonly inode: string }
 export interface CatalogSourceAnchor { readonly offset: number; readonly length: number; readonly sha256: string }
-export interface CatalogSourceSnapshot {
-  readonly schemaVersion: 1;
+export interface CatalogSourceObservation extends CatalogSourceIdentity {
+  readonly size: number; readonly mtimeNs: string; readonly ctimeNs: string;
+}
+export interface CatalogSourceIdentityReceipt {
+  readonly version: 1;
+  readonly recoveryKey: string;
+  readonly storeKey: string;
+  readonly sessionKey: string;
+  readonly generation: number;
+  readonly shardKey: string;
+  readonly previousSnapshot: string;
+  readonly previousSnapshotHash: string;
+  readonly checkpointHash: string;
+  readonly bindingHash: string;
+  readonly fileIdentity: CatalogFileIdentity;
+  readonly observation: CatalogSourceObservation;
+  readonly prefixBytes: number;
+  readonly spans: number;
+  readonly spanChainHash: string;
+}
+interface SnapshotBase {
   readonly identity: CatalogSourceIdentity;
   readonly size: number;
   readonly anchors: readonly CatalogSourceAnchor[];
 }
+export type CatalogSourceSnapshot = SnapshotBase & (
+  | { readonly schemaVersion: 1 }
+  | { readonly schemaVersion: 2; readonly fileIdentity: CatalogFileIdentity; readonly identityReceipt?: CatalogSourceIdentityReceipt }
+);
 export class CatalogSourceError extends Error {
-  constructor(readonly code: "catalog-source-unsafe" | "catalog-source-changed" | "catalog-source-budget" | "catalog-source-range" | "catalog-source-io") {
+  constructor(readonly code: "catalog-source-unsafe" | "catalog-source-changed" | "catalog-source-budget" | "catalog-source-range" | "catalog-source-io" | "catalog-source-identity-unavailable") {
     super(code); this.name = "CatalogSourceError";
   }
 }
@@ -24,6 +48,7 @@ const digest = (bytes: Uint8Array): string => createHash("sha256").update(bytes)
 function safeError(error: unknown): never {
   if (error instanceof CatalogSourceError) throw error;
   const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === "catalog-source-identity-unavailable") throw new CatalogSourceError(code);
   throw new CatalogSourceError(code === "ELOOP" ? "catalog-source-unsafe" : code === "ENOENT" ? "catalog-source-changed" : "catalog-source-io");
 }
 
@@ -33,6 +58,8 @@ function safeError(error: unknown): never {
  */
 export class CatalogSource {
   readonly identity: CatalogSourceIdentity;
+  readonly fileIdentity: CatalogFileIdentity;
+  readonly observation: CatalogSourceObservation;
   readonly size: number;
   private fd: number;
   private used = 0;
@@ -59,7 +86,10 @@ export class CatalogSource {
       this.fd = fd;
       this.size = size;
       this.identity = { device: String(stat.dev), inode: String(stat.ino) };
-      this.assertCurrent();
+      this.observation = { ...this.identity, size, mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs) };
+      this.assertUnchanged(this.observation);
+      this.fileIdentity = captureCatalogFileIdentity(fd, stat);
+      this.assertUnchanged(this.observation);
     } catch (error) {
       if (fd !== undefined) { try { closeSync(fd); } catch { /* preserve safe original error */ } }
       safeError(error);
@@ -75,6 +105,16 @@ export class CatalogSource {
       const pinned = fstatSync(this.fd, { bigint: true });
       for (const stat of [current, pinned]) {
         if (!stat.isFile() || stat.nlink !== 1n || String(stat.dev) !== this.identity.device || String(stat.ino) !== this.identity.inode || stat.size < BigInt(minimumSize)) throw new CatalogSourceError("catalog-source-changed");
+      }
+    } catch (error) { safeError(error); }
+  }
+  /** Explicit recovery requires a write-free source window across all pages. */
+  assertUnchanged(expected: CatalogSourceObservation): void {
+    this.assertCurrent();
+    try {
+      for (const stat of [lstatSync(this.filename, { bigint: true }), fstatSync(this.fd, { bigint: true })]) {
+        if (String(stat.dev) !== expected.device || String(stat.ino) !== expected.inode || Number(stat.size) !== expected.size
+          || String(stat.mtimeNs) !== expected.mtimeNs || String(stat.ctimeNs) !== expected.ctimeNs) throw new CatalogSourceError("catalog-source-changed");
       }
     } catch (error) { safeError(error); }
   }
@@ -104,7 +144,13 @@ export class CatalogSource {
       ? (index === 0 ? evidence.first : evidence.tail.subarray(evidence.tail.length - span.length))
       : this.read(span.offset, span.length));
     const anchors = spans.map((span, index) => ({ ...span, sha256: digest(buffers[index]!) }));
-    const snapshot: CatalogSourceSnapshot = { schemaVersion: 1, identity: this.identity, size, anchors };
+    const receipt = evidence?.prior.schemaVersion === 2 ? evidence.prior.identityReceipt : undefined;
+    // A healthy legacy source can keep appending under its original guard.
+    // Only explicit full-span recovery promotes an existing v1 binding.
+    const snapshot: CatalogSourceSnapshot = evidence?.prior.schemaVersion === 1
+      ? { schemaVersion: 1, identity: { ...this.identity }, size, anchors }
+      : { schemaVersion: 2, identity: { ...this.identity }, fileIdentity: { ...this.fileIdentity }, size, anchors,
+        ...(receipt ? { identityReceipt: structuredClone(receipt) } : {}) };
     if (evidence) {
       // New anchors must match bytes accepted by the parser, not freshly adopted
       // filesystem bytes. Recheck old evidence AFTER candidate capture as well:
@@ -117,7 +163,21 @@ export class CatalogSource {
     return snapshot;
   }
   verify(snapshot: CatalogSourceSnapshot): void {
-    if (snapshot?.schemaVersion !== 1 || !validInteger(snapshot.size) || snapshot.size > this.size || snapshot.identity?.device !== this.identity.device || snapshot.identity?.inode !== this.identity.inode) throw new CatalogSourceError("catalog-source-changed");
+    if (!snapshot || !validInteger(snapshot.size) || snapshot.size > this.size || snapshot.identity?.inode !== this.identity.inode
+      || (snapshot.schemaVersion === 1 ? snapshot.identity.device !== this.identity.device
+        : snapshot.schemaVersion !== 2 || !isCatalogFileIdentity(snapshot.fileIdentity)
+          || !sameCatalogFileIdentity(snapshot.fileIdentity, this.fileIdentity))) throw new CatalogSourceError("catalog-source-changed");
+    this.verifyAnchors(snapshot);
+  }
+  /** Only the explicit full-span recovery operation uses this legacy check.
+   * It does not authorize normal ingestion or reads and does not publish state.
+   */
+  verifyLegacyForRecovery(snapshot: CatalogSourceSnapshot): void {
+    if (snapshot?.schemaVersion !== 1 || !validInteger(snapshot.size) || snapshot.size > this.size
+      || snapshot.identity?.inode !== this.identity.inode || this.fileIdentity.kind !== "linux-btrfs-statfs") throw new CatalogSourceError("catalog-source-changed");
+    this.verifyAnchors(snapshot);
+  }
+  private verifyAnchors(snapshot: CatalogSourceSnapshot): void {
     const first = Math.min(snapshot.size, CATALOG_SOURCE_ANCHOR_BYTES);
     const expected = [{ offset: 0, length: first }];
     if (snapshot.size > first) expected.push({ offset: Math.max(first, snapshot.size - CATALOG_SOURCE_ANCHOR_BYTES), length: Math.min(snapshot.size - first, CATALOG_SOURCE_ANCHOR_BYTES) });
@@ -135,7 +195,7 @@ export class CatalogSource {
       size: snapshot.size,
       first: Buffer.from(buffers[0]!),
       tail: Buffer.from(Buffer.concat(buffers).subarray(-CATALOG_SOURCE_ANCHOR_BYTES)),
-      prior: { ...snapshot, identity: { ...snapshot.identity }, anchors: snapshot.anchors.map(anchor => ({ ...anchor })) },
+      prior: structuredClone(snapshot),
     };
   }
   /** Hand off exactly the contiguous bytes consumed and hashed by ingestion.

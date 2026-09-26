@@ -19,6 +19,7 @@ logical-root/                         0700
   stores/initial-<SHA256>/            0700, deterministic initial DB directory
   stores/recovery-<SHA256>/           0700, deterministic recovery DB directory
     catalog-<session-hash>.sqlite     engine-owned DB, WAL and SHM together
+    source-identities/<hash>.json    0600, explicit bounded identity-proof progress
 ```
 
 The initial folder is derived from the logical session key. A recovery folder is
@@ -46,7 +47,12 @@ next ingestion resumes it. Competing initializers cannot overwrite another activ
 pointer. Native writer contention may produce a controlled refusal; retry the
 bounded request rather than allocate another physical store.
 
-Recovery is explicit and does not open the active DB:
+The physical-store recovery below is explicit and does not open the active DB.
+It is not the repair for an intact legacy source binding whose raw device number
+changed. [Explicit source identity promotion](catalog-source-identity.md) verifies
+all recorded raw spans and preserves the existing physical UUID and checkpoints.
+
+For physical-store recovery:
 
 1. Send `recoverStart` with a bounded `rebuildKey`.
 2. The wrapper commits immutable recovery intent with the observed active UUID
