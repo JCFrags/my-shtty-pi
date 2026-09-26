@@ -7,7 +7,7 @@ export const PROJECT_GLANCE_COMMAND = "project-glance" as const;
 export const PROJECT_GLANCE_PLUGIN_ID = "pi.project-glance" as const;
 export const PROJECT_GLANCE_ENTRYPOINT = "glance" as const;
 export const PROJECT_GLANCE_TITLE = "Project Glance" as const;
-export const PROJECT_GLANCE_SECTION = "Progress Feed" as const;
+export const PROJECT_GLANCE_SECTION = "Recent updates" as const;
 export const PROJECT_GLANCE_TYPE_PREFIX = "ProjectGlance" as const;
 export const PROJECT_GLANCE_EVENT_PREFIX = "pi-project-glance:" as const;
 export const PROJECT_GLANCE_CUSTOM_ENTRY_PREFIX = "pi-project-glance/" as const;
@@ -112,7 +112,8 @@ export interface ProjectGlanceSnapshotRequest {
   type: "snapshot_request";
   requestId: string;
 }
-export type ProjectGlanceAction = { type: "mark_read" | "dismiss" | "focus"; itemId?: string } | ProjectGlanceQuestionAction;
+export type ProjectGlanceFeedAction = { type: "dismiss"; itemId: string } | { type: "clear_recent"; itemIds: string[] };
+export type ProjectGlanceAction = { type: "mark_read" | "dismiss" | "focus"; itemId?: string } | Extract<ProjectGlanceFeedAction, { type: "clear_recent" }> | ProjectGlanceQuestionAction;
 
 export interface ProjectGlanceActionRequest {
   version: typeof PROJECT_GLANCE_PROTOCOL_VERSION;

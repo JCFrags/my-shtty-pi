@@ -6,6 +6,7 @@ import { createConnection, type Socket } from "node:net";
 import {
   PROJECT_GLANCE_PROTOCOL_VERSION,
   type ProjectGlanceRuntimeDescriptor,
+  type ProjectGlanceFeedAction,
   type ProjectGlanceServerFrame,
   type ProjectGlanceSnapshot,
 } from "./model.js";
@@ -105,17 +106,17 @@ export class ProjectGlanceClient {
     catch { return false; }
   }
 
-  sendFeedAction(branchId: string, baseRevision: number, action: { type: "dismiss"; itemId: string }): Promise<void> {
+  sendFeedAction(branchId: string, baseRevision: number, action: ProjectGlanceFeedAction): Promise<void> {
     const socket = this.#socket, descriptor = this.#descriptor, snapshot = this.#latestSnapshot;
     if (!socket?.writable || !descriptor || !this.#authenticated || !snapshot || this.#pendingActions.size || this.#actionNeedsSnapshot) return Promise.reject(new Error("An update is in progress. Retry after it completes."));
-    if (branchId !== snapshot.branchId || baseRevision !== snapshot.revision) return Promise.reject(new Error("Inbox changed. Review it and retry."));
+    if (branchId !== snapshot.branchId || baseRevision !== snapshot.revision) return Promise.reject(new Error("Recent updates changed. Review them and retry."));
     const requestId = this.#nextRequestId(), actionId = `action-${randomUUID()}`;
     this.#pendingActions.set(requestId, actionId); this.#sentBaseRevision = baseRevision;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.#dropConnection(socket, this.#activeConnectionId), 10_000); timer.unref?.();
       this.#questionReceipts.set(requestId, { resolve, reject, timer });
       try { socket.write(encodeFrame({ version: PROJECT_GLANCE_PROTOCOL_VERSION, type: "action", requestId, actionId, sessionKey: descriptor.sessionKey, generation: descriptor.generation, branchId, baseRevision, action })); }
-      catch { this.#pendingActions.delete(requestId); this.#finishQuestion(requestId, new Error("Archive action failed. Review the restored inbox before retrying.")); }
+      catch { this.#pendingActions.delete(requestId); this.#finishQuestion(requestId, new Error("Recent updates action failed. Review the cards before retrying.")); }
     });
   }
 

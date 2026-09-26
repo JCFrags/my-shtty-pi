@@ -220,11 +220,16 @@ export class ProjectGlanceRelayRuntime {
             await this.#syncFeedFromContext(this.#context);
             return this.#revision;
           }
-          // Focus and expansion never change inbox state. Only durable archive
-          // success can acknowledge a dismissal.
-          if (frame.action.type !== "dismiss") return this.#revision;
-          if (!frame.action.itemId) return undefined;
-          const accepted = this.#history.archive(this.#branchId, frame.action.itemId, frame.actionId);
+          // Focus and expansion never change recent cards. A close or clear
+          // is acknowledged only after its hidden state is saved.
+          let accepted: boolean;
+          if (frame.action.type === "clear_recent") {
+            accepted = this.#history.clearRecent(this.#branchId, frame.action.itemIds, frame.actionId);
+          } else {
+            if (frame.action.type !== "dismiss") return this.#revision;
+            if (!frame.action.itemId) return undefined;
+            accepted = this.#history.archive(this.#branchId, frame.action.itemId, frame.actionId);
+          }
           this.#publishCurrent(this.#current, []);
           return accepted ? this.#revision : undefined;
         });

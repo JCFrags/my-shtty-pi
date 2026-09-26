@@ -9,6 +9,18 @@ export const MAX_CACHED_ARCHIVE_PAGES = 5;
 export const MAX_RENDERED_HISTORY_PAGES = 3;
 export const MAX_CACHED_BODY_CHUNKS = 4;
 const INITIAL_PAGE = "@initial";
+const HISTORY_CARD_PREFIX = "history\u0000";
+
+/** Source IDs cannot contain controls, so the History prefix cannot collide. */
+export function paneCardId(view: HistoryView, itemId: string): string {
+  return view === "history" ? `${HISTORY_CARD_PREFIX}${itemId}` : itemId;
+}
+
+export function paneCardSource(cardId: string): { view: HistoryView; itemId: string } {
+  return cardId.startsWith(HISTORY_CARD_PREFIX)
+    ? { view: "history", itemId: cardId.slice(HISTORY_CARD_PREFIX.length) }
+    : { view: "inbox", itemId: cardId };
+}
 
 export interface ProjectGlanceArchiveSummary {
   inboxCount: number;
@@ -179,6 +191,7 @@ export class ProjectGlanceArchiveModel {
     return true;
   }
 
+  /** Body state uses the local card ID. BodyResult keeps the source item ID. */
   beginBody(itemId: string, offset = 0): boolean {
     if (!this.#branchId) return false;
     const state: BodyState = this.#bodies.get(itemId) ?? { offset, chunks: new Map(), loading: new Set<number>() };
@@ -194,7 +207,7 @@ export class ProjectGlanceArchiveModel {
     const state = this.#bodies.get(itemId);
     if (!state) return false;
     state.loading.delete(requestedOffset);
-    if (body.itemId !== itemId || body.offset !== requestedOffset) return false;
+    if (body.itemId !== paneCardSource(itemId).itemId || body.offset !== requestedOffset) return false;
     state.offset = body.offset;
     state.chunks.set(body.offset, body);
     delete state.error;

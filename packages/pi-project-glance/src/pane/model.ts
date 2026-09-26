@@ -6,6 +6,7 @@ import {
 import type { ProjectGlanceSnapshot } from "../protocol/model.js";
 import {
   ProjectGlanceArchiveModel,
+  paneCardId,
   type ProjectGlanceArchiveSummary,
 } from "./archive.js";
 
@@ -96,14 +97,17 @@ export class ProjectGlancePaneModel {
     }
   }
 
-  get selectableIds(): string[] {
-    const inbox = this.archive.hasActivePage("inbox")
+  get recentIds(): string[] {
+    return this.archive.hasActivePage("inbox")
       ? this.archive.activeItems("inbox").map((item) => item.itemId)
       : this.visibleFeed.map((item) => item.id);
+  }
+
+  get selectableIds(): string[] {
     const history = this.archive.historyExpanded
-      ? this.archive.activeItems("history").map((item) => item.itemId)
+      ? this.archive.activeItems("history").map((item) => paneCardId("history", item.itemId))
       : [];
-    return [...inbox, ...history];
+    return [...this.recentIds, ...history];
   }
 
   reconcileSelection(): void {
@@ -125,10 +129,8 @@ export class ProjectGlancePaneModel {
         (feed.some((item) => item.id === this.#selectedId) ? this.#selectedId : feed[0]?.id);
       return this.#selectedId;
     }
-    const inbox = this.archive.hasActivePage("inbox")
-      ? this.archive.activeItems("inbox").map((item) => item.itemId)
-      : this.visibleFeed.map((item) => item.id);
-    this.#selectedId = inbox.includes(this.#selectedId ?? "") ? this.#selectedId : inbox[0];
+    const recent = this.recentIds;
+    this.#selectedId = recent.includes(this.#selectedId ?? "") ? this.#selectedId : recent[0];
     return this.#selectedId;
   }
 

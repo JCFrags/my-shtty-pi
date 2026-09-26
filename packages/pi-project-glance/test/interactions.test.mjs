@@ -175,38 +175,37 @@ test("the complete CURRENT section uses one distinct width-bounded card", () => 
   }
 });
 
-test("Inbox navigation keeps item anchors without acknowledging attention", () => {
+test("recent arrivals keep item anchors without acknowledging attention", () => {
   const sessionKey = deriveSessionKey("pane-inbox-anchor");
   const model = new ProjectGlancePaneModel(sessionKey);
   model.applySnapshot(snapshot(sessionKey, 1, {
     feed: [],
-    archive: { inboxCount: 40, historyCount: 0, commitSeq: 1, state: "ready" },
+    archive: { inboxCount: 10, historyCount: 40, commitSeq: 1, state: "ready" },
   }));
   model.archive.receivePage("inbox", undefined, {
     branchId: "A", view: "inbox", snapshotSeq: 1,
-    items: Array.from({ length: 25 }, (_, index) => ({ itemId: `i${index}`, type: "assistant_update", preview: `Inbox ${index}`, createdAt: AT, bodyBytes: 20 })),
-    nextCursor: "older-25",
+    items: Array.from({ length: 10 }, (_, index) => ({ itemId: `i${index}`, type: "assistant_update", preview: `Recent ${index}`, createdAt: AT, bodyBytes: 20 })),
   }, true);
   model.reconcileSelection();
   const view = new ProjectGlancePaneView(model);
   const width = 32;
   const layout = () => view.scrollView.updateLayout(view.feed.render(width).length, 8, () => {});
   layout();
-  view.scrollView.scrollTo(view.feed.rowForItem("i12") + 1);
+  view.scrollView.scrollTo(view.feed.rowForItem("i5") + 1);
   const anchor = view.feed.anchorAt(view.scrollView.scrollTop);
   view.preserveReadingPosition();
-  model.archive.receivePage("inbox", "older-25", {
-    branchId: "A", view: "inbox", snapshotSeq: 1,
-    items: Array.from({ length: 15 }, (_, index) => ({ itemId: `i${index + 25}`, type: "assistant_update", preview: `Inbox ${index + 25}`, createdAt: AT, bodyBytes: 20 })),
-    previousCursor: "newer-25",
-  }, false);
+  model.archive.receivePage("inbox", undefined, {
+    branchId: "A", view: "inbox", snapshotSeq: 2,
+    items: Array.from({ length: 10 }, (_, index) => ({ itemId: `i${index + 1}`, type: "assistant_update", preview: `Recent ${index + 1}`, createdAt: AT, bodyBytes: 20 })),
+  }, true);
+  view.feed.invalidate();
   layout();
   assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchor);
-  assert.equal(model.archive.summary.inboxCount, 40);
+  assert.equal(model.archive.summary.inboxCount, 10);
   assert.deepEqual(model.snapshot.uiState?.readIds, []);
 });
 
-test("durable pages retain every card and dismissal moves one card to permanent History", async () => {
+test("History pages retain every card and dismissal hides only the recent copy", async () => {
   const { SessionManager } = await import("@earendil-works/pi-coding-agent");
   await withRuntime(async ({ root, environment }) => {
     const manager = SessionManager.create(root, join(root, "sessions"));
@@ -219,25 +218,27 @@ test("durable pages retain every card and dismissal moves one card to permanent 
       await runtime.ensureForContext({ sessionManager: manager });
       client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (value) => { latest = value; } });
       client.start();
-      await waitFor(() => latest?.archive?.inboxCount === 70);
+      await waitFor(() => latest?.archive?.inboxCount === 10 && latest?.archive?.historyCount === 70);
       assert.deepEqual(latest.feed, [], "archive-backed snapshots do not duplicate the first page");
-      const first = await client.requestPage(runtime.branchId, "inbox");
+      const recent = await client.requestPage(runtime.branchId, "inbox");
+      assert.deepEqual(recent.items.map((value) => value.preview), Array.from({ length: 10 }, (_, index) => `update m${index + 60}`));
+      const first = await client.requestPage(runtime.branchId, "history");
       assert.equal(first.items.length, 25);
-      assert.deepEqual(first.items.map((value) => value.preview), Array.from({ length: 25 }, (_, index) => `update m${index}`), "Inbox is oldest first");
-      const second = await client.requestPage(runtime.branchId, "inbox", first.nextCursor);
-      assert.deepEqual(second.items.map((value) => value.preview), Array.from({ length: 25 }, (_, index) => `update m${index + 25}`));
-      const third = await client.requestPage(runtime.branchId, "inbox", second.nextCursor);
-      assert.deepEqual(third.items.map((value) => value.preview), Array.from({ length: 20 }, (_, index) => `update m${index + 50}`));
+      assert.deepEqual(first.items.map((value) => value.preview), Array.from({ length: 25 }, (_, index) => `update m${69 - index}`));
+      const second = await client.requestPage(runtime.branchId, "history", first.nextCursor);
+      assert.deepEqual(second.items.map((value) => value.preview), Array.from({ length: 25 }, (_, index) => `update m${44 - index}`));
+      const third = await client.requestPage(runtime.branchId, "history", second.nextCursor);
+      assert.deepEqual(third.items.map((value) => value.preview), Array.from({ length: 20 }, (_, index) => `update m${19 - index}`));
       const itemIds = [...first.items, ...second.items, ...third.items].map((value) => value.itemId);
       assert.equal(new Set(itemIds).size, 70, "pagination retains every durable card exactly once");
       const dismissedId = first.items[0].itemId;
       const revision = latest.revision;
       await client.sendFeedAction(runtime.branchId, revision, { type: "dismiss", itemId: dismissedId });
-      await waitFor(() => latest?.archive?.inboxCount === 69 && latest?.archive?.historyCount === 1);
+      await waitFor(() => latest?.archive?.inboxCount === 9 && latest?.archive?.historyCount === 70);
       const inbox = await client.requestPage(runtime.branchId, "inbox");
       const history = await client.requestPage(runtime.branchId, "history");
       assert.equal(inbox.items.some((value) => value.itemId === dismissedId), false);
-      assert.deepEqual(history.items.map((value) => value.itemId), [dismissedId]);
+      assert.deepEqual(history.items.map((value) => value.itemId), first.items.map((value) => value.itemId));
       assert.equal(history.items[0].archivedAt !== undefined, true);
       assert.deepEqual(latest.uiState?.readIds ?? [], [], "dismissal does not create read acknowledgements");
       client.stop();
@@ -246,7 +247,7 @@ test("durable pages retain every card and dismissal moves one card to permanent 
       let restartedSnapshot;
       client = new ProjectGlanceClient({ descriptorPath: runtime.descriptorPath, onSnapshot: (value) => { restartedSnapshot = value; } });
       client.start();
-      await waitFor(() => restartedSnapshot?.archive?.historyCount === 1);
+      await waitFor(() => restartedSnapshot?.archive?.historyCount === 70 && restartedSnapshot?.archive?.inboxCount === 9);
       assert.equal((await client.requestPage(runtime.branchId, "history")).items[0].itemId, dismissedId, "History survives relay restart");
     } finally { client?.stop(); await runtime.stop(); }
   });

@@ -1,4 +1,5 @@
 export const HISTORY_PAGE_SIZE = 25 as const;
+export const RECENT_UPDATE_LIMIT = 10 as const;
 export const MAX_HISTORY_CURSOR_BYTES = 512;
 export const MAX_HISTORY_PREVIEW_BYTES = 1024;
 export const MAX_BODY_CHUNK_UTF8_BYTES = 24 * 1024;
@@ -47,6 +48,13 @@ export interface ArchiveInput {
   actionId: string;
   archivedAt: string;
   source: "action" | "legacy";
+}
+
+export interface ClearRecentInput {
+  branchId: string;
+  itemIds: readonly string[];
+  actionId: string;
+  archivedAt: string;
 }
 
 export interface ArchiveResult {
@@ -146,6 +154,7 @@ export interface DurableGlanceRepository {
   checkpoint(sessionKey: string): SourceCheckpoint | undefined;
   capture(input: CaptureInput): CaptureResult;
   archive(input: ArchiveInput): ArchiveResult;
+  clearRecent(input: ClearRecentInput): ArchiveResult;
   page(input: PageInput): PageResult;
   counts(branchId: string): CountsResult;
   body(input: BodyInput): BodyResult;

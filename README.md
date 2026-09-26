@@ -46,7 +46,7 @@ The [registry](package.json) contains 16 owned products: 14 active and two inact
 | [Pi Native SSH](packages/pi-native-ssh/README.md) | Use configured OpenSSH routes, persistent sessions, and bounded file transfers with remote-write rollback. | `ssh_transfer`, Grounded `session`, `/remote`. Route mode also binds `read`, `ls`, `write`, `edit`, and `bash`. |
 | [Pi Pixel CUA Portal](packages/pi-pixel-cua/README.md) | Observe and control one explicitly granted native GNOME Wayland window through pixels. | `cua_portal_start`, `cua_portal_observe`, `cua_portal_act`, `cua_portal_stop`, `/pixel-cua-status`, `/pixel-cua-stop` |
 | [Pi Progressive Tools](packages/pi-progressive-tools/README.md) | Keep a short tool catalog visible and enable permitted tools through exact-name help. | `list_tools`, `tool_help`, `/tool-audit`, `/tool-reset` |
-| [Pi Project Glance](packages/pi-project-glance/README.md) | Show current task state, a durable progress inbox and History, and deferred questions in a Herdr pane. | `/project-glance`. No model-facing tool. |
+| [Pi Project Glance](packages/pi-project-glance/README.md) | Show current task state, 10 rolling recent updates, complete History, and deferred questions in a Herdr pane. | `/project-glance`. No model-facing tool. |
 
 ### Inactive products
 

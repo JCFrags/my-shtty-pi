@@ -74,6 +74,14 @@ export class ProjectGlanceHistoryController {
     } catch (error) { this.fail(error); return false; }
   }
 
+  clearRecent(branchId: string, itemIds: readonly string[], actionId: string): boolean {
+    try {
+      const result = this.#ready(branchId).clearRecent({ branchId, itemIds, actionId, archivedAt: new Date().toISOString() });
+      this.#refreshCounts();
+      return result.accepted;
+    } catch (error) { this.fail(error); return false; }
+  }
+
   fail(_error: unknown): void {
     // Do not expose database paths, SQL, or source text in transport diagnostics.
     this.#status = { ...this.#status, state: "error", errorCode: "history_storage_failed" };
