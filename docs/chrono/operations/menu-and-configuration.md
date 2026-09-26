@@ -116,7 +116,7 @@ Enabling asks for confirmation because bounded assistant/tool excerpts can leave
 
 - `hybridSummaryEnabled` / `PI_CHRONO_PI_SUMMARY`, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not require or use this summary input.
 - `rawTail`, default `dynamic`, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override the V3/V4 dynamic-tail policy.
-- `replayTargetTokens` controls compatibility replay, whose separate hard cap is 25,000 tokens.
+- `replayTargetTokens` controls compatibility replay, whose separate hard cap is 25,000 tokens. It does not control the local session-agent candidate's [adaptive replay allowance](../context/session-agent-compaction.md#adaptive-replay-selection). That candidate keeps the configured total ceiling and has no separate replay setting.
 - `incrementalPrecomputeEnabled`, default false, selects the older candidate store. The normal memory engine cancels this work rather than maintaining both lifetime derivation paths.
 - `isolatedWorkerEnabled`, default false, selects contained compatibility replay. Indexed jobs already use bounded workers.
 - `catalogShadowEnabled` and `rollupShadowEnabled`, default false, select separate shadow diagnostics, not V4 ownership or indexed-rollup readiness.
