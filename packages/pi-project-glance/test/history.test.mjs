@@ -30,21 +30,41 @@ test("archive extraction retains complete sanitized commentary before projection
   assert.ok(Buffer.byteLength(item.sanitizedBody) > 4096);
 });
 
-test("private SQLite store captures once and pages Inbox oldest-first in both directions", () => {
+test("recent slots roll at ten, never refill after close or clear, and History keeps every update", () => {
   const { database } = fixture();
-  const repository = createDurableGlanceRepository(database);
+  let repository = createDurableGlanceRepository(database);
   const entries = linear(60);
   const captured = repository.capture({ sessionKey: "a".repeat(64), sourceSessionId: "session-a", mode: "initial", startOrdinal: 0, entries, activeLeafId: "e59", activePathIds: entries.map((entry) => entry.id) });
+  const branchId = captured.branchId;
   assert.equal(captured.insertedItems, 60);
-  assert.deepEqual(repository.counts(captured.branchId), { inbox: 60, history: 0, commitSeq: captured.checkpoint.commitSeq });
-  const first = repository.page({ branchId: captured.branchId, view: "inbox" });
+  assert.deepEqual(repository.counts(branchId), { inbox: 10, history: 60, commitSeq: captured.checkpoint.commitSeq });
+  const recent = repository.page({ branchId, view: "inbox" });
+  assert.deepEqual(recent.items.map((item) => item.preview), Array.from({ length: 10 }, (_, index) => `Update ${index + 50}`));
+  assert.equal(recent.nextCursor, undefined);
+  const first = repository.page({ branchId, view: "history" });
   assert.equal(first.items.length, 25);
-  assert.equal(first.items[0].preview, "Update 0");
-  assert.equal(first.previousCursor, undefined);
-  const second = repository.page({ branchId: captured.branchId, view: "inbox", cursor: first.nextCursor });
-  assert.equal(second.items[0].preview, "Update 25");
-  const previous = repository.page({ branchId: captured.branchId, view: "inbox", cursor: second.previousCursor });
+  assert.equal(first.items[0].preview, "Update 59");
+  const second = repository.page({ branchId, view: "history", cursor: first.nextCursor });
+  assert.equal(second.items[0].preview, "Update 34");
+  const previous = repository.page({ branchId, view: "history", cursor: second.previousCursor });
   assert.deepEqual(previous.items.map((item) => item.itemId), first.items.map((item) => item.itemId));
+  repository.archive({ branchId, itemId: recent.items[0].itemId, actionId: "close-one", archivedAt: AT, source: "action" });
+  assert.equal(repository.counts(branchId).inbox, 9, "closing does not refill from older History");
+  repository.capture({ sessionKey: "a".repeat(64), sourceSessionId: "session-a", mode: "append", startOrdinal: 60, entries: [assistantEntry("e60", "e59", "Update 60")], activeLeafId: "e60", currentBranchId: branchId });
+  assert.equal(repository.counts(branchId).inbox, 10);
+  assert.equal(repository.page({ branchId, view: "inbox" }).items[0].preview, "Update 51");
+  const clear = { branchId, itemIds: recent.items.map((item) => item.itemId), actionId: "clear-shown", archivedAt: AT };
+  repository.clearRecent(clear);
+  assert.equal(repository.clearRecent(clear).changed, false, "repeat clear is idempotent");
+  assert.deepEqual(repository.page({ branchId, view: "inbox" }).items.map((item) => item.preview), ["Update 60"], "an arrival outside the submitted IDs survives clear");
+  repository.close();
+  repository = createDurableGlanceRepository(database);
+  const remaining = repository.page({ branchId, view: "inbox" });
+  assert.equal(remaining.items.length, 1, "hidden cards stay hidden after reopening");
+  repository.clearRecent({ branchId, itemIds: remaining.items.map((item) => item.itemId), actionId: "clear-last", archivedAt: AT });
+  assert.equal(repository.counts(branchId).inbox, 0);
+  assert.equal(repository.counts(branchId).history, 61);
+  assert.equal(repository.body({ branchId, itemId: recent.items[0].itemId, offset: 0 }).text, "Update 50");
   assert.equal(statSync(database).mode & 0o777, 0o600);
   assert.equal(statSync(dirname(database)).mode & 0o777, 0o700);
   repository.close();
@@ -55,15 +75,16 @@ test("snapshot cursors have no gaps when arrivals and archives commit concurrent
   const repository = createDurableGlanceRepository(database);
   const entries = linear(40);
   const initial = repository.capture({ sessionKey: "b".repeat(64), sourceSessionId: "session-b", mode: "initial", startOrdinal: 0, entries, activeLeafId: "e39", activePathIds: entries.map((entry) => entry.id) });
-  const first = repository.page({ branchId: initial.branchId, view: "inbox" });
-  const oldSecondPageItem = repository.page({ branchId: initial.branchId, view: "inbox", cursor: first.nextCursor }).items[0];
+  const first = repository.page({ branchId: initial.branchId, view: "history" });
+  const oldSecondPageItem = repository.page({ branchId: initial.branchId, view: "history", cursor: first.nextCursor }).items[0];
   repository.archive({ branchId: initial.branchId, itemId: oldSecondPageItem.itemId, actionId: "archive-one", archivedAt: AT, source: "action" });
   repository.capture({ sessionKey: "b".repeat(64), sourceSessionId: "session-b", mode: "append", startOrdinal: 40, entries: [assistantEntry("e40", "e39", "Update 40")], activeLeafId: "e40", currentBranchId: initial.branchId });
-  const stableSecond = repository.page({ branchId: initial.branchId, view: "inbox", cursor: first.nextCursor });
+  const stableSecond = repository.page({ branchId: initial.branchId, view: "history", cursor: first.nextCursor });
   assert.equal(stableSecond.items[0].itemId, oldSecondPageItem.itemId);
   assert.equal(new Set([...first.items, ...stableSecond.items].map((item) => item.itemId)).size, first.items.length + stableSecond.items.length);
-  const fresh = repository.page({ branchId: initial.branchId, view: "inbox" });
-  assert.ok(!fresh.items.some((item) => item.itemId === oldSecondPageItem.itemId));
+  const fresh = repository.page({ branchId: initial.branchId, view: "history" });
+  assert.equal(fresh.items[0].preview, "Update 40");
+  assert.equal(repository.counts(initial.branchId).history, 41);
   repository.close();
 });
 
@@ -77,11 +98,11 @@ test("restart reuses an ancestor branch but historical checkout cannot leak late
   const all = [...firstEntries, assistantEntry("e2", "e1", "Update 2")];
   const restart = repository.capture({ sessionKey: "9".repeat(64), sourceSessionId: "session-nine", mode: "initial", startOrdinal: 0, entries: all, activeLeafId: "e2", activePathIds: ["e0", "e1", "e2"] });
   assert.equal(restart.branchId, first.branchId);
-  assert.deepEqual(repository.counts(first.branchId), { inbox: 2, history: 1, commitSeq: restart.checkpoint.commitSeq });
+  assert.deepEqual(repository.counts(first.branchId), { inbox: 2, history: 3, commitSeq: restart.checkpoint.commitSeq });
   const checkout = repository.capture({ sessionKey: "9".repeat(64), sourceSessionId: "session-nine", mode: "tree", startOrdinal: 0, entries: all, activeLeafId: "e0", activePathIds: ["e0"] });
   assert.notEqual(checkout.branchId, first.branchId);
   assert.deepEqual(repository.page({ branchId: checkout.branchId, view: "inbox" }).items.map((item) => item.preview), ["Update 0"]);
-  assert.deepEqual(repository.counts(checkout.branchId).history, 0);
+  assert.deepEqual(repository.counts(checkout.branchId).history, 1);
   repository.close();
 });
 
@@ -100,7 +121,7 @@ test("live tree selection recovers previously off-path updates and dismissals wi
     entries, activeLeafId: "b", activePathIds: ["root", "b"],
   });
   assert.deepEqual(repository.page({ branchId: branchB.branchId, view: "inbox" }).items.map((item) => item.preview), ["Root", "Branch B"]);
-  assert.equal(repository.counts(branchB.branchId).history, 0);
+  assert.equal(repository.counts(branchB.branchId).history, 2);
 
   const branchA = repository.capture({
     sessionKey, sourceSessionId: "session-eight", mode: "tree", startOrdinal: entries.length,
@@ -108,12 +129,12 @@ test("live tree selection recovers previously off-path updates and dismissals wi
   });
   assert.notEqual(branchA.branchId, branchB.branchId);
   assert.deepEqual(repository.page({ branchId: branchA.branchId, view: "inbox" }).items.map((item) => item.preview), ["Root"]);
-  assert.deepEqual(repository.page({ branchId: branchA.branchId, view: "history" }).items.map((item) => item.preview), ["Branch A"]);
+  assert.deepEqual(repository.page({ branchId: branchA.branchId, view: "history" }).items.map((item) => item.preview), ["Branch A", "Root"]);
   assert.equal(branchA.importedDismissals, 1);
   assert.deepEqual(repository.checkpoint(sessionKey), branchA.checkpoint);
   assert.equal(branchA.checkpoint.nextOrdinal, entries.length);
   assert.deepEqual(repository.page({ branchId: branchB.branchId, view: "inbox" }).items.map((item) => item.preview), ["Root", "Branch B"], "selecting A cannot leak its update or dismissal into B");
-  assert.equal(repository.counts(branchB.branchId).history, 0);
+  assert.equal(repository.counts(branchB.branchId).history, 2);
   repository.close();
 });
 
@@ -128,7 +149,7 @@ test("archive receipts are idempotent, History is newest-first, and source confl
   assert.equal(one.changed, true);
   assert.deepEqual(replay, { accepted: true, changed: false, archiveSeq: one.archiveSeq });
   repository.archive({ branchId: capture.branchId, itemId: inbox.items[2].itemId, actionId: "later-action", archivedAt: AT, source: "action" });
-  assert.deepEqual(repository.page({ branchId: capture.branchId, view: "history" }).items.map((item) => item.preview), ["Update 2", "Update 0"]);
+  assert.deepEqual(repository.page({ branchId: capture.branchId, view: "history" }).items.map((item) => item.preview), ["Update 2", "Update 1", "Update 0"]);
   assert.throws(() => repository.capture({ sessionKey: "c".repeat(64), sourceSessionId: "session-c", mode: "initial", startOrdinal: 0, entries: [assistantEntry("e0", null, "changed")], activeLeafId: "e0", activePathIds: ["e0"], currentBranchId: capture.branchId }), /SOURCE_CONFLICT/);
   assert.equal(repository.counts(capture.branchId).inbox, 1);
   repository.close();

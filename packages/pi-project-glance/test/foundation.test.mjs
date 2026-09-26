@@ -356,7 +356,7 @@ test("client reconnects after a relay generation restart", async () => {
   });
 });
 
-test("pane model and renderer keep CURRENT and PROGRESS FEED read-only", () => {
+test("pane model and renderer keep CURRENT and RECENT UPDATES read-only", () => {
   const snapshot = createStaticSnapshot(STATIC_FIXTURE_SESSION_KEY, FIXTURE_NOW);
   const model = new ProjectGlancePaneModel(STATIC_FIXTURE_SESSION_KEY);
   assert.equal(model.applySnapshot(snapshot), "applied");
@@ -367,7 +367,7 @@ test("pane model and renderer keep CURRENT and PROGRESS FEED read-only", () => {
   assert.throws(() => model.applySnapshot({ ...snapshot, sessionKey: deriveSessionKey("other") }), /PROJECT_GLANCE_SESSION_MISMATCH/);
   const lines = renderProjectGlance(model.snapshot, "connected", 80);
   assert.ok(lines.some((line) => line.includes("CURRENT")));
-  assert.ok(lines.includes("PROGRESS FEED"));
+  assert.ok(lines.includes("RECENT UPDATES"));
   assert.ok(lines.some((line) => line.includes("Validate the Project Glance foundation")));
   assert.ok(renderProjectGlanceAtHeight(model.snapshot, "connected", 34, 3).length <= 3);
 });
@@ -737,7 +737,7 @@ test("pane layout pins CURRENT and scrolls only the feed", () => {
   assert.equal(view.root.children[0], view.pinned);
   assert.equal(view.root.children[1], view.scrollView);
   const pinnedBefore = view.pinned.render(32);
-  assert.deepEqual(view.scrollView.render(32).slice(0, 1), ["PROGRESS FEED"]);
+  assert.deepEqual(view.scrollView.render(32).slice(0, 1), ["RECENT UPDATES"]);
   view.scrollView.updateLayout(100, 5, () => undefined);
   view.scrollView.scrollBy(7);
   assert.ok(view.scrollView.scrollTop > 0);
@@ -750,7 +750,7 @@ test("pane layout pins CURRENT and scrolls only the feed", () => {
   assert.ok(narrow.some((line) => line.includes("×")), "cards show a visible dismissal control");
   assert.ok(!narrow.some((line) => /^Connection:/u.test(line)));
   assert.ok(renderProjectGlancePinned(model.snapshot, "disconnected", 32).some((line) => line.startsWith("DISCONNECTED:")));
-  assert.ok(renderProjectGlanceFeed(model.snapshot, 32).includes("PROGRESS FEED"));
+  assert.ok(renderProjectGlanceFeed(model.snapshot, 32).includes("RECENT UPDATES"));
 });
 
 test("registry records do not lose concurrent sessions and same-session locks serialize", async () => {

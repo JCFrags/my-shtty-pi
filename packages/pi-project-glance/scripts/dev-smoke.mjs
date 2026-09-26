@@ -66,7 +66,7 @@ async function waitForPaneSmoke(paneId, relay) {
     observedScreen = observedScreen || (
       text.includes("Project Glance") &&
       text.includes("CURRENT") &&
-      text.includes("PROGRESS FEED")
+      text.includes("RECENT UPDATES")
     );
     if (relay.connectedClients > 0 && observedScreen && await paneIsPresent(paneId)) {
       await sleep(PANE_POLL_MS);

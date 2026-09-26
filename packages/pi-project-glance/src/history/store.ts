@@ -3,6 +3,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { extractArchiveItems } from "../feed/index.js";
 import {
   HISTORY_PAGE_SIZE,
+  RECENT_UPDATE_LIMIT,
   MAX_BODY_CHUNK_UTF8_BYTES,
   MAX_HISTORY_CURSOR_BYTES,
   MAX_HISTORY_PREVIEW_BYTES,
@@ -13,6 +14,7 @@ import {
   type CaptureInput,
   type CaptureResult,
   type CountsResult,
+  type ClearRecentInput,
   type DurableGlanceRepository,
   type HistoryView,
   type ImportResult,
@@ -161,6 +163,24 @@ export class SqliteGlanceRepository implements DurableGlanceRepository {
     return this.#transaction(() => this.#archiveNow(input, this.#newCommit()));
   }
 
+  clearRecent(input: ClearRecentInput): ArchiveResult {
+    if (!text(input.actionId, 128) || !Array.isArray(input.itemIds) || input.itemIds.length < 1 ||
+        input.itemIds.length > RECENT_UPDATE_LIMIT || new Set(input.itemIds).size !== input.itemIds.length) {
+      throw new Error("GLANCE_HISTORY_INVALID_CLEAR");
+    }
+    return this.#transaction(() => {
+      const commitSeq = this.#newCommit();
+      let changed = false;
+      for (const [index, itemId] of input.itemIds.entries()) {
+        const result = this.#archiveNow({ branchId: input.branchId, itemId,
+          actionId: `clear:${digest(input.actionId)}:${index}`, archivedAt: input.archivedAt, source: "action" }, commitSeq);
+        if (!result.accepted) throw new Error("GLANCE_HISTORY_INVALID_CLEAR");
+        changed ||= result.changed;
+      }
+      return { accepted: true, changed, archiveSeq: commitSeq };
+    });
+  }
+
   #archiveNow(input: ArchiveInput, commitSeq: number): ArchiveResult {
     if (!text(input.branchId, 128) || !text(input.itemId, 128) || !text(input.actionId, 128) || !Number.isFinite(Date.parse(input.archivedAt))) throw new Error("GLANCE_HISTORY_INVALID_ARCHIVE");
     const item = row(this.#database.prepare("SELECT i.item_pk FROM items i JOIN branch_items bi ON bi.item_pk=i.item_pk WHERE i.item_id=? AND bi.branch_id=?").get(input.itemId, input.branchId));
@@ -183,13 +203,14 @@ export class SqliteGlanceRepository implements DurableGlanceRepository {
     const cursor = input.cursor ? this.#decodeCursor(input.cursor) : undefined;
     if (cursor && (cursor.branchId !== input.branchId || cursor.view !== input.view)) throw new Error("GLANCE_HISTORY_CURSOR_MISMATCH");
     const snapshotSeq = cursor?.snapshotSeq ?? this.#maxCommit();
+    if (input.view === "inbox") {
+      if (cursor) throw new Error("GLANCE_HISTORY_INVALID_CURSOR");
+      return { branchId: input.branchId, view: input.view, snapshotSeq,
+        items: this.#recentRows(input.branchId, snapshotSeq).map((value) => this.#preview(value)) };
+    }
     const move = cursor?.move ?? "next";
-    const ascending = input.view === "inbox";
-    const displayOperator = ascending ? ">" : "<";
-    const reverseOperator = ascending ? "<" : ">";
-    const operator = move === "next" ? displayOperator : reverseOperator;
-    const order = (ascending === (move === "next")) ? "ASC" : "DESC";
-    const archivedPredicate = input.view === "inbox" ? "a.item_pk IS NULL" : "a.item_pk IS NOT NULL";
+    const operator = move === "next" ? "<" : ">";
+    const order = move === "next" ? "DESC" : "ASC";
     const params: SQLInputValue[] = [snapshotSeq, input.branchId, snapshotSeq];
     let boundary = "";
     if (cursor) {
@@ -199,24 +220,25 @@ export class SqliteGlanceRepository implements DurableGlanceRepository {
     const sql = `SELECT i.item_pk,i.item_id,i.type,i.preview,i.source_at,i.source_ordinal,i.body_bytes,a.archived_at
       FROM branch_items bi JOIN items i ON i.item_pk=bi.item_pk
       LEFT JOIN archives a ON a.branch_id=bi.branch_id AND a.item_pk=bi.item_pk AND a.archive_seq<=?
-      WHERE bi.branch_id=? AND bi.visible_seq<=? AND ${archivedPredicate} ${boundary}
+      WHERE bi.branch_id=? AND bi.visible_seq<=? ${boundary}
       ORDER BY i.source_ordinal ${order},i.item_pk ${order} LIMIT ${HISTORY_PAGE_SIZE}`;
     let rows = this.#database.prepare(sql).all(...params) as Row[];
     if (move === "previous") rows = rows.reverse();
     const items = rows.map((value) => this.#preview(value));
     const first = rows[0];
     const last = rows.at(-1);
-    const previousCursor = first && this.#hasBeyond(input.branchId, input.view, snapshotSeq, integer(first.source_ordinal), integer(first.item_pk), "previous")
+    const previousCursor = first && this.#hasBeyond(input.branchId, snapshotSeq, integer(first.source_ordinal), integer(first.item_pk), "previous")
       ? this.#encodeCursor({ v: 1, view: input.view, branchId: input.branchId, snapshotSeq, ordinal: integer(first.source_ordinal), itemPk: integer(first.item_pk), move: "previous" }) : undefined;
-    const nextCursor = last && this.#hasBeyond(input.branchId, input.view, snapshotSeq, integer(last.source_ordinal), integer(last.item_pk), "next")
+    const nextCursor = last && this.#hasBeyond(input.branchId, snapshotSeq, integer(last.source_ordinal), integer(last.item_pk), "next")
       ? this.#encodeCursor({ v: 1, view: input.view, branchId: input.branchId, snapshotSeq, ordinal: integer(last.source_ordinal), itemPk: integer(last.item_pk), move: "next" }) : undefined;
     return { branchId: input.branchId, view: input.view, snapshotSeq, items, ...(previousCursor ? { previousCursor } : {}), ...(nextCursor ? { nextCursor } : {}) };
   }
 
   counts(branchId: string): CountsResult {
     if (!text(branchId, 128)) throw new Error("GLANCE_HISTORY_INVALID_BRANCH");
-    const values = row(this.#database.prepare("SELECT COUNT(*) AS total,SUM(CASE WHEN a.item_pk IS NULL THEN 1 ELSE 0 END) AS inbox,SUM(CASE WHEN a.item_pk IS NOT NULL THEN 1 ELSE 0 END) AS history FROM branch_items bi LEFT JOIN archives a ON a.branch_id=bi.branch_id AND a.item_pk=bi.item_pk WHERE bi.branch_id=?").get(branchId));
-    return { inbox: Number(values?.inbox ?? 0), history: Number(values?.history ?? 0), commitSeq: this.#maxCommit() };
+    const commitSeq = this.#maxCommit();
+    const history = row(this.#database.prepare("SELECT COUNT(*) AS total FROM branch_items WHERE branch_id=? AND visible_seq<=?").get(branchId, commitSeq));
+    return { inbox: this.#recentRows(branchId, commitSeq).length, history: Number(history?.total ?? 0), commitSeq };
   }
 
   body(input: BodyInput): BodyResult {
@@ -367,14 +389,22 @@ export class SqliteGlanceRepository implements DurableGlanceRepository {
     return { itemId: String(value.item_id), type: value.type as ItemPreview["type"], preview: String(value.preview), createdAt: String(value.source_at), bodyBytes: integer(value.body_bytes), ...(typeof value.archived_at === "string" ? { archivedAt: value.archived_at } : {}) };
   }
 
-  #hasBeyond(branchId: string, view: HistoryView, snapshotSeq: number, ordinal: number, itemPk: number, move: "next" | "previous"): boolean {
-    const ascending = view === "inbox";
-    const operator = move === "next" ? (ascending ? ">" : "<") : (ascending ? "<" : ">");
-    const archive = view === "inbox" ? "a.item_pk IS NULL" : "a.item_pk IS NOT NULL";
-    const statement = this.#database.prepare(`SELECT 1 FROM branch_items bi JOIN items i ON i.item_pk=bi.item_pk LEFT JOIN archives a ON a.branch_id=bi.branch_id AND a.item_pk=bi.item_pk AND a.archive_seq<=? WHERE bi.branch_id=? AND bi.visible_seq<=? AND ${archive} AND (i.source_ordinal ${operator} ? OR (i.source_ordinal=? AND i.item_pk ${operator} ?)) LIMIT 1`);
-    const params: SQLInputValue[] = [snapshotSeq, branchId, snapshotSeq];
-    params.push(ordinal, ordinal, itemPk);
-    return Boolean(statement.get(...params));
+  #recentRows(branchId: string, snapshotSeq: number): Row[] {
+    // Select arrival slots before hiding dismissed cards. Closing a card must
+    // never refill its slot from older History.
+    return this.#database.prepare(`SELECT recent.* FROM (
+      SELECT i.item_pk,i.item_id,i.type,i.preview,i.source_at,i.source_ordinal,i.body_bytes
+      FROM branch_items bi JOIN items i ON i.item_pk=bi.item_pk
+      WHERE bi.branch_id=? AND bi.visible_seq<=?
+      ORDER BY i.source_ordinal DESC,i.item_pk DESC LIMIT ${RECENT_UPDATE_LIMIT}
+    ) recent LEFT JOIN archives a ON a.branch_id=? AND a.item_pk=recent.item_pk AND a.archive_seq<=?
+    WHERE a.item_pk IS NULL ORDER BY recent.source_ordinal ASC,recent.item_pk ASC`).all(branchId, snapshotSeq, branchId, snapshotSeq) as Row[];
+  }
+
+  #hasBeyond(branchId: string, snapshotSeq: number, ordinal: number, itemPk: number, move: "next" | "previous"): boolean {
+    const operator = move === "next" ? "<" : ">";
+    const statement = this.#database.prepare(`SELECT 1 FROM branch_items bi JOIN items i ON i.item_pk=bi.item_pk WHERE bi.branch_id=? AND bi.visible_seq<=? AND (i.source_ordinal ${operator} ? OR (i.source_ordinal=? AND i.item_pk ${operator} ?)) LIMIT 1`);
+    return Boolean(statement.get(branchId, snapshotSeq, ordinal, ordinal, itemPk));
   }
 
   #encodeCursor(value: CursorV1): string {

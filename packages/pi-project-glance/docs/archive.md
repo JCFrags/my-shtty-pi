@@ -6,11 +6,13 @@ Glance uses Node 24's built-in SQLite implementation. The default database is `$
 
 Schema version 1 stores sanitized eligible updates, bounded previews, source identities, branch membership, archive actions, and import/checkpoint metadata. It does not store complete conversations or tool payloads. WAL (write-ahead logging), `synchronous=FULL`, atomic transactions, and idempotent action receipts protect committed updates. Concurrent writers use SQLite locking with a five-second busy timeout. A lock timeout, disk-full error, or failed commit is an error, not successful dismissal.
 
+History includes every saved update immediately. Recent updates selects the latest 10 branch-local arrival slots, then excludes individually closed or cleared cards. Existing archive-action records store that hidden state. This uses schema version 1 without rewriting saved updates. Clear saves at most 10 exact card IDs in one transaction, not a sequence of independent requests.
+
 No automatic pruning runs. Disk use can grow permanently. Back up the archive and monitor available space using ordinary filesystem tools. Do not delete SQLite `-wal` or `-shm` files from a running installation.
 
 ## Selected-session import
 
-Normal capture reconciles only the selected session and follows incremental checkpoints. The one-time legacy importer additionally visits all branches in one explicitly selected session file. It recovers eligible updates and valid old dismissal records beyond the former 500-entry window. Seen-only records do not archive undismissed updates. It does not discover or scan other session files.
+Normal capture reconciles only the selected session and follows incremental checkpoints. The one-time legacy importer additionally visits all branches in one explicitly selected session file. It recovers eligible updates and valid old dismissal records beyond the former 500-entry window. Seen-only records do not hide recent updates. It does not discover or scan other session files.
 
 1. Select the exact session JSONL file and, when known, its session ID. Do not use a directory glob.
 2. From the built `packages/pi-project-glance` release directory, run the following with `SELECTED_SESSION_FILE` set to that absolute path. Set `EXPECTED_SESSION_ID` to add an identity check. Use the same `XDG_STATE_HOME` as the installed extension.

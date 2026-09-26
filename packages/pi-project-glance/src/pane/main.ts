@@ -17,9 +17,9 @@ import {
   PROJECT_GLANCE_TITLE,
 } from "../protocol/model.js";
 import { ProjectGlanceClient } from "../protocol/client.js";
-import type { HistoryView } from "../history/contracts.js";
+import { RECENT_UPDATE_LIMIT, type HistoryView } from "../history/contracts.js";
 import type { ProjectGlanceQuestionAction } from "../questions/model.js";
-import type { ProjectGlancePaneDataAdapter } from "./archive.js";
+import { paneCardSource, type ProjectGlancePaneDataAdapter } from "./archive.js";
 import { ProjectGlanceQuestionsRegion } from "./questions.js";
 import {
   ProjectGlancePaneModel,
@@ -57,6 +57,7 @@ export class ProjectGlancePinnedRegion implements Component {
 export class ProjectGlanceFeedRegion implements Component {
   readonly #model: ProjectGlancePaneModel;
   readonly #activateUrl: ((url: string) => void) | undefined;
+  readonly #canClearRecent: () => boolean;
   #hitTargets = new Map<number, { start: number; end: number; url: string }[]>();
   #cache: { key: string; lines: string[] } | undefined;
   #selectedRow: number | undefined;
@@ -70,9 +71,11 @@ export class ProjectGlanceFeedRegion implements Component {
   constructor(
     model: ProjectGlancePaneModel,
     activateUrl?: (url: string) => void,
+    canClearRecent: () => boolean = () => false,
   ) {
     this.#model = model;
     this.#activateUrl = activateUrl;
+    this.#canClearRecent = canClearRecent;
   }
 
   invalidate(): void { this.#cache = undefined; }
@@ -106,23 +109,23 @@ export class ProjectGlanceFeedRegion implements Component {
     const expandedIds = new Set(this.#model.selectableIds.filter((id) => this.#model.isExpanded(id)));
     const selectedId = this.#model.selectedId;
     const snapshot = this.#model.snapshot;
+    const canClearRecent = this.#canClearRecent();
     // snapshot getters return copies. Key actual renderer inputs, not object
     // identity or revision alone (relay/branch changes can reuse revisions).
-    const key = JSON.stringify([width, snapshot !== undefined, snapshot?.feed, snapshot?.uiState, selectedId, [...expandedIds], this.#model.archive.summary, this.#model.archive.historyExpanded, this.#actionError]);
+    const key = JSON.stringify([width, snapshot !== undefined, snapshot?.feed, snapshot?.uiState, selectedId, [...expandedIds], this.#model.archive.summary, this.#model.archive.historyExpanded, canClearRecent, this.#actionError]);
     if (this.#cache?.key === key) return this.#cache.lines;
     this.#itemRows.clear();
     const linkedLines = renderProjectGlanceFeed(snapshot, width, {
       ...(selectedId ? { selectedId } : {}),
       expandedIds,
       archive: this.#model.archive,
+      canClearRecent,
+      actionError: this.#actionError,
     });
-    if (this.#actionError) linkedLines.push(truncateToWidth(this.#actionError, width));
     const hitTargets = new Map<number, { start: number; end: number; url: string }[]>();
     let selectedRow: number | undefined;
     let firstHistoryRow: number | undefined;
     let lastHistoryRow: number | undefined;
-    const historyIds = new Set(this.#model.archive.activeItems("history").map((item) => item.itemId));
-    const selectedSuffix = selectedId ? `/${encodeURIComponent(selectedId)}` : undefined;
     for (let y = 0; y < linkedLines.length; y += 1) {
       const line = linkedLines[y] ?? "";
       // The renderer emits non-nested OSC8 spans. Measure each span once,
@@ -139,11 +142,11 @@ export class ProjectGlanceFeedRegion implements Component {
           if (target.hostname === "toggle" || target.hostname === "dismiss") {
             const id = decodeURIComponent(target.pathname.slice(1));
             if (!this.#itemRows.has(id)) this.#itemRows.set(id, y);
-            if (historyIds.has(id)) {
+            if (paneCardSource(id).view === "history") {
               firstHistoryRow ??= y;
               lastHistoryRow = y;
             }
-            if (selectedSuffix && url.endsWith(selectedSuffix)) selectedRow ??= y;
+            if (id === selectedId) selectedRow ??= y;
           }
         }
         column = end;
@@ -210,6 +213,7 @@ export interface ProjectGlancePaneQuestionOptions {
   onQuestionFocusEnter?: () => void;
   dataAdapter?: ProjectGlancePaneDataAdapter;
   onDismiss?: (itemId: string) => Promise<void>;
+  onClearRecent?: (itemIds: string[]) => Promise<void>;
 }
 
 /** Fixed edges surround the question viewport, not its scrolling document.
@@ -293,7 +297,7 @@ export class ProjectGlancePaneView implements Component {
   #position: { id: string; offset: number; fallbackIds: string[] } | "selected" | undefined;
   #lastRequestedCommit = new Map<HistoryView, number>();
   #archiveBranch: string | undefined;
-  #dismissPending = new Set<string>();
+  #pendingMutations = new Set<object>();
   readonly root: VStack;
 
   constructor(model: ProjectGlancePaneModel, activateUrl?: (url: string) => void, questionOptions: ProjectGlancePaneQuestionOptions = {}) {
@@ -301,9 +305,17 @@ export class ProjectGlancePaneView implements Component {
     this.#questionOptions = questionOptions;
     this.pinned = new ProjectGlancePinnedRegion(model);
     this.questions = new ProjectGlanceQuestionsRegion(
-      (action) => {
+      async (action) => {
         if (model.state !== "connected" || !questionOptions.onQuestionAction) throw new Error("QUESTION_UNAVAILABLE");
-        return questionOptions.onQuestionAction(action);
+        const pending = {};
+        this.#pendingMutations.add(pending);
+        questionOptions.requestRender?.();
+        try {
+          await questionOptions.onQuestionAction(action);
+        } finally {
+          this.#pendingMutations.delete(pending);
+          questionOptions.requestRender?.();
+        }
       },
       () => questionOptions.requestRender?.(),
       questionOptions.onQuestionEditing,
@@ -333,7 +345,7 @@ export class ProjectGlancePaneView implements Component {
       } catch {
         // Ignore malformed terminal links.
       }
-    });
+    }, () => this.canClearRecent());
     this.scrollView = new PositionedScrollView(this.feed, {
       follow: "none",
       primary: true,
@@ -421,7 +433,7 @@ export class ProjectGlancePaneView implements Component {
     if (archive.branchId !== this.#archiveBranch) {
       this.#archiveBranch = archive.branchId;
       this.#lastRequestedCommit.clear();
-      this.#dismissPending.clear();
+      this.#pendingMutations.clear();
       this.feed.setActionError("");
     }
     if (!adapter || this.#model.state !== "connected" || !archive.branchId || !summary || summary.state !== "ready") return;
@@ -441,6 +453,8 @@ export class ProjectGlancePaneView implements Component {
     const adapter = this.#questionOptions.dataAdapter;
     const branchId = this.#model.archive.branchId;
     if (!adapter || !branchId || this.#model.archive.summary?.state !== "ready") return false;
+    // Refresh existing cards without resetting the History window or reading anchor.
+    if (force && this.#model.archive.hasActivePage(view)) activate = false;
     if (!force && cursor !== undefined && this.#model.archive.hasCachedPage(view, cursor)) {
       const included = activate
         ? this.#model.archive.activateCachedPage(view, cursor)
@@ -502,31 +516,59 @@ export class ProjectGlancePaneView implements Component {
   }
 
   dismissSelected(): void {
+    if (this.questions.ownsKeyboard) return;
     const itemId = this.#model.selectedId;
     if (itemId) this.dismissItem(itemId);
   }
 
   dismissItem(itemId: string): void {
     const snapshot = this.#model.snapshot;
-    const isInboxItem = this.#model.archive.activeItems("inbox").some((item) => item.itemId === itemId);
-    if (!snapshot?.branchId || !isInboxItem || !this.#questionOptions.onDismiss || this.#dismissPending.has(itemId)) return;
-    const branchId = snapshot.branchId;
+    const onDismiss = this.#questionOptions.onDismiss;
+    if (this.#model.state !== "connected" || !snapshot?.branchId || !this.#model.recentIds.includes(itemId) || !onDismiss || this.#pendingMutations.size) return;
+    this.mutateRecent(() => onDismiss(itemId), "Dismiss failed. The update remains in Recent updates. Review and retry.");
+  }
+
+  private canClearRecent(): boolean {
+    const archive = this.#model.archive;
+    const summary = archive.summary;
+    if (this.#model.state !== "connected" || !this.#model.snapshot?.branchId || !this.#questionOptions.onClearRecent || this.#pendingMutations.size) return false;
+    if (summary && (summary.state !== "ready" || archive.pageLoading("inbox") || archive.activePage("inbox")?.snapshotSeq !== summary.commitSeq)) return false;
+    const count = this.#model.recentIds.length;
+    return count > 0 && count <= RECENT_UPDATE_LIMIT;
+  }
+
+  clearRecent(): void {
+    if (this.questions.ownsKeyboard || !this.canClearRecent()) return;
+    const onClearRecent = this.#questionOptions.onClearRecent!;
+    // Freeze this displayed set before dispatch. Never broaden it to new arrivals.
+    const itemIds = [...this.#model.recentIds];
+    this.mutateRecent(() => onClearRecent(itemIds), "Clear recent failed. Updates remain visible. Review and retry.");
+  }
+
+  private mutationIdentity(): string {
+    const snapshot = this.#model.snapshot;
+    return JSON.stringify([snapshot?.sessionKey, this.#model.expectedGeneration, snapshot?.branchId]);
+  }
+
+  private mutateRecent(action: () => Promise<void>, failure: string): void {
+    const identity = this.mutationIdentity();
+    const pending = {};
     this.preserveReadingPosition();
     this.feed.setActionError("");
-    this.#dismissPending.add(itemId);
+    this.#pendingMutations.add(pending);
     this.root.invalidate();
     this.#questionOptions.requestRender?.();
-    const send = async () => { await this.#questionOptions.onDismiss?.(itemId); };
+    const send = async () => { await action(); };
     void send().then(() => {
-      if (this.#model.snapshot?.branchId !== branchId) return;
+      if (this.mutationIdentity() !== identity) return;
       this.preserveReadingPosition();
       this.feed.setActionError("");
     }, () => {
-      if (this.#model.snapshot?.branchId !== branchId) return;
+      if (this.mutationIdentity() !== identity) return;
       this.preserveReadingPosition();
-      this.feed.setActionError("Dismiss failed. The Inbox item remains. Review the current Inbox and retry.");
+      this.feed.setActionError(failure);
     }).finally(() => {
-      this.#dismissPending.delete(itemId);
+      this.#pendingMutations.delete(pending);
       this.root.invalidate();
       this.#questionOptions.requestRender?.();
     });
@@ -534,7 +576,7 @@ export class ProjectGlancePaneView implements Component {
 
   navigatePage(direction: "previous" | "next", view?: HistoryView): void {
     const selected = this.#model.selectedId;
-    const activeView = view ?? (selected && this.#model.archive.activeItems("history").some((item) => item.itemId === selected) ? "history" : "inbox");
+    const activeView = view ?? (selected ? paneCardSource(selected).view : "inbox");
     const cursor = this.#model.archive.pageCursor(activeView, direction);
     if (!cursor) return;
     this.ensurePage(activeView, cursor, activeView === "inbox");
@@ -552,7 +594,7 @@ export class ProjectGlancePaneView implements Component {
     if (!this.#model.archive.beginBody(itemId, offset)) return;
     this.root.invalidate();
     this.#questionOptions.requestRender?.();
-    void adapter.requestBody(branchId, itemId, offset).then((body) => {
+    void adapter.requestBody(branchId, paneCardSource(itemId).itemId, offset).then((body) => {
       if (this.#model.archive.branchId !== branchId) return;
       this.preserveReadingPosition();
       this.#model.archive.receiveBody(itemId, offset, body);
@@ -575,6 +617,10 @@ export class ProjectGlancePaneView implements Component {
       }
       if (target.hostname === "dismiss") {
         this.dismissItem(decodeURIComponent(target.pathname.slice(1)));
+        return true;
+      }
+      if (target.hostname === "clear-recent") {
+        this.clearRecent();
         return true;
       }
       const match = /^page-(inbox|history)-(previous|next)$/u.exec(target.hostname);
@@ -696,8 +742,13 @@ export async function main(): Promise<void> {
     },
     onDismiss: (itemId) => {
       const snapshot = model.snapshot;
-      if (model.state !== "connected" || !snapshot?.branchId || !client) return Promise.reject(new Error("INBOX_UNAVAILABLE"));
+      if (model.state !== "connected" || !snapshot?.branchId || !client) return Promise.reject(new Error("RECENT_UNAVAILABLE"));
       return client.sendFeedAction(snapshot.branchId, snapshot.revision, { type: "dismiss", itemId });
+    },
+    onClearRecent: (itemIds) => {
+      const snapshot = model.snapshot;
+      if (model.state !== "connected" || !snapshot?.branchId || !client) return Promise.reject(new Error("RECENT_UNAVAILABLE"));
+      return client.sendFeedAction(snapshot.branchId, snapshot.revision, { type: "clear_recent", itemIds: [...itemIds] });
     },
     dataAdapter: {
       requestPage: (branchId, historyView, cursor) => client.requestPage(branchId, historyView, cursor),
@@ -742,6 +793,7 @@ export async function main(): Promise<void> {
     else if (data === "h") view.toggleHistory();
     else if ((data === "\r" || data === " ") && model.selectedId) view.toggleSelected();
     else if (data === "d" && model.selectedId) view.dismissSelected();
+    else if (data === "c") view.clearRecent();
     else return undefined;
     view.invalidate();
     tui.requestRender();

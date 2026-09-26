@@ -18,7 +18,7 @@ function update(text) {
   ] };
 }
 
-test("authenticated archive capture, full body, dismissal and restart retain all 61 updates", async () => {
+test("authenticated recent close and clear preserve complete History and survive restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "glance-archive-relay-"));
   const environment = { ...process.env, XDG_RUNTIME_DIR: root, XDG_STATE_HOME: join(root, "state") };
   const sm = SessionManager.create(root, join(root, "sessions"));
@@ -36,10 +36,20 @@ test("authenticated archive capture, full body, dismissal and restart retain all
   try {
     await runtime.ensureForContext({ sessionManager: sm });
     await connect();
-    assert.equal(latest.archive.inboxCount, 61);
-    let page = await client.requestPage(latest.branchId, "inbox");
+    assert.equal(latest.archive.inboxCount, 10);
+    assert.equal(latest.archive.historyCount, 61);
+    const recent = await client.requestPage(latest.branchId, "inbox");
+    assert.equal(recent.items.length, 10);
+    assert.equal(recent.items[0].preview, "Synthetic update 51");
+    let page = await client.requestPage(latest.branchId, "history");
     assert.equal(page.items.length, 25);
-    const first = page.items[0];
+    const ids = page.items.map((item) => item.itemId);
+    while (page.nextCursor) {
+      page = await client.requestPage(latest.branchId, "history", page.nextCursor);
+      ids.push(...page.items.map((item) => item.itemId));
+    }
+    assert.equal(new Set(ids).size, 61);
+    const first = page.items.at(-1);
     let offset = 0, text = "";
     do {
       const body = await client.requestBody(latest.branchId, first.itemId, offset);
@@ -48,21 +58,20 @@ test("authenticated archive capture, full body, dismissal and restart retain all
       offset = body.nextOffset;
     } while (offset !== undefined);
     assert.equal(text, longBody);
-    const ids = page.items.map((item) => item.itemId);
-    while (page.nextCursor) {
-      page = await client.requestPage(latest.branchId, "inbox", page.nextCursor);
-      ids.push(...page.items.map((item) => item.itemId));
-    }
-    assert.equal(new Set(ids).size, 61);
     const beforeFocus = snapshots;
     assert.equal(client.sendAction(latest.branchId, latest.revision, { type: "focus" }), true);
     await until(() => snapshots > beforeFocus);
-    assert.equal(latest.archive.inboxCount, 61);
-    await client.sendFeedAction(latest.branchId, latest.revision, { type: "dismiss", itemId: first.itemId });
-    await until(() => latest.archive.historyCount === 1);
-    assert.equal(latest.archive.inboxCount, 60);
-    const archived = await client.requestPage(latest.branchId, "history");
-    assert.equal(archived.items[0].itemId, first.itemId);
+    assert.equal(latest.archive.inboxCount, 10);
+    await client.sendFeedAction(latest.branchId, latest.revision, { type: "dismiss", itemId: recent.items[0].itemId });
+    await until(() => latest.archive.inboxCount === 9);
+    assert.equal(latest.archive.historyCount, 61);
+    const remaining = await client.requestPage(latest.branchId, "inbox");
+    await client.sendFeedAction(latest.branchId, latest.revision, { type: "clear_recent", itemIds: remaining.items.map((item) => item.itemId) });
+    await until(() => latest.archive.inboxCount === 0);
+    assert.equal(latest.archive.historyCount, 61);
+    sm.appendMessage(update("Synthetic new arrival"));
+    await runtime.syncFeed({ sessionManager: sm });
+    await until(() => latest.archive.inboxCount === 1 && latest.archive.historyCount === 62);
     const originalBranch = latest.branchId;
     client.stop();
     await runtime.stop();
@@ -70,9 +79,9 @@ test("authenticated archive capture, full body, dismissal and restart retain all
     await runtime.ensureForContext({ sessionManager: SessionManager.open(sm.getSessionFile()) });
     await connect();
     assert.equal(latest.branchId, originalBranch);
-    assert.equal(latest.archive.historyCount, 1);
-    assert.equal(latest.archive.inboxCount, 60);
-    assert.equal((await client.requestPage(latest.branchId, "history")).items[0].itemId, first.itemId);
+    assert.equal(latest.archive.historyCount, 62);
+    assert.equal(latest.archive.inboxCount, 1);
+    assert.equal((await client.requestPage(latest.branchId, "inbox")).items[0].preview, "Synthetic new arrival");
     const restoredBody = await client.requestBody(latest.branchId, first.itemId, 0);
     assert.equal(restoredBody.text, longBody.slice(0, restoredBody.text.length));
   } finally {

@@ -20,6 +20,7 @@ import {
   type ProjectGlanceServerFrame,
   type ProjectGlanceSnapshot,
 } from "./model.js";
+import { RECENT_UPDATE_LIMIT } from "../history/contracts.js";
 import { validateQuestionAction, validateQuestions, validateQuestionAttention } from "./question-validation.js";
 import { assertSnapshotFrameBudget } from "./framing.js";
 import { projectFeedText, validateProjectionText } from "./projection-text.js";
@@ -323,6 +324,20 @@ export function validateClientFrame(value: unknown): ProjectGlanceClientFrame {
         branchId: boundedText(source.branchId, MAX_ITEM_ID_BYTES),
         baseRevision: boundedInteger(source.baseRevision, Number.MAX_SAFE_INTEGER),
         action: validateQuestionAction(action),
+      };
+    }
+    if (action.type === "clear_recent") {
+      exactKeys(action, ["type", "itemIds"]);
+      if (!Array.isArray(action.itemIds) || action.itemIds.length < 1 || action.itemIds.length > RECENT_UPDATE_LIMIT) throw new ProjectGlanceValidationError();
+      const itemIds = action.itemIds.map((id) => boundedText(id, MAX_ITEM_ID_BYTES));
+      if (new Set(itemIds).size !== itemIds.length) throw new ProjectGlanceValidationError();
+      return {
+        version: PROJECT_GLANCE_PROTOCOL_VERSION, type,
+        requestId: validateRequestId(source.requestId), actionId: validateRequestId(source.actionId),
+        sessionKey: validateSessionKey(source.sessionKey), generation: validateGeneration(source.generation),
+        branchId: boundedText(source.branchId, MAX_ITEM_ID_BYTES),
+        baseRevision: boundedInteger(source.baseRevision, Number.MAX_SAFE_INTEGER),
+        action: { type: "clear_recent", itemIds },
       };
     }
     exactKeys(action, ["type"], ["itemId"]);

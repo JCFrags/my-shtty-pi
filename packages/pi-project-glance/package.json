@@ -9,7 +9,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "description": "Pi Project Glance current state, durable update inbox and History, and deferred questions.",
+  "description": "Pi Project Glance current state, rolling recent updates, complete History, and deferred questions.",
   "license": "MIT",
   "keywords": [
     "pi-package",

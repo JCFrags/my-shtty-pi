@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { ProjectGlanceArchiveModel, MAX_CACHED_ARCHIVE_PAGES, MAX_RENDERED_HISTORY_PAGES, MAX_CACHED_BODY_CHUNKS } from "../dist/pane/archive.js";
+import { ProjectGlanceArchiveModel, paneCardId, MAX_CACHED_ARCHIVE_PAGES, MAX_RENDERED_HISTORY_PAGES, MAX_CACHED_BODY_CHUNKS } from "../dist/pane/archive.js";
 import { ProjectGlancePaneView } from "../dist/pane/main.js";
 import { ProjectGlancePaneModel } from "../dist/pane/model.js";
 import { ProjectGlanceQuestionsRegion } from "../dist/pane/questions.js";
@@ -34,15 +34,15 @@ function click(region, text, width = 80) {
 
 test("archive cache is bounded and resets only when the branch changes", () => {
   const model = new ProjectGlanceArchiveModel();
-  model.sync(branchId, { inboxCount: 150, historyCount: 90, commitSeq: 7, state: "ready" });
+  model.sync(branchId, { inboxCount: 10, historyCount: 90, commitSeq: 7, state: "ready" });
   for (let index = 0; index < 8; index++) {
     const cursor = `cursor-${index}`;
-    assert.equal(model.beginPage("inbox", cursor), true);
-    model.receivePage("inbox", cursor, page("inbox", [preview(`i-${index}`)]), index === 7);
+    assert.equal(model.beginPage("history", cursor), true);
+    model.receivePage("history", cursor, page("history", [preview(`i-${index}`)]), index === 7);
   }
   assert.ok(model.cachedPageCount() <= MAX_CACHED_ARCHIVE_PAGES);
   model.toggleHistory();
-  model.sync(branchId, { inboxCount: 151, historyCount: 90, commitSeq: 8, state: "ready" });
+  model.sync(branchId, { inboxCount: 10, historyCount: 91, commitSeq: 8, state: "ready" });
   assert.equal(model.historyExpanded, true, "same-branch arrivals preserve local UI state");
   model.sync("branch-B", { inboxCount: 1, historyCount: 0, commitSeq: 1, state: "ready" });
   assert.equal(model.historyExpanded, false);
@@ -130,7 +130,7 @@ test("History scroll automatically crosses page boundaries and recovers evicted 
     const anchorBeforeLoad = view.feed.anchorAt(view.scrollView.scrollTop);
     await tick();
     layout();
-    if (reads.length > readsBeforeLayout && anchorBeforeLoad && model.archive.activeItems("history").some((item) => item.itemId === anchorBeforeLoad.id)) {
+    if (reads.length > readsBeforeLayout && anchorBeforeLoad && model.archive.activeItems("history").some((item) => paneCardId("history", item.itemId) === anchorBeforeLoad.id)) {
       assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchorBeforeLoad, "automatic append preserves the visible card and row offset");
       stableAnchorChecks += 1;
     }
@@ -184,7 +184,7 @@ test("body rendering and cache stay bounded without concatenating chunks", () =>
   assert.doesNotMatch(expanded, /chunk-0/);
 });
 
-test("receipt failure retains an archive Inbox card and renders a truthful error", async () => {
+test("receipt failure retains a Recent updates card and renders a truthful error", async () => {
   const model = new ProjectGlancePaneModel(snapshot.sessionKey);
   model.applySnapshot({ ...snapshot, feed: [], archive: { inboxCount: 1, historyCount: 1, commitSeq: 7, state: "ready" } });
   model.archive.receivePage("inbox", undefined, page("inbox", [preview("inbox")]), true);
@@ -210,21 +210,21 @@ test("receipt failure retains an archive Inbox card and renders a truthful error
   const rendered = plain(view.feed.render(width)).join("\n");
   assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchor);
   assert.match(rendered, /Preview inbox/);
-  assert.match(rendered, /Dismiss failed\. The Inbox item remains\./);
+  assert.match(rendered, /Dismiss failed\. The update remains in Recent updates\./);
   assert.doesNotMatch(rendered, /private transport detail/);
 });
 
-test("Inbox is all unread, History defaults collapsed and has subdued cards without X", () => {
+test("Recent updates has no page gate, History defaults collapsed and has subdued cards without X", () => {
   const model = new ProjectGlanceArchiveModel();
-  model.sync(branchId, { inboxCount: 27, historyCount: 1, commitSeq: 7, state: "ready" });
-  model.receivePage("inbox", undefined, page("inbox", [preview("oldest"), preview("newer")], { nextCursor: "inbox-next" }), true);
-  model.receivePage("history", undefined, page("history", [preview("archived", { archivedAt: at })]), true);
+  model.sync(branchId, { inboxCount: 2, historyCount: 3, commitSeq: 7, state: "ready" });
+  model.receivePage("inbox", undefined, page("inbox", [preview("oldest"), preview("newer")]), true);
+  model.receivePage("history", undefined, page("history", [preview("newer"), preview("oldest"), preview("archived", { archivedAt: at })]), true);
   let rendered = renderProjectGlanceFeed(snapshot, 48, { archive: model });
   let text = plain(rendered).join("\n");
-  assert.match(text, /27 unread/);
-  assert.match(text, /▸ HISTORY \(1\)/);
+  assert.match(text, /RECENT UPDATES\n2 updates/);
+  assert.match(text, /▸ HISTORY \(3\)/);
   assert.doesNotMatch(text, /Preview archived/);
-  assert.match(text, /\[Next page\]/);
+  assert.doesNotMatch(text, /\[(?:Next|Previous|First) page\]/);
   model.toggleHistory();
   rendered = renderProjectGlanceFeed(snapshot, 48, { archive: model });
   text = plain(rendered).join("\n");
@@ -243,6 +243,122 @@ const question = (patch = {}) => ({
   reason: "Synthetic fixture",
   response: { kind: "text" },
   ...patch,
+});
+
+test("Clear recent freezes one displayed set while shared History cards keep independent reading state", async () => {
+  const model = new ProjectGlancePaneModel(snapshot.sessionKey);
+  let recent = [preview("shared"), preview("second")];
+  let history = [preview("second"), preview("shared"), preview("older")];
+  let commitSeq = 7;
+  const currentSnapshot = (revision) => ({ ...snapshot, revision, feed: [], questions: [question({ id: "qst_00000000-0000-4000-8000-000000000001" })], archive: { inboxCount: recent.length, historyCount: history.length, commitSeq, state: "ready" } });
+  model.applySnapshot(currentSnapshot(1));
+  const clears = [], receipts = [], dismissals = [], bodyReads = [];
+  const view = new ProjectGlancePaneView(model, (url) => {
+    const target = new URL(url);
+    if (target.hostname === "toggle") model.toggleExpanded(decodeURIComponent(target.pathname.slice(1)));
+  }, {
+    onClearRecent: (itemIds) => {
+      clears.push(itemIds);
+      return new Promise((resolve, reject) => receipts.push({ resolve, reject }));
+    },
+    onDismiss: async (itemId) => { dismissals.push(itemId); },
+    dataAdapter: {
+      requestPage: async (_branch, requestedView) => page(requestedView, requestedView === "inbox" ? recent : history, { snapshotSeq: commitSeq }),
+      requestBody: async (_branch, itemId, offset) => {
+        bodyReads.push({ itemId, offset });
+        return { itemId, offset, text: offset === 0 ? "first" : "last", ...(offset === 0 ? { nextOffset: 5 } : { previousOffset: 0 }), totalBytes: 9, bodyDigest: "b".repeat(64) };
+      },
+    },
+  });
+  view.invalidate();
+  await tick();
+  view.toggleHistory();
+  await tick();
+  const historyId = paneCardId("history", "shared");
+  assert.deepEqual(model.selectableIds, ["shared", "second", paneCardId("history", "second"), historyId, paneCardId("history", "older")]);
+  click(view.feed, "Preview shared");
+  await tick();
+  assert.equal(model.isExpanded("shared"), true);
+  assert.equal(model.isExpanded(historyId), false, "expanding Recent does not expand its History copy");
+  model.selectRelative(3);
+  assert.equal(model.selectedId, historyId);
+  view.toggleSelected();
+  await tick();
+  click(view.feed, "Next body chunk");
+  await tick();
+  assert.equal(model.archive.bodyOffset("shared"), 5);
+  assert.equal(model.archive.bodyOffset(historyId), 0, "body chunk navigation belongs to one rendered copy");
+  assert.deepEqual(bodyReads, [{ itemId: "shared", offset: 0 }, { itemId: "shared", offset: 0 }, { itemId: "shared", offset: 5 }], "transport always receives the source ID");
+  const text = () => plain(view.feed.render(80)).join("\n");
+  const layout = () => view.scrollView.updateLayout(view.feed.render(80).length, 4, () => {});
+  layout();
+  assert.notEqual(view.feed.rowForItem("shared"), view.feed.rowForItem(historyId));
+  assert.equal(view.feed.selectedRow, view.feed.rowForItem(historyId));
+  assert.equal(view.feed.firstHistoryRow, view.feed.rowForItem(paneCardId("history", "second")));
+  view.dismissSelected();
+  assert.deepEqual(dismissals, [], "selecting History must not dismiss the Recent copy");
+
+  model.setConnectionState("disconnected");
+  assert.doesNotMatch(text(), /Clear recent/);
+  view.clearRecent();
+  model.setConnectionState("connected");
+  model.archive.beginPage("inbox");
+  assert.doesNotMatch(text(), /Clear recent/);
+  view.clearRecent();
+  model.archive.receivePage("inbox", undefined, page("inbox", recent), true);
+  assert.equal(view.handleQuestionInput("\t"), true);
+  assert.equal(view.handleQuestionInput("c"), true);
+  assert.equal(view.handleQuestionInput("d"), true);
+  view.clearRecent();
+  view.dismissSelected();
+  assert.deepEqual(clears, [], "questions own these keys and disconnected/loading views cannot clear");
+  view.releaseQuestionFocus();
+
+  view.scrollView.scrollTo(view.feed.rowForItem(historyId) + 1);
+  const anchor = view.feed.anchorAt(view.scrollView.scrollTop);
+  click(view.feed, "Clear recent");
+  assert.deepEqual(clears, [["shared", "second"]], "one click dispatches one exact set without confirmation");
+  assert.doesNotMatch(text(), /Clear recent/);
+  view.clearRecent();
+  view.dismissItem("shared");
+  assert.equal(clears.length, 1);
+  assert.deepEqual(dismissals, [], "a clear is not parallel single-card dismissals");
+  assert.deepEqual(model.recentIds, ["shared", "second"], "receipt wait does not remove cards optimistically");
+
+  const publish = async (revision) => {
+    view.preserveReadingPosition();
+    model.applySnapshot(currentSnapshot(revision));
+    view.invalidate();
+    await tick();
+    layout();
+  };
+  recent = [preview("second"), preview("late")];
+  history = [preview("late"), preview("second"), preview("shared"), preview("older")];
+  commitSeq = 8;
+  await publish(2);
+  assert.deepEqual(clears[0], ["shared", "second"], "an arrival cannot broaden the pending request");
+  receipts[0].reject(new Error("private transport detail"));
+  await tick();
+  layout();
+  assert.deepEqual(model.recentIds, ["second", "late"]);
+  assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchor);
+  assert.match(text(), /Clear recent failed\. Updates remain visible\./);
+  assert.doesNotMatch(text(), /private transport detail/);
+
+  click(view.feed, "[Clear recent]");
+  assert.deepEqual(clears[1], ["second", "late"]);
+  receipts[1].resolve();
+  await tick();
+  recent = [];
+  commitSeq = 9;
+  await publish(3);
+  assert.match(text(), /0 updates/);
+  assert.doesNotMatch(text(), /Clear recent/);
+  assert.equal(model.archive.summary.historyCount, 4);
+  assert.equal(model.selectedId, historyId);
+  assert.equal(model.isExpanded(historyId), true);
+  assert.deepEqual(view.feed.anchorAt(view.scrollView.scrollTop), anchor, "clearing Recent does not jump to another copy of the same record");
+  assert.ok(model.archive.cachedBodyChunkCount() <= MAX_CACHED_BODY_CHUNKS);
 });
 
 test("question editing presence follows text editing only", () => {

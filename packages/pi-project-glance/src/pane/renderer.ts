@@ -6,7 +6,7 @@ import type {
   ProjectGlanceFeedItem,
   ProjectGlanceSnapshot,
 } from "../protocol/model.js";
-import type { ProjectGlanceArchiveModel } from "./archive.js";
+import { paneCardId, type ProjectGlanceArchiveModel } from "./archive.js";
 import {
   sliceByColumn,
   truncateToWidth,
@@ -157,15 +157,6 @@ function bodyControls(itemId: string, previous: boolean, next: boolean, width: n
   return controls ? [truncateToWidth(controls, width, "")] : [];
 }
 
-function pageControls(view: HistoryView, previous: boolean, next: boolean, initial: boolean, width: number): string[] {
-  const controls = [
-    !initial ? link(`page-${view}-first`, view, "[First page]") : "",
-    previous ? link(`page-${view}-previous`, view, "[Previous page]") : "",
-    next ? link(`page-${view}-next`, view, "[Next page]") : "",
-  ].filter(Boolean).join(" ");
-  return controls ? [truncateToWidth(controls, width, "")] : [];
-}
-
 function connectionBanner(state: ProjectGlanceConnectionState): string | undefined {
   if (state === "connecting") return "CONNECTING: Waiting for the local relay.";
   if (state === "reconnecting") return "RECONNECTING: Reconnecting to the local relay.";
@@ -184,21 +175,22 @@ export function renderProjectGlancePinned(snapshot: ProjectGlanceSnapshot | unde
   return lines;
 }
 
-function previewItem(item: ItemPreview): RenderItem {
-  return { id: item.itemId, type: item.type, text: item.preview, createdAt: item.createdAt, bodyBytes: item.bodyBytes };
+function previewItem(item: ItemPreview, view: HistoryView = "inbox"): RenderItem {
+  return { id: paneCardId(view, item.itemId), type: item.type, text: item.preview, createdAt: item.createdAt, bodyBytes: item.bodyBytes };
 }
 
-export function renderProjectGlanceFeed(snapshot: ProjectGlanceSnapshot | undefined, width: number, options: { selectedId?: string; expandedIds?: ReadonlySet<string>; archive?: ProjectGlanceArchiveModel } = {}): string[] {
+export function renderProjectGlanceFeed(snapshot: ProjectGlanceSnapshot | undefined, width: number, options: { selectedId?: string; expandedIds?: ReadonlySet<string>; archive?: ProjectGlanceArchiveModel; canClearRecent?: boolean; actionError?: string } = {}): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
   const archive = options.archive;
+  const recentCount = (count: number) => truncateToWidth(`${count} updates${options.canClearRecent ? `  ${link("clear-recent", "all", "[Clear recent]")}` : ""}`, safeWidth, "");
   const dismissed = new Set(snapshot?.uiState?.dismissedIds ?? []);
   if (!archive?.summary) {
-    const read = new Set(snapshot?.uiState?.readIds ?? []);
     const visible = snapshot?.feed.filter((item) => !dismissed.has(item.id)) ?? [];
     const lines = [
       truncateToWidth(PROJECT_GLANCE_SECTION.toUpperCase(), safeWidth, ""),
-      truncateToWidth(`${visible.filter((item) => !read.has(item.id)).length} unread`, safeWidth, ""),
+      recentCount(visible.length),
     ];
+    if (options.actionError) lines.push(truncateToWidth(options.actionError, safeWidth, ""));
     if (!snapshot) {
       lines.push(truncateToWidth("Waiting for the local relay.", safeWidth, ""));
       return lines;
@@ -209,26 +201,26 @@ export function renderProjectGlanceFeed(snapshot: ProjectGlanceSnapshot | undefi
         expanded: options.expandedIds?.has(item.id) ?? false,
         selected: options.selectedId === item.id,
         history: false,
-        unread: !read.has(item.id),
       }), "");
     }
     if (visible.length === 0) lines.push(truncateToWidth("No progress items.", safeWidth, ""));
     return lines;
   }
   const fallback = snapshot?.feed.filter((item) => !dismissed.has(item.id)) ?? [];
-  const inbox: RenderItem[] = archive?.hasActivePage("inbox") ? archive.activeItems("inbox").map(previewItem) : fallback.map((item) => ({ id: item.id, type: item.type, text: item.text, createdAt: item.createdAt, bodyBytes: Buffer.byteLength(item.text, "utf8") }));
+  const inbox: RenderItem[] = archive?.hasActivePage("inbox") ? archive.activeItems("inbox").map((item) => previewItem(item)) : fallback.map((item) => ({ id: item.id, type: item.type, text: item.text, createdAt: item.createdAt, bodyBytes: Buffer.byteLength(item.text, "utf8") }));
   const inboxCount = archive?.summary?.inboxCount ?? inbox.length;
-  const lines: string[] = [truncateToWidth("INBOX", safeWidth, ""), truncateToWidth(`${inboxCount} unread`, safeWidth, "")];
+  const lines: string[] = [truncateToWidth("RECENT UPDATES", safeWidth, ""), recentCount(inboxCount)];
+  if (options.actionError) lines.push(truncateToWidth(options.actionError, safeWidth, ""));
   if (!snapshot) {
     lines.push(truncateToWidth("Waiting for the local relay.", safeWidth, ""));
     return lines;
   }
   if (archive?.summary?.state === "importing") lines.push(truncateToWidth("Archive import is in progress.", safeWidth, ""));
   if (archive?.summary?.state === "error") lines.push(truncateToWidth(`Archive error${archive.summary.errorCode ? `: ${archive.summary.errorCode}` : "."}`, safeWidth, ""));
-  if (archive?.pageLoading("inbox") && !archive.hasActivePage("inbox")) lines.push(truncateToWidth("Loading inbox…", safeWidth, ""));
+  if (archive?.pageLoading("inbox") && !archive.hasActivePage("inbox")) lines.push(truncateToWidth("Loading Recent updates…", safeWidth, ""));
   if (archive.pageError("inbox")) {
     lines.push(truncateToWidth(archive.pageError("inbox") ?? "", safeWidth, ""));
-    lines.push(link("page-inbox-first", "inbox", "[Retry inbox page]"));
+    lines.push(truncateToWidth(link("page-inbox-first", "inbox", "[Retry Recent updates]"), safeWidth, ""));
   }
   for (const item of inbox) {
     const expanded = options.expandedIds?.has(item.id) ?? false;
@@ -245,8 +237,7 @@ export function renderProjectGlanceFeed(snapshot: ProjectGlanceSnapshot | undefi
     if (expanded && body) lines.push(...bodyControls(item.id, archive.canMoveBodyPrevious(item.id), body.nextOffset !== undefined, safeWidth));
     lines.push("");
   }
-  if (inbox.length === 0) lines.push(truncateToWidth("Inbox is empty.", safeWidth, ""));
-  if (archive.hasActivePage("inbox")) lines.push(...pageControls("inbox", !!archive.pageCursor("inbox", "previous"), !!archive.pageCursor("inbox", "next"), archive.activeIsInitial("inbox"), safeWidth));
+  if (inbox.length === 0) lines.push(truncateToWidth("No recent updates.", safeWidth, ""));
 
   const historyCount = archive?.summary?.historyCount ?? dismissed.size;
   const expandedHistory = archive?.historyExpanded ?? false;
@@ -260,7 +251,7 @@ export function renderProjectGlanceFeed(snapshot: ProjectGlanceSnapshot | undefi
     }
     const history = archive?.activeItems("history") ?? [];
     for (const value of history) {
-      const item = previewItem(value);
+      const item = previewItem(value, "history");
       const expanded = options.expandedIds?.has(item.id) ?? false;
       const body = archive?.body(item.id);
       const error = archive?.bodyError(item.id);
