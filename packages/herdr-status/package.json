@@ -1,7 +1,7 @@
 {
   "name": "pi-herdr-status",
-  "version": "0.1.0",
-  "description": "Rich, display-only Herdr metadata for Pi panes without competing with Herdr's official Pi integration.",
+  "version": "0.2.0",
+  "description": "Unified additive Herdr sidebar settings and terminal title activity for Pi.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -21,6 +21,12 @@
   "devDependencies": {
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": true }
   },
   "private": true,
   "scripts": {
