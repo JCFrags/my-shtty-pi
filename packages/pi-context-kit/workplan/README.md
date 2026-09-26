@@ -55,6 +55,8 @@ An object without a verified anchor is an orphan, not selected state. A failed o
 
 Branch lookup uses direct owned bindings or one bounded indexed ancestry page. A pending lookup advances on a later call. It never calls `getBranch()` or guesses empty state. Empty state is valid only after complete ancestry proves that this provider has no state. Native fork/clone inherits a verified owned anchor, and subsequent writes create a separate source-bound commit.
 
+An already owned branch that reports `state-store-source-recovery-required` needs the [state-store identity recovery procedure](../state-store/API.md#explicit-recovery-of-old-disk-commits), not `/workplan-import`. It requires an independently established complete source-prefix hash. New Linux Btrfs commits have reboot-stable identity checks. Unsupported filesystems keep strict device checks. Recovery preserves old immutable state and does not make previous code versions compatible with new commits.
+
 ## Legacy import
 
 For an old branch, run `/workplan-import` until it reports a complete durable binding. Each command advances either one 32-entry source page or at most four native events. The owner stores a small progress pointer for the exact source session and leaf. Reopen that same cut and repeat the command to resume after restart. An explicit JSON object reference can also be supplied as the command argument.

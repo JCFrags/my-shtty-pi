@@ -140,7 +140,7 @@ export async function openObjectLocation(options: ObjectStoreOptions): Promise<O
   }
   exact(metadata, ["version", "providerId", "storeId"]);
   if (metadata.version !== 1 || metadata.providerId !== options.providerId || !isStoreId(metadata.storeId)) fail("state-store-corrupt");
-  for (const name of ["objects", "bindings", "resolutions", "commits", "imports", "locks"]) await checkDirectory(join(root, name), true);
+  for (const name of ["objects", "bindings", "resolutions", "commits", "imports", "locks", "identities"]) await checkDirectory(join(root, name), true);
   await syncDirectory(root);
   return Object.freeze({ root, providerId: options.providerId, storeId: metadata.storeId });
 }

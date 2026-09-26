@@ -32,6 +32,8 @@ Each mutation resolves its source view, validates the operation, publishes the o
 
 Session start and tree navigation use a direct binding or one bounded ancestry-resolution page. Native operations can advance resolution one page per invocation. `agent_settled` can advance one further page. Normal startup never calls `getBranch()` or replays legacy note events. Context queries do not perform restoration or import. Forks inherit exact anchored source state and new writes create a new source-bound commit.
 
+An already owned branch that reports `state-store-source-recovery-required` needs the [state-store identity recovery procedure](../state-store/API.md#explicit-recovery-of-old-disk-commits), not `/notes-import`. It requires an independently established complete source-prefix hash. New Linux Btrfs commits have reboot-stable identity checks. Unsupported filesystems keep strict device checks. Recovery preserves old immutable state and does not make previous code versions compatible with new commits.
+
 ## Legacy import
 
 Select only one Notes writer. Use `/notes-import` for an unimported legacy branch. One invocation collects or replays at most 128 complete source entries within an 8 MiB page budget. Repeat while pending. There is no lifetime entry-count cap and no hidden startup import loop.

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { CommitOptions, ImportReceiptInput, ObjectLocation, ObjectRef, OwnedSnapshot, OwnerResolution,
+import type { CommitOptions, ImportReceiptInput, LegacySourceRecovery, ObjectLocation, ObjectRef, OwnedSnapshot, OwnerResolution,
   OwnerStatus, ResolveOptions, SessionEntryView, StateAnchorHost, StateOwnerOptions, StateScope } from "./types.ts";
 import { checkedEntry, currentScope } from "./ancestry.ts";
 import { OwnedObjectStore, publishPrivateBytes, readPrivateRecord, writePrivateRecord } from "./objects.ts";
-import { acquireSourceLock, anchorDataMatches, captureSource, sameSource, sourceKey, validateSource,
-  verifyDiskAnchor, type AnchorProof, type SourceIdentity } from "./source.ts";
+import { acquireSourceLock, anchorDataMatches, captureSource, sameDurableSource, sameSource, sameSourceFields, sourceKey, validateSource,
+  verifyDiskAnchor, verifySourcePrefix, verifyStoredAnchor, type AnchorProof, type SourceIdentity } from "./source.ts";
 import { canonicalJson, checkSignal, detach, exact, fail, freezeJson, hashText, identifier, integer, isHash,
   isStoreId, objectRef, sameScope, scope, STATE_ANCHOR_TYPE, STATE_STORE_LIMITS, StateStoreError } from "./validation.ts";
 
@@ -18,6 +18,9 @@ interface CommittedReceipt {
   version: 1; commitRef: ObjectRef; anchor: SessionEntryView;
   durability: SourceIdentity["durability"]; proof?: Omit<AnchorProof, "entry">;
 }
+interface SourceRecoveryReceipt extends LegacySourceRecovery {
+  version: 1; anchor: SessionEntryView; proof: Omit<AnchorProof, "entry">;
+}
 interface ViewKey { version: 1; scope: StateScope; sourceKey: string }
 interface Binding extends ViewKey { head: string; anchorId: string; commitRef: ObjectRef }
 interface Cursor extends ViewKey { nextEntryId: string | null; scanned: number; legacySeen: boolean }
@@ -26,6 +29,20 @@ interface View<Root> { source: SourceIdentity; resolution: OwnerResolution<Root>
 interface CapturedView { epoch: number; scope: StateScope; source: SourceIdentity }
 
 function keyOf(view: ViewKey): string { return hashText(canonicalJson(view, STATE_STORE_LIMITS.recordBytes)); }
+function sameRecord(left: unknown, right: unknown): boolean {
+  return canonicalJson(left, STATE_STORE_LIMITS.recordBytes) === canonicalJson(right, STATE_STORE_LIMITS.recordBytes);
+}
+function validateRecovery(value: LegacySourceRecovery, receipt = false): void {
+  exact(value, ["authorization", "commitRef", "scope", "source", "target", "prefix"], receipt ? ["version", "anchor", "proof"] : []);
+  objectRef(value.commitRef); scope(value.scope); validateSource(value.source); validateSource(value.target);
+  exact(value.prefix, ["bytes", "sha256"]);
+  integer(value.prefix.bytes, 1, STATE_STORE_LIMITS.recoveryPrefixBytes);
+  if (value.authorization !== "independent-prefix-sha256" || !isHash(value.prefix.sha256)
+    || value.source.durability !== "disk" || value.target.durability !== "disk" || value.source.identity
+    || !sameSourceFields(value.source, value.target) || value.scope.sessionId !== value.source.sessionId
+    || value.prefix.bytes > value.target.size) fail("state-store-invalid");
+  if (!value.target.identity) fail("state-store-identity-unavailable");
+}
 function nativeSignature(entry: SessionEntryView): string {
   return hashText(canonicalJson({ id: entry.id, parentId: entry.parentId, type: entry.type,
     customType: entry.customType ?? null }, STATE_STORE_LIMITS.anchorBytes));
@@ -129,13 +146,19 @@ export class BranchStateOwner<Root> {
     return record;
   }
   private async committed(record: CommitRecord, ref: ObjectRef, location: ObjectLocation,
-    live?: SessionEntryView): Promise<CommittedReceipt> {
+    live?: SessionEntryView, currentSource?: SourceIdentity, requireExisting = false): Promise<CommittedReceipt> {
     const path = join(location.root, "commits", `${record.commitId}.json`);
     let receipt = await readPrivateRecord<CommittedReceipt>(path);
     const data = this.anchorData(ref, location);
     if (receipt === undefined) {
+      if (requireExisting) fail("state-store-missing");
       // Object publication without this bounded native append is never a commit.
-      const proof = await verifyDiskAnchor(record.source, record.origin, data, live);
+      let source = record.source;
+      if (source.durability === "disk" && currentSource?.durability === "disk" && source.device !== currentSource.device) {
+        if (!sameDurableSource(source, currentSource)) fail(source.identity ? "state-store-source-changed" : "state-store-source-recovery-required");
+        source = { ...currentSource, size: source.size };
+      }
+      const proof = await verifyDiskAnchor(source, record.origin, data, live);
       receipt = { version: 1, commitRef: ref, anchor: proof.entry, durability: "disk",
         proof: { offset: proof.offset, bytes: proof.bytes, lineHash: proof.lineHash } };
       await publishPrivateBytes(path, Buffer.from(canonicalJson(receipt, STATE_STORE_LIMITS.recordBytes)));
@@ -153,21 +176,69 @@ export class BranchStateOwner<Root> {
     } else if (receipt.proof !== undefined) fail("state-store-corrupt");
     return receipt;
   }
+  private async sourceRecovery(record: CommitRecord, ref: ObjectRef, receipt: CommittedReceipt, view: CapturedView,
+    anchor: SessionEntryView, location: ObjectLocation, recovery?: LegacySourceRecovery, signal?: AbortSignal): Promise<SourceRecoveryReceipt | undefined> {
+    if (record.source.durability !== "disk" || view.source.durability !== "disk" || !sameSourceFields(record.source, view.source)) fail("state-store-source-changed");
+    if (record.source.identity) {
+      if (!sameDurableSource(record.source, view.source)) fail("state-store-source-changed");
+      // Durable identity admits a reboot, but never substitutes for the committed line proof.
+      await verifyStoredAnchor(view.source, receipt.proof!, receipt.anchor, anchor);
+      return undefined;
+    }
+    const path = join(location.root, "identities", `${record.commitId}.json`);
+    const saved = await readPrivateRecord<SourceRecoveryReceipt>(path);
+    if (saved) {
+      exact(saved, ["version", "authorization", "commitRef", "scope", "source", "target", "prefix", "anchor", "proof"]);
+      validateRecovery(saved, true);
+      if (recovery && !sameRecord(recovery.prefix, saved.prefix)) fail("state-store-conflict");
+      if (saved.version !== 1 || view.source.size < saved.prefix.bytes || !sameDurableSource(saved.target, view.source)
+        || !sameRecord(saved.source, record.source) || !sameRecord(saved.commitRef, ref)
+        || !sameRecord(saved.anchor, receipt.anchor) || !sameRecord(saved.proof, receipt.proof)
+        || saved.prefix.bytes < receipt.proof!.offset + receipt.proof!.bytes) fail("state-store-source-changed");
+      await verifyStoredAnchor(view.source, receipt.proof!, receipt.anchor, anchor);
+      return undefined;
+    }
+    if (!recovery) {
+      // Preserve compatibility with an unchanged legacy source. Never enroll it implicitly.
+      if (record.source.device !== view.source.device) fail("state-store-source-recovery-required");
+      if (view.source.size < record.source.size + receipt.proof!.bytes) fail("state-store-source-changed");
+      return undefined;
+    }
+    if (!view.source.identity) fail("state-store-identity-unavailable");
+    if (recovery.prefix.bytes < receipt.proof!.offset + receipt.proof!.bytes) fail("state-store-invalid");
+    await verifyStoredAnchor(view.source, receipt.proof!, receipt.anchor, anchor);
+    await verifySourcePrefix(view.source, recovery.prefix, signal);
+    return { version: 1, ...recovery, anchor: receipt.anchor, proof: receipt.proof! };
+  }
   private async snapshot(host: StateAnchorHost, view: CapturedView, anchor: SessionEntryView, ref: ObjectRef,
-    location: ObjectLocation): Promise<OwnedSnapshot<Root>> {
+    location: ObjectLocation, recovery?: LegacySourceRecovery, signal?: AbortSignal): Promise<OwnedSnapshot<Root>> {
     const record = await this.commitRecord(ref, location);
-    const receipt = await this.committed(record, ref, location);
+    if (recovery && (!sameRecord(recovery.commitRef, ref) || !sameRecord(recovery.source, record.source)
+      || !sameRecord(recovery.target, view.source) || !sameScope(recovery.scope, view.scope))) fail("state-store-conflict");
+    const receipt = await this.committed(record, ref, location, undefined,
+      record.origin.sessionId === view.scope.sessionId ? view.source : undefined, !!recovery);
     if (anchor.id !== receipt.anchor.id || !anchorDataMatches(anchor, this.anchorData(ref, location))) fail("state-store-corrupt");
+    let recovered: SourceRecoveryReceipt | undefined;
     if (record.origin.sessionId === view.scope.sessionId) {
+      if (anchor.parentId !== record.origin.leafId) fail("state-store-corrupt");
       const materialized = record.source.durability === "ephemeral" || record.source.durability === "deferred"
         && view.source.durability !== "ephemeral" && record.source.file === view.source.file;
-      if (anchor.parentId !== record.origin.leafId || !sameSource(record.source, view.source) && !materialized) fail("state-store-corrupt");
+      if (record.source.durability === "disk") recovered = await this.sourceRecovery(record, ref, receipt, view, anchor, location, recovery, signal);
+      else if (!sameSource(record.source, view.source) && !materialized) fail("state-store-source-changed");
     } else {
+      if (recovery) fail("state-store-source-changed");
       const parent = host.sessionManager.getHeader()?.parentSession;
       if (typeof parent !== "string" || !parent || parent.length > 4096) fail("state-store-corrupt");
     }
     const root = await this.objects.read<Root>(record.rootRef, { maxBytes: this.rootObjectMaximum });
     canonicalJson(root, this.rootMaximum); this.options.validateRoot(root);
+    if (recovered) {
+      if (record.importReceipt) await this.objects.read(record.importReceipt, { maxBytes: STATE_STORE_LIMITS.recordBytes, signal });
+      await this.unchanged(host, view, signal);
+      await publishPrivateBytes(join(location.root, "identities", `${record.commitId}.json`),
+        Buffer.from(canonicalJson(recovered, STATE_STORE_LIMITS.recordBytes)));
+      await this.unchanged(host, view, signal);
+    }
     return freezeJson({ commitId: record.commitId, parentCommitId: record.parentCommitId,
       rootRef: record.rootRef, root, anchorId: anchor.id, scope: view.scope, origin: record.origin,
       durability: view.source.durability === "disk" ? receipt.durability : view.source.durability,
@@ -213,13 +284,30 @@ export class BranchStateOwner<Root> {
     }
   }
   async resolve(host: StateAnchorHost, options: ResolveOptions = {}): Promise<OwnerResolution<Root>> {
+    return this.resolveView(host, options);
+  }
+  /** Explicit operator recovery. One call still advances at most one ancestry page. */
+  async recoverSourceIdentity(host: StateAnchorHost, evidence: LegacySourceRecovery, options: ResolveOptions = {}): Promise<OwnerResolution<Root>> {
+    const recovery = detach(evidence, STATE_STORE_LIMITS.recordBytes);
+    validateRecovery(recovery);
+    return this.resolveView(host, options, recovery);
+  }
+  private async resolveView(host: StateAnchorHost, options: ResolveOptions, recovery?: LegacySourceRecovery): Promise<OwnerResolution<Root>> {
     this.active(options.signal);
     if (this.busy) fail("state-store-busy");
+    if (recovery && this.pending) fail("state-store-uncertain");
     this.busy = true;
+    let release: (() => Promise<void>) | undefined;
     try {
       const location = await this.objects.location();
       await this.reconcilePending(host, location);
       const view = await this.capture(host, options.signal), key = this.viewKey(view);
+      if (recovery) {
+        if (!sameScope(recovery.scope, view.scope) || !sameRecord(recovery.target, view.source)) fail("state-store-conflict");
+        this.belongs(recovery.commitRef, location);
+        release = await acquireSourceLock(location, view.source, randomUUID());
+        await this.unchanged(host, view, options.signal);
+      }
       const hash = keyOf(key), path = join(location.root, "resolutions", `${hash}.json`);
       let cursor = await readPrivateRecord<Cursor>(path);
       if (cursor) {
@@ -243,7 +331,7 @@ export class BranchStateOwner<Root> {
         if (id === view.scope.leafId) head = entry;
         const ref = this.anchorRef(entry, location);
         if (ref && !cursor.legacySeen) {
-          const snapshot = await this.snapshot(host, view, entry, ref, location);
+          const snapshot = await this.snapshot(host, view, entry, ref, location, recovery, options.signal);
           result = { status: "ready", snapshot, coverage: { scanned: cursor.scanned + reads, complete: true, legacySeen: false } };
           await this.unchanged(host, view, options.signal);
           if (head) await this.saveBinding(location, key, head, entry, ref);
@@ -257,7 +345,7 @@ export class BranchStateOwner<Root> {
             if (binding.head !== nativeSignature(entry)) fail("state-store-corrupt");
             const anchor = getEntry(binding.anchorId);
             if (this.anchorRef(anchor, location)?.hash !== binding.commitRef.hash) fail("state-store-corrupt");
-            const snapshot = await this.snapshot(host, view, anchor, binding.commitRef, location);
+            const snapshot = await this.snapshot(host, view, anchor, binding.commitRef, location, recovery, options.signal);
             result = { status: "ready", snapshot, coverage: { scanned: cursor.scanned + reads, complete: true, legacySeen: false } };
             await this.unchanged(host, view, options.signal);
             if (head) await this.saveBinding(location, key, head, anchor, binding.commitRef);
@@ -276,9 +364,12 @@ export class BranchStateOwner<Root> {
           : { status: "pending", scope: view.scope, continuation: hashText(canonicalJson(cursor, STATE_STORE_LIMITS.recordBytes)), coverage };
       }
       await this.unchanged(host, view, options.signal);
+      if (recovery && result.status !== "ready" && result.status !== "pending") fail("state-store-conflict");
       this.selected = { source: view.source, resolution: result };
       return result;
-    } finally { this.busy = false; }
+    } finally {
+      try { await release?.(); } finally { this.busy = false; }
+    }
   }
   async readProgress<T>(host: StateAnchorHost, key: string): Promise<T | undefined> {
     identifier(key);

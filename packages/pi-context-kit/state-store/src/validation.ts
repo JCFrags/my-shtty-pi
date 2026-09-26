@@ -8,6 +8,7 @@ export const STATE_STORE_LIMITS = Object.freeze({
   recordBytes: 64 * 1024,
   anchorBytes: 16 * 1024,
   headerBytes: 16 * 1024,
+  recoveryPrefixBytes: 128 * 1024 * 1024,
   ancestryEntries: 128,
   maxAncestryEntries: 512,
   ancestryBytes: 8 * 1024 * 1024,
@@ -23,7 +24,8 @@ export type StateStoreErrorCode =
   | "state-store-corrupt" | "state-store-missing" | "state-store-scope-changed"
   | "state-store-conflict" | "state-store-busy" | "state-store-cancelled"
   | "state-store-unresolved" | "state-store-legacy-required" | "state-store-unpersisted"
-  | "state-store-uncertain" | "state-store-closed";
+  | "state-store-uncertain" | "state-store-closed"
+  | "state-store-source-changed" | "state-store-source-recovery-required" | "state-store-identity-unavailable";
 export class StateStoreError extends Error {
   readonly code: StateStoreErrorCode;
   readonly durability?: StateDurability;

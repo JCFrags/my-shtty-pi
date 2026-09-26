@@ -45,6 +45,8 @@ An ephemeral session or a deferred session file refuses mutations with `state-st
 
 Session start and tree navigation use direct bindings or one bounded ancestry-resolution page. They never call `getBranch()` or replay all history. Native tools can advance a pending resolution one page per call. `agent_settled` can resolve one further page. Context queries read only an already resolved state and never restore it. Forked anchors retain their original provenance and new writes create a new source-bound commit.
 
+An already owned branch that reports `state-store-source-recovery-required` needs the [state-store identity recovery procedure](../state-store/API.md#explicit-recovery-of-old-disk-commits), not `/todo-import`. It requires an independently established complete source-prefix hash. New Linux Btrfs commits have reboot-stable identity checks. Unsupported filesystems keep strict device checks. Recovery preserves old immutable state and does not make previous code versions compatible with new commits.
+
 ## Legacy import
 
 Disable the old Todo writer before selecting this extension. Run `/todo-import` on an unimported legacy branch. Each invocation collects or replays at most 128 whole source entries within an 8 MiB page budget. Repeat while the command reports pending. There is no lifetime entry-count cap or hidden startup import loop.

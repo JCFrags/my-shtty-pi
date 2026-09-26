@@ -1,18 +1,16 @@
+import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { lstat, open, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { ObjectLocation, SessionEntryView, StateScope, StateSessionManager } from "./types.ts";
+import type { ObjectLocation, SessionEntryView, SourceIdentity, SourcePrefixProof, StateScope, StateSessionManager } from "./types.ts";
+import { durableIdentity } from "./identity.ts";
 import { currentScope } from "./ancestry.ts";
 import { checkDirectory, syncDirectory } from "./objects.ts";
-import { canonicalJson, exact, fail, hashText, identifier, integer, isErrno, isHash, sameScope,
+import { canonicalJson, checkSignal, exact, fail, hashText, identifier, integer, isErrno, isHash, sameScope,
   STATE_ANCHOR_TYPE, STATE_STORE_LIMITS, StateStoreError } from "./validation.ts";
 
-export type SourceIdentity = {
-  durability: "disk"; sessionId: string; file: string; device: string; inode: string;
-  size: number; headerHash: string;
-} | { durability: "ephemeral"; sessionId: string }
-  | { durability: "deferred"; sessionId: string; file: string };
+export type { SourceIdentity } from "./types.ts";
 export interface AnchorProof {
   entry: SessionEntryView;
   lineHash: string;
@@ -43,8 +41,27 @@ async function openSourceFile(path: string): Promise<FileHandle> {
     if (isErrno(error, "ELOOP")) fail("state-store-unsafe-path");
     throw error;
   }
-  try { validateSourceFile(await handle.stat()); return handle; }
-  catch (error) { await handle.close(); throw error; }
+  try {
+    const info = await handle.stat();
+    validateSourceFile(info);
+    await sourcePathMatches(path, info);
+    return handle;
+  } catch (error) { await handle.close(); throw error; }
+}
+async function sourcePathMatches(path: string, info: Stats): Promise<void> {
+  let named: Stats;
+  try { named = await lstat(path); }
+  catch (error) { if (isErrno(error, "ENOENT")) fail("state-store-scope-changed"); throw error; }
+  validateSourceFile(named);
+  if (named.dev !== info.dev || named.ino !== info.ino || named.size !== info.size
+    || named.mtimeMs !== info.mtimeMs || named.ctimeMs !== info.ctimeMs) fail("state-store-scope-changed");
+}
+async function unchangedSourceFile(path: string, handle: FileHandle, before: Stats): Promise<void> {
+  const after = await handle.stat();
+  validateSourceFile(after);
+  if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+    || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) fail("state-store-scope-changed");
+  await sourcePathMatches(path, after);
 }
 async function captureFile(file: string, sessionId: string): Promise<SourceIdentity> {
   let handle: FileHandle;
@@ -56,6 +73,7 @@ async function captureFile(file: string, sessionId: string): Promise<SourceIdent
   try {
     const info = await handle.stat();
     integer(info.size, 1, Number.MAX_SAFE_INTEGER);
+    const identity = await durableIdentity(handle);
     const headerBytes = await readAtMost(handle, 0, Math.min(STATE_STORE_LIMITS.headerBytes, info.size));
     const end = headerBytes.indexOf(10);
     if (end < 0) fail("state-store-corrupt");
@@ -65,10 +83,9 @@ async function captureFile(file: string, sessionId: string): Promise<SourceIdent
       || (header as Record<string, unknown>).version !== 3 || (header as Record<string, unknown>).id !== sessionId) fail("state-store-corrupt");
     const last = await readAtMost(handle, info.size - 1, 1);
     if (last[0] !== 10) fail("state-store-corrupt");
-    const after = await handle.stat();
-    if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) fail("state-store-scope-changed");
+    await unchangedSourceFile(file, handle, info);
     return { durability: "disk", sessionId, file, device: String(info.dev), inode: String(info.ino),
-      size: info.size, headerHash: hashText(headerBytes.subarray(0, end + 1)) };
+      size: info.size, headerHash: hashText(headerBytes.subarray(0, end + 1)), ...(identity ? { identity } : {}) };
   } finally { await handle.close(); }
 }
 export async function captureSource(manager: StateSessionManager): Promise<SourceIdentity> {
@@ -84,7 +101,13 @@ export function validateSource(value: unknown): asserts value is SourceIdentity 
   if (item.durability === "ephemeral") exact(value, ["durability", "sessionId"]);
   else if (item.durability === "deferred") exact(value, ["durability", "sessionId", "file"]);
   else if (item.durability === "disk") {
-    exact(value, ["durability", "sessionId", "file", "device", "inode", "size", "headerHash"]);
+    exact(value, ["durability", "sessionId", "file", "device", "inode", "size", "headerHash"], ["identity"]);
+    if (item.identity !== undefined) {
+      exact(item.identity, ["scheme", "filesystemId", "birthtimeNs"]);
+      if (item.identity.scheme !== "linux-btrfs-statfs-v1" || typeof item.identity.filesystemId !== "string"
+        || !/^[a-f0-9]{1,16}$/.test(item.identity.filesystemId) || /^0+$/.test(item.identity.filesystemId)
+        || typeof item.identity.birthtimeNs !== "string" || !/^[1-9][0-9]{0,29}$/.test(item.identity.birthtimeNs)) fail("state-store-corrupt");
+    }
     if (typeof item.device !== "string" || !/^\d+$/.test(item.device) || typeof item.inode !== "string" || !/^\d+$/.test(item.inode)
       || !isHash(item.headerHash)) fail("state-store-corrupt");
     integer(item.size, 1, Number.MAX_SAFE_INTEGER);
@@ -98,10 +121,22 @@ export function sameSource(left: SourceIdentity, right: SourceIdentity, exactSiz
   if (left.durability === "ephemeral" || right.durability === "ephemeral") return true;
   if (left.file !== right.file) return false;
   return left.durability !== "disk" || right.durability !== "disk" || (left.device === right.device
-    && left.inode === right.inode && left.headerHash === right.headerHash && (!exactSize || left.size === right.size));
+    && sameSourceFields(left, right) && (!left.identity && !right.identity || sameDurableSource(left, right))
+    && (!exactSize || left.size === right.size));
+}
+/** Durable comparison is separate from same-open checks, which always retain st_dev. */
+export function sameSourceFields(left: SourceIdentity, right: SourceIdentity): boolean {
+  return left.durability === "disk" && right.durability === "disk" && left.sessionId === right.sessionId
+    && left.file === right.file && left.inode === right.inode && left.headerHash === right.headerHash;
+}
+export function sameDurableSource(left: SourceIdentity, right: SourceIdentity): boolean {
+  return sameSourceFields(left, right) && left.durability === "disk" && right.durability === "disk"
+    && !!left.identity && !!right.identity && left.identity.scheme === right.identity.scheme
+    && left.identity.filesystemId === right.identity.filesystemId && left.identity.birthtimeNs === right.identity.birthtimeNs;
 }
 export function sourceKey(source: SourceIdentity): string {
-  const value = source.durability === "disk" ? { ...source, size: 0 } : source;
+  // Keep historical keys for unsupported sources. Btrfs derived indexes survive a device-only restart.
+  const value = source.durability === "disk" ? { ...source, size: 0, ...(source.identity ? { device: "0" } : {}) } : source;
   return hashText(canonicalJson(value, STATE_STORE_LIMITS.recordBytes));
 }
 export function anchorDataMatches(entry: SessionEntryView, data: unknown): boolean {
@@ -134,8 +169,56 @@ export async function verifyDiskAnchor(source: SourceIdentity, origin: StateScop
       await syncDirectory(directory);
       if (directory === dirname(directory)) break;
     }
-    validateSourceFile(await handle.stat());
+    await unchangedSourceFile(source.file, handle, info);
     return { entry, lineHash: hashText(bytes.subarray(0, end + 1)), offset: source.size, bytes: end + 1 };
+  } finally { await handle.close(); }
+}
+/** Verify a retained immutable receipt against the exact bounded source line. No writes or sync. */
+export async function verifyStoredAnchor(source: SourceIdentity, proof: Omit<AnchorProof, "entry">,
+  expected: SessionEntryView, live: SessionEntryView): Promise<void> {
+  if (source.durability !== "disk") fail("state-store-source-changed");
+  integer(proof.offset, 1, Number.MAX_SAFE_INTEGER);
+  integer(proof.bytes, 1, STATE_STORE_LIMITS.anchorBytes);
+  if (!isHash(proof.lineHash) || !Number.isSafeInteger(proof.offset + proof.bytes)
+    || proof.offset + proof.bytes > source.size) fail("state-store-source-changed");
+  const handle = await openSourceFile(source.file);
+  try {
+    const before = await handle.stat();
+    if (String(before.dev) !== source.device || String(before.ino) !== source.inode || before.size !== source.size) fail("state-store-scope-changed");
+    const bytes = await readAtMost(handle, proof.offset, proof.bytes);
+    const boundary = await readAtMost(handle, proof.offset - 1, 1);
+    if (boundary[0] !== 10 || bytes.length !== proof.bytes || bytes.indexOf(10) !== bytes.length - 1
+      || hashText(bytes) !== proof.lineHash) fail("state-store-corrupt");
+    let entry: unknown;
+    try { entry = JSON.parse(bytes.toString("utf8")); } catch { fail("state-store-corrupt"); }
+    const encoded = canonicalJson(entry, STATE_STORE_LIMITS.anchorBytes);
+    if (encoded !== canonicalJson(expected, STATE_STORE_LIMITS.anchorBytes)
+      || encoded !== canonicalJson(live, STATE_STORE_LIMITS.anchorBytes)) fail("state-store-corrupt");
+    await unchangedSourceFile(source.file, handle, before);
+  } finally { await handle.close(); }
+}
+/** One explicit recovery reads at most recoveryPrefixBytes, in bounded streaming chunks. */
+export async function verifySourcePrefix(source: SourceIdentity, proof: SourcePrefixProof, signal?: AbortSignal): Promise<void> {
+  exact(proof, ["bytes", "sha256"]);
+  integer(proof.bytes, 1, STATE_STORE_LIMITS.recoveryPrefixBytes);
+  if (!isHash(proof.sha256)) fail("state-store-invalid");
+  if (source.durability !== "disk" || proof.bytes > source.size) fail("state-store-source-changed");
+  checkSignal(signal);
+  const handle = await openSourceFile(source.file);
+  try {
+    const before = await handle.stat();
+    if (String(before.dev) !== source.device || String(before.ino) !== source.inode || before.size !== source.size) fail("state-store-scope-changed");
+    const digest = createHash("sha256");
+    for (let offset = 0; offset < proof.bytes;) {
+      checkSignal(signal);
+      const bytes = await readAtMost(handle, offset, Math.min(64 * 1024, proof.bytes - offset));
+      if (!bytes.length) fail("state-store-source-changed");
+      digest.update(bytes); offset += bytes.length;
+    }
+    const boundary = await readAtMost(handle, proof.bytes - 1, 1);
+    if (boundary[0] !== 10 || digest.digest("hex") !== proof.sha256) fail("state-store-source-changed");
+    await unchangedSourceFile(source.file, handle, before);
+    checkSignal(signal);
   } finally { await handle.close(); }
 }
 export async function acquireSourceLock(location: ObjectLocation, source: SourceIdentity, operationId: string): Promise<() => Promise<void>> {

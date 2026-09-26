@@ -62,6 +62,71 @@ Stateless exports: `openObjectLocation(options)`, `publishObject(location,value,
 
 Objects use exclusive publication, SHA-256 and exact byte verification, no-follow private paths, and file/directory sync. New owned directories are mode `0700` and files are mode `0600`. Existing Pi source files must be regular, owned, single-link, and not writable by other users. The source check does not change existing permissions. The anchor boundary syncs the Pi file and its directory chain. Existing corrupt/missing objects fail. The store never creates empty state to replace a failed read/import. Objects and committed receipts are immutable. Bounded binding/resolution records are derived indexes. The implementation keeps only a finite binding cache and one selected root.
 
+## Source identity across reboot
+
+Disk records keep the observed device number for strict live-operation checks. On Linux Btrfs, new records also contain `identity:{scheme:"linux-btrfs-statfs-v1",filesystemId,birthtimeNs}`. Durable matching requires this identity plus the same absolute path, session ID, inode, and complete-header SHA-256. Resolution verifies the exact committed anchor line at its recorded offset, length, and SHA-256. It does not accept matching metadata in place of that proof. Source growth is allowed. Truncation below the required proof is not.
+
+Btrfs `statfs().f_fsid` mixes the on-disk filesystem ID with the persistent subvolume root ID. This distinction matters because snapshots can preserve inode numbers. See the [Btrfs subvolume contract](https://btrfs.readthedocs.io/en/latest/Subvolumes.html) and [`btrfs_statfs` implementation](https://github.com/torvalds/linux/blob/master/fs/btrfs/super.c). This is not a general guarantee about `f_fsid` on other filesystems. Btrfs `temp_fsid` cloned-filesystem mode also mixes a device value and can still refuse after a mount change. Filesystem clones with duplicated identities are not a supported transfer mechanism.
+
+Node's `statfs` omits `f_fsid`. For Btrfs only, capture invokes `/usr/bin/stat --file-system --format=%t:%i -- /proc/self/fd/3` with the already checked source descriptor inherited as FD 3. It uses no shell or source-path interpolation. Output is capped at 128 bytes, and a 2-second deadline kills the child. Each capture uses one child. A Btrfs source without GNU stat, `/proc`, or a positive birth time refuses rather than falling back to a weaker identity. Other filesystems and platforms keep strict device matching. They do not receive automatic reboot continuity or this legacy recovery path.
+
+Capture and proof verification check the held descriptor and named file before and after I/O. Device, inode, ownership, single-link status, mode, size, modification time, and change time remain live-operation guards. A durable match never relaxes these checks during a running operation. These checks are not a sandbox against a malicious process with the same user ID.
+
+`captureSourceIdentity(manager)` captures this identity without opening an owned store, synchronizing the source, or writing an index. In contrast, `resolve`, provider status, and provider recovery can write derived indexes and are not filesystem-read-only diagnostics.
+
+## Explicit recovery of old disk commits
+
+Old disk records have no durable `identity`. An unchanged device/inode/path/session/header remains compatible. A device change returns `state-store-source-recovery-required`, not a claim that immutable object bytes are damaged. Normal resolve, import, and startup do not authorize or perform recovery.
+
+Recovery requires independently established **complete source-prefix bytes and SHA-256**, not a new hash of the source being accepted. A retained pre-change snapshot or independently verified, contiguous archive spans can supply that evidence. The prefix starts at byte zero, ends with a newline, and must include the entire committed anchor. Missing proof means refusal. There is no force or evidence-gap mode.
+
+1. Stop competing provider writes and tree moves. Preserve original source, owned store, and previous code selection privately. Do not remove locks or alter old commits.
+2. Identify the selected provider anchor, exact `commitRef`, existing committed receipt, and old commit's complete `source`. Verify the independent prefix evidence and provider-owned child objects before recovery.
+3. Pin the current native session and leaf. Capture the target with `captureSourceIdentity`. Recovery permits only the old inode/path/session/header with a supported current durable identity.
+4. Call the provider owner's API under its transaction serialization, or in a coordinated offline operator process:
+
+```ts
+const target = await captureSourceIdentity(host.sessionManager);
+if (target.durability !== "disk" || !target.identity) throw new Error("Unsupported recovery target");
+const evidence = {
+  authorization: "independent-prefix-sha256" as const,
+  commitRef, // exact selected old anchor reference
+  scope: { sessionId: host.sessionManager.getSessionId(), leafId: host.sessionManager.getLeafId() },
+  source, // exact old commit source, without a durable identity
+  target,
+  prefix: { bytes: independentlyVerifiedBytes, sha256: independentlyVerifiedSha256 },
+};
+const result = await owner.recoverSourceIdentity(host, evidence, { signal });
+// pending: repeat this same request at the same cut to advance one ancestry page.
+// ready: the existing commit is selected. No new Pi anchor or provider revision was made.
+```
+
+5. Compare complete native state through the provider's read interface. Reopen the same selected branch before allowing new writes. Recover older selected branch commits separately when needed.
+
+One call retains the normal ancestry-page bound. At the selected anchor, it verifies the immutable commit, root, optional import receipt, existing committed receipt, exact live/disk anchor, and the complete supplied prefix. Prefix verification streams 64 KiB chunks with cancellation checks and a fixed 128 MiB cap. Larger evidence refuses. The library does not hydrate Workplan's unrelated plan bodies. That remains a provider/operator check.
+
+After verification and source rechecks, recovery exclusively publishes `identities/<commitId>.json`. This private immutable receipt contains the exact old commit/source, current durable identity, authorized scope, prefix proof, and original anchor proof. It does not rewrite objects, commit receipts, session JSONL, or provider state. The source lock covers recovery. A scope change after publication can leave a valid receipt but must not report ready. Preserve it and resolve again. A repeated recovery cannot replace an existing receipt with a different identity.
+
+Later resolution checks the receipt's durable identity and original exact anchor, including after another device-only reboot. It also refuses truncation below the authorized prefix. It does not rehash the complete prefix on every read. Existing immutable hashes and provider validation still apply. Old derived indexes/import-progress pointers remain intact, but identity-specific legacy progress is not migrated by this operation.
+
+Error boundaries:
+
+- `state-store-source-recovery-required`: an old source needs the explicit independent-prefix proof.
+- `state-store-source-changed`: durable identity, source fields, prefix, or required source length differs.
+- `state-store-identity-unavailable`: supported identity capture is unavailable or the recovery target has no supported identity.
+- `state-store-corrupt` or `state-store-missing`: immutable data or exact anchor proof is damaged or absent.
+- `state-store-conflict` or `state-store-scope-changed`: the pinned request, session, leaf, or live source changed.
+
+Recovery preserves rollback evidence, not old-reader compatibility. Previous state-store code does not read the new `identity` field or recovery receipts. Selecting it again can refuse both newly written commits and recovered old device-mismatched commits. After new writes, use the provider's complete native transfer into a fresh replacement before selecting a legacy writer. Keep the source, owned objects, receipts, and prior installation. Do not delete identity receipts or edit source hashes to force a rollback.
+
+Focused regression, from the repository root on Linux Btrfs:
+
+```sh
+node --experimental-transform-types --test packages/pi-context-kit/state-store/test/reboot-identity.test.mjs
+```
+
+The fixture uses the actual registered provider tools and Pi session manager. It simulates only the observed source device number, exercises another reboot after explicit recovery, and refuses a real same-path file replacement, including replacement during capture. Unsupported fixture filesystems report a skip, not Btrfs coverage. This does not claim an actual machine reboot or installed-provider activation.
+
 ## Legacy import boundary
 
 Small durable progress pointers use `await owner.readProgress<T>(host, key)` and `await owner.writeProgress(host, key, value)`. Keys are nonempty opaque strings up to 128 UTF-8 bytes. Values are bounded plain JSON. Each record includes exact session/leaf and source identity, with a 64 KiB total record cap. The owner rechecks its epoch, source, and live scope after I/O. Different views have different keys on disk. Store bulk pages/staged roots as immutable objects and keep only their references in progress. Providers serialize progress calls with their other transaction work. These methods do not add a lock or commit/anchor state.

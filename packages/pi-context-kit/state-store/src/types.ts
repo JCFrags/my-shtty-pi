@@ -22,6 +22,31 @@ export interface StateAnchorHost {
 export type StateProviderId = "todo" | "notes" | "workplan";
 export interface StateScope { sessionId: string; leafId: string | null }
 export type StateDurability = "disk" | "ephemeral" | "deferred";
+/** Linux Btrfs statfs identity includes the filesystem and subvolume root ID. */
+export interface DurableSourceIdentity {
+  scheme: "linux-btrfs-statfs-v1";
+  filesystemId: string;
+  birthtimeNs: string;
+}
+export interface DiskSourceIdentity {
+  durability: "disk"; sessionId: string; file: string; device: string; inode: string;
+  size: number; headerHash: string;
+  /** Absent in legacy commits and on platforms without a supported durable identity. */
+  identity?: DurableSourceIdentity;
+}
+export type SourceIdentity = DiskSourceIdentity | { durability: "ephemeral"; sessionId: string }
+  | { durability: "deferred"; sessionId: string; file: string };
+export interface SourcePrefixProof { bytes: number; sha256: string }
+/** Operator-supplied evidence, never generated or inferred by normal resolution. */
+export interface LegacySourceRecovery {
+  authorization: "independent-prefix-sha256";
+  commitRef: ObjectRef;
+  scope: StateScope;
+  source: DiskSourceIdentity;
+  target: DiskSourceIdentity;
+  /** Independently established before recovery. Must include the committed anchor. */
+  prefix: SourcePrefixProof;
+}
 export interface ObjectRef {
   version: 1;
   providerId: StateProviderId;
