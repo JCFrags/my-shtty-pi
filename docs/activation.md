@@ -102,6 +102,42 @@ After a pane-renderer change, close the existing Glance side pane in Herdr and r
 
 Herdr owns the pane title and border. Project Glance intentionally starts with one blue CURRENT card, followed by separate dark update cards collapsed to two preview lines by default. Its mouse controls use component-owned row/column targets in Pi/TUI 0.85.1, not live OSC 8 links. CURRENT remains outside the feed scroll region.
 
+## Herdr sidebar presentation
+
+`packages/herdr-status` owns the additive sidebar and terminal title animation.
+Its only command is `/herdr-sidebar-settings`, including diagnostics. The former
+`/herdr-status` and `/title-animation` registrations are removed. Herdr Agent State
+still owns lifecycle/session reporting, and Dialog still owns blocking question
+signals. Do not replace either with metadata or title updates.
+
+1. Back up the selected Status source, exact standalone Spinner alias or package
+   registration, Pi settings, animation preference, and Herdr configuration.
+2. Prepare the accepted unified package in a retained source root. Remove only the
+   confirmed standalone Spinner registration. Keep package order and all unrelated
+   selections unchanged. Preserve the old source and preference for rollback.
+3. Check the complete installed loader in an isolated agent directory. Expect one
+   fewer extension, unchanged tools, and one new command in place of the two old
+   commands. Compare unrelated identities and order, not only aggregate counts.
+4. Select the accepted package source and archive the old Spinner alias. Start a
+   fresh Pi process, open `/herdr-sidebar-settings`, and save the compact layout.
+   This patches only the Pi override in Herdr's sidebar configuration and requests
+   a live config reload, not a server restart.
+5. Check the loaded source hash in Diagnostics. Verify working model/context and
+   activity, idle `Ready`, and continued activity after compaction. Check both old
+   commands are absent. Existing Pi sessions require a safe idle reload with an
+   empty editor and no managed jobs that reload would terminate.
+
+Herdr natively supplies agent identity, state, location, and a terminal-title row.
+The extension supplies only model/context, optional observed counters, and the title
+content. Do not add `$summary` or `$tool` rows alongside the same activity title.
+The package README defines field ownership, preference scope, and profile migration.
+
+For rollback, restore the previous Status source and its matching standalone
+Spinner alias together. Restore only the owned Pi sidebar value and the matching
+presentation preference, after checking that no newer change would be lost. Do not
+restore whole Pi settings or Herdr config snapshots over later unrelated changes.
+Keep the accepted and previous source roots until no running session needs them.
+
 ## Dialog Herdr blocking state
 
 Grounded Dialog reports both modern `ask_user` and legacy `ask_user_question`

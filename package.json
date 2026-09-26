@@ -157,13 +157,6 @@
         "entrypoints": [
           "extensions/tool-controls.ts"
         ]
-      },
-      {
-        "slug": "titlebar-spinner",
-        "status": "active",
-        "entrypoints": [
-          "extensions/titlebar-spinner.ts"
-        ]
       }
     ]
   },
