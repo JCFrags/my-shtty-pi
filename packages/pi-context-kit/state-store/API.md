@@ -40,6 +40,10 @@ const committed = await owner.commit(host, nextRoot, {
 
 `resolve(host, {signal?})` returns `OwnerResolution<Root>`. It uses direct bindings or at most `ancestryPageEntries` native `getEntry()` calls. Continuation state is persisted per exact source view. No `getBranch()` call or unlimited replay exists. `status()` is synchronous. `invalidate()` increments this instance's epoch and clears its selected view. Call it before a session-tree transition/rebind. `close()` prevents further work. Neither method deletes objects.
 
+Continuation records retain the original leaf's native signature in the optional `head` field. Completion can therefore publish that leaf's binding after several pages or an owner restart. Later ordinary messages can reach the completed binding instead of repeating the full ancestry walk. Old records without `head` remain readable. A resumed old record recovers the signature with one counted entry read. With a one-entry page, that call saves the signature and the next call advances ancestry. A cold unresolved view still needs bounded calls at the same leaf until completion. A changed leaf does not reuse an unresolved cursor from another view.
+
+Code-rollback limit: predecessor owners, including the local 4.0.4 selection, reject resolution records that contain `head` because they validate exact keys. This change preserves old-cursor admission, the binding format, immutable objects, committed receipts, and source bytes. It does not make new cursors readable by old code. Keep compatible owner code and rollback evidence. Do not clear indexes or rewrite canonical state to force a rollback.
+
 Providers must serialize their full `resolve`/compute/`commit` transaction across every tool, command, and Glance mutation route. The owner refuses concurrent commit work and detects stale roots, but does not queue the provider's computation.
 
 `commit(host, root, options)` returns `OwnedSnapshot<Root>`. It requires the exact resolved view and `expectedCommitId`. The provider computes its native mutation, including native revision checks. The store verifies the scope again after asynchronous work. An immutable root/object and prepared receipt precede a small `context-kit:state-anchor:v1` custom entry. The exact live entry and bounded disk append are verified and synced before disk success. A thrown append can leave a live or partial anchor. Such an operation becomes uncertain, and `resolve` reconciles it before another mutation.
@@ -125,7 +129,7 @@ Focused regression, from the repository root on Linux Btrfs:
 node --experimental-transform-types --test packages/pi-context-kit/state-store/test/reboot-identity.test.mjs
 ```
 
-The fixture uses the actual registered provider tools and Pi session manager. It simulates only the observed source device number, exercises another reboot after explicit recovery, and refuses a real same-path file replacement, including replacement during capture. Unsupported fixture filesystems report a skip, not Btrfs coverage. This does not claim an actual machine reboot or installed-provider activation.
+The fixtures use the actual registered provider tools and Pi session manager. The ancestry regression completes a multi-page walk, checks native reads after ordinary user and tool-result appends, and reopens cold owners. It also checks one-entry page progress. The identity regression simulates only the observed source device number, exercises another reboot after explicit recovery, and refuses a real same-path file replacement, including replacement during capture. Unsupported fixture filesystems skip the identity regression, not the ancestry regression. This does not claim an actual machine reboot or installed-provider activation.
 
 ## Legacy import boundary
 
