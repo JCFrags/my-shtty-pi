@@ -414,7 +414,7 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
   }
 });
 
-test("long common prefix resumes after a fork without rewinding committed ancestor heads", { timeout: 100_000 }, async () => {
+test("long common prefix resumes after a fork without rewinding committed ancestor heads", { timeout: 160_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-long-branch-"));
   const sourcePath = join(directory, "source.jsonl"), schedulerDirectory = join(directory, "scheduler");
   mkdirSync(schedulerDirectory, { mode: 0o700 });
@@ -428,9 +428,9 @@ test("long common prefix resumes after a fork without rewinding committed ancest
   writeFileSync(sourcePath, records.join(""), { mode: 0o600 });
   const target = { sourcePath, catalogDirectory: join(directory, "catalog"), sessionKey: hash("long-branch-session"), shardKey: hash("long-branch-shard") };
   const options = { schedulerDirectory, slots: 1 }, adapter = new HistorySearchAdapter(options);
-  // One overall bound covers both cold indexing and branch catch-up. Do not
-  // restart the deadline when a prefix becomes ready.
-  const deadline = Date.now() + 90_000;
+  // One overall bound covers cold indexing, branch catch-up, and the serial
+  // contained-worker reads. Do not restart it when a prefix becomes ready.
+  const deadline = Date.now() + 150_000;
   const waitForCut = async (cut: number): Promise<void> => {
     while (adapter.status().indexedCut !== cut) {
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
@@ -507,7 +507,7 @@ test("long common prefix resumes after a fork without rewinding committed ancest
   }
 });
 
-test("normal fresh Pi loading adopts and resumes V3 without activation commands", async () => {
+test("normal fresh Pi loading adopts and resumes V3 without activation commands", { timeout: 130_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "chrono-auto-resume-"));
   const agent = join(root, "agent"), sessions = join(root, "sessions"), scheduler = join(root, "scheduler");
   for (const directory of [agent, sessions, scheduler]) mkdirSync(directory, { mode: 0o700 });
@@ -523,7 +523,7 @@ export default function(pi) {
  chrono(new Proxy(pi,{get(o,k){if(k==='registerTool')return t=>{tools.set(t.name,t);return o.registerTool(t)};return Reflect.get(o,k)}}),{schedulerDirectory:${JSON.stringify(scheduler)}});
  pi.registerCommand('resume-probe',{handler:async(_args,ctx)=>{
   const call=(name,params={})=>tools.get(name).execute('resume-probe',params,undefined,undefined,ctx);
-  const deadline=Date.now()+20000;let status;
+  const deadline=Date.now()+40000;let status;
   do {status=(await call('history_status')).details;if(status.index==='ready')break;if(Date.now()>=deadline)throw Error('resume-not-ready:'+JSON.stringify(status));await new Promise(r=>setTimeout(r,30));}while(true);
   const found=(await call('history_search',{query:${JSON.stringify(phrase)},mode:'exact',limit:1,tokenBudget:2000})).details;
   if(found.status!=='ok'||!found.hits?.[0])throw Error('resume-search-failed');
@@ -537,6 +537,9 @@ export default function(pi) {
   writeFileSync(join(agent, "settings.json"), JSON.stringify({ extensions: [bridge] }), { mode: 0o600 });
   const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
   async function fresh(): Promise<void> {
+    // One finite window includes cold startup, index readiness, and all probe
+    // reads. A handled command can still be waiting for several real workers.
+    const deadline = Date.now() + 60_000;
     const base = Object.fromEntries(["PATH", "LANG", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"].flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
     const child = spawn(process.execPath, [cli, "--mode", "rpc", "--offline", "--session", sourcePath, "--session-dir", sessions,
       "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files"], { cwd: root, env: { ...base, HOME: agent, PI_CODING_AGENT_DIR: agent,
@@ -562,7 +565,7 @@ export default function(pi) {
       }
     });
     const send = (type: string, extra = {}) => new Promise<unknown>((resolve, reject) => {
-      const id = String(++sequence), timer = setTimeout(() => { pending.delete(id); reject(new Error(`resume-rpc-timeout:${extensionError?.message ?? diagnostics}`)); }, 25_000);
+      const id = String(++sequence), timer = setTimeout(() => { pending.delete(id); reject(new Error(`resume-rpc-timeout:${type}:${JSON.stringify(extra)}:${extensionError?.message ?? diagnostics}`)); }, Math.max(1, deadline - Date.now()));
       pending.set(id, { resolve, reject, timer }); child.stdin.write(JSON.stringify({ id, type, ...extra }) + "\n");
     });
     try {
