@@ -2112,6 +2112,7 @@ async function execute(
 export function registerOrchestrate(
   api: ExtensionAPI,
   extensionPath?: string,
+  initialContext?: PiContext,
 ): void {
   const tool: ToolRegistration = {
     name: "orchestrate",
@@ -2164,12 +2165,14 @@ export function registerOrchestrate(
     }
   };
 
-  runtime.on("session_start", (_event, rawContext) => {
+  const start = (context: PiContext): void => {
     stop();
-    const context = rawContext as PiContext;
     void drain(context);
     timer = setInterval(() => void drain(context), 750);
     timer.unref?.();
-  });
+  };
+  // In-Herdr role selection runs during session_start, after its dispatch began.
+  if (initialContext) start(initialContext);
+  else runtime.on("session_start", (_event, rawContext) => start(rawContext as PiContext));
   runtime.on("session_shutdown", () => stop());
 }

@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ChannelStore, ChannelStoreError } from "./channel-store.js";
+import { ChildBinding, ChildBindingError, type ChildContext } from "./child-binding.js";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { readRegistryByDomain, RegistryError } from "./store.js";
 import type {
@@ -80,7 +81,7 @@ const SCHEMA = {
     },
   ],
 } as const;
-type PiContext = { cwd: string };
+type PiContext = ChildContext & { cwd: string };
 type Tool = {
   name: string;
   label: string;
@@ -121,14 +122,10 @@ function value(v: unknown, max: number): string {
 }
 const id = (v: JsonObject, k: string): string | undefined =>
   typeof v[k] === "string" ? (v[k] as string) : undefined;
-function env(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new ChildError("CHILD_CONTEXT_INCOMPLETE");
-  return v;
-}
 function publicError(e: unknown): ChildError {
   if (e instanceof ChildError) return e;
   if (
+    e instanceof ChildBindingError ||
     e instanceof ChannelStoreError ||
     e instanceof RegistryError ||
     e instanceof HerdrCliError
@@ -136,54 +133,24 @@ function publicError(e: unknown): ChildError {
     return new ChildError(e.code);
   return new ChildError("CHILD_OPERATION_FAILED");
 }
-async function context(p: JsonObject): Promise<{
+async function context(p: JsonObject, piContext: PiContext, binding: ChildBinding): Promise<{
   agent: AgentRecord;
   run: RunRecord;
   cli: HerdrCli;
   store: ChannelStore;
 }> {
-  if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_SOCKET_PATH)
-    throw new ChildError("NOT_IN_HERDR");
-  const domainId = env("PI_HERDR_DOMAIN_ID"),
-    agentId = env("PI_HERDR_AGENT_ID");
-  if (env("PI_HERDR_AGENT_GENERATION") !== "1")
-    throw new ChildError("GENERATION_MISMATCH");
   const runId = value(p.runId, 128),
     generation = p.assignmentGeneration;
   if (!Number.isSafeInteger(generation) || Number(generation) < 1)
     throw new ChildError("INVALID_REQUEST");
-  const registry = await readRegistryByDomain(domainId),
-    agent = registry.agents.find((a) => a.agentId === agentId);
-  if (!agent || agent.agentGeneration !== 1)
-    throw new ChildError("CHILD_IDENTITY_MISMATCH");
+  const { agent, cli } = await binding.resolve(piContext);
   if (agent.runId !== runId || agent.assignmentGeneration !== generation)
     throw new ChildError("STALE_ASSIGNMENT");
   const run = agent.runs.find(
     (r) => r.runId === runId && r.assignmentGeneration === generation,
   );
   if (!run) throw new ChildError("STALE_ASSIGNMENT");
-  if (
-    agent.workspaceId !== env("HERDR_WORKSPACE_ID") ||
-    agent.tabId !== env("HERDR_TAB_ID") ||
-    agent.paneId !== env("HERDR_PANE_ID")
-  )
-    throw new ChildError("CHILD_IDENTITY_MISMATCH");
-  const cli = new HerdrCli(),
-    [current, herdrAgent, pane] = await Promise.all([
-      cli.paneCurrent(),
-      cli.agentGet(agent.herdrAgentName),
-      cli.paneGet(agent.paneId),
-    ]);
-  for (const candidate of [current, herdrAgent, pane])
-    if (
-      id(candidate, "workspace_id") !== agent.workspaceId ||
-      id(candidate, "tab_id") !== agent.tabId ||
-      id(candidate, "pane_id") !== agent.paneId
-    )
-      throw new ChildError("CHILD_IDENTITY_MISMATCH");
-  if (id(herdrAgent, "name") !== agent.herdrAgentName)
-    throw new ChildError("CHILD_IDENTITY_MISMATCH");
-  return { agent, run, cli, store: new ChannelStore(domainId) };
+  return { agent, run, cli, store: new ChannelStore(agent.domainId) };
 }
 async function validateTarget(cli: HerdrCli, target: AgentRecord) {
   const [a, p] = await Promise.all([
@@ -222,7 +189,7 @@ async function append(
     c.run.deliveredSequence,
   );
 }
-async function execute(raw: unknown): Promise<JsonObject> {
+async function execute(raw: unknown, piContext: PiContext, binding: ChildBinding): Promise<JsonObject> {
   const p = object(raw) ?? {},
     action = p.action;
   if (
@@ -232,7 +199,7 @@ async function execute(raw: unknown): Promise<JsonObject> {
     action !== "complete"
   )
     throw new ChildError("INVALID_REQUEST");
-  const c = await context(p);
+  const c = await context(p, piContext, binding);
   if (action === "progress") {
     if (c.run.phase === "cancel_requested")
       throw new ChildError("CANCEL_REQUESTED");
@@ -332,7 +299,7 @@ async function execute(raw: unknown): Promise<JsonObject> {
     duplicate: completed.duplicate,
   };
 }
-export function registerSubagentChannel(api: ExtensionAPI): void {
+export function registerSubagentChannel(api: ExtensionAPI, binding = new ChildBinding(api)): void {
   const tool: Tool = {
     name: "subagent_channel",
     label: "Subagent Channel",
@@ -341,9 +308,9 @@ export function registerSubagentChannel(api: ExtensionAPI): void {
       "Report progress, send a message, acknowledge a requested cancellation, or explicitly complete the exact assigned run. Every call requires the current run ID and assignment generation; stale assignments are rejected.",
     promptSnippet:
       "Use subagent_channel with the exact runId and assignmentGeneration from the latest assignment prompt; acknowledge cancellation only after the parent requests it.",
-    async execute(_id, params) {
+    async execute(_id, params, _signal, _update, piContext) {
       try {
-        const result = await execute(params);
+        const result = await execute(params, piContext, binding);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
           details: result,

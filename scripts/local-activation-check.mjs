@@ -17,6 +17,11 @@ const sdkRoot = value("--sdk-root") ?? join(execFileSync("npm", ["root", "-g"], 
 const sandbox = await mkdtemp(join(tmpdir(), "pi-registration-check-"));
 process.env.PI_OFFLINE = "1";
 process.env.PI_TELEMETRY = "0";
+// This process checks factory inventory, not a live Herdr session or child role.
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith("HERDR_") || /^PI_HERDR_(?:DOMAIN_ID|AGENT_ID|AGENT_GENERATION|RUN_ID|ASSIGNMENT_GENERATION|ROOT_PARENT_PANE_ID|PARENT_PANE_ID)$/u.test(key))
+    delete process.env[key];
+}
 
 function localSource(source) {
   assert.equal(typeof source, "string", "Resource source must be a string");

@@ -1,14 +1,38 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerSubagentChannel } from "../src/orchestrator/child-tool.js";
+import { ChildBinding, hasChildEnvironment, isChildSession, type ChildContext } from "../src/orchestrator/child-binding.js";
 import { registerOrchestrate } from "../src/orchestrator/tool.js";
 import { registerAgentSettings } from "../src/pi/settings-command.js";
 
 /** Direct-Herdr root orchestration or exact managed-child channel. */
 export default function piHerdrOrchestrator(api: ExtensionAPI): void {
-  if (process.env.PI_HERDR_AGENT_ID) {
-    registerSubagentChannel(api);
+  if (!hasChildEnvironment() && !Object.keys(process.env).some((key) => key.startsWith("HERDR_"))) {
+    registerOrchestrate(api);
+    registerAgentSettings(api);
     return;
   }
-  registerOrchestrate(api);
-  registerAgentSettings(api);
+  const binding = new ChildBinding(api);
+  api.on("session_start", async (_event, rawContext) => {
+    const context = rawContext as ChildContext & {
+      cwd: string;
+      ui?: { notify(message: string, level: "warning"): void };
+    };
+    let child = true;
+    try {
+      child = await isChildSession(context);
+    } catch {
+      // An unavailable identity is not permission to become a root.
+    }
+    if (!child) {
+      registerOrchestrate(api, undefined, context);
+      registerAgentSettings(api);
+      return;
+    }
+    registerSubagentChannel(api, binding);
+    try {
+      await binding.resolve(context);
+    } catch {
+      context.ui?.notify("Managed child binding is unavailable. subagent_channel will revalidate on its next call.", "warning");
+    }
+  });
 }
