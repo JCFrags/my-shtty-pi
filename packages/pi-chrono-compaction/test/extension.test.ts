@@ -138,6 +138,7 @@ test("logical follower observes ready admission after an initial read-only refus
   const ctx = { hasUI: false, getContextUsage: () => undefined, isIdle: () => true,
     hasPendingMessages: () => false, compact: (options: typeof compactRequests[number]) => { compactRequests.push(options); },
     sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sourcePath, getLeafId: () => leafId,
+      getEntry: (id: string) => branch.find(entry => entry.id === id),
       getBranch: () => branch, getHeader: () => ({ type: "session", version: 3, id: sessionId }) } };
   const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("initializer and workers must not start"); });
   syncBuiltinESMExports();
@@ -158,7 +159,9 @@ test("logical follower observes ready admission after an initial read-only refus
     const hooks = new Map<string, Hook>(), tools = new Map<string, { execute: () => Promise<any> }>();
     const verifications: Array<(ready: boolean) => void> = [];
     const pi = { registerFlag() {}, getFlag: () => requestedCanary ? sessionId : undefined,
-      registerTool(tool: { name: string; execute: () => Promise<any> }) { tools.set(tool.name, tool); },
+      registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) {
+        tools.set(tool.name, { execute: () => tool.execute("fixture-compaction", {}, undefined, undefined, ctx) });
+      },
       registerCommand() {}, on(name: string, hook: Hook) { setUniqueHook(hooks, name, hook); },
       appendEntry() { throw new Error("session writes forbidden"); },
       sendMessage() { throw new Error("model messages forbidden"); } };
@@ -330,6 +333,8 @@ test("compatibility incremental lifecycle schedules, validates, falls back when 
       sessionManager: {
         getSessionFile: () => sessionPath,
         getSessionId: () => "synthetic-incremental",
+        getLeafId: () => branch.at(-1)?.id ?? null,
+        getEntry: (id: string) => branch.find(entry => entry.id === id),
         getEntries: () => branch,
         getBranch: () => branch,
       },
@@ -905,7 +910,7 @@ test("uniform continuation follows unresolved turns across successful compaction
   process.env.PI_CHRONO_CONFIG_PATH = configPath;
   const pi = {
     registerTool(tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) {
-      toolExecutors.set(tool.name, tool.execute);
+      toolExecutors.set(tool.name, () => tool.execute("fixture-compaction", {}, undefined, undefined, context));
     },
     registerCommand() {},
     on(name: string, handler: Hook) {
@@ -1068,7 +1073,9 @@ test("owned guarded refusal resumes once, respects cancellation, and fences nati
     ui: { notify: (text: string) => { notifications.push(text); }, getEditorText: () => "" },
     modelRegistry: { getApiKeyAndHeaders() { throw new Error("model call forbidden"); } },
   };
-  const pi = { registerTool(tool: { name: string; execute: () => Promise<any> }) { tools.set(tool.name, tool.execute); },
+  const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) {
+      tools.set(tool.name, () => tool.execute("fixture-compaction", {}, undefined, undefined, context));
+    },
     registerCommand() {}, appendEntry() { throw new Error("session mutation forbidden"); },
     on(name: string, hook: Hook) { setUniqueHook(hooks, name, hook); },
     sendMessage(message: { content: string }, options?: { triggerTurn?: boolean }) { messages.push({ ...message, ...options }); },

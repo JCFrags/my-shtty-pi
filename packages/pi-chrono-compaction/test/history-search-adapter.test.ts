@@ -17,6 +17,8 @@ import { line } from "./capsule-storage-fixture.js";
 
 const hash = (s: string): string => createHash("sha256").update(s).digest("hex");
 const uuid = (s: string): string => { const h = hash(s); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`; };
+const emptyLine = (id: string, parentId: string | null): string =>
+  JSON.stringify({ type: "message", id, parentId, message: { role: "user", content: [] } }) + "\n";
 async function ready(adapter: HistorySearchAdapter, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -28,16 +30,15 @@ async function ready(adapter: HistorySearchAdapter, timeoutMs = 10_000): Promise
   assert.fail(`lifecycle did not settle: ${JSON.stringify(adapter.scheduler.status())}`);
 }
 
-/** Each cold layer has the existing finite 10-second settlement bound. A
- * completed earlier layer is not charged against a later layer's startup.
- * Never reset on repeated running/lagging ticks. Five stages cap total waiting.
+/** Share the existing five-layer, 50-second maximum across the full target.
+ * A cached prefix can make an early layer ready before target catch-up finishes.
+ * Never reset the absolute deadline on progress or a layer transition.
  */
 async function readyLayers(adapter: HistorySearchAdapter): Promise<void> {
   const stages = ["catalog", "capsules", "index", "memory", "rollup"] as const;
-  const started = Date.now();
+  const started = Date.now(), deadline = started + 50_000;
   const observed: { stage: string; elapsedMs: number }[] = [];
   for (const stage of stages) {
-    const deadline = Date.now() + 10_000;
     const layerState = (): unknown => {
       const value = adapter.status()[stage];
       return typeof value === "object" && value !== null ? (value as { state?: string }).state : value;
@@ -51,7 +52,7 @@ async function readyLayers(adapter: HistorySearchAdapter): Promise<void> {
       assert.notEqual(status[stage], "error", JSON.stringify({ stage, status, observed }));
       assert.ok(Date.now() < deadline, JSON.stringify({ code: "layer-did-not-settle", stage, status, observed }));
       // drain is only one active job, not full readiness. Race it with a short
-      // poll so the finite stage deadline still applies to a stuck worker.
+      // poll so the finite overall deadline still applies to a stuck worker.
       await Promise.race([adapter.scheduler.drain(), new Promise(resolve => setTimeout(resolve, 20))]);
       await new Promise(resolve => setTimeout(resolve, 20));
     }
@@ -322,7 +323,11 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
   let content = "", parent: string | null = null;
   for (let index = 1; index <= 40; index += 1) {
     const id = `event-${index}`;
-    content += line(id, parent, index === 1 ? "early searchable prefix needle" : index === 40 ? "eventual tail needle" : `ordinary history ${index}`);
+    // Keep all physical cuts and five later sources, exceeding the four-source index page.
+    content += index === 1 ? line(id, parent, "early searchable prefix needle")
+      : index === 40 ? line(id, parent, "eventual tail needle")
+      : index >= 17 && index <= 20 ? line(id, parent, `ordinary history ${index}`)
+      : emptyLine(id, parent);
     parent = id;
   }
   writeFileSync(sourcePath, content, { mode: 0o600 });
@@ -410,8 +415,12 @@ test("long common prefix resumes after a fork without rewinding committed ancest
   const sourcePath = join(directory, "source.jsonl"), schedulerDirectory = join(directory, "scheduler");
   mkdirSync(schedulerDirectory, { mode: 0o700 });
   const ancestorText = "exact common ancestor evidence", siblingText = "abandoned sibling evidence";
-  const records = Array.from({ length: 24 }, (_, index) => line(`event-${index + 1}`, index ? `event-${index}` : null,
-    index === 19 ? ancestorText : index === 23 ? siblingText : `ordinary branch history ${index + 1}`));
+  // Empty filler bodies preserve the long physical ancestry without unrelated reducer jobs.
+  const records = Array.from({ length: 24 }, (_, index) => {
+    const id = `event-${index + 1}`, parent = index ? `event-${index}` : null;
+    return index === 19 ? line(id, parent, ancestorText) : index === 23 ? line(id, parent, siblingText)
+      : index === 0 ? line(id, parent, "ordinary branch history 1") : emptyLine(id, parent);
+  });
   writeFileSync(sourcePath, records.join(""), { mode: 0o600 });
   const target = { sourcePath, catalogDirectory: join(directory, "catalog"), sessionKey: hash("long-branch-session"), shardKey: hash("long-branch-shard") };
   const options = { schedulerDirectory, slots: 1 }, adapter = new HistorySearchAdapter(options);

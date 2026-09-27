@@ -31,8 +31,32 @@ The summary and chronological replay complement each other. A summary alone, det
 - Native Memory, Todo, Notes, and Workplan are fallible evidence. A saved record is not automatically current, relevant, true, or authoritative.
 - Default current-work selection must not let archived or completed records displace open work. Apply lifecycle selection before bounded record and byte fitting. Keep archive recovery available.
 - Keep full receipts, internal scores, classification labels, omitted-record inventories, and provider transport metadata outside the main context. Show only the short notices and recovery routes needed to interpret the content safely.
-- Keep the 32,000-token default for Chrono-owned context. This is a maximum, not a target. Choose preferred event detail from relevance, role, outcome, and recency before fitting that ceiling. Reduce further when necessary, but do not expand routine history merely because space remains. Charge the complete summary, replay, exact tail, and required framing. Account separately for system text, tools, and response reserve. Label estimates as estimates.
+- Keep the configured context ceiling unchanged, including its 32,000-token default. This is a maximum, not a target. Apply the adaptive replay policy below within the remaining allowance. Charge the complete summary, replay, exact tail, and required framing. Account separately for system text, tools, and response reserve. Label estimates as estimates.
 - Refuse a stale, mismatched, cancelled, or unusable compaction rather than silently return the rejected old representation. If a summary cannot be requested safely after overflow, preserve the source and report that limit.
+
+## Pi context edits
+
+Apply the latest applicable `context_edit` before extracting replay content. A null replacement omits the message. A non-null replacement supplies its content while preserving the source ID, role, and tool metadata. Only edits on the active branch and within Pi's latest retained context apply. Edits after the replay cut still affect their earlier targets.
+
+Replay checks edit and compaction metadata through the complete active branch. It retains edit references only for the bounded replay candidates and does not copy lifetime message bodies. Locked Pi 0.85.1 does not export `buildSessionProjection`, so capture uses a small compatibility adapter. Focused synthetic fixtures match installed Pi 0.87.1 projection behavior. This does not widen the package's declared Pi compatibility range.
+
+Exact raw `history_get` remains unchanged. Context edits do not rewrite source JSONL or remove text already copied into an older saved summary. The summary-submission freshness guards remain in force.
+
+## Adaptive replay selection
+
+Replay starts with a preferred allowance of 5,000 estimated tokens. This is a starting heuristic, not a measured optimum, a minimum size, or a new context setting. The compiler still supplies the hard replay limit after it charges the continuation summary and exact tail. The final complete-request check is unchanged.
+
+Selection happens before token fitting. User wording, relevant evidence, explicit error outcomes, and a small recent suffix are eligible. Older unrelated tool output is not retained merely because it fits. Repeated tool excerpts keep the latest representative. This is excerpt deduplication, not proof that the original entries are identical or that an error was resolved. Omitted entries keep their original recovery IDs.
+
+A polling call does not prove that its result is routine. Only empty results, explicit empty process/session lists, or the recognized nonterminal process-status envelope receive that classification. Final stdout, failures, agent handoffs, and other substantive results use normal evidence admission. A recent relevant status-only poll can remain as a brief excerpt, but cannot expand the preferred allowance.
+
+Summary hints are fallible relevance terms. A direct match or two significant words from one hint can admit an event. Expansion requires a direct match, overlap with at least two hints, matching user wording, or an explicit error among the last eight captured events. A single weak word overlap and an older unmatched error cannot expand replay. These rules do not determine whether historical work is still open. The continuation summary remains the primary current-state account.
+
+The effective allowance can grow only to the preferred-detail cost of expansion-eligible evidence, and never above the compiler's hard limit. Routine and older optional detail cannot cause that growth. Fitting removes optional detail first, then reduces important detail before omitting useful events. Selected excerpts remain in source order. Short histories do not fill unused space.
+
+Receipts retain the existing selected and omitted ID fields. The `adaptive-replay-v1` policy adds the preferred, effective, and hard replay allowances, expansion demand, and content-free selection reasons. The model-facing text discloses selection and allowance omissions, gives a captured-interval `history_range` route, and keeps each selected entry's exact `history_get` reference. Source JSONL, exact recovery, submission freshness guards, and the summary prompt are unchanged.
+
+Two focused synthetic scenarios check selective admission below the preferred allowance, multiword hints, useful poll output, relevance-driven expansion, stale and repeated errors, source order, recovery IDs, and complete-context fitting. They do not establish semantic completeness, an optimal allowance, or loaded activation. Real-prefix practical verification remains separate.
 
 ## Session and cache behavior
 
@@ -89,5 +113,7 @@ The earlier isolated implementation passed six focused offline tests. The latest
 A genuine same-session preview was generated and the user reviewed its overall shape. History compression can improve incrementally. That preview used the recent interval after housekeeping compaction, not the original pre-first-compaction fixture. Its configured ceiling was 40,000 tokens. Summary generation reported 11.17% cached input. The activation-related early prefix change was reproduced through Pi's offline serializer, but the cause of the later low reuse remains unknown.
 
 Recompiling the same saved input with relevance-based preferred detail reduced estimated context from 35,967 to 13,048 tokens. It kept the summary unchanged and all 82 captured events in source order. Ceilings of 32,000 and 40,000 produced identical text. This checks ceiling behavior on one captured input, not semantic completeness or a new live compaction. No additional model request was made. The bounded summary headroom policy is now approved for isolated implementation. The corrected live high-context exchange and activation remain unverified.
+
+For the context-edit and adaptive replay changes, four synthetic edit fixtures matched installed Pi 0.87.1 projection behavior across 25 captures. Combined edit, replay, compiler, and hook checks passed. A fixed real conversation prefix reused its saved summary without a model call. Estimated replay decreased from 17,833 to 6,971 tokens, with 46 of 156 events selected. Total compiled context was 9,833 tokens under the unchanged 40,000-token ceiling. Practical continuation review found no blocking gap and verified source order, roles, recovery IDs, and truthful omission notices. This checks one prefix, not semantic completeness, a live summary exchange, or activation.
 
 The private `sessionAgentPreview` integration option uses the registered summary tool and the same capture and compiler functions. It pins the intended session, source, settings, and response reserve. It skips candidate background work and vetoes native compaction for the entire temporary load. Its callback receives the complete result after safe-idle settlement. Call `revalidate()` during the callback, including after an awaited file write. That function is no longer valid after the callback returns and the summary ticket is cleared. The adapter does not start a model turn, apply compaction, or send a continuation. The extended existing hook fixture verifies this dispatch without a model or live session.
