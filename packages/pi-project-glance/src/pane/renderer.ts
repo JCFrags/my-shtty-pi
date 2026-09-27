@@ -96,8 +96,8 @@ function renderItemContent(item: RenderItem, width: number, expanded: boolean, s
 }
 
 const FEED_CARD_STYLE = "\u001b[48;5;236m\u001b[38;5;255m";
-const HISTORY_CARD_STYLE = "\u001b[48;5;17m\u001b[38;5;255m";
-const HISTORY_HEADER_STYLE = "\u001b[1m\u001b[38;5;81m";
+const HISTORY_CARD_STYLE = "\u001b[48;2;24;32;44m\u001b[38;5;252m";
+const HISTORY_HEADER_STYLE = "\u001b[1m\u001b[38;5;67m";
 const CURRENT_CARD_STYLE = "\u001b[48;5;24m\u001b[38;5;255m";
 const CARD_RESET = "\u001b[0m";
 
