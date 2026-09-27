@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>Chrono menu and configuration</title>
+  <!-- Reading copy of menu-and-configuration.md. Source SHA-256: 814a771404f096445d6378df19bf7b7a696c0af78df1f8ce76805bb902fb3495 -->
+  <!-- Source front matter, retained as document metadata:
+---
+title: Chrono menu and configuration
+audience: [users, agents, operators]
+status: current reference
+purpose: Describe the unified operator interface, setting precedence, defaults, and path-specific controls.
+related:
+  - ../USER-GUIDE.md
+  - workers-and-caches.md
+  - activation-and-migration.md
+---
+  -->
+  <style>
+    :root {
+      color-scheme: dark;
+      background: #161b22;
+      color: #dce3ed;
+      font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+      font-size: 20px;
+      line-height: 1.7;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: clamp(24px, 4vw, 56px) clamp(22px, 4vw, 48px) 88px;
+    }
+    h1, h2, h3 { color: #f0f4fa; line-height: 1.3; font-weight: 650; }
+    h1 { margin: 0 0 1.15em; font-size: 2rem; letter-spacing: -0.025em; }
+    h2 { margin: 2em 0 0.8em; padding-top: 0.85em; border-top: 1px solid #343e4c; font-size: 1.4rem; }
+    h1 + h2 { margin-top: 0; padding-top: 0; border-top: 0; }
+    h3 { margin: 1.65em 0 0.65em; font-size: 1.15rem; }
+    p { margin: 0 0 1.15em; }
+    strong { color: #f0f4fa; font-weight: 650; }
+    a { color: #9fc5ff; text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+    a:hover { color: #c5ddff; }
+    :focus-visible { outline: 2px solid #a7cbff; outline-offset: 5px; border-radius: 3px; }
+    ul, ol { margin: 0 0 1.3em; padding-left: 1.5em; }
+    li { padding-left: 0.15em; margin: 0.4em 0; }
+    li::marker { color: #a9b7ca; }
+    code {
+      font-family: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", monospace;
+      font-size: 0.9em;
+      padding: 0.1em 0.3em;
+      border: 1px solid #374252;
+      border-radius: 4px;
+      background: #232c39;
+      color: #e5edfa;
+      overflow-wrap: anywhere;
+    }
+    .table-scroll { overflow-x: auto; margin: 1.3em 0 1.5em; border: 1px solid #3a4555; border-radius: 7px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; line-height: 1.6; }
+    th, td { padding: 0.75em 0.9em; text-align: left; vertical-align: top; border-bottom: 1px solid #343e4c; }
+    th { color: #f0f4fa; background: #253040; font-weight: 650; }
+    th[align="right"], td[align="right"] { text-align: right; }
+    td { background: #1b232e; }
+    tbody tr:nth-child(even) td { background: #1f2834; }
+    tbody tr:last-child td { border-bottom: 0; }
+    th:first-child, td:first-child { min-width: 8.5em; }
+    ::selection { background: #385784; color: #fff; }
+    @media (max-width: 600px) {
+      :root { font-size: 19px; }
+      main { padding: 26px 22px 64px; }
+      table { min-width: 540px; }
+    }
+    @media print {
+      :root { color-scheme: light; background: white; color: #111; font-size: 12pt; }
+      main { max-width: none; padding: 0; }
+      h1, h2, h3, strong, a, code, th { color: #111; }
+      code, th, td, tbody tr:nth-child(even) td { background: white; }
+      .table-scroll { overflow: visible; }
+      table { min-width: 0; }
+      h1, h2, h3 { break-after: avoid; }
+      tr { break-inside: avoid; }
+    }
+    pre { overflow-x: auto; padding: 18px; border: 1px solid #374252; border-radius: 7px; background: #232c39; line-height: 1.55; }
+    pre code { display: block; padding: 0; border: 0; background: transparent; white-space: pre; overflow-wrap: normal; }
+  </style>
+</head>
+<body>
+<main>
+<h1>Chrono menu and configuration</h1>
+<h2>One menu</h2>
+<p>Open <code>/Chrono</code>. The unified interface has <strong>Settings</strong>, <strong>Status and diagnostics</strong>, <strong>Maintenance</strong>, <strong>About</strong>, and <strong>Close</strong>. It replaces the old separate <code>/chrono-*</code> operator commands. Native model-facing history tools retain their names.</p>
+<p>Settings exposes common controls first and <strong>Custom settings (all options)</strong> for advanced controls. Valid changes save immediately. Failed writes remain visible and can be corrected or discarded. Reports remain in the interface, not the conversation or model context.</p>
+<p>Use Up/Down or Page Up/Page Down to scroll a report. Home/End select its ends. Enter or Esc returns. The local focused-overlay correction keeps page keys in the report when Pi runs fullscreen. Implementation of that correction is not proof that an older running process loaded it.</p>
+<h3>Status and diagnostics</h3>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>Menu entry</th>
+<th>Direct action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Overview and search readiness</td>
+<td><code>/Chrono search-status</code></td>
+</tr>
+<tr>
+<td>Background LLM usage</td>
+<td><code>/Chrono value-worker-status</code></td>
+</tr>
+<tr>
+<td>Local workers</td>
+<td><code>/Chrono worker-status</code></td>
+</tr>
+<tr>
+<td>Read-only health check</td>
+<td><code>/Chrono doctor</code></td>
+</tr>
+<tr>
+<td>Source catalog shadow</td>
+<td><code>/Chrono catalog-status</code></td>
+</tr>
+<tr>
+<td>Capsule shadow</td>
+<td><code>/Chrono capsules-status</code></td>
+</tr>
+<tr>
+<td>Rollup shadow</td>
+<td><code>/Chrono rollup-shadow-status</code></td>
+</tr>
+</tbody></table></div>
+<p>The shadow reports describe retained diagnostic paths, not certificates of active composition eligibility. Search status and <code>history_status</code> read cached lifecycle observations. Worker/doctor diagnostics do not clear reservations, resume owners, repair admission, or change worker limits.</p>
+<h3>Maintenance</h3>
+<p>Maintenance contains session search on/off, a stored-compaction preview, logical-session actions, explicit rollup repair, and background failure-circuit reset. Advanced direct forms include:</p>
+<pre><code class="language-text">/Chrono search on
+/Chrono search off
+/Chrono composition-preview [compaction-entry-id]
+/Chrono logical-session status &lt;logical-session-id&gt; [branch-id]
+/Chrono rollup-repair status &lt;repair-id&gt;
+/Chrono value-worker-reset
+</code></pre>
+<p>Preview saves a bounded private comparison and does not replace context. Repair changes derived state. Reset cancels this process&#39;s pending value work and clears its persisted failure pause. If eligible and enabled, model work can resume afterward. Do not use those mutating actions as status checks.</p>
+<p><code>/Chrono settings</code> opens the interface. Do not assume the old <code>/chrono-compact-settings key value</code> syntax remains a setter. The internal <code>_auto-rollover</code> action uses a one-use guard and is not a manual maintenance route.</p>
+<h2>Configuration precedence</h2>
+<p>The default file is <code>$HOME/.pi/agent/chrono-compact.json</code>. <code>PI_CHRONO_CONFIG_PATH</code> can select another JSON object file.</p>
+<p>For supported settings, the environment wins over JSON, which wins over compiled defaults. Menu writes change JSON only. A missing file uses defaults. A malformed or invalid file is ignored as a whole for that process, with a visible warning. Numeric environment values are generally clamped by their resolver. JSON validation rejects invalid known values. Do not assume every field has identical parsing behavior.</p>
+<p>The writer validates the object and replaces it through an owner-only temporary file and rename. This is not a transaction with Pi package settings or provider migration. An external file edit alone does not prove that a process uses the new effective value.</p>
+<h2>Core controls</h2>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>JSON field</th>
+<th>Environment override</th>
+<th>Default and applicability</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>contextCompiler</code></td>
+<td><code>PI_CHRONO_CONTEXT_COMPILER</code></td>
+<td><code>v3</code>. Select <code>v4</code> explicitly for native cards and frozen receipts.</td>
+</tr>
+<tr>
+<td><code>memoryOwner</code></td>
+<td><code>PI_CHRONO_MEMORY_OWNER</code></td>
+<td><code>chrono</code>. Select <code>context-kit</code> before factory load for independent Memory. Requires a safe reload and explicit data migration.</td>
+</tr>
+<tr>
+<td><code>memoryEngineEnabled</code></td>
+<td><code>PI_CHRONO_MEMORY_ENGINE</code></td>
+<td><code>true</code>. Normal adoption, indexed derivation, and V3 memory path. V4 compiler selection is a separate control.</td>
+</tr>
+<tr>
+<td><code>searchIndexEnabled</code></td>
+<td><code>PI_CHRONO_SEARCH_INDEX</code></td>
+<td>The normal engine implies search unless explicitly disabled.</td>
+</tr>
+<tr>
+<td><code>targetContextTokens</code></td>
+<td><code>PI_CHRONO_TARGET_CONTEXT</code></td>
+<td>32,000, range 8,000–250,000. Model headroom can lower the effective ceiling.</td>
+</tr>
+<tr>
+<td><code>dynamicRawTailMinTokens</code> / <code>dynamicRawTailMaxTokens</code></td>
+<td><code>PI_CHRONO_RAW_TAIL_MIN</code> / <code>PI_CHRONO_RAW_TAIL_MAX</code></td>
+<td>3,000 / 6,000. Minimum cannot exceed maximum. V3/V4 use these dynamic limits.</td>
+</tr>
+<tr>
+<td><code>triggerThresholdTokens</code></td>
+<td><code>PI_CHRONO_TRIGGER_TOKENS</code></td>
+<td>No proactive threshold. Pi context pressure remains active independently.</td>
+</tr>
+<tr>
+<td><code>triggerMinimumGrowthTokens</code></td>
+<td><code>PI_CHRONO_TRIGGER_MIN_GROWTH</code></td>
+<td>4,000. Growth gate for another threshold attempt. It does not bypass the failure retry pause.</td>
+</tr>
+<tr>
+<td><code>automaticRolloverEnabled</code></td>
+<td><code>PI_CHRONO_AUTOMATIC_ROLLOVER</code></td>
+<td><code>true</code>, subject to safe-idle and complete-transfer checks.</td>
+</tr>
+<tr>
+<td><code>rolloverSourceBytes</code></td>
+<td><code>PI_CHRONO_ROLLOVER_BYTES</code></td>
+<td>8,388,608, range 1–64 MiB of growth beyond bootstrap.</td>
+</tr>
+<tr>
+<td><code>toolResultProjectionMode</code></td>
+<td><code>PI_CHRONO_TOOL_RESULT_PROJECTION</code></td>
+<td><code>off</code>. <code>safe</code> and <code>aggressive</code> select boundary-stable request-local shortening.</td>
+</tr>
+<tr>
+<td><code>hostWorkerSlots</code></td>
+<td><code>PI_CHRONO_HOST_WORKER_SLOTS</code></td>
+<td>1, range 1–4 deterministic worker slots.</td>
+</tr>
+<tr>
+<td><code>workerTimeoutSeconds</code></td>
+<td><code>PI_CHRONO_WORKER_TIMEOUT_SECONDS</code></td>
+<td>900, range 30–3,600 for applicable compatibility jobs. Indexed jobs have lower operation-specific deadlines.</td>
+</tr>
+<tr>
+<td><code>workerNiceLevel</code></td>
+<td><code>PI_CHRONO_WORKER_NICE</code></td>
+<td>10, range 0–19.</td>
+</tr>
+</tbody></table></div>
+<p>The menu does not expose every V4 ownership/selection field as a dedicated choice. Configure <code>contextCompiler</code> and <code>memoryOwner</code> through the coordinated activation procedure, not an improvised live handoff. Status shows the captured versus configured Memory owner and whether reload is required.</p>
+<p>The planned local selection is V4 plus independent Memory, with value advice and projections off. See <a href="../design/evidence-and-roadmap.md">the single status owner</a> for implementation and activation evidence.</p>
+<h2>Search inclusion</h2>
+<p>Effective indexed search resolves in this order:</p>
+<ol>
+<li>An explicit global false environment or JSON setting forces search off.</li>
+<li>Otherwise, the exact session/source rollout record selects on or off.</li>
+<li>Otherwise, a valid logical binding or eligible fresh-session canary can select it.</li>
+<li>Otherwise, the normal memory-engine/search defaults apply.</li>
+</ol>
+<p><code>/Chrono search on|off</code> changes one exact session/source record, not every session. A persisted false value blocks automatic adoption. Unsafe rollout storage fails closed. Status is read-only and does not retry startup admission.</p>
+<h2>Optional background LLM</h2>
+<p>Background LLM is off by default. Modes are <code>off</code>, <code>shadow</code>, and <code>advisory</code>. Shadow stores advice without applying it. Advisory can adjust eligible deterministic value scores, not final text or authority.</p>
+<p>The menu&#39;s <strong>Usage</strong> choices write ordinary settings:</p>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>Preset</th>
+<th>Input/output per job</th>
+<th align="right">Items</th>
+<th align="right">Calls per session</th>
+<th>Input/output per session</th>
+<th align="right">Estimated USD ceiling</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Lite</td>
+<td>4,000 / 1,000</td>
+<td align="right">10</td>
+<td align="right">20</td>
+<td>40,000 / 8,000</td>
+<td align="right">$0.25</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>6,000 / 1,500</td>
+<td align="right">20</td>
+<td align="right">100</td>
+<td>250,000 / 50,000</td>
+<td align="right">$2</td>
+</tr>
+<tr>
+<td>Max</td>
+<td>12,000 / 4,000</td>
+<td align="right">40</td>
+<td align="right">400</td>
+<td>1,000,000 / 200,000</td>
+<td align="right">$10</td>
+</tr>
+</tbody></table></div>
+<p>All presets use one concurrent model call. Lite uses zero retries and a 90-second timeout. Medium/Max use one retry and 120/180 seconds. Their preferred thinking levels are off/low/medium, adjusted to supported model metadata. Each uses three failures before a 1,800-second pause.</p>
+<p>Custom controls expose mode, model, thinking, per-job and per-session limits, timeout, retries, concurrency, estimated cost, and circuit settings. Selecting a preset is not a measured quality level or guaranteed bill. When a cost ceiling is configured, unavailable model pricing prevents the call rather than guessing.</p>
+<p>The model picker uses available scoped models when present, otherwise available registry models. Choose the main model or a provider/model. An unavailable exact model does not silently fall back. The background choice does not change the main conversation model.</p>
+<p>Enabling asks for confirmation because bounded assistant/tool excerpts can leave the local process and incur charges. It also enables compatibility precompute. Crucially, this worker is paused while the normal memory engine is enabled. It does not currently enrich the V3/V4 indexed compiler. Do not imply that selecting Max improves V4.</p>
+<h2>Retained compatibility controls</h2>
+<ul>
+<li><code>hybridSummaryEnabled</code> / <code>PI_CHRONO_PI_SUMMARY</code>, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not require or use this summary input.</li>
+<li><code>rawTail</code>, default <code>dynamic</code>, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override the V3/V4 dynamic-tail policy.</li>
+<li><code>replayTargetTokens</code> controls compatibility replay, whose separate hard cap is 25,000 tokens.</li>
+<li><code>incrementalPrecomputeEnabled</code>, default false, selects the older candidate store. The normal memory engine cancels this work rather than maintaining both lifetime derivation paths.</li>
+<li><code>isolatedWorkerEnabled</code>, default false, selects contained compatibility replay. Indexed jobs already use bounded workers.</li>
+<li><code>catalogShadowEnabled</code> and <code>rollupShadowEnabled</code>, default false, select separate shadow diagnostics, not V4 ownership or indexed-rollup readiness.</li>
+<li><code>editableMemoryEnabled</code> applies to Chrono-owned legacy Memory. It is not the independent Memory ownership switch.</li>
+<li><code>rankedSearchEnabled</code>, hot/warm source bands, and summary rebase are retained compatibility controls. Do not confuse them with a new indexed-history search model.</li>
+<li><code>historyEditorEnabled</code> is accepted only for old configuration compatibility. The retired editor cannot run.</li>
+</ul>
+<p><a href="README.md">Operations index</a> · <a href="../context/compaction-and-budgets.md">Compaction</a> · <a href="workers-and-caches.md">Workers and cost boundaries</a></p>
+</main>
+</body>
+</html>
