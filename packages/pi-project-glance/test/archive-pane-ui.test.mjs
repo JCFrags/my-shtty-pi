@@ -231,8 +231,8 @@ test("Recent updates has no page gate, History defaults collapsed and has high-c
   assert.match(text, /Preview archived/);
   const historyLine = plain(rendered).find((line) => line.includes("Preview archived"));
   assert.ok(historyLine && !historyLine.includes("×"));
-  assert.ok(rendered.find((line) => line.includes("Preview archived"))?.includes("\x1b[48;5;17m\x1b[38;5;255m"));
-  assert.ok(rendered.find((line) => line.includes("HISTORY (3)"))?.includes("\x1b[1m\x1b[38;5;81m"));
+  assert.ok(rendered.find((line) => line.includes("Preview archived"))?.includes("\x1b[48;2;24;32;44m\x1b[38;5;252m"));
+  assert.ok(rendered.find((line) => line.includes("HISTORY (3)"))?.includes("\x1b[1m\x1b[38;5;67m"));
   for (const line of rendered) assert.ok(visibleWidth(line) <= 48);
 });
 
