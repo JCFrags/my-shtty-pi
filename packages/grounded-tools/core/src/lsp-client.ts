@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 interface PendingRequest {
@@ -26,6 +27,7 @@ export interface LspServerConfig {
   args: string[];
   extensions: string[];
   languageId: string;
+  languageIds?: Record<string, string>;
   rootMarkers: string[];
   initializationOptions?: unknown;
   timeoutMs?: number;
@@ -123,8 +125,9 @@ export class LspClient {
     this.documents.set(uri, version);
     this.diagnosticBaseline.set(uri, this.diagnosticRevision.get(uri) ?? 0);
     if (current === undefined) {
+      const languageId = this.config.languageIds?.[extname(path).toLowerCase()] ?? this.config.languageId;
       this.notify("textDocument/didOpen", {
-        textDocument: { uri, languageId: this.config.languageId, version, text },
+        textDocument: { uri, languageId, version, text },
       });
     } else {
       this.notify("textDocument/didChange", {
