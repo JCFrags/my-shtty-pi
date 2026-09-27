@@ -87,7 +87,6 @@ function renderItemContent(item: RenderItem, width: number, expanded: boolean, s
     const lines = [label, ...wrapText(text, textWidth).map((line) => `${indent}${line}`)];
     if (loading) lines.push(truncateToWidth(`${indent}Loading full body…`, safeWidth));
     if (error) lines.push(truncateToWidth(`${indent}${error}`, safeWidth));
-    if (body) lines.push(truncateToWidth(`${indent}Bytes ${body.offset + Buffer.byteLength(body.text, "utf8")} of ${body.totalBytes}`, safeWidth));
     return lines;
   }
   const wrapped = wrapText(item.text, textWidth);
@@ -97,7 +96,8 @@ function renderItemContent(item: RenderItem, width: number, expanded: boolean, s
 }
 
 const FEED_CARD_STYLE = "\u001b[48;5;236m\u001b[38;5;255m";
-const HISTORY_CARD_STYLE = "\u001b[48;5;234m\u001b[38;5;245m";
+const HISTORY_CARD_STYLE = "\u001b[48;5;17m\u001b[38;5;255m";
+const HISTORY_HEADER_STYLE = "\u001b[1m\u001b[38;5;81m";
 const CURRENT_CARD_STYLE = "\u001b[48;5;24m\u001b[38;5;255m";
 const CARD_RESET = "\u001b[0m";
 
@@ -242,7 +242,7 @@ export function renderProjectGlanceFeed(snapshot: ProjectGlanceSnapshot | undefi
   const historyCount = archive?.summary?.historyCount ?? dismissed.size;
   const expandedHistory = archive?.historyExpanded ?? false;
   lines.push("");
-  lines.push(link("history", "toggle", truncateToWidth(`${expandedHistory ? "▾" : "▸"} HISTORY (${historyCount})`, safeWidth, "")));
+  lines.push(link("history", "toggle", `${HISTORY_HEADER_STYLE}${truncateToWidth(`${expandedHistory ? "▾" : "▸"} HISTORY (${historyCount})`, safeWidth, "")}${CARD_RESET}`));
   if (expandedHistory) {
     if (archive?.pageLoading("history") && !archive.hasActivePage("history")) lines.push(truncateToWidth("Loading history…", safeWidth, ""));
     if (archive.pageError("history")) {

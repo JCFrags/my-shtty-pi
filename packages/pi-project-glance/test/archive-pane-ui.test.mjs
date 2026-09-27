@@ -214,7 +214,7 @@ test("receipt failure retains a Recent updates card and renders a truthful error
   assert.doesNotMatch(rendered, /private transport detail/);
 });
 
-test("Recent updates has no page gate, History defaults collapsed and has subdued cards without X", () => {
+test("Recent updates has no page gate, History defaults collapsed and has high-contrast cards without X", () => {
   const model = new ProjectGlanceArchiveModel();
   model.sync(branchId, { inboxCount: 2, historyCount: 3, commitSeq: 7, state: "ready" });
   model.receivePage("inbox", undefined, page("inbox", [preview("oldest"), preview("newer")]), true);
@@ -231,6 +231,8 @@ test("Recent updates has no page gate, History defaults collapsed and has subdue
   assert.match(text, /Preview archived/);
   const historyLine = plain(rendered).find((line) => line.includes("Preview archived"));
   assert.ok(historyLine && !historyLine.includes("×"));
+  assert.ok(rendered.find((line) => line.includes("Preview archived"))?.includes("\x1b[48;5;17m\x1b[38;5;255m"));
+  assert.ok(rendered.find((line) => line.includes("HISTORY (3)"))?.includes("\x1b[1m\x1b[38;5;81m"));
   for (const line of rendered) assert.ok(visibleWidth(line) <= 48);
 });
 
@@ -290,6 +292,9 @@ test("Clear recent freezes one displayed set while shared History cards keep ind
   assert.equal(model.archive.bodyOffset(historyId), 0, "body chunk navigation belongs to one rendered copy");
   assert.deepEqual(bodyReads, [{ itemId: "shared", offset: 0 }, { itemId: "shared", offset: 0 }, { itemId: "shared", offset: 5 }], "transport always receives the source ID");
   const text = () => plain(view.feed.render(80)).join("\n");
+  assert.doesNotMatch(text(), /Bytes \d+ of \d+/, "expanded Recent and History cards omit byte counters");
+  assert.match(text(), /Previous body chunk/, "Recent body navigation remains available");
+  assert.match(text(), /Next body chunk/, "History body navigation remains available");
   const layout = () => view.scrollView.updateLayout(view.feed.render(80).length, 4, () => {});
   layout();
   assert.notEqual(view.feed.rowForItem("shared"), view.feed.rowForItem(historyId));
