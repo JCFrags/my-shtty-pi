@@ -136,9 +136,12 @@ test("abrupt client death leaves kernel occupancy until the old tree stops; next
   const f = await fixture();
   try {
     const options = f.options("dead-owner", "wait", 20_000);
-    const owner = independent({ ...options, caps: { ...options.caps, deadlineMs: Date.now() + 2000 } });
-    void owner.result.catch(() => {});
-    const old = await marker((options.request as Request).marker);
+    // The deadline includes cold client and cgroup startup before the forced death.
+    const owner = independent({ ...options, caps: { ...options.caps, deadlineMs: Date.now() + 10_000 } });
+    const old = await Promise.race([
+      marker((options.request as Request).marker),
+      owner.result.then(() => { throw new Error("owner-completed-before-marker"); }),
+    ]);
     const oldProcesses = await Promise.all((await readFile(`/sys/fs/cgroup${old.group}/cgroup.procs`, "utf8")).trim().split("\n").map(async value => {
       const pid = Number(value); return { pid, identity: await processIdentity(pid) };
     }));

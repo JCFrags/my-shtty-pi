@@ -99,6 +99,7 @@ test("exact raw logical predecessor recovery uses its catalog when the final sea
   try {
     seed.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "sibling" });
     await waitFor(() => seed.status().index === "ready", () => seed.status());
+    seed.scheduler.cancel(); await seed.scheduler.drain();
     const oldTarget = await seed.compositionTarget("sibling");
     seed.dispose(); await seed.scheduler.drain();
     appendFileSync(sourcePath, final);
@@ -128,6 +129,9 @@ test("exact raw logical predecessor recovery uses its catalog when the final sea
       sessionKey: activeKey, shardKey: hash(`pi-jsonl-v1\0${activePath}`), leafId: "active" });
     assert.deepEqual((await adapter.getRaw("active", {})).details, { status: "unavailable", code: "search-v3-index-not-ready" },
       "an unvalidated active catalog must still refuse");
+    // Keep the active route, but do not spend its shared worker slot indexing
+    // unrelated replacement history while testing the closed predecessor.
+    adapter.scheduler.cancel(); await adapter.scheduler.drain();
     adapter.scheduleLogical(grant);
     // Observe the real child scheduler only to await its terminal missing-index
     // result and drain it during cleanup. Do not manufacture adapter readiness.
@@ -441,6 +445,9 @@ test("long common prefix resumes after a fork without rewinding committed ancest
   try {
     adapter.schedule({ ...target, leafId: "event-24" });
     await waitForCut(24);
+    // Index publication is the required boundary. Stop and drain optional
+    // memory/rollup work before inspecting the committed branch heads.
+    adapter.scheduler.cancel(); await adapter.scheduler.drain();
     const oldTarget = await adapter.compositionTarget("event-24");
     const oldSearch = await runSearchV3Worker({ ...oldTarget, op: "status" }, options);
     const capsuleRequest = { v: 1 as const, op: "status" as const, derivedDirectory: oldTarget.capsuleDirectory,
@@ -479,6 +486,7 @@ test("long common prefix resumes after a fork without rewinding committed ancest
     assert.equal((await adapter.getRaw("event-20", {})).details.text, records[19]);
     assert.deepEqual((await adapter.recall(siblingHandle)).details, { status: "unavailable", code: "search-v3-reference-scope-mismatch" });
     await waitForCut(26);
+    adapter.scheduler.cancel(); await adapter.scheduler.drain();
     assert.equal(adapter.status().lag, 0);
     const ancestor = await adapter.search({ query: ancestorText, mode: "exact" });
     const ancestorHandle = (ancestor.details.hits as { handle: string }[])[0]?.handle;
@@ -533,7 +541,7 @@ export default function(pi) {
     const child = spawn(process.execPath, [cli, "--mode", "rpc", "--offline", "--session", sourcePath, "--session-dir", sessions,
       "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files"], { cwd: root, env: { ...base, HOME: agent, PI_CODING_AGENT_DIR: agent,
         PI_CHRONO_CONFIG_PATH: join(agent, "chrono.json"), PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false", PI_CHRONO_CATALOG_SHADOW: "false", PI_CHRONO_ROLLUP_SHADOW: "false", PI_CHRONO_VALUE_WORKER_MODE: "off" }, stdio: ["pipe", "pipe", "pipe"] });
-    let buffer = "", sequence = 0, receipt: unknown, diagnostics = "";
+    let buffer = "", sequence = 0, receipt: unknown, diagnostics = "", extensionError: Error | undefined;
     const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
     const closed = new Promise<number | null>(resolve => child.once("close", resolve));
     child.stderr.on("data", bytes => { diagnostics = (diagnostics + bytes.toString()).slice(-4096); });
@@ -545,6 +553,7 @@ export default function(pi) {
       while ((end = buffer.indexOf("\n")) >= 0) {
         const raw = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         let event: any; try { event = JSON.parse(raw); } catch { continue; }
+        if (event.type === "extension_error") extensionError = new Error(`resume-extension-error:${JSON.stringify(event)}`);
         if (event.type === "extension_ui_request" && event.method === "notify" && event.message.startsWith("RESUME_RESULT:")) receipt = JSON.parse(event.message.slice(14));
         if (event.type === "response" && pending.has(event.id)) {
           const p = pending.get(event.id)!; pending.delete(event.id); clearTimeout(p.timer);
@@ -553,12 +562,13 @@ export default function(pi) {
       }
     });
     const send = (type: string, extra = {}) => new Promise<unknown>((resolve, reject) => {
-      const id = String(++sequence), timer = setTimeout(() => { pending.delete(id); reject(new Error(`resume-rpc-timeout:${diagnostics}`)); }, 25_000);
+      const id = String(++sequence), timer = setTimeout(() => { pending.delete(id); reject(new Error(`resume-rpc-timeout:${extensionError?.message ?? diagnostics}`)); }, 25_000);
       pending.set(id, { resolve, reject, timer }); child.stdin.write(JSON.stringify({ id, type, ...extra }) + "\n");
     });
     try {
       await send("get_commands");
       await send("prompt", { message: "/resume-probe" });
+      if (extensionError) throw extensionError;
       assert.deepEqual(receipt, { enabled: true, persisted: false, logical: true, adoptions: 1, search: true, recall: true, exact: true });
       await send("prompt", { message: "/resume-quit" });
       assert.equal(await closed, 0);

@@ -15,7 +15,7 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "0d20378997d93d97b1214ec062734df161266d21",
+  "tree": "37785c083fe6f6a4b0a9834bea7f73f54d9959ff",
   "files": 455,
   "maps": 143,
   "package": "packages/pi-chrono-compaction",
@@ -584,7 +584,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "test/history-search-adapter.test.ts",
       "upstreamSha256": "c025d07d72fd03778e3fe1b823a3d7519a977fac8d82670da1e6f51c95faf0f3",
-      "integratedSha256": "6f63df21af8725751525fddb982660e9e3191c1a2772676d176de0bc4bfa8ec3"
+      "integratedSha256": "3051e9c6d6c63a580f927cbc8ba1312fc4ec84c4214eadb62522d948ea68787e"
     },
     {
       "path": "test/history-worker-isolation.test.ts",
@@ -679,7 +679,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "test/worker-runtime.test.ts",
       "upstreamSha256": "d55227e12c9ce45e42b4703daf30b2966f95d1352cd442319ae01fd8fbf7fee0",
-      "integratedSha256": "dc2b7e69a97bc048e9f1d7572085c8548f86ac970e1198de10cdceb590964ffa"
+      "integratedSha256": "32e3c408dfe2350dc3559b39fddd763677e490104a72cdf66cf7fa386d0e0b9c"
     }
   ]
 });
