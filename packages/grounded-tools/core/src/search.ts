@@ -164,17 +164,29 @@ export async function structuredTextSearch(options: {
   }).sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.byteColumn - b.byteColumn);
 }
 
+function literalFileCandidate(pathGlob: string): string | undefined {
+  const segments = pathGlob.split("/");
+  const isLiteral = (segment: string) => segment.length > 0 && segment !== "." && segment !== ".."
+    && !/[^A-Za-z0-9._-]/.test(segment);
+  const candidate = segments.at(-1)!;
+  if (!isLiteral(candidate) || !segments.slice(0, -1).every((segment) =>
+    isLiteral(segment) || segment === "*" || segment === "**")) return undefined;
+  return candidate;
+}
+
 async function structuredPathInventory(options: {
   cwd: string;
   path: string;
   signal?: AbortSignal;
-}): Promise<StructuredPathHit[]> {
+}, literalCandidate?: string): Promise<StructuredPathHit[]> {
   const args = [
     "--print0", "--color=never", "--type", "f", "--type", "d", "--hidden",
     "--no-require-git", "--exclude", ".git",
   ];
   appendIgnoreFiles(args, options.cwd, options.path);
-  args.push(".", options.path);
+  if (literalCandidate === undefined) args.push(".", options.path);
+  // Substrings retain names whose backslashes become path separators in the final matcher.
+  else args.push("--fixed-strings", "--ignore-case", "--", literalCandidate, options.path);
   const result = await capture("fd", args, {
     cwd: options.cwd,
     ...(options.signal ? { signal: options.signal } : {}),
@@ -209,7 +221,7 @@ export async function structuredFileSearch(options: {
   path: string;
   signal?: AbortSignal;
 }): Promise<StructuredPathHit[]> {
-  const inventory = await structuredPathInventory(options);
+  const inventory = await structuredPathInventory(options, literalFileCandidate(options.pathGlob));
   return filterStructuredFileInventory({ ...options, inventory });
 }
 
