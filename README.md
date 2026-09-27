@@ -1,3 +1,13 @@
+---
+title: My Pi extensions
+audience: [users, agents, maintainers]
+status: repository orientation
+purpose: Introduce the maintained products and route readers to setup, detailed documentation, and verification.
+related:
+  - docs/chrono/README.md
+  - docs/activation.md
+---
+
 # My Pi extensions
 
 Extensions for [Pi](https://pi.dev): precise coding tools, task and project state, chronological memory, Herdr integration, and terminal interface controls. This repository also maintains a separately built terminal-browser source copy with AgentCursor integration.
@@ -21,7 +31,7 @@ Use Node.js 24.18.0, npm, Git, and Python 3 for the repository verification work
 
 The root lock prepares Grounded Tools, Context Kit, and root development dependencies. Other products have package-local locks. ChronoCompact, Pi Herdr Orchestrator, and Pi Project Glance use compiled entrypoints: install their locked dependencies and run their declared build steps before registration. Chrono also needs the explicit native SQLite build described under [verification](#verification).
 
-Grounded Tools has seven separately loadable subpackages. Register selected paths such as `packages/grounded-tools/files`, not the grouping directory. Context Kit also has separate `recall` and `telemetry` registrations. Its `protocol` library has no Pi entrypoint. Do not install dependencies separately inside these workspace subpackages.
+Grounded Tools has seven separately loadable subpackages. Register selected paths such as `packages/grounded-tools/files`, not the grouping directory. Context Kit has six separate registrations: `memory`, `todo`, `notes`, `workplan`, `recall`, and `telemetry`. Its `protocol` and `state-store` libraries have no Pi entrypoint. Do not install dependencies separately inside these workspace subpackages. Replace a legacy state provider rather than load both writers.
 
 For an existing installation, preserve package order and replace only the intended registration. Do not append duplicates. Follow [activation and rollback](docs/activation.md) for loader checks, retained package roots, safe reloads, and scoped rollback. A build or link does not update an existing process. Reload only when work is settled and the editor has no unsent draft, then verify the loaded identity. Reload can terminate managed jobs.
 
@@ -40,7 +50,7 @@ The [registry](package.json) contains 16 owned products: 14 active and two inact
 | [Herdr Sidebar](packages/herdr-status/README.md) | Configure additive model/context fields and terminal title activity. Preserve native lifecycle reporting. | `/herdr-sidebar-settings` |
 | [Pi Agent Context](packages/pi-agent-context/README.md) | Maintain stable date/environment snapshots and inspect prompt, context, and tool costs. | `/context-refresh`, `/context-audit` |
 | [ChronoCompact](packages/pi-chrono-compaction/README.md) | Select chronological memory and recover source-linked history. | [History, memory, and operator interfaces below](#chronocompact) |
-| [Context Kit](packages/pi-context-kit/README.md) | Independent current-state recall and local runtime/quality observations for the V4 foundation. | `context_recall`, `telemetry_status`, `/context-telemetry` |
+| [Context Kit](packages/pi-context-kit/README.md) | Independent Memory, Todo, Notes, Workplan, current-state recall, and local runtime/quality observations. | `memory_*`, `todo`, `notes`, `workplan`, `context_recall`, `telemetry_status`, native import commands, `/context-telemetry` |
 | [Pi Herdr Orchestrator](packages/pi-herdr-orchestrator/README.md) | Run direct-Herdr agents and retain authenticated broker configuration. | Root `orchestrate`, child-only `subagent_channel`, `/agent-settings` |
 | [Pi-Notify](packages/pi-notify/README.md) | Standalone durable events and timers, software consumers, resource notes, and an optional exact-target Pi receiver. | `pi-notify` CLI, HTTP API, `/notify`, `notify`, `notify_complete`. |
 | [Pi Native SSH](packages/pi-native-ssh/README.md) | Use configured OpenSSH routes, persistent sessions, and bounded file transfers with remote-write rollback. | `ssh_transfer`, Grounded `session`, `/remote`. Route mode also binds `read`, `ls`, `write`, `edit`, and `bash`. |
@@ -106,66 +116,33 @@ The former `message-board.md` is retired. Use relevant issue or PR comments and 
 
 ## ChronoCompact
 
-ChronoCompact provides selective chronological memory and source-linked recall. Important events retain more detail. Routine history can leave active context while the original source remains recoverable. This is useful incomplete memory, not an attempt to fit a lifetime of history into one context window.
+Chrono keeps useful selective chronological context and source-linked recovery. Context Kit adds independent current-state providers. Original history remains recoverable when detail leaves active context. Neither system promises perfect recall or unlimited capacity.
 
-Programmatic V3 memory is enabled by default. The default combined context target is 32,000 estimated tokens, adjusted to the selected model's capacity, with a small adaptive raw tail. Incremental catalogs, event capsules, episodes, current state, and hierarchical rollups support bounded selection and recovery. Optional language-model advice can improve individual events or bounded groups. The programmatic pipeline does the main work and does not require model calls. Derived memory never gains instruction authority.
+Start with the [non-technical user guide](docs/chrono/USER-GUIDE.md) or the [subject documentation index](docs/chrono/README.md). Agents should read the [system overview](docs/chrono/architecture/system-overview.md), [contracts](docs/chrono/architecture/contracts-and-trust.md), and relevant [source map](docs/chrono/architecture/source-map.md).
 
-If Chrono refuses its own requested compaction, it keeps the current context and reports a bounded failure code. It can resume unresolved work once at safe idle, but it does not retry compaction until new user input. User cancellation does not resume work.
+Open `/Chrono` for Settings, Status and diagnostics, Maintenance, and About. Background LLM presets, model selection, and optional boundary-stable tool-result shortening live there. Background value advice is a compatibility feature paused while the normal memory engine is enabled. It does not enrich V4 indexed compaction.
 
-After rollover, an active replacement session can recheck an initially unavailable worker gate at normal search scheduling. This bounded read-only retry does not initialize or repair admission, change worker policy, or retarget pending stored compaction. Status reads do not trigger it. Requested canaries and other startup refusals remain excluded.
-
-Raw `history_get` can recover an exact cataloged entry before the derived search index is ready. After rollover, use the predecessor's explicit `shardId`. Branch and source validation still apply. The focused adapter check recovered identical predecessor bytes without creating its missing search head. Ranked search, decoded blocks, ranges, and derived memory retain their existing readiness requirements. This correction does not rebuild history or change its stores.
-
-The 3.0.2 stopped-owner and admission-wait diagnostics remain read-only. An inactive worker unit does not prove that its scheduler reservation is free. These diagnostics do not resume owners, remove reservations, or recover blocked admission.
-
-At safe idle, automatic rollover starts a smaller physical session after 8 MiB of new source growth beyond its bootstrap data. It preserves the old JSONL and transfers Notes, Tasks, and Workplan state through bounded native checkpoints. Running managed processes or open shell sessions block the switch. Arbitrary third-party extension state is not automatically migrated. Use checkpoint-aware providers when resuming a replacement session.
-
-Focused checks exercised model-free composition, bounded recall, native state preservation, and actual Pi physical replacement with restart. These checks do not establish perfect recall or billion-token normal-use qualification. Search ranks a bounded lexical candidate window, not the entire archive at once. Loading a pre-existing large Pi session can still incur its initial memory cost. See the [release and evidence boundary](docs/chrono-v3/README.md#release-and-evidence-boundary) and [settled scale results](docs/chrono-v3/reviews/M11-report-correction.md#actual-settled-campaign).
-
-### Agent tools
-
-| Tools | Purpose |
+| Need | Documentation |
 | --- | --- |
-| `history_status` | Inspect indexed readiness, cuts, lag, and safe errors without triggering ingestion or reading the archive. |
-| `history_search`, `history_recall` | Find likely events and expand selected cues, episodes, resource history, state, rollups, or bounded exact blocks. Inspect coverage and continuation fields. |
-| `history_get`, `history_range` | Recover exact source entries, blocks, or chronological ranges. |
-| `history_retention_hint`, `request_compaction` | Record advisory retention priorities and request compaction at a safe work boundary. |
-| `memory_remember`, `memory_update` | Save or revise ordinary source-linked working knowledge without rewriting its event history. |
-| `memory_forget`, `memory_promote` | Remove ordinary knowledge from active working memory or return it to working use. Source history is not deleted. |
-| `memory_list`, `memory_get`, `memory_search` | Inspect current or archived remembered knowledge and its provenance. |
+| Historical discovery, exact entries/ranges, and readiness | [History tools](docs/chrono/history/indexing-and-exact-recovery.md) |
+| Episodes, resources, and rollups | [Chronology](docs/chrono/history/chronology-episodes-resources.md) |
+| V3/V4 compaction, budgets, and receipts | [Context compiler](docs/chrono/context/compaction-and-budgets.md) |
+| Logical sessions and complete state continuation | [Rollover](docs/chrono/history/logical-sessions.md) |
+| Menu, settings, workers, caches, and Telemetry | [Operations](docs/chrono/operations/README.md) |
+| Architecture changes, implemented versus selected features, and measured limits | [Design and evidence](docs/chrono/design/README.md) |
 
-### Operator entrypoint
+The [current status](docs/chrono/design/evidence-and-roadmap.md) separates the local V4 integration from main's 3.0.5 interface and from loaded activation. Package version, effective configuration, ready indexes, and actual use are separate facts. Historical [V3](docs/chrono-v3/README.md) and [V4](docs/chrono-v4/README.md) records remain available for their exact revisions.
 
-The 3.0.5 source patch consolidates operator controls under one command. This description does not establish remote acceptance, local activation, or new runtime validation.
+## Context Kit and V4
 
-| Command | Purpose |
-| --- | --- |
-| `/Chrono [action]` | Open Settings, Status and diagnostics, Maintenance, or About. Optional direct actions are listed in [operations](docs/chrono-v3/operations.md#operator-menu-and-actions). |
+[Context Kit](packages/pi-context-kit/README.md) has six independent extensions: Memory, Todo, Notes, Workplan, Recall, and Telemetry. Each state provider owns its store. Shared libraries provide contracts and storage primitives, not one database.
 
-Valid settings changes save immediately. Invalid values return to the input with an error. In the terminal UI, status reports use a read-only scroller and return to the menu with Enter or Esc. RPC action output remains notifications.
+- [Memory](docs/chrono/state/memory.md) holds source-linked accepted knowledge and separate proposals in one logical session.
+- [Todo, Notes, and Workplan](docs/chrono/state/todo-notes-workplan.md) hold branch-local tasks, scratchpad notes, and durable project state.
+- [Recall](docs/chrono/context/recall.md) returns bounded current cards from active native providers, not historical search or complete transfer snapshots.
+- [Telemetry](docs/chrono/operations/telemetry.md) separates local runtime counters from caller-reported quality. No quality observations means unknown.
 
-Background LLM is optional and can incur charges. Lite, Medium, and Max presets set bounded usage. Custom exposes all controls and the provider/model picker. This compatibility worker stays paused under the default V3 engine. Enabling it does not silently change engines. See [configuration](docs/chrono-v3/configuration.md#optional-background-llm-presets) for the first-exhausted-budget rule and preset limits.
-
-Optional tool-result shortening now runs only on the first request after successful compaction. Later turns reuse frozen replacements, and new results stay exact until the next compaction. Reload, resume, and tree changes reset to exact results. Source-binding refusals also return exact content. This preserves source history but does not guarantee provider-cache hits. See [projection timing and limits](docs/chrono-v3/configuration.md#tool-result-shortening-at-compaction).
-
-The extension dispatches `/Chrono _auto-rollover` internally with a one-use binding. Use Maintenance or `/Chrono logical-session` for operator controls.
-
-Start with the [Chrono overview](docs/chrono-v3/README.md), [configuration](docs/chrono-v3/configuration.md), [operations](docs/chrono-v3/operations.md), and [recovery](docs/chrono-v3/recovery.md). Old plans and reports are historical guides, not the current release checklist.
-
-## Context Kit and the V4 foundation
-
-[Context Kit](packages/pi-context-kit/README.md) supplies two independent source-loaded extensions:
-
-- `context_recall` queries active Todo, Notes, and Workplan providers for bounded current-state cards. It returns native IDs, revisions, status, categories, omitted fields, typed task links, and read-only recovery instructions. It does not scan archives, change state, enable hidden tools, inject context, or compact the session.
-- `telemetry_status` and `/context-telemetry` report local content-free runtime counters and separate caller-reported quality observations. Telemetry works without Recall, Chrono, Grounded Tools, or a model. No quality observations means unknown, not success.
-
-Recall defaults to six cards and 128 scanned records per provider, a 150 ms common wait, and a 16 KiB complete result. Coverage can be incomplete. A native recovery call can return a newer revision, so current cards are not immutable historical handles.
-
-Telemetry has a 16 MiB managed-storage ceiling and does not delete or reuse old slots automatically. Full or failed storage stops disk collection, not agent work. Load it before Chrono or another compactor that can cancel the before-event. Follow the [scoped activation procedure](docs/activation.md#context-kit-foundation).
-
-The [small practical scenario](docs/chrono-v4/foundation-evidence.md) exercised native recovery, unchanged state, and real Pi session reopening. Two controlled model calls scored 0/4 current facts with an old excerpt and 4/4 with actual current cards. The baseline safely requested missing evidence. The inputs differed in available evidence, so this does not establish general accuracy, token savings, or faster performance.
-
-The [V4 design](docs/chrono-v4/README.md) covers independent Memory, Notes, Todo, Workplan, deterministic context selection, and replacement compaction. Those new state implementations and the replacement compactor remain planned. The current foundation preserves existing native state and keeps V3 compaction selected.
+V4 compiler selection is explicit. Independent Memory also needs the startup ownership handoff. Select one native writer per provider. Existing legacy branches need explicit import. Code selection does not migrate data. After new writes, rollback requires complete current native state and, for Memory, verified reverse export. Follow [activation and migration](docs/chrono/operations/activation-and-migration.md) and [rollback](docs/chrono/operations/troubleshooting-and-rollback.md).
 
 ## Integration boundaries
 
@@ -239,8 +216,9 @@ This checks historical Git objects only. Keep session files, credentials, runtim
 - [Capability vision](docs/capability-vision.md): roles of native tools, CLIs, skills, and progressive disclosure.
 - [Activation and rollback](docs/activation.md): registration ownership and loaded-process checks.
 - [Project Glance archive operations](packages/pi-project-glance/docs/archive.md): import, backup, restore, and compatible rollback.
-- [Chrono documentation](docs/chrono-v3/README.md): memory architecture, configuration, recovery, and revision-bound evidence.
-- [V4 foundation](docs/chrono-v4/README.md): independent component design, source-pinned research, native connectors, telemetry, and practical evidence.
+- [Chrono user guide](docs/chrono/USER-GUIDE.md): functions, practical controls, connections, and limitations.
+- [Chrono subject documentation](docs/chrono/README.md): architecture, exact history, state ownership, compaction, operation, and evidence.
+- [Historical V4 records](docs/chrono-v4/README.md): source-pinned research, design, and revision-bound practical evidence.
 - [Browser documentation](vendor/terminal-browser/README.md): the separately managed browser workflow.
 
 The root [MIT license](LICENSE) applies with retained package notices. Imported code keeps its attribution. The [browser license](vendor/terminal-browser/LICENSE), [font license](vendor/terminal-browser/assets/fonts/LICENSE.txt), and [bundled dependency notices](vendor/terminal-browser/assets/licenses/) retain their separate terms and are not replaced by the root license.

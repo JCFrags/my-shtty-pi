@@ -53,7 +53,9 @@ async function processIdentity(pid: number): Promise<string | undefined> {
 const runtimePath = fileURLToPath(new URL("../src/worker-runtime.js", import.meta.url));
 function independent(options: BoundedWorkerOptions<Request, Response>, repeats = 1): { child: ChildProcess; result: Promise<Response[]> } {
   const { validateRequest: _a, validateResponse: _b, signal: _s, ...settings } = options;
-  const script = `import {runBoundedWorker} from ${JSON.stringify(runtimePath)};const options=${JSON.stringify(settings)};let out=[];for(let n=0;n<${repeats};n++){const r=await runBoundedWorker({...options,request:{...options.request,id:options.request.id+'-'+n},validateRequest:v=>v,validateResponse:v=>v?.kind==='progress'?undefined:v});out.push(r.value);}process.stdout.write(JSON.stringify(out)+'\\n');`;
+  // Each repeated call gets the original allowance, not the prior call's spent deadline.
+  const repeatTimeoutMs = Math.max(1, settings.caps.deadlineMs - Date.now());
+  const script = `import {runBoundedWorker} from ${JSON.stringify(runtimePath)};const options=${JSON.stringify(settings)};let out=[];for(let n=0;n<${repeats};n++){const r=await runBoundedWorker({...options,caps:{...options.caps,deadlineMs:n===0?options.caps.deadlineMs:Date.now()+${repeatTimeoutMs}},request:{...options.request,id:options.request.id+'-'+n},validateRequest:v=>v,validateResponse:v=>v?.kind==='progress'?undefined:v});out.push(r.value);}process.stdout.write(JSON.stringify(out)+'\\n');`;
   const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"], env: { PATH: "/usr/bin:/bin" } });
   const result = new Promise<Response[]>((resolve, reject) => { let out = "", err = ""; child.stdout!.on("data", b => out += b); child.stderr!.on("data", b => err += b); child.on("error", reject); child.on("close", code => { if (code !== 0) reject(new Error(`independent-client-${code}: ${err.slice(-1500)}`)); else { try { resolve(JSON.parse(out)); } catch (e) { reject(e); } } }); });
   return { child, result };
@@ -171,10 +173,11 @@ test("different arrival deadlines share execution; shorter waiter times out with
   const f = await fixture();
   try {
     const options = f.options("deadlines", "wait", 1800);
-    const short = runBoundedWorker({ ...options, caps: { ...options.caps, deadlineMs: Date.now() + 1000 } });
-    const started = await marker((options.request as Request).marker);
     const stages: string[] = [];
     const long = runBoundedWorker({ ...options, caps: { ...options.caps, deadlineMs: Date.now() + 5000 }, onProgress: stage => stages.push(stage) });
+    const started = await marker((options.request as Request).marker);
+    // Join an active execution so cold startup cannot consume the short waiter's deadline.
+    const short = runBoundedWorker({ ...options, caps: { ...options.caps, deadlineMs: Date.now() + 1000 } });
     await assert.rejects(short, /worker-timeout/);
     const result = await long;
     assert.equal(result.value.pid, started.pid);
@@ -200,7 +203,8 @@ test("host status and progress are bounded across waiters, heap cap is applied i
     const entryPath = join(f.directory, "heap.mjs");
     await writeFile(entryPath, `process.on('message',q=>process.send({id:q.id,pid:process.pid,group:'heap',started:1,ended:2,code:process.execArgv.join(',')}));`);
     const heap = f.options("heap");
-    const result = await runBoundedWorker({ ...heap, entryPath, caps: { ...heap.caps, memoryBytes: 128 * 1024 * 1024, heapMiB: 80 } });
+    // The cgroup contains both bridge and child. Keep the child heap limit separate.
+    const result = await runBoundedWorker({ ...heap, entryPath, caps: { ...heap.caps, memoryBytes: 256 * 1024 * 1024, heapMiB: 80 } });
     assert.match(result.value.code!, /--max-old-space-size=80/);
   } finally { await f.cleanup(); }
 });

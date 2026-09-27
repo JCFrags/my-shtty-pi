@@ -1,4 +1,15 @@
+---
+title: Historical Chrono memory architecture
+audience: [agents, maintainers]
+status: superseded operational overview
+purpose: Preserve the architecture at its recorded revision without presenting old defaults as current behavior.
+related:
+  - ../chrono/architecture/system-overview.md
+---
+
 # Chrono Memory Engine current architecture
+
+> Historical title and revision retained. Read the [current architecture](../chrono/architecture/system-overview.md). The disabled default, required regular summary, global mandatory-coverage gate, 30,000-token ceiling, and manual-only rollover below describe the recorded earlier source and are superseded.
 
 ## Evidence boundary
 

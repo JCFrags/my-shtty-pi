@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { composeStoredSelection } from "./context-composer.js";
 import { composeBoundedMemory } from "./bounded-memory.js";
-import { LOGICAL_CHECKPOINT_TYPE, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
+import { isLogicalCheckpointType, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
 import { resolveLogicalShardRoutes } from "./logical-session-routing.js";
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -72,7 +72,7 @@ export function replacementContainsOnlyContinuation(entries, binding) {
     let continuationCount = 0;
     const checkpoints = [];
     for (const entry of entries) {
-        if (entry.type === "custom" && entry.customType === LOGICAL_CHECKPOINT_TYPE && continuationCount === 0) {
+        if (entry.type === "custom" && isLogicalCheckpointType(entry.customType) && continuationCount === 0) {
             checkpoints.push({ customType: entry.customType, data: entry.data });
             continue;
         }

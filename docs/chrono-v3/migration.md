@@ -1,4 +1,16 @@
+---
+title: Earlier adoption and schema recovery
+audience: [operators, agents, maintainers]
+status: revision-bound recovery reference
+purpose: Preserve store migration and repair constraints while identifying superseded activation assumptions.
+related:
+  - ../chrono/operations/activation-and-migration.md
+  - ../chrono/operations/troubleshooting-and-rollback.md
+---
+
 # Adoption, migration, and schema recovery
+
+> The disabled-default and global mandatory-overflow claims below belong to earlier revisions. Use [current activation and migration](../chrono/operations/activation-and-migration.md) and [recovery](../chrono/operations/troubleshooting-and-rollback.md). The versioned state-repair compatibility constraints remain useful protocol history, not permission to delete or relabel stores.
 
 Migration is non-destructive preparation of derived data and routing. It is not deployment or automatic approval to compose context. `memoryEngineEnabled` remains false by default; see the [documentation boundary](README.md#current-documentation-boundary).
 

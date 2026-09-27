@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { createCatalogParserState, parseCatalogChunk, type CatalogRecordMetadata } from "../src/catalog-parser.js";
@@ -36,7 +37,11 @@ function parse(raw: string, split?: number): CatalogRecordMetadata {
 // configuration, starting workers, or changing activation. This fails if the
 // registered history contract changes without corresponding provenance coverage.
 test("provenance cases cover every actual registered history tool", () => {
-  const source = ts.createSourceFile("pi-extension.ts", readFileSync(new URL("../../src/pi-extension.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+  const sourcePath = fileURLToPath(new URL("../../src/pi-extension.ts", import.meta.url));
+  const program = ts.createProgram([sourcePath], { module: ts.ModuleKind.NodeNext });
+  const source = program.getSourceFile(sourcePath);
+  assert.ok(source);
+  const checker = program.getTypeChecker();
   const names: string[] = [];
   const inspect = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
@@ -44,8 +49,11 @@ test("provenance cases cover every actual registered history tool", () => {
       const definition = node.arguments[0];
       assert.ok(definition && ts.isObjectLiteralExpression(definition));
       const name = definition.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(source) === "name");
-      assert.ok(name && ts.isPropertyAssignment(name) && ts.isStringLiteral(name.initializer));
-      if (name.initializer.text.startsWith("history_")) names.push(name.initializer.text);
+      assert.ok(name && ts.isPropertyAssignment(name));
+      // Imported constants must resolve to one literal name, not escape coverage.
+      const nameType = checker.getTypeAtLocation(name.initializer);
+      assert.ok(nameType.isStringLiteral(), "registered tool name must resolve to one string literal");
+      if (nameType.value.startsWith("history_")) names.push(nameType.value);
     }
     ts.forEachChild(node, inspect);
   };

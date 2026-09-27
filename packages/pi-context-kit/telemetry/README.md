@@ -1,4 +1,16 @@
+---
+title: Context Kit Telemetry native reference
+audience: [agents, maintainers, operators]
+status: implemented, independently loadable
+purpose: Specify local runtime observations, caller-reported quality, and privacy/storage limits.
+related:
+  - ../../../docs/chrono/operations/telemetry.md
+  - ../README.md
+---
+
 # Context Kit Telemetry
+
+Read the [Telemetry subject guide](../../../docs/chrono/operations/telemetry.md) for practical interpretation and the [evidence boundary](../../../docs/chrono/design/evidence-and-roadmap.md) before making quality or activation claims.
 
 `@context-kit/telemetry` is an independent, local Pi extension. It observes lifecycle events. It does not require Recall, Chrono, Grounded Tools, a provider extension, a model, or a network service.
 
