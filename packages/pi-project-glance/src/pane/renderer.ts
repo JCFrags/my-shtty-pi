@@ -53,7 +53,7 @@ function renderLabeled(label: string, value: string, width: number): string[] {
 
 function renderCurrent(current: ProjectGlanceCurrent, width: number): string[] {
   const rows: string[] = [];
-  for (const [label, value] of [["Step", current.step], ["Toward", current.toward], ["Focus", current.focus]] as const) {
+  for (const [label, value] of [["Todo task", current.step], ["Plan milestone", current.toward], ["Checkpoint note", current.focus]] as const) {
     if (value) rows.push(...renderLabeled(label, value, width));
   }
   return rows;
@@ -170,7 +170,7 @@ export function renderProjectGlancePinned(snapshot: ProjectGlanceSnapshot | unde
   const banner = connectionBanner(state);
   if (banner) lines.push(truncateToWidth(banner, safeWidth, ""));
   const contentWidth = safeWidth < 4 ? safeWidth : safeWidth - 2;
-  lines.push(...renderBox(["CURRENT", ...(snapshot ? renderCurrent(snapshot.current, contentWidth) : [])], safeWidth, CURRENT_CARD_STYLE));
+  lines.push(...renderBox(snapshot ? renderCurrent(snapshot.current, contentWidth) : [], safeWidth, CURRENT_CARD_STYLE));
   lines.push("");
   return lines;
 }

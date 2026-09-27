@@ -356,7 +356,7 @@ test("client reconnects after a relay generation restart", async () => {
   });
 });
 
-test("pane model and renderer keep CURRENT and RECENT UPDATES read-only", () => {
+test("pane model and renderer keep the pinned summary and RECENT UPDATES read-only", () => {
   const snapshot = createStaticSnapshot(STATIC_FIXTURE_SESSION_KEY, FIXTURE_NOW);
   const model = new ProjectGlancePaneModel(STATIC_FIXTURE_SESSION_KEY);
   assert.equal(model.applySnapshot(snapshot), "applied");
@@ -366,7 +366,10 @@ test("pane model and renderer keep CURRENT and RECENT UPDATES read-only", () => 
   assert.equal(model.applySnapshot(snapshot), "stale");
   assert.throws(() => model.applySnapshot({ ...snapshot, sessionKey: deriveSessionKey("other") }), /PROJECT_GLANCE_SESSION_MISMATCH/);
   const lines = renderProjectGlance(model.snapshot, "connected", 80);
-  assert.ok(lines.some((line) => line.includes("CURRENT")));
+  assert.ok(lines.every((line) => !line.includes("CURRENT")));
+  for (const label of ["Todo task:", "Plan milestone:", "Checkpoint note:"]) {
+    assert.ok(lines.some((line) => line.includes(label)));
+  }
   assert.ok(lines.includes("RECENT UPDATES"));
   assert.ok(lines.some((line) => line.includes("Validate the Project Glance foundation")));
   assert.ok(renderProjectGlanceAtHeight(model.snapshot, "connected", 34, 3).length <= 3);

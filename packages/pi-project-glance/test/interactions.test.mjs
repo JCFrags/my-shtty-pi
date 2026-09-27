@@ -143,14 +143,14 @@ test("progress items render as width-bounded background cards with paragraph wra
   }
 });
 
-test("the complete CURRENT section uses one distinct width-bounded card", () => {
+test("the pinned summary uses one untitled width-bounded card", () => {
   const sessionKey = deriveSessionKey("pane-current-card");
   const model = new ProjectGlancePaneModel(sessionKey);
   model.applySnapshot(snapshot(sessionKey, 1, {
     current: {
       step: "Verify the current card at narrow width.",
       toward: "Complete Project Glance interactions.",
-      focus: "Keep CURRENT pinned above the feed.",
+      focus: "Keep the summary pinned above the feed.",
     },
   }));
   const width = 30;
@@ -162,10 +162,10 @@ test("the complete CURRENT section uses one distinct width-bounded card", () => 
   assert.ok(bottom > top);
   assert.ok(plain.every((line) => line !== "Project Glance"));
   assert.ok(lines.slice(top, bottom + 1).every((line) => line.startsWith("\u001b[48;5;24m")));
-  assert.ok(plain.slice(top, bottom + 1).some((line) => line.includes("CURRENT")));
-  assert.ok(plain.slice(top, bottom + 1).some((line) => line.includes("Step:")));
-  assert.ok(plain.slice(top, bottom + 1).some((line) => line.includes("Toward:")));
-  assert.ok(plain.slice(top, bottom + 1).some((line) => line.includes("Focus:")));
+  assert.ok(plain.every((line) => !line.includes("CURRENT")));
+  assert.ok(plain[top + 1].includes("Todo task:"), "the first card row contains data, not a title");
+  assert.ok(plain.slice(top, bottom + 1).some((line) => line.includes("Plan milestone:")));
+  assert.ok(plain.slice(top, bottom + 1).some((line) => line.includes("Checkpoint note:")));
   assert.ok(lines.every((line) => visibleWidth(line) <= width));
   for (const narrowWidth of [4, 8, 12]) {
     assert.ok(
