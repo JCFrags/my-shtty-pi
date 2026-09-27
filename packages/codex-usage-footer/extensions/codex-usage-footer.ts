@@ -22,7 +22,6 @@ import { formatForecastDetails, formatForecastStatus, SharedForecastCoordinator,
 
 const STATUS_KEY = "codex-usage-footer";
 const SESSION_SETTINGS_ENTRY = "codex-usage-display-session-v1";
-const MAX_STATUS_LENGTH = 240;
 const WEEKLY_SECONDS = 604_800;
 const FIVE_HOUR_SECONDS = 18_000;
 
@@ -70,7 +69,7 @@ export function migrateDisplayPreferences(value: unknown): DisplayPreferences | 
 		resetFormat: ["friendly-countdown", "friendly", "countdown", "exact"].includes(String(old.resetFormat)) ? old.resetFormat as ResetFormat : DEFAULT_DISPLAY_PREFERENCES.resetFormat,
 	};
 }
-function percentageText(usedPercent: number, format: UsageFormat): string { const value = format === "used" ? usedPercent : 100 - usedPercent; return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}% ${format}`; }
+function percentageText(usedPercent: number, format: UsageFormat, compact = false): string { const value = format === "used" ? usedPercent : 100 - usedPercent; return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}% ${compact && format === "remaining" ? "left" : format}`; }
 type LocalDateTime = Readonly<{ weekday: string; month: string; day: string; year: string; hour: string; minute: string; timeZoneName: string; calendarDay: number }>;
 function localDateTime(date: Date, timeZone?: string): LocalDateTime | undefined {
 	try {
@@ -84,13 +83,14 @@ function relativeReset(resetMs: number, nowMs: number): string | undefined {
 	if (totalMinutes < 1) return "in <1m"; const days = Math.floor(totalMinutes / 1440); const hours = Math.floor((totalMinutes % 1440) / 60); const minutes = totalMinutes % 60;
 	if (days > 0) return `in ${days}d${hours > 0 ? ` ${hours}h` : ""}`; if (hours > 0) return `in ${hours}h${minutes > 0 ? ` ${minutes}m` : ""}`; return `in ${minutes}m`;
 }
-export function formatResetTime(seconds: number, nowMs = Date.now(), timeZone?: string, format: ResetFormat = "friendly-countdown", detailed = false): string | undefined {
+export function formatResetTime(seconds: number, nowMs = Date.now(), timeZone?: string, format: ResetFormat = "friendly-countdown", detailed = false, compact = false): string | undefined {
 	const resetMs = seconds * 1000; const reset = localDateTime(new Date(resetMs), timeZone); const now = localDateTime(new Date(nowMs), timeZone); if (!reset || !now) return undefined;
 	const countdown = relativeReset(resetMs, nowMs); if (!countdown) return `${detailed ? "Reset" : "reset"} due, awaiting update`;
 	const exact = `${reset.weekday}, ${reset.month} ${reset.day}, ${reset.year} at ${reset.hour}:${reset.minute} ${reset.timeZoneName}`;
-	const distance = reset.calendarDay - now.calendarDay; const day = distance === 0 ? "today" : distance === 1 ? "tomorrow" : reset.weekday; const friendly = detailed ? exact : `${day} at ${reset.hour}:${reset.minute}`;
-	if (format === "countdown") return countdown; if (format === "exact") return `${detailed ? "Resets " : "resets "}${exact}`; if (format === "friendly") return `${detailed ? "Resets " : "resets "}${friendly}`;
-	return detailed ? `Resets ${friendly} · ${countdown}` : `resets ${friendly} (${countdown})`;
+	const distance = reset.calendarDay - now.calendarDay; const day = distance === 0 ? "today" : distance === 1 ? "tomorrow" : reset.weekday; const friendly = detailed ? exact : `${day}${compact ? " " : " at "}${reset.hour}:${reset.minute}`;
+	const prefix = detailed ? "Resets " : compact ? "reset " : "resets ";
+	if (format === "countdown") return countdown; if (format === "exact") return `${prefix}${exact}`; if (format === "friendly") return `${prefix}${friendly}`;
+	return detailed ? `Resets ${friendly} · ${countdown}` : `${prefix}${friendly} (${compact ? countdown.slice(3) : countdown})`;
 }
 export type WindowClass = "weekly" | "five-hour" | "unknown";
 export function classifyWindow(window: UsageWindow): WindowClass { return window.windowSeconds === WEEKLY_SECONDS ? "weekly" : window.windowSeconds === FIVE_HOUR_SECONDS ? "five-hour" : "unknown"; }
@@ -103,8 +103,8 @@ function enabledFields(prefs: WindowDisplayPreferences, kind: WindowClass): Read
 }
 function footerWindow(family: UsageFamily, window: UsageWindow, prefs: DisplayPreferences, nowMs: number, timeZone: string | undefined, snapshotObservedAt: number): string | undefined {
 	if (family.kind !== "standard" && family.kind !== "spark") return undefined; const kind = classifyWindow(window); const controls = enabledFields(family.kind === "spark" ? prefs.spark : prefs.standard, kind);
-	const values: string[] = []; if (controls.usage && window.usedPercent !== undefined) values.push(percentageText(window.usedPercent, prefs.usageFormat));
-	if (controls.reset && window.resetAt !== undefined) { const reset = formatResetTime(window.resetAt, nowMs, timeZone, prefs.resetFormat); if (reset) values.push(reset); }
+	const values: string[] = []; if (controls.usage && window.usedPercent !== undefined) values.push(percentageText(window.usedPercent, prefs.usageFormat, true));
+	if (controls.reset && window.resetAt !== undefined) { const reset = formatResetTime(window.resetAt, nowMs, timeZone, prefs.resetFormat, false, true); if (reset) values.push(reset); }
 	if (!values.length) return undefined; const stale = (window.fieldObservedAt?.duration !== undefined && window.fieldObservedAt.duration < snapshotObservedAt) || (controls.usage && window.usedPercent !== undefined && window.fieldObservedAt?.usage !== undefined && window.fieldObservedAt.usage < snapshotObservedAt) || (controls.reset && window.resetAt !== undefined && window.fieldObservedAt?.reset !== undefined && window.fieldObservedAt.reset < snapshotObservedAt);
 	return `${family.kind === "spark" ? "Spark " : ""}${classLabel(kind)} ${values.join(" · ")}${stale ? " [stale]" : ""}`;
 }
@@ -125,7 +125,7 @@ function formatDetailedSnapshot(snapshot: UsageSnapshot, prefs: DisplayPreferenc
 }
 export function formatCodexUsageStatus(headers: HeaderRecord, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string {
 	const snapshot = snapshotFromHeaders(headers, nowMs); const text = snapshot ? formatFooterSnapshot(snapshot, prefs, nowMs, timeZone) : "";
-	return `Codex ${text || (snapshot ? "configured windows not reported" : "quota/reset unavailable")}`.slice(0, MAX_STATUS_LENGTH);
+	return `Codex ${text || (snapshot ? "configured windows not reported" : "quota/reset unavailable")}`;
 }
 function ageText(ageMs: number): string { if (ageMs < 60_000) return `${Math.max(0, Math.floor(ageMs / 1000))}s`; if (ageMs < 3_600_000) return `${Math.floor(ageMs / 60_000)}m`; return `${Math.floor(ageMs / 3_600_000)}h`; }
 type CountSource = Readonly<{ availableCount: number; observedAt: number; source: "usage summary" | "details" }>;
@@ -140,12 +140,12 @@ function nextKnownExpiry(cache: QuotaCache | undefined, nowMs: number, countSour
 export function formatBankedFooter(cache: QuotaCache | undefined, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string | undefined {
 	if (!prefs.banked.count && !prefs.banked.expiry) return undefined; const parts: string[] = []; const countSource = newestBankedCount(cache); const count = countSource?.availableCount; const staleAfter = cache?.preferences?.pollIntervalMs ?? STALE_AFTER_MS;
 	if (prefs.banked.count) parts.push(count === undefined ? "count unknown" : `${count}${nowMs - countSource!.observedAt > staleAfter ? " [stale]" : ""}`);
-	if (prefs.banked.expiry) { const next = nextKnownExpiry(cache, nowMs, countSource); if (next) { const formatted = formatResetTime(next.time / 1000, nowMs, timeZone, prefs.resetFormat)?.replace(/^resets /, ""); const detailsStale = !!cache?.bankedDetails && (nowMs - cache.bankedDetails.observedAt > staleAfter || !!cache.bankedDetailsLastErrorAt && cache.bankedDetailsLastErrorAt > cache.bankedDetails.observedAt); parts.push(`${next.incomplete ? "next known/listed expiry" : "next expires"} ${formatted ?? "Unknown"}${detailsStale ? " [stale]" : ""}`); } else if (count !== 0) parts.push("next expiry unknown"); }
-	return `Banked resets: ${parts.join(" · ")}`;
+	if (prefs.banked.expiry) { const next = nextKnownExpiry(cache, nowMs, countSource); if (next) { const formatted = formatResetTime(next.time / 1000, nowMs, timeZone, prefs.resetFormat, false, true)?.replace(/^reset /, ""); const detailsStale = !!cache?.bankedDetails && (nowMs - cache.bankedDetails.observedAt > staleAfter || !!cache.bankedDetailsLastErrorAt && cache.bankedDetailsLastErrorAt > cache.bankedDetails.observedAt); parts.push(`${next.incomplete ? "next known/listed expiry" : "next expires"} ${formatted ?? "Unknown"}${detailsStale ? " [stale]" : ""}`); } else if (count !== 0) parts.push("next expiry unknown"); }
+	return `Banked ${parts.join(" · ")}`;
 }
 export function formatCachedStatus(cache: QuotaCache | undefined, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string {
 	const parts: string[] = []; if (hasEnabledWindowFields(prefs)) { const snapshot = latestSnapshot(cache); const quota = snapshot ? (() => { const text = formatFooterSnapshot(snapshot, prefs, nowMs, timeZone); const age = Math.max(0, nowMs - snapshot.observedAt); const staleAfter = cache?.preferences?.pollIntervalMs ?? STALE_AFTER_MS; return `${text || "configured windows not reported"}${age > staleAfter ? `; stale ${ageText(age)}` : ""}`; })() : cache?.lastErrorAt ? "quota/reset unavailable (last poll failed)" : "quota/reset waiting"; parts.push(`Codex ${quota}`); }
-	const banked = formatBankedFooter(cache, nowMs, timeZone, prefs); if (banked) parts.push(banked); return parts.join("; ").slice(0, MAX_STATUS_LENGTH);
+	const banked = formatBankedFooter(cache, nowMs, timeZone, prefs); if (banked) parts.push(banked); return parts.join("; ");
 }
 export function formatUsageDetails(cache: QuotaCache | undefined, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string {
 	const snapshot = latestSnapshot(cache); if (!snapshot) return cache?.lastErrorAt ? "No cached Codex usage is available. The last shared poll failed." : "No cached Codex usage is available.";
