@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { CapsuleCatalogView, ScopedBodySourceRef, ScopedRawSourceRef } from "./capsule-contract.js";
 import { composeStoredSelection } from "./context-composer.js";
 import { composeBoundedMemory } from "./bounded-memory.js";
-import { LOGICAL_CHECKPOINT_TYPE, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
+import { isLogicalCheckpointType, validateLogicalStateCheckpoints } from "./logical-session-checkpoints.js";
 import type { EpisodeStateSelection, EpisodeStateSelectionItem, EpisodeStateSelectionProposition } from "./episode-state-contract.js";
 import type { LogicalActivationBinding } from "./logical-session-routing.js";
 import { resolveLogicalShardRoutes } from "./logical-session-routing.js";
@@ -95,7 +95,7 @@ export function replacementContainsOnlyContinuation(entries: readonly SessionEnt
   let continuationCount = 0;
   const checkpoints: unknown[] = [];
   for (const entry of entries) {
-    if (entry.type === "custom" && entry.customType === LOGICAL_CHECKPOINT_TYPE && continuationCount === 0) {
+    if (entry.type === "custom" && isLogicalCheckpointType(entry.customType) && continuationCount === 0) {
       checkpoints.push({ customType: entry.customType, data: entry.data });
       continue;
     }

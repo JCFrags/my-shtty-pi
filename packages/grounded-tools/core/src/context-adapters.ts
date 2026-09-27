@@ -1,13 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   fitProviderPage, registerContextProvider, sameScope,
-  type Category, type ContextCard, type ContextRequest, type ProviderId, type ProviderPage,
+  type Category, type ContextCard, type ContextRequest, type ProviderPage,
 } from "@context-kit/protocol";
 import type { Note, NotesState } from "./notes.ts";
 import type { Task, TaskState } from "./tasks.ts";
 import type { Workplan, WorkplanState } from "./workplan.ts";
 
 const SCAN_RECORDS = 128;
+const METADATA_RECORDS = 256;
 const SCAN_CHARS = 4096;
 const ARRAY_ITEMS = 8;
 const TEXT_BYTES = 1536;
@@ -166,15 +167,38 @@ function card(view: RecordView, request: ContextRequest, terms: string[]): { val
   } };
 }
 
-function page<T>(request: ContextRequest, records: readonly T[], project: (record: T) => RecordView): ProviderPage {
-  const allTerms = [...new Set(request.query.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [])];
+function queryTerms(query: string): string[] {
+  return [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [])];
+}
+
+/** Inspect only bounded lifecycle metadata before the content-scan budget applies.
+ * Termless browse excludes closed records and puts the current activity first.
+ * Text queries include retained closed records, without reading source history.
+ */
+export function selectContextRecords<T extends { status: string }>(request: ContextRequest, records: readonly T[]): { records: T[]; complete: boolean } {
+  const count = Math.min(records.length, METADATA_RECORDS);
+  const browse = queryTerms(request.query).length === 0;
+  const current: T[] = [], eligible: T[] = [];
+  for (let index = 0; index < count; index++) {
+    const record = records[index]!;
+    if (browse && (record.status === "done" || record.status === "completed" || record.status === "archived")) continue;
+    if (browse && ((request.providerId === "workplan" && record.status === "active")
+      || (request.providerId === "todo" && record.status === "in_progress"))) current.push(record);
+    else eligible.push(record);
+  }
+  return { records: [...current, ...eligible], complete: count === records.length };
+}
+
+function page<T extends { status: string }>(request: ContextRequest, records: readonly T[], project: (record: T) => RecordView): ProviderPage {
+  const allTerms = queryTerms(request.query);
   const terms = allTerms.slice(0, 16);
-  const count = Math.min(records.length, request.limits.scan, SCAN_RECORDS);
-  let complete = count === records.length && terms.length === allTerms.length;
+  const eligible = selectContextRecords(request, records);
+  const count = Math.min(eligible.records.length, request.limits.scan, SCAN_RECORDS);
+  let complete = eligible.complete && count === eligible.records.length && terms.length === allTerms.length;
   let matched = 0;
   const selected: { card: ContextCard; score: number; index: number }[] = [];
   for (let index = 0; index < count; index++) {
-    const view = project(records[index]!);
+    const view = project(eligible.records[index]!);
     const result = card(view, request, terms);
     complete &&= view.fields.complete;
     if (!result.matched) continue;
@@ -189,8 +213,45 @@ function page<T>(request: ContextRequest, records: readonly T[], project: (recor
     coverage: { scanned: count, matched, excluded: matched - selected.length, scanComplete: complete } });
 }
 
+/** Plain, bounded metadata. Persist this separately from a complete native plan. */
+export interface WorkplanContextRecord {
+  id: string; revision: string; status: string; title: string;
+  fields: { values: Field[]; omitted: string[]; complete: boolean };
+  relations?: Relations;
+}
+export function createWorkplanContextRecord(plan: Workplan): WorkplanContextRecord {
+  const view = planView(plan);
+  const title = prefix(view.title.slice(0, 256), 256);
+  if (title.length !== view.title.length) view.fields.omit("title");
+  return { id: view.id, revision: view.revision, status: view.status, title,
+    fields: { values: view.fields.values, omitted: [...view.fields.omitted], complete: view.fields.complete },
+    ...(view.relations?.length ? { relations: view.relations } : {}) };
+}
+export function projectWorkplanPage(request: ContextRequest, records: readonly WorkplanContextRecord[]): ProviderPage {
+  if (request.providerId !== "workplan") throw new Error("Invalid Workplan context request");
+  return page(request, records, (record) => {
+    const fields = new Fields();
+    fields.values = record.fields.values.map((field) => ({ ...field }));
+    fields.omitted = new Set(record.fields.omitted);
+    fields.complete = record.fields.complete;
+    return { ...record, fields, ...(record.relations ? { relations: record.relations.map((link) => ({ ...link })) } : {}) };
+  });
+}
+export function projectTodoPage(request: ContextRequest, state: TaskState, revisionForTask?: (task: Task) => string): ProviderPage {
+  if (request.providerId !== "todo") throw new Error("Invalid Todo context request");
+  return page(request, state.tasks, (task) => {
+    const view = taskView(task, request);
+    if (revisionForTask) view.revision = revisionForTask(task);
+    return view;
+  });
+}
+export function projectNotesPage(request: ContextRequest, state: NotesState): ProviderPage {
+  if (request.providerId !== "notes") throw new Error("Invalid Notes context request");
+  return page(request, state.notes, noteView);
+}
+
 type States = { todo: TaskState; notes: NotesState; workplan: WorkplanState };
-interface Snapshot<P extends ProviderId> {
+interface Snapshot<P extends keyof States> {
   context: Pick<ExtensionContext, "sessionManager"> | undefined;
   state: States[P]; pending: boolean; corrupt: boolean;
 }
@@ -199,7 +260,7 @@ function refusal(readiness: Exclude<ProviderPage["readiness"], "ready">): Provid
 }
 
 /** Optional read-only adapter. It never restores, persists, or mutates native state. */
-export function registerNativeContextProvider<P extends ProviderId>(
+export function registerNativeContextProvider<P extends keyof States>(
   pi: Pick<ExtensionAPI, "events" | "getActiveTools">, providerId: P, snapshot: () => Snapshot<P>,
 ): () => void {
   try {

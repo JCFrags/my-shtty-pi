@@ -1,12 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isExactObject } from "./state.ts";
+import { boundedTransferJson, registerStateTransferProvider, StateTransferError } from "@context-kit/protocol/transfer";
 
 export const STATE_CHECKPOINT_REQUEST_EVENT = "grounded-state:checkpoint-request-v1" as const;
 export const STATE_CHECKPOINT_RESPONSE_EVENT = "grounded-state:checkpoint-response-v1" as const;
 export const STATE_CHECKPOINT_ENTRY = "grounded-state-checkpoint-v1" as const;
 export const STATE_CHECKPOINT_MAX_BYTES = 8 * 1024 * 1024;
-const MAX_NODES = 200_000;
-const MAX_DEPTH = 32;
 
 export type StateCheckpointProvider = "notes" | "todo" | "workplan";
 export type StateCheckpointCode = "state-checkpoint-corrupt" | "state-checkpoint-pending"
@@ -44,51 +43,7 @@ const providerName = (value: unknown): value is StateCheckpointProvider => value
 /** Bound traversal before validation, serialization, or cloning. Never shorten state to fit. */
 function boundedJson(value: unknown, maxBytes: number): string {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > STATE_CHECKPOINT_MAX_BYTES) refuse("state-checkpoint-budget");
-  let bytes = 0;
-  let nodes = 0;
-  const ancestors = new Set<object>();
-  const count = (amount: number) => { bytes += amount; if (bytes > maxBytes) refuse("state-checkpoint-budget"); };
-  const text = (value: string) => {
-    if (value.length > maxBytes - bytes) refuse("state-checkpoint-budget");
-    count(Buffer.byteLength(JSON.stringify(value), "utf8"));
-  };
-  const visit = (item: unknown, depth: number): void => {
-    if (++nodes > MAX_NODES || depth > MAX_DEPTH) refuse("state-checkpoint-budget");
-    if (item === null) { count(4); return; }
-    if (typeof item === "string") { text(item); return; }
-    if (typeof item === "boolean") { count(item ? 4 : 5); return; }
-    if (typeof item === "number") {
-      if (!Number.isFinite(item) || (Number.isInteger(item) && !Number.isSafeInteger(item))) refuse("state-checkpoint-corrupt");
-      count(JSON.stringify(item).length); return;
-    }
-    if (typeof item !== "object" || ancestors.has(item)) refuse("state-checkpoint-corrupt");
-    if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype) refuse("state-checkpoint-corrupt");
-    ancestors.add(item);
-    count(2);
-    if (Array.isArray(item)) {
-      if (item.length > MAX_NODES - nodes) refuse("state-checkpoint-budget");
-      for (let index = 0; index < item.length; index++) {
-        if (index) count(1);
-        const property = Object.getOwnPropertyDescriptor(item, String(index));
-        if (!property || !("value" in property)) refuse("state-checkpoint-corrupt");
-        visit(property.value, depth + 1);
-      }
-    } else {
-      const keys = Object.keys(item);
-      if (keys.length > MAX_NODES - nodes) refuse("state-checkpoint-budget");
-      for (let index = 0; index < keys.length; index++) {
-        if (index) count(1);
-        const key = keys[index]!;
-        text(key); count(1);
-        const property = Object.getOwnPropertyDescriptor(item, key)!;
-        if (!("value" in property)) refuse("state-checkpoint-corrupt");
-        visit(property.value, depth + 1);
-      }
-    }
-    ancestors.delete(item);
-  };
-  visit(value, 0);
-  return JSON.stringify(value);
+  return boundedTransferJson(value, maxBytes);
 }
 
 /** Native custom entries only. The caller rejects a second checkpoint or one after provider events. */
@@ -115,7 +70,7 @@ export function registerStateCheckpointProvider<S>(
   capture: () => { state: S; sessionId?: string; leafId?: string | null; pending: boolean; corrupt: boolean },
   validate: (state: S) => void,
 ): () => void {
-  return events.on(STATE_CHECKPOINT_REQUEST_EVENT, (value: unknown) => {
+  const removeV1 = events.on(STATE_CHECKPOINT_REQUEST_EVENT, (value: unknown) => {
     if (!isExactObject(value, ["version", "requestId", "sourceSessionId", "sourceLeafId", "maxBytes"])
       || value.version !== 1 || !identifier(value.requestId)) return;
     let response: StateCheckpointResponse;
@@ -132,8 +87,23 @@ export function registerStateCheckpointProvider<S>(
       response = { version: 1, requestId: value.requestId, provider, ok: true, entry };
     } catch (error) {
       response = { version: 1, requestId: value.requestId, provider, ok: false,
-        code: error instanceof CheckpointError ? error.code : "state-checkpoint-corrupt" };
+        code: error instanceof CheckpointError || error instanceof StateTransferError ? error.code : "state-checkpoint-corrupt" };
     }
     events.emit(STATE_CHECKPOINT_RESPONSE_EVENT, response);
   });
+  const removeV2 = registerStateTransferProvider(events, provider, (request) => {
+    const current = capture();
+    if (current.sessionId !== request.scope.sessionId || current.leafId !== request.scope.leafId) refuse("state-checkpoint-scope");
+    if (current.corrupt) refuse("state-checkpoint-corrupt");
+    if (current.pending) refuse("state-checkpoint-pending");
+    const entry = JSON.parse(boundedJson({ customType: STATE_CHECKPOINT_ENTRY, data: {
+      version: 1, provider, sourceSessionId: request.scope.sessionId, sourceLeafId: request.scope.leafId, state: current.state,
+    } }, request.maxBytes)) as StateCheckpointEntry<S>;
+    validate(entry.data.state);
+    return [entry];
+  }, () => {
+    const current = capture();
+    return current.sessionId !== undefined && current.leafId !== undefined ? { sessionId: current.sessionId, leafId: current.leafId } : undefined;
+  });
+  return () => { removeV1(); removeV2(); };
 }

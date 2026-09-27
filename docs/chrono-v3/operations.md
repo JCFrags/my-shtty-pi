@@ -1,4 +1,16 @@
+---
+title: Earlier Chrono V3 operations
+audience: [operators, agents]
+status: revision-bound operating reference
+purpose: Preserve V3 lifecycle detail while routing current commands, ownership, and transfer to their subject owners.
+related:
+  - ../chrono/operations/README.md
+  - ../chrono/state/persistence-and-transfer.md
+---
+
 # Chrono Memory Engine operations
+
+> Use the [current operations guide](../chrono/operations/README.md). Current Chrono has one `/Chrono` menu, not the separate commands below. Owned Context Kit providers use [asynchronous complete transfer](../chrono/state/persistence-and-transfer.md), and existing legacy branches need explicit import. This page retains earlier lifecycle and evidence detail.
 
 ## Current operating boundary
 

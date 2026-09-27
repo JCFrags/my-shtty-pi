@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CatalogSqlite } from "./catalog-sqlite.js";
 import { CatalogSource } from "./catalog-source.js";
+import { recoverCatalogSourceIdentity } from "./catalog-source-recovery.js";
 import { createCatalogParserState, parseCatalogChunk } from "./catalog-parser.js";
 import { CATALOG_LIMITS as L, isCatalogRequest } from "./catalog-contract.js";
 const hash = (x) => createHash("sha256").update(x).digest("hex");
@@ -357,6 +358,19 @@ class Engine {
         const r = this.request;
         if (r.op === "ingestStep")
             return this.ingest(r);
+        if (r.op === "sourceIdentity")
+            return this.transaction(() => {
+                // Serialize proof progress as well as final publication with all catalog
+                // writers. No source scan runs under the logical-root pointer mutex.
+                this.run("UPDATE meta SET active=active WHERE singleton=1");
+                if (text(this.get("SELECT store FROM meta WHERE singleton=1"), "store") !== r.targetStoreKey)
+                    fail("catalog-store-mismatch");
+                const shard = this.shard(this.generation(r.generation), r.shardKey);
+                this.checkpoint(shard);
+                return recoverCatalogSourceIdentity(r, { shard, rows: (sql, limit, ...values) => this.rows(sql, limit, ...values),
+                    publish: snapshot => this.run("UPDATE shards SET snapshot=? WHERE g=? AND shard=?", snapshot, r.generation, r.shardKey),
+                    charge: bytes => { this.bytes += bytes; } });
+            });
         if (r.op === "rebuildStep")
             return this.transaction(() => {
                 this.run("UPDATE meta SET active=active WHERE singleton=1");
@@ -479,7 +493,7 @@ export function executeCatalogRequest(request, options) {
                 fail("catalog-identity-unsafe");
         }
         const create = options?.create ?? (request.op === "ingestStep" || (request.op === "rebuildStep" && request.action === "start"));
-        const expectedStoreKey = options?.expectedStoreKey ?? ("view" in request ? request.view.storeKey : undefined);
+        const expectedStoreKey = options?.expectedStoreKey ?? (request.op === "sourceIdentity" ? request.targetStoreKey : "view" in request ? request.view.storeKey : undefined);
         if (create)
             prepareDirectory(request.catalogDirectory);
         const path = join(request.catalogDirectory, `catalog-${hash(request.sessionKey)}.sqlite`);

@@ -5,7 +5,18 @@ export interface CatalogRef { shardKey: string; eventId: string }
 export type CatalogLeaf = CatalogRef | { shardKey: string; ordinal: number };
 export interface CatalogView { storeKey: string; sessionKey: string; generation: number; eventCut: number; branchKey: string; segments: { segment: number; cut: number }[] }
 interface Base { v: 1; catalogDirectory: string; sessionKey: string }
+export interface CatalogSourceIdentityRequest {
+  op: "sourceIdentity";
+  action: "start" | "step" | "status" | "publish";
+  targetStoreKey: string;
+  generation: number;
+  shardKey: string;
+  recoveryKey: string;
+  expectedSnapshotHash: string;
+  expectedCheckpointHash: string;
+}
 export type CatalogRequest = Base & (
+  | CatalogSourceIdentityRequest
   | { op: "ingestStep"; generation?: number; shardKey: string; sourcePath: string; branchKey: string; shardOrdinal: number; parent?: CatalogRef }
   | { op: "status"; generation?: number; shardKey?: string }
   | { op: "pin"; generation?: number; branchKey: string; leaf: CatalogLeaf }
@@ -38,6 +49,11 @@ export function isCatalogRequest(value: unknown): value is CatalogRequest {
       case "blocks": return view(x.view) && integer(x.eventSeq);
       case "raw": return view(x.view) && integer(x.eventSeq) && integer(x.offset) && integer(x.length) && x.length <= 65536;
       case "integrityStep": return key(x.shardKey);
+      case "sourceIdentity": return ["start", "step", "status", "publish"].includes(x.action)
+        && key(x.targetStoreKey) && integer(x.generation) && x.generation > 0 && key(x.shardKey) && key(x.recoveryKey)
+        && typeof x.expectedSnapshotHash === "string" && /^[a-f0-9]{64}$/.test(x.expectedSnapshotHash)
+        && typeof x.expectedCheckpointHash === "string" && /^[a-f0-9]{64}$/.test(x.expectedCheckpointHash)
+        && Object.keys(x).sort().join(",") === "action,catalogDirectory,expectedCheckpointHash,expectedSnapshotHash,generation,op,recoveryKey,sessionKey,shardKey,targetStoreKey,v";
       case "rebuildStep": return x.action === "start" ? key(x.rebuildKey) : x.action === "publish" && integer(x.generation) && integer(x.expectedShards) && x.expectedShards > 0 && x.expectedShards <= 1024;
       default: return false;
     }

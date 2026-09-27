@@ -1,4 +1,16 @@
+---
+title: Chrono V3 historical documentation and evidence
+audience: [agents, maintainers]
+status: revision-bound archive
+purpose: Preserve V3 design, protocol references, decisions, and evidence while routing current use to the subject guide.
+related:
+  - ../chrono/README.md
+  - ../chrono/design/evolution-and-decisions.md
+---
+
 # Chrono Memory Engine documentation
+
+> Current documentation is in [docs/chrono](../chrono/README.md). Start with the [user guide](../chrono/USER-GUIDE.md), [architecture](../chrono/architecture/README.md), or [operations](../chrono/operations/README.md). This directory preserves revision-bound records. Older disabled defaults, required summaries, manual-only rollover, fixed budgets, and `/chrono-*` command lists are superseded where the current guide says so. The one current operator menu is `/Chrono`. Low-level contracts and evidence remain scoped to their recorded revisions.
 
 ChronoCompact develops source-linked chronological memory for Pi. This directory separates the current product direction, subject documentation, architecture decisions, and historical evidence.
 

@@ -1,4 +1,16 @@
+---
+title: Optional model advice privacy and authority decision
+audience: [agents, maintainers]
+status: historical decision with a superseded summary prerequisite
+purpose: Preserve restricted optional-advice authority and distinguish it from current model-free compilation.
+related:
+  - ../../chrono/operations/workers-and-caches.md
+  - ../../chrono/context/compaction-and-budgets.md
+---
+
 # ADR-013: Optional model advice privacy and authority
+
+> The privacy and authority boundary remains relevant. The statement below that a regular Pi summary is required is superseded. [Current compaction](../../chrono/context/compaction-and-budgets.md) is usable without it. The [compatibility value worker](../../chrono/operations/workers-and-caches.md) is paused under the normal memory engine and does not enrich V4.
 
 Status: records the existing optional-advice boundary. It authorizes no provider call, new provider, or expanded model authority.
 

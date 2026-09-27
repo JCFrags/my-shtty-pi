@@ -25,6 +25,11 @@ export function isCatalogRequest(value) {
             case "blocks": return view(x.view) && integer(x.eventSeq);
             case "raw": return view(x.view) && integer(x.eventSeq) && integer(x.offset) && integer(x.length) && x.length <= 65536;
             case "integrityStep": return key(x.shardKey);
+            case "sourceIdentity": return ["start", "step", "status", "publish"].includes(x.action)
+                && key(x.targetStoreKey) && integer(x.generation) && x.generation > 0 && key(x.shardKey) && key(x.recoveryKey)
+                && typeof x.expectedSnapshotHash === "string" && /^[a-f0-9]{64}$/.test(x.expectedSnapshotHash)
+                && typeof x.expectedCheckpointHash === "string" && /^[a-f0-9]{64}$/.test(x.expectedCheckpointHash)
+                && Object.keys(x).sort().join(",") === "action,catalogDirectory,expectedCheckpointHash,expectedSnapshotHash,generation,op,recoveryKey,sessionKey,shardKey,targetStoreKey,v";
             case "rebuildStep": return x.action === "start" ? key(x.rebuildKey) : x.action === "publish" && integer(x.generation) && integer(x.expectedShards) && x.expectedShards > 0 && x.expectedShards <= 1024;
             default: return false;
         }
