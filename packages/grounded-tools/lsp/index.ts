@@ -19,6 +19,14 @@ const DEFAULT_SERVERS: LspServerConfig[] = [
     args: ["--stdio"],
     extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     languageId: "typescript",
+    languageIds: {
+      ".ts": "typescript",
+      ".tsx": "typescriptreact",
+      ".js": "javascript",
+      ".jsx": "javascriptreact",
+      ".mjs": "javascript",
+      ".cjs": "javascript",
+    },
     rootMarkers: ["tsconfig.json", "jsconfig.json", "package.json", ".git"],
   },
   {
@@ -90,6 +98,11 @@ function validServer(value: unknown): value is LspServerConfig {
     && Array.isArray(server.args) && server.args.every((item) => typeof item === "string")
     && Array.isArray(server.extensions) && server.extensions.every((item) => typeof item === "string")
     && typeof server.languageId === "string" && server.languageId.length > 0
+    && (server.languageIds === undefined || (server.languageIds !== null
+      && typeof server.languageIds === "object" && !Array.isArray(server.languageIds)
+      && Object.entries(server.languageIds).every(([extension, languageId]) =>
+        /^\.[^./\\]+$/.test(extension) && extension === extension.toLowerCase()
+        && typeof languageId === "string" && languageId.length > 0)))
     && Array.isArray(server.rootMarkers) && server.rootMarkers.every((item) => typeof item === "string")
     && (server.timeoutMs === undefined || (typeof server.timeoutMs === "number" && Number.isFinite(server.timeoutMs)));
 }

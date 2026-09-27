@@ -12,6 +12,28 @@
 
 The `tasks`, `notes`, and `workplan` entrypoints remain compatibility alternatives. The independent [Context Kit providers](../pi-context-kit/README.md) own Todo, Notes, and Workplan in the Chrono context-state stack. Replace the corresponding Grounded registration when selecting Context Kit. Never load both writers for one native tool. Progressive Tools controls catalog visibility and schema exposure. It does not own either provider implementation or store.
 
+## LSP document languages
+
+Grounded LSP selects a server by its `extensions` list. When it first opens a document, an optional `languageIds` map selects the language by the lowercase file extension. An unmapped extension uses the required scalar `languageId`. Different document languages share the same server/root client.
+
+The default TypeScript server uses these language fields:
+
+```json
+{
+  "languageId": "typescript",
+  "languageIds": {
+    ".ts": "typescript",
+    ".tsx": "typescriptreact",
+    ".js": "javascript",
+    ".jsx": "javascriptreact",
+    ".mjs": "javascript",
+    ".cjs": "javascript"
+  }
+}
+```
+
+Global server configuration is the `servers` array in `grounded-tools/lsp.json` under Pi's agent directory. A custom server replaces the complete default entry with the same `id`. Existing custom entries without `languageIds` keep their scalar language for all routed extensions. To use the mapping above, add it to the existing TypeScript server entry and preserve its other settings. Explicit map values take precedence over the scalar fallback, including intentional nonstandard language choices.
+
 ## Session rollover
 
 This section describes the retained legacy V3 path. Notes, Todo, and Workplan can export their complete current native state at a settled session boundary. Chrono V3 carries that state into a new physical session through `grounded-state-checkpoint-v1` custom entries. IDs, counters, archived records, and Workplan revision and checkpoint history remain intact. Later ordinary events replay from that checkpoint on the selected branch.
