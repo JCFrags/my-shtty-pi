@@ -64,9 +64,11 @@ async function waitForPaneSmoke(paneId, relay) {
   while (Date.now() - started <= PANE_WAIT_TIMEOUT_MS) {
     const text = await readPane(paneId);
     observedScreen = observedScreen || (
-      text.includes("Project Glance") &&
-      text.includes("CURRENT") &&
-      text.includes("RECENT UPDATES")
+      text.includes("Todo task:") &&
+      text.includes("Plan milestone:") &&
+      text.includes("Checkpoint note:") &&
+      text.includes("RECENT UPDATES") &&
+      !text.includes("CURRENT")
     );
     if (relay.connectedClients > 0 && observedScreen && await paneIsPresent(paneId)) {
       await sleep(PANE_POLL_MS);
