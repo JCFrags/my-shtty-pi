@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <title>Chrono menu and configuration</title>
-  <!-- Reading copy of menu-and-configuration.md. Source SHA-256: 814a771404f096445d6378df19bf7b7a696c0af78df1f8ce76805bb902fb3495 -->
+  <!-- Reading copy of menu-and-configuration.md. Source SHA-256: 6e5dbb1460ae019f9723c981c5424855602d35270e5cb078943cad24d4a3dd2f -->
   <!-- Source front matter, retained as document metadata:
 ---
 title: Chrono menu and configuration
@@ -161,7 +161,7 @@ related:
 <tbody><tr>
 <td><code>contextCompiler</code></td>
 <td><code>PI_CHRONO_CONTEXT_COMPILER</code></td>
-<td><code>v3</code>. Select <code>v4</code> explicitly for native cards and frozen receipts.</td>
+<td><code>v3</code>. Select <code>v4</code> explicitly for the same-session summary and compressed chronological replay. Native cards remain evidence in the receipt, not a rendered state dump.</td>
 </tr>
 <tr>
 <td><code>memoryOwner</code></td>
@@ -186,7 +186,7 @@ related:
 <tr>
 <td><code>dynamicRawTailMinTokens</code> / <code>dynamicRawTailMaxTokens</code></td>
 <td><code>PI_CHRONO_RAW_TAIL_MIN</code> / <code>PI_CHRONO_RAW_TAIL_MAX</code></td>
-<td>3,000 / 6,000. Minimum cannot exceed maximum. V3/V4 use these dynamic limits.</td>
+<td>3,000 / 6,000. Minimum cannot exceed maximum. V3 uses these dynamic limits. Current V4 retains only the minimal safe exact suffix, not this token floor.</td>
 </tr>
 <tr>
 <td><code>triggerThresholdTokens</code></td>
@@ -285,9 +285,9 @@ related:
 <p>Enabling asks for confirmation because bounded assistant/tool excerpts can leave the local process and incur charges. It also enables compatibility precompute. Crucially, this worker is paused while the normal memory engine is enabled. It does not currently enrich the V3/V4 indexed compiler. Do not imply that selecting Max improves V4.</p>
 <h2>Retained compatibility controls</h2>
 <ul>
-<li><code>hybridSummaryEnabled</code> / <code>PI_CHRONO_PI_SUMMARY</code>, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not require or use this summary input.</li>
-<li><code>rawTail</code>, default <code>dynamic</code>, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override the V3/V4 dynamic-tail policy.</li>
-<li><code>replayTargetTokens</code> controls compatibility replay, whose separate hard cap is 25,000 tokens.</li>
+<li><code>hybridSummaryEnabled</code> / <code>PI_CHRONO_PI_SUMMARY</code>, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not use this summary input. This switch does not enable or disable V4&#39;s required same-session summary.</li>
+<li><code>rawTail</code>, default <code>dynamic</code>, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override V3&#39;s dynamic-tail policy or V4&#39;s minimal safe suffix.</li>
+<li><code>replayTargetTokens</code> controls compatibility replay, whose separate hard cap is 25,000 tokens. It does not control current V4&#39;s <a href="../context/session-agent-compaction.md#adaptive-replay-selection">adaptive replay allowance</a>. V4 keeps the configured total ceiling and has no separate replay setting.</li>
 <li><code>incrementalPrecomputeEnabled</code>, default false, selects the older candidate store. The normal memory engine cancels this work rather than maintaining both lifetime derivation paths.</li>
 <li><code>isolatedWorkerEnabled</code>, default false, selects contained compatibility replay. Indexed jobs already use bounded workers.</li>
 <li><code>catalogShadowEnabled</code> and <code>rollupShadowEnabled</code>, default false, select separate shadow diagnostics, not V4 ownership or indexed-rollup readiness.</li>

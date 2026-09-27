@@ -8,9 +8,13 @@
 - Historical deployment check, from the repository root: `npm run verify:history`
 - Additive current-state boundary: Todo publishes its existing version-1 summary with a bounded branch identity, and its existing `pi-todo:summary-changed-v1` envelope may carry the bounded snapshot used by the provider. That changed event is an invalidation for consumers, not an authoritative current-state payload. Workplan publishes `pi-workplan:request-summary-v1`, `pi-workplan:summary-v1`, `pi-workplan:summary-changed-v1`, and post-persistence `pi-workplan:activity-v1` (`checkpoint_recorded`, `milestone_completed`, and `plan_completed`). Workplan request IDs are echoed exactly; branch IDs are bounded opaque identifiers and are not whitespace-normalized. Project Glance consumes these events without importing grounded-tools implementation internals or mutating provider state.
 
+## Legacy state-provider compatibility
+
+The `tasks`, `notes`, and `workplan` entrypoints remain compatibility alternatives. The independent [Context Kit providers](../pi-context-kit/README.md) own Todo, Notes, and Workplan in the Chrono context-state stack. Replace the corresponding Grounded registration when selecting Context Kit. Never load both writers for one native tool. Progressive Tools controls catalog visibility and schema exposure. It does not own either provider implementation or store.
+
 ## Session rollover
 
-Notes, Todo, and Workplan can export their complete current native state at a settled session boundary. Chrono V3 carries that state into a new physical session through `grounded-state-checkpoint-v1` custom entries. IDs, counters, archived records, and Workplan revision and checkpoint history remain intact. Later ordinary events replay from that checkpoint on the selected branch.
+This section describes the retained legacy V3 path. Notes, Todo, and Workplan can export their complete current native state at a settled session boundary. Chrono V3 carries that state into a new physical session through `grounded-state-checkpoint-v1` custom entries. IDs, counters, archived records, and Workplan revision and checkpoint history remain intact. Later ordinary events replay from that checkpoint on the selected branch.
 
 Export reads in-memory provider state, not old session archives. Each provider limits a checkpoint to 8 MiB, 200,000 visited values, and 32 nesting levels. Chrono limits the combined checkpoints to 16 MiB. Invalid, pending, or over-budget state prevents rollover. The system does not shorten tool state to make it fit.
 

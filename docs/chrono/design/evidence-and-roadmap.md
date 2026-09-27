@@ -13,17 +13,17 @@ related:
 
 ## Current source boundary
 
-The local runtime integration is `1f4b170`, version `4.0.1-local.20260919`. It combines the V4 completion at `788efc2` with main's Chrono 3.0.5 unified menu and stable tool-result projections, plus the local report-scroll correction at `8761d86`.
+This source contains Chrono `be67e0ec`, version `4.0.5-local.20260926`, and the native ancestry correction `0121b02`. It retains the unified menu and stable tool-result projections, and adds the same-session summary, context-edit handling, and adaptive chronological replay described in the [compaction contract](../context/session-agent-compaction.md).
 
-This is a local integration, not a published GitHub release. Documentation does not establish live selection or loaded activation.
+GitHub acceptance, local code selection, and loaded activation are separate checks. This source record does not establish remote integration or the code currently loaded in an installation.
 
 | Concern | Boundary |
 | --- | --- |
-| Previously selected/main Chrono | 3.0.5, one `/Chrono` menu, presets/model picker, reports, and projection snapshots. |
-| Implemented V4 | Independent provider stores, V2 collection, complete asynchronous transfer, and opt-in compiler. |
+| Retained interface | One `/Chrono` menu, presets/model picker, reports, and projection snapshots from the earlier 3.0.5 interface. |
+| Implemented V4 | Independent Context Kit providers, V2 evidence collection, complete asynchronous transfer, and an opt-in same-session summary/replay compiler. |
 | Compiled defaults | `contextCompiler: "v3"`, `memoryOwner: "chrono"`, normal memory engine on. |
 | Intended local selection | `contextCompiler: "v4"`, `memoryOwner: "context-kit"`. Preserve `valueWorkerMode: "off"` and `toolResultProjectionMode: "off"`. |
-| Loaded activation | This documentation commit does not prove selection or adoption. Check the private activation receipt and the loaded identity of each target process. |
+| Loaded activation | The local 4.0.5 check verified the coordinating process only, not fleet adoption. Check the private activation receipt and each target process's loaded identity. |
 | Existing legacy state | Explicit paged imports are still required. Code selection is not migration. |
 | Background LLM | Compatibility subsystem, paused while the normal engine is enabled. Presets do not enrich V4. |
 
@@ -45,7 +45,7 @@ The inputs differed in available evidence. That result does not establish genera
 
 ### V4 implementation scenario
 
-The [completion evidence](../../chrono-v4/completion-evidence.md) used installed Pi 0.85.1, Node 24.18.0, private source-known state, and a scripted model stream. It made no network model request or summary-model call.
+The [completion evidence](../../chrono-v4/completion-evidence.md) used installed Pi 0.85.1, Node 24.18.0, private source-known state, and a scripted model stream. It made no network model request or summary-model call. That earlier compiler differs from the current same-session summary path. Its result does not establish that current V4 needs no summary.
 
 It exercised explicit import, new writes, reopen, branch-local Todo/Notes/Workplan, logical-session Memory, Recall/native recovery, complete transfer refusal and success, and post-write compatible rollback.
 
@@ -55,11 +55,15 @@ An affected recovery check read two exact raw pages, 16,384 bytes total, from th
 
 Original failures and narrow corrections remain documented. Successful setup and compaction were not repeatedly rerun merely to replace failed evidence.
 
-### Local integration check
+### Local integration checks
 
-The integration owner reported a successful compiled build and two existing short conflict-focused checks for `1f4b170`. Prior V4 practical evidence is reused. It was not repeated as a new quality or lifetime-scale campaign.
+The earlier integration owner reported a successful compiled build and two existing short conflict-focused checks for `1f4b170`. Those results retain that source boundary. Prior V4 practical evidence was not repeated as a new quality or lifetime-scale campaign.
 
-This documentation change uses only short local link/front-matter and factual consistency checks. It adds no runtime tests, model calls, live changes, or publication.
+The local Chrono 4.0.5 verifier reported 704 passed, zero failed, and two skipped. Loaded activation was verified only in the coordinating process before publication. These checks do not establish fleet activation, complete indexing, or a new committed compaction.
+
+For the context-edit and adaptive replay source at `be67e0ec`, a fixed real prefix reused its saved summary without a model call. Estimated replay decreased from 17,833 to 6,971 tokens, selecting 46 of 156 events. Complete compiled context was 9,833 tokens under the unchanged 40,000-token ceiling. The source and saved summary were preserved. Practical continuation review found no blocking gap in that prefix. This is not semantic completeness, a corrected live high-context summary exchange, or a prompt-cache improvement. See the [verification limits](../context/session-agent-compaction.md#verification-status).
+
+The documentation reconciliation uses local link, source-hash, and factual consistency checks. It adds no runtime tests, model calls, or live changes. Publication acceptance remains a separate integration result.
 
 ## What the system does not establish
 

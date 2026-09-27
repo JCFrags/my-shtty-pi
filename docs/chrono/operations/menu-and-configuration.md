@@ -62,12 +62,12 @@ The writer validates the object and replaces it through an owner-only temporary 
 
 | JSON field | Environment override | Default and applicability |
 | --- | --- | --- |
-| `contextCompiler` | `PI_CHRONO_CONTEXT_COMPILER` | `v3`. Select `v4` explicitly for native cards and frozen receipts. |
+| `contextCompiler` | `PI_CHRONO_CONTEXT_COMPILER` | `v3`. Select `v4` explicitly for the same-session summary and compressed chronological replay. Native cards remain evidence in the receipt, not a rendered state dump. |
 | `memoryOwner` | `PI_CHRONO_MEMORY_OWNER` | `chrono`. Select `context-kit` before factory load for independent Memory. Requires a safe reload and explicit data migration. |
 | `memoryEngineEnabled` | `PI_CHRONO_MEMORY_ENGINE` | `true`. Normal adoption, indexed derivation, and V3 memory path. V4 compiler selection is a separate control. |
 | `searchIndexEnabled` | `PI_CHRONO_SEARCH_INDEX` | The normal engine implies search unless explicitly disabled. |
 | `targetContextTokens` | `PI_CHRONO_TARGET_CONTEXT` | 32,000, range 8,000–250,000. Model headroom can lower the effective ceiling. |
-| `dynamicRawTailMinTokens` / `dynamicRawTailMaxTokens` | `PI_CHRONO_RAW_TAIL_MIN` / `PI_CHRONO_RAW_TAIL_MAX` | 3,000 / 6,000. Minimum cannot exceed maximum. V3/V4 use these dynamic limits. |
+| `dynamicRawTailMinTokens` / `dynamicRawTailMaxTokens` | `PI_CHRONO_RAW_TAIL_MIN` / `PI_CHRONO_RAW_TAIL_MAX` | 3,000 / 6,000. Minimum cannot exceed maximum. V3 uses these dynamic limits. Current V4 retains only the minimal safe exact suffix, not this token floor. |
 | `triggerThresholdTokens` | `PI_CHRONO_TRIGGER_TOKENS` | No proactive threshold. Pi context pressure remains active independently. |
 | `triggerMinimumGrowthTokens` | `PI_CHRONO_TRIGGER_MIN_GROWTH` | 4,000. Growth gate for another threshold attempt. It does not bypass the failure retry pause. |
 | `automaticRolloverEnabled` | `PI_CHRONO_AUTOMATIC_ROLLOVER` | `true`, subject to safe-idle and complete-transfer checks. |
@@ -114,9 +114,9 @@ Enabling asks for confirmation because bounded assistant/tool excerpts can leave
 
 ## Retained compatibility controls
 
-- `hybridSummaryEnabled` / `PI_CHRONO_PI_SUMMARY`, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not require or use this summary input.
-- `rawTail`, default `dynamic`, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override the V3/V4 dynamic-tail policy.
-- `replayTargetTokens` controls compatibility replay, whose separate hard cap is 25,000 tokens. It does not control the local session-agent candidate's [adaptive replay allowance](../context/session-agent-compaction.md#adaptive-replay-selection). That candidate keeps the configured total ceiling and has no separate replay setting.
+- `hybridSummaryEnabled` / `PI_CHRONO_PI_SUMMARY`, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not use this summary input. This switch does not enable or disable V4's required same-session summary.
+- `rawTail`, default `dynamic`, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override V3's dynamic-tail policy or V4's minimal safe suffix.
+- `replayTargetTokens` controls compatibility replay, whose separate hard cap is 25,000 tokens. It does not control current V4's [adaptive replay allowance](../context/session-agent-compaction.md#adaptive-replay-selection). V4 keeps the configured total ceiling and has no separate replay setting.
 - `incrementalPrecomputeEnabled`, default false, selects the older candidate store. The normal memory engine cancels this work rather than maintaining both lifetime derivation paths.
 - `isolatedWorkerEnabled`, default false, selects contained compatibility replay. Indexed jobs already use bounded workers.
 - `catalogShadowEnabled` and `rollupShadowEnabled`, default false, select separate shadow diagnostics, not V4 ownership or indexed-rollup readiness.

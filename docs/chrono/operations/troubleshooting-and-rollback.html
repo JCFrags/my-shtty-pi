@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <title>Troubleshooting and rollback</title>
-  <!-- Reading copy of troubleshooting-and-rollback.md. Source SHA-256: a5b09f5c7f934d0a5da05bbf67cb76da1ae74a68ba0ba042ea973aa74298b5a1 -->
+  <!-- Reading copy of troubleshooting-and-rollback.md. Source SHA-256: c9fdabc41c1f741d8417ced660860c2526297a4874dac86585229abb0e51e47e -->
   <!-- Source front matter, retained as document metadata:
 ---
 title: Troubleshooting and rollback
@@ -223,7 +223,7 @@ related:
 </tbody></table></div>
 <h2>Derived-store recovery</h2>
 <p>Ordinary lag resumes the same checkpoints. Missing derivations can be created by the owning materializer. An existing corrupt, incompatible, or unsafe store is not equivalent to missing data.</p>
-<p>Catalog recovery uses an explicitly identified replacement store and validated publication. Capsule/reducer identity changes create a new derived identity. Do not relabel immutable bytes, discover ownership by a directory scan, or overwrite a corrupted content-addressed object.</p>
+<p>Physical catalog corruption recovery uses an explicitly identified replacement store and validated publication. An intact legacy source binding with a confirmed reboot-only device change has a separate <a href="../../chrono-v3/catalog-source-identity.md">in-place identity promotion</a>. It requires complete bounded raw-span proof and an unchanged source window, not a rebuild or force option. Older code refuses the resulting snapshot v2 source operations, so retain compatible code and coherent backups. Capsule/reducer identity changes create a new derived identity. Do not relabel immutable bytes, discover ownership by a directory scan, or overwrite a corrupted content-addressed object.</p>
 <p>Historical state clause checkpoints require a compatible materializer. Exact state-gap repair has its own versioned ruleset. Older binaries can refuse repaired stores even for reads. Preserve pending repair and original coverage rather than downgrade its marker.</p>
 <p>Rollup repair is explicit and bounded:</p>
 <pre><code class="language-text">/Chrono rollup-repair start &lt;repair-id&gt;

@@ -13,6 +13,8 @@ related:
 
 Use these tools for different kinds of current state. Each Context Kit provider owns its persistence and remains usable without the others, Recall, or Chrono. The tools retain existing native reducers, read interfaces, and applicable Project Glance contracts.
 
+These providers form the Chrono context-state stack. Progressive Tools controls catalog visibility and schema exposure, not their implementation or persistence. Chrono consumes provider evidence and requests complete rollover checkpoints. It does not own their stores.
+
 | Tool | Put here | Do not assume |
 | --- | --- | --- |
 | Todo | Immediate actions, dependencies, external waits, and progress. | Completing a task completes a linked project milestone. |
@@ -69,11 +71,11 @@ All three providers follow the selected branch. Forked anchors can inherit exact
 
 A successful native write requires an existing persisted session and verified durable Pi anchor. Ephemeral or deferred sessions do not receive a false durable success. A missing or corrupt root does not become empty state.
 
-Startup resolves direct bindings or a bounded ancestry page. Native calls can advance pending resolution. Context queries only read already-resolved state. They do not replay history, restore it, or start import.
+Startup resolves direct bindings or a bounded ancestry page. Native calls can advance pending resolution. Todo and Notes context queries read already-selected state. Workplan context queries can advance bounded resolution and write derived indexes or receipts. These queries do not import or mutate canonical state, but Workplan's query is not a filesystem-read-only diagnostic.
 
 ## Migration and integration
 
-Replace only the selected legacy registration. Do not load both legacy and owned writers. Existing legacy branches use `/todo-import`, `/notes-import`, and `/workplan-import` until complete. A new code selection is not a migration.
+Grounded Tasks, Notes, and Workplan remain legacy compatibility alternatives. Replace only the selected legacy registration with its Context Kit provider. Do not load both legacy and owned writers. Existing legacy branches use `/todo-import`, `/notes-import`, and `/workplan-import` until complete. A new code selection is not a migration.
 
 Fresh rollover replacements can bootstrap complete checkpoints. After new owned writes, rollback to legacy providers also requires a fresh replacement with the latest complete checkpoint before any ordinary legacy state. Reopening the pre-import branch loses later state and is not a valid data rollback.
 

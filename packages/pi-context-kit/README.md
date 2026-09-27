@@ -14,6 +14,8 @@ Start with the [Chrono user guide](../../docs/chrono/USER-GUIDE.md) or [subject 
 
 Context Kit contains six independently loadable Pi extensions. Each state provider owns its persistence and remains usable without Recall, Telemetry, or Chrono. The pure libraries share contracts and storage code, not a database or mutable store instance.
 
+Todo, Notes, and Workplan are the native providers in the Chrono context-state stack. [Progressive Tools](../pi-progressive-tools/README.md) controls their catalog visibility and schema exposure, not their implementation or persistence. Chrono consumes provider evidence and requests complete rollover checkpoints. It does not own the provider stores.
+
 | Package | Interface | Purpose |
 | --- | --- | --- |
 | [Memory](memory/README.md) | `memory_*` | Source-linked accepted knowledge, revisions, temporal reads, and separate extraction proposals in one logical session. |
@@ -43,7 +45,7 @@ For Memory, set Chrono's `memoryOwner` to `context-kit` before loading the new p
 
 New native state writes require a persisted Pi session. An ephemeral or deferred session does not receive a false success. Owned payloads become visible only after the provider verifies and synchronizes its exact Pi anchor. Pending or corrupt state does not become empty state.
 
-Recall can start with missing providers. Keep each intended native tool active. Missing, hidden, slow, failed, or malformed providers produce explicit exclusions rather than implicit tool activation. Context reads do not run imports or create stores.
+Recall can start with missing providers. Keep each intended native tool active. Missing, hidden, slow, failed, or malformed providers produce explicit exclusions rather than implicit tool activation. Context queries do not import or mutate canonical state. Todo and Notes read their selected state. Workplan can advance bounded resolution and write derived indexes or receipts, so its context query is not a filesystem-read-only diagnostic.
 
 Telemetry can run alone. Its [storage and privacy limits](telemetry/README.md#privacy-and-storage-limits) apply without other packages. Place it before a compactor in the settings list so it observes attempts that a later listener cancels. Preserve unrelated package order and configuration. See [activation and rollback](../../docs/activation.md). Selection does not prove loaded use.
 
@@ -57,7 +59,7 @@ Queries match bounded case-insensitive terms, not semantic similarity. Cards inc
 
 Defaults are six cards and 128 scanned records per provider, 8 KiB per provider reply, a 150 ms common wait, and a 16 KiB complete serialized result. Provider-specific limits also apply. Check coverage and omissions before drawing conclusions from an empty or partial page. A Memory recovery request pins an exact revision. Other native recovery calls can return a later current record.
 
-Chrono's implemented V4 path can use the same collector through explicit `contextCompiler: "v4"`. The existing public compaction hook freezes admitted native pages, historical cuts, omissions, recovery descriptors, and estimated request charges. It fits whole records with the raw tail, system text, tool schemas, and response reserve. Missing optional history can use the bounded loaded-prefix fallback. It does not require a summary model. The default compiler remains `v3` until explicitly selected. See the [completion scope](../../docs/chrono-v4/completion-scope.md).
+Chrono's current V4 path requires a continuation summary from the same session agent, followed by compressed chronological replay and only the necessary exact tail. It uses the shared collector to capture native evidence in the receipt, not to render a second state-card dump. The compiler accounts for the summary, replay, tail, system text, tool schemas, and response reserve. Select it explicitly with `contextCompiler: "v4"`. The default remains `v3`. See the [session-agent compaction contract](../../docs/chrono/context/session-agent-compaction.md). The earlier [completion scope](../../docs/chrono-v4/completion-scope.md) describes its source-pinned historical implementation.
 
 Recall cards are not rollover state. Complete native checkpoints remain mandatory for Todo, Notes, and Workplan. Memory transfers a verified same-store logical binding, not the store bytes. An unavailable or oversized complete transfer refuses rollover instead of shortening state. A rollback after new writes requires a fresh replacement with current complete native state. Keep original source, owned stores, and prior installations.
 

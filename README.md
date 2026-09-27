@@ -45,7 +45,7 @@ The [registry](package.json) contains 16 owned products: 14 active and two inact
 | --- | --- | --- |
 | [Codex Usage Footer](packages/codex-usage-footer/README.md) | Shared Standard Codex and Spark quota, banked reset details, and an optional unofficial forecast. | `/codex-usage` |
 | [Files UI](packages/files-ui/README.md) | Browse files, preview content, and insert selected paths or bounded content into the editor. | `/files` |
-| [Grounded Tools](packages/grounded-tools/README.md) | Exact coding tools, questions, tasks, notes, and workplans. | [Seven tool groups below](#grounded-tools) |
+| [Grounded Tools](packages/grounded-tools/README.md) | Exact coding tools, questions, and legacy state-provider compatibility. | [Seven tool groups below](#grounded-tools) |
 | [Herdr Agent State](packages/herdr-agent-state/README.md) | Report Pi session identity and working, blocked, or idle state to Herdr. | Automatic lifecycle integration. No tool or command. |
 | [Herdr Sidebar](packages/herdr-status/README.md) | Configure additive model/context fields and terminal title activity. Preserve native lifecycle reporting. | `/herdr-sidebar-settings` |
 | [Pi Agent Context](packages/pi-agent-context/README.md) | Maintain stable date/environment snapshots and inspect prompt, context, and tool costs. | `/context-refresh`, `/context-audit` |
@@ -77,9 +77,11 @@ One product supplies seven Pi entrypoints. The internal `core` subpackage suppli
 | `process` | `bash`, `process`, `session` | Exact command output, complete logs, managed background processes, and explicit persistent local or SSH sessions. |
 | `lsp` | `lsp` | Language Server Protocol diagnostics and navigation, including a rename preview that does not edit files. |
 | `dialog` | `ask_user` when enabled, otherwise legacy `ask_user_question` | Structured blocking questions with Herdr state reporting and a provider-based deferred question interface. |
-| `tasks` | `todo` | Branch-aware immediate task plans with dependencies, blocking, and one in-progress task. |
-| `notes` | `notes` | Explicit branch-aware scratchpad notes, separate from remembered knowledge. |
-| `workplan` | `workplan` | Durable goals, constraints, milestones, decisions, checkpoints, and recovery after context loss. |
+| `tasks` | `todo` | Legacy compatibility provider for branch-aware immediate task plans. |
+| `notes` | `notes` | Legacy compatibility provider for branch-aware scratchpad notes. |
+| `workplan` | `workplan` | Legacy compatibility provider for durable project state and recovery. |
+
+[Context Kit's independent providers](packages/pi-context-kit/README.md) replace these three legacy registrations in the Chrono context-state stack. The Grounded alternatives remain available for compatible legacy installations. Select exactly one writer per native tool.
 
 `/grounded-files`, `/grounded-lsp`, and `/grounded-processes` report policy or status. `/todos` and `/todo-add` provide manual task controls. `GROUNDED_TRIAL_MODE=1` prefixes `read`, `edit`, `write`, `bash`, and `process` with `grounded_`; the other tool names stay unchanged.
 
@@ -89,7 +91,7 @@ Set `askUserV1: true` in the Pi agent directory's `grounded-dialog.json` to sele
 
 ## Find and use tools
 
-Progressive Tools appends names and short usage hints to the model's existing system prompt. It uses the loaded tool registry, not a package search or web catalog.
+Progressive Tools appends names and short usage hints to the model's existing system prompt. It uses the loaded tool registry, not a package search or web catalog. It controls discovery and schema exposure, not tool implementations or provider persistence. Context Kit owns Todo, Notes, and Workplan in the Chrono context-state stack. Chrono consumes provider evidence and requests complete rollover checkpoints. It does not own those stores.
 
 1. Use the visible catalog, or call `list_tools({})` to see permitted names and hints again.
 2. Call `tool_help({"names":["history_recall"]})` with exact, case-sensitive names. Help returns guidance and enables matching managed tools. It does not execute them or return their schemas.
@@ -131,7 +133,7 @@ Open `/Chrono` for Settings, Status and diagnostics, Maintenance, and About. Bac
 | Menu, settings, workers, caches, and Telemetry | [Operations](docs/chrono/operations/README.md) |
 | Architecture changes, implemented versus selected features, and measured limits | [Design and evidence](docs/chrono/design/README.md) |
 
-The [current status](docs/chrono/design/evidence-and-roadmap.md) separates the local V4 integration from main's 3.0.5 interface and from loaded activation. Package version, effective configuration, ready indexes, and actual use are separate facts. Historical [V3](docs/chrono-v3/README.md) and [V4](docs/chrono-v4/README.md) records remain available for their exact revisions.
+The [current status](docs/chrono/design/evidence-and-roadmap.md) identifies the `4.0.5-local.20260926` source and separates publication, code selection, and loaded activation. Package version, effective configuration, ready indexes, and actual use are separate facts. Historical [V3](docs/chrono-v3/README.md) and [V4](docs/chrono-v4/README.md) records remain available for their exact revisions.
 
 ## Context Kit and V4
 
