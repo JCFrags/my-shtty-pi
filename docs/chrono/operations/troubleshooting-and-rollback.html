@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>Troubleshooting and rollback</title>
+  <!-- Reading copy of troubleshooting-and-rollback.md. Source SHA-256: c9fdabc41c1f741d8417ced660860c2526297a4874dac86585229abb0e51e47e -->
+  <!-- Source front matter, retained as document metadata:
+---
+title: Troubleshooting and rollback
+audience: [operators, agents, maintainers]
+status: current procedure
+purpose: Diagnose bounded failures and preserve source and later native writes during recovery.
+related:
+  - activation-and-migration.md
+  - workers-and-caches.md
+  - ../history/indexing-and-exact-recovery.md
+---
+  -->
+  <style>
+    :root {
+      color-scheme: dark;
+      background: #161b22;
+      color: #dce3ed;
+      font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+      font-size: 20px;
+      line-height: 1.7;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: clamp(24px, 4vw, 56px) clamp(22px, 4vw, 48px) 88px;
+    }
+    h1, h2, h3 { color: #f0f4fa; line-height: 1.3; font-weight: 650; }
+    h1 { margin: 0 0 1.15em; font-size: 2rem; letter-spacing: -0.025em; }
+    h2 { margin: 2em 0 0.8em; padding-top: 0.85em; border-top: 1px solid #343e4c; font-size: 1.4rem; }
+    h1 + h2 { margin-top: 0; padding-top: 0; border-top: 0; }
+    h3 { margin: 1.65em 0 0.65em; font-size: 1.15rem; }
+    p { margin: 0 0 1.15em; }
+    strong { color: #f0f4fa; font-weight: 650; }
+    a { color: #9fc5ff; text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+    a:hover { color: #c5ddff; }
+    :focus-visible { outline: 2px solid #a7cbff; outline-offset: 5px; border-radius: 3px; }
+    ul, ol { margin: 0 0 1.3em; padding-left: 1.5em; }
+    li { padding-left: 0.15em; margin: 0.4em 0; }
+    li::marker { color: #a9b7ca; }
+    code {
+      font-family: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", monospace;
+      font-size: 0.9em;
+      padding: 0.1em 0.3em;
+      border: 1px solid #374252;
+      border-radius: 4px;
+      background: #232c39;
+      color: #e5edfa;
+      overflow-wrap: anywhere;
+    }
+    .table-scroll { overflow-x: auto; margin: 1.3em 0 1.5em; border: 1px solid #3a4555; border-radius: 7px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; line-height: 1.6; }
+    th, td { padding: 0.75em 0.9em; text-align: left; vertical-align: top; border-bottom: 1px solid #343e4c; }
+    th { color: #f0f4fa; background: #253040; font-weight: 650; }
+    th[align="right"], td[align="right"] { text-align: right; }
+    td { background: #1b232e; }
+    tbody tr:nth-child(even) td { background: #1f2834; }
+    tbody tr:last-child td { border-bottom: 0; }
+    th:first-child, td:first-child { min-width: 8.5em; }
+    ::selection { background: #385784; color: #fff; }
+    @media (max-width: 600px) {
+      :root { font-size: 19px; }
+      main { padding: 26px 22px 64px; }
+      table { min-width: 540px; }
+    }
+    @media print {
+      :root { color-scheme: light; background: white; color: #111; font-size: 12pt; }
+      main { max-width: none; padding: 0; }
+      h1, h2, h3, strong, a, code, th { color: #111; }
+      code, th, td, tbody tr:nth-child(even) td { background: white; }
+      .table-scroll { overflow: visible; }
+      table { min-width: 0; }
+      h1, h2, h3 { break-after: avoid; }
+      tr { break-inside: avoid; }
+    }
+    pre { overflow-x: auto; padding: 18px; border: 1px solid #374252; border-radius: 7px; background: #232c39; line-height: 1.55; }
+    pre code { display: block; padding: 0; border: 0; background: transparent; white-space: pre; overflow-wrap: normal; }
+  </style>
+</head>
+<body>
+<main>
+<h1>Troubleshooting and rollback</h1>
+<h2>Start read-only</h2>
+<ol>
+<li>Preserve the exact loaded version and safe failure code. Do not publish source text, private paths, or raw diagnostics.</li>
+<li>Read <code>history_status</code> or <code>/Chrono search-status</code>.</li>
+<li>If admission or execution is involved, read <code>/Chrono worker-status</code> and <code>/Chrono doctor</code>.</li>
+<li>Identify whether the problem is selection, ordinary lag, an unavailable component, incompatible data, or changed source.</li>
+<li>Apply only the relevant supported recovery. Preserve source, stores, routing metadata, and the previous installation.</li>
+</ol>
+<p>Do not delete stores, remove reservations, stop another session&#39;s worker, raise limits, or repeatedly force compaction to make a report look healthy.</p>
+<h2>Symptoms and next actions</h2>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Meaning to check</th>
+<th>Safe next action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Old <code>/chrono-*</code> command missing</td>
+<td>Current interface uses one <code>/Chrono</code>.</td>
+<td>Open the menu or use its documented action argument. Do not reinstall to restore retired names.</td>
+</tr>
+<tr>
+<td>Page keys scroll chat</td>
+<td>Older report UI may be loaded.</td>
+<td>Check the loaded identity and whether the focused-overlay correction is present. Use a safe reload only when permitted.</td>
+</tr>
+<tr>
+<td>Saved setting has no effect</td>
+<td>Environment override or startup-captured owner.</td>
+<td>Compare effective settings and captured/configured Memory owner. Do not start a second writer.</td>
+</tr>
+<tr>
+<td>Indexing disabled</td>
+<td>Global false setting or exact session exclusion.</td>
+<td>Confirm intended selection before changing it. Status does not override policy.</td>
+</tr>
+<tr>
+<td><code>catalog</code>, <code>capsules</code>, <code>index</code>, <code>memory</code>, or <code>rollup</code> phase</td>
+<td>That derived checkpoint is behind the requested view.</td>
+<td>Preserve progress and allow normal lifecycle work. Queries do not ingest.</td>
+</tr>
+<tr>
+<td><code>awaiting-cut-validation</code></td>
+<td>Layers report ready at their checkpoints.</td>
+<td>Actual composition still validates source, tool structure, budget, and the chosen cut.</td>
+</tr>
+<tr>
+<td>Worker unit inactive but admission waiting</td>
+<td>A stopped live owner may retain a reservation.</td>
+<td>Inspect owner identity and bounded diagnostics. Do not reclaim by service state alone.</td>
+</tr>
+<tr>
+<td><code>worker-legacy-transition-required</code> after replacement</td>
+<td>Existing gate was unavailable at startup.</td>
+<td>Normal eligible scheduling can recheck that gate. This is not automatic admission repair.</td>
+</tr>
+<tr>
+<td>Empty search page with <code>nextCursor</code></td>
+<td>Bounded postings/routes can be filtered out.</td>
+<td>Continue unchanged if the next window is relevant. Do not report global absence.</td>
+</tr>
+<tr>
+<td>Exact raw read works while search is pending</td>
+<td>Catalog route is valid independently of derived search.</td>
+<td>Use its bounded continuation. Do not infer that decoded/ranked/range paths are ready.</td>
+</tr>
+<tr>
+<td>Raw receipt read refuses or returns a partial page</td>
+<td>New entry may not be cataloged, scope changed, or offset is wrong.</td>
+<td>Initial request uses only the entry locator and needed shard. Continue with returned absolute <code>nextByte</code>, never invented zero.</td>
+</tr>
+<tr>
+<td>Stale or foreign handle</td>
+<td>Scope, generation, route, or source differs.</td>
+<td>Obtain a fresh compatible handle. Never edit the handle.</td>
+</tr>
+<tr>
+<td>Source mismatch or truncation</td>
+<td>Immutable source assumption no longer holds.</td>
+<td>Stop dependent operations and preserve evidence. Do not repoint by path similarity.</td>
+</tr>
+<tr>
+<td>Recall missing a provider</td>
+<td>Native tool hidden, missing listener, pending state, or timeout.</td>
+<td>Check active native tools and provider status. Use permitted tool help, then re-query. Do not assume empty state.</td>
+</tr>
+<tr>
+<td><code>state-store-unpersisted</code></td>
+<td>Pi has no durable session file yet.</td>
+<td>Use a persisted session before native writes. Do not report volatile success.</td>
+</tr>
+<tr>
+<td>Owned provider says legacy/pending</td>
+<td>Explicit import or bounded resolution is incomplete.</td>
+<td>Follow its native import/resolution procedure at the same view. Do not initialize over it.</td>
+</tr>
+<tr>
+<td>Memory unavailable after rollover</td>
+<td>Same-store binding still needs the preserved store.</td>
+<td>Verify the original store and binding. The bootstrap is not a database backup.</td>
+</tr>
+<tr>
+<td>Rollover deferred</td>
+<td>Draft, work, process, shell, unstable cut, or incomplete/oversized state.</td>
+<td>Settle the blocking condition safely. Never shorten canonical state.</td>
+</tr>
+<tr>
+<td>Compaction refused</td>
+<td>Unsafe source/tail, changed input, or unusable budget.</td>
+<td>Current context remains. Address the exact cause rather than retrying unchanged.</td>
+</tr>
+<tr>
+<td>Background LLM enabled but idle</td>
+<td>Compatibility preprocessing is paused under the normal engine, or budgets/circuit/model are unavailable.</td>
+<td>Read status. Do not disable V3/V4 merely to force model activity.</td>
+</tr>
+<tr>
+<td>Telemetry quality unknown</td>
+<td>No caller quality observations.</td>
+<td>Report unknown. Tool success and token totals are not quality scores.</td>
+</tr>
+<tr>
+<td>Telemetry storage full</td>
+<td>Fixed slot cap reached, possibly before byte capacity.</td>
+<td>Agent work can continue. Stop writers and obtain approval before manual archival/cleanup.</td>
+</tr>
+</tbody></table></div>
+<h2>Derived-store recovery</h2>
+<p>Ordinary lag resumes the same checkpoints. Missing derivations can be created by the owning materializer. An existing corrupt, incompatible, or unsafe store is not equivalent to missing data.</p>
+<p>Physical catalog corruption recovery uses an explicitly identified replacement store and validated publication. An intact legacy source binding with a confirmed reboot-only device change has a separate <a href="../../chrono-v3/catalog-source-identity.md">in-place identity promotion</a>. It requires complete bounded raw-span proof and an unchanged source window, not a rebuild or force option. Older code refuses the resulting snapshot v2 source operations, so retain compatible code and coherent backups. Capsule/reducer identity changes create a new derived identity. Do not relabel immutable bytes, discover ownership by a directory scan, or overwrite a corrupted content-addressed object.</p>
+<p>Historical state clause checkpoints require a compatible materializer. Exact state-gap repair has its own versioned ruleset. Older binaries can refuse repaired stores even for reads. Preserve pending repair and original coverage rather than downgrade its marker.</p>
+<p>Rollup repair is explicit and bounded:</p>
+<pre><code class="language-text">/Chrono rollup-repair start &lt;repair-id&gt;
+/Chrono rollup-repair step &lt;repair-id&gt;
+/Chrono rollup-repair status &lt;repair-id&gt;
+/Chrono rollup-repair publish &lt;repair-id&gt; &lt;legacy|expected-store-id&gt;
+</code></pre>
+<p>Run this only for an authorized specific repair, with preserved source and a stable cut. Each invocation performs one transition. Publish requires a complete validated target and the recorded prior route. <code>legacy</code> names the original store route, not a bypass. Old stores and handles remain. There is no general public arbitrary-pointer restore command.</p>
+<p>Detailed protocol owners: <a href="../../chrono-v3/catalog-store-publication.md">catalog publication</a>, <a href="../../chrono-v3/episodes-and-state.md#explicit-historical-state-gap-repair">state repair</a>, and <a href="../../chrono-v3/rollups.md#explicit-repair-surface">rollup repair</a>. Their old command spelling is superseded by <code>/Chrono</code> above.</p>
+<h2>Three different rollbacks</h2>
+<h3>Immediate logical rollback</h3>
+<p><code>/Chrono logical-session rollback &lt;logical-session-id&gt; [branch-id]</code> returns from a matching continuation-only replacement before ordinary new work. The manifest and bootstrap must match. The replacement remains preserved on an isolated rollback branch.</p>
+<p>For an interrupted transition, use the matching <code>recover</code> action first. It can abort preparation, return from an empty replacement, or finish the exact recorded binding. Do not infer the legal action from file presence alone.</p>
+<h3>Code-selection rollback</h3>
+<p>Restore only the affected registration/configuration values and compatible retained package root. Preserve unrelated later settings. Do not restore a whole old settings document. Verify the complete loader, then reload only safe target sessions and confirm their loaded hashes.</p>
+<p>A code rollback does not authorize service restarts, gate changes, source deletion, or removal of provider stores. An older package must support the active checkpoint/schema. Otherwise leave the incompatible writer disabled and use a supported return path.</p>
+<h3>Data-preserving rollback after new writes</h3>
+<ol>
+<li>Stop concurrent state mutations at a stable source cut.</li>
+<li>Capture complete current Todo, Notes, and Workplan state. Refuse if pending, corrupt, changed, or over the transfer bounds.</li>
+<li>Create a fresh replacement with the latest full native checkpoints before any legacy provider events. A checkpoint appended after old state is invalid.</li>
+<li>For Memory, export to three new private files: the fresh target&#39;s actual V2 sidecar, the complete native companion, and the receipt. Supply the exact expected store cut and explicit target turn.</li>
+<li>Verify source-prefix preservation, artifact digests, complete accepted-head semantics, proposals/metadata in the companion, and actual old native source-known reads. Check legacy pinned-retention differences separately.</li>
+<li>Recheck no pending or later independent writes, then select exactly one compatible old writer.</li>
+<li>Keep original source, replacement source, independent stores, companion, receipts, and both package roots.</li>
+</ol>
+<p>Reverse Memory export does not activate a writer and does not create the fresh continuation. A partial artifact pair is not a valid export. If conversion cannot preserve exact accepted state, refuse instead of normalizing away a difference.</p>
+<p>Later writes under the old V2 writer are not automatically reconciled back into the previous independent store. A future return must preserve and reconcile those writes rather than select stale heads.</p>
+<h2>Report the result precisely</h2>
+<p>Separate restored code selection, loaded process identity, state preservation, and practical behavior. State which sessions remain on old code and which legacy branches still need import. A passing build, preview, loader, or old scenario is not proof that every current process works.</p>
+<p><a href="README.md">Operations index</a> · <a href="activation-and-migration.md">Activation and migration</a> · <a href="../state/persistence-and-transfer.md">Provider transfer</a></p>
+</main>
+</body>
+</html>

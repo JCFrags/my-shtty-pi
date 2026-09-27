@@ -1,6 +1,20 @@
+---
+title: Local activation and rollback
+audience: [operators, agents, maintainers]
+status: repository procedure with historical product receipts
+purpose: Preserve supported registration, loaded-use, and scoped rollback procedures across products.
+related:
+  - chrono/operations/activation-and-migration.md
+  - chrono/operations/troubleshooting-and-rollback.md
+---
+
 # Local activation and rollback
 
+For Chrono and Context Kit, start with [activation and explicit state migration](chrono/operations/activation-and-migration.md) and [data-preserving rollback](chrono/operations/troubleshooting-and-rollback.md). Current Chrono uses one `/Chrono` menu. Product counts and observed identities below belong to their recorded milestones, not a universal current loader inventory.
+
 ## Ownership
+
+Context Kit's independent native providers own Todo, Notes, and Workplan in the Chrono context-state stack. Chrono consumes their evidence and requests complete rollover checkpoints. It does not own provider persistence. Progressive Tools owns catalog visibility and schema exposure only. The legacy compatibility providers are Grounded Tasks, Notes, and Workplan, not Progressive Tools. Select one writer per native tool and preserve unrelated registrations.
 
 The repository supplies Project Glance presentation and Pi orchestration as separate products. Project Glance reads bounded Todo and Workplan summaries; it does not own their state or depend on the orchestration broker. Standalone Files UI and blocking Ask User remain independent.
 
@@ -213,7 +227,26 @@ $ACTIVATION/registration-backup/rollback.sh --apply
 
 Rollback exchanges only the Codex alias and preserves settings and unrelated extensions. Existing Pi processes need a safe `/reload` or restart after activation or rollback. Do not send `/reload` into an editor that contains an unsent draft.
 
-## Context Kit foundation
+## Context Kit owned providers and V4 compilation
+
+The owned providers are separately loaded from `packages/pi-context-kit/{memory,todo,notes,workplan}`. Recall and Telemetry remain separate. Use Node 24.18.0, Pi 0.85.1, and the accepted repository-root lock. The pure protocol and state-store libraries are not Pi registrations. Chrono's package-local file dependency must resolve to that retained checkout's protocol. Verify each provider's actual workspace `@grounded/pi-core` resolution and source hash as well. A matching entrypoint does not establish a matching dependency set. Do not copy dependency trees or register both old and new native writers.
+
+1. Preserve settings, the two affected Chrono configuration fields, aliases, original source, and provider stores. Prepare exact accepted retained source and complete offline loader comparisons. Keep Telemetry before Chrono, and preserve every unrelated extension and package order.
+2. Replace only the intended Todo, Notes, Workplan, Recall, and Chrono sources. Add Memory when selected. Set `contextCompiler: "v4"` and `memoryOwner: "context-kit"` before loading the independent Memory owner. `memoryOwner` is captured at startup. A configuration edit alone does not stop an already loaded old writer.
+3. Use a coordinated selection window with compare-before-write guards, per-file atomic replacement, and a durable rollback journal. Settings and configuration cannot be replaced by one filesystem rename. Do not claim multi-file reader atomicity. Prevent a new loader from observing a partial selection and preserve unrelated later settings during compensation.
+4. Compare the complete selected loader again. Require one owner for each native name, all intended new commands, correct source and dependency hashes, and unchanged unrelated owners and Ask User state. Then exercise the actual registered tools in a fresh installed Pi process. Reload existing sessions only when their jobs, agent work, and editor drafts permit it.
+
+When combining previously separate provider roots, check the selected shared-core behavior rather than assuming identical dependencies. The current core excludes closed records from empty-query Recall and prioritizes current work before bounded fitting. A text query still permits closed-state recovery. Check both open-work selection and native recovery when a source change also changes that core.
+
+Code selection does not migrate data. A fresh complete checkpoint-only replacement can bootstrap through the owned providers. An existing legacy branch needs `/todo-import`, `/notes-import`, and `/workplan-import`, repeated only while each bounded step reports pending. Freeze that branch during import. The commands preserve original JSONL and retain normalized native-entry evidence. They do not rewrite raw history. Memory uses explicit `/memory-import-v2` for a chosen sidecar. Never interpret failed or incomplete import as empty state. New writes require a persisted session and an exact verified disk anchor, not a `message_end` notification.
+
+After import, compare complete native state and source identity before making a new write. Check reopen, branch visibility, native recovery, and complete transfer. Accepted Memory survives a tree move in its logical namespace. Todo, Notes, and Workplan stay branch-local. Recall coverage and quality telemetry do not establish migration completeness.
+
+A code-selection rollback and a data rollback are separate. After new writes, return Todo, Notes, and Workplan through complete current native checkpoints in a fresh replacement, before loading the legacy writers. Do not append a checkpoint after earlier legacy state. Memory needs a verified reverse export to the actual fresh target's V2 sidecar, with complete proposals and unsupported metadata retained in its companion. V2 turn-based retention differs from independent Memory. Do not select an old writer while export or semantic comparison is incomplete. Preserve both source generations and the independent stores. See the [provider procedures](../packages/pi-context-kit/README.md).
+
+The native ancestry correction retains the original leaf signature across bounded resolution pages. Older owners reject new cursors containing `head`. Selecting old code is therefore not a data rollback. Preserve compatible owner code, source, and stores instead of clearing derived indexes. See the [state-store rollback limits](../packages/pi-context-kit/state-store/API.md#provider-integration).
+
+## Earlier Context Kit foundation
 
 Recall and Telemetry have separate source-loaded entrypoints at `packages/pi-context-kit/recall` and `packages/pi-context-kit/telemetry`. The protocol package is a pure library, not a Pi registration. Prepare their workspace dependencies from the accepted repository-root lock.
 

@@ -66,6 +66,14 @@ Areas and aliases remain available for audit filtering, not model-side ranking.
 
 ## Commands and scope
 
+This package registers only `list_tools` and `tool_help`. It does not implement
+or persist Todo, Notes, or Workplan. The independent [Context Kit
+providers](../pi-context-kit/README.md) own those tools and stores in the Chrono
+context-state stack. Chrono consumes their evidence and requests complete
+rollover checkpoints. It does not own their persistence. The legacy provider
+alternatives belong to [Grounded Tools](../grounded-tools/README.md), not
+Progressive Tools. Catalog hints and schema policy do not change that ownership.
+
 - `/tool-audit` shows non-built-in tools, policy decisions, sources, config errors,
   and approximate schema costs. Add `all` to include built-ins, or use a text
   filter. Its report remains a session entry that is not sent to the model.

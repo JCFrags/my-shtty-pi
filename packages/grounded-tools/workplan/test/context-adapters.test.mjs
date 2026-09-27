@@ -3,8 +3,12 @@ import test from "node:test";
 import { setImmediate as tick } from "node:timers/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { requestChannel, responseChannel, validateResponse, jsonBytes } from "@context-kit/protocol";
+import { createWorkplanContextRecord, projectNotesPage, projectTodoPage, projectWorkplanPage } from "@grounded/pi-core/context-adapters";
+import { emptyWorkplanState, performWorkplanAction } from "@grounded/pi-core/workplan";
+import { WorkplanStore } from "@context-kit/workplan/store";
 import groundedTasks from "../../tasks/index.ts";
 import groundedNotes from "../../notes/index.ts";
 import groundedWorkplan from "../index.ts";
@@ -18,7 +22,7 @@ class Host {
   active;
   events = {
     on: (name, handler) => {
-      if (this.rejectAdapter && name.startsWith("context-kit:")) throw new Error("Transport unavailable");
+      if (this.rejectAdapter && name.startsWith("context-kit:request:")) throw new Error("Transport unavailable");
       const listeners = this.listeners.get(name) ?? new Set();
       listeners.add(handler);
       this.listeners.set(name, listeners);
@@ -115,6 +119,94 @@ test("each actual native factory works alone and refuses unpersisted, wrong-view
     assert.equal((await reloaded.query(name)).readiness, "corrupt");
     await assert.rejects(() => reloaded.execute(name, op.read), /STATE_CORRUPT/);
     await reloaded.lifecycle("session_shutdown");
+  }
+});
+
+test("current-state browse selects open records before scan and reply limits without deleting retained state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "context-kit-current-selection-"));
+  const store = new WorkplanStore({ storeRoot: join(directory, "workplan") });
+  const entries = new Map();
+  let leafId = null;
+  const host = {
+    sessionManager: {
+      getSessionId: () => "selection-fixture", getSessionFile: () => undefined,
+      getLeafId: () => leafId, getEntry: (id) => entries.get(id),
+      getHeader: () => ({ id: "selection-fixture" }),
+    },
+    appendEntry(customType, data) {
+      const id = `anchor-${entries.size + 1}`;
+      entries.set(id, { id, parentId: leafId, type: "custom", customType, data });
+      leafId = id;
+    },
+  };
+  try {
+    let state = emptyWorkplanState();
+    const apply = (input) => { state = performWorkplanAction(state, input, 1_700_000_000_000).state; };
+    for (let number = 1; number <= 20; number++) {
+      apply({ action: "create", content: { title: `Retired plan ${number}`, objective: "Old objective", approach: "Native recovery retained" } });
+      apply({ action: "archive", planId: `WP${number}`, expectedRevision: 1, rationale: "Fixture complete" });
+    }
+    apply({ action: "create", content: { title: "Current active plan", objective: "Continue current task", approach: "Use native state" } });
+    apply({ action: "resume", planId: "WP21", expectedRevision: 1, rationale: "Start current task" });
+    await store.resolve(host);
+    const root = await store.stageNativeState(state);
+    await store.commitRoot(host, root, { expectedCommitId: null, durability: "allow-volatile" });
+    const nativeBefore = JSON.stringify(store.root), entriesBefore = entries.size;
+    const loaded = [];
+    const projection = store.projection.bind(store);
+    store.projection = (metadata, signal) => { loaded.push(metadata.id); return projection(metadata, signal); };
+    const request = (overrides = {}) => ({ version: 2, requestId: "selection", providerId: "workplan",
+      scope: { sessionId: "selection-fixture", leafId }, query: "", categories: [],
+      limits: { records: 6, scan: 128, bytes: 8192 }, deadlineMs: Date.now() + 1000, ...overrides });
+    for (const limits of [{ records: 6, scan: 128, bytes: 8192 }, { records: 1, scan: 1, bytes: 2048 }]) {
+      loaded.length = 0;
+      const input = request({ limits });
+      const page = await store.contextPage(host, input);
+      assert.equal(page.readiness, "ready");
+      assert.deepEqual(page.cards.map(({ id, revision, status }) => ({ id, revision, status })), [{ id: "WP21", revision: "2", status: "active" }]);
+      assert.deepEqual(loaded, ["WP21"], "closed projections never consume browse scan work");
+      assert.deepEqual(page.coverage, { scanned: 1, matched: 1, excluded: 0, scanComplete: true });
+      assert.ok(jsonBytes({ version: input.version, requestId: input.requestId, providerId: input.providerId, scope: input.scope, ...page }) <= limits.bytes);
+    }
+    const queried = await store.contextPage(host, request({ query: "retired" }));
+    assert.equal(queried.cards[0].id, "WP1");
+    assert.equal(queried.cards[0].status, "archived");
+    assert.deepEqual(queried.coverage, { scanned: 21, matched: 20, excluded: 14, scanComplete: true });
+    const recovered = await store.execute(host, queried.cards[0].recovery.args);
+    assert.match(recovered.text, /archived/);
+    assert.deepEqual(recovered.recovery, { planId: "WP1", revision: 2 });
+    assert.deepEqual(await store.readSelected(store.root, "WP1"), state.plans[0]);
+    assert.equal(JSON.stringify(store.root), nativeBefore);
+    assert.equal(entries.size, entriesBefore, "projection and recovery do not append source entries");
+    assert.equal((await store.contextPage(host, request({ scope: { sessionId: "wrong-view", leafId } }))).readiness, "scope_changed");
+
+    const records = state.plans.map(createWorkplanContextRecord);
+    const openAndClosed = [{ ...records[0], status: "draft" }, { ...records[1], status: "completed" }, ...records.slice(2)];
+    const bounded = request({ limits: { records: 1, scan: 1, bytes: 2048 } });
+    const current = projectWorkplanPage(bounded, openAndClosed);
+    assert.equal(current.cards[0].id, "WP21", "active plans precede other open plans before scanning");
+    assert.equal(current.coverage.scanComplete, false, "another eligible draft was not scanned");
+    assert.deepEqual(projectWorkplanPage(request(), records.slice(0, 20)).coverage,
+      { scanned: 0, matched: 0, excluded: 0, scanComplete: true });
+    assert.deepEqual(projectWorkplanPage(request(), [{ ...records[0], status: "completed" }]).cards, []);
+    assert.equal(projectWorkplanPage(request({ query: "retired" }), [{ ...records[0], status: "completed" }]).cards[0].status, "completed");
+
+    const tasks = Array.from({ length: 20 }, (_, index) => ({ id: `T${index + 1}`, text: "Retired task", status: "done", blockedBy: [], createdAt: 1, updatedAt: 1 }));
+    tasks.push({ ...tasks[0], id: "T21", text: "Pending task", status: "pending" }, { ...tasks[0], id: "T22", text: "Current task", status: "in_progress" });
+    const todo = { tasks, nextId: 23 };
+    assert.equal(projectTodoPage({ ...bounded, providerId: "todo" }, todo).cards[0].id, "T22");
+    assert.equal(projectTodoPage(request({ providerId: "todo", query: "retired" }), todo).cards[0].status, "done");
+    const notes = Array.from({ length: 20 }, (_, index) => ({ id: `N${index + 1}`, title: "Retired note", body: "Source text", tags: [], status: "archived", revision: 1, createdAt: "1", updatedAt: "1" }));
+    notes.push({ ...notes[0], id: "N21", title: "Current note", status: "active" });
+    const notesState = { notes, nextNoteNumber: 22, stateRevision: 21 };
+    assert.equal(projectNotesPage({ ...bounded, providerId: "notes" }, notesState).cards[0].id, "N21");
+    assert.equal(projectNotesPage(request({ providerId: "notes", query: "retired" }), notesState).cards[0].status, "archived");
+    const oversizedLegacy = { tasks: Array.from({ length: 257 }, (_, index) => ({ ...tasks[0], id: `T${index + 1}` })), nextId: 258 };
+    assert.deepEqual(projectTodoPage(request({ providerId: "todo" }), oversizedLegacy).coverage,
+      { scanned: 0, matched: 0, excluded: 0, scanComplete: false }, "metadata admission is bounded even for uncapped legacy Todo state");
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

@@ -1,4 +1,15 @@
+---
+title: Logical sessions and bounded physical shards decision
+audience: [agents, maintainers]
+status: historical decision with superseded operating gates
+purpose: Preserve the shard decision and earlier alternatives while identifying later automatic rollover.
+related:
+  - ../../chrono/history/logical-sessions.md
+---
+
 # ADR-001: Logical sessions and bounded physical shards
+
+> The source-preserving shard rationale remains useful. Manual-only rollover, required summary, and complete mandatory-history gates below are historical. Use [current logical sessions](../../chrono/history/logical-sessions.md) for safe-idle automatic rollover and selective continuation.
 
 Status: records implemented candidate behavior, not milestone acceptance. See the [documentation boundary](../README.md#current-documentation-boundary).
 

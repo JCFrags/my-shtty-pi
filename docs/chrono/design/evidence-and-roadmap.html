@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>Implementation, evidence, and future choices</title>
+  <!-- Reading copy of evidence-and-roadmap.md. Source SHA-256: 31e47c8242245684b6ab4d4e7ee6461c6ce8fd04e60f484b8ef565f0a16ad12e -->
+  <!-- Source front matter, retained as document metadata:
+---
+title: Implementation, evidence, and future choices
+audience: [users, agents, maintainers, evaluators]
+status: local integration with process-specific activation checks
+purpose: Identify the implemented version and keep practical evidence, selection, activation, and planned work separate.
+related:
+  - evolution-and-decisions.md
+  - ../operations/activation-and-migration.md
+  - ../../chrono-v4/completion-evidence.md
+---
+  -->
+  <style>
+    :root {
+      color-scheme: dark;
+      background: #161b22;
+      color: #dce3ed;
+      font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+      font-size: 20px;
+      line-height: 1.7;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: clamp(24px, 4vw, 56px) clamp(22px, 4vw, 48px) 88px;
+    }
+    h1, h2, h3 { color: #f0f4fa; line-height: 1.3; font-weight: 650; }
+    h1 { margin: 0 0 1.15em; font-size: 2rem; letter-spacing: -0.025em; }
+    h2 { margin: 2em 0 0.8em; padding-top: 0.85em; border-top: 1px solid #343e4c; font-size: 1.4rem; }
+    h1 + h2 { margin-top: 0; padding-top: 0; border-top: 0; }
+    h3 { margin: 1.65em 0 0.65em; font-size: 1.15rem; }
+    p { margin: 0 0 1.15em; }
+    strong { color: #f0f4fa; font-weight: 650; }
+    a { color: #9fc5ff; text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+    a:hover { color: #c5ddff; }
+    :focus-visible { outline: 2px solid #a7cbff; outline-offset: 5px; border-radius: 3px; }
+    ul, ol { margin: 0 0 1.3em; padding-left: 1.5em; }
+    li { padding-left: 0.15em; margin: 0.4em 0; }
+    li::marker { color: #a9b7ca; }
+    code {
+      font-family: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", monospace;
+      font-size: 0.9em;
+      padding: 0.1em 0.3em;
+      border: 1px solid #374252;
+      border-radius: 4px;
+      background: #232c39;
+      color: #e5edfa;
+      overflow-wrap: anywhere;
+    }
+    .table-scroll { overflow-x: auto; margin: 1.3em 0 1.5em; border: 1px solid #3a4555; border-radius: 7px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; line-height: 1.6; }
+    th, td { padding: 0.75em 0.9em; text-align: left; vertical-align: top; border-bottom: 1px solid #343e4c; }
+    th { color: #f0f4fa; background: #253040; font-weight: 650; }
+    th[align="right"], td[align="right"] { text-align: right; }
+    td { background: #1b232e; }
+    tbody tr:nth-child(even) td { background: #1f2834; }
+    tbody tr:last-child td { border-bottom: 0; }
+    th:first-child, td:first-child { min-width: 8.5em; }
+    ::selection { background: #385784; color: #fff; }
+    @media (max-width: 600px) {
+      :root { font-size: 19px; }
+      main { padding: 26px 22px 64px; }
+      table { min-width: 540px; }
+    }
+    @media print {
+      :root { color-scheme: light; background: white; color: #111; font-size: 12pt; }
+      main { max-width: none; padding: 0; }
+      h1, h2, h3, strong, a, code, th { color: #111; }
+      code, th, td, tbody tr:nth-child(even) td { background: white; }
+      .table-scroll { overflow: visible; }
+      table { min-width: 0; }
+      h1, h2, h3 { break-after: avoid; }
+      tr { break-inside: avoid; }
+    }
+    pre { overflow-x: auto; padding: 18px; border: 1px solid #374252; border-radius: 7px; background: #232c39; line-height: 1.55; }
+    pre code { display: block; padding: 0; border: 0; background: transparent; white-space: pre; overflow-wrap: normal; }
+  </style>
+</head>
+<body>
+<main>
+<h1>Implementation, evidence, and future choices</h1>
+<h2>Current source boundary</h2>
+<p>This source contains Chrono <code>be67e0ec</code>, version <code>4.0.5-local.20260926</code>, and the native ancestry correction <code>0121b02</code>. It retains the unified menu and stable tool-result projections, and adds the same-session summary, context-edit handling, and adaptive chronological replay described in the <a href="../context/session-agent-compaction.md">compaction contract</a>.</p>
+<p>GitHub acceptance, local code selection, and loaded activation are separate checks. This source record does not establish remote integration or the code currently loaded in an installation.</p>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Boundary</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Retained interface</td>
+<td>One <code>/Chrono</code> menu, presets/model picker, reports, and projection snapshots from the earlier 3.0.5 interface.</td>
+</tr>
+<tr>
+<td>Implemented V4</td>
+<td>Independent Context Kit providers, V2 evidence collection, complete asynchronous transfer, and an opt-in same-session summary/replay compiler.</td>
+</tr>
+<tr>
+<td>Compiled defaults</td>
+<td><code>contextCompiler: &quot;v3&quot;</code>, <code>memoryOwner: &quot;chrono&quot;</code>, normal memory engine on.</td>
+</tr>
+<tr>
+<td>Intended local selection</td>
+<td><code>contextCompiler: &quot;v4&quot;</code>, <code>memoryOwner: &quot;context-kit&quot;</code>. Preserve <code>valueWorkerMode: &quot;off&quot;</code> and <code>toolResultProjectionMode: &quot;off&quot;</code>.</td>
+</tr>
+<tr>
+<td>Loaded activation</td>
+<td>The local 4.0.5 check verified the coordinating process only, not fleet adoption. Check the private activation receipt and each target process&#39;s loaded identity.</td>
+</tr>
+<tr>
+<td>Existing legacy state</td>
+<td>Explicit paged imports are still required. Code selection is not migration.</td>
+</tr>
+<tr>
+<td>Background LLM</td>
+<td>Compatibility subsystem, paused while the normal engine is enabled. Presets do not enrich V4.</td>
+</tr>
+</tbody></table></div>
+<p>The retained release is immutable. Record actual selection and adoption privately and in the owning local activation reference, not by treating this source document as a live deployment report. Operators must check that receipt and each target process. Keep private roots, receipts, session IDs, and diagnostic traces outside the repository. Do not infer all-session adoption from a fresh loader.</p>
+<h2>Evidence that can be reused</h2>
+<h3>V3 and narrow corrections</h3>
+<p>Focused V3 work exercised model-free composition, source-linked recall, native state preservation, and physical Pi replacement with restart. Later corrections addressed refusal continuation, branch targeting, catalog-only raw recovery, startup recheck, retrieval cues, and menu/projection behavior.</p>
+<p>These checks have revision boundaries. The retained <a href="../../chrono-release-compatibility.md">release compatibility record</a> and <a href="../../chrono-v3/README.md">V3 records</a> identify them. The retained scale campaign did not complete its matrix. Its <a href="../../chrono-v3/reviews/M11-report-correction.md#actual-settled-campaign">settled correction</a> is not a billion-token pass.</p>
+<h3>V4 foundation</h3>
+<p>The <a href="../../chrono-v4/foundation-evidence.md">foundation evidence</a> used a small source-known native scenario and two controlled model calls. Current cards supported four scored facts. An old excerpt alone supported none of those missing facts and the model safely requested evidence.</p>
+<p>The inputs differed in available evidence. That result does not establish general accuracy, token savings, faster performance, or a full comparison with V3&#39;s retrieval tools.</p>
+<h3>V4 implementation scenario</h3>
+<p>The <a href="../../chrono-v4/completion-evidence.md">completion evidence</a> used installed Pi 0.85.1, Node 24.18.0, private source-known state, and a scripted model stream. It made no network model request or summary-model call. That earlier compiler differs from the current same-session summary path. Its result does not establish that current V4 needs no summary.</p>
+<p>It exercised explicit import, new writes, reopen, branch-local Todo/Notes/Workplan, logical-session Memory, Recall/native recovery, complete transfer refusal and success, and post-write compatible rollback.</p>
+<p>Exactly one actual compaction matched its JSON-normalized preview hashes and receipt using the loaded-prefix fallback. The request charges were estimates, not exact tokenizer or provider-payload measurements.</p>
+<p>An affected recovery check read two exact raw pages, 16,384 bytes total, from the original compaction entry while the derived index was still pending. Further continuation remained. This is not complete receipt-tool recovery or whole-receipt JSON decoding. Some receipt-card follow-up calls did not run after an earlier refusal. Separate native-state checks passed.</p>
+<p>Original failures and narrow corrections remain documented. Successful setup and compaction were not repeatedly rerun merely to replace failed evidence.</p>
+<h3>Local integration checks</h3>
+<p>The earlier integration owner reported a successful compiled build and two existing short conflict-focused checks for <code>1f4b170</code>. Those results retain that source boundary. Prior V4 practical evidence was not repeated as a new quality or lifetime-scale campaign.</p>
+<p>The local Chrono 4.0.5 verifier reported 704 passed, zero failed, and two skipped. Loaded activation was verified only in the coordinating process before publication. These checks do not establish fleet activation, complete indexing, or a new committed compaction.</p>
+<p>For the context-edit and adaptive replay source at <code>be67e0ec</code>, a fixed real prefix reused its saved summary without a model call. Estimated replay decreased from 17,833 to 6,971 tokens, selecting 46 of 156 events. Complete compiled context was 9,833 tokens under the unchanged 40,000-token ceiling. The source and saved summary were preserved. Practical continuation review found no blocking gap in that prefix. This is not semantic completeness, a corrected live high-context summary exchange, or a prompt-cache improvement. See the <a href="../context/session-agent-compaction.md#verification-status">verification limits</a>.</p>
+<p>The documentation reconciliation uses local link, source-hash, and factual consistency checks. It adds no runtime tests, model calls, or live changes. Publication acceptance remains a separate integration result.</p>
+<h2>What the system does not establish</h2>
+<ul>
+<li>Perfect recall, complete natural-language obligation extraction, or infinite storage.</li>
+<li>General model-based quality improvement from all components or any LLM preset.</li>
+<li>Whole-archive global ranking, embeddings, or a universal resource-version graph.</li>
+<li>An atomic distributed snapshot across providers.</li>
+<li>Exact model token counts or full control over later provider payload changes.</li>
+<li>A hard cap on all disk growth, total host memory, or the initial load of an old huge Pi file.</li>
+<li>Safe automatic migration of arbitrary third-party extension state.</li>
+<li>Data-preserving rollback merely by selecting an older package.</li>
+<li>Automatic cleanup of source shards, canonical revisions, or old pinned stores.</li>
+</ul>
+<h2>Useful future choices</h2>
+<div class="table-scroll" tabindex="0"><table>
+<thead>
+<tr>
+<th>Possible work</th>
+<th>Why it may help</th>
+<th>Evidence needed before expanding</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Source-backed action/result/correction relations in the existing history path</td>
+<td>Connect historical evidence more precisely.</td>
+<td>Better recovery on a bounded real case without stale or invented relations. Do not create a second all-history graph by default.</td>
+</tr>
+<tr>
+<td>Broader provider discovery</td>
+<td>Reduce the fixed registry&#39;s integration limit.</td>
+<td>Preserve native-tool exclusions, identity, versioning, and failure isolation.</td>
+</tr>
+<tr>
+<td>Optional indexed-pipeline model assistance</td>
+<td>Improve bounded event/group representations.</td>
+<td>An off/on comparison with fixed source cut and budget after the deterministic baseline works. No required model dependency.</td>
+</tr>
+<tr>
+<td>More accurate request accounting</td>
+<td>Reduce uncertainty around provider framing and tokens.</td>
+<td>Match the installed provider path and retain explicit estimator qualifications.</td>
+</tr>
+<tr>
+<td>Long-run scheduling and recovery improvements</td>
+<td>Keep actual sessions usable under sustained growth.</td>
+<td>Measured bounded scenarios and observed bottlenecks, not architecture-only scale claims.</td>
+</tr>
+<tr>
+<td>Quality evaluation across useful tasks</td>
+<td>Determine whether evidence improves safe next actions.</td>
+<td>Source-known expectations, omissions and failures in the denominator, and separately labeled self-reports.</td>
+</tr>
+<tr>
+<td>Storage lifecycle tooling</td>
+<td>Manage retained disk data without breaking recovery.</td>
+<td>Explicit ownership, pinned-reference preservation, backup, and approval for destructive changes.</td>
+</tr>
+</tbody></table></div>
+<p>Choose a small improvement when actual use demonstrates the need. More tests or reviews are not a substitute for a useful result, and no roadmap item authorizes extra model spending, publication, or deployment.</p>
+<p><a href="README.md">Design index</a> · <a href="evolution-and-decisions.md">Evolution and decisions</a> · <a href="../USER-GUIDE.md">User guide</a></p>
+</main>
+</body>
+</html>

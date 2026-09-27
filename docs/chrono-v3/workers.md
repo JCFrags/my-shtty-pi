@@ -1,4 +1,15 @@
+---
+title: V3 worker runtime reference
+audience: [agents, maintainers, operators]
+status: revision-bound reference
+purpose: Preserve deterministic worker design and route current diagnostics and cache distinctions.
+related:
+  - ../chrono/operations/workers-and-caches.md
+---
+
 # Worker runtime and scheduling
+
+> Start with [current workers and caches](../chrono/operations/workers-and-caches.md). The separate `/chrono-*` diagnostics below now use `/Chrono` action arguments. Worker policy and admission remain unchanged by documentation or status reads.
 
 V3 store work runs outside Pi in bounded local workers. The runtime is provider-free. This describes the [candidate implementation](README.md#current-documentation-boundary), not a new host-policy or startup authorization.
 

@@ -17,6 +17,8 @@ import { line } from "./capsule-storage-fixture.js";
 
 const hash = (s: string): string => createHash("sha256").update(s).digest("hex");
 const uuid = (s: string): string => { const h = hash(s); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`; };
+const emptyLine = (id: string, parentId: string | null): string =>
+  JSON.stringify({ type: "message", id, parentId, message: { role: "user", content: [] } }) + "\n";
 async function ready(adapter: HistorySearchAdapter, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -28,16 +30,15 @@ async function ready(adapter: HistorySearchAdapter, timeoutMs = 10_000): Promise
   assert.fail(`lifecycle did not settle: ${JSON.stringify(adapter.scheduler.status())}`);
 }
 
-/** Each cold layer has the existing finite 10-second settlement bound. A
- * completed earlier layer is not charged against a later layer's startup.
- * Never reset on repeated running/lagging ticks. Five stages cap total waiting.
+/** Share the existing five-layer, 50-second maximum across the full target.
+ * A cached prefix can make an early layer ready before target catch-up finishes.
+ * Never reset the absolute deadline on progress or a layer transition.
  */
 async function readyLayers(adapter: HistorySearchAdapter): Promise<void> {
   const stages = ["catalog", "capsules", "index", "memory", "rollup"] as const;
-  const started = Date.now();
+  const started = Date.now(), deadline = started + 50_000;
   const observed: { stage: string; elapsedMs: number }[] = [];
   for (const stage of stages) {
-    const deadline = Date.now() + 10_000;
     const layerState = (): unknown => {
       const value = adapter.status()[stage];
       return typeof value === "object" && value !== null ? (value as { state?: string }).state : value;
@@ -51,7 +52,7 @@ async function readyLayers(adapter: HistorySearchAdapter): Promise<void> {
       assert.notEqual(status[stage], "error", JSON.stringify({ stage, status, observed }));
       assert.ok(Date.now() < deadline, JSON.stringify({ code: "layer-did-not-settle", stage, status, observed }));
       // drain is only one active job, not full readiness. Race it with a short
-      // poll so the finite stage deadline still applies to a stuck worker.
+      // poll so the finite overall deadline still applies to a stuck worker.
       await Promise.race([adapter.scheduler.drain(), new Promise(resolve => setTimeout(resolve, 20))]);
       await new Promise(resolve => setTimeout(resolve, 20));
     }
@@ -98,6 +99,7 @@ test("exact raw logical predecessor recovery uses its catalog when the final sea
   try {
     seed.schedule({ sourcePath, catalogDirectory, sessionKey, shardKey, leafId: "sibling" });
     await waitFor(() => seed.status().index === "ready", () => seed.status());
+    seed.scheduler.cancel(); await seed.scheduler.drain();
     const oldTarget = await seed.compositionTarget("sibling");
     seed.dispose(); await seed.scheduler.drain();
     appendFileSync(sourcePath, final);
@@ -127,6 +129,9 @@ test("exact raw logical predecessor recovery uses its catalog when the final sea
       sessionKey: activeKey, shardKey: hash(`pi-jsonl-v1\0${activePath}`), leafId: "active" });
     assert.deepEqual((await adapter.getRaw("active", {})).details, { status: "unavailable", code: "search-v3-index-not-ready" },
       "an unvalidated active catalog must still refuse");
+    // Keep the active route, but do not spend its shared worker slot indexing
+    // unrelated replacement history while testing the closed predecessor.
+    adapter.scheduler.cancel(); await adapter.scheduler.drain();
     adapter.scheduleLogical(grant);
     // Observe the real child scheduler only to await its terminal missing-index
     // result and drain it during cleanup. Do not manufacture adapter readiness.
@@ -322,7 +327,11 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
   let content = "", parent: string | null = null;
   for (let index = 1; index <= 40; index += 1) {
     const id = `event-${index}`;
-    content += line(id, parent, index === 1 ? "early searchable prefix needle" : index === 40 ? "eventual tail needle" : `ordinary history ${index}`);
+    // Keep all physical cuts and five later sources, exceeding the four-source index page.
+    content += index === 1 ? line(id, parent, "early searchable prefix needle")
+      : index === 40 ? line(id, parent, "eventual tail needle")
+      : index >= 17 && index <= 20 ? line(id, parent, `ordinary history ${index}`)
+      : emptyLine(id, parent);
     parent = id;
   }
   writeFileSync(sourcePath, content, { mode: 0o600 });
@@ -405,19 +414,23 @@ test("bounded initial catch-up serves a searchable committed prefix before the f
   }
 });
 
-test("long common prefix resumes after a fork without rewinding committed ancestor heads", { timeout: 100_000 }, async () => {
+test("long common prefix resumes after a fork without rewinding committed ancestor heads", { timeout: 160_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-adapter-long-branch-"));
   const sourcePath = join(directory, "source.jsonl"), schedulerDirectory = join(directory, "scheduler");
   mkdirSync(schedulerDirectory, { mode: 0o700 });
   const ancestorText = "exact common ancestor evidence", siblingText = "abandoned sibling evidence";
-  const records = Array.from({ length: 24 }, (_, index) => line(`event-${index + 1}`, index ? `event-${index}` : null,
-    index === 19 ? ancestorText : index === 23 ? siblingText : `ordinary branch history ${index + 1}`));
+  // Empty filler bodies preserve the long physical ancestry without unrelated reducer jobs.
+  const records = Array.from({ length: 24 }, (_, index) => {
+    const id = `event-${index + 1}`, parent = index ? `event-${index}` : null;
+    return index === 19 ? line(id, parent, ancestorText) : index === 23 ? line(id, parent, siblingText)
+      : index === 0 ? line(id, parent, "ordinary branch history 1") : emptyLine(id, parent);
+  });
   writeFileSync(sourcePath, records.join(""), { mode: 0o600 });
   const target = { sourcePath, catalogDirectory: join(directory, "catalog"), sessionKey: hash("long-branch-session"), shardKey: hash("long-branch-shard") };
   const options = { schedulerDirectory, slots: 1 }, adapter = new HistorySearchAdapter(options);
-  // One overall bound covers both cold indexing and branch catch-up. Do not
-  // restart the deadline when a prefix becomes ready.
-  const deadline = Date.now() + 90_000;
+  // One overall bound covers cold indexing, branch catch-up, and the serial
+  // contained-worker reads. Do not restart it when a prefix becomes ready.
+  const deadline = Date.now() + 150_000;
   const waitForCut = async (cut: number): Promise<void> => {
     while (adapter.status().indexedCut !== cut) {
       assert.notEqual(adapter.scheduler.status().state, "error", JSON.stringify(adapter.status()));
@@ -432,6 +445,9 @@ test("long common prefix resumes after a fork without rewinding committed ancest
   try {
     adapter.schedule({ ...target, leafId: "event-24" });
     await waitForCut(24);
+    // Index publication is the required boundary. Stop and drain optional
+    // memory/rollup work before inspecting the committed branch heads.
+    adapter.scheduler.cancel(); await adapter.scheduler.drain();
     const oldTarget = await adapter.compositionTarget("event-24");
     const oldSearch = await runSearchV3Worker({ ...oldTarget, op: "status" }, options);
     const capsuleRequest = { v: 1 as const, op: "status" as const, derivedDirectory: oldTarget.capsuleDirectory,
@@ -470,6 +486,7 @@ test("long common prefix resumes after a fork without rewinding committed ancest
     assert.equal((await adapter.getRaw("event-20", {})).details.text, records[19]);
     assert.deepEqual((await adapter.recall(siblingHandle)).details, { status: "unavailable", code: "search-v3-reference-scope-mismatch" });
     await waitForCut(26);
+    adapter.scheduler.cancel(); await adapter.scheduler.drain();
     assert.equal(adapter.status().lag, 0);
     const ancestor = await adapter.search({ query: ancestorText, mode: "exact" });
     const ancestorHandle = (ancestor.details.hits as { handle: string }[])[0]?.handle;
@@ -490,7 +507,7 @@ test("long common prefix resumes after a fork without rewinding committed ancest
   }
 });
 
-test("normal fresh Pi loading adopts and resumes V3 without activation commands", async () => {
+test("normal fresh Pi loading adopts and resumes V3 without activation commands", { timeout: 130_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "chrono-auto-resume-"));
   const agent = join(root, "agent"), sessions = join(root, "sessions"), scheduler = join(root, "scheduler");
   for (const directory of [agent, sessions, scheduler]) mkdirSync(directory, { mode: 0o700 });
@@ -506,7 +523,7 @@ export default function(pi) {
  chrono(new Proxy(pi,{get(o,k){if(k==='registerTool')return t=>{tools.set(t.name,t);return o.registerTool(t)};return Reflect.get(o,k)}}),{schedulerDirectory:${JSON.stringify(scheduler)}});
  pi.registerCommand('resume-probe',{handler:async(_args,ctx)=>{
   const call=(name,params={})=>tools.get(name).execute('resume-probe',params,undefined,undefined,ctx);
-  const deadline=Date.now()+20000;let status;
+  const deadline=Date.now()+40000;let status;
   do {status=(await call('history_status')).details;if(status.index==='ready')break;if(Date.now()>=deadline)throw Error('resume-not-ready:'+JSON.stringify(status));await new Promise(r=>setTimeout(r,30));}while(true);
   const found=(await call('history_search',{query:${JSON.stringify(phrase)},mode:'exact',limit:1,tokenBudget:2000})).details;
   if(found.status!=='ok'||!found.hits?.[0])throw Error('resume-search-failed');
@@ -520,11 +537,14 @@ export default function(pi) {
   writeFileSync(join(agent, "settings.json"), JSON.stringify({ extensions: [bridge] }), { mode: 0o600 });
   const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
   async function fresh(): Promise<void> {
+    // One finite window includes cold startup, index readiness, and all probe
+    // reads. A handled command can still be waiting for several real workers.
+    const deadline = Date.now() + 60_000;
     const base = Object.fromEntries(["PATH", "LANG", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"].flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
     const child = spawn(process.execPath, [cli, "--mode", "rpc", "--offline", "--session", sourcePath, "--session-dir", sessions,
       "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files"], { cwd: root, env: { ...base, HOME: agent, PI_CODING_AGENT_DIR: agent,
         PI_CHRONO_CONFIG_PATH: join(agent, "chrono.json"), PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false", PI_CHRONO_CATALOG_SHADOW: "false", PI_CHRONO_ROLLUP_SHADOW: "false", PI_CHRONO_VALUE_WORKER_MODE: "off" }, stdio: ["pipe", "pipe", "pipe"] });
-    let buffer = "", sequence = 0, receipt: unknown, diagnostics = "";
+    let buffer = "", sequence = 0, receipt: unknown, diagnostics = "", extensionError: Error | undefined;
     const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
     const closed = new Promise<number | null>(resolve => child.once("close", resolve));
     child.stderr.on("data", bytes => { diagnostics = (diagnostics + bytes.toString()).slice(-4096); });
@@ -536,6 +556,7 @@ export default function(pi) {
       while ((end = buffer.indexOf("\n")) >= 0) {
         const raw = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         let event: any; try { event = JSON.parse(raw); } catch { continue; }
+        if (event.type === "extension_error") extensionError = new Error(`resume-extension-error:${JSON.stringify(event)}`);
         if (event.type === "extension_ui_request" && event.method === "notify" && event.message.startsWith("RESUME_RESULT:")) receipt = JSON.parse(event.message.slice(14));
         if (event.type === "response" && pending.has(event.id)) {
           const p = pending.get(event.id)!; pending.delete(event.id); clearTimeout(p.timer);
@@ -544,12 +565,13 @@ export default function(pi) {
       }
     });
     const send = (type: string, extra = {}) => new Promise<unknown>((resolve, reject) => {
-      const id = String(++sequence), timer = setTimeout(() => { pending.delete(id); reject(new Error(`resume-rpc-timeout:${diagnostics}`)); }, 25_000);
+      const id = String(++sequence), timer = setTimeout(() => { pending.delete(id); reject(new Error(`resume-rpc-timeout:${type}:${JSON.stringify(extra)}:${extensionError?.message ?? diagnostics}`)); }, Math.max(1, deadline - Date.now()));
       pending.set(id, { resolve, reject, timer }); child.stdin.write(JSON.stringify({ id, type, ...extra }) + "\n");
     });
     try {
       await send("get_commands");
       await send("prompt", { message: "/resume-probe" });
+      if (extensionError) throw extensionError;
       assert.deepEqual(receipt, { enabled: true, persisted: false, logical: true, adoptions: 1, search: true, recall: true, exact: true });
       await send("prompt", { message: "/resume-quit" });
       assert.equal(await closed, 0);

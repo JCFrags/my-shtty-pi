@@ -144,7 +144,9 @@ test("recorded same-cut preview and normal hooks preserve selection readiness un
       });
       let summaryCalls = 0, composeCalls = 0;
       let refuseComposition = false;
-      const pi = { registerTool(tool: { name: string; execute: () => Promise<unknown> }) { tools.set(tool.name, tool.execute); },
+      const pi = { registerTool(tool: { name: string; execute: (...args: any[]) => Promise<unknown> }) {
+        tools.set(tool.name, () => tool.execute("fixture-compaction", {}, undefined, undefined, compactContext));
+      },
         registerCommand() {}, appendEntry() {}, sendMessage() {},
         on(name: string, handler: Hook) { hooks.set(name, handler); } };
       extension(pi as unknown as ExtensionAPI, { schedulerDirectory: join(root, "runtime"),

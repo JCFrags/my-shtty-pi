@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import extension from "../src/pi-extension.js";
+import type { SessionEntryLike } from "../src/types.js";
 const pause = () => new Promise(resolve => setTimeout(resolve, 30));
 for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in" : "default-off"} is nonblocking and isolated`, async () => {
   const root = mkdtempSync(join(tmpdir(), "chrono-catalog-lifecycle-"));
@@ -13,12 +14,15 @@ for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in
   const hooks = new Map<string, (...args: any[]) => any>();
   const commands = new Map<string, { handler: (...args: any[]) => any }>();
   const source = join(root, "synthetic.jsonl");
-  const original = JSON.stringify({ type: "session", version: 3, id: "synthetic", cwd: "/synthetic" }) + "\n" + JSON.stringify({ type: "message", id: "one", parentId: null, message: { role: "user", content: "Synthetic lifecycle only." } }) + "\n";
+  const entries: SessionEntryLike[] = [{ type: "message", id: "one", parentId: null, message: { role: "user", content: "Synthetic lifecycle only." } }];
+  const original = JSON.stringify({ type: "session", version: 3, id: "synthetic", cwd: "/synthetic" }) + "\n" + JSON.stringify(entries[0]) + "\n";
   writeFileSync(source, original, { mode: 0o600 });
   let status = "";
   let completed = false;
   const context = { hasUI: true, getContextUsage: () => undefined, isIdle: () => true,
-    sessionManager: { getSessionFile: () => source, getSessionId: () => "synthetic", getEntries: () => { throw new Error("unexpected-whole-session-read"); }, getBranch: () => { throw new Error("unexpected-whole-branch-read"); } },
+    sessionManager: { getSessionFile: () => source, getSessionId: () => "synthetic",
+      getLeafId: () => entries.at(-1)?.id ?? null, getEntry: (id: string) => entries.find(entry => entry.id === id),
+      getEntries: () => { throw new Error("unexpected-whole-session-read"); }, getBranch: () => { throw new Error("unexpected-whole-branch-read"); } },
     ui: { notify: (message: string) => { status = message; } },
   };
   async function waitReady() {
@@ -42,7 +46,8 @@ for (const enabled of [false, true]) test(`catalog lifecycle ${enabled ? "opt-in
     assert.equal(existsSync(join(root, ".chrono-catalog")), false, "scheduling stack does no catalog filesystem work");
     if (enabled) {
       await waitReady();
-      const append = JSON.stringify({ type: "message", id: "two", parentId: "one", message: { role: "assistant", content: [{ type: "text", text: "Synthetic append." }] } }) + "\n";
+      entries.push({ type: "message", id: "two", parentId: "one", message: { role: "assistant", content: [{ type: "text", text: "Synthetic append." }] } });
+      const append = JSON.stringify(entries.at(-1)) + "\n";
       appendFileSync(source, append);
       hooks.get("agent_settled")!({}, context); await waitReady();
       assert.equal(readFileSync(source, "utf8"), original + append);

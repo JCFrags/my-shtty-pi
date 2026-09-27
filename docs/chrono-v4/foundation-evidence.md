@@ -1,4 +1,16 @@
+---
+title: V4 foundation practical evidence
+audience: [agents, maintainers, evaluators]
+status: revision-bound evidence
+purpose: Preserve the bounded native scenario and two-call comparison without generalizing its result.
+related:
+  - completion-evidence.md
+  - ../chrono/design/evidence-and-roadmap.md
+---
+
 # Foundation practical evidence
+
+> This is earlier foundation evidence, not current deployment status or proof of all later components. Read the [current evidence boundary](../chrono/design/evidence-and-roadmap.md) for interpretation.
 
 ## Scope and result
 
