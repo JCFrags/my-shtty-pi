@@ -126,7 +126,7 @@ test("defaults are shared, weekly-only for Standard Codex, and Spark is off", ()
 		{ slot: "secondary", usedPercent: 81, resetAt, windowSeconds: 604_800 }, { slot: "primary", usedPercent: 25, resetAt, windowSeconds: 18_000 },
 	] }, { kind: "spark", limitId: "codex_spark", limitName: "spark", windows: [{ slot: "primary", usedPercent: 5, resetAt, windowSeconds: 604_800 }] }] };
 	const status = formatCachedStatus(cacheWith(snapshot), observedAt, "UTC");
-	assert.equal(status, "Codex Weekly 19% remaining · resets Mon at 22:21 (in 4d 7h); Banked resets: count unknown · next expiry unknown");
+	assert.equal(status, "Codex Weekly 19% left · reset Mon 22:21 (4d 7h); Banked count unknown · next expiry unknown");
 	assert.doesNotMatch(status, /5-hour|Spark/);
 });
 
@@ -170,17 +170,35 @@ test("independent Standard and Spark toggles render only enabled duration fields
 	prefs = applyDisplaySetting(prefs, "standard.fiveHourUsage", "on");
 	prefs = applyDisplaySetting(prefs, "spark.fiveHourReset", "on");
 	const text = formatCachedStatus(cacheWith(snapshot), observedAt, "UTC", prefs);
-	assert.match(text, /Weekly 19% remaining; 5-hour 75% remaining; Spark 5-hour resets/);
-	assert.doesNotMatch(text, /Weekly 19% remaining · resets/);
+	assert.match(text, /Weekly 19% left; 5-hour 75% left; Spark 5-hour reset/);
+	assert.doesNotMatch(text, /Weekly 19% left · reset/);
 	assert.doesNotMatch(text, /Spark 5-hour 95%/);
 });
 
 test("usage/reset formats and separators remain deterministic", () => {
 	const headers = { "x-codex-primary-used-percent": "81", "x-codex-primary-window-minutes": "10080", "x-codex-primary-reset-at": String(resetAt) };
-	assert.equal(formatCodexUsageStatus(headers, observedAt, "UTC"), "Codex Weekly 19% remaining · resets Mon at 22:21 (in 4d 7h)");
+	assert.equal(formatCodexUsageStatus(headers, observedAt, "UTC"), "Codex Weekly 19% left · reset Mon 22:21 (4d 7h)");
 	const used = applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "usageFormat", "Used %");
 	assert.match(formatCodexUsageStatus(headers, observedAt, "UTC", used), /Weekly 81% used ·/);
-	for (const [choice, expected] of [["Friendly only", "resets Mon at 22:21"], ["Countdown only", "in 4d 7h"], ["Exact local time", "resets Mon, Sep 14, 2026 at 22:21 UTC"]] as const) assert.match(formatCodexUsageStatus(headers, observedAt, "UTC", applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "resetFormat", choice)), new RegExp(expected));
+	for (const [choice, expected] of [["Friendly only", "reset Mon 22:21"], ["Countdown only", "in 4d 7h"], ["Exact local time", "reset Mon, Sep 14, 2026 at 22:21 UTC"]] as const) assert.match(formatCodexUsageStatus(headers, observedAt, "UTC", applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "resetFormat", choice)), new RegExp(expected));
+});
+
+test("long footer statuses preserve every selected window and final banked fields", () => {
+	const enabled = { weeklyUsage: true, weeklyReset: true, fiveHourUsage: true, fiveHourReset: true };
+	const prefs = { ...DEFAULT_DISPLAY_PREFERENCES, standard: enabled, spark: enabled, resetFormat: "exact" as const };
+	const headers: Record<string, string> = { "x-codex-spark-limit-name": "Spark" };
+	for (const prefix of ["x-codex", "x-codex-spark"]) for (const [slot, minutes] of [["primary", "10080"], ["secondary", "300"]] as const) {
+		headers[`${prefix}-${slot}-used-percent`] = "81.5";
+		headers[`${prefix}-${slot}-window-minutes`] = minutes;
+		headers[`${prefix}-${slot}-reset-at`] = String(resetAt);
+	}
+	const cache: QuotaCache = { ...cacheWith(snapshotFromHeaders(headers, observedAt)!), bankedDetails: {
+		availableCount: 1, observedAt, credits: [{ resetType: "codex_rate_limits", status: "available", expiresAt: resetAt * 1000, expiresAtState: "known" }],
+	} };
+	const headerStatus = formatCodexUsageStatus(headers, observedAt, "UTC", prefs);
+	assert.ok(headerStatus.length > 240);
+	assert.ok(headerStatus.endsWith("Spark 5-hour 18.5% left · reset Mon, Sep 14, 2026 at 22:21 UTC"));
+	assert.equal(formatCachedStatus(cache, observedAt, "UTC", prefs), `${headerStatus}; Banked 1 · next expires Mon, Sep 14, 2026 at 22:21 UTC`);
 });
 
 test("reset formatting handles timezone, DST, sub-minute, and due values", () => {
@@ -247,7 +265,7 @@ test("derives private account key and coordinates one poll across two clients", 
 test("classification duration carried into a usage-only header marks footer stale", () => {
 	const previous: UsageSnapshot = { observedAt, source: "poll", families: [{ kind: "standard", limitId: "codex", windows: [{ slot: "primary", usedPercent: 20, windowSeconds: 604_800, fieldObservedAt: { usage: observedAt, duration: observedAt } }] }] };
 	const update = snapshotFromHeaders({ "x-codex-primary-used-percent": "21" }, observedAt + 1)!; const merged = mergeUsageSnapshots(previous, update); const prefs = applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "standard.weeklyReset", "off");
-	assert.match(formatCachedStatus(cacheWith(merged), observedAt + 1, "UTC", prefs), /Weekly 79% remaining \[stale\]/);
+	assert.match(formatCachedStatus(cacheWith(merged), observedAt + 1, "UTC", prefs), /Weekly 79% left \[stale\]/);
 });
 
 test("unnamed partial family header preserves known Spark identity and name", () => {
@@ -303,8 +321,8 @@ test("stale lock recovery and failed polling preserve last good history", async 
 
 test("newest banked count wins, with usage summary winning equal-time ties", () => {
 	const oldSummaryNewDetails: QuotaCache = { version: 1, accountKey: "x", history: [], bankedSummary: { availableCount: 2, observedAt: 100 }, bankedDetails: { availableCount: 0, observedAt: 200, credits: [] } };
-	assert.equal(formatBankedFooter(oldSummaryNewDetails, 200, "UTC"), "Banked resets: 0"); assert.match(formatBankedDetails(oldSummaryNewDetails, 200, "UTC"), /Count source: details/);
-	const tie: QuotaCache = { ...oldSummaryNewDetails, bankedSummary: { availableCount: 2, observedAt: 200 } }; assert.match(formatBankedFooter(tie, 200, "UTC")!, /Banked resets: 2/); assert.match(formatBankedDetails(tie, 200, "UTC"), /Count source: usage summary/);
+	assert.equal(formatBankedFooter(oldSummaryNewDetails, 200, "UTC"), "Banked 0"); assert.match(formatBankedDetails(oldSummaryNewDetails, 200, "UTC"), /Count source: details/);
+	const tie: QuotaCache = { ...oldSummaryNewDetails, bankedSummary: { availableCount: 2, observedAt: 200 } }; assert.match(formatBankedFooter(tie, 200, "UTC")!, /Banked 2/); assert.match(formatBankedDetails(tie, 200, "UTC"), /Count source: usage summary/);
 });
 
 test("expiry is qualified unless every current available credit has a known future date", () => {
@@ -312,7 +330,7 @@ test("expiry is qualified unless every current available credit has a known futu
 	const futureA = resetAt * 1000; const futureB = futureA + 60_000;
 	const complete: QuotaCache = { version: 1, accountKey: "x", history: [], bankedSummary: { availableCount: 2, observedAt }, bankedDetails: { availableCount: 2, observedAt, credits: [credit(futureA), credit(futureB)] } };
 	assert.match(formatBankedFooter(complete, observedAt, "UTC")!, / · next expires /); assert.doesNotMatch(formatBankedFooter(complete, observedAt, "UTC")!, /known\/listed/);
-	const summaryFive: QuotaCache = { ...complete, bankedSummary: { availableCount: 5, observedAt: observedAt + 1 } }; assert.match(formatBankedFooter(summaryFive, observedAt, "UTC")!, /Banked resets: 5 · next known\/listed expiry/);
+	const summaryFive: QuotaCache = { ...complete, bankedSummary: { availableCount: 5, observedAt: observedAt + 1 } }; assert.match(formatBankedFooter(summaryFive, observedAt, "UTC")!, /Banked 5 · next known\/listed expiry/);
 	const nullDate: QuotaCache = { ...complete, bankedDetails: { availableCount: 2, observedAt, credits: [credit(futureA), credit(undefined, "not-supplied")] } }; assert.match(formatBankedFooter(nullDate, observedAt, "UTC")!, /next known\/listed expiry/);
 	const pastDate: QuotaCache = { ...complete, bankedDetails: { availableCount: 2, observedAt, credits: [credit(futureA), credit(observedAt - 1)] } }; assert.match(formatBankedFooter(pastDate, observedAt, "UTC")!, /next known\/listed expiry/);
 });
@@ -321,8 +339,8 @@ test("banked summary distinguishes zero, positive, and missing", () => {
 	assert.deepEqual(parseBankedSummary({ rate_limit_reset_credits: { available_count: 0 } }, observedAt), { availableCount: 0, observedAt });
 	assert.deepEqual(parseBankedSummary({ rate_limit_reset_credits: { available_count: 2 } }, observedAt), { availableCount: 2, observedAt });
 	assert.equal(parseBankedSummary({}, observedAt), undefined); assert.equal(parseBankedSummary({ rate_limit_reset_credits: { available_count: -1 } }, observedAt), undefined);
-	assert.equal(formatBankedFooter({ version: 1, accountKey: "x", history: [], bankedSummary: { availableCount: 0, observedAt } }, observedAt, "UTC"), "Banked resets: 0");
-	assert.equal(formatBankedFooter({ version: 1, accountKey: "x", history: [] }, observedAt, "UTC"), "Banked resets: count unknown · next expiry unknown");
+	assert.equal(formatBankedFooter({ version: 1, accountKey: "x", history: [], bankedSummary: { availableCount: 0, observedAt } }, observedAt, "UTC"), "Banked 0");
+	assert.equal(formatBankedFooter({ version: 1, accountKey: "x", history: [] }, observedAt, "UTC"), "Banked count unknown · next expiry unknown");
 });
 
 test("banked details preserve the official status contract, date uncertainty, caps, and terminal safety", () => {
@@ -334,7 +352,7 @@ test("banked details preserve the official status contract, date uncertainty, ca
 	assert.deepEqual(details.credits.map((credit) => [credit.resetType, credit.status, credit.expiresAtState]), [["codex_rate_limits", "available", "known"], ["unknown", "redeeming", "not-supplied"], ["codex_rate_limits", "redeemed", "invalid"]]);
 	assert.equal(details.credits[1]?.grantedAtInvalid, true); assert.ok(details.credits[0]!.description!.length <= 240); assert.doesNotMatch(details.credits[0]!.title!, /\u001b|\n/);
 	const cache: QuotaCache = { version: 1, accountKey: "x", history: [], bankedSummary: { availableCount: 4, observedAt }, bankedDetails: details };
-	const footer = formatBankedFooter(cache, observedAt, "UTC")!; assert.match(footer, /Banked resets: 4 · next known\/listed expiry Mon at 22:21/);
+	const footer = formatBankedFooter(cache, observedAt, "UTC")!; assert.match(footer, /Banked 4 · next known\/listed expiry Mon 22:21/);
 	const body = formatBankedDetails(cache, observedAt, "UTC"); assert.match(body, /do not prove the earliest expiry/); assert.match(body, /Type: codex_rate_limits/); assert.match(body, /Status: available/); assert.doesNotMatch(body, /secret-/); assert.doesNotMatch(body, /redeeming|redeemed/);
 });
 
@@ -387,7 +405,7 @@ test("an old usage writer cannot reserve or erase the companion banked cache", a
 	const first = new SharedQuotaCoordinator({ ...common, onUpdate: (value) => { latest = value; } }); await startAfterInitialPoll(first); await waitFor(() => latest?.bankedDetails?.availableCount === 1); assert.equal(usageRequests, 0); assert.equal(detailsRequests, 0, "a valid existing banked gate is migrated without a request");
 	const sidecarPath = join(cacheRoot, `${identity.accountKey}.banked.json`); for (let attempt = 0; attempt < 200; attempt += 1) { try { await stat(sidecarPath); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); } } assert.equal((await stat(sidecarPath)).mode & 0o777, 0o600); assert.doesNotMatch(await readFile(sidecarPath, "utf8"), /discarded|mixed-version-account/);
 	now += 180_001; await writeFile(mainPath, JSON.stringify(oldWriterCache()), { mode: 0o600 }); await first.tick(); assert.equal(latest?.bankedDetails?.availableCount, 1); assert.equal(usageRequests, 0, "the old writer continues to own the usage gate"); assert.equal(detailsRequests, 1, "the companion banked gate remains independently eligible");
-	now += 1; const newerEmpty = parseBankedDetails({ available_count: 0, credits: [] }, now)!; await writeFile(mainPath, JSON.stringify({ ...oldWriterCache(), bankedSummary: { availableCount: 0, observedAt: now }, bankedDetails: newerEmpty, bankedDetailsLastAttemptAt: now, bankedDetailsLastSuccessAt: now }), { mode: 0o600 }); await first.tick(); assert.equal(latest?.bankedDetails?.availableCount, 0, "newer main details beat stale sidecar details"); assert.equal(formatBankedFooter(latest, now, "UTC"), "Banked resets: 0", "a newer zero summary suppresses stale expiry");
+	now += 1; const newerEmpty = parseBankedDetails({ available_count: 0, credits: [] }, now)!; await writeFile(mainPath, JSON.stringify({ ...oldWriterCache(), bankedSummary: { availableCount: 0, observedAt: now }, bankedDetails: newerEmpty, bankedDetailsLastAttemptAt: now, bankedDetailsLastSuccessAt: now }), { mode: 0o600 }); await first.tick(); assert.equal(latest?.bankedDetails?.availableCount, 0, "newer main details beat stale sidecar details"); assert.equal(formatBankedFooter(latest, now, "UTC"), "Banked 0", "a newer zero summary suppresses stale expiry");
 	first.stop(); now += 1; await writeFile(mainPath, JSON.stringify(oldWriterCache()), { mode: 0o600 }); const restarted = new SharedQuotaCoordinator({ ...common, onUpdate: (value) => { latest = value; } }); t.after(() => restarted.stop()); await restarted.start(); await waitFor(() => latest?.bankedDetails?.availableCount === 0); assert.equal(detailsRequests, 1, "reload reads the reconciled companion cache without repeating the GET");
 });
 
