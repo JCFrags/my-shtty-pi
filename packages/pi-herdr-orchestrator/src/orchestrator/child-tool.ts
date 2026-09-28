@@ -3,6 +3,7 @@ import { ChannelStore, ChannelStoreError } from "./channel-store.js";
 import { ChildBinding, ChildBindingError, type ChildContext } from "./child-binding.js";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { readRegistryByDomain, RegistryError } from "./store.js";
+import { subagentChannelPresentation } from "./presentation.js";
 import type {
   AgentRecord,
   ChannelEvent,
@@ -82,7 +83,7 @@ const SCHEMA = {
   ],
 } as const;
 type PiContext = ChildContext & { cwd: string };
-type Tool = {
+type Tool = typeof subagentChannelPresentation & {
   name: string;
   label: string;
   description: string;
@@ -301,6 +302,7 @@ async function execute(raw: unknown, piContext: PiContext, binding: ChildBinding
 }
 export function registerSubagentChannel(api: ExtensionAPI, binding = new ChildBinding(api)): void {
   const tool: Tool = {
+    ...subagentChannelPresentation,
     name: "subagent_channel",
     label: "Subagent Channel",
     parameters: SCHEMA as unknown,
