@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerSubagentChannel } from "../src/orchestrator/child-tool.js";
+import { classifyValidationFailure, registerSubagentChannel, startupDiagnostic, type ValidationFailureCode } from "../src/orchestrator/child-tool.js";
 import { ChildBinding, hasChildEnvironment, isChildSession, type ChildContext } from "../src/orchestrator/child-binding.js";
 import { registerOrchestrate } from "../src/orchestrator/tool.js";
 import { registerAgentSettings } from "../src/pi/settings-command.js";
@@ -18,21 +18,26 @@ export default function piHerdrOrchestrator(api: ExtensionAPI): void {
       ui?: { notify(message: string, level: "warning"): void };
     };
     let child = true;
+    let roleFailure: ValidationFailureCode | undefined;
     try {
       child = await isChildSession(context);
-    } catch {
+    } catch (error) {
       // An unavailable identity is not permission to become a root.
+      roleFailure = classifyValidationFailure(error, "role");
     }
     if (!child) {
       registerOrchestrate(api, undefined, context);
       registerAgentSettings(api);
       return;
     }
-    registerSubagentChannel(api, binding);
+    registerSubagentChannel(api, binding, roleFailure);
+    let bindingFailure: ValidationFailureCode | undefined;
     try {
       await binding.resolve(context);
-    } catch {
-      context.ui?.notify("Managed child binding is unavailable. subagent_channel will revalidate on its next call.", "warning");
+    } catch (error) {
+      bindingFailure = classifyValidationFailure(error, "binding");
     }
+    const diagnostic = startupDiagnostic(roleFailure, bindingFailure);
+    if (diagnostic) context.ui?.notify(diagnostic, "warning");
   });
 }

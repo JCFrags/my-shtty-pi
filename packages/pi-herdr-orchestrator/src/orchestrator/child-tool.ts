@@ -87,6 +87,7 @@ type Tool = {
   label: string;
   description: string;
   promptSnippet?: string;
+  promptGuidelines?: string[];
   parameters: unknown;
   execute(
     id: string,
@@ -101,10 +102,81 @@ type Tool = {
 };
 type Api = { registerTool(tool: Tool): void };
 class ChildError extends Error {
-  constructor(readonly code: string) {
-    super(code);
+  constructor(readonly code: string, message = code) {
+    super(message);
     this.name = "ChildError";
   }
+}
+const BINDING_FAILURES = {
+  NOT_IN_HERDR: "Herdr context is unavailable",
+  CHILD_CONTEXT_INCOMPLETE: "Required session or Herdr context is incomplete",
+  CHILD_IDENTITY_MISMATCH: "Expected and observed identities differ",
+  CHILD_NATIVE_SESSION_UNAVAILABLE: "Herdr has not supplied native Pi session identity",
+  CHILD_NATIVE_SESSION_MISMATCH: "Native Pi session identity does not match",
+  CHILD_BINDING_MISSING: "No child-binding locator is available",
+  CHILD_BINDING_MALFORMED: "The saved child-binding locator is invalid",
+  CHILD_BINDING_MISMATCH: "Child-binding locators conflict",
+  GENERATION_MISMATCH: "The child generation does not match",
+} as const;
+const HERDR_FAILURES = {
+  HERDR_UNAVAILABLE: "The Herdr executable is unavailable",
+  HERDR_COMMAND_FAILED: "A Herdr identity command failed",
+  HERDR_INVALID_JSON: "The Herdr identity response was invalid",
+} as const;
+const FAILURE_MESSAGES = {
+  ...BINDING_FAILURES,
+  ...HERDR_FAILURES,
+  REGISTRY_MALFORMED: "The exact registry is unavailable or invalid",
+  ROLE_CHECK_FAILED: "The role check failed without a recognized safe reason",
+  CHILD_OPERATION_FAILED: "Child validation failed without a recognized safe reason",
+} as const;
+export type ValidationFailureCode = keyof typeof FAILURE_MESSAGES;
+
+/** External error text and arbitrary CLI codes must not enter diagnostics. */
+export function classifyValidationFailure(
+  error: unknown,
+  stage: "role" | "binding",
+): ValidationFailureCode {
+  if (error instanceof ChildBindingError && Object.hasOwn(BINDING_FAILURES, error.code))
+    return error.code as keyof typeof BINDING_FAILURES;
+  if (error instanceof RegistryError && error.code === "REGISTRY_MALFORMED")
+    return "REGISTRY_MALFORMED";
+  if (error instanceof HerdrCliError)
+    return Object.hasOwn(HERDR_FAILURES, error.code)
+      ? error.code as keyof typeof HERDR_FAILURES
+      : "HERDR_COMMAND_FAILED";
+  return stage === "role" ? "ROLE_CHECK_FAILED" : "CHILD_OPERATION_FAILED";
+}
+function boundedDiagnostic(message: string, fallback: string): string {
+  return Buffer.byteLength(message, "utf8") <= 768 ? message : fallback;
+}
+export function startupDiagnostic(
+  roleFailure?: ValidationFailureCode,
+  bindingFailure?: ValidationFailureCode,
+): string | undefined {
+  if (!roleFailure && !bindingFailure) return undefined;
+  const role = roleFailure
+    ? `Startup role resolution failed (${roleFailure}). ${FAILURE_MESSAGES[roleFailure]}.`
+    : "Managed-child context was detected.";
+  const binding = bindingFailure
+    ? `Startup binding is unavailable (${bindingFailure}). ${FAILURE_MESSAGES[bindingFailure]}. ${roleFailure ? "This does not establish a managed child. " : ""}subagent_channel revalidates child binding, not root role selection.`
+    : "A managed-child binding validated afterward. Only subagent_channel is available.";
+  return boundedDiagnostic(`${role} Root tools remain unavailable. ${binding}`,
+    "Startup validation failed. Root tools remain unavailable; child calls still require full validation.");
+}
+function startupGuidance(code: ValidationFailureCode): string {
+  return boundedDiagnostic(
+    `Startup role resolution failed (${code}). ${FAILURE_MESSAGES[code]}. Root tools were withheld at startup. Tool presence does not establish a valid child binding. Child calls revalidate binding, not root role selection. Use only the actual assigned run and generation; never invent them.`,
+    "Startup role resolution failed. Root tools were withheld; use only an actual child assignment.",
+  );
+}
+function bindingRefusal(error: unknown, roleFailure?: ValidationFailureCode): ChildError {
+  const code = classifyValidationFailure(error, "binding");
+  const startup = roleFailure
+    ? ` Startup role resolution failed (${roleFailure}). ${FAILURE_MESSAGES[roleFailure]}. Root tools remain unavailable; this child call does not retry role selection.`
+    : "";
+  return new ChildError(code, boundedDiagnostic(`${code}: ${FAILURE_MESSAGES[code]}.${startup}`,
+    `${code}: Child binding could not be validated.`));
 }
 const object = (v: unknown): JsonObject | undefined =>
   v !== null && typeof v === "object" && !Array.isArray(v)
@@ -133,7 +205,7 @@ function publicError(e: unknown): ChildError {
     return new ChildError(e.code);
   return new ChildError("CHILD_OPERATION_FAILED");
 }
-async function context(p: JsonObject, piContext: PiContext, binding: ChildBinding): Promise<{
+async function context(p: JsonObject, piContext: PiContext, binding: ChildBinding, roleFailure?: ValidationFailureCode): Promise<{
   agent: AgentRecord;
   run: RunRecord;
   cli: HerdrCli;
@@ -143,7 +215,9 @@ async function context(p: JsonObject, piContext: PiContext, binding: ChildBindin
     generation = p.assignmentGeneration;
   if (!Number.isSafeInteger(generation) || Number(generation) < 1)
     throw new ChildError("INVALID_REQUEST");
-  const { agent, cli } = await binding.resolve(piContext);
+  const { agent, cli } = await binding.resolve(piContext).catch((error: unknown) => {
+    throw bindingRefusal(error, roleFailure);
+  });
   if (agent.runId !== runId || agent.assignmentGeneration !== generation)
     throw new ChildError("STALE_ASSIGNMENT");
   const run = agent.runs.find(
@@ -189,7 +263,7 @@ async function append(
     c.run.deliveredSequence,
   );
 }
-async function execute(raw: unknown, piContext: PiContext, binding: ChildBinding): Promise<JsonObject> {
+async function execute(raw: unknown, piContext: PiContext, binding: ChildBinding, roleFailure?: ValidationFailureCode): Promise<JsonObject> {
   const p = object(raw) ?? {},
     action = p.action;
   if (
@@ -199,7 +273,7 @@ async function execute(raw: unknown, piContext: PiContext, binding: ChildBinding
     action !== "complete"
   )
     throw new ChildError("INVALID_REQUEST");
-  const c = await context(p, piContext, binding);
+  const c = await context(p, piContext, binding, roleFailure);
   if (action === "progress") {
     if (c.run.phase === "cancel_requested")
       throw new ChildError("CANCEL_REQUESTED");
@@ -299,18 +373,24 @@ async function execute(raw: unknown, piContext: PiContext, binding: ChildBinding
     duplicate: completed.duplicate,
   };
 }
-export function registerSubagentChannel(api: ExtensionAPI, binding = new ChildBinding(api)): void {
+export function registerSubagentChannel(
+  api: ExtensionAPI,
+  binding = new ChildBinding(api),
+  startupRoleFailure?: ValidationFailureCode,
+): void {
   const tool: Tool = {
     name: "subagent_channel",
     label: "Subagent Channel",
     parameters: SCHEMA as unknown,
     description:
+      (startupRoleFailure ? `Startup role resolution failed (${startupRoleFailure}). ` : "") +
       "Report progress, send a message, acknowledge a requested cancellation, or explicitly complete the exact assigned run. Every call requires the current run ID and assignment generation; stale assignments are rejected.",
+    ...(startupRoleFailure ? { promptGuidelines: [startupGuidance(startupRoleFailure)] } : {}),
     promptSnippet:
       "Use subagent_channel with the exact runId and assignmentGeneration from the latest assignment prompt; acknowledge cancellation only after the parent requests it.",
     async execute(_id, params, _signal, _update, piContext) {
       try {
-        const result = await execute(params, piContext, binding);
+        const result = await execute(params, piContext, binding, startupRoleFailure);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
           details: result,

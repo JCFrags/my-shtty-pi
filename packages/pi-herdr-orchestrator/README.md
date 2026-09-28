@@ -37,6 +37,8 @@ Inside Herdr, role selection waits for `session_start`. A child registers only `
 
 Herdr Agent State can publish native identity later in startup. The child retains its channel and retries validation and marker creation on the next actual call, without a timer or root fallback. `appendEntry` is not a disk-persistence receipt. Cold recovery is available only after Pi persists the native session and locator.
 
+If startup role resolution fails, root tools remain unavailable. One warning distinguishes that failure from detected child context with an unavailable binding. `tool_help({"names":["subagent_channel"]})` and the native tool description expose safe historical startup guidance without requiring an invented assignment. Binding refusals report their current safe reason. The child-only surface does not prove a validated binding, and child calls do not retry root role selection. A normal parent needs a safe operator-controlled reload or new session to rerun startup. This improves diagnostics, not automatic recovery. The original reported startup trigger remains unknown.
+
 Malformed or conflicting locators, closed/failed agents, copied or forked native sessions, and unmarked legacy managed children do not gain root access or automatic recovery. A complete fresh environment can seed an unmarked native session after validation. Environmentless transfer to another native session is not supported.
 
 The isolated broker test is `node --test checks/disposable-broker.test.mjs`. It creates its own socket, executable, HOME, XDG directories, and configuration. It invokes `bin/pi-herdr-orchestrator broker startup`, `broker status`, `doctor --json`, and `broker stop` only under that temporary environment. Do not copy the stop invocation into a live environment.
