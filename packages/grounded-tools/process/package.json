@@ -10,7 +10,8 @@
     ]
   },
   "dependencies": {
-    "@grounded/pi-core": "0.1.0"
+    "@grounded/pi-core": "0.1.0",
+    "pi-tool-controls": "file:../../pi-tool-controls"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.83.0 <1",
