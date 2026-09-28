@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { registerContextProvider, sameScope, type ProviderPage } from "@context-kit/protocol";
 import { registerStateTransferProvider, StateTransferError } from "@context-kit/protocol/transfer";
 import { projectTodoPage } from "@grounded/pi-core/context-adapters";
 import { StateToolError } from "@grounded/pi-core/state";
-import { formatTask, TodoParams, validateTodoState, type TodoInput } from "./operations.ts";
-import { todoResult, type TodoDetails } from "./output.ts";
+import { TodoParams, validateTodoState, type TodoInput } from "./operations.ts";
+import { todoResult } from "./output.ts";
+import { todoPresentation } from "./renderers.ts";
 import { TodoStore } from "./store.ts";
 import { registerTodoUi } from "./ui.ts";
 
@@ -86,18 +86,7 @@ export default function contextTodo(pi: ExtensionAPI, options: TodoOptions = {})
       const operation = await execute(input, ctx, signal);
       return todoResult(input, operation, operation.owner, signal, options.outputRoot);
     },
-    renderCall(args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action) + (args.id ? ` ${theme.fg("accent", args.id)}` : ""), 0, 0);
-    },
-    renderResult(result, { expanded }, theme) {
-      const details = result.details as TodoDetails | undefined;
-      const first = result.content[0];
-      const message = first?.type === "text" ? first.text : "";
-      if (!details) return new Text(message, 0, 0);
-      if (details.action === "list") return new Text(`${theme.fg("success", "✓")} ${message}`, 0, 0);
-      const rows = expanded && details.state ? details.state.tasks.map(formatTask) : details.rows ?? [];
-      return new Text(`${theme.fg("success", "✓")} ${message}${rows.length ? `\n${rows.join("\n")}` : ""}`, 0, 0);
-    },
+    ...todoPresentation,
   });
   pi.registerCommand("todo-import", {
     description: "Import the selected legacy Todo branch, one bounded source or replay page per invocation",

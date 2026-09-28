@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { add, Meter, QUALITY_EVENT } from "./model.ts";
 import { LocalWriter } from "./storage.ts";
+import { telemetryPresentation } from "./renderers.ts";
 
 export { QUALITY_EVENT, type QualityObservation } from "./model.ts";
 
@@ -47,6 +48,7 @@ export default function telemetry(pi: ExtensionAPI): void {
     label: "Telemetry status",
     description: "Read bounded local runtime metrics and separate, caller-reported quality observations. Does not read source history or measure accuracy. No observations means unknown.",
     parameters: Type.Object({}, { additionalProperties: false }),
+    ...telemetryPresentation,
     async execute() {
       const result = status();
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
