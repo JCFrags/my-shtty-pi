@@ -1,10 +1,11 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider, sameScope, type ProviderPage } from "@context-kit/protocol";
 import { registerStateTransferProvider, StateTransferError } from "@context-kit/protocol/transfer";
 import { projectNotesPage } from "@grounded/pi-core/context-adapters";
 import { boundedStateOutput, cancelled, STATE_RESULT_PROTOCOL, StateToolError, type StateToolDetails } from "@grounded/pi-core/state";
 import { NotesParams, NOTES_DESCRIPTION, NOTES_GUIDELINES, NOTES_PROMPT_SNIPPET, renderNoteRead, renderNotesResult, type Note } from "./operations.ts";
 import { NotesStore } from "./store.ts";
+import { notesPresentation } from "./renderers.ts";
 
 export { NotesParams, NOTES_DESCRIPTION, NOTES_GUIDELINES, NOTES_PROMPT_SNIPPET };
 export { NotesStore } from "./store.ts";
@@ -58,7 +59,11 @@ export default function contextNotes(pi: ExtensionAPI, options: NotesOptions = {
     lifecycleEpoch++; store.close(); context = undefined;
     for (const remove of removers) { try { remove(); } catch { /* Cleanup cannot fail session shutdown. */ } }
   });
-  pi.on("context", (event) => {
+  // Pi 0.87's ordinary context hook folds system anchors after any append.
+  const [piMajor, piMinor] = VERSION.split(".").map(Number);
+  const contextEvent = piMajor > 0 || (piMajor === 0 && piMinor >= 87) ? "context_with_system" : "context";
+  // Keep the Pi 0.85 type target. This handler preserves the full input and only appends state.
+  pi.on(contextEvent as "context", (event) => {
     const state = store.stateView();
     const readiness = store.readiness();
     const text = readiness !== "ready" ? `[notes state] ${readiness}${store.isLegacy() ? "; explicit /notes-import required" : ""}`
@@ -68,6 +73,7 @@ export default function contextNotes(pi: ExtensionAPI, options: NotesOptions = {
   pi.registerTool({
     name: "notes", label: "Notes", description: NOTES_DESCRIPTION, promptSnippet: NOTES_PROMPT_SNIPPET, promptGuidelines: NOTES_GUIDELINES,
     parameters: NotesParams, executionMode: "sequential",
+    ...notesPresentation,
     async execute(_id, input, signal, _update, ctx) {
       if (!context || ctx.sessionManager !== context.sessionManager) throw new StateToolError("STATE_CONFLICT", "Notes session changed");
       const epoch = lifecycleEpoch;

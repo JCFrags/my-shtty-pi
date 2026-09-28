@@ -25,7 +25,8 @@
   "dependencies": {
     "@context-kit/protocol": "*",
     "@context-kit/state-store": "*",
-    "@grounded/pi-core": "*"
+    "@grounded/pi-core": "*",
+    "pi-tool-controls": "file:../../pi-tool-controls"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

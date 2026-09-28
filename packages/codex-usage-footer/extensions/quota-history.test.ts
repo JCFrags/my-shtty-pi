@@ -21,7 +21,9 @@ import {
 	type UsageSnapshot,
 } from "./quota-history.ts";
 import usageFooter, {
+	applyDisplayPreset,
 	applyDisplaySetting,
+	classifyDisplayPreset,
 	classifyWindow,
 	DEFAULT_DISPLAY_PREFERENCES,
 	effectiveDisplayPreferences,
@@ -126,7 +128,7 @@ test("defaults are shared, weekly-only for Standard Codex, and Spark is off", ()
 		{ slot: "secondary", usedPercent: 81, resetAt, windowSeconds: 604_800 }, { slot: "primary", usedPercent: 25, resetAt, windowSeconds: 18_000 },
 	] }, { kind: "spark", limitId: "codex_spark", limitName: "spark", windows: [{ slot: "primary", usedPercent: 5, resetAt, windowSeconds: 604_800 }] }] };
 	const status = formatCachedStatus(cacheWith(snapshot), observedAt, "UTC");
-	assert.equal(status, "Codex Weekly 19% left · reset Mon 22:21 (4d 7h); Banked count unknown · next expiry unknown");
+	assert.equal(status, "Weekly 19% left · reset Mon 22:21 (4d 7h); Banked count unknown · next expiry unknown");
 	assert.doesNotMatch(status, /5-hour|Spark/);
 });
 
@@ -160,6 +162,32 @@ test("all eight Standard and Spark window controls toggle independently", () => 
 	}
 });
 
+test("presets own only window fields, banked fields, and reset format, with derived Custom", () => {
+	const source = { ...DEFAULT_DISPLAY_PREFERENCES, showFooter: false, showForecast: false, usageFormat: "used" as const, extra: "keep", standard: { ...DEFAULT_DISPLAY_PREFERENCES.standard, extra: "standard" }, spark: { ...DEFAULT_DISPLAY_PREFERENCES.spark, extra: "spark" }, banked: { ...DEFAULT_DISPLAY_PREFERENCES.banked, extra: "banked" } };
+	const before = structuredClone(source); const defaults = structuredClone(DEFAULT_DISPLAY_PREFERENCES);
+	assert.equal(classifyDisplayPreset(source), "comfortable"); assert.equal(migrateDisplayPreferences(source), source);
+	for (const [preset, standard, spark, banked, reset] of [
+		["compact", [true, true, false, false], [false, false, false, false], [true, false], "countdown"],
+		["comfortable", [true, true, false, false], [false, false, false, false], [true, true], "friendly-countdown"],
+		["verbose", [true, true, true, true], [true, true, true, true], [true, true], "exact"],
+	] as const) {
+		const result = applyDisplayPreset(source, preset);
+		const fields = ["weeklyUsage", "weeklyReset", "fiveHourUsage", "fiveHourReset"] as const;
+		assert.deepEqual(fields.map((field) => result.standard[field]), standard); assert.deepEqual(fields.map((field) => result.spark[field]), spark);
+		assert.deepEqual([result.banked.count, result.banked.expiry], banked); assert.equal(result.resetFormat, reset); assert.equal(classifyDisplayPreset(result), preset);
+		assert.deepEqual({ ...result, standard: source.standard, spark: source.spark, banked: source.banked, resetFormat: source.resetFormat }, source);
+		for (const family of ["standard", "spark"] as const) {
+			assert.equal((result[family] as typeof source[typeof family]).extra, source[family].extra);
+			for (const field of fields) assert.equal(classifyDisplayPreset(applyDisplaySetting(result, `${family}.${field}`, result[family][field] ? "off" : "on")), "custom");
+		}
+		assert.equal((result.banked as typeof source.banked).extra, "banked");
+		for (const field of ["count", "expiry"] as const) assert.equal(classifyDisplayPreset(applyDisplaySetting(result, `banked.${field}`, result.banked[field] ? "off" : "on")), "custom");
+		assert.equal(classifyDisplayPreset(applyDisplaySetting(result, "resetFormat", "Friendly only")), "custom");
+		assert.equal(classifyDisplayPreset(applyDisplaySetting(applyDisplaySetting(result, "banked.count", "off"), "banked.count", "on")), preset);
+	}
+	assert.deepEqual(source, before); assert.deepEqual(DEFAULT_DISPLAY_PREFERENCES, defaults);
+});
+
 test("independent Standard and Spark toggles render only enabled duration fields", () => {
 	const snapshot: UsageSnapshot = { observedAt, source: "poll", families: [
 		{ kind: "standard", limitId: "codex", windows: [{ slot: "primary", usedPercent: 81, resetAt, windowSeconds: 604_800 }, { slot: "secondary", usedPercent: 25, resetAt, windowSeconds: 18_000 }] },
@@ -177,7 +205,9 @@ test("independent Standard and Spark toggles render only enabled duration fields
 
 test("usage/reset formats and separators remain deterministic", () => {
 	const headers = { "x-codex-primary-used-percent": "81", "x-codex-primary-window-minutes": "10080", "x-codex-primary-reset-at": String(resetAt) };
-	assert.equal(formatCodexUsageStatus(headers, observedAt, "UTC"), "Codex Weekly 19% left · reset Mon 22:21 (4d 7h)");
+	assert.equal(formatCodexUsageStatus(headers, observedAt, "UTC"), "Weekly 19% left · reset Mon 22:21 (4d 7h)");
+	assert.equal(formatCodexUsageStatus({}, observedAt, "UTC"), "quota/reset unavailable");
+	assert.match(formatCachedStatus(undefined, observedAt, "UTC"), /^quota\/reset waiting;/);
 	const used = applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "usageFormat", "Used %");
 	assert.match(formatCodexUsageStatus(headers, observedAt, "UTC", used), /Weekly 81% used ·/);
 	for (const [choice, expected] of [["Friendly only", "reset Mon 22:21"], ["Countdown only", "in 4d 7h"], ["Exact local time", "reset Mon, Sep 14, 2026 at 22:21 UTC"]] as const) assert.match(formatCodexUsageStatus(headers, observedAt, "UTC", applyDisplaySetting(DEFAULT_DISPLAY_PREFERENCES, "resetFormat", choice)), new RegExp(expected));
@@ -198,7 +228,7 @@ test("long footer statuses preserve every selected window and final banked field
 	const headerStatus = formatCodexUsageStatus(headers, observedAt, "UTC", prefs);
 	assert.ok(headerStatus.length > 240);
 	assert.ok(headerStatus.endsWith("Spark 5-hour 18.5% left · reset Mon, Sep 14, 2026 at 22:21 UTC"));
-	assert.equal(formatCachedStatus(cache, observedAt, "UTC", prefs), `${headerStatus}; Banked 1 · next expires Mon, Sep 14, 2026 at 22:21 UTC`);
+	assert.equal(formatCachedStatus(cache, observedAt, "UTC", prefs), `${headerStatus}; Banked 1 · expires Mon, Sep 14, 2026 at 22:21 UTC`);
 });
 
 test("reset formatting handles timezone, DST, sub-minute, and due values", () => {
@@ -238,14 +268,42 @@ test("menu harness and registered command traverse nested Display and Standard m
 		let done = false; let result: unknown; const component = factory({ requestRender() {} }, theme, {}, (value: unknown) => { done = true; result = value; }); const title = component.render(100).find((line: string) => line.trim())?.replace(/\u001b\[[0-9;]*m/g, "").trim() ?? ""; visited.push(title);
 		const visits = visited.filter((value) => value === title).length;
 		if (title === "Codex usage" && visits === 1) { component.handleInput("\u001b[B"); component.handleInput("\u001b[B"); component.handleInput("\u001b[B"); component.handleInput("\r"); }
-		else if (title === "Display settings" && visits === 1) { component.handleInput("\u001b[B"); component.handleInput("\u001b[B"); component.handleInput("\r"); }
+		else if (title === "Display settings" && visits === 1) { for (let index = 0; index < 4; index += 1) component.handleInput("\u001b[B"); component.handleInput("\r"); }
+		else if (title === "Customize display (advanced)" && visits === 1) component.handleInput("\r");
 		else if (title === "Standard Codex") return undefined;
 		else component.handleInput("\u001b");
 		if (!done) throw new Error(`screen did not close: ${title}`);
 		return result;
 	} } };
 	await handler!("", ctx);
-	assert.deepEqual(visited, ["Codex usage", "Display settings", "Standard Codex", "Display settings", "Codex usage"]);
+	assert.deepEqual(visited, ["Codex usage", "Display settings", "Customize display (advanced)", "Standard Codex", "Customize display (advanced)", "Display settings", "Codex usage"]);
+});
+
+test("preset navigation and cancellation do not write, and deliberate session selection appends once", async () => {
+	initTheme("dark", false);
+	const display = { ...DEFAULT_DISPLAY_PREFERENCES, showFooter: false, showForecast: false, usageFormat: "used" as const };
+	const entries: Array<{ type: string; customType: string; data: unknown }> = [{ type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display } }];
+	const handlers = new Map<string, Function>(); let command!: (args: string, ctx: any) => Promise<void>; let writes = 0;
+	usageFooter({ on(name: string, handler: Function) { handlers.set(name, handler); }, registerCommand(_name: string, definition: any) { command = definition.handler; }, appendEntry(customType: string, data: unknown) { writes += 1; entries.push({ type: "custom", customType, data }); } } as any);
+	const steps = [
+		["Codex usage", ["\u001b[B", "\u001b[B", "\u001b[B", "\r"]], ["Display settings", ["\u001b[B", "\r"]],
+		["Display preset", ["\u001b[B", "\u001b"]], ["Display settings", ["\u001b[B", "\r"]],
+		["Display preset", ["\u001b[B", "\r"]], ["Display settings", ["\u001b"]], ["Codex usage", ["\u001b"]],
+	] as const; let step = 0;
+	const ctx: any = { hasUI: true, mode: "tui", sessionManager: { getBranch: () => entries }, ui: {
+		setStatus() {}, notify(message: string) { assert.fail(message); },
+		custom(factory: any) { return new Promise((resolve) => {
+			const component = factory({ requestRender() {} }, { fg: (_name: string, text: string) => text, bold: (text: string) => text }, {}, resolve);
+			const [title, keys] = steps[step]!; const body = component.render(160).join("\n").replace(/\u001b\[[0-9;]*m/g, ""); assert.equal(body.split("\n")[0], title);
+			assert.equal(writes, step <= 4 ? 0 : 1);
+			if (title === "Display preset") { assert.match(body, /> Comfortable \(current\)/); assert.match(body, /Show footer, forecast, and Remaining\/Used stay unchanged/); }
+			step += 1; for (const key of keys) component.handleInput(key);
+		}); },
+	} };
+	await handlers.get("session_start")!({}, ctx); assert.equal(writes, 0); await command("", ctx);
+	assert.equal(step, steps.length); assert.equal(writes, 1);
+	assert.deepEqual(entries.at(-1), { type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display: applyDisplayPreset(display, "verbose") } });
+	await handlers.get("session_shutdown")!({}, ctx);
 });
 
 test("registered command opens and returns from the nested Banked resets details screen", async () => {
@@ -297,6 +355,17 @@ test("concurrent narrow shared display edits retry and preserve independent fiel
 	const edit = (id: string, value: string) => (current: unknown) => applyDisplaySetting(migrateDisplayPreferences(current) ?? DEFAULT_DISPLAY_PREFERENCES, id, value);
 	assert.deepEqual(await Promise.all([a.updateDisplayPreferences(edit("standard.fiveHourUsage", "on")), b.updateDisplayPreferences(edit("spark.weeklyUsage", "on"))]), [true, true]); await waitFor(() => latest?.preferences?.revision === 2);
 	const display = migrateDisplayPreferences(latest?.preferences?.display)!; assert.equal(display.standard.fiveHourUsage, true); assert.equal(display.spark.weeklyUsage, true);
+	await a.updatePreferences({ pollIntervalMs: 300_000, historyLimit: 16 }); await a.publishHeaders({ "x-codex-primary-used-percent": "25", "x-codex-primary-window-minutes": "10080" });
+	const file = join(cacheRoot, `${identity.accountKey}.json`); const before: QuotaCache = JSON.parse(await readFile(file, "utf8")); let presetTransforms = 0;
+	assert.deepEqual(await Promise.all([
+		a.updateDisplayPreferences((current) => { presetTransforms += 1; return applyDisplayPreset(migrateDisplayPreferences(current)!, "verbose"); }),
+		b.updateDisplayPreferences((current) => ({ ...migrateDisplayPreferences(current)!, showFooter: false, showForecast: false, usageFormat: "used" })),
+	]), [true, true]);
+	const after: QuotaCache = JSON.parse(await readFile(file, "utf8")); const result = migrateDisplayPreferences(after.preferences?.display)!;
+	assert.equal(presetTransforms, 1); assert.equal(after.preferences!.revision, before.preferences!.revision + 2, "one preset transaction and one independent edit");
+	assert.equal(classifyDisplayPreset(result), "verbose"); assert.equal(result.showFooter, false); assert.equal(result.showForecast, false); assert.equal(result.usageFormat, "used");
+	assert.equal(after.preferences!.pollIntervalMs, 300_000); assert.equal(after.preferences!.historyLimit, 16);
+	assert.deepEqual({ ...after, preferences: before.preferences }, before, "the display transactions preserve all other cache data");
 });
 
 test("default shared display edit propagates, history stays bounded, invalid file preserves last good", async (t) => {
@@ -329,7 +398,7 @@ test("expiry is qualified unless every current available credit has a known futu
 	const credit = (expiresAt: number | undefined, state: "known" | "not-supplied" | "invalid" = "known") => ({ resetType: "codex_rate_limits" as const, status: "available" as const, grantedAt: observedAt - 1, ...(expiresAt === undefined ? {} : { expiresAt }), expiresAtState: state });
 	const futureA = resetAt * 1000; const futureB = futureA + 60_000;
 	const complete: QuotaCache = { version: 1, accountKey: "x", history: [], bankedSummary: { availableCount: 2, observedAt }, bankedDetails: { availableCount: 2, observedAt, credits: [credit(futureA), credit(futureB)] } };
-	assert.match(formatBankedFooter(complete, observedAt, "UTC")!, / · next expires /); assert.doesNotMatch(formatBankedFooter(complete, observedAt, "UTC")!, /known\/listed/);
+	assert.match(formatBankedFooter(complete, observedAt, "UTC")!, / · expires /); assert.doesNotMatch(formatBankedFooter(complete, observedAt, "UTC")!, /known\/listed/);
 	const summaryFive: QuotaCache = { ...complete, bankedSummary: { availableCount: 5, observedAt: observedAt + 1 } }; assert.match(formatBankedFooter(summaryFive, observedAt, "UTC")!, /Banked 5 · next known\/listed expiry/);
 	const nullDate: QuotaCache = { ...complete, bankedDetails: { availableCount: 2, observedAt, credits: [credit(futureA), credit(undefined, "not-supplied")] } }; assert.match(formatBankedFooter(nullDate, observedAt, "UTC")!, /next known\/listed expiry/);
 	const pastDate: QuotaCache = { ...complete, bankedDetails: { availableCount: 2, observedAt, credits: [credit(futureA), credit(observedAt - 1)] } }; assert.match(formatBankedFooter(pastDate, observedAt, "UTC")!, /next known\/listed expiry/);

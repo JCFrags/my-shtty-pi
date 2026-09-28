@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider, type ProviderPage } from "@context-kit/protocol";
 import { registerStateTransferProvider, StateTransferError, type StateTransferEntry } from "@context-kit/protocol/transfer";
 import type { ObjectRef, StateAnchorHost } from "@context-kit/state-store";
@@ -13,6 +13,7 @@ import {
   prepareWorkplanArguments, WORKPLAN_DESCRIPTION, WORKPLAN_GUIDELINES, WORKPLAN_PROMPT_SNIPPET, WorkplanParams,
 } from "./schema.ts";
 import { WorkplanStore } from "./store.ts";
+import { workplanPresentation } from "./renderers.ts";
 import { contextMessage, latestVisibleRecovery } from "./ui.ts";
 
 export { WorkplanStore } from "./store.ts";
@@ -101,7 +102,11 @@ export function createWorkplanExtension(pi: ExtensionAPI, options: { storeRoot?:
     epoch++; for (const job of contextJobs) job.abort();
     context = undefined; store.close(); removeSummary(); removeContext(); removeTransfer();
   });
-  pi.on("context", async (event, ctx) => {
+  // Pi 0.87's ordinary context hook folds system anchors after any append.
+  const [piMajor, piMinor] = VERSION.split(".").map(Number);
+  const contextEvent = piMajor > 0 || (piMajor === 0 && piMinor >= 87) ? "context_with_system" : "context";
+  // Keep the Pi 0.85 type target. This handler preserves the full input and only appends state.
+  pi.on(contextEvent as "context", async (event, ctx) => {
     context = ctx;
     if (!store.pending || store.resolutionStatus === "pending" || store.resolutionStatus === "unresolved") {
       try { await store.exclusive(() => store.resolve(host(ctx), ctx.signal)); } catch { /* Explicit status below. */ }
@@ -138,6 +143,7 @@ export function createWorkplanExtension(pi: ExtensionAPI, options: { storeRoot?:
     name: "workplan", label: "Workplan", description: WORKPLAN_DESCRIPTION,
     promptSnippet: WORKPLAN_PROMPT_SNIPPET, promptGuidelines: WORKPLAN_GUIDELINES,
     parameters: WorkplanParams, prepareArguments: prepareWorkplanArguments, executionMode: "sequential",
+    ...workplanPresentation,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       context = ctx;
       const operationEpoch = epoch;
