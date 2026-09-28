@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Mouse-first bulk expansion controls for Pi tool output cards.",
   "type": "module",
+  "exports": {
+    "./presentation": {
+      "types": "./presentation/index.d.ts",
+      "import": "./presentation/index.js"
+    }
+  },
   "license": "MIT",
   "keywords": [
     "pi-package",

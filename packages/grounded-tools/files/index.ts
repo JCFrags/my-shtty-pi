@@ -11,7 +11,7 @@ import {
   type ExtensionAPI,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { editPresentation, readPresentation, searchPresentation, writePresentation } from "./renderers.ts";
 import { Type } from "typebox";
 import { anchorDocument, resolveAnchorRange } from "@grounded/pi-core/anchors";
 import { atomicWriteText } from "@grounded/pi-core/atomic";
@@ -65,14 +65,6 @@ function remoteMutationQueuePath(resource: SessionFileResource, canonicalPath: s
 
 function textResult(text: string, details?: unknown) {
   return { content: [{ type: "text" as const, text }], details };
-}
-
-function compactSearchValue(value: string, maxCharacters = 72): string {
-  const characters = [...value];
-  const clipped = characters.length > maxCharacters
-    ? `${characters.slice(0, maxCharacters - 1).join("")}…`
-    : value;
-  return JSON.stringify(clipped);
 }
 
 const ReadParams = Type.Object({
@@ -534,6 +526,7 @@ export default function groundedFiles(pi: ExtensionAPI) {
       "Set sessionId only for an existing session when paths must follow that session and provider.",
     ],
     parameters: ReadParams,
+    ...readPresentation,
     async execute(id, params, signal, onUpdate, ctx) {
       return runFileOperation(params.sessionId, signal, ctx.cwd, async (operationCwd, resource, backend) => {
         const mode = params.mode ?? "full";
@@ -648,6 +641,7 @@ export default function groundedFiles(pi: ExtensionAPI) {
       "For repeated or concurrently changing text, use read mode=anchors and edit with expectedDigest, startAnchor, endAnchor, and contentLines.",
     ],
     parameters: EditParams,
+    ...editPresentation,
     prepareArguments(args) {
       if (!args || typeof args !== "object") return args as never;
       const input = args as Record<string, unknown>;
@@ -725,6 +719,7 @@ export default function groundedFiles(pi: ExtensionAPI) {
     promptSnippet: "Create or replace complete files atomically without summarizing content",
     promptGuidelines: ["Use write for complete files; prefer edit for targeted changes to existing files."],
     parameters: WriteParams,
+    ...writePresentation,
     async execute(_id, params, signal, _onUpdate, ctx) {
       return runFileOperation(params.sessionId, signal, ctx.cwd, async (operationCwd, resource, backend) => {
         const absolute = backend === "ssh"
@@ -800,36 +795,7 @@ export default function groundedFiles(pi: ExtensionAPI) {
       "Do not treat local_search strategy=fuzzy results as proof that a path does not exist.",
     ],
     parameters: LocalSearchParams,
-    renderCall(args, theme) {
-      const input = args as Record<string, unknown>;
-      const title = theme.fg("toolTitle", theme.bold("local_search "));
-      if (input.action === "capabilities") {
-        return new Text(title + theme.fg("muted", "capabilities"), 0, 0);
-      }
-
-      const strategy = input.strategy === "files" || input.strategy === "fuzzy" ? input.strategy : "text";
-      const searched = strategy === "files" ? String(input.pathGlob ?? "") : String(input.query ?? "");
-      const scope = typeof input.path === "string" && input.path.length > 0 ? input.path : ".";
-      const modifiers: string[] = [];
-      if (strategy === "text" && input.syntax === "regex") modifiers.push("regex");
-      if (strategy === "text" && typeof input.fileGlob === "string") {
-        modifiers.push(`files ${compactSearchValue(input.fileGlob)}`);
-      }
-      if (strategy === "text" && input.ignoreCase === true) modifiers.push("ignore case");
-      if (strategy === "text" && typeof input.contextLines === "number") {
-        modifiers.push(`context ${input.contextLines}`);
-      }
-      if (typeof input.cursor === "string") modifiers.push("next page");
-      if (typeof input.sessionId === "string") modifiers.push("session");
-
-      const summary = [
-        theme.fg("muted", strategy),
-        theme.fg("accent", ` ${compactSearchValue(searched)}`),
-        theme.fg("muted", ` in ${compactSearchValue(scope)}`),
-        ...modifiers.map((modifier) => theme.fg("muted", ` · ${modifier}`)),
-      ].join("");
-      return new Text(title + summary, 0, 0);
-    },
+    ...searchPresentation,
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (params.action === "capabilities") {
         return textResult([
