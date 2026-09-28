@@ -19,6 +19,8 @@ npm run build
 npm test
 ```
 
+Install root dependencies first with `npm ci --ignore-scripts` from the repository root, then run the package commands above. The runtime `pi-tool-controls/presentation` file dependency needs the sibling `pi-tool-controls` package and the root dependency tree in the retained checkout. An orchestrator tarball alone is not a standalone deployment. Use the checkout's lockfiles; `npm pack` omits `package-lock.json` from the tarball. Importing this pure library does not activate the inactive bulk-controls extension.
+
 Pi supplies its canonical peer packages at extension load time. No alternate TUI package is bundled. `dist/` is generated and is not a deployed-byte contract. Build copies the checked-in schemas, profiles, and workflows into `dist/`.
 
 Tests cover a model-free Pi lifecycle with exact child restore and explicit result collection, root command and tool catalog behavior, real Pi settings rendering and explicit save/cancel behavior, M10 channel ordering and recovery, strict historical event replay, and packaged broker startup/authentication/status/doctor/settings persistence against a disposable fake Herdr environment seeded with a historical event. They do not prove live Herdr acceptance or deploy anything.
@@ -28,6 +30,14 @@ The lifecycle check uses the locked Pi peer by default. To run that same check w
 ```sh
 ORCHESTRATOR_TEST_SDK_ROOT=/path/to/pi-coding-agent node --test --test-name-pattern='managed child lifecycle' checks/settings.test.mjs
 ```
+
+## Compact human tool display
+
+`orchestrate` and `subagent_channel` use saved inputs only for their human display. Collapsed cards use at most six text rows, and expanded cards use at most ten, plus Pi's separator. Expansion shows a bounded preview, not the full result. Errors, partial display, cancellation, identity warnings, and source limits precede excerpts. Labels appear only when supplied. A successful tool call is not completed work. Inspect keeps the requested run separate from the current agent and pane.
+
+Wait returns bounded event and terminal summaries, not collected final results. List/recover can omit tracked agents and shorten progress. Inspect can omit older runs and returns only a bounded current-pane excerpt. Preview clipping does not change these source limits or the original arguments, content, or details. Notifications and execution are unchanged.
+
+For original saved evidence, use Pi's `/export NEW_PRIVATE_PATH.jsonl`. Choose a new path in an owner-only directory and check file permissions. The export can overwrite an existing path and can contain tasks, messages, results, paths, and secrets. JSONL export preserves active-branch payloads but rewrites its header and parent links. HTML export uses the display renderers and is not a raw fallback. Export cannot recover evidence omitted by the tool itself.
 
 ## Managed-child restore
 

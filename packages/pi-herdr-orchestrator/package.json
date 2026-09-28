@@ -31,6 +31,9 @@
       "optional": false
     }
   },
+  "dependencies": {
+    "pi-tool-controls": "file:../pi-tool-controls"
+  },
   "devDependencies": {
     "@types/node": "22.15.30",
     "typescript": "5.8.3"
