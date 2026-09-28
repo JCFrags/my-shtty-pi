@@ -1,4 +1,4 @@
-import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Box, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 // Sanitize display copies only. Never change the saved arguments or result.
 function safeText(value) {
@@ -12,8 +12,19 @@ function singleLine(value) {
   return safeText(value).replace(/\s+/g, " ").trim();
 }
 
-function component(render) {
-  return { render, invalidate() {} };
+function component(render, theme, isPartial, isError) {
+  const content = { render, invalidate() {} };
+  if (typeof theme.bg !== "function") return content;
+  const background = isPartial ? "toolPendingBg" : isError ? "toolErrorBg" : "toolSuccessBg";
+  // Only helper-generated styles reach this callback. Reopen the background
+  // after the width utility's full resets, including its ellipsis and fill.
+  const box = new Box(0, 0, (line) => line.split("\x1b[0m")
+    .map((part) => theme.bg(background, part)).join("\x1b[0m"));
+  box.addChild(content);
+  return {
+    render: (width) => width < 1 ? [] : box.render(width),
+    invalidate: () => box.invalidate(),
+  };
 }
 
 /** Pure human presentation hooks. Projections must only read their inputs. */
@@ -21,8 +32,16 @@ export function createToolPresentation(spec) {
   return {
     renderShell: "self",
     renderCall(args, theme, context) {
-      const title = singleLine(spec.call(args, context));
-      return component((width) => width < 1 ? [] : [theme.fg("toolTitle", theme.bold(truncateToWidth(title, width)))]);
+      const call = spec.call(args, context);
+      const title = Array.isArray(call)
+        ? call.map((span) => ({ ...span, text: safeText(span.text).replace(/\s+/g, " ") }))
+        : singleLine(call);
+      return component((width) => {
+        if (width < 1) return [];
+        if (typeof title === "string") return [theme.fg("toolTitle", theme.bold(truncateToWidth(title, width)))];
+        const styled = title.map((span) => theme.fg(span.color ?? "toolTitle", span.bold ? theme.bold(span.text) : span.text)).join("");
+        return [truncateToWidth(styled, width)];
+      }, theme, context.isPartial, context.isError);
     },
     renderResult(result, options, theme, context) {
       const view = spec.result(result, options, context);
@@ -67,7 +86,7 @@ export function createToolPresentation(spec) {
           rendered.push(theme.fg("dim", truncateToWidth(cue, width)));
         }
         return rendered;
-      });
+      }, theme, options.isPartial, context.isError);
     },
   };
 }

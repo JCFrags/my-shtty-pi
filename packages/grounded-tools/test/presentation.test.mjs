@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { createToolPresentation } from "pi-tool-controls/presentation";
 import files from "../files/index.ts";
 import processes from "../process/index.ts";
 
@@ -24,16 +25,41 @@ function freeze(value) {
   return value;
 }
 const result = (body, details, isError = false) => ({ content: [{ type: "text", text: body }], details, isError });
+function card(name, args) {
+  const definition = definitions.get(name);
+  let activeTheme;
+  const component = new ToolExecutionComponent(name, "fixture", freeze(args), { showImages: false }, {
+    ...definition,
+    renderCall(args, theme, context) {
+      activeTheme = theme;
+      return definition.renderCall(args, theme, context);
+    },
+  }, { requestRender() {} }, ".");
+  return { component, theme: activeTheme };
+}
+function background(rows, theme, role, width) {
+  const open = theme.getBgAnsi(role);
+  for (const row of rows) {
+    assert.equal(visibleWidth(row), width, "background fills the existing width");
+    for (const part of row.split("\x1b[0m")) {
+      assert.ok(part.startsWith(open), "background survives a full reset before ellipsis or fill");
+      assert.ok(part.endsWith("\x1b[49m"));
+    }
+  }
+}
 function view(name, args, saved, width, expanded, partial = false) {
   const before = JSON.stringify({ args, saved });
-  const component = new ToolExecutionComponent(name, "fixture", freeze(args), { showImages: false }, definitions.get(name), { requestRender() {} }, ".");
+  const { component, theme } = card(name, args);
   component.updateResult(freeze(saved), partial);
   component.setExpanded(expanded);
-  const rows = component.render(width).map(stripTerminalSequences);
-  assert.equal(rows[0], "", "Pi owns the preceding separator");
+  const ansiRows = component.render(width);
+  const rows = ansiRows.map(stripTerminalSequences);
+  if (width < 1) assert.deepEqual(rows, []);
+  else assert.equal(rows[0], "", "Pi owns the preceding separator");
+  background(ansiRows.slice(1), theme, partial ? "toolPendingBg" : saved.isError ? "toolErrorBg" : "toolSuccessBg", width);
   assert.ok(rows.length <= (expanded ? 11 : 7), `${name}: ${rows.length} rows at ${width}`);
   for (const row of rows) assert.ok(visibleWidth(row) <= width, `${name}: overwide row ${JSON.stringify(row)}`);
-  if (expanded) assert.match(rows.join("\n"), /raw: \/export NEW\.jsonl/);
+  if (expanded && width >= 24) assert.match(rows.join("\n"), /raw: \/export NEW\.jsonl/);
   assert.equal(JSON.stringify({ args, saved }), before, `${name}: renderer mutated saved evidence`);
   return rows.join("\n");
 }
@@ -53,7 +79,7 @@ const fileFixtures = [
 test("file/search renderers bound visual rows and preserve frozen saved evidence", () => {
   assert.deepEqual([...definitions.keys()], ["read", "edit", "write", "local_search", "bash", "process", "session"]);
   for (const [name, args, saved] of fileFixtures) {
-    for (const width of [24, 48, 80]) for (const expanded of [false, true]) view(name, args, saved, width, expanded);
+    for (const width of [0, 1, 24, 48, 80]) for (const expanded of [false, true]) view(name, args, saved, width, expanded);
   }
   assert.equal(view(...fileFixtures[0], 80, false).split("\n").length, 2);
   const skill = view(...fileFixtures[0], 80, true);
@@ -80,6 +106,53 @@ test("file/search renderers bound visual rows and preserve frozen saved evidence
   assert.match(view("edit", { path: "sample.json" }, manyNotices, 80, true), /Hard-link topology/);
 });
 
+test("framing follows the native phase and themes without admitting raw styles", () => {
+  const [name, args, saved] = fileFixtures[0];
+  const { component, theme } = card(name, args);
+  background(component.render(80).slice(1), theme, "toolPendingBg", 80);
+  for (const [value, partial, role] of [[saved, true, "toolPendingBg"], [saved, false, "toolSuccessBg"],
+    [result("error", undefined, true), true, "toolPendingBg"], [result("error", undefined, true), false, "toolErrorBg"]]) {
+    component.updateResult(freeze(value), partial);
+    background(component.render(80).slice(1), theme, role, 80);
+  }
+  component.updateResult(saved);
+  for (const expanded of [false, true]) {
+    component.setExpanded(expanded);
+    const title = component.render(80)[1];
+    assert.ok(title.includes(theme.fg("customMessageLabel", theme.bold("[skill] "))));
+    assert.ok(title.includes(theme.fg("customMessageText", "demo: ")));
+    assert.ok(title.includes(theme.fg("accent", args.path)));
+  }
+  component.setExpanded(false);
+  assert.equal(component.render(80).length, 2, "quiet read adds no empty body frame");
+  component.invalidate();
+  background(component.render(80).slice(1), theme, "toolSuccessBg", 80);
+  const edit = card(fileFixtures[2][0], fileFixtures[2][1]);
+  edit.component.updateResult(fileFixtures[2][2]);
+  const warnings = edit.component.render(80).join("\n");
+  for (const text of ["Syntax warning (JSON): SYNTAX_SENTINEL", "LSP: 1 diagnostics (1 errors)"]) {
+    assert.ok(warnings.includes(theme.fg("warning", text)));
+  }
+  const shell = card("bash", { command: "build" });
+  shell.component.updateResult(freeze(result("error: failed", { exitCode: 2, running: false })));
+  const shellRows = shell.component.render(80);
+  background(shellRows.slice(1), theme, "toolSuccessBg", 80);
+  assert.ok(shellRows.join("\n").includes(theme.fg("error", "Exit 2")));
+
+  const plain = { fg: (_role, value) => value, bold: value => value };
+  const context = freeze({ args: {}, isError: false });
+  const string = createToolPresentation({ call: () => "  old\t title  ", result: () => ({ summary: "saved" }) });
+  assert.deepEqual(string.renderCall({}, plain, context).render(80), ["old title"]);
+  assert.deepEqual(string.renderResult(saved, { expanded: false, isPartial: false }, plain, context).render(80), ["saved"]);
+  const spans = freeze([{ text: "read ", bold: true }, { text: "\x1b]0;BAD\x07path\x1b[31m\u202e\nname", color: "accent" }]);
+  const semantic = createToolPresentation({ call: () => spans, result: () => ({}) });
+  assert.deepEqual(semantic.renderCall({}, plain, context).render(80), ["read path name"]);
+  const roles = new Set();
+  const alternate = { ...plain, bg: (role, value) => { roles.add(role); return value; } };
+  assert.deepEqual(string.renderCall({}, alternate, context).render(24), ["old title".padEnd(24)]);
+  assert.deepEqual([...roles], ["toolSuccessBg"]);
+});
+
 test("shell/process/session renderers keep failure and lifecycle states without input dumps", () => {
   const fixtures = [
     ["bash", { command: "printf 'DO_NOT_ECHO_SCRIPT'\nprintf ok" }, result("[exited]\nexit_code: 0\n---\nQUIET_STDOUT", { exitCode: 0, running: false })],
@@ -92,7 +165,7 @@ test("shell/process/session renderers keep failure and lifecycle states without 
     ["process", { action: "poll", id: "older" }, result("older saved result", undefined)],
   ];
   for (const [name, args, saved, partial] of fixtures) {
-    for (const width of [24, 48, 80]) for (const expanded of [false, true]) {
+    for (const width of [0, 1, 24, 48, 80]) for (const expanded of [false, true]) {
       const rendered = view(name, args, saved, width, expanded, partial);
       assert.doesNotMatch(rendered, /DO_NOT_ECHO_/);
     }

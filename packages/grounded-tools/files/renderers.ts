@@ -1,4 +1,4 @@
-import { createToolPresentation, type PresentationView } from "pi-tool-controls/presentation";
+import { createToolPresentation, type PresentationSpan, type PresentationView } from "pi-tool-controls/presentation";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value && typeof value === "object" ? value as RecordValue : {};
@@ -8,12 +8,22 @@ const number = (value: unknown): number | undefined => typeof value === "number"
 const savedText = (result: { content: readonly unknown[] }): string => result.content.map(record).map((block) => block.type === "text" ? text(block.text) : "").filter(Boolean).join("\n");
 const sessionLabel = (args: RecordValue): string => args.sessionId ? ` [session ${text(args.sessionId)}]` : "";
 
-function fileCall(name: string, args: RecordValue): string {
+function fileCall(name: string, args: RecordValue): readonly PresentationSpan[] {
   const path = text(args.path) || "(path pending)";
-  const skill = /(?:^|\/)SKILL\.md$/.test(path) ? `skill ${path.split("/").at(-2) ?? "SKILL.md"}: ` : "";
+  const skill = /(?:^|\/)SKILL\.md$/.test(path) ? path.split("/").at(-2) ?? "SKILL.md" : undefined;
   const mode = name === "read" && args.mode && args.mode !== "full" ? ` [${text(args.mode)}]` : "";
   const range = name === "read" ? `${args.offset !== undefined ? `:${args.offset}` : ""}${args.limit !== undefined ? ` [limit ${args.limit}]` : ""}` : "";
-  return `${name} ${skill}${path}${range}${mode}${sessionLabel(args)}`;
+  const spans: PresentationSpan[] = [{ text: `${name} `, color: "toolTitle", bold: true }];
+  if (skill !== undefined) spans.push(
+    { text: "[skill] ", color: "customMessageLabel", bold: true },
+    { text: `${skill}: `, color: "customMessageText" },
+  );
+  spans.push(
+    { text: path, color: "accent" },
+    { text: range, color: "warning" },
+    { text: `${mode}${sessionLabel(args)}`, color: "dim" },
+  );
+  return spans;
 }
 
 function failure(body: string, partial: boolean): PresentationView {

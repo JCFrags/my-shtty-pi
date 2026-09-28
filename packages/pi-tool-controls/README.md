@@ -11,7 +11,13 @@
 
 `pi-tool-controls/presentation` is a separate ESM library with structural TypeScript declarations. Importing it does not import or activate the inactive bulk-controls extension. The existing `pi.extensions` registration is unchanged.
 
-`createToolPresentation({ call, result })` returns only `renderShell: "self"`, `renderCall`, and `renderResult`. `call(args, context)` returns a short title. `result(savedResult, options, context)` returns display copies:
+`createToolPresentation({ call, result })` returns only `renderShell: "self"`, `renderCall`, and `renderResult`. `call(args, context)` returns a short string title or readonly `PresentationSpan[]`. Each span has plain `text`, an optional semantic `color`, and optional `bold`. The helper sanitizes text before styling and bounds the combined title to one row. Include needed spaces between spans. String titles keep their existing bold `toolTitle` style.
+
+The helper uses the active theme's `toolPendingBg`, `toolErrorBg`, or `toolSuccessBg` in a zero-padding Pi TUI `Box`. Pending takes precedence over the native tool error flag. Domain warnings, cancellation, and nonzero command exits do not change that flag or choose the background. Full-width background fill adds no rows or horizontal inset. Pi still owns separator, expansion, mouse routing, and images.
+
+Native Pi supplies `theme.bg` and `context.isPartial`. Minimal `fg`/`bold` themes without `bg` keep unframed, unpadded output. Older direct call contexts without `isPartial` use the final phase. Direct callers that display pending titles must supply it. Styles are evaluated during rendering, and invalidation clears the frame's cache.
+
+`result(savedResult, options, context)` returns display copies:
 
 - `summary`: one status row, with optional semantic `tone`.
 - `notices`: priority rows before excerpts. Each notice is bounded to one visual row. If the budget cannot show all notices, a separate row gives the omitted-notice count.
