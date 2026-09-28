@@ -282,7 +282,7 @@ test("menu harness and registered command traverse nested Display and Standard m
 test("preset navigation and cancellation do not write, and deliberate session selection appends once", async () => {
 	initTheme("dark", false);
 	const display = { ...DEFAULT_DISPLAY_PREFERENCES, showFooter: false, showForecast: false, usageFormat: "used" as const };
-	const entries: Array<{ type: string; customType: string; data: unknown }> = [{ type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display } }];
+	let entries: Array<{ type: string; customType: string; data: unknown }> = [{ type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display } }];
 	const handlers = new Map<string, Function>(); let command!: (args: string, ctx: any) => Promise<void>; let writes = 0;
 	usageFooter({ on(name: string, handler: Function) { handlers.set(name, handler); }, registerCommand(_name: string, definition: any) { command = definition.handler; }, appendEntry(customType: string, data: unknown) { writes += 1; entries.push({ type: "custom", customType, data }); } } as any);
 	const steps = [
@@ -290,19 +290,61 @@ test("preset navigation and cancellation do not write, and deliberate session se
 		["Display preset", ["\u001b[B", "\u001b"]], ["Display settings", ["\u001b[B", "\r"]],
 		["Display preset", ["\u001b[B", "\r"]], ["Display settings", ["\u001b"]], ["Codex usage", ["\u001b"]],
 	] as const; let step = 0;
+	let driveMenu = (component: any, body: string) => {
+		const [title, keys] = steps[step]!; assert.equal(body.split("\n")[0], title);
+		assert.equal(writes, step <= 4 ? 0 : 1);
+		if (title === "Display preset") { assert.match(body, /> Comfortable \(current\)/); assert.match(body, /Show footer, forecast, and Remaining\/Used stay unchanged/); }
+		step += 1; for (const key of keys) component.handleInput(key);
+	};
 	const ctx: any = { hasUI: true, mode: "tui", sessionManager: { getBranch: () => entries }, ui: {
 		setStatus() {}, notify(message: string) { assert.fail(message); },
 		custom(factory: any) { return new Promise((resolve) => {
 			const component = factory({ requestRender() {} }, { fg: (_name: string, text: string) => text, bold: (text: string) => text }, {}, resolve);
-			const [title, keys] = steps[step]!; const body = component.render(160).join("\n").replace(/\u001b\[[0-9;]*m/g, ""); assert.equal(body.split("\n")[0], title);
-			assert.equal(writes, step <= 4 ? 0 : 1);
-			if (title === "Display preset") { assert.match(body, /> Comfortable \(current\)/); assert.match(body, /Show footer, forecast, and Remaining\/Used stay unchanged/); }
-			step += 1; for (const key of keys) component.handleInput(key);
+			driveMenu(component, component.render(160).join("\n").replace(/\u001b\[[0-9;]*m/g, ""));
 		}); },
 	} };
 	await handlers.get("session_start")!({}, ctx); assert.equal(writes, 0); await command("", ctx);
 	assert.equal(step, steps.length); assert.equal(writes, 1);
-	assert.deepEqual(entries.at(-1), { type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display: applyDisplayPreset(display, "verbose") } });
+	const savedA = applyDisplayPreset(display, "verbose");
+	assert.deepEqual(entries.at(-1), { type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display: savedA } });
+	const branchA = entries; const beforeA = structuredClone(branchA);
+	const displayB = applyDisplayPreset(DEFAULT_DISPLAY_PREFERENCES, "compact");
+	const branchB = [{ type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display: displayB } }]; const beforeB = structuredClone(branchB);
+	const inspectBranch = async (branch: typeof entries, scope: string, preset: string, prefs: typeof DEFAULT_DISPLAY_PREFERENCES) => {
+		entries = branch; const before = structuredClone(branch); const writesBefore = writes;
+		await handlers.get("session_tree")!({}, ctx);
+		const screens: string[] = [];
+		driveMenu = (component, body) => {
+			const index = screens.length; screens.push(body);
+			if (index === 0) { for (let i = 0; i < 3; i += 1) component.handleInput("\u001b[B"); component.handleInput("\r"); }
+			else if (index === 1) { for (let i = 0; i < 4; i += 1) component.handleInput("\u001b[B"); component.handleInput("\r"); }
+			else component.handleInput("\u001b");
+		};
+		await command("", ctx);
+		assert.deepEqual(screens.map((body) => body.split("\n")[0]), ["Codex usage", "Display settings", "Customize display (advanced)", "Display settings", "Codex usage"]);
+		assert.ok(screens[1]!.includes(`Display scope\n    ${scope}`)); assert.ok(screens[1]!.includes(`Display preset\n    ${preset}`));
+		assert.ok(screens[1]!.includes(`Show footer\n    ${prefs.showFooter ? "on" : "off"}`)); assert.ok(screens[1]!.includes(`Tibo Button Forecast\n    ${prefs.showForecast ? "on" : "off"}`));
+		assert.ok(screens[2]!.includes(`Usage format\n    ${prefs.usageFormat === "used" ? "Used %" : "Remaining %"}`));
+		assert.equal(writes, writesBefore); assert.deepEqual(branch, before);
+	};
+	await inspectBranch(branchB, "This session", "Compact", displayB);
+	const selectB = [
+		["Codex usage", ["\u001b[B", "\u001b[B", "\u001b[B", "\r"]], ["Display settings", ["\u001b[B", "\r"]],
+		["Display preset", ["\u001b[B", "\r"]], ["Display settings", ["\u001b"]], ["Codex usage", ["\u001b"]],
+	] as const; step = 0;
+	driveMenu = (component, body) => {
+		const [title, keys] = selectB[step]!; assert.equal(body.split("\n")[0], title); assert.equal(writes, step <= 2 ? 1 : 2);
+		if (title === "Display preset") assert.match(body, /> Compact \(current\)/);
+		step += 1; for (const key of keys) component.handleInput(key);
+	};
+	await command("", ctx); assert.equal(step, selectB.length); assert.equal(writes, 2);
+	const savedB = applyDisplayPreset(displayB, "comfortable");
+	assert.deepEqual(branchB, [...beforeB, { type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "session", display: savedB } }]);
+	await inspectBranch([], "All local sessions", "Comfortable", DEFAULT_DISPLAY_PREFERENCES);
+	await inspectBranch([{ type: "custom", customType: "codex-usage-display-session-v1", data: { scope: "shared", display: savedA } }], "All local sessions", "Comfortable", DEFAULT_DISPLAY_PREFERENCES);
+	await inspectBranch(branchA, "This session", "Verbose", savedA);
+	await inspectBranch(branchB, "This session", "Comfortable", savedB);
+	assert.deepEqual(branchA, beforeA); assert.equal(writes, 2);
 	await handlers.get("session_shutdown")!({}, ctx);
 });
 

@@ -259,6 +259,16 @@ export class BranchStateOwner<Root> {
     this.cacheBinding(hash, binding);
     return binding;
   }
+  private async loadCursor(location: ObjectLocation, key: ViewKey): Promise<Cursor | undefined> {
+    const cursor = await readPrivateRecord<Cursor>(join(location.root, "resolutions", `${keyOf(key)}.json`));
+    if (!cursor) return undefined;
+    exact(cursor, ["version", "scope", "sourceKey", "nextEntryId", "scanned", "legacySeen"], ["head"]);
+    scope(cursor.scope); integer(cursor.scanned, 0, Number.MAX_SAFE_INTEGER);
+    if (cursor.version !== 1 || !sameScope(cursor.scope, key.scope) || cursor.sourceKey !== key.sourceKey
+      || typeof cursor.legacySeen !== "boolean" || cursor.head !== undefined && !isHash(cursor.head)) fail("state-store-corrupt");
+    if (cursor.nextEntryId !== null) identifier(cursor.nextEntryId);
+    return cursor;
+  }
   private async saveBinding(location: ObjectLocation, key: ViewKey, head: string,
     anchor: SessionEntryView, ref: ObjectRef): Promise<void> {
     const binding: Binding = { ...key, head, anchorId: anchor.id, commitRef: ref };
@@ -309,14 +319,8 @@ export class BranchStateOwner<Root> {
         await this.unchanged(host, view, options.signal);
       }
       const hash = keyOf(key), path = join(location.root, "resolutions", `${hash}.json`);
-      let cursor = await readPrivateRecord<Cursor>(path);
-      if (cursor) {
-        exact(cursor, ["version", "scope", "sourceKey", "nextEntryId", "scanned", "legacySeen"], ["head"]);
-        scope(cursor.scope); integer(cursor.scanned, 0, Number.MAX_SAFE_INTEGER);
-        if (cursor.version !== 1 || !sameScope(cursor.scope, view.scope) || cursor.sourceKey !== key.sourceKey
-          || typeof cursor.legacySeen !== "boolean" || cursor.head !== undefined && !isHash(cursor.head)) fail("state-store-corrupt");
-        if (cursor.nextEntryId !== null) identifier(cursor.nextEntryId);
-      } else cursor = { ...key, nextEntryId: view.scope.leafId, scanned: 0, legacySeen: false };
+      const cursor: Cursor = await this.loadCursor(location, key)
+        ?? { ...key, nextEntryId: view.scope.leafId, scanned: 0, legacySeen: false };
       let result: OwnerResolution<Root> | undefined;
       const seen = new Set<string>();
       let reads = 0;
@@ -354,6 +358,20 @@ export class BranchStateOwner<Root> {
             await this.unchanged(host, view, options.signal);
             if (cursor.head) await this.saveBinding(location, key, cursor.head, anchor, binding.commitRef);
             break;
+          }
+        }
+        // Reuse only an interval whose original leaf is on this selected ancestry.
+        // Like a binding, this derived interval relies on stable native entries.
+        if (id !== view.scope.leafId) {
+          checkSignal(options.signal);
+          const ancestor = await this.loadCursor(location, { ...key, scope: { sessionId: view.scope.sessionId, leafId: id } });
+          checkSignal(options.signal);
+          if (ancestor?.head && ancestor.scanned > 0) {
+            if (ancestor.head !== nativeSignature(entry) || ancestor.nextEntryId !== null
+              && (ancestor.nextEntryId === view.scope.leafId || seen.has(ancestor.nextEntryId))) fail("state-store-corrupt");
+            cursor.legacySeen ||= ancestor.legacySeen;
+            cursor.nextEntryId = ancestor.nextEntryId;
+            continue;
           }
         }
         cursor.nextEntryId = entry.parentId;

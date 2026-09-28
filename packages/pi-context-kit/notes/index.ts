@@ -5,6 +5,7 @@ import { projectNotesPage } from "@grounded/pi-core/context-adapters";
 import { boundedStateOutput, cancelled, STATE_RESULT_PROTOCOL, StateToolError, type StateToolDetails } from "@grounded/pi-core/state";
 import { NotesParams, NOTES_DESCRIPTION, NOTES_GUIDELINES, NOTES_PROMPT_SNIPPET, renderNoteRead, renderNotesResult, type Note } from "./operations.ts";
 import { NotesStore } from "./store.ts";
+import { notesPresentation } from "./renderers.ts";
 
 export { NotesParams, NOTES_DESCRIPTION, NOTES_GUIDELINES, NOTES_PROMPT_SNIPPET };
 export { NotesStore } from "./store.ts";
@@ -72,6 +73,7 @@ export default function contextNotes(pi: ExtensionAPI, options: NotesOptions = {
   pi.registerTool({
     name: "notes", label: "Notes", description: NOTES_DESCRIPTION, promptSnippet: NOTES_PROMPT_SNIPPET, promptGuidelines: NOTES_GUIDELINES,
     parameters: NotesParams, executionMode: "sequential",
+    ...notesPresentation,
     async execute(_id, input, signal, _update, ctx) {
       if (!context || ctx.sessionManager !== context.sessionManager) throw new StateToolError("STATE_CONFLICT", "Notes session changed");
       const epoch = lifecycleEpoch;
