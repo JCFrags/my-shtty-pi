@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ChannelStore, ChannelStoreError } from "./channel-store.js";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { RegistryError, RegistryStore } from "./store.js";
+import { DEFAULT_WAIT_MS, MAX_WAIT_MS, runWaitCommand, WaitScope, WaitStopped } from "./wait-scope.js";
 import { orchestratePresentation } from "./presentation.js";
 import {
   PROTOCOL,
@@ -115,7 +116,10 @@ const ORCHESTRATE_SCHEMA = {
           uniqueItems: true,
           items: stringProperty(128),
         },
-        timeoutMs: { type: "integer", minimum: 0, maximum: 120000 },
+        timeoutMs: {
+          type: "integer", minimum: 0, maximum: MAX_WAIT_MS,
+          description: "Overall work budget in milliseconds (default 30000). Zero polls once without event sleep, with a 5000 ms work allowance. Started I/O and delivery cleanup can finish after the deadline.",
+        },
       },
     },
     {
@@ -195,6 +199,7 @@ interface OrchestrationContext {
   cli: HerdrCli;
   parent: ParentIdentity;
   store: RegistryStore;
+  root: string;
 }
 
 type IdentityResult =
@@ -298,21 +303,26 @@ async function withDomainLock<T>(
     if (domainLocks.get(domainId) === queued) domainLocks.delete(domainId);
   };
   void queued.then(cleanup, cleanup);
-  if (signal) {
-    await Promise.race([
-      previous,
-      new Promise<never>((_resolve, reject) => {
-        const abort = () => reject(signal.reason ?? new Error("Aborted"));
-        signal.addEventListener("abort", abort, { once: true });
-        void previous.finally(() => signal.removeEventListener("abort", abort));
-      }),
-    ]).catch((error) => {
-      // Release only this waiter's gate. Keep the queued chain mapped until the
-      // previous holder has settled, so a later caller cannot bypass it.
-      release();
-      throw error;
-    });
-  } else await previous;
+  let detach = (): void => undefined;
+  try {
+    if (signal) {
+      await Promise.race([
+        previous,
+        new Promise<never>((_resolve, reject) => {
+          const abort = () => reject(signal.reason ?? new Error("Aborted"));
+          signal.addEventListener("abort", abort, { once: true });
+          detach = () => signal.removeEventListener("abort", abort);
+          if (signal.aborted) abort();
+        }),
+      ]);
+    } else await previous;
+  } catch (error) {
+    // Release only this waiter's gate. A later caller must not bypass the holder.
+    release();
+    throw error;
+  } finally {
+    detach();
+  }
   try {
     if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
     return await action();
@@ -321,20 +331,18 @@ async function withDomainLock<T>(
   }
 }
 
-async function projectRoot(cwd: string): Promise<string> {
+async function projectRoot(cwd: string, scope?: WaitScope): Promise<string> {
   try {
-    const result = await execFile(
-      "git",
-      ["-C", cwd, "rev-parse", "--show-toplevel"],
-      {
-        cwd,
-        encoding: "utf8",
-        maxBuffer: 16 * 1024,
-      },
-    );
+    const args = ["-C", cwd, "rev-parse", "--show-toplevel"];
+    const options = { cwd, encoding: "utf8" as const, maxBuffer: 16 * 1024 };
+    const result = scope
+      ? await runWaitCommand(scope, "git", args, options)
+      : await execFile("git", args, options);
     const root = result.stdout.trim();
     if (root && isAbsolute(root)) return resolve(root);
-  } catch {
+  } catch (error) {
+    if (error instanceof WaitStopped) throw error;
+    scope?.check();
     // A non-repository cwd is still a valid Herdr working directory.
   }
   return resolve(cwd);
@@ -357,16 +365,18 @@ function parentFromPane(pane: JsonObject): ParentIdentity {
   return { workspaceId, tabId, paneId };
 }
 
-async function requireContext(context: PiContext): Promise<OrchestrationContext> {
+async function requireContext(context: PiContext, scope?: WaitScope): Promise<OrchestrationContext> {
+  scope?.check();
   if (process.env.HERDR_ENV !== "1") throw new OrchestrationError("NOT_IN_HERDR");
   if (!process.env.HERDR_SOCKET_PATH || !process.env.HERDR_PANE_ID)
     throw new OrchestrationError("HERDR_CONTEXT_INCOMPLETE");
   const cli = new HerdrCli();
-  const pane = await cli.paneCurrent();
+  const pane = await cli.paneCurrent(scope);
   const parent = parentFromPane(pane);
-  const root = await projectRoot(context.cwd);
+  const root = await projectRoot(context.cwd, scope);
+  scope?.check();
   const store = new RegistryStore(root, parent);
-  return { cli, parent, store };
+  return { cli, parent, store, root };
 }
 
 async function identity(
@@ -1173,8 +1183,10 @@ function terminalPhase(status: RunResult["status"]): RunRecord["phase"] {
 async function reconcile(
   current: OrchestrationContext,
   runIds?: Set<string>,
-  options: { migrateLegacy?: boolean } = {},
+  options: { migrateLegacy?: boolean; scope?: WaitScope } = {},
 ): Promise<void> {
+  const scope = options.scope;
+  scope?.check();
   const channel = new ChannelStore(current.store.domainId);
   const originals = runIds
     ? (await Promise.all([...runIds].map((runId) => current.store.getRun(runId))))
@@ -1183,9 +1195,11 @@ async function reconcile(
     : await current.store.list();
   for (const original of originals) {
     for (const originalRun of original.runs) {
+      scope?.check();
       let run = originalRun;
       if (run.legacyDeliveredEventIds.length) {
-        await channel.discardLegacy(run.legacyDeliveredEventIds);
+        await channel.discardLegacy(run.legacyDeliveredEventIds, scope);
+        scope?.check();
         await current.store.updateRun(original.agentId, run.runId, {
           legacyDeliveredEventIds: [],
         });
@@ -1210,6 +1224,7 @@ async function reconcile(
         )
         .sort((a, b) => a.sequence - b.sequence)
         .at(-1);
+      scope?.check();
       if (progress && progress.sequence !== run.latestProgress?.eventSequence) {
         await current.store.updateRun(original.agentId, run.runId, {
           latestProgress: {
@@ -1220,7 +1235,8 @@ async function reconcile(
         });
         run = (await current.store.getRun(run.runId))!.run;
       }
-      const result = await channel.result(run.runId);
+      const result = await channel.result(run.runId, scope);
+      scope?.check();
       if (!result) continue;
       if (!resultValid(result, original, run))
         throw new OrchestrationError("RESULT_IDENTITY_MISMATCH");
@@ -1263,7 +1279,9 @@ function notify(
 async function drainNotificationsUnlocked(
   current: OrchestrationContext,
   context: PiContext,
+  scope?: WaitScope,
 ): Promise<void> {
+  scope?.check();
   if (!context.hasUI || !context.ui?.notify) return;
   const selectedAgents = newestAgents(await current.store.list());
   const candidates = selectedAgents
@@ -1298,17 +1316,18 @@ async function drainNotificationsUnlocked(
   let remaining = MAX_NOTIFICATIONS_PER_DRAIN;
 
   for (const { run: snapshot } of candidates) {
+    scope?.check();
     if (remaining <= 0) return;
     try {
       await reconcile(current, new Set([snapshot.runId]), {
-        migrateLegacy: false,
+        migrateLegacy: false, ...(scope ? { scope } : {}),
       });
       let entry = await current.store.getRun(snapshot.runId);
       if (!entry) continue;
       const fresh = (await channel.events(
         [snapshot.runId],
         new Map([[snapshot.runId, entry.run.deliveredSequence]]),
-        { migrateLegacy: false },
+        { migrateLegacy: false, ...(scope ? { scope } : {}) },
       ))
         .filter(
           (event) =>
@@ -1324,6 +1343,7 @@ async function drainNotificationsUnlocked(
         .slice(0, remaining);
 
       for (const event of fresh) {
+        scope?.check();
         notify(
           context,
           event.kind,
@@ -1340,6 +1360,7 @@ async function drainNotificationsUnlocked(
       entry = await current.store.getRun(snapshot.runId);
       if (!entry || remaining <= 0) return;
       if (entry.run.terminal && !entry.run.terminalNotified) {
+        scope?.check();
         notify(
           context,
           entry.run.terminal.status,
@@ -1352,119 +1373,160 @@ async function drainNotificationsUnlocked(
         });
         remaining -= 1;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof WaitStopped) throw error;
+      scope?.check();
       // One malformed or concurrently removed run must not block other notices.
     }
   }
 }
 
-async function waitRuns(
-  context: PiContext,
-  params: OrchestrateParams,
-  signal?: AbortSignal,
-): Promise<JsonObject> {
+function validateWaitParams(params: OrchestrateParams): number {
   if (
     !Array.isArray(params.runIds) ||
     params.runIds.length < 1 ||
     params.runIds.length > 8 ||
+    new Set(params.runIds).size !== params.runIds.length ||
     params.runIds.some(
       (id) => typeof id !== "string" || !/^r-[0-9a-f-]{36}$/u.test(id),
     )
   )
     throw new OrchestrationError("INVALID_RUN_IDS");
-  const timeoutMs = params.timeoutMs ?? 30000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 120000)
+  const timeoutMs = params.timeoutMs ?? DEFAULT_WAIT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS)
     throw new OrchestrationError("INVALID_TIMEOUT");
-  const current = await requireContext(context),
-    wanted = new Set(params.runIds),
-    channel = new ChannelStore(current.store.domainId);
-  for (const runId of wanted)
-    if (!(await current.store.getRun(runId)))
-      throw new OrchestrationError("RUN_NOT_REGISTERED");
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    await reconcile(current, wanted);
-    await drainNotificationsUnlocked(current, context);
-    const entries = (
-      await Promise.all([...wanted].map((id) => current.store.getRun(id)))
-    ).filter((x): x is { agent: AgentRecord; run: RunRecord } => !!x);
-    const all = await channel.events(
-      [...wanted],
-      new Map(entries.map((entry) => [entry.run.runId, entry.run.deliveredSequence])),
-    );
-    const fresh = all
-      .filter((e) => {
-        const entry = entries.find((x) => x.run.runId === e.runId);
-        return (
-          !!entry &&
-          e.version === 2 &&
-          e.domainId === entry.agent.domainId &&
-          e.agentId === entry.agent.agentId &&
-          e.agentGeneration === entry.agent.agentGeneration &&
-          e.assignmentGeneration === entry.run.assignmentGeneration &&
-          e.sequence > entry.run.deliveredSequence
-        );
-      })
-      .sort((a, b) => a.runId.localeCompare(b.runId) || a.sequence - b.sequence)
-      .slice(0, 24);
-    const results = entries
-      .filter((x) => x.run.terminal && !x.run.terminalDelivered)
-      .map((x) => ({
-        runId: x.run.runId,
-        agentId: x.agent.agentId,
-        status: x.run.terminal!.status,
-        summary: x.run.terminal!.summary,
-        completedAt: x.run.terminal!.completedAt,
-        resultAvailable: true,
-      }));
-    if (fresh.length || results.length || Date.now() >= deadline) {
-      for (const entry of entries) {
-        const delivered = fresh.filter((e) => e.runId === entry.run.runId);
-        const through = delivered.length
-          ? Math.max(...delivered.map((e) => e.sequence))
-          : entry.run.deliveredSequence;
-        const terminalDelivered =
-          entry.run.terminalDelivered ||
-          results.some((r) => r.runId === entry.run.runId);
-        if (
-          delivered.length ||
-          terminalDelivered !== entry.run.terminalDelivered
-        ) {
-          await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
-            deliveredSequence: through,
-            terminalDelivered,
-          });
-          if (delivered.length) {
-            await channel.acknowledge(entry.run.runId, through);
-            await channel.discardLegacy(
-              delivered.flatMap((e) =>
-                e.legacyEventId ? [e.legacyEventId] : [],
-              ),
-            );
+  return timeoutMs;
+}
+
+async function waitRuns(
+  context: PiContext,
+  params: OrchestrateParams,
+  scope: WaitScope,
+): Promise<JsonObject> {
+  const wanted = new Set(params.runIds!);
+  let validated = false;
+  const empty = (): JsonObject => ({ ok: true, action: "wait", events: [], results: [], timedOut: true });
+  try {
+    const base = await requireContext(context, scope);
+    const channel = new ChannelStore(base.store.domainId);
+    const scan = () => withDomainLock(base.store.domainId, async () => {
+      scope.check();
+      // Never reuse loaded registry state across a lock release.
+      const current = { ...base, store: new RegistryStore(base.root, base.parent) };
+      await current.store.load();
+      for (const runId of wanted) {
+        scope.check();
+        if (!(await current.store.getRun(runId)))
+          throw new OrchestrationError("RUN_NOT_REGISTERED");
+      }
+      scope.check();
+      validated = true;
+      await reconcile(current, wanted, { scope });
+      await drainNotificationsUnlocked(current, context, scope);
+      const entries = (
+        await Promise.all([...wanted].map((id) => current.store.getRun(id)))
+      ).filter((x): x is { agent: AgentRecord; run: RunRecord } => !!x);
+      const all = await channel.events(
+        [...wanted],
+        new Map(entries.map((entry) => [entry.run.runId, entry.run.deliveredSequence])),
+        { scope },
+      );
+      const fresh = all
+        .filter((e) => {
+          const entry = entries.find((x) => x.run.runId === e.runId);
+          return (
+            !!entry &&
+            e.version === 2 &&
+            e.domainId === entry.agent.domainId &&
+            e.agentId === entry.agent.agentId &&
+            e.agentGeneration === entry.agent.agentGeneration &&
+            e.assignmentGeneration === entry.run.assignmentGeneration &&
+            e.sequence > entry.run.deliveredSequence
+          );
+        })
+        .sort((a, b) => a.runId.localeCompare(b.runId) || a.sequence - b.sequence)
+        .slice(0, 24);
+      const results = entries
+        .filter((x) => x.run.terminal && !x.run.terminalDelivered)
+        .map((x) => ({
+          runId: x.run.runId,
+          agentId: x.agent.agentId,
+          status: x.run.terminal!.status,
+          summary: x.run.terminal!.summary,
+          completedAt: x.run.terminal!.completedAt,
+          resultAvailable: true,
+        }));
+      scope.check();
+      if (fresh.length || results.length) {
+        // Delivery admission: finish this bounded commit even if a stop arrives.
+        for (const entry of entries) {
+          const delivered = fresh.filter((e) => e.runId === entry.run.runId);
+          const through = delivered.length
+            ? Math.max(...delivered.map((e) => e.sequence))
+            : entry.run.deliveredSequence;
+          const terminalDelivered =
+            entry.run.terminalDelivered ||
+            results.some((r) => r.runId === entry.run.runId);
+          if (
+            delivered.length ||
+            terminalDelivered !== entry.run.terminalDelivered
+          ) {
+            await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
+              deliveredSequence: through,
+              terminalDelivered,
+            });
+            if (delivered.length) {
+              await channel.acknowledge(entry.run.runId, through);
+              await channel.discardLegacy(
+                delivered.flatMap((e) =>
+                  e.legacyEventId ? [e.legacyEventId] : [],
+                ),
+              );
+            }
           }
         }
+        return {
+          ok: true,
+          action: "wait",
+          events: fresh.map((e) => ({
+            eventSequence: e.sequence,
+            kind: e.kind,
+            runId: e.runId,
+            agentId: e.agentId,
+            target: e.target,
+            summary: e.summary.slice(0, 2048),
+            createdAt: e.createdAt,
+          })),
+          results,
+          timedOut: false,
+        };
       }
-      return {
-        ok: true,
-        action: "wait",
-        events: fresh.map((e) => ({
-          eventSequence: e.sequence,
-          kind: e.kind,
-          runId: e.runId,
-          agentId: e.agentId,
-          target: e.target,
-          summary: e.summary.slice(0, 2048),
-          createdAt: e.createdAt,
-        })),
-        results,
-        timedOut: !fresh.length && !results.length,
-      };
+      return undefined;
+    }, scope.signal);
+    const first = await scan();
+    if (first) return first;
+    if (params.timeoutMs === 0) return empty();
+    while (true) {
+      scope.check();
+      const waiting = await channel.armChangeWait([...wanted], scope.signal, scope);
+      try {
+        // Publications before arming are read here. Later ones remain latched.
+        const result = await scan();
+        if (result) return result;
+        const outcome = await waiting.changed;
+        if (outcome.kind === "error") throw outcome.error;
+        if (outcome.kind === "aborted") throw outcome.reason;
+        scope.check();
+      } finally {
+        await waiting.close();
+      }
     }
-    await channel.waitForChange(
-      [...wanted],
-      Math.max(0, deadline - Date.now()),
-      signal,
-    );
+  } catch (error) {
+    if (error instanceof WaitStopped && error.kind === "deadline") {
+      if (validated) return empty();
+      throw new OrchestrationError("WAIT_DEADLINE_EXCEEDED");
+    }
+    throw error;
   }
 }
 
@@ -2077,7 +2139,12 @@ async function execute(
   params: OrchestrateParams,
   extensionPath?: string,
   signal?: AbortSignal,
+  waitScope?: WaitScope,
 ): Promise<JsonObject> {
+  if (params.action === "wait") {
+    if (!waitScope) throw new OrchestrationError("INVALID_REQUEST");
+    return waitRuns(context, params, waitScope);
+  }
   if (params.action === "health") return health(context);
   const scope = await requireContext(context);
   return withDomainLock(scope.store.domainId, async () => {
@@ -2095,8 +2162,6 @@ async function execute(
         return send(context, params);
       case "close":
         return close(context, params);
-      case "wait":
-        return waitRuns(context, params, signal);
       case "collect":
         return collect(context, params);
       case "reuse":
@@ -2115,6 +2180,7 @@ export function registerOrchestrate(
   extensionPath?: string,
   initialContext?: PiContext,
 ): void {
+  const activeWaits = new Map<WaitScope, Promise<void>>();
   const tool: ToolRegistration = {
     ...orchestratePresentation,
     name: "orchestrate",
@@ -2126,12 +2192,21 @@ export function registerOrchestrate(
     parameters:
       ORCHESTRATE_SCHEMA as unknown as ToolRegistration["parameters"],
     async execute(_toolCallId, rawParams, signal, _onUpdate, context) {
+      const startedAt = performance.now();
+      let waitScope: WaitScope | undefined;
+      let settled = (): void => undefined;
       try {
+        const params = parseParams(rawParams);
+        if (params.action === "wait") {
+          waitScope = new WaitScope(startedAt, validateWaitParams(params), signal);
+          activeWaits.set(waitScope, new Promise<void>((resolve) => { settled = resolve; }));
+        }
         const result = await execute(
           context,
-          parseParams(rawParams),
+          params,
           extensionPath,
           signal,
+          waitScope,
         );
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -2139,6 +2214,12 @@ export function registerOrchestrate(
         };
       } catch (error) {
         throw publicError(error);
+      } finally {
+        if (waitScope) {
+          waitScope.dispose();
+          activeWaits.delete(waitScope);
+          settled();
+        }
       }
     },
   };
@@ -2176,5 +2257,9 @@ export function registerOrchestrate(
   // In-Herdr role selection runs during session_start, after its dispatch began.
   if (initialContext) start(initialContext);
   else runtime.on("session_start", (_event, rawContext) => start(rawContext as PiContext));
-  runtime.on("session_shutdown", () => stop());
+  runtime.on("session_shutdown", async () => {
+    stop();
+    for (const scope of activeWaits.keys()) scope.stop();
+    await Promise.allSettled([...activeWaits.values()]);
+  });
 }
