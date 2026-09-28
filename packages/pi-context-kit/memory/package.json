@@ -9,7 +9,7 @@
   "exports": { ".": "./src/index.ts", "./bindings": "./src/bindings.ts", "./store": "./src/store.ts", "./export-v2": "./src/reverse-export.ts" },
   "files": ["src", "README.md"],
   "pi": { "extensions": ["./src/index.ts"] },
-  "dependencies": { "@context-kit/protocol": "*" },
+  "dependencies": { "@context-kit/protocol": "*", "pi-tool-controls": "file:../../pi-tool-controls" },
   "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typebox": "*" },
   "scripts": { "test": "node --experimental-transform-types --test test/memory.test.ts test/reverse-export.test.ts", "test:reverse": "node --experimental-transform-types --test test/reverse-export.test.ts" }
 }

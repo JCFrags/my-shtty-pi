@@ -7,6 +7,7 @@ import { ChannelStore, ChannelStoreError } from "./channel-store.js";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { RegistryError, RegistryStore } from "./store.js";
 import { DEFAULT_WAIT_MS, MAX_WAIT_MS, runWaitCommand, WaitScope, WaitStopped } from "./wait-scope.js";
+import { orchestratePresentation } from "./presentation.js";
 import {
   PROTOCOL,
   PROTOCOL_VERSION,
@@ -159,7 +160,7 @@ type PiContext = {
     notify(message: string, level?: "info" | "warning" | "error"): void;
   };
 };
-type ToolRegistration = {
+type ToolRegistration = typeof orchestratePresentation & {
   name: string;
   label: string;
   description: string;
@@ -2181,6 +2182,7 @@ export function registerOrchestrate(
 ): void {
   const activeWaits = new Map<WaitScope, Promise<void>>();
   const tool: ToolRegistration = {
+    ...orchestratePresentation,
     name: "orchestrate",
     label: "Orchestrate",
     description:

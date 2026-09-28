@@ -8,7 +8,7 @@
   "license": "MIT",
   "keywords": ["pi-package"],
   "pi": { "extensions": ["./src/index.ts"] },
-  "dependencies": { "@context-kit/protocol": "*" },
+  "dependencies": { "@context-kit/protocol": "*", "pi-tool-controls": "file:../../pi-tool-controls" },
   "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typebox": "*" },
   "scripts": { "test": "node --experimental-transform-types --test test/recall.test.ts" }
 }
