@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { CATEGORIES, HARD_LIMITS, PROVIDER_IDS } from "@context-kit/protocol";
+import { recallPresentation } from "./renderers.ts";
 import {
   collectContext, contextLimits, contextToolResult, parseContextQuery,
   type ContextCollection, type ContextLimits,
@@ -33,6 +34,7 @@ export function createRecallTool(
     label: "Context Recall",
     description: "Find bounded current-state cards from active Memory, Todo, Notes, and Workplan tools. One query page, not historical recall. Memory is logical-session knowledge; other state is branch-local. Proposals require an explicit category. Returns lifecycle, coverage, exclusions, and read-only native recovery. Defaults: 6 cards and 128 scanned records per provider, 150 ms wait, 16 KiB complete result. Never activates tools, scans archives, or changes context.",
     parameters: RecallParams,
+    ...recallPresentation,
     async execute(_toolCallId: string, raw: RecallInput, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
       const input = parseContextQuery(raw);
       return contextToolResult(await collectContext(pi, { ...defaults, ...input }, {

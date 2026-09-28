@@ -10,6 +10,7 @@ import { exportMemoryV2, type MemoryV2ExportInput } from "./reverse-export.ts";
 import { buildOperation, validateOperation, type Action } from "./operations.ts";
 import { readMemoryContext, unavailable } from "./connector.ts";
 import type { MemoryPage, MemoryStore } from "./store.ts";
+import { memoryPresentation } from "./renderers.ts";
 
 export { captureMemoryBinding, defaultMemoryRoot, restoreMemoryBinding } from "./bindings.ts";
 export { importLegacyV2, parseLegacyImport, readLegacySource } from "./legacy-import.ts";
@@ -168,6 +169,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   }
   function tool(name: string, description: string, parameters: any, execute: (id: string, args: any, signal: AbortSignal | undefined, ctx: ExtensionContext) => unknown) {
     pi.registerTool({ name, label: name, description, parameters, executionMode: "sequential",
+      ...memoryPresentation(name),
       async execute(id, raw, signal, _update, ctx) {
         try { checkSignal(signal); if (busy) fail("pending"); return execute(id, plain(raw), signal, ctx) as any; }
         catch (error) { throw safeError(error); }

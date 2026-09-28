@@ -13,6 +13,7 @@ import {
   prepareWorkplanArguments, WORKPLAN_DESCRIPTION, WORKPLAN_GUIDELINES, WORKPLAN_PROMPT_SNIPPET, WorkplanParams,
 } from "./schema.ts";
 import { WorkplanStore } from "./store.ts";
+import { workplanPresentation } from "./renderers.ts";
 import { contextMessage, latestVisibleRecovery } from "./ui.ts";
 
 export { WorkplanStore } from "./store.ts";
@@ -138,6 +139,7 @@ export function createWorkplanExtension(pi: ExtensionAPI, options: { storeRoot?:
     name: "workplan", label: "Workplan", description: WORKPLAN_DESCRIPTION,
     promptSnippet: WORKPLAN_PROMPT_SNIPPET, promptGuidelines: WORKPLAN_GUIDELINES,
     parameters: WorkplanParams, prepareArguments: prepareWorkplanArguments, executionMode: "sequential",
+    ...workplanPresentation,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       context = ctx;
       const operationEpoch = epoch;
