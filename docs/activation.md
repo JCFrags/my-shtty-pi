@@ -246,6 +246,16 @@ A code-selection rollback and a data rollback are separate. After new writes, re
 
 The native ancestry correction retains the original leaf signature across bounded resolution pages. Older owners reject new cursors containing `head`. Selecting old code is therefore not a data rollback. Preserve compatible owner code, source, and stores instead of clearing derived indexes. See the [state-store rollback limits](../packages/pi-context-kit/state-store/API.md#provider-integration).
 
+## Grounded compact display library
+
+The Files and Process packages depend on the pure `pi-tool-controls/presentation` subpath through local file dependencies. Install from the retained repository-root lock. Keep the sibling `packages/pi-tool-controls/presentation` source and its manifest in that root. Do not add the inactive Tool Controls extension to Pi settings or change its status.
+
+This display change covers seven existing owner registrations only. Before selecting a candidate, compare each selected owner's actual imported dependency closure with the accepted source. Entry-point parity alone is insufficient, especially when Files/LSP and Process use different retained roots. Preserve the selected shared-core alias, unrelated roots, native SSH registrations, and package order. Grounded must retain its intended name ownership. Prepare a new immutable root rather than patching an old activation.
+
+Use an isolated installed-Pi loader to check owner definitions, unchanged model-facing metadata/execution, and only the intended render-hook changes. Exercise compact/expanded cards and `/export` in a fresh harmless session. Preserve all existing sessions and jobs. A test or fresh loader is not activation in those sessions. Follow the normal safe-reload gate separately because Grounded Process shuts down jobs on reload.
+
+The [Grounded README](../packages/grounded-tools/README.md#compact-human-tool-display) defines text-row bounds, image/separator limits, and private raw JSONL export. No data migration or payload rewrite is part of this change. Rollback restores only the affected owner selections with their compatible dependency roots, not whole settings snapshots.
+
 ## Earlier Context Kit foundation
 
 Recall and Telemetry have separate source-loaded entrypoints at `packages/pi-context-kit/recall` and `packages/pi-context-kit/telemetry`. The protocol package is a pure library, not a Pi registration. Prepare their workspace dependencies from the accepted repository-root lock.

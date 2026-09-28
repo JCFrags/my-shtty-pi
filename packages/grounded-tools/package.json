@@ -2,6 +2,9 @@
   "name": "pi-grounded-tools",
   "version": "0.1.0",
   "private": true,
+  "scripts": {
+    "test": "node --experimental-transform-types --test test/presentation.test.mjs"
+  },
   "workspaces": [
     "core",
     "dialog",

@@ -2,6 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { bashPresentation, processPresentation, sessionPresentation } from "./renderers.ts";
 import { boundedOutput } from "@grounded/pi-core/output";
 import { LocalSessionProvider } from "@grounded/pi-core/local-session";
 import { ProcessManager, type ProcessSnapshot } from "@grounded/pi-core/process-manager";
@@ -249,6 +250,7 @@ export default function groundedProcess(pi: ExtensionAPI) {
       "Use process to poll, drive, interrupt, or kill a yielded bash process.",
     ],
     parameters: BashParams,
+    ...bashPresentation,
     executionMode: "sequential",
     async execute(_id, params, signal, onUpdate, ctx) {
       if (signal?.aborted) throw new Error("Operation aborted");
@@ -343,6 +345,7 @@ export default function groundedProcess(pi: ExtensionAPI) {
     description: "List, poll, write exact input to, interrupt, or kill processes started by grounded bash. Poll output is exact and the complete stream remains in the process log.",
     promptSnippet: "Drive and inspect yielded shell processes",
     parameters: ProcessParams,
+    ...processPresentation,
     executionMode: "sequential",
     async execute(_id, params) {
       if (params.action === "list") {
@@ -409,6 +412,7 @@ export default function groundedProcess(pi: ExtensionAPI) {
       "Call session capabilities before requesting PTY input or an SSH backend.",
     ],
     parameters: SessionParams,
+    ...sessionPresentation,
     executionMode: "sequential",
     async execute(_id, params, _signal, _onUpdate, ctx) {
       if (params.action === "capabilities") {
