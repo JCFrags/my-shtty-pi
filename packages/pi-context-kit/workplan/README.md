@@ -28,6 +28,10 @@ Question status uses `open` and `resolved`, not `answered`. `record_question` ad
 
 A checkpoint records project state. It does not grant new authorization. Linked Todo IDs are unverified external references, not synchronized tasks.
 
+## Request context
+
+On Pi 0.87 and later, the request-local state message uses `context_with_system`. It appends after the complete input without changing existing system messages, tool declarations, or conversation messages. Older Pi versions retain the `context` hook. Recovery markers and state resolution are unchanged. This avoids folding native prompt/tool updates into the leading prefix. The state message still moves with the request tail, so this change does not guarantee append-only transport or provider cache hits.
+
 ## Storage and bounds
 
 The default private directory is `$XDG_STATE_HOME/pi-context-kit/workplan/`, or `~/.local/state/pi-context-kit/workplan/` when that variable is unset. `@context-kit/state-store` supplies immutable publication, source-scoped binding indexes, and Pi anchor verification. Each Workplan extension has its own owner instance and transaction queue.

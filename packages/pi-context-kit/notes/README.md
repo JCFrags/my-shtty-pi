@@ -34,6 +34,10 @@ Session start and tree navigation use a direct binding or one bounded ancestry-r
 
 An already owned branch that reports `state-store-source-recovery-required` needs the [state-store identity recovery procedure](../state-store/API.md#explicit-recovery-of-old-disk-commits), not `/notes-import`. It requires an independently established complete source-prefix hash. New Linux Btrfs commits have reboot-stable identity checks. Unsupported filesystems keep strict device checks. Recovery preserves old immutable state and does not make previous code versions compatible with new commits.
 
+## Request context
+
+On Pi 0.87 and later, the request-local state message uses `context_with_system`. It appends after the complete input without changing existing system messages, tool declarations, or conversation messages. Older Pi versions retain the `context` hook. This avoids folding native prompt/tool updates into the leading prefix. The state message still moves with the request tail, so this change does not guarantee append-only transport or provider cache hits.
+
 ## Legacy import
 
 Select only one Notes writer. Use `/notes-import` for an unimported legacy branch. One invocation collects or replays at most 128 complete source entries within an 8 MiB page budget. Repeat while pending. There is no lifetime entry-count cap and no hidden startup import loop.

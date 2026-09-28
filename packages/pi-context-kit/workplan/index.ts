@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider, type ProviderPage } from "@context-kit/protocol";
 import { registerStateTransferProvider, StateTransferError, type StateTransferEntry } from "@context-kit/protocol/transfer";
 import type { ObjectRef, StateAnchorHost } from "@context-kit/state-store";
@@ -101,7 +101,11 @@ export function createWorkplanExtension(pi: ExtensionAPI, options: { storeRoot?:
     epoch++; for (const job of contextJobs) job.abort();
     context = undefined; store.close(); removeSummary(); removeContext(); removeTransfer();
   });
-  pi.on("context", async (event, ctx) => {
+  // Pi 0.87's ordinary context hook folds system anchors after any append.
+  const [piMajor, piMinor] = VERSION.split(".").map(Number);
+  const contextEvent = piMajor > 0 || (piMajor === 0 && piMinor >= 87) ? "context_with_system" : "context";
+  // Keep the Pi 0.85 type target. This handler preserves the full input and only appends state.
+  pi.on(contextEvent as "context", async (event, ctx) => {
     context = ctx;
     if (!store.pending || store.resolutionStatus === "pending" || store.resolutionStatus === "unresolved") {
       try { await store.exclusive(() => store.resolve(host(ctx), ctx.signal)); } catch { /* Explicit status below. */ }
