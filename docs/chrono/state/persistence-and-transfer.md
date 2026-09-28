@@ -41,7 +41,7 @@ The state-store library has a separately explicit volatile policy for integrator
 
 Direct bindings avoid normal full-history replay. When needed, an owner reads a bounded ancestry page and retains exact progress for that view. Native operations or a settled lifecycle event can advance another page. No hidden unlimited startup loop is implied.
 
-Empty state is valid only after complete relevant ancestry proves no prior state. Legacy state instead requires explicit import. A changed branch cannot reuse another branch's unresolved cursor.
+Empty state is valid only after complete relevant ancestry proves no prior state. Legacy state instead requires explicit import. A changed leaf can reuse a saved cursor only at an ancestor reached on the selected native ancestry, with the same source key and a matching native head signature. The current view keeps its own head and combines both legacy flags. This retains bounded progress across ordinary appends and cold owners, but does not guarantee one-call completion or catch-up when appends consume the page budget. Common-ancestor progress is reusable after a tree selection. A cursor on an unvisited sibling suffix is not. These shortcuts retain the existing stable-ancestry and private-index assumptions, not a complete source-prefix proof.
 
 Native fork/clone can re-chain inherited anchors. Their original provenance remains intact. New writes bind the new source view rather than rewriting the inherited receipt.
 
