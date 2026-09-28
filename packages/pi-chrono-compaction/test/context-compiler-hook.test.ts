@@ -127,6 +127,9 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
       targetTokens: Math.min(2000, resolveExtensionSettings().hybridSummaryTargetTokens), requestToolCallId: requestCallId, scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: requestLeafId, epoch: 0,
         model: { provider: "fixture", id: "fixture", api: "openai-completions", thinkingLevel: "off" } } });
     sm.appendMessage({ role: "toolResult", toolCallId: requestCallId, toolName: "request_compaction", content: requestResult.content, details: requestResult.details, isError: false, timestamp: Date.now() });
+    // Pi 0.87.1 refreshes the native prompt/tool loadout before the next request.
+    // The locked 0.85.1 declarations do not yet include this persisted role.
+    sm.appendMessage({ role: "system", content: "", sections: { tools: "Updated fixture tool definitions" }, timestamp: Date.now() } as unknown as Parameters<typeof sm.appendMessage>[0]);
     const view = () => ({ scope: { ...request.scope, leafId: sm.getLeafId()! }, now: Date.now(), getEntry: (id: string) => sm.getEntry(id) as SessionEntryLike | undefined });
     const messages = sm.buildSessionContext().messages;
     await hooks.get("context")!({ messages }, ctx);

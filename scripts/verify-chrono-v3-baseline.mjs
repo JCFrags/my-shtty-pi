@@ -15,16 +15,16 @@ export const CHRONO_HISTORICAL_BASELINE = Object.freeze({
 export const CHRONO_BASELINE = Object.freeze({
   "commit": "ae0d72660b7b2dfa350a9663141879f35a3e8b6b",
   "upstreamTree": "a84ccd75001dd16f212cc0cda85547d9a9f273a9",
-  "tree": "1882c6906db8b49dbb3c36cf51601aefc6906a61",
+  "tree": "a5ffa963136949bee9aabededed278f5fd6aa0fc",
   "files": 455,
   "maps": 143,
   "package": "packages/pi-chrono-compaction",
-  "version": "4.0.5-local.20260926",
+  "version": "4.0.6-local.20260927",
   "integrationDifferences": [
     {
       "path": "DEPLOYED.sha256",
       "upstreamSha256": "3954d79d5faa1bb68e189a9db2fc799f0b4659715a2d73c91df2d7e332f3d627",
-      "integratedSha256": "a9f2ce7a3eee97e9db0a6c4e35298f9e7a68a8384cd3ffdfbff869e9fc573fa8"
+      "integratedSha256": "2c9cfcc0f79fea9398288fdbbde00432d66418534aeee1ba5a35ad97afee598b"
     },
     {
       "path": "README.md",
@@ -214,7 +214,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "dist/src/runtime-identity.js",
       "upstreamSha256": null,
-      "integratedSha256": "156977c05bd97cf045ed0aa9650ba97a1d410900f598340832cce013cb1e6bcd"
+      "integratedSha256": "32c212137c6988a2fd2ef65db0d57313f525fdc0efa498ea00ecedfec3989f05"
     },
     {
       "path": "dist/src/search-v3-store.js",
@@ -229,7 +229,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "dist/src/session-agent-summary.js",
       "upstreamSha256": null,
-      "integratedSha256": "5dddb6b115563319a1ee80acfdbc84fa554d30b96ccb39f538424b1aef0f2736"
+      "integratedSha256": "3b8fbc61b8e040b181b2122b64be431def20d1bced4d01ca6a70f1bba75e8f13"
     },
     {
       "path": "dist/src/session-migration.js",
@@ -249,12 +249,12 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "package-lock.json",
       "upstreamSha256": "42024d0876d7a367509bb86b11601c3ede4cebb7282cfb14b803d42ce60114d9",
-      "integratedSha256": "f4fc4debd2b19638b9acb528b0bfe70f680aa363dcfd4411d51fcf720568878b"
+      "integratedSha256": "8ef00472d672e024b5d9324e71e04ac5e2d05297da7a1f879e13aefd44b9bcf6"
     },
     {
       "path": "package.json",
       "upstreamSha256": "18e98ac6afc84a504df0c3bee20690941c2a60390f74b0d413603b0b2cf717e4",
-      "integratedSha256": "375d46afd4a084b9a42a403b41a3f09444257c6c0b32519694d3891ac2657282"
+      "integratedSha256": "2e6a13325b11ed2269d6303cb26e70c82b3d8b8356958b23f77aee1ead7e2d21"
     },
     {
       "path": "scripts/catalog-deployment-canary.mjs",
@@ -474,7 +474,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "src/runtime-identity.ts",
       "upstreamSha256": null,
-      "integratedSha256": "f8df9c4d963e73ae4e8cdda66a4c4217ca20b19558a17cb5119e13919b52198d"
+      "integratedSha256": "c85c59ab7476144e626286c47d4498394163c806f150f367c1cd7f4c823c591d"
     },
     {
       "path": "src/search-v3-store.ts",
@@ -489,7 +489,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "src/session-agent-summary.ts",
       "upstreamSha256": null,
-      "integratedSha256": "339e5d5d6e6cd65bedb57e89e6ebee180b126980e94448cbb3c4255161a2b56c"
+      "integratedSha256": "15a5a206ab1f67e70cbb41f71452cee2a1fe2eb8d1f6dbc52e5a0752f1fb937c"
     },
     {
       "path": "src/session-migration.ts",
@@ -554,7 +554,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "test/context-compiler-hook.test.ts",
       "upstreamSha256": null,
-      "integratedSha256": "bb458a5091c36eae1b2331d1322a7e4da952b86a41362c7ebe53e0db8864bb15"
+      "integratedSha256": "a353be51dae5c6826eff0b2b2d4ada307317cd1f22932dee251fc0478d2e869e"
     },
     {
       "path": "test/context-compiler.test.ts",
@@ -644,7 +644,7 @@ export const CHRONO_BASELINE = Object.freeze({
     {
       "path": "test/session-agent-summary.test.ts",
       "upstreamSha256": null,
-      "integratedSha256": "0ef7fa912f70114f22e489b5434788c97a4214475a5e071565c5c2f154c68d40"
+      "integratedSha256": "b53fd9c68d1fec0e0182c612cf12f3c6c47e2df69782d6c8818a7276aeb43d21"
     },
     {
       "path": "test/session-migration.test.ts",

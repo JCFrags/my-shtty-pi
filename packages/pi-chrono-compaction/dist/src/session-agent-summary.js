@@ -202,6 +202,11 @@ export function consumeSessionAgentSummaryRequest(request, view, messages) {
         if (metadata(entry))
             continue;
         const message = entry.type === "message" ? record(entry.message) : undefined;
+        // Pi can persist a prompt/tool delta between turn_end and the next context
+        // hook. That system message belongs to the summary-producing request, not
+        // intervening work. Accept it only before consumption; later guards stay strict.
+        if (message?.role === "system")
+            continue;
         // A request made by a tool may still have sibling results in this batch.
         if (message?.role === "toolResult")
             continue;
