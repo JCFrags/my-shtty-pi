@@ -12,7 +12,7 @@ import notes from "../../notes/index.ts";
 import { createWorkplanExtension } from "../../workplan/index.ts";
 import { BranchStateOwner, captureSourceIdentity, STATE_ANCHOR_TYPE } from "../src/index.ts";
 import { publishPrivateBytes } from "../src/objects.ts";
-import { sameDurableSource, sameSource, verifyDiskAnchor } from "../src/source.ts";
+import { sameDurableSource, sameSource, sourceKey, verifyDiskAnchor } from "../src/source.ts";
 import { canonicalJson, hashText, STATE_STORE_LIMITS } from "../src/validation.ts";
 
 class ProviderHost {
@@ -63,7 +63,53 @@ async function session(root) {
 const anchorHost = (manager) => ({ sessionManager: manager, appendEntry: (type, data) => manager.appendCustomEntry(type, data) });
 const scopeOf = (manager) => ({ sessionId: manager.getSessionId(), leafId: manager.getLeafId() });
 
-test("multi-page resolution retains bindings across normal appends and cold owners", async (t) => {
+async function savedCursor(root, provider, manager) {
+  const key = { version: 1, scope: scopeOf(manager), sourceKey: sourceKey(await captureSourceIdentity(manager)) };
+  const path = join(root, provider, "resolutions", `${hashText(canonicalJson(key, STATE_STORE_LIMITS.recordBytes))}.json`);
+  try { return { path, cursor: JSON.parse(await readFile(path, "utf8")) }; }
+  catch (error) { if (error.code === "ENOENT") return { path }; throw error; }
+}
+async function immutableState(root, names) {
+  const hashes = {};
+  for (const name of names) {
+    hashes[`${name}/store.json`] = hashText(await readFile(join(root, name, "store.json")));
+    for (const directory of ["objects", "commits", "identities"]) {
+      for (const file of (await readdir(join(root, name, directory))).sort()) {
+        const path = `${name}/${directory}/${file}`;
+        hashes[path] = hashText(await readFile(join(root, path)));
+      }
+    }
+  }
+  return hashes;
+}
+async function observeResolution(t, manager, root, names) {
+  const immutable = await immutableState(root, names);
+  t.diagnostic(`immutable baseline ${JSON.stringify(immutable)}`);
+  let reads = 0;
+  const getEntry = manager.getEntry.bind(manager);
+  t.mock.method(manager, "getEntry", (id) => { reads++; return getEntry(id); });
+  return async (name, phase, operation) => {
+    const before = await readFile(manager.getSessionFile());
+    reads = 0;
+    let result, error;
+    try { result = await operation(); } catch (caught) { error = caught; }
+    const count = reads;
+    assert.ok(count <= 128, `${name} ${phase} read ${count} entries`);
+    assert.deepEqual(await readFile(manager.getSessionFile()), before, "resolution must not change source bytes");
+    assert.deepEqual(await immutableState(root, names), immutable, "resolution must preserve immutable state");
+    const { cursor } = await savedCursor(root, name, manager);
+    const nextIndex = cursor?.nextEntryId === null ? -1 : cursor
+      ? manager.getEntries().findIndex(entry => entry.id === cursor.nextEntryId) : undefined;
+    if (cursor?.nextEntryId) assert.ok(nextIndex >= 0, "saved next entry must exist");
+    t.diagnostic(JSON.stringify({ name, phase, reads: count, leafId: manager.getLeafId(),
+      nextEntryId: cursor?.nextEntryId, nextIndex, scanned: cursor?.scanned, head: cursor?.head,
+      legacySeen: cursor?.legacySeen, error: error?.message, result,
+      source: { bytes: before.length, sha256: hashText(before) }, immutablePreserved: true }));
+    return { result, error, cursor, nextIndex, reads: count };
+  };
+}
+
+test("multi-page resolution retains pending progress across moving leaves and cold owners", async (t) => {
   const root = await mkdtemp(join(process.cwd(), ".state-ancestry-fixture-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const manager = await session(root);
@@ -73,41 +119,60 @@ test("multi-page resolution retains bindings across normal appends and cold owne
   await providers.execute("notes", { action: "add", title: "Retain note", body: "Exact body" });
   await providers.execute("workplan", { action: "create", content: { title: "Retain plan", objective: "Stay ready", approach: "Resolve bounded pages" } });
   const inputs = { todo: { action: "list" }, notes: { action: "read", id: "N1" }, workplan: { action: "read", planId: "WP1" } };
-  let reads = 0;
-  const getEntry = manager.getEntry.bind(manager);
-  t.mock.method(manager, "getEntry", (id) => { reads++; return getEntry(id); });
-  const read = async (name) => {
-    reads = 0;
-    try { return await providers.execute(name, inputs[name]); }
-    finally { assert.ok(reads <= 128, `${name} read ${reads} entries`); }
-  };
-  const expected = {};
-  for (const name of Object.keys(inputs)) expected[name] = await read(name);
+  const names = Object.keys(inputs), expected = {};
+  for (const name of names) expected[name] = await providers.execute(name, inputs[name]);
+  const observe = await observeResolution(t, manager, root, names);
+  const read = (name, phase) => observe(name, phase, () => providers.execute(name, inputs[name]));
   const append = (text) => manager.appendMessage({ role: "user", content: text, timestamp: 0 });
+  const appendResult = (name, phase, isError) => manager.appendMessage({ role: "toolResult",
+    toolCallId: `${phase}-${name}`, toolName: name, content: [{ type: "text", text: phase }], isError, timestamp: 0 });
   for (let index = 0; index < 300; index++) append(`Ordinary message ${index}`);
-  await providers.lifecycle("session_shutdown");
-  providers = new ProviderHost(manager, root);
-  await providers.lifecycle("session_start");
-  const before = await readFile(manager.getSessionFile());
-  for (const name of Object.keys(inputs)) {
-    await assert.rejects(() => read(name), /STATE_CONFLICT.*pending/);
-    assert.equal(reads, 128);
-    assert.deepEqual(await read(name), expected[name]);
+  const pending = {};
+  for (const name of names) {
+    append(`First pending ${name}`);
+    pending[name] = await read(name, "first-pending");
+    assert.match(pending[name].error?.message ?? "", /STATE_CONFLICT.*pending/);
+    assert.equal(pending[name].reads, 128);
+    assert.ok(pending[name].cursor.head);
+    assert.equal(pending[name].cursor.legacySeen, false);
+    appendResult(name, "first-pending", true);
   }
-  assert.deepEqual(await readFile(manager.getSessionFile()), before, "resolution must not append anchors");
+  for (const name of names) {
+    append(`Moving pending ${name}`);
+    const moved = await read(name, "moving-pending");
+    assert.match(moved.error?.message ?? "", /STATE_CONFLICT.*pending/);
+    assert.equal(moved.reads, 128);
+    assert.ok(moved.nextIndex < pending[name].nextIndex, `${name} restarted pending ancestry at a new leaf`);
+    assert.notEqual(moved.cursor.scope.leafId, pending[name].cursor.scope.leafId);
+    appendResult(name, "moving-pending", true);
+  }
+  const coldStart = async (phase) => {
+    await providers.lifecycle("session_shutdown");
+    providers = new ProviderHost(manager, root);
+    append(phase);
+    for (const [index, handler] of providers.handlers.get("session_start").entries()) {
+      const observed = await observe(names[index], phase, () => handler({ type: "session_start" }, providers.context));
+      assert.equal(observed.error, undefined);
+    }
+  };
+  await coldStart("cold-pending");
   for (let turn = 0; turn < 2; turn++) {
-    append(`Normal continuation ${turn}`);
-    for (const name of Object.keys(inputs)) {
-      assert.deepEqual(await read(name), expected[name]);
-      assert.ok(reads <= 6, `${name} restarted a completed ancestry walk`);
-      manager.appendMessage({ role: "toolResult", toolCallId: `fixture-${turn}-${name}`, toolName: name,
-        content: [{ type: "text", text: "Read complete" }], isError: false, timestamp: 0 });
+    for (const name of names) {
+      append(`Normal continuation ${turn} ${name}`);
+      const observed = await read(name, `ready-${turn}`);
+      assert.equal(observed.error, undefined);
+      assert.deepEqual(observed.result, expected[name]);
+      assert.ok(observed.reads <= 8, `${name} restarted a completed ancestry walk`);
+      appendResult(name, `ready-${turn}`, false);
     }
   }
-  await providers.lifecycle("session_shutdown");
-  providers = new ProviderHost(manager, root);
-  await providers.lifecycle("session_start");
-  for (const name of Object.keys(inputs)) assert.deepEqual(await read(name), expected[name]);
+  await coldStart("cold-ready");
+  for (const name of names) {
+    append(`After cold owner ${name}`);
+    const observed = await read(name, "after-cold-ready");
+    assert.equal(observed.error, undefined);
+    assert.deepEqual(observed.result, expected[name]);
+  }
   await providers.lifecycle("session_shutdown");
 
   // A retained signature must also permit progress at the smallest supported page size.
@@ -118,6 +183,7 @@ test("multi-page resolution retains bindings across normal appends and cold owne
   assert.equal((await owner.resolve(host)).status, "empty");
   const committed = await owner.commit(host, { value: 7 }, { expectedCommitId: null, durability: "allow-volatile" });
   for (let index = 0; index < 3; index++) small.appendMessage({ role: "user", content: "Ordinary message", timestamp: 0 });
+  let reads = 0;
   const smallGetEntry = small.getEntry.bind(small);
   t.mock.method(small, "getEntry", (id) => { reads++; return smallGetEntry(id); });
   for (let page = 0; page < 4; page++) {
@@ -126,8 +192,79 @@ test("multi-page resolution retains bindings across normal appends and cold owne
     assert.equal(reads, 1);
     assert.equal(result.status, page === 3 ? "ready" : "pending");
     if (result.status === "ready") assert.equal(result.snapshot.commitId, committed.commitId);
+    t.diagnostic(JSON.stringify({ phase: "one-entry", page, reads, status: result.status }));
+    if (page === 0) {
+      const saved = await savedCursor(root, "one-entry", small);
+      const { head, ...oldCursor } = saved.cursor;
+      assert.ok(head);
+      await writeFile(saved.path, JSON.stringify(oldCursor), { mode: 0o600 });
+      owner.close(); owner = new BranchStateOwner(options); reads = 0;
+      assert.equal((await owner.resolve(host)).status, "pending");
+      assert.equal(reads, 1, "old head recovery must use the one-entry budget");
+      const restored = (await savedCursor(root, "one-entry", small)).cursor;
+      assert.equal(restored.head, head);
+      assert.equal(restored.nextEntryId, oldCursor.nextEntryId);
+      t.diagnostic(JSON.stringify({ phase: "old-head-recovery", reads, nextEntryId: restored.nextEntryId }));
+    }
   }
   owner.close();
+});
+
+test("moving legacy cursors preserve import refusal and exclude an off-branch suffix", async (t) => {
+  const root = await mkdtemp(join(process.cwd(), ".state-legacy-ancestry-fixture-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const manager = await session(root), providers = new ProviderHost(manager, root);
+  await providers.lifecycle("session_start");
+  await providers.execute("todo", { action: "add", text: "Clean task" });
+  await providers.execute("notes", { action: "add", title: "Clean note", body: "Unchanged body" });
+  const inputs = { todo: { action: "list" }, notes: { action: "read", id: "N1" } };
+  const names = Object.keys(inputs), expected = {};
+  for (const name of names) expected[name] = await providers.execute(name, inputs[name]);
+  const observe = await observeResolution(t, manager, root, names);
+  const append = (text) => manager.appendMessage({ role: "user", content: text, timestamp: 0 });
+  for (let index = 0; index < 300; index++) append(`Clean prefix ${index}`);
+  const cleanLeaf = manager.getLeafId();
+  // These markers require explicit import. This check never replays their payloads.
+  for (const provider of names) manager.appendCustomEntry("grounded-state-checkpoint-v1", { version: 1, provider });
+  const pending = {};
+  for (const name of names) {
+    append(`Legacy pending ${name}`);
+    pending[name] = await observe(name, "legacy-first", () => providers.execute(name, inputs[name]));
+    assert.match(pending[name].error?.message ?? "", /STATE_CONFLICT.*pending/);
+    assert.equal(pending[name].cursor.legacySeen, true);
+  }
+  for (const name of names) {
+    let complete = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      append(`Legacy continuation ${name} ${attempt}`);
+      const observed = await observe(name, `legacy-${attempt}`, () => providers.execute(name, inputs[name]));
+      assert.equal(observed.result, undefined, "legacy ancestry cannot expose an older owned root");
+      assert.equal(observed.cursor.legacySeen, true);
+      assert.ok(observed.nextIndex < pending[name].nextIndex, "legacy cursor must advance at a moving leaf");
+      if (observed.cursor.nextEntryId === null) {
+        assert.match(observed.error?.message ?? "", /STATE_CONFLICT.*legacy state requires/);
+        complete = true; break;
+      }
+      assert.match(observed.error?.message ?? "", /STATE_CONFLICT.*pending/);
+    }
+    assert.ok(complete, `${name} must finish the bounded legacy fixture`);
+  }
+  manager.branch(cleanLeaf);
+  await providers.lifecycle("session_tree");
+  for (const name of names) {
+    let ready = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      append(`Clean branch ${name} ${attempt}`);
+      const observed = await observe(name, `clean-branch-${attempt}`, () => providers.execute(name, inputs[name]));
+      if (!observed.error) {
+        assert.deepEqual(observed.result, expected[name]); ready = true; break;
+      }
+      assert.match(observed.error.message, /STATE_CONFLICT.*pending/);
+      assert.equal(observed.cursor.legacySeen, false, "off-branch legacy cursor must not be reused");
+    }
+    assert.ok(ready, `${name} must resolve the clean selected branch`);
+  }
+  await providers.lifecycle("session_shutdown");
 });
 
 // One focused scenario. The only simulated field is the session descriptor's st_dev.
