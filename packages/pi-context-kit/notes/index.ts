@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider, sameScope, type ProviderPage } from "@context-kit/protocol";
 import { registerStateTransferProvider, StateTransferError } from "@context-kit/protocol/transfer";
 import { projectNotesPage } from "@grounded/pi-core/context-adapters";
@@ -59,7 +59,11 @@ export default function contextNotes(pi: ExtensionAPI, options: NotesOptions = {
     lifecycleEpoch++; store.close(); context = undefined;
     for (const remove of removers) { try { remove(); } catch { /* Cleanup cannot fail session shutdown. */ } }
   });
-  pi.on("context", (event) => {
+  // Pi 0.87's ordinary context hook folds system anchors after any append.
+  const [piMajor, piMinor] = VERSION.split(".").map(Number);
+  const contextEvent = piMajor > 0 || (piMajor === 0 && piMinor >= 87) ? "context_with_system" : "context";
+  // Keep the Pi 0.85 type target. This handler preserves the full input and only appends state.
+  pi.on(contextEvent as "context", (event) => {
     const state = store.stateView();
     const readiness = store.readiness();
     const text = readiness !== "ready" ? `[notes state] ${readiness}${store.isLegacy() ? "; explicit /notes-import required" : ""}`
