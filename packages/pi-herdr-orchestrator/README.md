@@ -29,6 +29,16 @@ The lifecycle check uses the locked Pi peer by default. To run that same check w
 ORCHESTRATOR_TEST_SDK_ROOT=/path/to/pi-coding-agent node --test --test-name-pattern='managed child lifecycle' checks/settings.test.mjs
 ```
 
+## Finite event waits
+
+`orchestrate` with `action: "wait"` returns queued events or terminal notices for 1–8 registered runs. `timeoutMs` defaults to 30000 and accepts up to 600000. One monotonic budget starts at tool execution entry and includes validation, context commands, lock admission, channel work, and event watching. Activity does not reset it. The domain lock is released during watcher sleep. Each later scan loads fresh registry state under the lock.
+
+`timeoutMs: 0` polls once without event-watch sleep. It has a fixed 5000 ms work allowance for setup, the scan, and delivery bookkeeping. Zero does not mean zero elapsed execution time. If the budget expires before context and run validation finish, the tool reports `WAIT_DEADLINE_EXCEEDED`. After validation, an empty `timedOut: true` result means no batch was delivered. It does not mean the child failed or stopped.
+
+The deadline stops admission of new work. Started filesystem operations, exact read-helper shutdown, watcher cleanup, and an admitted bounded delivery commit must settle before return. These operations or an event-loop/kernel stall can exceed the requested time. Host abort stops the wait, not the child. An abort during an admitted delivery commit lets that bookkeeping finish. The existing window between saved delivery cursors and Pi recording the tool result remains; this is not an exactly-once receipt protocol.
+
+Event order, output caps, exact assignment checks, and separate UI notification cursors are unchanged. A UI notification does not resume the model. The final tool return supplies the model-visible batch. Full results still require explicit `collect`. Longer waits do not add activity snapshots, infer progress from terminal text, or provide cold-session wakeups.
+
 ## Managed-child restore
 
 A validated child saves one versioned `pi-herdr-orchestrator:child-binding` custom entry in its native Pi session. The entry contains only the exact registry domain, agent identity/generation, and native session ID/file. It is a locator, not authorization, and is excluded from model context. It contains no assignment, environment snapshot, or credential.

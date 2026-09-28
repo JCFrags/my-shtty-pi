@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { JsonObject } from "./types.js";
+import { runWaitCommand, type WaitScope } from "./wait-scope.js";
 
 const execFile = promisify(execFileCallback);
 const MAX_BUFFER = 256 * 1024;
@@ -69,15 +70,19 @@ export class HerdrCli {
     this.binary = binary;
   }
 
-  private async run(binary: string, args: string[]): Promise<string> {
+  private async run(binary: string, args: string[], scope?: WaitScope): Promise<string> {
     try {
-      const result = await execFile(binary, args, {
+      const options = {
         env: { ...process.env },
-        encoding: "utf8",
+        encoding: "utf8" as const,
         maxBuffer: MAX_BUFFER,
-      });
+      };
+      const result = scope
+        ? await runWaitCommand(scope, binary, args, options)
+        : await execFile(binary, args, options);
       return result.stdout;
     } catch (cause: unknown) {
+      scope?.check();
       const failure = cause as { code?: string | number; stderr?: unknown };
       const parsedCode =
         typeof failure.stderr === "string"
@@ -94,8 +99,8 @@ export class HerdrCli {
     }
   }
 
-  private async json(args: string[]): Promise<unknown> {
-    const stdout = (await this.run(this.binary, args)).trim();
+  private async json(args: string[], scope?: WaitScope): Promise<unknown> {
+    const stdout = (await this.run(this.binary, args, scope)).trim();
     if (stdout.length === 0) return {};
     let parsed: unknown;
     try {
@@ -165,9 +170,9 @@ export class HerdrCli {
     return responseResult(await this.json(["tab", "close", tabId]));
   }
 
-  async paneCurrent(): Promise<JsonObject> {
+  async paneCurrent(scope?: WaitScope): Promise<JsonObject> {
     return responseObject(
-      await this.json(["pane", "current", "--current"]),
+      await this.json(["pane", "current", "--current"], scope),
       "pane",
     );
   }

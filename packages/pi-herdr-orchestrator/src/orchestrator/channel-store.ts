@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { watch, type FSWatcher } from "node:fs";
 import {
   chmod,
   link,
@@ -11,12 +12,18 @@ import {
   rmdir,
   stat,
   unlink,
-  watch,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { domainDirectoryFor } from "./store.js";
 import type { ChannelEvent, RunResult } from "./types.js";
+import { WaitStopped, type WaitScope } from "./wait-scope.js";
+
+type ChangeOutcome =
+  | { kind: "changed" }
+  | { kind: "aborted"; reason: unknown }
+  | { kind: "error"; error: ChannelStoreError };
+export type ChangeWait = { changed: Promise<ChangeOutcome>; close(): Promise<void> };
 const MAX_FILE_BYTES = 24 * 1024,
   MAX_PENDING_PER_RUN = 256,
   ALLOCATOR_ATTEMPTS = 40,
@@ -30,13 +37,17 @@ export class ChannelStoreError extends Error {
     this.code = code;
   }
 }
-async function readJson<T>(path: string): Promise<T> {
+async function readJson<T>(path: string, scope?: WaitScope): Promise<T> {
   try {
+    scope?.check();
     if ((await stat(path)).size > MAX_FILE_BYTES)
       throw new ChannelStoreError("CHANNEL_RECORD_TOO_LARGE");
-    return JSON.parse(await readFile(path, "utf8")) as T;
+    scope?.check();
+    const raw = await readFile(path, "utf8");
+    scope?.check();
+    return JSON.parse(raw) as T;
   } catch (e) {
-    if (e instanceof ChannelStoreError) throw e;
+    if (e instanceof ChannelStoreError || e instanceof WaitStopped) throw e;
     throw new ChannelStoreError(
       (e as { code?: string }).code === "ENOENT"
         ? "RESULT_NOT_READY"
@@ -71,21 +82,26 @@ export class ChannelStore {
     this.eventsDirectory = join(this.directory, "events");
     this.resultsDirectory = join(this.directory, "results");
   }
-  async ensure() {
+  async ensure(scope?: WaitScope) {
+    scope?.check();
     await mkdir(this.eventsDirectory, { recursive: true, mode: 0o700 });
+    scope?.check();
     await mkdir(this.resultsDirectory, { recursive: true, mode: 0o700 });
-    await Promise.all(
-      [this.directory, this.eventsDirectory, this.resultsDirectory].map((p) =>
-        chmod(p, 0o700).catch(() => undefined),
-      ),
-    );
+    for (const p of [this.directory, this.eventsDirectory, this.resultsDirectory]) {
+      scope?.check();
+      await chmod(p, 0o700).catch(() => undefined);
+    }
+    scope?.check();
   }
-  private async runDirectory(runId: string) {
+  private async runDirectory(runId: string, scope?: WaitScope) {
     if (!validRunId(runId)) throw new ChannelStoreError("INVALID_RUN_ID");
-    await this.ensure();
+    await this.ensure(scope);
     const d = join(this.eventsDirectory, runId);
+    scope?.check();
     await mkdir(d, { recursive: true, mode: 0o700 });
+    scope?.check();
     await chmod(d, 0o700).catch(() => undefined);
+    scope?.check();
     return d;
   }
   private async atomicReplace(path: string, value: unknown): Promise<void> {
@@ -125,9 +141,10 @@ export class ChannelStore {
       await unlink(tmp).catch(() => undefined);
     }
   }
-  private async acquireAllocator(runDirectory: string): Promise<AllocatorLock> {
+  private async acquireAllocator(runDirectory: string, scope?: WaitScope): Promise<AllocatorLock> {
     const lockPath = join(runDirectory, ".sequence.lock");
     for (let attempt = 0; attempt < ALLOCATOR_ATTEMPTS; attempt++) {
+      scope?.check();
       const token = randomUUID();
       try {
         await mkdir(lockPath, { mode: 0o700 });
@@ -144,6 +161,7 @@ export class ChannelStore {
       } catch (error) {
         const code = (error as { code?: string }).code;
         if (code === "ENOENT") {
+          scope?.check();
           await mkdir(runDirectory, { recursive: true, mode: 0o700 });
           continue;
         }
@@ -178,6 +196,7 @@ export class ChannelStore {
           stale = age > STALE_LOCK_MS;
         }
         if (stale) {
+          scope?.check();
           const tombstone = join(
             runDirectory,
             `.sequence.stale.${process.pid}.${randomUUID()}`,
@@ -190,7 +209,8 @@ export class ChannelStore {
             if ((reclaimError as { code?: string }).code === "ENOENT") continue;
           }
         }
-        await new Promise((resolve) => setTimeout(resolve, ALLOCATOR_RETRY_MS));
+        if (scope) await scope.delay(ALLOCATOR_RETRY_MS);
+        else await new Promise((resolve) => setTimeout(resolve, ALLOCATOR_RETRY_MS));
       }
     }
     throw new ChannelStoreError("CHANNEL_ALLOCATOR_BUSY");
@@ -297,9 +317,9 @@ export class ChannelStore {
     if (await this.immutable(path, result)) return { result, cancelled: true };
     return { result: await readJson<RunResult>(path), cancelled: false };
   }
-  async result(runId: string): Promise<RunResult | undefined> {
+  async result(runId: string, scope?: WaitScope): Promise<RunResult | undefined> {
     try {
-      return await readJson<RunResult>(this.resultPath(runId));
+      return await readJson<RunResult>(this.resultPath(runId), scope);
     } catch (e) {
       if (e instanceof ChannelStoreError && e.code === "RESULT_NOT_READY")
         return undefined;
@@ -310,13 +330,15 @@ export class ChannelStore {
     runId: string,
     d: string,
     deliveredFloor: number,
+    scope?: WaitScope,
   ): Promise<void> {
+      scope?.check();
       let nativeNames = (await readdir(d))
         .filter((name) => /^\d{12}\.json$/u.test(name))
         .sort();
       const migrated = new Set<string>();
       for (const name of nativeNames) {
-        const event = await readJson<ChannelEvent>(join(d, name));
+        const event = await readJson<ChannelEvent>(join(d, name), scope);
         if (event.legacyEventId) migrated.add(event.legacyEventId);
       }
       const legacy: Array<{ name: string; old: Record<string, unknown> }> = [];
@@ -324,13 +346,13 @@ export class ChannelStore {
         .filter((candidate) => /^[0-9]{13}-[0-9a-f-]{36}\.json$/u.test(candidate))
         .sort()) {
         const old = await readJson<Record<string, unknown>>(
-          join(this.eventsDirectory, name),
+          join(this.eventsDirectory, name), scope,
         );
         if (old.version === 1 && old.runId === runId) legacy.push({ name, old });
       }
       let highWater = 0;
       try {
-        const stored = await readJson<{ sequence: number }>(join(d, ".sequence.json"));
+        const stored = await readJson<{ sequence: number }>(join(d, ".sequence.json"), scope);
         if (!Number.isSafeInteger(stored.sequence) || stored.sequence < 0)
           throw new ChannelStoreError("CHANNEL_RECORD_MALFORMED");
         highWater = stored.sequence;
@@ -344,6 +366,8 @@ export class ChannelStore {
         nativeNames.length ? Number(nativeNames.at(-1)!.slice(0, 12)) : 0,
       );
       for (const { name, old } of legacy) {
+        // Finish one admitted publication/removal unit before stopping.
+        scope?.check();
         const legacyEventId = name.slice(0, -5);
         if (migrated.has(legacyEventId)) {
           await unlink(join(this.eventsDirectory, name)).catch((error) => {
@@ -383,11 +407,11 @@ export class ChannelStore {
         highWater = sequence;
       }
   }
-  private async migrateLegacy(runId: string, deliveredFloor: number): Promise<void> {
-    const d = await this.runDirectory(runId);
-    const lock = await this.acquireAllocator(d);
+  private async migrateLegacy(runId: string, deliveredFloor: number, scope?: WaitScope): Promise<void> {
+    const d = await this.runDirectory(runId, scope);
+    const lock = await this.acquireAllocator(d, scope);
     try {
-      await this.migrateLegacyLocked(runId, d, deliveredFloor);
+      await this.migrateLegacyLocked(runId, d, deliveredFloor, scope);
     } finally {
       await this.releaseAllocator(lock).catch(() => undefined);
     }
@@ -395,30 +419,34 @@ export class ChannelStore {
   async events(
     runIds: string[],
     deliveredFloors: ReadonlyMap<string, number> = new Map(),
-    options: { migrateLegacy?: boolean } = {},
+    options: { migrateLegacy?: boolean; scope?: WaitScope } = {},
   ): Promise<ChannelEvent[]> {
     const events: ChannelEvent[] = [];
+    const scope = options.scope;
     for (const runId of runIds) {
+      scope?.check();
       if (options.migrateLegacy !== false)
-        await this.migrateLegacy(runId, deliveredFloors.get(runId) ?? 0);
-      const d = await this.runDirectory(runId);
+        await this.migrateLegacy(runId, deliveredFloors.get(runId) ?? 0, scope);
+      const d = await this.runDirectory(runId, scope);
       const names = (await readdir(d))
         .filter((name) => /^\d{12}\.json$/u.test(name))
         .sort()
         .slice(0, MAX_PENDING_PER_RUN);
       for (const name of names)
-        events.push(await readJson<ChannelEvent>(join(d, name)));
+        events.push(await readJson<ChannelEvent>(join(d, name), scope));
     }
     return events;
   }
-  async discardLegacy(eventIds: string[]): Promise<void> {
-    for (const eventId of eventIds)
+  async discardLegacy(eventIds: string[], scope?: WaitScope): Promise<void> {
+    for (const eventId of eventIds) {
+      scope?.check();
       if (/^[0-9]{13}-[0-9a-f-]{36}$/u.test(eventId))
         await unlink(join(this.eventsDirectory, `${eventId}.json`)).catch(
           (e) => {
             if ((e as { code?: string }).code !== "ENOENT") throw e;
           },
         );
+    }
   }
   async acknowledge(runId: string, through: number): Promise<void> {
     const d = await this.runDirectory(runId);
@@ -430,6 +458,70 @@ export class ChannelStore {
     }
     await rm(d, { recursive: false }).catch(() => undefined);
   }
+  async armChangeWait(
+    runIds: string[],
+    signal?: AbortSignal,
+    scope?: WaitScope,
+  ): Promise<ChangeWait> {
+    const check = () => {
+      scope?.check();
+      if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
+    };
+    check();
+    const directories: string[] = [];
+    // Sequential preparation cannot leave sibling directory writes after failure.
+    for (const id of runIds) {
+      check();
+      directories.push(await this.runDirectory(id, scope));
+    }
+    await this.ensure(scope);
+    check();
+    const watchers: FSWatcher[] = [];
+    const closures: Promise<void>[] = [];
+    let closed: Promise<void> | undefined;
+    let settle = (_outcome: ChangeOutcome): void => undefined;
+    const changed = new Promise<ChangeOutcome>((resolve) => { settle = resolve; });
+    const abort = () => settle({ kind: "aborted", reason: signal?.reason ?? new Error("Aborted") });
+    const close = (): Promise<void> => {
+      if (!closed) {
+        signal?.removeEventListener("abort", abort);
+        watchers.forEach((watcher) => watcher.close());
+        closed = Promise.all(closures).then(() => undefined);
+      }
+      return closed;
+    };
+    const install = (directory: string, relevant: (name: string) => boolean) => {
+      check();
+      const watcher = watch(directory, (_event, filename) => {
+        if (filename === null || relevant(String(filename))) settle({ kind: "changed" });
+      });
+      watchers.push(watcher);
+      closures.push(new Promise<void>((resolve) => watcher.once("close", () => resolve())));
+      watcher.on("error", () => {
+        const error = new ChannelStoreError("CHANNEL_WATCH_FAILED");
+        settle({ kind: "error", error });
+        scope?.stop(error);
+        void close();
+      });
+    };
+    try {
+      // Ignore directory chmod, allocator and temporary-file hints from our reads.
+      for (const directory of directories)
+        install(directory, (name) => /^\d{12}\.json$/u.test(name));
+      const resultNames = new Set(runIds.map((id) => `${id}.json`));
+      install(this.resultsDirectory, (name) => resultNames.has(name));
+      install(this.eventsDirectory, (name) => /^[0-9]{13}-[0-9a-f-]{36}\.json$/u.test(name));
+      signal?.addEventListener("abort", abort, { once: true });
+      check();
+      return { changed, close };
+    } catch (error) {
+      await close();
+      check();
+      if (error instanceof WaitStopped) throw error;
+      throw new ChannelStoreError("CHANNEL_WATCH_FAILED");
+    }
+  }
+
   async waitForChange(
     runIds: string[],
     timeoutMs: number,
@@ -437,40 +529,26 @@ export class ChannelStore {
   ): Promise<void> {
     if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
     if (timeoutMs <= 0) return;
-    const directories = await Promise.all(
-      runIds.map((id) => this.runDirectory(id)),
-    );
-    await this.ensure();
-    const controllers = directories
-      .map(() => new AbortController())
-      .concat(new AbortController());
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (aborted = false) => {
-        if (settled) return;
-        settled = true;
-        controllers.forEach((c) => c.abort());
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
-        if (aborted) reject(signal?.reason ?? new Error("Aborted"));
-        else resolve();
-      };
-      const abort = () => finish(true);
-      const timer = setTimeout(() => finish(), timeoutMs);
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) return abort();
-      const consume = async (d: string, signal: AbortSignal) => {
-        try {
-          for await (const _ of watch(d, { signal })) {
-            finish();
-            break;
-          }
-        } catch {
-          finish();
-        }
-      };
-      directories.forEach((d, i) => void consume(d, controllers[i]!.signal));
-      void consume(this.resultsDirectory, controllers.at(-1)!.signal);
-    });
+    let waiting: ChangeWait;
+    try {
+      waiting = await this.armChangeWait(runIds, signal);
+    } catch (error) {
+      // The existing cancellation observer treats watcher failure as a wake.
+      if (error instanceof ChannelStoreError && error.code === "CHANNEL_WATCH_FAILED") return;
+      throw error;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const outcome = await Promise.race([
+        waiting.changed,
+        new Promise<ChangeOutcome>((resolve) => {
+          timer = setTimeout(() => resolve({ kind: "changed" }), timeoutMs);
+        }),
+      ]);
+      if (outcome.kind === "aborted") throw outcome.reason;
+    } finally {
+      clearTimeout(timer);
+      await waiting.close();
+    }
   }
 }
