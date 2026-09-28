@@ -62,7 +62,7 @@ Two focused synthetic scenarios check selective admission below the preferred al
 
 Use the current session's normal agent request path, effective instructions, model, tools, and conversation. A compaction request adds a small summary instruction at the end. It must not replace the system prompt with a summarizer role or create a new routing session merely for summarization.
 
-Bind the requested summary to the session, consumed boundary, and actual assistant submission. Later tool results and user input must not be falsely described as consumed. Use public Pi hooks. Do not patch private AgentSession methods or interrupt unrelated tools and agents.
+Bind the requested summary to the session, consumed boundary, and actual assistant submission. Pi can persist native system prompt or tool-definition updates after `turn_end` and before the summary request reaches the `context` hook. These pre-consumption updates belong to the summary-producing request and do not interrupt it. System updates after consumption still invalidate the submission or result boundary. Keep this exception out of general metadata handling. Later tool results and user input must not be falsely described as consumed. Use public Pi hooks. Do not patch private AgentSession methods or interrupt unrelated tools and agents.
 
 Prompt-cache reuse is a verification goal, not a consequence that follows from using the same model. Compare the effective request prefix and provider usage. Report unsupported provider evidence, cold-cache behavior, or unrelated prefix changes honestly.
 

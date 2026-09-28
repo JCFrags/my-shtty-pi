@@ -20,7 +20,10 @@ test("same-session summary requires observed request, sole assistant submission 
   const custom = { role: "custom", customType: SESSION_AGENT_SUMMARY_CUSTOM_TYPE, content: prompt };
   const entries = new Map<string, SessionEntryLike>([
     ["source", { type: "message", id: "source", parentId: null, message: { role: "user", content: "Keep the approved scope." } }],
-    ["request", { type: "custom_message", id: "request", parentId: "source", customType: custom.customType, content: prompt }],
+    ["system", { type: "message", id: "system", parentId: "source", message: {
+      role: "system", content: "", sections: { tools: "Updated native tool definitions" }, toolsAdded: [],
+    } }],
+    ["request", { type: "custom_message", id: "request", parentId: "system", customType: custom.customType, content: prompt }],
   ]);
   const view = (leafId: string, now = 1100) => ({ scope: { ...scope, leafId }, now, getEntry: (id: string) => entries.get(id) });
   assert.equal(consumeSessionAgentSummaryRequest(request, view("source"), []), undefined);
@@ -40,6 +43,13 @@ test("same-session summary requires observed request, sole assistant submission 
   const accepted = acceptSessionAgentSummary(consumed, submission, { ...view("assistant"), toolCallId: call.id });
   assert.equal(accepted.submissionAssistantLeafId, "assistant");
   assert.equal(accepted.authority, "derived");
+  entries.set("late-system", { type: "message", id: "late-system", parentId: "request", message: {
+    role: "system", content: "Changed after the request was consumed.",
+  } });
+  entries.set("late-assistant", { type: "message", id: "late-assistant", parentId: "late-system", message: assistant });
+  assert.throws(() => acceptSessionAgentSummary(consumed, submission,
+    { ...view("late-assistant"), toolCallId: call.id }), /submission-interrupted/);
+  entries.delete("late-system"); entries.delete("late-assistant");
   assert.throws(() => settleSessionAgentSummary(accepted, view("assistant")), /result-unavailable/);
   assert.equal(JSON.stringify([...entries.values()]), beforeAccept, "request and submission guards do not rewrite source entries");
   assert.throws(() => acceptSessionAgentSummary(consumed, { ...submission, summary: "Different" },
@@ -55,6 +65,10 @@ test("same-session summary requires observed request, sole assistant submission 
   assert.equal(ready.submissionResultLeafId, "result");
   assert.equal(ready.readyScope.leafId, "receipt");
   validateSessionAgentSummary(ready, view("receipt"));
+  entries.set("late-result-system", { type: "message", id: "late-result-system", parentId: "receipt", message: {
+    role: "system", content: "Changed after the submission.",
+  } });
+  assert.throws(() => settleSessionAgentSummary(accepted, view("late-result-system")), /result-invalid/);
   for (const changed of [{ ...scope, leafId: "other" }, { ...ready.readyScope, epoch: 2 },
     { ...ready.readyScope, sessionId: "replacement" }, { ...ready.readyScope, model: { ...scope.model, id: "other-model" } }]) {
     assert.throws(() => validateSessionAgentSummary(ready, { scope: changed, now: 1100 }), /changed/);
