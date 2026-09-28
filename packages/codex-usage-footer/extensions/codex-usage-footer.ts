@@ -44,6 +44,28 @@ const DEFAULT_SPARK = Object.freeze({ weeklyUsage: false, weeklyReset: false, fi
 const DEFAULT_BANKED = Object.freeze({ count: true, expiry: true });
 export const DEFAULT_DISPLAY_PREFERENCES: DisplayPreferences = Object.freeze({ version: 4, showFooter: true, showForecast: true, standard: DEFAULT_STANDARD, spark: DEFAULT_SPARK, banked: DEFAULT_BANKED, usageFormat: "remaining", resetFormat: "friendly-countdown" });
 
+export type DisplayPreset = "compact" | "comfortable" | "verbose";
+const DISPLAY_PRESET_ITEMS = [
+	{ value: "compact", label: "Compact", description: "Standard weekly usage, reset countdown, and banked count." },
+	{ value: "comfortable", label: "Comfortable", description: "Standard weekly usage/reset and banked count/expiry, with local times and countdowns." },
+	{ value: "verbose", label: "Verbose", description: "All reported Standard and Spark windows, plus banked count/expiry, with exact local times." },
+] as const;
+const ALL_WINDOW_FIELDS = Object.freeze({ weeklyUsage: true, weeklyReset: true, fiveHourUsage: true, fiveHourReset: true });
+const DISPLAY_PRESETS: Readonly<Record<DisplayPreset, Pick<DisplayPreferences, "standard" | "spark" | "banked" | "resetFormat">>> = {
+	compact: { standard: DEFAULT_STANDARD, spark: DEFAULT_SPARK, banked: { count: true, expiry: false }, resetFormat: "countdown" },
+	comfortable: { standard: DEFAULT_STANDARD, spark: DEFAULT_SPARK, banked: DEFAULT_BANKED, resetFormat: "friendly-countdown" },
+	verbose: { standard: ALL_WINDOW_FIELDS, spark: ALL_WINDOW_FIELDS, banked: DEFAULT_BANKED, resetFormat: "exact" },
+};
+export function applyDisplayPreset(current: DisplayPreferences, preset: DisplayPreset): DisplayPreferences {
+	const values = DISPLAY_PRESETS[preset];
+	return { ...current, standard: { ...current.standard, ...values.standard }, spark: { ...current.spark, ...values.spark }, banked: { ...current.banked, ...values.banked }, resetFormat: values.resetFormat };
+}
+export function classifyDisplayPreset(prefs: DisplayPreferences): DisplayPreset | "custom" {
+	const sameWindows = (a: WindowDisplayPreferences, b: WindowDisplayPreferences) => a.weeklyUsage === b.weeklyUsage && a.weeklyReset === b.weeklyReset && a.fiveHourUsage === b.fiveHourUsage && a.fiveHourReset === b.fiveHourReset;
+	return DISPLAY_PRESET_ITEMS.find(({ value }) => { const preset = DISPLAY_PRESETS[value]; return sameWindows(prefs.standard, preset.standard) && sameWindows(prefs.spark, preset.spark) && prefs.banked.count === preset.banked.count && prefs.banked.expiry === preset.banked.expiry && prefs.resetFormat === preset.resetFormat; })?.value ?? "custom";
+}
+function displayPresetLabel(prefs: DisplayPreferences): string { return DISPLAY_PRESET_ITEMS.find(({ value }) => value === classifyDisplayPreset(prefs))?.label ?? "Custom"; }
+
 type UiContext = { hasUI: boolean; mode?: string; model?: { api?: string; provider?: string }; ui: { setStatus(key: string, value: string | undefined): void; notify(message: string, level?: "info" | "warning" | "error"): void; custom<T>(factory: (tui: { requestRender(): void }, theme: any, keybindings: unknown, done: (value: T) => void) => any): Promise<T | undefined> } };
 function isWindowPreferences(value: unknown): value is WindowDisplayPreferences {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false; const r = value as Record<string, unknown>;
@@ -125,7 +147,7 @@ function formatDetailedSnapshot(snapshot: UsageSnapshot, prefs: DisplayPreferenc
 }
 export function formatCodexUsageStatus(headers: HeaderRecord, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string {
 	const snapshot = snapshotFromHeaders(headers, nowMs); const text = snapshot ? formatFooterSnapshot(snapshot, prefs, nowMs, timeZone) : "";
-	return `Codex ${text || (snapshot ? "configured windows not reported" : "quota/reset unavailable")}`;
+	return text || (snapshot ? "configured windows not reported" : "quota/reset unavailable");
 }
 function ageText(ageMs: number): string { if (ageMs < 60_000) return `${Math.max(0, Math.floor(ageMs / 1000))}s`; if (ageMs < 3_600_000) return `${Math.floor(ageMs / 60_000)}m`; return `${Math.floor(ageMs / 3_600_000)}h`; }
 type CountSource = Readonly<{ availableCount: number; observedAt: number; source: "usage summary" | "details" }>;
@@ -140,11 +162,11 @@ function nextKnownExpiry(cache: QuotaCache | undefined, nowMs: number, countSour
 export function formatBankedFooter(cache: QuotaCache | undefined, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string | undefined {
 	if (!prefs.banked.count && !prefs.banked.expiry) return undefined; const parts: string[] = []; const countSource = newestBankedCount(cache); const count = countSource?.availableCount; const staleAfter = cache?.preferences?.pollIntervalMs ?? STALE_AFTER_MS;
 	if (prefs.banked.count) parts.push(count === undefined ? "count unknown" : `${count}${nowMs - countSource!.observedAt > staleAfter ? " [stale]" : ""}`);
-	if (prefs.banked.expiry) { const next = nextKnownExpiry(cache, nowMs, countSource); if (next) { const formatted = formatResetTime(next.time / 1000, nowMs, timeZone, prefs.resetFormat, false, true)?.replace(/^reset /, ""); const detailsStale = !!cache?.bankedDetails && (nowMs - cache.bankedDetails.observedAt > staleAfter || !!cache.bankedDetailsLastErrorAt && cache.bankedDetailsLastErrorAt > cache.bankedDetails.observedAt); parts.push(`${next.incomplete ? "next known/listed expiry" : "next expires"} ${formatted ?? "Unknown"}${detailsStale ? " [stale]" : ""}`); } else if (count !== 0) parts.push("next expiry unknown"); }
+	if (prefs.banked.expiry) { const next = nextKnownExpiry(cache, nowMs, countSource); if (next) { const formatted = formatResetTime(next.time / 1000, nowMs, timeZone, prefs.resetFormat, false, true)?.replace(/^reset /, ""); const detailsStale = !!cache?.bankedDetails && (nowMs - cache.bankedDetails.observedAt > staleAfter || !!cache.bankedDetailsLastErrorAt && cache.bankedDetailsLastErrorAt > cache.bankedDetails.observedAt); parts.push(`${next.incomplete ? "next known/listed expiry" : "expires"} ${formatted ?? "Unknown"}${detailsStale ? " [stale]" : ""}`); } else if (count !== 0) parts.push("next expiry unknown"); }
 	return `Banked ${parts.join(" · ")}`;
 }
 export function formatCachedStatus(cache: QuotaCache | undefined, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string {
-	const parts: string[] = []; if (hasEnabledWindowFields(prefs)) { const snapshot = latestSnapshot(cache); const quota = snapshot ? (() => { const text = formatFooterSnapshot(snapshot, prefs, nowMs, timeZone); const age = Math.max(0, nowMs - snapshot.observedAt); const staleAfter = cache?.preferences?.pollIntervalMs ?? STALE_AFTER_MS; return `${text || "configured windows not reported"}${age > staleAfter ? `; stale ${ageText(age)}` : ""}`; })() : cache?.lastErrorAt ? "quota/reset unavailable (last poll failed)" : "quota/reset waiting"; parts.push(`Codex ${quota}`); }
+	const parts: string[] = []; if (hasEnabledWindowFields(prefs)) { const snapshot = latestSnapshot(cache); const quota = snapshot ? (() => { const text = formatFooterSnapshot(snapshot, prefs, nowMs, timeZone); const age = Math.max(0, nowMs - snapshot.observedAt); const staleAfter = cache?.preferences?.pollIntervalMs ?? STALE_AFTER_MS; return `${text || "configured windows not reported"}${age > staleAfter ? `; stale ${ageText(age)}` : ""}`; })() : cache?.lastErrorAt ? "quota/reset unavailable (last poll failed)" : "quota/reset waiting"; parts.push(quota); }
 	const banked = formatBankedFooter(cache, nowMs, timeZone, prefs); if (banked) parts.push(banked); return parts.join("; ");
 }
 export function formatUsageDetails(cache: QuotaCache | undefined, nowMs = Date.now(), timeZone?: string, prefs = DEFAULT_DISPLAY_PREFERENCES): string {
@@ -176,12 +198,12 @@ export function formatHistory(cache: QuotaCache | undefined, nowMs = Date.now(),
 
 export class KeyboardMenu<T extends string> {
 	private index = 0; readonly items: readonly Readonly<{ value: T; label: string; description?: string }>[];
-	constructor(items: readonly Readonly<{ value: T; label: string; description?: string }>[]) { this.items = items; }
+	constructor(items: readonly Readonly<{ value: T; label: string; description?: string }>[], initialValue?: T) { this.items = items; this.index = Math.max(0, items.findIndex((item) => item.value === initialValue)); }
 	get selectedIndex(): number { return this.index; }
 	handleInput(data: string): Readonly<{ selected?: T; cancelled?: true; changed?: true }> { if (matchesKey(data, Key.up)) { this.index = (this.index + this.items.length - 1) % this.items.length; return { changed: true }; } if (matchesKey(data, Key.down)) { this.index = (this.index + 1) % this.items.length; return { changed: true }; } if (matchesKey(data, Key.enter)) return { selected: this.items[this.index]!.value }; if (matchesKey(data, Key.escape)) return { cancelled: true }; return {}; }
 }
-async function showMenu<T extends string>(ctx: UiContext, title: string, items: readonly Readonly<{ value: T; label: string; description?: string }>[]): Promise<T | null> {
-	const result = await ctx.ui.custom<T | null>((tui, theme, _keys, done) => { const menu = new KeyboardMenu(items); return { render(width: number) { return [truncateToWidth(theme.fg("accent", theme.bold(title)), width), "", ...items.flatMap((item, index) => [truncateToWidth(`${index === menu.selectedIndex ? ">" : " "} ${item.label}`, width), ...(item.description ? [truncateToWidth(`    ${item.description}`, width)] : [])]), "", truncateToWidth(theme.fg("dim", "↑↓ navigate · enter select · esc back"), width)]; }, invalidate() {}, handleInput(data: string) { const event = menu.handleInput(data); if (event.selected) done(event.selected); else if (event.cancelled) done(null); else if (event.changed) tui.requestRender(); } }; });
+async function showMenu<T extends string>(ctx: UiContext, title: string, items: readonly Readonly<{ value: T; label: string; description?: string }>[], initialValue?: T, note?: string): Promise<T | null> {
+	const result = await ctx.ui.custom<T | null>((tui, theme, _keys, done) => { const menu = new KeyboardMenu(items, initialValue); return { render(width: number) { return [truncateToWidth(theme.fg("accent", theme.bold(title)), width), "", ...(note ? [truncateToWidth(note, width), ""] : []), ...items.flatMap((item, index) => [truncateToWidth(`${index === menu.selectedIndex ? ">" : " "} ${item.label}`, width), ...(item.description ? [truncateToWidth(`    ${item.description}`, width)] : [])]), "", truncateToWidth(theme.fg("dim", "↑↓ navigate · enter select · esc back"), width)]; }, invalidate() {}, handleInput(data: string) { const event = menu.handleInput(data); if (event.selected) done(event.selected); else if (event.cancelled) done(null); else if (event.changed) tui.requestRender(); } }; });
 	return result ?? null;
 }
 async function showText(ctx: UiContext, title: string, body: string): Promise<void> {
@@ -236,12 +258,13 @@ export default function usageFooter(pi: ExtensionAPI) {
 		const model = selectedModel!; const authResult = await ctx.modelRegistry.getApiKeyAndHeaders(model); if (ownGeneration !== generation || !authResult.ok || !authResult.apiKey) return; const identity = resolveAccountIdentity(authResult.apiKey); if (!identity) return;
 		coordinator = new SharedQuotaCoordinator({ accountKey: identity.accountKey, resolveAuth: async () => { const current = await ctx.modelRegistry.getApiKeyAndHeaders(model); return current.ok && current.apiKey ? resolveAccountIdentity(current.apiKey) : undefined; }, onUpdate: (next) => { if (ownGeneration !== generation) return; cache = next; const migrated = migrateDisplayPreferences(next?.preferences?.display); if (migrated) sharedDisplay = migrated; sharedDisplayResolved = true; syncForecastParticipation(); render(); } }); await coordinator.start();
 	};
-	const saveDisplaySetting = async (ctx: UiContext, id: string, value: string): Promise<void> => {
-		if (displayScope === "session") { sessionDisplay = applyDisplaySetting(effectiveDisplay(), id, value); persistSession(); syncForecastParticipation(); render(); return; }
+	const saveDisplayChange = async (ctx: UiContext, transform: (current: DisplayPreferences) => DisplayPreferences): Promise<void> => {
+		if (displayScope === "session") { const display = transform(effectiveDisplay()); pi.appendEntry(SESSION_SETTINGS_ENTRY, { scope: displayScope, display }); sessionDisplay = display; syncForecastParticipation(); render(); return; }
 		if (!coordinator) { ctx.ui.notify("Shared settings require an active Codex OAuth account.", "warning"); return; }
-		const saved = await coordinator.updateDisplayPreferences((current) => applyDisplaySetting(migrateDisplayPreferences(current) ?? DEFAULT_DISPLAY_PREFERENCES, id, value));
+		const saved = await coordinator.updateDisplayPreferences((current) => transform(migrateDisplayPreferences(current) ?? DEFAULT_DISPLAY_PREFERENCES));
 		if (!saved) ctx.ui.notify("Could not save shared display setting. Try again.", "error"); else syncForecastParticipation();
 	};
+	const saveDisplaySetting = (ctx: UiContext, id: string, value: string): Promise<void> => saveDisplayChange(ctx, (current) => applyDisplaySetting(current, id, value));
 	async function oneSetting(ctx: UiContext, title: string, item: SettingItem, change: (value: string) => Promise<void>): Promise<void> {
 		await ctx.ui.custom<void>((tui, theme, _keys, done) => { let writes = Promise.resolve(); const container = new Container(); container.addChild(new Text(theme.fg("accent", theme.bold(title)), 0, 1)); const list = new SettingsList([item], 4, getSettingsListTheme(), (_id, value) => { writes = writes.then(() => change(value)); }, () => { void writes.finally(() => done()); }, { enableSearch: false }); container.addChild(list); return { render: (width: number) => container.render(width), invalidate: () => container.invalidate(), handleInput: (data: string) => { list.handleInput?.(data); tui.requestRender(); } }; });
 	}
@@ -253,19 +276,34 @@ export default function usageFooter(pi: ExtensionAPI) {
 		const prefs = effectiveDisplay().banked; const items: SettingItem[] = [{ id: "banked.count", label: "Banked reset count", currentValue: boolValue(prefs.count), values: ["on", "off"] }, { id: "banked.expiry", label: "Next known expiry", currentValue: boolValue(prefs.expiry), values: ["on", "off"] }];
 		await ctx.ui.custom<void>((tui, theme, _keys, done) => { let writes = Promise.resolve(); const container = new Container(); container.addChild(new Text(theme.fg("accent", theme.bold("Banked resets")), 0, 1)); const list = new SettingsList(items, 6, getSettingsListTheme(), (id, value) => { writes = writes.then(() => saveDisplaySetting(ctx, id, value)); }, () => { void writes.finally(() => done()); }, { enableSearch: false }); container.addChild(list); return { render: (width: number) => container.render(width), invalidate: () => container.invalidate(), handleInput: (data: string) => { list.handleInput?.(data); tui.requestRender(); } }; });
 	}
-	async function displaySettings(ctx: UiContext): Promise<void> {
+	async function presetSettings(ctx: UiContext): Promise<void> {
+		const prefs = effectiveDisplay(); const current = classifyDisplayPreset(prefs);
+		const items = DISPLAY_PRESET_ITEMS.map((item) => ({ ...item, label: `${item.label}${item.value === current ? " (current)" : ""}` }));
+		const choice = await showMenu(ctx, "Display preset", items, current === "custom" ? undefined : current, `Current: ${displayPresetLabel(prefs)}. Show footer, forecast, and Remaining/Used stay unchanged.`);
+		if (choice) await saveDisplayChange(ctx, (latest) => applyDisplayPreset(latest, choice));
+	}
+	async function customizeDisplay(ctx: UiContext): Promise<void> {
 		while (true) {
-			const prefs = effectiveDisplay(); const choice = await showMenu(ctx, "Display settings", [
-				{ value: "scope", label: "Display scope", description: displayScope === "shared" ? "All local sessions" : "This session" }, { value: "footer", label: "Show footer", description: boolValue(prefs.showFooter) },
-				{ value: "standard", label: "Standard Codex" }, { value: "spark", label: "Spark" }, { value: "banked", label: "Banked resets", description: `${boolValue(prefs.banked.count)} count · ${boolValue(prefs.banked.expiry)} expiry` }, { value: "forecast", label: "Tibo Button Forecast", description: boolValue(prefs.showForecast) }, { value: "usage", label: "Usage format", description: usageLabel(prefs.usageFormat) }, { value: "reset", label: "Reset format", description: resetLabel(prefs.resetFormat) },
+			const prefs = effectiveDisplay(); const choice = await showMenu(ctx, "Customize display (advanced)", [
+				{ value: "standard", label: "Standard Codex" }, { value: "spark", label: "Spark" }, { value: "banked", label: "Banked resets", description: `${boolValue(prefs.banked.count)} count · ${boolValue(prefs.banked.expiry)} expiry` }, { value: "usage", label: "Usage format", description: usageLabel(prefs.usageFormat) }, { value: "reset", label: "Reset format", description: resetLabel(prefs.resetFormat) },
 			] as const); if (!choice) return;
 			if (choice === "standard" || choice === "spark") await familySettings(ctx, choice);
 			else if (choice === "banked") await bankedSettings(ctx);
-			else if (choice === "scope") await oneSetting(ctx, "Display scope", { id: "scope", label: "Scope", currentValue: displayScope === "shared" ? "All local sessions" : "This session", values: ["All local sessions", "This session"] }, async (value) => { const changed = switchDisplayScope(sharedDisplay, sessionDisplay, value === "This session" ? "session" : "shared"); displayScope = changed.scope; sessionDisplay = changed.session; persistSession(); syncForecastParticipation(); render(); });
-			else if (choice === "footer") await oneSetting(ctx, "Show footer", { id: "footer", label: "Show footer", currentValue: boolValue(prefs.showFooter), values: ["on", "off"] }, (value) => saveDisplaySetting(ctx, "footer", value));
-			else if (choice === "forecast") await oneSetting(ctx, "Tibo Button Forecast", { id: "forecast", label: "Tibo Button Forecast", currentValue: boolValue(prefs.showForecast), values: ["on", "off"] }, (value) => saveDisplaySetting(ctx, "forecast", value));
 			else if (choice === "usage") await oneSetting(ctx, "Usage format", { id: "usageFormat", label: "Usage format", currentValue: usageLabel(prefs.usageFormat), values: ["Remaining %", "Used %"] }, (value) => saveDisplaySetting(ctx, "usageFormat", value));
 			else await oneSetting(ctx, "Reset format", { id: "resetFormat", label: "Reset format", currentValue: resetLabel(prefs.resetFormat), values: ["Friendly + countdown", "Friendly only", "Countdown only", "Exact local time"] }, (value) => saveDisplaySetting(ctx, "resetFormat", value));
+		}
+	}
+	async function displaySettings(ctx: UiContext): Promise<void> {
+		while (true) {
+			const prefs = effectiveDisplay(); const choice = await showMenu(ctx, "Display settings", [
+				{ value: "scope", label: "Display scope", description: displayScope === "shared" ? "All local sessions" : "This session" }, { value: "preset", label: "Display preset", description: displayPresetLabel(prefs) },
+				{ value: "footer", label: "Show footer", description: boolValue(prefs.showFooter) }, { value: "forecast", label: "Tibo Button Forecast", description: boolValue(prefs.showForecast) }, { value: "customize", label: "Customize display (advanced)", description: "Individual fields and formats" },
+			] as const); if (!choice) return;
+			if (choice === "preset") await presetSettings(ctx);
+			else if (choice === "customize") await customizeDisplay(ctx);
+			else if (choice === "scope") await oneSetting(ctx, "Display scope", { id: "scope", label: "Scope", currentValue: displayScope === "shared" ? "All local sessions" : "This session", values: ["All local sessions", "This session"] }, async (value) => { const changed = switchDisplayScope(sharedDisplay, sessionDisplay, value === "This session" ? "session" : "shared"); displayScope = changed.scope; sessionDisplay = changed.session; persistSession(); syncForecastParticipation(); render(); });
+			else if (choice === "footer") await oneSetting(ctx, "Show footer", { id: "footer", label: "Show footer", currentValue: boolValue(prefs.showFooter), values: ["on", "off"] }, (value) => saveDisplaySetting(ctx, "footer", value));
+			else await oneSetting(ctx, "Tibo Button Forecast", { id: "forecast", label: "Tibo Button Forecast", currentValue: boolValue(prefs.showForecast), values: ["on", "off"] }, (value) => saveDisplaySetting(ctx, "forecast", value));
 		}
 	}
 	async function sharedSettings(ctx: UiContext): Promise<void> {
