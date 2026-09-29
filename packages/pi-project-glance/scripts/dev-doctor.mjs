@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { lstatSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -189,10 +190,11 @@ async function launcherState(path) {
   }
 }
 
-const groundedPackageDefinitions = [
-  { key: "todo", name: "@grounded/pi-tasks", directory: "tasks" },
-  { key: "workplan", name: "@grounded/pi-workplan", directory: "workplan" },
+const nativePackageDefinitions = [
+  { key: "todo", name: "@context-kit/todo", directory: "todo" },
+  { key: "workplan", name: "@context-kit/workplan", directory: "workplan" },
 ];
+const retiredStatePackages = new Set(["@grounded/pi-tasks", "@grounded/pi-notes", "@grounded/pi-workplan"]);
 const summaryEventNames = [
   "pi-todo:request-summary-v1",
   "pi-todo:summary-v1",
@@ -216,61 +218,45 @@ async function regularEntrypoint(path) {
   }
 }
 
-function expectedGroundedSuffix(definition) {
-  return `/packages/grounded-tools/${definition.directory}`;
-}
-
-async function groundedToolsLinkState() {
-  const states = new Map(groundedPackageDefinitions.map((definition) => [definition.key, {
-    present: false,
-    rootMatches: false,
-    root: undefined,
-    entrypointPresent: false,
+async function nativeProvidersLinkState({
+  agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"),
+  providerRoot = process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT,
+} = {}) {
+  const states = new Map(nativePackageDefinitions.map((definition) => [definition.key, {
+    present: false, selectionValid: false, root: undefined, entrypointPresent: false, count: 0,
   }]));
-  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
   let settings;
-  try {
-    settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8"));
-  } catch {
-    return { piListOk: false, states };
-  }
-  const entries = Array.isArray(settings.packages) ? settings.packages : [];
-  const piList = await execFileAsync("pi", ["list"], { env });
-  for (const item of entries) {
+  try { settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")); }
+  catch { return { states, retiredSelected: false }; }
+  let retiredSelected = false;
+  for (const item of Array.isArray(settings.packages) ? settings.packages : []) {
     const source = typeof item === "string" ? item : item?.source;
     const candidate = configuredLocalPath(source, agentDir)
       ?? (typeof source === "string" && source && !source.startsWith("/") && !source.startsWith("~")
-        ? resolve(agentDir, source)
-        : undefined);
+        ? resolve(agentDir, source) : undefined);
     if (!candidate) continue;
     try {
-      const candidateReal = await realpath(candidate);
-      const metadata = JSON.parse(await readFile(join(candidateReal, "package.json"), "utf8"));
-      const definition = groundedPackageDefinitions.find((value) => value.name === metadata.name);
+      const root = await realpath(candidate);
+      const metadata = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+      if (retiredStatePackages.has(metadata.name)) { retiredSelected = true; continue; }
+      const definition = nativePackageDefinitions.find((value) => value.name === metadata.name);
       if (!definition) continue;
       const state = states.get(definition.key);
-      state.present = true;
-      // A retained Glance activation may coexist with independently linked providers.
-      // The explicit repository root still requires an exact realpath match.
-      const providerRoot = process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT ?? resolve(packageRoot, "../..");
-      const expectedRoot = resolve(providerRoot, "packages/grounded-tools", definition.directory);
-      let expectedReal;
-      try {
-        expectedReal = await realpath(expectedRoot);
-      } catch {
-        // The isolated verifier copy has no sibling repository tree.
+      state.count++; state.present = true; state.root = root;
+      state.entrypointPresent = await regularEntrypoint(join(root, "index.ts"));
+      let pinMatches = true;
+      if (providerRoot) {
+        try { pinMatches = root === await realpath(resolve(providerRoot, "packages/pi-context-kit", definition.directory)); }
+        catch { pinMatches = false; }
       }
-      const suffix = expectedGroundedSuffix(definition);
-      const rootMatches = expectedReal ? candidateReal === expectedReal
-        : !process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT && candidateReal.endsWith(suffix);
-      if (rootMatches || !state.root) state.root = candidateReal;
-      state.rootMatches ||= rootMatches;
-      state.entrypointPresent ||= await regularEntrypoint(join(candidateReal, "index.ts"));
+      // Without an explicit common pin, each native provider may use its own retained root.
+      state.selectionValid = state.count === 1 && pinMatches && state.entrypointPresent
+        && sameJson(metadata.pi?.extensions, ["./index.ts"]);
     } catch {
-      // Missing or malformed local entries are not healthy grounded-tools links.
+      // Missing or malformed local package metadata is not a valid native selection.
     }
   }
-  return { piListOk: piList.ok, states };
+  return { states, retiredSelected };
 }
 
 async function currentStateFixture() {
@@ -470,8 +456,8 @@ async function currentStateFixture() {
 
 async function providerContractChecks(states) {
   const result = {
-    groundedToolsLinkPresent: false,
-    groundedToolsLinkRootMatches: false,
+    nativeProvidersLinkPresent: false,
+    nativeProvidersSelectionValid: false,
     todoEntrypointPresent: false,
     workplanEntrypointPresent: false,
     todoSummaryContractV1Available: false,
@@ -482,19 +468,21 @@ async function providerContractChecks(states) {
   const todo = states.get("todo");
   const workplan = states.get("workplan");
   if (!todo || !workplan) return result;
-  result.groundedToolsLinkPresent = todo.present && workplan.present;
-  result.groundedToolsLinkRootMatches = todo.rootMatches && workplan.rootMatches;
+  result.nativeProvidersLinkPresent = todo.present && workplan.present;
+  result.nativeProvidersSelectionValid = todo.selectionValid && workplan.selectionValid;
   result.todoEntrypointPresent = todo.entrypointPresent;
   result.workplanEntrypointPresent = workplan.entrypointPresent;
   if (!todo.root || !workplan.root) return result;
   try {
-    const todoSource = await readFile(join(todo.root, "index.ts"), "utf8");
+    const todoSource = `${await readFile(join(todo.root, "index.ts"), "utf8")}\n${await readFile(join(todo.root, "ui.ts"), "utf8")}`;
     const workplanSource = await readFile(join(workplan.root, "index.ts"), "utf8");
-    const summarySource = await readFile(join(workplan.root, "../core/src/workplan-summary.ts"), "utf8");
+    const resolveFrom = createRequire(join(workplan.root, "package.json"));
+    const summarySource = await readFile(resolveFrom.resolve("@grounded/pi-core/workplan-summary"), "utf8");
     result.todoSummaryContractV1Available = hasAll(todoSource, [
       ...summaryEventNames.filter((name) => name.startsWith("pi-todo:")),
       "interface TodoSummarySnapshot",
-      "snapshot: summary()",
+      "snapshot: summarizeTodos(state)",
+      "registerTodoUi",
     ]);
     result.workplanSummaryContractV1Available = hasAll(`${summarySource}\\n${workplanSource}`, [
       ...summaryEventNames.filter((name) => name.startsWith("pi-workplan:") && !name.endsWith("activity-v1")),
@@ -533,6 +521,14 @@ async function providerContractChecks(states) {
   return result;
 }
 
+/** Read selection and source metadata only. Does not load providers or start Pi/Herdr. */
+export async function inspectNativeProviders(options = {}) {
+  const { states, retiredSelected } = await nativeProvidersLinkState(options);
+  const checks = await providerContractChecks(states);
+  checks.nativeProvidersSelectionValid &&= !retiredSelected;
+  return checks;
+}
+
 function initialChecks(manifest) {
   return {
     platformLinux: process.platform === "linux",
@@ -561,8 +557,8 @@ function initialChecks(manifest) {
     socketMode: false,
     relaySnapshotBounded: false,
     disposableArtifactsRemoved: false,
-    groundedToolsLinkPresent: false,
-    groundedToolsLinkRootMatches: false,
+    nativeProvidersLinkPresent: false,
+    nativeProvidersSelectionValid: false,
     todoEntrypointPresent: false,
     workplanEntrypointPresent: false,
     todoSummaryContractV1Available: false,
@@ -597,10 +593,9 @@ async function run() {
     checks.piLinkPresent = piList.ok && piLinks.present;
     checks.piLinkRootMatches = piList.ok && piLinks.rootMatches;
 
-    const grounded = await groundedToolsLinkState();
-    Object.assign(checks, await providerContractChecks(grounded.states));
-    checks.groundedToolsLinkPresent = piList.ok && grounded.piListOk && checks.groundedToolsLinkPresent;
-    checks.groundedToolsLinkRootMatches = piList.ok && grounded.piListOk && checks.groundedToolsLinkRootMatches;
+    Object.assign(checks, await inspectNativeProviders());
+    checks.nativeProvidersLinkPresent = piList.ok && checks.nativeProvidersLinkPresent;
+    checks.nativeProvidersSelectionValid = piList.ok && checks.nativeProvidersSelectionValid;
     Object.assign(checks, await currentStateFixture());
 
     const plugin = await pluginInfo();
@@ -674,9 +669,11 @@ async function fileIsBuilt(path) {
   }
 }
 
-try {
-  await run();
-} catch {
-  process.stderr.write("Project Glance doctor failed safely.\n");
-  process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    await run();
+  } catch {
+    process.stderr.write("Project Glance doctor failed safely.\n");
+    process.exitCode = 1;
+  }
 }

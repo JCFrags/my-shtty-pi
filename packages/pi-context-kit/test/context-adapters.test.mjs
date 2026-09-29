@@ -1,75 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { setImmediate as tick } from "node:timers/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { mkdtemp, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { requestChannel, responseChannel, validateResponse, jsonBytes } from "@context-kit/protocol";
+import { jsonBytes } from "@context-kit/protocol";
 import { createWorkplanContextRecord, projectNotesPage, projectTodoPage, projectWorkplanPage } from "@grounded/pi-core/context-adapters";
 import { emptyWorkplanState, performWorkplanAction } from "@grounded/pi-core/workplan";
 import { WorkplanStore } from "@context-kit/workplan/store";
-import groundedTasks from "../../tasks/index.ts";
-import groundedNotes from "../../notes/index.ts";
-import groundedWorkplan from "../index.ts";
+import { fixtureDirectory, persistedSession, NativeProviderHost } from "./fixtures/native-providers.mjs";
 
-const factories = { todo: groundedTasks, notes: groundedNotes, workplan: groundedWorkplan };
-class Host {
-  listeners = new Map();
-  handlers = new Map();
-  tools = new Map();
-  calls = 0;
-  active;
-  events = {
-    on: (name, handler) => {
-      if (this.rejectAdapter && name.startsWith("context-kit:request:")) throw new Error("Transport unavailable");
-      const listeners = this.listeners.get(name) ?? new Set();
-      listeners.add(handler);
-      this.listeners.set(name, listeners);
-      return () => listeners.delete(handler);
-    },
-    emit: (name, value) => { for (const handler of [...(this.listeners.get(name) ?? [])]) handler(value); },
-  };
-  constructor(names = Object.keys(factories), manager = SessionManager.inMemory(), rejectAdapter = false) {
-    this.manager = manager;
-    this.rejectAdapter = rejectAdapter;
-    const host = this;
-    this.context = { get sessionManager() { return host.manager; }, hasUI: false, ui: { setWidget() {}, notify() {} } };
-    for (const name of names) factories[name](this, { settingsPath: join(tmpdir(), "context-kit-no-settings", "settings.json") });
-  }
-  on(name, handler) { const handlers = this.handlers.get(name) ?? []; handlers.push(handler); this.handlers.set(name, handlers); }
-  registerTool(tool) { this.tools.set(tool.name, tool); }
-  registerCommand() {}
-  registerShortcut() {}
-  getActiveTools() { return this.active ?? [...this.tools.keys()]; }
-  appendEntry(type, data) { this.manager.appendCustomEntry(type, data); }
-  scope() { return { sessionId: this.manager.getSessionId(), leafId: this.manager.getLeafId() }; }
-  async lifecycle(name) { for (const handler of this.handlers.get(name) ?? []) await handler({ type: name }, this.context); }
-  async persist(name, id, result) {
-    const message = { role: "toolResult", toolName: name, toolCallId: id, content: result.content, details: result.details, isError: false, timestamp: Date.now() };
-    this.manager.appendMessage(message);
-    for (const handler of this.handlers.get("message_end") ?? []) await handler({ type: "message_end", message }, this.context);
-  }
-  async execute(name, args) {
-    const id = `call-${++this.calls}`;
-    const result = await this.tools.get(name).execute(id, args, new AbortController().signal);
-    await this.persist(name, id, result);
-    return result;
-  }
-  async query(providerId, overrides = {}) {
-    const request = { version: 1, requestId: `query-${++this.calls}`, providerId, scope: this.scope(), query: "",
-      categories: [], limits: { records: 6, scan: 128, bytes: 8192 }, deadlineMs: Date.now() + 1000, ...overrides };
-    let response;
-    const remove = this.events.on(responseChannel(providerId), (value) => { response = value; });
-    const getBranch = this.manager.getBranch;
-    this.manager.getBranch = () => { throw new Error("Context adapters must not replay native history"); };
-    try {
-      this.events.emit(requestChannel(providerId), request);
-      await tick();
-      if (response) validateResponse(response, request);
-      return response;
-    } finally { this.manager.getBranch = getBranch; remove(); }
-  }
+async function assertDiskAnchor(host, providerId) {
+  const anchor = host.manager.getEntries().findLast((entry) => entry.type === "custom"
+    && entry.customType === "context-kit:state-anchor:v1" && entry.data.providerId === providerId);
+  assert.ok(anchor);
+  const persisted = (await readFile(host.manager.getSessionFile(), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(persisted.find((entry) => entry.id === anchor.id), JSON.parse(JSON.stringify(anchor)));
 }
 
 const operations = {
@@ -80,23 +25,28 @@ const operations = {
     read: { action: "recover", planId: "WP1" }, id: "WP1" },
 };
 
-test("each actual native factory works alone and refuses unpersisted, wrong-view, hidden, and corrupt state", async () => {
+test("each owned factory works alone, commits before tool results, and preserves exact branch state", async (t) => {
   for (const [name, op] of Object.entries(operations)) {
-    const host = new Host([name]);
+    const root = await fixtureDirectory(`context-${name}`);
+    const host = new NativeProviderHost(await persistedSession(root), root, { providers: [name] });
+    t.after(() => host.lifecycle("session_shutdown"));
     await host.lifecycle("session_start");
     const initial = await host.execute(name, op.add);
     const initialLeaf = host.manager.getLeafId();
     const ready = await host.query(name);
     assert.equal(ready.readiness, "ready");
     assert.equal(ready.cards[0].id, op.id);
-    assert.equal(ready.cards[0].revision, name === "todo" ? String(initial.details.state.tasks[0].updatedAt) : "1");
+    assert.ok(ready.cards[0].revision);
+    if (name !== "todo") assert.equal(ready.cards[0].revision, "1");
+    assert.ok(initial.details.owner.commitId);
+    await assertDiskAnchor(host, name);
     assert.equal((await host.query(name === "notes" ? "todo" : "notes")), undefined, "absent peers do not register providers");
     assert.ok((await host.execute(name, op.read)).content[0].text.length);
     const oldScope = host.scope();
-    const pending = await host.tools.get(name).execute("pending", op.update, new AbortController().signal);
-    assert.equal((await host.query(name)).readiness, "pending");
-    assert.deepEqual((await host.query(name)).cards, []);
-    await host.persist(name, "pending", pending);
+    const committed = await host.execute(name, op.update, { persist: false });
+    assert.equal((await host.query(name)).readiness, "ready", "the owned disk anchor is the persistence boundary");
+    await assertDiskAnchor(host, name);
+    await host.persist(name, "committed", committed);
     assert.equal((await host.query(name)).readiness, "ready");
     assert.equal((await host.query(name, { scope: oldScope })).readiness, "scope_changed");
     assert.equal((await host.query(name, { scope: { ...host.scope(), sessionId: "other-session" } })).readiness, "scope_changed");
@@ -108,7 +58,10 @@ test("each actual native factory works alone and refuses unpersisted, wrong-view
     assert.deepEqual((await host.query(name)).cards, ready.cards, "tree restore returns the selected native revision");
     await host.lifecycle("session_shutdown");
     assert.equal(await host.query(name), undefined, "shutdown removes the context listener");
-    const reloaded = new Host([name], host.manager);
+    const reopened = SessionManager.open(host.manager.getSessionFile());
+    reopened.branch(initialLeaf);
+    const reloaded = new NativeProviderHost(reopened, root, { providers: [name] });
+    t.after(() => reloaded.lifecycle("session_shutdown"));
     await reloaded.lifecycle("session_start");
     assert.deepEqual((await reloaded.query(name)).cards, ready.cards);
     const broken = structuredClone(initial.details);
@@ -116,14 +69,14 @@ test("each actual native factory works alone and refuses unpersisted, wrong-view
     else broken.event.stateRevision = 999999;
     reloaded.manager.appendMessage({ role: "toolResult", toolName: name, toolCallId: "invalid", content: [], details: broken, isError: false, timestamp: Date.now() });
     await reloaded.lifecycle("session_tree");
-    assert.equal((await reloaded.query(name)).readiness, "corrupt");
-    await assert.rejects(() => reloaded.execute(name, op.read), /STATE_CORRUPT/);
+    assert.deepEqual((await reloaded.query(name)).cards, ready.cards, "owned tool-result envelopes cannot replace committed state");
+    assert.ok((await reloaded.execute(name, op.read)).content[0].text.length);
     await reloaded.lifecycle("session_shutdown");
   }
 });
 
 test("current-state browse selects open records before scan and reply limits without deleting retained state", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "context-kit-current-selection-"));
+  const directory = await fixtureDirectory("context-kit-current-selection");
   const store = new WorkplanStore({ storeRoot: join(directory, "workplan") });
   const entries = new Map();
   let leafId = null;
@@ -206,17 +159,18 @@ test("current-state browse selects open records before scan and reply limits wit
       { scanned: 0, matched: 0, excluded: 0, scanComplete: false }, "metadata admission is bounded even for uncapped legacy Todo state");
   } finally {
     store.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("bounded query excerpts and native relations survive a failed peer without changing tool state", async () => {
-  const host = new Host();
+test("bounded query excerpts and native relations survive a hidden peer without changing tool state", async (t) => {
+  const root = await fixtureDirectory("context-relations");
+  const host = new NativeProviderHost(await persistedSession(root), root);
+  t.after(() => host.lifecycle("session_shutdown"));
   await host.lifecycle("session_start");
   await host.execute("todo", { action: "add", text: "Review" });
   await host.execute("todo", { action: "add", text: "Release gate", blockedBy: ["T1"], waitReason: "Approval" });
   const body = "Earlier context. ".repeat(90) + "needle evidence for rollback" + " unrelated continuation".repeat(300);
-  const note = await host.execute("notes", { action: "add", title: "Source note", body });
+  await host.execute("notes", { action: "add", title: "Source note", body });
   await host.execute("workplan", { action: "create", content: { title: "Release plan", objective: "Recover state", approach: "Use native records", constraints: ["Retain recovery data"] } });
   await host.execute("workplan", { action: "add_milestone", planId: "WP1", expectedRevision: 1, content: { title: "Release gate" } });
   await host.execute("workplan", { action: "update_milestone", planId: "WP1", milestoneId: "WP1-M1", expectedRevision: 2, content: { status: "in_progress", linkedTodoIds: ["T2"] } });
@@ -247,18 +201,19 @@ test("bounded query excerpts and native relations survive a failed peer without 
   assert.equal(capped.coverage.scanned, 128);
   assert.equal(capped.coverage.scanComplete, false);
   assert.equal(capped.coverage.excluded, 127);
-  const invalid = structuredClone(note.details);
-  invalid.event.stateRevision = 999999;
-  host.manager.appendMessage({ role: "toolResult", toolName: "notes", toolCallId: "invalid", content: [], details: invalid, isError: false, timestamp: Date.now() });
-  await host.lifecycle("session_tree");
-  assert.equal((await host.query("notes")).readiness, "corrupt");
+  host.active = ["todo", "workplan"];
+  assert.equal((await host.query("notes")).readiness, "unavailable");
   assert.equal((await host.query("todo")).readiness, "ready");
   assert.equal((await host.query("workplan")).readiness, "ready");
   await host.lifecycle("session_shutdown");
 
-  const noTransport = new Host(undefined, undefined, true);
+  const optionalRoot = await fixtureDirectory("context-optional-transport");
+  const noTransport = new NativeProviderHost(await persistedSession(optionalRoot), optionalRoot,
+    { providers: ["todo", "notes"], rejectAdapter: true });
+  t.after(() => noTransport.lifecycle("session_shutdown"));
   await noTransport.lifecycle("session_start");
-  for (const [name, op] of Object.entries(operations)) {
+  for (const name of ["todo", "notes"]) {
+    const op = operations[name];
     await noTransport.execute(name, op.add);
     assert.ok((await noTransport.execute(name, op.read)).content[0].text.length);
   }

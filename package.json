@@ -32,10 +32,7 @@
           "files/index.ts",
           "process/index.ts",
           "lsp/index.ts",
-          "dialog/index.ts",
-          "tasks/index.ts",
-          "notes/index.ts",
-          "workplan/index.ts"
+          "dialog/index.ts"
         ],
         "runtimeResources": [
           "core/src/pty_bridge.py",
@@ -169,10 +166,7 @@
     "packages/grounded-tools/dialog",
     "packages/grounded-tools/files",
     "packages/grounded-tools/lsp",
-    "packages/grounded-tools/notes",
     "packages/grounded-tools/process",
-    "packages/grounded-tools/tasks",
-    "packages/grounded-tools/workplan",
     "packages/pi-context-kit/protocol",
     "packages/pi-context-kit/recall",
     "packages/pi-context-kit/telemetry",

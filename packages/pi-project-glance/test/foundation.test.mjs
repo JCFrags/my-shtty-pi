@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createConnection, createServer } from "node:net";
 import { execFileSync } from "node:child_process";
@@ -903,6 +904,51 @@ test("activation scripts distinguish link completion from active Pi reload", asy
   assert.match(smoke, /XDG_RUNTIME_DIR/u);
 });
 
+test("doctor provider inspection accepts native selections without starting live services", async () => {
+  const { inspectNativeProviders } = await import("../scripts/dev-doctor.mjs");
+  const root = await mkdtemp(join(tmpdir(), "glance-native-doctor-"));
+  await chmod(root, 0o700);
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { mode: 0o700 });
+  const providerRoot = process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT || fileURLToPath(new URL("../../..", import.meta.url));
+  const selected = ["todo", "workplan"].map((name) => join(providerRoot, "packages/pi-context-kit", name));
+  const settingsFile = join(agentDir, "settings.json");
+  const select = (packages) => writeFile(settingsFile, `${JSON.stringify({ packages })}\n`, { mode: 0o600 });
+  await select(selected);
+  const original = await readFile(settingsFile);
+  const accepted = await inspectNativeProviders({ agentDir, providerRoot });
+  assert.ok(Object.values(accepted).every(Boolean), JSON.stringify(accepted));
+  assert.deepEqual(await readFile(settingsFile), original);
+  assert.equal((await inspectNativeProviders({ agentDir, providerRoot: join(root, "wrong-root") })).nativeProvidersSelectionValid, false);
+
+  // Rejection metadata only. No old factory or forwarding package is installed.
+  const legacy = join(root, "legacy-metadata");
+  await mkdir(legacy, { mode: 0o700 });
+  await writeFile(join(legacy, "package.json"), JSON.stringify({ name: "@grounded/pi-tasks" }), { mode: 0o600 });
+  await select([legacy]);
+  assert.equal((await inspectNativeProviders({ agentDir, providerRoot: null })).nativeProvidersLinkPresent, false);
+  await select([...selected, legacy]);
+  assert.equal((await inspectNativeProviders({ agentDir, providerRoot: null })).nativeProvidersSelectionValid, false);
+
+  const separate = [];
+  for (const name of ["todo", "workplan"]) {
+    const destination = join(root, `retained-${name}`, "packages/pi-context-kit", name);
+    await mkdir(destination, { recursive: true, mode: 0o700 });
+    for (const file of ["package.json", "index.ts", ...(name === "todo" ? ["ui.ts"] : [])]) {
+      await fsPromises.copyFile(join(providerRoot, "packages/pi-context-kit", name, file), join(destination, file));
+    }
+    separate.push(destination);
+  }
+  await mkdir(join(separate[1], "node_modules/@grounded"), { recursive: true, mode: 0o700 });
+  await symlink(join(providerRoot, "packages/grounded-tools/core"), join(separate[1], "node_modules/@grounded/pi-core"));
+  await select(separate);
+  const independent = await inspectNativeProviders({ agentDir, providerRoot: null });
+  assert.ok(Object.values(independent).every(Boolean), JSON.stringify(independent));
+  assert.equal((await inspectNativeProviders({ agentDir, providerRoot })).nativeProvidersSelectionValid, false);
+  await writeFile(join(root, "inspection-result.json"), JSON.stringify({ accepted, independent }), { mode: 0o600 });
+  // Retain private fixture evidence. This check never loads a provider or starts Pi/Herdr.
+});
+
 test("doctor emits deterministic stable sanitized checks", { skip: process.env.PI_PROJECT_GLANCE_LIVE_DOCTOR !== "1" && "requires an explicitly linked live environment; run dev:doctor separately" }, () => {
   const expectedChecks = [
     "platformLinux", "nodeVersionSupported", "packageIdentity", "canonicalTuiPeer",
@@ -912,7 +958,7 @@ test("doctor emits deterministic stable sanitized checks", { skip: process.env.P
     "herdrPluginRootMatches", "herdrPluginEnabled", "herdrPanePresent", "herdrPaneCommandExact",
     "relayHandshake", "runtimeDirectoryMode", "descriptorMode", "socketMode",
     "relaySnapshotBounded", "disposableArtifactsRemoved",
-    "groundedToolsLinkPresent", "groundedToolsLinkRootMatches", "todoEntrypointPresent",
+    "nativeProvidersLinkPresent", "nativeProvidersSelectionValid", "todoEntrypointPresent",
     "workplanEntrypointPresent", "todoSummaryContractV1Available", "todoChangedEnvelopeCompatible",
     "workplanSummaryContractV1Available", "workplanActivityContractV1Available",
     "currentStateIntegrationFixture", "currentProjectionPrivacySafe", "opaqueProviderCorrelationExact", "liveSnapshotFeedEmpty", "progressFeedFixture",

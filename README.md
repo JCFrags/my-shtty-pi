@@ -31,7 +31,7 @@ Use Node.js 24.18.0, npm, Git, and Python 3 for the repository verification work
 
 The root lock prepares Grounded Tools, Context Kit, and root development dependencies. Other products have package-local locks. ChronoCompact, Pi Herdr Orchestrator, and Pi Project Glance use compiled entrypoints: install their locked dependencies and run their declared build steps before registration. Chrono also needs the explicit native SQLite build described under [verification](#verification).
 
-Grounded Tools has seven separately loadable subpackages. Register selected paths such as `packages/grounded-tools/files`, not the grouping directory. Context Kit has six separate registrations: `memory`, `todo`, `notes`, `workplan`, `recall`, and `telemetry`. Its `protocol` and `state-store` libraries have no Pi entrypoint. Do not install dependencies separately inside these workspace subpackages. Replace a legacy state provider rather than load both writers.
+Grounded Tools has four separately loadable subpackages. Register selected paths such as `packages/grounded-tools/files`, not the grouping directory. Context Kit has six separate registrations: `memory`, `todo`, `notes`, `workplan`, `recall`, and `telemetry`. Its `protocol` and `state-store` libraries have no Pi entrypoint. Do not install dependencies separately inside these workspace subpackages. Replace a legacy state provider rather than load both writers.
 
 For an existing installation, preserve package order and replace only the intended registration. Do not append duplicates. Follow [activation and rollback](docs/activation.md) for loader checks, retained package roots, safe reloads, and scoped rollback. A build or link does not update an existing process. Reload only when work is settled and the editor has no unsent draft, then verify the loaded identity. Reload can terminate managed jobs.
 
@@ -45,7 +45,7 @@ The [registry](package.json) contains 16 owned products: 14 active and two inact
 | --- | --- | --- |
 | [Codex Usage Footer](packages/codex-usage-footer/README.md) | Shared Standard Codex and Spark quota, banked reset details, and an optional unofficial forecast. | `/codex-usage` |
 | [Files UI](packages/files-ui/README.md) | Browse files, preview content, and insert selected paths or bounded content into the editor. | `/files` |
-| [Grounded Tools](packages/grounded-tools/README.md) | Exact coding tools, questions, and legacy state-provider compatibility. | [Seven tool groups below](#grounded-tools) |
+| [Grounded Tools](packages/grounded-tools/README.md) | Exact coding tools, questions, and shared native-state primitives. | [Four tool groups below](#grounded-tools) |
 | [Herdr Agent State](packages/herdr-agent-state/README.md) | Report Pi session identity and working, blocked, or idle state to Herdr. | Automatic lifecycle integration. No tool or command. |
 | [Herdr Sidebar](packages/herdr-status/README.md) | Configure additive model/context fields and terminal title activity. Preserve native lifecycle reporting. | `/herdr-sidebar-settings` |
 | [Pi Agent Context](packages/pi-agent-context/README.md) | Maintain stable date/environment snapshots and inspect prompt, context, and tool costs. | `/context-refresh`, `/context-audit` |
@@ -69,7 +69,7 @@ These packages retain source for compatibility work. Their presence does not imp
 
 ## Grounded Tools
 
-One product supplies seven Pi entrypoints. The internal `core` subpackage supplies shared primitives and has no Pi entrypoint.
+One product supplies four Pi entrypoints. The internal `core` subpackage supplies shared primitives and has no Pi entrypoint.
 
 | Subpackage | Tools | Use |
 | --- | --- | --- |
@@ -77,13 +77,10 @@ One product supplies seven Pi entrypoints. The internal `core` subpackage suppli
 | `process` | `bash`, `process`, `session` | Exact command output, complete logs, managed background processes, and explicit persistent local or SSH sessions. |
 | `lsp` | `lsp` | Language Server Protocol diagnostics and navigation, including a rename preview that does not edit files. |
 | `dialog` | `ask_user` when enabled, otherwise legacy `ask_user_question` | Structured blocking questions with Herdr state reporting and a provider-based deferred question interface. |
-| `tasks` | `todo` | Legacy compatibility provider for branch-aware immediate task plans. |
-| `notes` | `notes` | Legacy compatibility provider for branch-aware scratchpad notes. |
-| `workplan` | `workplan` | Legacy compatibility provider for durable project state and recovery. |
 
-[Context Kit's independent providers](packages/pi-context-kit/README.md) replace these three legacy registrations in the Chrono context-state stack. The Grounded alternatives remain available for compatible legacy installations. Select exactly one writer per native tool.
+[Context Kit's independent providers](packages/pi-context-kit/README.md) are the only supported current registrations for Todo, Notes, and Workplan. Grounded core supplies their shared primitives, not another writer. The [pre-retirement source](https://github.com/JCFrags/my-shtty-pi/tree/84bbb994ddda237f5df7a98cca30b1ed1f5ec2ed/packages/grounded-tools) remains in Git history. Preserve legacy sessions, import readers, and compatible retained installations. Select exactly one writer per native tool.
 
-`/grounded-files`, `/grounded-lsp`, and `/grounded-processes` report policy or status. `/todos` and `/todo-add` provide manual task controls. `GROUNDED_TRIAL_MODE=1` prefixes `read`, `edit`, `write`, `bash`, and `process` with `grounded_`; the other tool names stay unchanged.
+`/grounded-files`, `/grounded-lsp`, and `/grounded-processes` report policy or status. Context Kit Todo supplies `/todos` and `/todo-add` for manual task controls. `GROUNDED_TRIAL_MODE=1` prefixes `read`, `edit`, `write`, `bash`, and `process` with `grounded_`; the other tool names stay unchanged.
 
 [Grounded Dialog](packages/grounded-tools/dialog/README.md) owns the single question facade and reports its own blocking waits to Herdr Agent State. The standalone Herdr Blocked Bridge is retired. Remove its old registration when updating Dialog, as described in [activation guidance](docs/activation.md#dialog-herdr-blocking-state).
 

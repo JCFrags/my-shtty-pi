@@ -16,7 +16,7 @@
     "telemetry"
   ],
   "scripts": {
-    "test": "node --experimental-transform-types --test memory/test/memory.test.ts memory/test/reverse-export.test.ts recall/test/recall.test.ts telemetry/test/telemetry.test.ts state-store/test/reboot-identity.test.mjs"
+    "test": "node --experimental-transform-types --test memory/test/memory.test.ts memory/test/reverse-export.test.ts recall/test/recall.test.ts telemetry/test/telemetry.test.ts state-store/test/reboot-identity.test.mjs test/context-adapters.test.mjs test/checkpoint-transfer.test.mjs test/workplan-lifecycle.test.mjs"
   },
-  "files": ["protocol", "state-store", "memory", "todo", "notes", "workplan", "recall", "telemetry", "README.md", "!**/node_modules"]
+  "files": ["protocol", "state-store", "memory", "todo", "notes", "workplan", "recall", "telemetry", "test", "README.md", "!**/node_modules"]
 }

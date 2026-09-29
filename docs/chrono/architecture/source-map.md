@@ -20,7 +20,7 @@ Read the subject guide first. Use this map when a change needs exact implementat
 | [pi-context-kit](../../../packages/pi-context-kit/README.md) | Six independently loaded Memory, Todo, Notes, Workplan, Recall, and Telemetry extensions. |
 | [Context protocol](../../../packages/pi-context-kit/protocol/README.md) | Pure bounded collection and transfer contracts. No Pi entrypoint. Compiled exports also support Chrono. |
 | [Owned state store](../../../packages/pi-context-kit/state-store/API.md) | Immutable objects, source-bound anchors, and bounded ancestry resolution. No Pi entrypoint. |
-| [Grounded Tools](../../../packages/grounded-tools/README.md) | Existing pure native reducers/renderers, legacy provider entrypoints, process readiness, and other coding tools. |
+| [Grounded Tools](../../../packages/grounded-tools/README.md) | Shared native reducers/renderers and projectors, process readiness, and coding tools. Current state-provider entrypoints belong to Context Kit. |
 | [Project Glance](../../../packages/pi-project-glance/README.md) | Presentation over public provider events. It does not own Todo or Workplan state. |
 | [Progressive Tools](../../../packages/pi-progressive-tools/README.md) | Tool catalog, help, and visibility policy. Recall respects that policy. |
 
