@@ -75,7 +75,7 @@ Startup resolves direct bindings or a bounded ancestry page. Native calls can ad
 
 ## Migration and integration
 
-Grounded Tasks, Notes, and Workplan remain legacy compatibility alternatives. Replace only the selected legacy registration with its Context Kit provider. Do not load both legacy and owned writers. Existing legacy branches use `/todo-import`, `/notes-import`, and `/workplan-import` until complete. A new code selection is not a migration.
+Context Kit supplies the only supported current Todo, Notes, and Workplan registrations. If a retained older installation selects a Grounded writer, replace only that registration with its Context Kit provider. Do not load both legacy and owned writers. Existing legacy branches use `/todo-import`, `/notes-import`, and `/workplan-import` until complete. A new code selection is not a migration.
 
 Fresh rollover replacements can bootstrap complete checkpoints. After new owned writes, rollback to legacy providers also requires a fresh replacement with the latest complete checkpoint before any ordinary legacy state. Reopening the pre-import branch loses later state and is not a valid data rollback.
 

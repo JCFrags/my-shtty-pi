@@ -12,7 +12,7 @@ import {
   workplanBranchId,
   WORKPLAN_SUMMARY_CHANGED_EVENT,
   WORKPLAN_SUMMARY_LIMITS,
-} from "../../core/src/workplan-summary.ts";
+} from "../src/workplan-summary.ts";
 
 const at = "2026-09-03T00:00:00.000Z";
 

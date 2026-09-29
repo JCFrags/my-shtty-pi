@@ -14,7 +14,7 @@ For Chrono and Context Kit, start with [activation and explicit state migration]
 
 ## Ownership
 
-Context Kit's independent native providers own Todo, Notes, and Workplan in the Chrono context-state stack. Chrono consumes their evidence and requests complete rollover checkpoints. It does not own provider persistence. Progressive Tools owns catalog visibility and schema exposure only. The legacy compatibility providers are Grounded Tasks, Notes, and Workplan, not Progressive Tools. Select one writer per native tool and preserve unrelated registrations.
+Context Kit's independent native providers own Todo, Notes, and Workplan in the Chrono context-state stack. Chrono consumes their evidence and requests complete rollover checkpoints. It does not own provider persistence. Progressive Tools owns catalog visibility and schema exposure only. Context Kit supplies the only supported current Todo, Notes, and Workplan registrations. Older retained Grounded writers are historical installations, not current alternatives. Select one writer per native tool and preserve unrelated registrations.
 
 The repository supplies Project Glance presentation and Pi orchestration as separate products. Project Glance reads bounded Todo and Workplan summaries; it does not own their state or depend on the orchestration broker. Standalone Files UI and blocking Ask User remain independent.
 
@@ -259,6 +259,8 @@ Use an isolated installed-Pi loader to check owner definitions, unchanged model-
 The [Grounded README](../packages/grounded-tools/README.md#compact-human-tool-display) defines text-row bounds, image/separator limits, and private raw JSONL export. No data migration or payload rewrite is part of this change. Rollback restores only the affected owner selections with their compatible dependency roots, not whole settings snapshots.
 
 ## Earlier Context Kit foundation
+
+This section records the [pre-retirement source](https://github.com/JCFrags/my-shtty-pi/tree/84bbb994ddda237f5df7a98cca30b1ed1f5ec2ed). Its Grounded state-provider selections are historical, not installation choices on current main. Keep compatible retained roots and data for recovery.
 
 Recall and Telemetry have separate source-loaded entrypoints at `packages/pi-context-kit/recall` and `packages/pi-context-kit/telemetry`. The protocol package is a pure library, not a Pi registration. Prepare their workspace dependencies from the accepted repository-root lock.
 

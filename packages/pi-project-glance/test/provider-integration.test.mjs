@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -8,10 +8,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const providerRoot = process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT
   ? resolve(process.env.PI_PROJECT_GLANCE_PROVIDER_ROOT)
   : fileURLToPath(new URL("../../..", import.meta.url));
-const { default: groundedTasks } = await import(pathToFileURL(join(providerRoot, "packages/grounded-tools/tasks/index.ts")).href);
-const { default: groundedWorkplan } = await import(pathToFileURL(join(providerRoot, "packages/grounded-tools/workplan/index.ts")).href);
+const { NativeProviderHost, fixtureDirectory, persistedSession } = await import(pathToFileURL(join(providerRoot, "packages/pi-context-kit/test/fixtures/native-providers.mjs")).href);
+const { registerTodoUi } = await import(pathToFileURL(join(providerRoot, "packages/pi-context-kit/todo/ui.ts")).href);
 const {
-  WORKPLAN_SUMMARY_CHANGED_EVENT,
   workplanBranchId,
 } = await import(pathToFileURL(join(providerRoot, "packages/grounded-tools/core/src/workplan-summary.ts")).href);
 import {
@@ -110,14 +109,9 @@ function context(leafId, branch = [], sessionId = "provider-integration-session"
   };
 }
 
-function signal() {
-  return new AbortController().signal;
-}
-
 async function callTool(pi, name, params) {
-  const tool = pi.tools.get(name);
-  assert.ok(tool, `tool ${name} was registered`);
-  return tool.execute(`integration-${name}`, params, signal());
+  assert.ok(pi.tools.has(name), `tool ${name} was registered`);
+  return pi.execute(name, params);
 }
 
 async function nextTick() {
@@ -132,43 +126,36 @@ async function waitFor(predicate, timeoutMs = 2_000) {
   }
 }
 
-async function shutdownProviders(todoPi, workplanPi, ctx) {
-  await todoPi.emitLifecycle("session_shutdown", { type: "session_shutdown" }, ctx);
-  await workplanPi.emitLifecycle("session_shutdown", { type: "session_shutdown" }, ctx);
+async function shutdownProviders(todoPi, workplanPi) {
+  await todoPi.lifecycle("session_shutdown");
+  await workplanPi.lifecycle("session_shutdown");
 }
 
 async function runRealProviders(order, exercise) {
+  const root = await fixtureDirectory(`glance-${order}`);
+  const manager = await persistedSession(root);
   const bus = new EventBus();
-  const todoPi = new FakePi(bus);
-  const workplanPi = new FakePi(bus);
-  groundedTasks(todoPi);
-  groundedWorkplan(workplanPi);
-  const ctx = context("branch-a");
+  const todoPi = new NativeProviderHost(manager, root, { providers: ["todo"], events: bus });
+  const workplanPi = new NativeProviderHost(manager, root, { providers: ["workplan"], events: bus });
+  const ctx = todoPi.context, branchId = branchIdForContext(ctx);
   let controller;
-  if (order === "glance-first") {
-    controller = new ProjectGlanceCurrentController({ eventBus: bus, retryDelaysMs: [], onChange: exercise.onChange });
-    controller.start("branch-a");
-  }
-  await todoPi.emitLifecycle("session_start", { type: "session_start" }, ctx);
-  await workplanPi.emitLifecycle("session_start", { type: "session_start" }, ctx);
-  if (order === "providers-first") {
-    controller = new ProjectGlanceCurrentController({ eventBus: bus, retryDelaysMs: [], onChange: exercise.onChange });
-    controller.start("branch-a");
-  }
-  await nextTick();
   try {
-    await exercise.run({ bus, todoPi, workplanPi, controller, ctx });
+    if (order === "glance-first") {
+      controller = new ProjectGlanceCurrentController({ eventBus: bus, retryDelaysMs: [], onChange: exercise.onChange });
+      controller.start(branchId);
+    }
+    await todoPi.lifecycle("session_start");
+    await workplanPi.lifecycle("session_start");
+    if (order === "providers-first") {
+      controller = new ProjectGlanceCurrentController({ eventBus: bus, retryDelaysMs: [], onChange: exercise.onChange });
+      controller.start(branchId);
+    }
+    await nextTick();
+    await exercise.run({ bus, todoPi, workplanPi, controller, ctx, branchId, root });
   } finally {
-    controller.dispose();
-    await shutdownProviders(todoPi, workplanPi, ctx);
+    controller?.dispose();
+    await shutdownProviders(todoPi, workplanPi);
   }
-}
-
-async function persistWorkplanMutation(workplanPi, result) {
-  await workplanPi.emitLifecycle("message_end", {
-    message: { role: "toolResult", toolName: "workplan", details: result.details },
-  }, context("branch-a"));
-  await nextTick();
 }
 
 async function seedWorkplan(workplanPi) {
@@ -176,21 +163,18 @@ async function seedWorkplan(workplanPi) {
     action: "create",
     content: { title: "Integration plan", objective: "Project current state", approach: "Use bounded events" },
   });
-  await persistWorkplanMutation(workplanPi, created);
   const resumed = await callTool(workplanPi, "workplan", {
     action: "resume",
     planId: "WP1",
     expectedRevision: 1,
     rationale: "Begin integration",
   });
-  await persistWorkplanMutation(workplanPi, resumed);
   const added = await callTool(workplanPi, "workplan", {
     action: "add_milestone",
     planId: "WP1",
     expectedRevision: 2,
     content: { title: "Current milestone" },
   });
-  await persistWorkplanMutation(workplanPi, added);
   const started = await callTool(workplanPi, "workplan", {
     action: "update_milestone",
     planId: "WP1",
@@ -198,14 +182,12 @@ async function seedWorkplan(workplanPi) {
     expectedRevision: 3,
     content: { status: "in_progress" },
   });
-  await persistWorkplanMutation(workplanPi, started);
   const checkpoint = await callTool(workplanPi, "workplan", {
     action: "checkpoint",
     planId: "WP1",
     expectedRevision: 4,
     content: { summary: "Checkpoint summary", currentFocus: "Integration focus", nextActions: ["Verify current state"] },
   });
-  await persistWorkplanMutation(workplanPi, checkpoint);
   return { created, resumed, added, started, checkpoint };
 }
 
@@ -217,24 +199,17 @@ function oldGenericChangedParser(value, expectedBranchId) {
     && value.branchId === expectedBranchId;
 }
 
-async function observeTodoBranch(leafId) {
-  const bus = new EventBus();
-  const pi = new FakePi(bus);
-  const responses = [];
+async function observeTodoBranch(leafId, settingsPath) {
+  const bus = new EventBus(), pi = new FakePi(bus), responses = [];
   bus.on(TODO_SUMMARY_EVENT, (value) => responses.push(value));
-  groundedTasks(pi);
-  await pi.emitLifecycle("session_start", { type: "session_start" }, context(leafId));
-  return responses.at(-1)?.branchId;
-}
-
-async function observeWorkplanBranch(leafId) {
-  const bus = new EventBus();
-  const pi = new FakePi(bus);
-  const changes = [];
-  bus.on(WORKPLAN_SUMMARY_CHANGED_EVENT, (value) => changes.push(value));
-  groundedWorkplan(pi);
-  await pi.emitLifecycle("session_start", { type: "session_start" }, context(leafId));
-  return changes.at(-1)?.branchId;
+  // Invalid IDs exercise only the pure UI contract, not a fabricated native disk source.
+  const ui = registerTodoUi(pi, {
+    state: () => ({ tasks: [], nextId: 1 }),
+    execute: async () => { throw new Error("Read-only normalization fixture"); },
+    list: async () => "",
+  }, settingsPath);
+  try { ui.bind(context(leafId)); return responses.at(-1)?.branchId; }
+  finally { ui.close(); }
 }
 
 function currentResponse(branchId, requestId, values) {
@@ -308,7 +283,7 @@ test("actual Todo mutation accepts its snapshot-bearing invalidation and refresh
   let tamperNextChanged = false;
   await runRealProviders("providers-first", {
     onChange: (value) => changes.push(value),
-    async run({ bus, todoPi, controller }) {
+    async run({ bus, todoPi, controller, branchId }) {
       bus.on(TODO_SUMMARY_CHANGED_EVENT, (value) => {
         if (!tamperNextChanged) return;
         tamperNextChanged = false;
@@ -328,8 +303,8 @@ test("actual Todo mutation accepts its snapshot-bearing invalidation and refresh
       assert.deepEqual(Object.keys(captureChanged).sort(), ["branchId", "snapshot", "version"]);
       assert.equal(captureChanged.snapshot.version, 1);
       assert.equal(captureChanged.snapshot.currentUsefulTask.text, "Updated task");
-      assert.equal(oldGenericChangedParser(captureChanged, "branch-a"), false);
-      assert.ok(parseTodoSummaryChanged(captureChanged, "branch-a"));
+      assert.equal(oldGenericChangedParser(captureChanged, branchId), false);
+      assert.ok(parseTodoSummaryChanged(captureChanged, branchId));
       assert.equal(changes.length, before + 1);
       assert.equal(controller.current.step, "T1  Updated task");
     },
@@ -341,7 +316,7 @@ test("actual Todo, Workplan, and Project Glance entrypoints work in both lifecyc
     const changes = [];
     await runRealProviders(order, {
       onChange: (value) => changes.push(value),
-      async run({ todoPi, workplanPi, controller }) {
+      async run({ todoPi, workplanPi, controller, ctx, root }) {
         await callTool(todoPi, "todo", { action: "add", text: "Integration task" });
         await waitFor(() => controller.current.step === "T1  Integration task");
         await seedWorkplan(workplanPi);
@@ -352,22 +327,49 @@ test("actual Todo, Workplan, and Project Glance entrypoints work in both lifecyc
           toward: "WP1-M1  Current milestone",
           focus: "Integration focus",
         });
+        ctx.sessionManager.appendMessage({ role: "user", content: "Normal fixture continuation", timestamp: 0 });
+        const todoState = (await callTool(todoPi, "todo", { action: "list" })).details.state;
+        const planRead = (await callTool(workplanPi, "workplan", { action: "read", planId: "WP1" })).content;
+        const source = (await readFile(ctx.sessionManager.getSessionFile(), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+        assert.ok(source.some((entry) => entry.customType === "context-kit:state-anchor:v1" && entry.data.providerId === "todo"));
+        assert.ok(source.some((entry) => entry.customType === "context-kit:state-anchor:v1" && entry.data.providerId === "workplan"));
+        if (order === "providers-first") {
+          const expected = structuredClone(controller.current);
+          controller.dispose();
+          await shutdownProviders(todoPi, workplanPi);
+          const reopened = ctx.sessionManager.constructor.open(ctx.sessionManager.getSessionFile());
+          const coldBus = new EventBus();
+          const coldTodo = new NativeProviderHost(reopened, root, { providers: ["todo"], events: coldBus });
+          const coldWorkplan = new NativeProviderHost(reopened, root, { providers: ["workplan"], events: coldBus });
+          const coldController = new ProjectGlanceCurrentController({ eventBus: coldBus, retryDelaysMs: [], onChange() {} });
+          try {
+            await coldTodo.lifecycle("session_start");
+            await coldWorkplan.lifecycle("session_start");
+            coldController.start(branchIdForContext(coldTodo.context));
+            await waitFor(() => coldController.current.step === expected.step && coldController.current.focus === expected.focus);
+            assert.deepEqual(coldController.current, expected);
+            assert.deepEqual((await callTool(coldTodo, "todo", { action: "list" })).details.state, todoState);
+            assert.deepEqual((await callTool(coldWorkplan, "workplan", { action: "read", planId: "WP1" })).content, planRead);
+          } finally {
+            coldController.dispose();
+            await shutdownProviders(coldTodo, coldWorkplan);
+          }
+        }
       },
     });
   }
 });
 
-test("branch normalization conformance uses one fixture across Todo, Workplan, and Project Glance", async () => {
+test("branch normalization conformance uses the Todo UI, Workplan contract, and Project Glance", async () => {
+  const root = await fixtureDirectory("glance-normalization");
   for (const item of BRANCH_NORMALIZATION_CASES) {
     const expected = item.expected;
     const project = branchIdForContext(context(item.leafId));
-    const todo = await observeTodoBranch(item.leafId);
+    const todo = await observeTodoBranch(item.leafId, join(root, "todo-settings.json"));
     const workplan = workplanBranchId(item.leafId);
-    const workplanProvider = await observeWorkplanBranch(item.leafId);
     assert.equal(project, expected, item.name);
     assert.equal(todo, expected, `Todo: ${item.name}`);
     assert.equal(workplan, expected, `Workplan helper: ${item.name}`);
-    assert.equal(workplanProvider, expected, `Workplan provider: ${item.name}`);
   }
 });
 

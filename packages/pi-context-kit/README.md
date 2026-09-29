@@ -39,7 +39,7 @@ pi install "$PWD/packages/pi-context-kit/telemetry"
 
 Use Node 24.18.0 and Pi 0.85.1. These packages load TypeScript through Pi. The protocol includes verified compiled JavaScript for compiled Chrono imports. Do not register the grouping directory or either library as an extension. Do not install dependencies separately inside workspace packages.
 
-For Todo, Notes, or Workplan, replace the corresponding legacy Grounded package source with its Context Kit source. Do not load both writers. Existing native schemas, read-only recovery, and Glance contracts remain available. A preserved legacy branch needs explicit bounded import, not a silent empty store. Read each provider's migration procedure before switching.
+Context Kit supplies the only supported current Todo, Notes, and Workplan registrations. If an older installation still selects a legacy Grounded writer, replace only that source with its Context Kit source. Do not load both writers. Existing native schemas, read-only recovery, and Glance contracts remain available. A preserved legacy branch needs explicit bounded import, not a silent empty store. Read each provider's migration procedure before switching.
 
 For Memory, set Chrono's `memoryOwner` to `context-kit` before loading the new provider and reload at a safe boundary. This startup-only choice stops legacy Memory registration, automatic promotion writes, and pinned legacy reads together. It does not import the old sidecar. Follow the [Memory ownership and import procedure](memory/README.md#exact-v2-import-and-rollback). Accepted Memory is shared across tree moves in its logical session. Tasks, notes, and plans remain branch-local.
 

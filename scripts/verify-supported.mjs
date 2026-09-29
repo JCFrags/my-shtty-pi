@@ -389,9 +389,9 @@ export function executeProducts(root, files, state, selected) {
     for (const entry of [...product.entrypoints, ...manifestTargets(manifest.bin), ...generated]) if (!packed.has(entry.replace(/^\.\//, ''))) throw new Error(`${product.slug}: pack omitted ${entry}`);
     console.log(`PASS ${product.slug}: supported scripts and pack`);
   }
-  // These tests execute real providers from this same disposable indexed tree.
+  // These tests cover shared state contracts and Dialog in the same indexed tree.
   if (!selected || selected === 'grounded-tools' || selected === 'pi-project-glance') {
-    for (const provider of ['workplan', 'dialog']) {
+    for (const provider of ['core', 'dialog']) {
       const dir = join(root, `packages/grounded-tools/${provider}`);
       const tests = walk(join(dir, 'test')).filter(path => path.endsWith('.test.mjs'));
       if (!tests.length) throw new Error(`${provider} tests missing`);

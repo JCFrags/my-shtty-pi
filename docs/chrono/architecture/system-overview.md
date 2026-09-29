@@ -59,7 +59,7 @@ Arrows describe data use, not automatic state promotion. Recall does not write M
 | Context compiler | Selection and rendering at a frozen input boundary. | A derived context and receipt, not canonical knowledge. |
 | Telemetry | Content-free runtime observations and separate caller-reported quality. | Local bounded counters and best-effort records. |
 
-Memory's logical namespace survives tree moves within that namespace. Todo, Notes, and Workplan follow the selected branch. Neither model implies a global cross-project state store. These independent providers form the Chrono context-state stack. Chrono consumes their evidence and requests complete transfer. Each provider owns its persistence. Grounded Tools retains legacy compatibility providers. Do not load both writers for one native tool.
+Memory's logical namespace survives tree moves within that namespace. Todo, Notes, and Workplan follow the selected branch. Neither model implies a global cross-project state store. These independent providers form the Chrono context-state stack. Chrono consumes their evidence and requests complete transfer. Each provider owns its persistence. Context Kit supplies the only supported current Todo, Notes, and Workplan registrations. Do not load a retained older writer alongside the current owner of a native tool.
 
 ## The normal lifecycle
 

@@ -1,12 +1,12 @@
 # Grounded Tools
 
-- Purpose: Provide evidence-first file, process, LSP, dialog, task, note, and workplan tools with one shared core.
+- Purpose: Provide evidence-first file, process, LSP, and dialog tools. The shared core also supplies native-state primitives to Context Kit.
 - Status: active canonical
-- Pi entrypoint(s): `files/index.ts`, `process/index.ts`, `lsp/index.ts`, `dialog/index.ts`, `tasks/index.ts`, `notes/index.ts`, `workplan/index.ts`
+- Pi entrypoint(s): `files/index.ts`, `process/index.ts`, `lsp/index.ts`, `dialog/index.ts`
 - Load form: source-loaded
 - Current check command, from the repository root: `npm run verify -- --product grounded-tools`
 - Historical deployment check, from the repository root: `npm run verify:history`
-- Additive current-state boundary: Todo publishes its existing version-1 summary with a bounded branch identity, and its existing `pi-todo:summary-changed-v1` envelope may carry the bounded snapshot used by the provider. That changed event is an invalidation for consumers, not an authoritative current-state payload. Workplan publishes `pi-workplan:request-summary-v1`, `pi-workplan:summary-v1`, `pi-workplan:summary-changed-v1`, and post-persistence `pi-workplan:activity-v1` (`checkpoint_recorded`, `milestone_completed`, and `plan_completed`). Workplan request IDs are echoed exactly; branch IDs are bounded opaque identifiers and are not whitespace-normalized. Project Glance consumes these events without importing grounded-tools implementation internals or mutating provider state.
+- Shared current-state contracts: Context Kit Todo publishes its existing version-1 summary with a bounded branch identity, and its existing `pi-todo:summary-changed-v1` envelope may carry the bounded snapshot used by the provider. That changed event is an invalidation for consumers, not an authoritative current-state payload. Workplan publishes `pi-workplan:request-summary-v1`, `pi-workplan:summary-v1`, `pi-workplan:summary-changed-v1`, and post-persistence `pi-workplan:activity-v1` (`checkpoint_recorded`, `milestone_completed`, and `plan_completed`). Workplan request IDs are echoed exactly; branch IDs are bounded opaque identifiers and are not whitespace-normalized. Project Glance consumes these events without importing grounded-tools implementation internals or mutating provider state.
 
 ## Compact human tool display
 
@@ -30,9 +30,11 @@ Use `Ctrl+O` to expand or collapse tools. In Pi fullscreen mode, a left-click on
 
 HTML export uses the same compact renderers, so it is not the raw route. An export preserves returned evidence, not source bytes omitted during execution. Follow a returned complete-output path when needed and still available. Process/session logs can expire, normally after 24 hours. Do not publish exports or private log paths.
 
-## Legacy state-provider compatibility
+## Native state ownership
 
-The `tasks`, `notes`, and `workplan` entrypoints remain compatibility alternatives. The independent [Context Kit providers](../pi-context-kit/README.md) own Todo, Notes, and Workplan in the Chrono context-state stack. Replace the corresponding Grounded registration when selecting Context Kit. Never load both writers for one native tool. Progressive Tools controls catalog visibility and schema exposure. It does not own either provider implementation or store.
+The independent [Context Kit providers](../pi-context-kit/README.md) are the only supported current Todo, Notes, and Workplan registrations. Grounded core still supplies shared reducers, renderers, projectors, and checkpoint readers. It does not register another writer.
+
+The old factories remain in [pre-retirement Git source](https://github.com/JCFrags/my-shtty-pi/tree/84bbb994ddda237f5df7a98cca30b1ed1f5ec2ed/packages/grounded-tools), not as current entrypoints. Preserve original sessions, native import readers, and compatible retained installations for recovery. Never load both writers for one native tool. Progressive Tools controls catalog visibility and schema exposure, not provider persistence.
 
 ## LSP document languages
 
@@ -58,7 +60,7 @@ Global server configuration is the `servers` array in `grounded-tools/lsp.json` 
 
 ## Session rollover
 
-This section describes the retained legacy V3 path. Notes, Todo, and Workplan can export their complete current native state at a settled session boundary. Chrono V3 carries that state into a new physical session through `grounded-state-checkpoint-v1` custom entries. IDs, counters, archived records, and Workplan revision and checkpoint history remain intact. Later ordinary events replay from that checkpoint on the selected branch.
+This section describes the retained legacy V3 path in the [historical source](https://github.com/JCFrags/my-shtty-pi/tree/84bbb994ddda237f5df7a98cca30b1ed1f5ec2ed/packages/grounded-tools). It is not a provider installation procedure for current main. Notes, Todo, and Workplan can export their complete current native state at a settled session boundary. Chrono V3 carries that state into a new physical session through `grounded-state-checkpoint-v1` custom entries. IDs, counters, archived records, and Workplan revision and checkpoint history remain intact. Later ordinary events replay from that checkpoint on the selected branch.
 
 Export reads in-memory provider state, not old session archives. Each provider limits a checkpoint to 8 MiB, 200,000 visited values, and 32 nesting levels. Chrono limits the combined checkpoints to 16 MiB. Invalid, pending, or over-budget state prevents rollover. The system does not shorten tool state to make it fit.
 

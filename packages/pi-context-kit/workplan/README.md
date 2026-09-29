@@ -14,7 +14,7 @@ Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) 
 
 This package registers the native `workplan` tool. It owns branch-local persistence independently of Todo, Notes, Memory, Recall, and Chrono. It does not import the old Workplan extension factory or use a live tool to recover source state.
 
-Use one writer. Do not load this entrypoint together with `packages/grounded-tools/workplan/index.ts`.
+Use one writer. This package is the only supported current Workplan registration. Do not load it alongside a Workplan writer from a retained older installation.
 
 ## Native behavior
 

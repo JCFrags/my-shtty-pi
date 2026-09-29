@@ -10,9 +10,6 @@
     "dialog",
     "files",
     "lsp",
-    "notes",
-    "process",
-    "tasks",
-    "workplan"
+    "process"
   ]
 }
