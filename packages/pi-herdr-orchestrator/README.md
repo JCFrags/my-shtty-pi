@@ -1,75 +1,82 @@
 # Pi Herdr Orchestrator
 
-Direct Herdr orchestration for Pi.
+Run and manage direct-Herdr Pi agents on Linux. Roots use `orchestrate`. Managed children use only `subagent_channel`, with the exact run ID and assignment generation from their assignment.
 
-- Pi entry point: `dist/extensions/pi-herdr-orchestrator.js` (compiled-loaded).
-- Root tool: `orchestrate`. Managed-child tool: `subagent_channel`.
-- The package has no broker, CLI, authentication service, model-policy settings, scheduler, or workflow engine. `/agent-settings` is not registered.
-- Direct Herdr spawning retains its existing policy and capacity.
-- The Herdr manifest keeps plugin ID `pi.herdr.orchestrator`. It declares no startup hook or managed panes.
+The package has no broker, CLI, authentication service, model-policy settings, scheduler, or workflow engine. `/agent-settings` is not registered. The Herdr plugin ID is `pi.herdr.orchestrator`. Its manifest has a build hook, but no startup hook or managed panes.
 
-## Build and test
+## Fresh setup
 
-Requires Linux, Node.js >=22.19.0, npm, and the locked Pi peer (for the model-free lifecycle and startup checks).
+Use a full checkout at any local path. The private repository root is not an all-in-one Pi package. An orchestration tarball alone is not a supported installation: the runtime needs this checkout's sibling `pi-tool-controls/presentation` library and root dependency tree. Importing that library does not activate the inactive Tool Controls extension.
+
+Prerequisites:
+
+- Linux, Git, npm, Node.js >=22.19.0, Pi, and Herdr >=0.8.2. Repository verification uses Node.js 24.18.0 and locks Pi/TUI 0.85.1. Check the installed versions rather than infer compatibility from the open peer ranges.
+- A working Herdr Pi integration. Its `pi` agent command must start the intended Pi executable in interactive terminal UI (TUI) mode.
+- Herdr Agent State loaded exactly once in both parent and children. It publishes the native Pi session identity required by child validation. Print, JSON, RPC, or SDK factory checks do not provide that TUI reporting.
+- Working Pi provider authentication and a default model in the settings used by Herdr's children. Authenticate through Pi's supported login or provider setup. Do not copy credentials into this checkout.
+
+For a new installation with no existing Agent State or orchestration registration:
 
 ```sh
-npm ci --ignore-scripts
-npm run typecheck
-npm run build
-npm test
+git clone https://github.com/JCFrags/my-shtty-pi.git
+cd my-shtty-pi
+npm ci --ignore-scripts --no-audit --no-fund
+npm --prefix packages/pi-herdr-orchestrator ci --ignore-scripts --no-audit --no-fund
+npm --prefix packages/pi-herdr-orchestrator run typecheck
+npm --prefix packages/pi-herdr-orchestrator run build
+npm --prefix packages/pi-herdr-orchestrator test
+pi install "$PWD/packages/herdr-agent-state"
+pi install "$PWD/packages/pi-herdr-orchestrator"
+herdr plugin link "$PWD/packages/pi-herdr-orchestrator" --enabled
+node scripts/local-activation-check.mjs --expect-orchestrator
 ```
 
-Install root dependencies first with `npm ci --ignore-scripts` from the repository root, then run the package commands above. The runtime `pi-tool-controls/presentation` file dependency needs the sibling `pi-tool-controls` package and the root dependency tree in the retained checkout. An orchestrator tarball alone is not a standalone deployment. Use the checkout's lockfiles; `npm pack` omits `package-lock.json` from the tarball. Importing this pure library does not activate the inactive bulk-controls extension.
+If Herdr already installed an automatic Agent State extension, keep one reporting owner instead of adding a duplicate. For an existing installation, use [operations](docs/operations.md) and [scoped activation](../../docs/activation.md#retained-roots-and-orchestration), not these additive install commands.
 
-Pi supplies its canonical peer packages at extension load time. No alternate TUI package is bundled. `dist/` is generated and is not a deployed-byte contract. Build compiles only the extension and direct `src/orchestrator/` modules.
+`pi install` on a local path only registers that path. It does not copy source, install dependencies, or build `dist/extensions/pi-herdr-orchestrator.js`. Keep the full checkout and its prepared dependency trees available. Herdr plugin linking does not replace these build steps or load the Pi extension into a running process.
 
-Tests cover a model-free Pi lifecycle with exact child restore and explicit result collection, root and child tool catalogs, absence of `/agent-settings`, compact presentation, startup diagnostics, and M10 channel ordering, direct legacy migration, cancellation recovery, and bounded waits. The fake Herdr lifecycle fixture is retained. These checks do not prove live Herdr acceptance or deploy anything.
+Start a fresh parent Pi agent through Herdr's configured `pi` command. For an existing pane, the CLI form is `herdr agent start NAME --kind pi --pane PANE_ID`. Do not force print, JSON, or RPC mode. Herdr must supply its socket, workspace, tab, and pane context.
 
-The lifecycle check uses the locked Pi peer by default. To run that same check with an installed SDK, set `ORCHESTRATOR_TEST_SDK_ROOT` to its package directory:
+Children start with Herdr's `pi` defaults. They do not inherit the parent's current model, CLI extension arguments, or in-session settings changes. Configure the executable, model, authentication, and resources for that command before delegation. `PI_BIN_PATH` controls only the version probe, not the child executable. A one-off `pi -e` parent does not configure children.
+
+Keep `HOME`, `PI_CODING_AGENT_DIR` when customized, and the XDG environment consistent between the Herdr server, parent, and children. A variable set only in the parent shell need not reach a child started by the server. Use an absolute `XDG_STATE_HOME` if you override state storage. There is no `PI_HERDR_STATE_DIR` option.
+
+## Verify actual use
+
+The loader assertion requires one root `orchestrate`, no child channel, and no `/agent-settings`. It does not require Project Glance. It does not start a session, exercise native session reporting, or send a model prompt.
+
+In the fresh Herdr parent, ask Pi to:
+
+1. Call `orchestrate` with `action: "health"` and confirm `ok: true`.
+2. Run one harmless child assignment that reports progress, sends a parent message, and explicitly completes through `subagent_channel`.
+3. Wait for that run, then explicitly collect its final result. Use the returned IDs, not guessed names.
+4. Reuse the settled worker for one more harmless assignment, collect it, and close only that owned worker after Herdr reports it settled.
+
+Confirm that the child has `subagent_channel`, not `orchestrate`, and that Herdr reports its exact native Pi session. Completion does not close the worker. A successful tool call or an idle pane is not explicit completion. This practical check uses the configured model and can incur provider cost. [Operations](docs/operations.md) covers safe updates, cancellation, diagnostics, and rollback.
+
+## Development checks
+
+After the locked installs above:
 
 ```sh
+npm --prefix packages/pi-herdr-orchestrator run typecheck
+npm --prefix packages/pi-herdr-orchestrator run build
+npm --prefix packages/pi-herdr-orchestrator test
+```
+
+Tests cover the model-free Pi lifecycle, child restore, exact tool catalogs, compact display, startup diagnostics, and M10 ordering, migration, cancellation recovery, and bounded waits. Their fake Herdr fixture is not live acceptance. Run the [root verification workflow](../../README.md#verification) against indexed changes for repository delivery.
+
+To exercise the existing child lifecycle fixture with an installed SDK instead of the locked Pi peer:
+
+```sh
+cd packages/pi-herdr-orchestrator
 ORCHESTRATOR_TEST_SDK_ROOT=/path/to/pi-coding-agent node --test --test-name-pattern='managed child lifecycle' checks/lifecycle.test.mjs
 ```
 
-## Finite event waits
+Pi supplies its canonical peers at extension load time. The helper's own dependency resolution must also work. `dist/` is generated, excluded from Git, and built from the extension and direct `src/orchestrator/` modules. Package archives do not include the lockfile despite the manifest allowlist.
 
-`orchestrate` with `action: "wait"` returns queued events or terminal notices for 1–8 registered runs. `timeoutMs` defaults to 30000 and accepts up to 600000. One monotonic budget starts at tool execution entry and includes validation, context commands, lock admission, channel work, and event watching. Activity does not reset it. The domain lock is released during watcher sleep. Each later scan loads fresh registry state under the lock.
+## Further reading
 
-`timeoutMs: 0` polls once without event-watch sleep. It has a fixed 5000 ms work allowance for setup, the scan, and delivery bookkeeping. Zero does not mean zero elapsed execution time. If the budget expires before context and run validation finish, the tool reports `WAIT_DEADLINE_EXCEEDED`. After validation, an empty `timedOut: true` result means no batch was delivered. It does not mean the child failed or stopped.
-
-The deadline stops admission of new work. Started filesystem operations, exact read-helper shutdown, watcher cleanup, and an admitted bounded delivery commit must settle before return. These operations or an event-loop/kernel stall can exceed the requested time. Host abort stops the wait, not the child. An abort during an admitted delivery commit lets that bookkeeping finish. The existing window between saved delivery cursors and Pi recording the tool result remains; this is not an exactly-once receipt protocol.
-
-Event order, output caps, exact assignment checks, and separate UI notification cursors are unchanged. A UI notification does not resume the model. The final tool return supplies the model-visible batch. Full results still require explicit `collect`. Longer waits do not add activity snapshots, infer progress from terminal text, or provide cold-session wakeups.
-
-## Compact human tool display
-
-`orchestrate` and `subagent_channel` use saved inputs only for their human display. Collapsed cards use at most six text rows, and expanded cards use at most ten, plus Pi's separator. Expansion shows a bounded preview, not the full result. Errors, partial display, cancellation, identity warnings, and source limits precede excerpts. Labels appear only when supplied. A successful tool call is not completed work. Inspect keeps the requested run separate from the current agent and pane.
-
-Wait returns bounded event and terminal summaries, not collected final results. List/recover can omit tracked agents and shorten progress. Inspect can omit older runs and returns only a bounded current-pane excerpt. Preview clipping does not change these source limits or the original arguments, content, or details. Notifications and execution are unchanged.
-
-For original saved evidence, use Pi's `/export NEW_PRIVATE_PATH.jsonl`. Choose a new path in an owner-only directory and check file permissions. The export can overwrite an existing path and can contain tasks, messages, results, paths, and secrets. JSONL export preserves active-branch payloads but rewrites its header and parent links. HTML export uses the display renderers and is not a raw fallback. Export cannot recover evidence omitted by the tool itself.
-
-## Managed-child restore
-
-A validated child saves one versioned `pi-herdr-orchestrator:child-binding` custom entry in its native Pi session. The entry contains only the exact registry domain, agent identity/generation, and native session ID/file. It is a locator, not authorization, and is excluded from model context. It contains no assignment, environment snapshot, or credential.
-
-Inside Herdr, role selection waits for `session_start`. A child registers only `subagent_channel`. Every call checks the exact registry, supplied current assignment, live Herdr name and coordinates, and native session identity. Stale assignments and mismatches fail closed. No registry scan or transcript-text fallback is used. Normal roots outside Herdr still register immediately.
-
-Herdr Agent State can publish native identity later in startup. The child retains its channel and retries validation and marker creation on the next actual call, without a timer or root fallback. `appendEntry` is not a disk-persistence receipt. Cold recovery is available only after Pi persists the native session and locator.
-
-If startup role resolution fails, root tools remain unavailable. One warning distinguishes that failure from detected child context with an unavailable binding. `tool_help({"names":["subagent_channel"]})` and the native tool description expose safe historical startup guidance without requiring an invented assignment. Binding refusals report their current safe reason. The child-only surface does not prove a validated binding, and child calls do not retry root role selection. A normal parent needs a safe operator-controlled reload or new session to rerun startup. This improves diagnostics, not automatic recovery. The original reported startup trigger remains unknown.
-
-Malformed or conflicting locators, closed/failed agents, copied or forked native sessions, and unmarked legacy managed children do not gain root access or automatic recovery. A complete fresh environment can seed an unmarked native session after validation. Environmentless transfer to another native session is not supported.
-
-## Source provenance
-
-- The initial six `src/orchestrator/*.ts` modules and `checks/m10-reliability.mjs` were imported from production commit `3c87f445f788d460554999a5b5d01a627d7c0bcc`. The child-binding change adds exact native-session role recovery to the direct channel; the original result and assignment checks remain.
-- Existing MIT attribution is preserved in `LICENSE`.
-
-The complete direct `src/orchestrator/` path is retained, including its registry, channel, result collection, and legacy migrations. Separate broker state/result stores and their historical replay checks are removed. The direct path does not import the retired broker helpers.
-
-## Activation boundary
-
-Herdr 0.8.2 source at `9eb521456ac0d19d3ab3d9d7cea3cca10baa8a4c` updates the registry entry when `plugin link` uses an existing ID. It does not close existing panes. Recheck this behavior when Herdr changes.
-
-Relinking this direct-only manifest removes the future broker startup hook. It does not stop an already running broker or remove persisted data. Those actions require a separate maintenance decision. Keep the previous package root and plugin registration available for rollback. Build and test commands do not activate, stop, or roll back a live installation.
+- [Architecture and source map](docs/architecture.md): ownership, durable state, role selection, and dependency boundaries.
+- [Operations](docs/operations.md): finite waits, result collection, startup refusals, display limits, activation, and recovery.
+- Existing MIT attribution remains in [LICENSE](LICENSE).

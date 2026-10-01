@@ -11,6 +11,8 @@ const args = process.argv.slice(2);
 const value = (flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
 const candidate = value("--candidate");
 const orchestratorCandidate = value("--orchestrator-candidate");
+// An orchestration-only candidate must not pass when its registration is absent.
+const expectOrchestrator = args.includes("--expect-orchestrator") || Boolean(orchestratorCandidate);
 const expectV11 = args.includes("--expect-v1-1");
 const expectV1 = args.includes("--expect-v1") || expectV11;
 const agentDir = resolve(value("--agent-dir") ?? join(homedir(), ".pi", "agent"));
@@ -77,6 +79,13 @@ try {
   }));
   const commands = registry.flatMap((entry) => entry.commands);
   const tools = registry.flatMap((entry) => entry.tools);
+  if (expectOrchestrator) {
+    const owners = loaded.extensions.filter((extension) => extension.tools.has("orchestrate"));
+    assert.equal(owners.length, 1, "Exactly one root orchestrate registration is required");
+    assert(!tools.includes("subagent_channel"), "Factory inventory must not expose a managed-child channel");
+    assert(!commands.includes("agent-settings"), "Retired orchestration settings command must be absent");
+    if (orchestratorCandidate) assert.equal(resolve(owners[0].resolvedPath), join(resolve(orchestratorCandidate), "packages/pi-herdr-orchestrator/dist/extensions/pi-herdr-orchestrator.js"));
+  }
   if (expectV1) {
     assert.equal(commands.filter((name) => name === "project-glance").length, 1);
     assert.equal(commands.filter((name) => name === "agent-settings").length, 0);
@@ -108,6 +117,7 @@ try {
   console.log(JSON.stringify({
     status: "pass", scope: candidate || orchestratorCandidate ? "candidate registrations" : "linked registrations",
     activatedInExistingSession: false, modelPromptSent: false,
+    ...(expectOrchestrator ? { rootOrchestrationVerified: true } : {}),
     ...(expectV11 ? { deferredFacadeVerified: true, delivery: "safe-idle-next-natural-turn" } : {}),
     extensions: registry.length, commands: [...commands].sort(), tools: [...tools].sort(),
   }, null, 2));
