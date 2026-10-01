@@ -24,7 +24,7 @@
   },
   "include": [
     "extensions/**/*.ts",
-    "src/**/*.ts",
+    "src/orchestrator/**/*.ts",
     "types/**/*.d.ts"
   ]
 }

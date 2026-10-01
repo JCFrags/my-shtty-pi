@@ -32,7 +32,7 @@ Do not upgrade global software as part of linking. Check `pi --version`, the ins
 1. Inspect `git status --short`, `git worktree list`, and the baseline tag. Preserve unrelated edits, staged changes, and all user/session data. Use an isolated worktree for implementation. Do not reset, clean, stash, or switch a live activation checkout for convenience.
 2. Inspect `herdr plugin list --json`, each affected plugin's manifest, Pi's resource settings, and package/extension symlink targets. Never print credentials or raw runtime descriptors.
 3. Back up affected settings, link metadata and replaced package bytes in an owner-only directory outside the repository. Record old/new tree identities and file hashes. Keep the backup until activation and user acceptance are complete.
-4. The `pi.herdr.orchestrator` plugin identity owns broker startup. Do not unlink, disable or replace its startup infrastructure merely to remove its old pane. Do not terminate a broker or existing agents. If the running broker needs a restart to load new routes, report that separately and leave it running until the user authorizes a safe restart.
+4. The `pi.herdr.orchestrator` manifest has no startup hook or managed pane. Direct workers do not depend on a broker. Preserve existing agents and retained broker installations. Stop an older broker only through its retained supported CLI after an authorized, verified quiescent maintenance window.
 5. Preserve unrelated package order, registrations, external browser products, and auto-discovered extensions. Remove a predecessor registration only after its package identity and exact ownership are confirmed. Historical session entries are not package registrations and must not be deleted.
 
 ## Build and registration checks
@@ -50,7 +50,7 @@ node scripts/local-activation-check.mjs --candidate "$PWD" --expect-v1
 
 The candidate check substitutes only the affected product roots and removes the retired product registration in an isolated settings directory. It preserves other resource settings and uses the installed SDK. Remote package sources must already have a reviewed local resolution; this script does not install them. Use `--sdk-root` if Pi is not installed below `npm root -g`.
 
-A successful candidate check is not activation. After the planned link change, run the same check without `--candidate` and with `--expect-v1`. Confirm exactly one `/project-glance`, one `/agent-settings`, one `orchestrate`, and no predecessor commands or tools. Project Glance must register no model tools or shortcuts. Its source and live checks must also show no large editor widget.
+A successful candidate check is not activation. After the planned link change, run the same check without `--candidate` and with `--expect-v1`. Confirm exactly one `/project-glance`, one `orchestrate`, no `/agent-settings`, and no predecessor commands or tools. Project Glance must register no model tools or shortcuts. Its source and live checks must also show no large editor widget.
 
 ## Project Glance link workflow
 
@@ -85,18 +85,18 @@ A retained activation does not need to be the live Git worktree. Copy indexed so
 
 When Todo and Workplan remain linked to another repository root, use `PI_PROJECT_GLANCE_PROVIDER_ROOT="$PROVIDER_REPOSITORY" npm run dev:doctor` from the retained Glance package. This checks exact provider realpaths against the explicitly selected root; it does not change provider links or runtime imports. An invalid explicit root fails the check. The package test's live doctor check is opt-in with `PI_PROJECT_GLANCE_LIVE_DOCTOR=1`; ordinary package tests do not claim live deployment health. Root verifier tests own indexed-input and generated-output checks.
 
-For orchestration, install locked dependencies and run typecheck, build, test and pack in `packages/pi-herdr-orchestrator`. Run `node scripts/local-orchestration-smoke.mjs "$ACTIVATION"` against that built root. It uses real Herdr 0.8.2 and installed Pi metadata under private HOME/XDG directories, validates authenticated broker startup/status/doctor/policy and the no-pane manifest, then removes its own registrations, broker, server and sandbox. It sends no model prompts and does not prove existing-session activation or a model-backed child lifecycle. Real Herdr snapshots are under `result.snapshot`; use `herdr plugin link PATH --enabled` with this CLI.
+For orchestration, install the repository-root dependencies and package-local locked dependencies. Run typecheck, build, test and pack in `packages/pi-herdr-orchestrator`. Run `node scripts/local-orchestration-smoke.mjs "$ACTIVATION"` against that built root. It checks direct-only plugin registration with a private real Herdr server, then removes only its own registration, server, and sandbox. It sends no model prompts and does not prove existing-session activation or a model-backed child lifecycle. Use `node scripts/local-activation-check.mjs --orchestrator-candidate "$ACTIVATION"` for an orchestration-only candidate loader check. This preserves all unrelated selected product roots.
 
 After an owner-only registration backup and successful candidate loader check:
 
 1. Retarget only the existing Pi orchestration alias to `$ACTIVATION/packages/pi-herdr-orchestrator`, using a same-directory temporary symlink and atomic rename. Set its Pi package-list source to that exact absolute retained path, preserving its position. Keep the alias for convenience, but do not use its unchanged path as the hot-reload source.
-2. Run `herdr plugin link "$ACTIVATION/packages/pi-herdr-orchestrator" --enabled`. Keep the identity `pi.herdr.orchestrator`; its tracked manifest has broker startup and no presentation pane.
+2. Run `herdr plugin link "$ACTIVATION/packages/pi-herdr-orchestrator" --enabled`. Keep the identity `pi.herdr.orchestrator`. Its tracked manifest has no startup hook or presentation pane.
 3. Remove only the confirmed predecessor package entry and archive its exact alias in the backup. Replace the existing Glance entry at its original position, rather than appending a duplicate. Relink its same-ID Herdr plugin to the retained root, then run `dev:link` to verify the complete registration.
-4. Compare unrelated settings, aliases and plugin registrations before and after, then run the real loader, doctor and pane smoke checks.
+4. Compare unrelated settings, aliases and plugin registrations before and after. Run the real loader and direct worker lifecycle checks. For an orchestration-only update, do not change Glance or Dialog.
 
-Herdr 0.8.2 same-ID relinking updates plugin metadata without restarting the existing broker or closing its panes. The new startup manifest is used on a future server startup. A running old broker still has its old routes until a separately authorized safe restart; linking alone must not be reported as new broker activation. `/agent-settings` uses authenticated broker policy/configuration requests. The unchanged direct-Herdr `orchestrate` spawn path is separate and does not acquire broker model selection semantics.
+Same-ID relinking updates plugin metadata without closing existing panes. Confirm this with the installed Herdr version. The direct-only manifest prevents future broker startup but does not stop a broker that already runs. `/agent-settings` and broker policy are removed. Direct spawn routing, registry migrations, child binding, cancellation, and recovery remain unchanged.
 
-Historical event logs can contain a retired actor identity. The narrow historical decoder accepts that exact value only during replay and disk verification. New append and live authentication reject it. Never delete historical data or broaden live validation to make replay pass.
+Preserve all historical broker data and its compatible retained installation for recovery. The current direct package neither reads nor migrates that data. Never delete state as part of code selection.
 
 ## Activate and confirm
 

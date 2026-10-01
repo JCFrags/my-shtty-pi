@@ -1,35 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { createRequire, registerHooks } from "node:module";
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// Use the real Pi component and runtime without sending model prompts.
-const require = createRequire(import.meta.url);
-let tuiPath;
-try {
-  tuiPath = require.resolve("@earendil-works/pi-tui");
-} catch {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_/i.test(key)));
-  const globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8", env }).trim();
-  tuiPath = createRequire(join(globalRoot, "@earendil-works/pi-coding-agent/package.json"))
-    .resolve("@earendil-works/pi-tui");
-}
-const hooks = registerHooks({
-  resolve(specifier, context, next) {
-    return specifier === "@earendil-works/pi-tui"
-      ? { url: pathToFileURL(tuiPath).href, shortCircuit: true }
-      : next(specifier, context);
-  },
-});
-const { default: extension } = await import("../dist/extensions/pi-herdr-orchestrator.js");
-const { openAgentSettings } = await import("../dist/src/pi/agent-settings.js");
-hooks.deregister();
+// Use the real Pi runtime without sending model prompts.
+import extension from "../dist/extensions/pi-herdr-orchestrator.js";
 
 test("managed child lifecycle restores exact channel and explicit collection", { timeout: 30_000 }, async () => {
   const sdkRoot = process.env.ORCHESTRATOR_TEST_SDK_ROOT;
@@ -83,7 +62,7 @@ test("managed child lifecycle restores exact channel and explicit collection", {
     const tools = [], commands = [];
     extension({ registerTool: tool => tools.push(tool.name), registerCommand: command => commands.push(command), on() {} });
     assert.deepEqual(tools, ["orchestrate"]);
-    assert.deepEqual(commands, ["agent-settings"]);
+    assert.deepEqual(commands, []);
 
     const fakeHerdr = join(root, "herdr");
     await writeFile(fakeHerdr, `#!${process.execPath}\nimport { readFileSync } from 'node:fs';
@@ -200,9 +179,7 @@ console.log(JSON.stringify({ result: { [kind]: value } }));\n`, { mode: 0o700 })
     const catalog = await call(rootSession, "list_tools", {});
     assert(catalog.tools.some(tool => tool.name === "orchestrate"));
     assert(!catalog.tools.some(tool => tool.name === "subagent_channel"));
-    assert(rootSession.extensionRunner.getCommand("agent-settings"));
-    await rootSession.prompt("/agent-settings");
-    assert(notifications.some(message => message.includes("TUI mode")));
+    assert.equal(rootSession.extensionRunner.getCommand("agent-settings"), undefined);
     await call(rootSession, "tool_help", { names: ["orchestrate"] });
     const collected = await call(rootSession, "orchestrate", { action: "collect", runId: nextRun });
     assert.equal(collected.status, "completed");
@@ -213,48 +190,4 @@ console.log(JSON.stringify({ result: { [kind]: value } }));\n`, { mode: 0o700 })
     for (const session of sessions) await shutdown(session);
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test("real settings component renders and saves only after explicit Save", { timeout: 5000 }, async () => {
-  const calls = [];
-  const notifications = [];
-  const client = {
-    connected: true,
-    request: async (method, params) => {
-      calls.push({ method, params });
-      if (method === "model.capabilities") return {
-        models: [{ provider: "fixture", modelId: "synthetic", reasoning: false, thinkingLevels: ["off"] }],
-      };
-      if (method === "model.policy.get") return { policy: {}, operatorSettings: {} };
-      if (method === "model.operator.settings.set") return { persisted: true };
-      throw new Error("Unexpected request");
-    },
-  };
-  const context = {
-    modelRegistry: { getAvailable: () => [{ provider: "fixture", id: "synthetic" }] },
-    ui: {
-      notify: (text, level) => notifications.push({ text, level }),
-      custom: async factory => {
-        let finished = false;
-        let result;
-        const component = factory({}, { fg: (_color, text) => text, bold: text => text }, {}, value => {
-          finished = true; result = value;
-        });
-        assert.match(component.render(100).join("\n"), /Agent settings/);
-        assert.equal(calls.filter(call => call.method.endsWith(".set")).length, 0);
-        for (const char of "Save agent settings") component.handleInput(char);
-        component.handleInput("\r");
-        assert.equal(finished, true);
-        return result;
-      },
-    },
-  };
-  await openAgentSettings(client, context);
-  assert.equal(calls.at(-1).method, "model.operator.settings.set");
-  assert.equal(calls.at(-1).params.allowlist, null);
-  assert.equal(notifications.at(-1).level, "info");
-  calls.length = 0;
-  context.ui.custom = async () => undefined;
-  await openAgentSettings(client, context);
-  assert.deepEqual(calls.map(call => call.method), ["model.capabilities", "model.policy.get"]);
 });
