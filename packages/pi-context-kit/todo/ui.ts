@@ -80,10 +80,6 @@ export class TodoListView {
 export const TODO_SUMMARY_REQUEST_EVENT = "pi-todo:request-summary-v1";
 export const TODO_SUMMARY_EVENT = "pi-todo:summary-v1";
 export const TODO_SUMMARY_CHANGED_EVENT = "pi-todo:summary-changed-v1";
-export const TODO_ACTION_REQUEST_EVENT = "pi-todo:request-action-v1";
-export const TODO_ACTION_RESPONSE_EVENT = "pi-todo:action-response-v1";
-export interface TodoActionRequest { version: 1; requestId: string; action: "start" | "done" | "clear_wait"; taskId: string }
-export interface TodoActionResponse { version: 1; requestId: string; ok: boolean; action: TodoActionRequest["action"]; taskId: string; message?: string; error?: string }
 export interface TodoTaskSummary { id: string; text: string; status: Task["status"]; waitReason?: string }
 export interface TodoSummarySnapshot {
   version: 1; currentUsefulTask?: TodoTaskSummary; unfinishedTasks: TodoTaskSummary[];
@@ -158,23 +154,6 @@ export function registerTodoUi(pi: ExtensionAPI, owner: TodoUiOwner, settingsPat
       if (request.version !== undefined && request.version !== 1) return;
       if (request.branchId !== undefined && request.branchId !== currentBranchId) return;
       summary(TODO_SUMMARY_EVENT, typeof request.requestId === "string" ? bounded(request.requestId, 128) : undefined);
-    }));
-    removers.push(pi.events.on(TODO_ACTION_REQUEST_EVENT, (value: unknown) => {
-      const request = value && typeof value === "object" ? value as Partial<TodoActionRequest> : {};
-      const { action, taskId, requestId } = request;
-      if ((request.version !== undefined && request.version !== 1) || !identifier(requestId) || !identifier(taskId)
-        || (action !== "start" && action !== "done" && action !== "clear_wait")) return;
-      void (async () => {
-        try {
-          if (!context) throw new Error("Todo is unavailable");
-          const result = await owner.execute(action === "clear_wait" ? { action: "update", id: taskId, waitReason: "" } : { action, id: taskId }, context);
-          emit(TODO_ACTION_RESPONSE_EVENT, { version: 1, requestId, ok: true, action, taskId,
-            message: action === "clear_wait" ? `Cleared external wait for ${taskId}` : result.message } satisfies TodoActionResponse);
-        } catch (error) {
-          emit(TODO_ACTION_RESPONSE_EVENT, { version: 1, requestId, ok: false, action, taskId,
-            error: bounded(error instanceof Error ? error.message : String(error), 240) } satisfies TodoActionResponse);
-        }
-      })();
     }));
   } catch { /* Glance is not required to register native commands. */ }
   pi.registerCommand("todos", {

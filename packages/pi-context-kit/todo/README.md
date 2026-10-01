@@ -18,7 +18,7 @@ Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) 
 
 The `todo` tool retains `list`, `add`, `update`, `start`, `done`, `block`, `remove`, `reorder`, `clear_done`, and `replace`. Dependencies, external waits, and the single in-progress task rule use the native reducers. `replace` retains the native ID-counter reset behavior. Existing source timestamps are not converted into owner revisions.
 
-`/todo-add`, the native tool, and Glance `start`, `done`, and `clear_wait` all use one serialized owner transaction. `/todos [full|compact|plan]`, its scrolling view, and `ctrl+shift+u` retain the existing display behavior. Display preferences remain global in `grounded-tasks.json` under Pi's agent directory. They do not modify task state or task revisions.
+`/todo-add` and the native tool use one serialized owner transaction. Glance reads Todo summaries and does not perform task actions. `/todos [full|compact|plan]`, its scrolling view, and `ctrl+shift+u` retain the existing display behavior. Display preferences remain global in `grounded-tasks.json` under Pi's agent directory. They do not modify task state or task revisions.
 
 Admission limits apply before commit or import:
 
