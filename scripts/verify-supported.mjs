@@ -78,6 +78,9 @@ export function scanBoundary(text, label, slug) {
   if (registrations.some(name => /^(?:signals?|signal-board|agent-board|pi-herd|deck|herd|herdr-deck|orchestrator-status)$/.test(name))) {
     throw new Error(`${label}: retired presentation command`);
   }
+  if (slug === 'pi-herdr-orchestrator' && registrations.includes('agent-settings')) {
+    throw new Error(`${label}: retired broker settings command`);
+  }
   if (slug === 'pi-project-glance') {
     if (registrations.some(name => name !== 'project-glance')) throw new Error(`${label}: Glance command alias`);
     if (/\bregister(?:Tool|Shortcut|Keybind|Hotkey|Widget|EditorWidget)\s*\(|\bsetWidget\s*\(/.test(text)) throw new Error(`${label}: Glance control surface`);

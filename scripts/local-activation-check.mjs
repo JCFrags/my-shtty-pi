@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 const args = process.argv.slice(2);
 const value = (flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
 const candidate = value("--candidate");
+const orchestratorCandidate = value("--orchestrator-candidate");
 const expectV11 = args.includes("--expect-v1-1");
 const expectV1 = args.includes("--expect-v1") || expectV11;
 const agentDir = resolve(value("--agent-dir") ?? join(homedir(), ".pi", "agent"));
@@ -39,7 +40,9 @@ try {
     const source = localSource(typeof item === "string" ? item : item.source);
     const manifest = await metadata(source);
     if (candidate && manifest?.name === "pi-signal-board") continue;
-    const target = candidate && ["pi-project-glance", "pi-herdr-orchestrator"].includes(manifest?.name)
+    const target = orchestratorCandidate && manifest?.name === "pi-herdr-orchestrator"
+      ? join(resolve(orchestratorCandidate), "packages/pi-herdr-orchestrator")
+      : candidate && ["pi-project-glance", "pi-herdr-orchestrator"].includes(manifest?.name)
       ? join(resolve(candidate), "packages", manifest.name)
       : candidate && expectV11 && manifest?.name === "@grounded/pi-dialog"
         ? join(resolve(candidate), "packages/grounded-tools/dialog") : source;
@@ -76,7 +79,7 @@ try {
   const tools = registry.flatMap((entry) => entry.tools);
   if (expectV1) {
     assert.equal(commands.filter((name) => name === "project-glance").length, 1);
-    assert.equal(commands.filter((name) => name === "agent-settings").length, 1);
+    assert.equal(commands.filter((name) => name === "agent-settings").length, 0);
     assert.equal(tools.filter((name) => name === "orchestrate").length, 1);
     assert(!commands.some((name) => ["signals", "signalboard", "agent-board", "pi-herd"].includes(name)));
     assert(!tools.some((name) => /^(?:signal_board_|project[_-]glance)/u.test(name)));
@@ -103,7 +106,7 @@ try {
     if (candidate) assert.equal(resolve(owner.resolvedPath), join(resolve(candidate), "packages/grounded-tools/dialog/index.ts"));
   }
   console.log(JSON.stringify({
-    status: "pass", scope: candidate ? "candidate registrations" : "linked registrations",
+    status: "pass", scope: candidate || orchestratorCandidate ? "candidate registrations" : "linked registrations",
     activatedInExistingSession: false, modelPromptSent: false,
     ...(expectV11 ? { deferredFacadeVerified: true, delivery: "safe-idle-next-natural-turn" } : {}),
     extensions: registry.length, commands: [...commands].sort(), tools: [...tools].sort(),

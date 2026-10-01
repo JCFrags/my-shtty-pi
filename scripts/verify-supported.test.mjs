@@ -50,7 +50,7 @@ test('boundary bans retired commands and aliases, not supported settings or Glan
   assert.throws(() => scanBoundary('pi.registerCommand("pi-herd", {})', 'runtime', 'pi-herdr-orchestrator'), /retired presentation command/);
   assert.throws(() => scanBoundary('import x from "@pi-herdr-deck/tui"', 'runtime', 'pi-herdr-orchestrator'), /retired presentation identity/);
   assert.throws(() => scanBoundary('pi.registerCommand("orchestrator-status", {})', 'runtime', 'pi-herdr-orchestrator'), /retired presentation command/);
-  assert.doesNotThrow(() => scanBoundary('pi.registerCommand("agent-settings", {})', 'runtime', 'pi-herdr-orchestrator'));
+  assert.throws(() => scanBoundary('pi.registerCommand("agent-settings", {})', 'runtime', 'pi-herdr-orchestrator'), /retired broker settings command/);
   assert.doesNotThrow(() => scanBoundary('pi.registerCommand("project-glance", {})', 'runtime', 'pi-project-glance'));
   assert.throws(() => scanBoundary('pi.registerCommand("glance", {})', 'runtime', 'pi-project-glance'), /command alias/);
 });

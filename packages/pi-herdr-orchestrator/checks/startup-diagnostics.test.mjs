@@ -157,7 +157,7 @@ else { console.error(JSON.stringify({ code: 'FIXTURE_COMMAND_REFUSED' })); proce
     const after = await catalog(healthy.session);
     assert(after.some(item => item.name === "orchestrate"));
     assert(!after.some(item => item.name === "subagent_channel"));
-    assert(healthy.session.extensionRunner.getCommand("agent-settings"));
+    assert.equal(healthy.session.extensionRunner.getCommand("agent-settings"), undefined);
     await call(healthy.session, "tool_help", { names: ["orchestrate"] });
     tool(healthy.session, "orchestrate");
     assert.deepEqual(healthy.notifications, []);

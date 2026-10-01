@@ -2,13 +2,9 @@ id = "pi.herdr.orchestrator"
 name = "Pi Herdr Orchestrator"
 version = "0.1.0"
 min_herdr_version = "0.8.2"
-description = "Agent orchestration and authenticated model configuration"
+description = "Direct Herdr orchestration for Pi"
 platforms = ["linux"]
 
 [[build]]
 command = ["npm", "run", "build"]
-platforms = ["linux"]
-
-[[startup]]
-command = ["./bin/pi-herdr-orchestrator", "broker", "startup"]
 platforms = ["linux"]

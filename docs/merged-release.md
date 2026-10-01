@@ -1,5 +1,11 @@
 # Project Glance V1.1 merged release
 
+This is a historical release record. Its broker and `/agent-settings` requirements
+are superseded by the direct-only orchestration cleanup. Use
+[the current activation procedure](activation.md) for new selections. Preserve
+retained installations and data, but do not restore old broker infrastructure
+as a prerequisite for the current direct tools.
+
 This document defines the integration and deployment gates. It is not a claim
 that the merge, local cutover, or final user acceptance has happened. Record
 those identities and results on the release PR and immutable release checkpoint.
@@ -157,29 +163,13 @@ Retargeted links alone do not activate already-loaded code. `/reload` refreshes
 Pi extensions but does not replace a running Glance pane; close and reopen that
 pane separately. Require actual reload evidence and retained session identity.
 
-## Broker-only replacement
+## Retired broker deployment
 
-The supported package CLI provides `broker stop` and `broker start`. Starting
-or linking a new package alone can keep a healthy older broker running. Use the
-same authenticated state/runtime namespace and canonical Herdr socket.
-
-An external maintenance handoff must own stop, identity verification, start,
-and health checks without depending on the broker's own agent result channel.
-The supported stop validates PID/start identity, requests authenticated shutdown,
-and waits for exact-owned process artifacts to disappear. It does not terminate
-Herdr, Pi, or their panes. It also does not wait for every remote model turn:
-operator-confirmed task, workflow, callback, and answer-delivery quiescence is
-still required. A shutdown timeout is a blocker, not permission to kill a
-process or remove locks manually.
-
-After replacement, verify the new process and start identity, exact launch root
-and build closure, authenticated healthy status, event-sequence continuity,
-required doctor checks, and working policy reads. The retired
-`provider-projection-contracts` doctor check must be absent. Package version or
-launcher hash alone cannot distinguish the old broker from this release.
-Historical actor replay stays narrow; new writes and authentication still reject
-retired actors. Preserve keys and current state. Code rollback must not overwrite
-new events with an older state backup.
+The current package has no broker CLI or startup hook. The former replacement
+procedure remains in Git history. If an older broker still runs, preserve its
+installation and state. Use only that retained version's supported shutdown
+procedure after authorized quiescence checks. Do not replace it with a broker
+from the current direct-only package.
 
 ## Required acceptance
 
