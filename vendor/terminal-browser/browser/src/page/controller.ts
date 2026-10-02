@@ -105,7 +105,11 @@ export class BrowserController {
   pageDocumentGeneration = 0;
   pageViewRevision = 0;
   get pageContents() { return this.window.webContents; }
-  get pageVisible() { return this.visible && !this.stopped && !this.selectedPopup; }
+  get pageVisible() {
+    // Frame teardown can notify before the closed-window callback removes this tab.
+    return this.visible && !this.stopped && !this.selectedPopup &&
+      !this.window.isDestroyed() && !this.window.webContents.isDestroyed();
+  }
   noteGeometryChange() {
     this.pageViewRevision += 1;
     this.frames.invalidateGeometry();

@@ -34,7 +34,10 @@ export class PopupWindow implements AgentBrowserTarget {
   pageDocumentGeneration = 0;
   pageViewRevision = 0;
   get pageContents() { return this.window.webContents; }
-  get pageVisible() { return this.visible && !this.destroyed; }
+  get pageVisible() {
+    return this.visible && !this.destroyed && !this.window.isDestroyed() &&
+      !this.window.webContents.isDestroyed();
+  }
   noteGeometryChange() {
     this.pageViewRevision += 1;
     this.frames.invalidateGeometry();

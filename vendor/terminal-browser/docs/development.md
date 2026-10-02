@@ -158,8 +158,10 @@ baseline checks are not a substitute for packaged runtime acceptance.
 `pnpm --filter terminal-browser test:electron` runs pinned Electron fixtures.
 Linux needs an X11 display, for example `xvfb-run -a`: the native Wayland dialog
 backend can fail on hidden windows. An isolated private XDG runtime may not contain
-the host Wayland socket. Use `--ozone-platform=x11` for an approved X11 runtime
-check in that environment; do not weaken isolation merely to find the socket. The fixtures cover root/popup/frame input,
+the host Wayland socket. Pass `--ozone-platform=x11` to the existing Electron
+fixture or daemon entrypoint for an approved X11 runtime check in that environment.
+Source CLI `open` does not forward Chromium flags. Do not weaken isolation merely
+to find the socket. The fixtures cover root/popup/frame input,
 opener communication, dialogs and beforeunload decisions, project files,
 transfers, cancellation, takeover, and locator/frame geometry limits. Tests for
 terminal overlay positions do not prove alignment on a particular terminal.

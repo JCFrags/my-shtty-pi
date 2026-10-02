@@ -327,7 +327,7 @@
       "path": "browser/src/page/controller.ts",
       "sourceSha256": "4da2062762f42f70a436cd76c16c57259f1e3017fbb096d664744447bd8af7a2",
       "mode": 420,
-      "sha256": "04c0d34921bbb45e173167ec593df6d48bfc0ea1c7eeea6ae1ebe051b8a1df7f",
+      "sha256": "3330fe0b0eb2980fd7cba64a8a98222f25cf922c2688c06f7340a6f1c63fe0d0",
       "modified": true
     },
     {
@@ -383,7 +383,7 @@
       "path": "browser/src/page/popup.ts",
       "sourceSha256": "2c973561b4c192933a03b9c1b4f9118af867d73fe15592ca66d535246f56c80f",
       "mode": 420,
-      "sha256": "066d255d87328afdfe4081fe5f4f081078432b7088f500ce056c431404744423",
+      "sha256": "4d33bc7b0aa92198956f51eb78beee02365ac505e20163d66eb1e76f2292512b",
       "modified": true
     },
     {
@@ -1083,7 +1083,7 @@
       "path": "docs/development.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "2ff10fde0b6793b729f70e35fcba558c20edaf765eb0566bd707febfadb83c09",
+      "sha256": "25aafe9e04c57a794097064da9a4469888b641f1c7b599785eda8f9012864d8b",
       "modified": true
     },
     {
