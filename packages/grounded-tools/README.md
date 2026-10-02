@@ -101,6 +101,50 @@ The default TypeScript server uses these language fields:
 
 Global server configuration is the `servers` array in `grounded-tools/lsp.json` under Pi's agent directory. A custom server replaces the complete default entry with the same `id`. Existing custom entries without `languageIds` keep their scalar language for all routed extensions. To use the mapping above, add it to the existing TypeScript server entry and preserve its other settings. Explicit map values take precedence over the scalar fallback, including intentional nonstandard language choices.
 
+## Rust server lifetime
+
+Rust requires Linux and executable `/usr/bin/flock`. Automatic edit/write checks
+never start or restart a Rust server. Use an explicit `lsp` navigation or
+diagnostics request first. Automatic checks can reuse that initialized client for
+60 seconds after the last successful explicit operation. Automatic checks do not
+renew the window. One operation uses a Rust client at a time. A busy automatic
+check is skipped, and a concurrent explicit request reports request-active.
+Expiry waits for an active operation to finish, then stops the client unless a
+successful explicit operation renewed the window. Status and pathless diagnostics
+do not start servers.
+
+Participating processes for the same numeric OS user share one Rust slot at
+`/tmp/pi-grounded-lsp-<uid>/rust.lock`. The namespace does not depend on the
+repository, Pi agent directory, HOME, TMPDIR, or XDG settings. The parent and
+foreground server inherit the same kernel lock. Ownership remains until their
+copies close. Normal release never removes the lock file. An unavailable launcher,
+unsafe directory/file, or unsupported platform refuses explicit Rust use rather
+than starting an unbounded server. `lsp action=status` reports local state and the
+last outcome, not a fleet census. Skipped checks say that no check occurred. They
+are not clean diagnostics.
+
+The restriction applies to a whole configured server when its ID or command
+basename is `rust-analyzer`, its extensions contain `.rs`, or its scalar/mapped
+language is `rust`. Language and extension policy checks ignore case. This also
+covers custom IDs and mixed-language mappings. A concealed executable alias with
+misleading metadata cannot be detected. Custom launch commands must stay in the
+foreground and must not deliberately drop or unlock descriptor 3. Descendants can
+retain the lock after the Pi parent dies, so the slot can remain busy. Do not remove
+the lock file or kill another owner to reclaim admission.
+
+One slot is a process-count bound, **not an RSS memory limit**. One analyzer, its
+helpers, old loaded clients, nonparticipating processes, or Pi can still exhaust
+memory. This policy does not provide cgroup containment. Non-Rust server policy
+and document-language mappings are unchanged. Reload or restart existing Pi
+sessions only after their work is settled to activate changed source.
+
+For an LSP-only staged change, run `node scripts/verify-lsp.mjs` from the repository
+root. This standalone command uses the Git index, prepares committed-lock
+dependencies in a disposable snapshot, and checks only the LSP source routes,
+syntax, privacy, and tiny fake-server lifecycle. It does not run a real Rust
+workspace, other package tests, builds, or packaging checks. The general
+`--product grounded-tools` command above still includes shared repository checks.
+
 ## Session rollover
 
 This section describes the retained legacy V3 path in the [historical source](https://github.com/JCFrags/my-shtty-pi/tree/84bbb994ddda237f5df7a98cca30b1ed1f5ec2ed/packages/grounded-tools). It is not a provider installation procedure for current main. Notes, Todo, and Workplan can export their complete current native state at a settled session boundary. Chrono V3 carries that state into a new physical session through `grounded-state-checkpoint-v1` custom entries. IDs, counters, archived records, and Workplan revision and checkpoint history remain intact. Later ordinary events replay from that checkpoint on the selected branch.
