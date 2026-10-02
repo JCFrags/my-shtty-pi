@@ -155,29 +155,22 @@ Files UI remains separate from Grounded Files and orchestration. Signal Board, p
 
 ## Terminal-browser and AgentCursor
 
-[`vendor/terminal-browser`](vendor/terminal-browser/README.md) is the browser-only copy from [`JCFrags/my-shtty-pi-web`](https://github.com/JCFrags/my-shtty-pi-web) at `19c33769a33edddd066b3bac291ce371d2c1aba9`. It includes the Electron browser, pinned AgentCursor dependency, Rust rendering engine, CLI, Pi extension, Herdr plugin, assets, build tooling, and browser tests. [Copy provenance](vendor/terminal-browser/copy-provenance.json) and [upstream pins](vendor/terminal-browser/upstreams.lock.json) record its inputs and adaptations.
+[`vendor/terminal-browser`](vendor/terminal-browser/README.md) is a maintained terminal browser with a native CLI for Pi and other agents. Pi tools and Herdr pane management are optional adapters to the same AgentCursor backend. The default CLI-only installation does not configure either host. Use this repository's reviewed release artifacts, not an upstream installer.
 
-When the separate browser integration is installed, Pi exposes five tools:
-
-| Tool | Purpose |
-| --- | --- |
-| `browser_open` | Open or reuse this Pi pane's companion browser. |
-| `browser_observe` | Read bounded semantic or visual state, including supported frame selection. |
-| `browser_act` | Perform one AgentCursor action, navigation, dialog response, or project-confined upload. |
-| `browser_tabs` | Manage tabs/popups and inspect, wait for, or cancel owner-scoped downloads. |
-| `browser_control` | Inspect, pause, or resume agent control. |
-
-Observe before acting and after page changes. Do not automatically repeat a possibly delivered action or resume control taken by a human. Use these tools in Pi, not the upstream CLI as an alternative control route.
-
-WebX search/read, its optional loader and research services, retirement scripts, and external publishing automation are not included. This source copy does not activate another Pi package or replace an installed browser. Build it in its separate workspace:
+Launch an owned browser in a visible terminal, then use another terminal or pane for agent commands:
 
 ```sh
-cd vendor/terminal-browser
-pnpm install --frozen-lockfile
-pnpm build
+terminal-browser open https://example.com --session task-a --project /absolute/project
+terminal-browser agent observe --session task-a --project /absolute/project
 ```
 
-Use pnpm 10.13.1, Rust/Cargo, and the [documented native prerequisites](vendor/terminal-browser/README.md). Distribution, managed activation, and recovery remain separate from the root npm workspace. A browser build does not prove that a running daemon or Pi process loaded it.
+Use the returned observation ID, context, and control epoch for each native action. Observe again after page changes or interruption. Never automatically replay an uncertain side effect or resume control taken by a human. The legacy `action` route is retired. See [CLI use and migration](vendor/terminal-browser/docs/agent-control.md).
+
+The [optional Pi package](vendor/terminal-browser/pi-extension/README.md) keeps five tools: `browser_open`, `browser_observe`, `browser_act`, `browser_tabs`, and `browser_control`. These manage observation/epoch bookkeeping, not another browser backend. Blocking uses Ghostery's core engine and a bundled, SHA-pinned EasyList snapshot. Network blocking is enabled by default, with explicit profile-wide controls and bounded context diagnostics. There are no runtime list downloads, cosmetics, or scriptlets.
+
+The copy originated from [`JCFrags/my-shtty-pi-web`](https://github.com/JCFrags/my-shtty-pi-web) at `19c33769a33edddd066b3bac291ce371d2c1aba9`. [Copy provenance](vendor/terminal-browser/copy-provenance.json) records the import and maintained changes; [upstream pins](vendor/terminal-browser/upstreams.lock.json) record external inputs. The browser includes Electron, AgentCursor, the Rust renderer, CLI, optional adapters, assets, build tooling, and tests. It does not include WebX search/read or unrelated research services.
+
+Use the [installation and rollback guide](vendor/terminal-browser/docs/installation.md) for complete artifacts and the [development guide](vendor/terminal-browser/docs/development.md) for the separate pnpm workspace, native prerequisites, and verification. Product tags use `terminal-browser-vVERSION`. Builds, managed selections, and running-process activation are separate evidence. Copying source or changing a link does not prove that a running daemon or Pi session loaded the change.
 
 ## Verification
 

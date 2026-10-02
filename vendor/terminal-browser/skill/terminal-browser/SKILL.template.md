@@ -1,45 +1,131 @@
 ---
 name: terminal-browser
-description: Use for interactive websites or local HTML in a terminal companion. In Pi, use the five native browser tools for owner-scoped observation and AgentCursor input. Outside Pi, the supported terminal-browser CLI remains available.
+description: Use when an agent must inspect or interact with a website or local HTML in a visible terminal browser, manage browser tabs or downloads, or recover from stale observations or human takeover. Covers the native CLI for Pi and other agents, plus optional Pi tool adapters.
 ---
 
-## Pi workflow
+# Terminal browser
 
-Use `browser_open`, `browser_observe`, `browser_act`, `browser_tabs`, and
-`browser_control`. If these tools are hidden, discover them through the installed
-tool search. Do not substitute shell commands because a native tool is hidden.
+Use the native `terminal-browser` CLI by default, including from Pi. Pi native
+browser tools and Herdr pane management are optional adapters to the same backend.
+Do not use legacy `terminal-browser action` or a separate CDP client to bypass
+ownership, observations, human control, or file restrictions.
 
-Open or reuse this Pi pane's companion with `browser_open`. Observe before acting.
-Use `browser_act` for slow-natural AgentCursor input, `browser_tabs` for contexts
-and downloads, and `browser_control` for pause or explicit resume. Use one action
-per call. Keep observations bounded. Pi manages owner routing, observation IDs,
-and control epochs internally. Never resume human control automatically or repeat
-an action whose side effect may already have been delivered.
+## Start or reuse an owned browser
 
-## CLI workflow outside Pi
+1. Choose one stable, non-secret session ID for this agent task. Use a different
+   ID for each concurrent owner. Record the ID and the absolute project path.
+2. In a visible terminal, run:
 
-The upstream CLI and agent-browser compatibility remain supported. They are not
-the replacement for Pi's native browser tools.
+   ```sh
+   terminal-browser open https://example.com --session task-a --project /absolute/project
+   ```
 
-`terminal-browser open <url>` puts a browser in a terminal pane. On its own it
-takes over the current pane. `--split right` (or `down`, `left`, `up`) opens a
-new pane beside the human, which is how you show a page next to the
-conversation. A path to a local html file works the same as a url, so writing a
-page and opening it is a way to show something you built.
+   This occupies that terminal. Use another pane for the agent. Add
+   `--split right` only when the terminal adapter supports splits. Do not run a
+   foreground browser in a piped tool call or take over the agent's terminal.
+3. Use the same `--session` and `--project` on each native command. Never select
+   an arbitrary browser from `ls --all` as a fallback for missing ownership.
+4. Read `terminal-browser agent --help` and `terminal-browser session --help` for
+   the installed command contract. Launch does not run setup or install skills.
 
-`terminal-browser ls` shows the browsers and tabs in this terminal tab, with the
-tab ids the other commands take.
+## Observe, act, and inspect the result
 
-`terminal-browser action -- <command>` is an agent-browser compatible CLI for a
-tab that is already open. It targets this terminal tab's browser and its active
-tab unless you select another one.
+```sh
+terminal-browser agent observe --session task-a --project /absolute/project --max-elements 120
+```
 
-When you use the terminal-browser action sub command, the user will visually
-see in the browser tab an indication that you are acting on the browser tab. This
-will automatically hide after a preset duration, where the countdown resets
-everytime terminal-browser action is used. But its a much better experience
-for the user if after the last time you plan to use terminal-browser action you
-run terminal-browser action done, which immediately clears the indication
-that you are using the browser tab
+The JSON result supplies `contextId`, `observationId`, and `controlEpoch`. A control
+epoch is a counter that invalidates commands when control changes. Do not invent
+or reuse old values. Use a returned element ref or a unique native locator:
+
+```sh
+terminal-browser agent click e1 --session task-a --project /absolute/project \
+  --tab 7 --observation OBSERVATION_ID --control-epoch EPOCH
+```
+
+Replace every sample target and state value with the current observation. Use
+one action per call. Observe again after page changes, navigation, context/frame
+changes, resize, or an interrupted action. Inspect whether the requested effect
+already occurred before choosing another action. Never automatically replay an
+uncertain click, edit, upload, or download.
+
+- Use `--locator-json` with bounded AgentCursor steps when a ref is unsuitable.
+  Ambiguous targets fail. Narrow the query rather than choosing a hidden match.
+- Select a reported frame with `agent observe --frame f2`. Use `--frame main` to
+  return. Drag stays inside one selected frame. Closed shadow roots and transformed
+  frame owners are not general-purpose fallbacks.
+- For text, prefer `agent type ... --stdin` over putting private text in process
+  arguments. `--replace` performs one native edit.
+- Visual observation uses `--view visual` or `--view both` and
+  `--image-output /absolute/new-file.png`. Load the PNG through the agent's image
+  reader. JSON geometry is not a substitute for seeing the image. The CLI creates
+  a new private file and refuses overwrite. Captures can contain private content.
+- Native input uses slow-natural AgentCursor motion. Preparation can wait for a
+  target, but it does not authorize a repeated side effect.
+
+## Human control and cancellation
+
+Read `agent status` before diagnosing a blocked action. Use the returned epoch
+for `agent pause --control-epoch EPOCH` or an explicitly requested
+`agent resume --control-epoch EPOCH`. Never resume automatically after a human
+uses the browser. Resume changes state. Observe again before input.
+
+Cancellation or CLI disconnection stops later input and releases held keys and
+buttons. It does not undo input already delivered. Errors are not instructions
+to retry. Preserve startup diagnostics and use `terminal-browser doctor --json`
+for read-only diagnosis. Do not delete sockets or profile locks to force recovery.
+
+## Contexts, dialogs, and files
+
+Use `session tabs --action list` with the same owner flags to read context IDs.
+Use `open`, `activate`, or `close` deliberately. `wait --after-id ID` is bounded
+and does not hold the input queue. Popups keep their opener relationship.
+
+Dialogs never auto-accept. Use the exact dialog ID, context ID, and epoch from
+observe or an interrupted action, then give an explicit `--accept` or `--dismiss`
+to `agent dialog`. A prompt response can use `--stdin`. A timeout dismisses the
+dialog. Observe again after responding.
+
+Uploads require a visible chooser trigger and 1–16 regular files under the fixed
+launch project, at most 32 MiB each and 64 MiB total. Project escapes, symlink
+escapes, and conventional secret paths fail. This is not a file-content secret
+scanner. Review files before sending them. Changing cwd does not change the
+launch project. Reopen with the intended owner/project instead.
+
+Use `session tabs --action downloads` to inspect transfers, and
+`download_wait` or `download_cancel` with an exact `--download-id`. Downloads
+stay under `.terminal-browser-downloads` in the launch project, do not overwrite
+existing files, and are never opened or executed automatically. A click can be
+interrupted while its transfer still starts. Check the download list first.
+
+## Network blocking
+
+`agent blocking status` uses the same session/project owner and optional `--tab`.
+Blocking is enabled by default and uses a bundled, SHA-pinned EasyList snapshot
+with Ghostery's core engine. It does not download lists at runtime, send telemetry,
+inject cosmetics/scriptlets, or block the main document. This is not a complete
+tracker, malware, or anonymity boundary.
+
+`enable`, `disable`, `allow-site`, `block-site`, `clear-diagnostics`, and `reload`
+require the current `--control-epoch`. Site actions also need `--site HOST`.
+Enable/disable and exact-host exceptions are profile-wide. Change them only for
+the requested scope. Diagnostics are bounded to the selected context and omit
+full request URLs. `reload` rebuilds the bundled filter cache; it does not fetch
+updates or reload the page. Check `effective` and `warning`, not just `enabled`.
+Use a reviewed release to update lists. For a site failure, inspect status and
+make an explicitly requested site exception instead of disabling every safeguard.
+
+## Optional Pi tools
+
+When the user selected the optional package, the five tools are `browser_open`,
+`browser_observe`, `browser_act`, `browser_tabs`, and `browser_control`. These
+translate to the same native CLI. Pi caches observations and epochs and returns
+visual observations as image content. `browser_control` with `action: "blocking"`
+uses `blocking_action` for the same blocker commands. All ownership, takeover,
+cancellation, and file restrictions still apply. Do not mix CLI mutations with a cached Pi tool
+observation. Observe again through the adapter after changing browser state.
+
+Loading this skill does not enable those tools. Do not install an extension or
+change Pi settings merely because the tools are absent. Use the CLI default.
 
 ## Command reference

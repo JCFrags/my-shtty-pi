@@ -2,9 +2,72 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import test from "node:test";
 
-import { BrowserStartupError, PiBrowserClient, actionableError } from "../dist/client.js";
+import { BrowserCommandError, BrowserStartupError, PiBrowserClient, actionableError, defaultCommandRunner, ownerCommandRunner } from "../dist/client.js";
 
 const context = { cwd: "/tmp/project", sessionId: "session-a" };
+
+test("native JSON errors preserve codes and do not advise automatic resume or replay", () => {
+  const error = actionableError(JSON.stringify({ ok: false, error: { code: "CONTROL_NOT_AGENT", message: "agent control is human" } }));
+  assert(error instanceof BrowserCommandError);
+  assert.equal(error.code, "CONTROL_NOT_AGENT");
+  assert.match(error.message, /only when the user explicitly asks/);
+  assert.match(actionableError(JSON.stringify({ ok: false, error: { code: "STATE_CHANGED", message: "page changed" } })).message, /inspect the outcome/);
+});
+
+test("cancelled native calls never spawn or route a browser command", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(defaultCommandRunner({ args: ["agent", "status"], context: { ...context, signal: controller.signal } }), /cancelled before dispatch/);
+});
+
+test("non-Herdr adapter routes the exact native owner and attaches without terminal takeover", async () => {
+  const calls = [];
+  const run = ownerCommandRunner(async request => {
+    calls.push(request.args);
+    if (request.args[0] === "session") return { tabs: [{ id: 7, active: true }] };
+    if (request.args[1] === "status") return { state: "agent", controlEpoch: 4 };
+    return { completed: true };
+  }, {});
+  const client = new PiBrowserClient(run);
+  assert.equal((await client.open(context, { url: "https://example.test/" })).action, "reused");
+  await client.tabs(context, { action: "downloads" });
+  for (const args of calls) assert.deepEqual(args.slice(-4), ["--session", "session-a", "--project", "/tmp/project"]);
+  assert(calls.every(args => args[0] === "session" || args[0] === "agent"));
+  assert(calls.some(args => args[1] === "navigate" && args.includes("--control-epoch")));
+  assert(calls.some(args => args[0] === "session" && args.includes("downloads")));
+  const absent = new PiBrowserClient(ownerCommandRunner(async () => { throw new BrowserCommandError("SESSION_NOT_FOUND", "absent"); }, {}));
+  await assert.rejects(absent.open(context, {}), /separate visible terminal.*--session 'session-a'.*--project '\/tmp\/project'/);
+  let forwarded;
+  await ownerCommandRunner(async request => { forwarded = request; return {}; }, { HERDR_ENV: "1" })({ args: ["companion", "open"], context });
+  assert.deepEqual(forwarded.args, ["companion", "open"]);
+});
+
+test("blocking stays on the native CLI, requires current control, and clears cached observations", async () => {
+  const calls = [];
+  let state = "agent";
+  const client = new PiBrowserClient(async ({ args }) => {
+    calls.push(args);
+    if (args[1] === "observe") return fixtureObservation();
+    if (args[1] === "status") return { state, controlEpoch: 4 };
+    return { enabled: true, diagnostics: { scope: "context", recent: [] } };
+  });
+  await client.observe(context);
+  await client.blocking(context, { action: "status" });
+  assert.deepEqual(calls.at(-1), ["agent", "blocking", "status", "--tab", "7"]);
+  await client.blocking(context, { action: "allow-site", site: "example.test" });
+  assert.deepEqual(calls.at(-1), ["agent", "blocking", "allow-site", "--site", "example.test", "--tab", "7", "--control-epoch", "4"]);
+  await assert.rejects(client.act(context, { action: "click", ref: "e1" }), /browser_observe/);
+  state = "human";
+  const before = calls.filter(args => args[1] === "blocking").length;
+  await assert.rejects(client.blocking(context, { action: "disable" }), /control is with the user/);
+  assert.equal(calls.filter(args => args[1] === "blocking").length, before);
+});
+
+test("Pi session changes discard adapter observation state", async () => {
+  const client = new PiBrowserClient(async ({ args }) => args[1] === "observe" ? fixtureObservation() : { state: "agent", controlEpoch: 4 });
+  await client.observe(context);
+  await assert.rejects(client.act({ ...context, sessionId: "another-session" }, { action: "click", ref: "e1" }), /browser_observe/);
+});
 
 test("structured startup failures retain their machine-readable report", () => {
   const report = {
@@ -23,6 +86,8 @@ test("structured startup failures retain their machine-readable report", () => {
   assert(error instanceof BrowserStartupError);
   assert.deepEqual(error.report, report);
   assert.deepEqual(JSON.parse(error.message), report);
+  const envelope = { ...report, ok: false, error: { code: report.code, message: report.message } };
+  assert.deepEqual(JSON.parse(actionableError(JSON.stringify(envelope)).message), envelope);
 });
 
 function fixtureObservation(epoch = 4) {
