@@ -13,6 +13,7 @@
     "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\""
   },
   "dependencies": {
+    "@ghostery/adblocker": "2.18.2",
     "agentcursor": "git+https://github.com/kumard3/agentcursor.git#b23c633c66fd240f836f5edd1034f6fcf678e237",
     "pixel-react": "workspace:*",
     "pixel-store": "workspace:*",

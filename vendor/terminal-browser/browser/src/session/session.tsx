@@ -11,6 +11,7 @@ import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
 import { BrowserControl } from "../agent/control";
+import type { BlockingAction, BlockingStatus } from "../blocking/types";
 import {
   browserSession,
   configureBrowserSession,
@@ -516,6 +517,7 @@ class Session {
       },
       agentTabSwitchAllowed: () => this.agentTabSwitchAllowed(),
       agentStatus: () => this.control.snapshot,
+      blocking: (id, request, epoch) => this.tabs.blocking(id, request, epoch),
       agentPause: (expectedEpoch) => this.control.pause(expectedEpoch),
       agentResume: (expectedEpoch) => this.control.resume(expectedEpoch),
       agentContext: (action, id, url, epoch) => this.tabs.agentContext(action, id, url, epoch),
@@ -834,6 +836,7 @@ class Session {
         zoomHud={this.zoomHud}
         download={this.download}
         toast={this.toast}
+        blockingLabel={this.blockingLabel()}
         palette={
           this.palette
             ? {
@@ -1388,8 +1391,8 @@ class Session {
       ? "default"
       : this.dividerHover
         ? this.devtoolsDockSide === "bottom"
-          ? "row-resize"
-          : "col-resize"
+          ? "ns-resize"
+          : "ew-resize"
         : this.devtoolsHover
           ? (browser?.devtools?.cursorShape ?? "default")
           : browser?.popup
@@ -1537,6 +1540,7 @@ class Session {
     this.closePageMenu();
     const browser = this.tabs.activeController;
     if (!menu || !browser) return;
+    if (id.startsWith("blocking:")) { this.runBlockingAction(id); return; }
     switch (id) {
       case "grab":
         void this.toggleGrab();
@@ -1615,8 +1619,52 @@ class Session {
     };
   }
 
+  private blockingStatus(): BlockingStatus | null {
+    const browser = this.tabs.activeController;
+    return (browser?.popup ?? browser)?.blocking({ action: "status" }) ?? null;
+  }
+
+  private blockingLabel(): string | null {
+    const status = this.blockingStatus();
+    if (!status) return null;
+    if (status.warning) return "Ads: error";
+    if (!status.enabled) return "Ads: off";
+    if (status.siteAllowed) return "Ads: site";
+    return "Ads: on";
+  }
+
+  private blockingMenuItems(): PageMenuItem[] {
+    const status = this.blockingStatus();
+    if (!status) return [];
+    return [
+      { id: "blocking:status", label: `ad blocking: ${status.diagnostics.blocked} blocked in this context`, enabled: true, shortcut: "" },
+      { id: `blocking:${status.enabled ? "disable" : "enable"}`, label: `${status.enabled ? "disable" : "enable"} ad blocking for this profile`, enabled: true, shortcut: "" },
+      { id: `blocking:${status.siteAllowed ? "block-site" : "allow-site"}`, label: status.siteAllowed ? "remove this site's ad exception" : "allow ads on this site (profile)", enabled: status.site !== null, shortcut: "" },
+      { id: "blocking:clear-diagnostics", label: "clear this context's blocking diagnostics", enabled: true, shortcut: "" },
+      { id: "blocking:reload", label: "reload bundled ad filters (offline)", enabled: true, shortcut: "" },
+    ];
+  }
+
+  private runBlockingAction(id: string): void {
+    const action = id.slice("blocking:".length) as BlockingAction;
+    if (!this.blockingMenuItems().some(item => item.id === id && item.enabled)) return;
+    const browser = this.tabs.activeController;
+    if (!browser) return;
+    if (action !== "status") this.control.takeHuman("pointer");
+    try {
+      const status = (browser.popup ?? browser).blocking({ action });
+      const recent = [...new Set(status.diagnostics.recent.map(item => item.host))].slice(-3).join(", ").slice(0, 180);
+      this.showToast(status.warning ?? (action === "status" ? `Ad blocking: ${status.diagnostics.blocked} blocked in this context` : "Ad blocking updated. Reload the page if needed."), status.warning ? "failed" : "done",
+        action === "status" ? `EasyList ${status.filters.version}, network only. ${recent || "No blocked hosts recorded."}` : "Settings are shared by tabs and owners in this profile. No page was reloaded.");
+      this.render();
+    } catch (error) {
+      this.showToast(error instanceof Error ? error.message : "Ad blocking failed", "failed");
+    }
+  }
+
   private toolMenuItems(): PageMenuItem[] {
     return [
+      ...this.blockingMenuItems(),
       this.grabMenuItem(),
       {
         id: "record",
@@ -1800,6 +1848,9 @@ class Session {
 
   private paletteActions(): PaletteAction[] {
     return [
+      ...this.blockingMenuItems().filter(item => item.enabled).map(item => ({
+        id: item.id, label: item.label, shortcut: "", run: () => this.runBlockingAction(item.id),
+      })),
       {
         id: "find",
         label: "find in page",

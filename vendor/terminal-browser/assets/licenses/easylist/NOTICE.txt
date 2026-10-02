@@ -1,0 +1,39 @@
+EasyList
+
+Copyright: The EasyList authors (https://easylist.to/).
+This copy uses the Creative Commons Attribution-ShareAlike 3.0 Unported
+license option offered at https://easylist.to/pages/licence.html.
+License text: https://creativecommons.org/licenses/by-sa/3.0/legalcode
+The license permits a URI in place of a bundled copy of the license text.
+
+The unmodified list is assets/blocking/easylist.txt. Its original attribution,
+license pointer and filter comments remain intact.
+Version: 202608040529 (04 Aug 2026 05:29 UTC).
+EasyList commit recorded in the list: 3df94464d9bf5ff7fdd16c9fb8daf3ed4787c454.
+Source snapshot: https://github.com/ghostery/adblocker/blob/c4c20aa63e3a72113f66777cf35a3f58877a36ee/packages/adblocker/assets/easylist/easylist.txt
+SHA-256: a7babc0fbb982dfb276cd5f3d80b194988d539a341d07bc73540c07488453e4f
+
+The browser loads only network filters. It does not load EasyPrivacy,
+regional lists, externally referenced subscriptions, cosmetic filters,
+scriptlets, redirect resources or CSP injection rules. This is not full
+uBlock Origin compatibility or a guarantee that every advertisement is blocked.
+Runtime serialization changes the storage format, not the filter source.
+Keep this attribution and license with redistributed source or cached filters.
+The filter license does not replace the licenses of independent browser code.
+
+Update policy
+
+Filters are bundled, hash-checked and cached locally per persistent profile.
+There is no automatic download, remote update check, telemetry, subscription
+endpoint or user-supplied filter URL. The list's upstream Expires comment is
+not a runtime download schedule. The reload action rebuilds the cache from
+this release's checked list. It does not fetch a newer list or reload a page.
+
+To update, review a new upstream EasyList snapshot and its license, replace
+assets/blocking/easylist.txt, update FILTER_VERSION and FILTER_SHA256 in
+browser/src/blocking/profile.ts, and update this notice. Exercise blocking,
+site exceptions and the file-XHR guard before distributing the new release.
+The list and engine versions form the cache key, so a reviewed release update
+cannot silently reuse a previous release's compiled filters. Old caches are
+not deleted automatically. Existing profile enable/disable and exact-host
+exceptions remain in settings.json. There is no background update commitment.
