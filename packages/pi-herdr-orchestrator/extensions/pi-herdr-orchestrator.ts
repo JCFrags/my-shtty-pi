@@ -2,11 +2,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { classifyValidationFailure, registerSubagentChannel, startupDiagnostic, type ValidationFailureCode } from "../src/orchestrator/child-tool.js";
 import { ChildBinding, hasChildEnvironment, isChildSession, type ChildContext } from "../src/orchestrator/child-binding.js";
 import { registerOrchestrate } from "../src/orchestrator/tool.js";
+import { registerCapacityCommand } from "../src/orchestrator/capacity-command.js";
 
 /** Direct-Herdr root orchestration or exact managed-child channel. */
 export default function piHerdrOrchestrator(api: ExtensionAPI): void {
   if (!hasChildEnvironment() && !Object.keys(process.env).some((key) => key.startsWith("HERDR_"))) {
     registerOrchestrate(api);
+    registerCapacityCommand(api);
     return;
   }
   const binding = new ChildBinding(api);
@@ -25,6 +27,7 @@ export default function piHerdrOrchestrator(api: ExtensionAPI): void {
     }
     if (!child) {
       registerOrchestrate(api, undefined, context);
+      registerCapacityCommand(api);
       return;
     }
     registerSubagentChannel(api, binding, roleFailure);

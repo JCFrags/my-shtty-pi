@@ -1,4 +1,5 @@
 declare module "@earendil-works/pi-coding-agent" {
+  export function getAgentDir(): string;
   export interface ExtensionAPI {
     on(
       event: string,
