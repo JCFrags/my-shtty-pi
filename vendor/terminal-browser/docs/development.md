@@ -166,6 +166,11 @@ opener communication, dialogs and beforeunload decisions, project files,
 transfers, cancellation, takeover, and locator/frame geometry limits. Tests for
 terminal overlay positions do not prove alignment on a particular terminal.
 
+Controller input in a fixture must run inside an active agent operation. To test
+held-key release on takeover, hold the key during that operation's guarded input
+callback, before triggering takeover. Do not disable the runtime input guard for
+fixture setup.
+
 For a focused visible check, run `node browser/test/fixtures/dynamic-live.cjs`
 and open its loopback URL. Choose the right card, wait for the replaced delayed
 control, then select the `contact-form` frame. Fill `Contact name`, wait for
