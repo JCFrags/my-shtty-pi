@@ -21,6 +21,8 @@ export {
   browserOwnerEnvironment,
   browserOwnerFromColumns,
   parseBrowserOwner,
+  nativeBrowserOwner,
+  isNativeBrowserOwner,
   requireHerdrBrowserOwner,
   sameBrowserOwner,
 } from "./owner";

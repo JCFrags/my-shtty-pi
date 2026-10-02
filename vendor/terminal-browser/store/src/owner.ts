@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 
 export const BROWSER_OWNER_ENV = {
@@ -26,6 +28,26 @@ export interface BrowserOwnerColumns {
 
 const HERDR_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const SESSION_ID = /^[^\u0000-\u001f\u007f]{1,512}$/u;
+const NATIVE_WORKSPACE = "terminal-browser:cli";
+
+/** Native sessions use the existing owner tuple, independent of a terminal host. */
+export function nativeBrowserOwner(sessionId: string, projectDir: string): BrowserOwner {
+  requiredId(sessionId, "session id (1 to 128 letters, digits, dots, underscores, colons, or hyphens)");
+  const root = fs.realpathSync(projectDir);
+  if (!fs.statSync(root).isDirectory()) throw new Error("browser owner project must be a directory");
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  return {
+    workspaceId: NATIVE_WORKSPACE,
+    tabId: `project:${digest(root)}`,
+    paneId: `session:${digest(sessionId)}`,
+    sessionId,
+    projectDir: root,
+  };
+}
+
+export function isNativeBrowserOwner(owner: BrowserOwner): boolean {
+  return owner.workspaceId === NATIVE_WORKSPACE;
+}
 
 function requiredId(value: string | undefined, name: string): string {
   if (!value || !HERDR_ID.test(value)) throw new Error(`missing or invalid browser owner ${name}`);
@@ -46,7 +68,13 @@ export function parseBrowserOwner(environment: NodeJS.ProcessEnv): BrowserOwner 
   if (sessionId !== null && !SESSION_ID.test(sessionId)) {
     throw new Error("invalid browser owner session id");
   }
-  return { workspaceId, tabId, paneId, sessionId, projectDir: path.resolve(projectDir) };
+  const owner = { workspaceId, tabId, paneId, sessionId, projectDir: path.resolve(projectDir) };
+  if (isNativeBrowserOwner(owner)) {
+    const expected = nativeBrowserOwner(sessionId ?? "", projectDir);
+    if (tabId !== expected.tabId || paneId !== expected.paneId) throw new Error("native browser owner does not match its session and project");
+    return expected;
+  }
+  return owner;
 }
 
 export function requireHerdrBrowserOwner(

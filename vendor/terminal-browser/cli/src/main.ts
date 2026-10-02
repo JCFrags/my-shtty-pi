@@ -14,6 +14,8 @@ import {
   LOGS_DIR,
   appId,
   ensureDataDir,
+  browserOwnerEnvironment,
+  parseBrowserOwner,
   instanceKey,
   listApps,
   registerApp,
@@ -29,12 +31,13 @@ import {
   unsupportedGraphicsMessage,
 } from "pixel-terminals";
 import type { Direction, Terminal, TerminalCheck } from "pixel-terminals";
-import { actionCommand } from "./action";
+import { ACTION_MIGRATION, commandError, errorResponse } from "./errors";
+import { requireSessionOwner, takeSessionOwner } from "./session";
 import { agentCommand } from "./agent";
 import { companionTabs, currentBrowserOwner, openCompanion } from "./companion";
 import { control } from "./control";
 import { setupCommand } from "./editors";
-import { ensureSetup, linkSkills, markSetupDone } from "./setup";
+import { linkSkills, markSetupDone } from "./setup";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
@@ -75,7 +78,7 @@ for (const [signal, exitCode] of reportsStartup ? [["SIGINT", 130], ["SIGTERM", 
       exitCode: null,
       signal,
     });
-    if (report && rootStartup) process.stderr.write(`terminal-browser: ${JSON.stringify(report)}\n`);
+    if (report && rootStartup) process.stderr.write(`${JSON.stringify(errorResponse(new Error(report.message), { ...report }))}\n`);
     process.exit(exitCode);
   };
   startupSignalHandlers.set(signal, handler);
@@ -102,8 +105,7 @@ async function finishReportingWhenRegistered(): Promise<void> {
 delete process.env.ELECTRON_RUN_AS_NODE;
 
 function fail(message: string): never {
-  process.stderr.write(`terminal-browser: ${message}\n`);
-  process.exit(1);
+  throw commandError("INVALID_ARGUMENT", message);
 }
 
 function print(value: unknown) {
@@ -305,6 +307,7 @@ async function daemonSocket(): Promise<net.Socket> {
 interface DaemonReply {
   ok?: boolean;
   error?: string;
+  errorCode?: string;
   session?: string;
   event?: string;
   code?: number;
@@ -371,7 +374,7 @@ async function attachHere(argv: string[]): Promise<never> {
   const { socket, reply } = await openSession(argv, tty);
   if (reply.ok === false || !reply.session) {
     socket.destroy();
-    throw new Error(reply.error ?? "daemon refused the session");
+    throw commandError(reply.errorCode ?? "SESSION_OPEN_FAILED", reply.error ?? "daemon refused the session");
   }
   void finishReportingWhenRegistered().catch(() => {});
   nextReply(socket, (message) => {
@@ -474,7 +477,7 @@ async function launchInSplit(
       const opened = await terminal.split!({
         from,
         direction,
-        command: clientLaunchCommand(argv, startupEnvironment(startup)),
+        command: clientLaunchCommand(argv, { ...browserOwnerEnvironmentIfPresent(), ...startupEnvironment(startup) }),
         size: size ?? null,
         tty: ownTtyPath() ?? callerTty().path,
         onPaneCreated: (created) => {
@@ -547,8 +550,7 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
 
 async function requireGraphics(check: TerminalCheck) {
   if (check.graphics !== "unsupported") return;
-  process.stderr.write(unsupportedGraphicsMessage(process.stderr.isTTY === true));
-  process.exit(1);
+  throw commandError("GRAPHICS_UNSUPPORTED", unsupportedGraphicsMessage(false).trim());
 }
 
 const BROWSER_FLAGS = [
@@ -657,10 +659,15 @@ async function tryAdopt(args: string[]): Promise<boolean> {
   return false;
 }
 
-async function companionCommand(args: string[]): Promise<number> {
+function browserOwnerEnvironmentIfPresent(): NodeJS.ProcessEnv {
+  const owner = parseBrowserOwner(process.env);
+  return owner ? browserOwnerEnvironment(owner) : {};
+}
+
+async function companionCommand(args: string[], native = false): Promise<number> {
   const subcommand = args.shift();
-  const owner = currentBrowserOwner(process.env, process.cwd());
-  if (subcommand === "open") {
+  const owner = native ? requireSessionOwner(args, process.env, process.cwd()) : currentBrowserOwner(process.env, process.cwd());
+  if (subcommand === "open" && !native) {
     const newTab = takeBoolFlag(args, "--new-tab");
     const noFocus = takeBoolFlag(args, "--no-focus");
     const url = args.shift();
@@ -684,14 +691,16 @@ async function companionCommand(args: string[]): Promise<number> {
     print(await companionTabs(owner, { action, tab, url, downloadId, afterId: afterValue === undefined ? undefined : Number(afterValue), timeoutMs: timeoutValue === undefined ? undefined : Number(timeoutValue), cwd: process.cwd() }));
     return 0;
   }
-  fail("companion needs open or tabs");
+  fail(native ? "session needs tabs; launch with open --session <id> --project <directory>" : "companion needs open or tabs");
 }
 
 async function openCommand(args: string[]) {
   requirePaneAccess();
+  const owner = takeSessionOwner(args);
+  if (owner) Object.assign(process.env, browserOwnerEnvironment(owner));
   const split = takeSplitFlag(args);
   const size = takeSizeFlag(args);
-  const noMerge = takeBoolFlag(args, "--no-merge") || mergeDisabled();
+  const noMerge = takeBoolFlag(args, "--no-merge") || mergeDisabled() || parseBrowserOwner(process.env) !== null;
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
   takeSshFlags(args);
   rejectUnknownFlags(args);
@@ -723,20 +732,6 @@ async function openCommand(args: string[]) {
   argv.push(`--split-dir=${direction}`);
   if (tty) argv.push(`--parent-tty=${tty}`);
   print(await launchInSplit(terminal!, direction, argv, size));
-}
-
-function splitPassthrough(args: string[]): { own: string[]; passthrough: string[] } {
-  const at = args.indexOf("--");
-  if (at < 0) return { own: args, passthrough: [] };
-  return { own: args.slice(0, at), passthrough: args.slice(at + 1) };
-}
-
-function takeTabFlag(args: string[]): number | undefined {
-  const raw = takeFlag(args, "--tab");
-  if (raw === undefined) return undefined;
-  const id = Number(raw.replace(/^t/, ""));
-  if (!Number.isInteger(id)) fail(`invalid --tab ${raw} (a tab id from terminal-browser ls)`);
-  return id;
 }
 
 function asksForHelp(args: string[]): boolean {
@@ -827,7 +822,7 @@ async function main(): Promise<number> {
   if (command === "daemon-status") { print(safeDaemonStatus(await daemonRequest({ cmd: "status" }))); return 0; }
   if (command === "shutdown") return shutdownDaemon(args);
   if (command === "upgrade") return upgradeCommand();
-  if (command !== "setup") ensureSetup();
+  if (command === "action") throw commandError("LEGACY_ACTION_RETIRED", ACTION_MIGRATION);
   if (command === "open") {
     await openCommand(args);
     return 0;
@@ -858,28 +853,13 @@ async function main(): Promise<number> {
     requirePaneAccess();
     return companionCommand(args);
   }
+  if (command === "session") {
+    return companionCommand(args, true);
+  }
   if (command === "agent") {
     requirePaneAccess();
-    return agentCommand((await currentTerminal()).terminal, args);
-  }
-  if (command === "action") {
-    requirePaneAccess();
-    const { own, passthrough } = splitPassthrough(args);
-    const options = {
-      browserKey: takeFlag(own, "--browser"),
-      tabId: takeTabFlag(own),
-      targetId: takeFlag(own, "--target"),
-      follow: takeBoolFlag(own, "--follow"),
-      done: false,
-      passthrough,
-    };
-    if (own[0] === "done") {
-      own.shift();
-      options.done = true;
-      if (passthrough.length > 0) fail("[PLACEHOLDER COPY]");
-    }
-    if (own.length > 0) fail(`unexpected ${own[0]} — put agent-browser arguments after --`);
-    return actionCommand((await currentTerminal()).terminal, options);
+    const explicitlyOwned = args.some((arg) => arg === "--session" || arg.startsWith("--session=")) || parseBrowserOwner(process.env) !== null;
+    return agentCommand(explicitlyOwned ? null : (await currentTerminal()).terminal, args);
   }
   const rest = process.argv.slice(2);
   if (asksForHelp(rest)) {
@@ -897,5 +877,6 @@ void main()
   .catch((error: unknown) => {
     const report = error instanceof StartupFailure ? error.report : writeStartupFailure(error);
     if (rootStartup) removeStartupAttempt(rootStartup);
-    fail(report ? JSON.stringify(report) : error instanceof Error ? error.message : String(error));
+    process.stderr.write(`${JSON.stringify(errorResponse(error, report ? { ...report } : null))}\n`);
+    process.exit(1);
   });
