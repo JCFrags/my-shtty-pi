@@ -16,15 +16,15 @@ settings, register a Herdr plugin, install a skill, or start a browser.
 
 Download the installer archive, Linux x64 runtime archive, platform manifest, and
 `SHA256SUMS` from the same trusted release. No checkout or pnpm is required. The
-example uses version `0.1.0`:
+example uses version `0.1.1`:
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf terminal-browser-installer-0.1.0.tar.gz
+tar -xzf terminal-browser-installer-0.1.1.tar.gz
 MANAGER="$PWD/terminal-browser-installer/install.sh"
 INSTALL="$HOME/.local/share/terminal-browser-managed"
 "$MANAGER" init "$INSTALL"
-"$MANAGER" stage "$PWD/terminal-browser-0.1.0-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
+"$MANAGER" stage "$PWD/terminal-browser-0.1.1-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
 # Use the artifact ID returned by stage after reviewing the selection.
 "$MANAGER" activate "$INSTALL" ARTIFACT_ID
 terminal-browser doctor --json
