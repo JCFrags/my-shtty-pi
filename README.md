@@ -192,7 +192,47 @@ npm run verify -- --product pi-context-kit
 
 Use focused checks for a small correction. Required CI remains the merge gate.
 
-Static checks cover registry, locks, imports, package boundaries, retired interfaces, privacy, and browser-copy provenance. Full verification also runs declared package checks, explicit native build/probe steps, compiled-output checks, Grounded Dialog/Workplan tests, and package archive checks. A separate CI job builds, typechecks, and tests the browser copy. Verification does not activate packages or establish live usability or unmeasured Chrono scale.
+Static checks cover registry, locks, imports, package boundaries, retired interfaces, privacy, and browser-copy provenance. Full verification also runs declared package checks, explicit native build/probe steps, compiled-output checks, Grounded Dialog/Workplan tests, and package archive checks. The `browser-copy` CI job checks provenance, installs locked dependencies, builds, typechecks, and tests the browser copy. Verification does not activate packages or establish live usability or unmeasured Chrono scale.
+
+### CI scope
+
+[`scripts/ci-scope.mjs`](scripts/ci-scope.mjs) selects known changed projects and their mapped dependents. All 17 registered products, including inactive products, have explicit ownership and dependent entries. Selected products use the existing `npm run verify -- --product <slug>` command in a matrix. Multiple mapped changes select the union of their transitive dependents. Changes under `vendor/terminal-browser/` select the complete, unchanged `browser-copy` job, not individual browser packages. Other product execution is skipped unless the dependency map selects it.
+
+Affected-project runs retain root `npm test`, `verify:static`, and the existing static Chrono and historical checks. Each selected-product command also retains its existing indexed static and regression checks. These are not subdirectory-only snapshots. Only the exact LSP exception below omits the unrelated repository checks.
+
+The router validates pull-request base/head IDs against the checked-out merge parents. For pushes to `main`, it validates before/after IDs, checkout identity, and ancestry. It examines the complete diff without rename detection so both old and new paths count. Manual runs, empty or uncertain diffs, file-type changes, root/workflow/verifier changes, unknown ownership, and dependency-map drift use full verification. Shared helpers also use full verification: Grounded `core/`, Context Kit `protocol/` and `state-store/`, and Tool Controls `presentation/`. The exact LSP client exception does not exempt other core files.
+
+The LSP-only route accepts a nonempty diff entirely within these exact files:
+
+- `scripts/verify-lsp.mjs`
+- `packages/grounded-tools/lsp/index.ts`
+- `packages/grounded-tools/core/src/lsp-client.ts`
+- `packages/grounded-tools/README.md`
+- `packages/grounded-tools/lsp/rust-launch.ts`
+- `packages/grounded-tools/lsp/test/lifecycle.test.mjs`
+- `packages/grounded-tools/lsp/test/fixtures/fake-lsp.mjs`
+- `packages/grounded-tools/lsp/test/fixtures/owner.mjs`
+
+That route runs only `node scripts/verify-lsp.mjs`, which owns the scoped static, privacy, dependency, and lifecycle checks. It does not run root, product-packaging, Chrono, history, or browser suites. Missing, partial, non-regular, or newly unmapped LSP inputs fail the selected LSP job instead of starting unrelated suites. Mixed LSP and other paths use full verification. Once the runner and fixtures are present, full runs and selected Grounded runs also require the LSP job. The CI router can land before the separate runner: legacy full runs skip LSP only when all five newly introduced files are absent, the three existing inputs are regular files, and complete history shows no earlier copy of those five files. Partial inputs or deletion after delivery cannot restore that skip.
+
+The required `verify` status always checks the selected results, including the expected skipped jobs. A failed, canceled, or unexpectedly skipped selected check cannot satisfy this gate. The browser release workflow and branch protections remain separate and unchanged.
+
+### Maintain the CI dependency map
+
+The router checks registry/owned-root equality, declared dependency and build projections, and literal cross-project runtime imports. Product manifest and lock root name/version/descriptive metadata can change without forcing full verification. Dependency versions, dependency specs, workspace configuration, entrypoints, scripts, and other structural fields remain significant. Shared-helper paths still force full verification even for metadata-only edits.
+
+When dependencies or build contracts change, review `dependents` and the shared prefixes before updating `manifestEvidenceSha256`. Compute the reviewed projection from tracked worktree inputs with:
+
+```sh
+node --input-type=module <<'JS'
+import { execFileSync } from 'node:child_process';
+import { dependencyEvidence } from './scripts/ci-scope.mjs';
+const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+console.log(dependencyEvidence(process.cwd(), files).sha256);
+JS
+```
+
+Do not refresh the digest merely to suppress full verification. Literal import discovery is an extra guard, not a complete dependency proof. Computed loads, test fixtures, and event contracts need explicit map review. The LSP exception separately rejects literal `lsp-client` consumers outside its exact path set. Update or withdraw the narrow route if its consumers or verification contract change.
 
 Some retained package READMEs contain historical verifier commands. Use this root workflow for current source. The `deployed-baseline-2026-09-01` tag preserves the earlier deployment; its counts and hashes do not constrain current products or establish activation.
 
