@@ -120,15 +120,17 @@ test('obstruction at the actual point and lost insertion focus prevent side effe
 
 test('preparation interrupts a pending renderer wait and blocks its late mutation', async () => {
   const fixture = preparationFixture();
-  let resume;
+  let resume, rendererEntered;
   let mutated = false;
+  const entered = new Promise(resolve => { rendererEntered = resolve; });
   fixture.observer.elementState = async (_ref, options) => {
-    await new Promise(resolve => { resume = resolve; });
+    await new Promise(resolve => { resume = resolve; rendererEntered(); });
     options.guard();
     mutated = true;
     return { documentId: 'doc', state: state() };
   };
   const pending = fixture.preparation.prepare({ ref: 'e1' });
+  await entered;
   fixture.abort.abort(new Error('cancelled pending geometry'));
   await assert.rejects(pending, /cancelled pending geometry/);
   resume();
