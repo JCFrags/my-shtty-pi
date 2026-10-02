@@ -62,9 +62,17 @@ jobs:
         run: node ../../scripts/verify-browser-copy.mjs
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Prepare pinned source Electron and browser assets
+        run: |
+          scripts/fetch-electron.sh --dest "$RUNNER_TEMP/terminal-browser-source-electron"
+          scripts/copy-react-grab.sh
       - name: Build and verify workspace
+        env:
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ runner.temp }}/terminal-browser-source-electron
         run: |
           pnpm -r build
+          # Source pixel-react loads this native module. Bundles use browser/native instead.
+          test -s engine/packages/pixel-react/native/pixel.node
           pnpm --filter terminal-browser --filter terminal-browser-cli --filter pi-terminal-browser run typecheck
           pnpm --filter terminal-browser --filter terminal-browser-cli --filter pixel-store --filter pi-terminal-browser run test
           xvfb-run -a pnpm --filter terminal-browser test:electron
