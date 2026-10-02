@@ -145,15 +145,18 @@ test('ambiguous editable locator after input reports possible delivery and no re
 });
 
 test('preparation timeout also blocks a late mutation when the operation guard remains healthy', async () => {
-  let now = 0, resume, mutated = false;
+  let now = 0, resume, mutated = false, rendererEntered;
+  const entered = new Promise(resolve => { rendererEntered = resolve; });
   const observer = { elementState: async (_ref, options) => {
-    await new Promise(resolve => { resume = resolve; });
+    await new Promise(resolve => { resume = resolve; rendererEntered(); });
     options.guard();
     mutated = true;
     return { documentId: 'doc', state: state() };
   } };
   const preparation = new TargetPreparation(observer, 'doc', () => {}, async () => {}, () => now);
   const pending = preparation.prepare({ ref: 'e1' });
+  // Shared input preparation can yield before it starts the renderer timeout.
+  await entered;
   now = 10_000;
   await assert.rejects(pending, /preparation timed out/);
   resume();

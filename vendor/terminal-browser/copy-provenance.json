@@ -362,7 +362,7 @@
       "path": "browser/src/page/input.ts",
       "sourceSha256": "a1df066f8eb54b37e745aefd6e283b5306e7d308bf13a80cc813d2fc12366713",
       "mode": 420,
-      "sha256": "82e15905e4c769a301b795e3857d98a8b74956cf7b909508c0752e759513decf",
+      "sha256": "b16281e4001d0667046d02def2abf3c910e538ab08807312eba6c0a4d00c3640",
       "modified": true
     },
     {
@@ -509,7 +509,7 @@
       "path": "browser/src/session/session.tsx",
       "sourceSha256": "a3abe8c042e55ccb152f7aabab04b98f523851fddafba93e81c8d839a170cf4a",
       "mode": 420,
-      "sha256": "2c0f902f0e4dced4eaa2d184369b3b4c8ed92dbea192b74c3101e2a9b048a72e",
+      "sha256": "2bc10c2781ed71fb27c3589c5b882f42b7611917afa523b8dcb01dd54d256e89",
       "modified": true
     },
     {
@@ -656,8 +656,8 @@
       "path": "browser/test/agent-actions.test.js",
       "sourceSha256": "93d081d93b6ee290f603093ef8cebfb412a41711c879366f6447583434cc3017",
       "mode": 420,
-      "sha256": "93d081d93b6ee290f603093ef8cebfb412a41711c879366f6447583434cc3017",
-      "modified": false
+      "sha256": "fdf275730c089c310fb9a69ffa9d12fc774374d6bb864c1ca711d3569f41bc87",
+      "modified": true
     },
     {
       "path": "browser/test/agent-overlay.test.js",
@@ -824,8 +824,8 @@
       "path": "browser/test/semantic.test.js",
       "sourceSha256": "06853df4eee9102f4a4c24b848debd3680d98123cd85b746837c1351bf82141b",
       "mode": 420,
-      "sha256": "06853df4eee9102f4a4c24b848debd3680d98123cd85b746837c1351bf82141b",
-      "modified": false
+      "sha256": "848d9b1b3b7071e97fe63a9b3457c5f3f237d9c71cbc9acdb4153f330d740e9c",
+      "modified": true
     },
     {
       "path": "browser/test/tabs.test.js",
@@ -1083,7 +1083,7 @@
       "path": "docs/development.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "25aafe9e04c57a794097064da9a4469888b641f1c7b599785eda8f9012864d8b",
+      "sha256": "c2dcf9ddb4c35b465266285ac867e4c995f73bb5efb4094f554a435ebe4d82bc",
       "modified": true
     },
     {
@@ -2336,7 +2336,7 @@
       "path": "skill/terminal-browser/SKILL.template.md",
       "sourceSha256": "fd3b2ae04ad254dbef1699b06c6dabb3642d0696d87bac146f01e529daf1d5e5",
       "mode": 420,
-      "sha256": "97efa9ba1b7d3e74116973d3e4503f4355c66c195de766a0a5b827c3e0b3de71",
+      "sha256": "bc010a7e77f769789ed766f8cf03dde7857c3942787b09a2a8a81fb896e12b09",
       "modified": true
     },
     {

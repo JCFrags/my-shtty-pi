@@ -1,4 +1,3 @@
-import { clipboard, nativeImage } from "electron";
 import type { WebContents } from "electron";
 import type { EngineKeyEvent, PastedImage, PointerEvent, WheelEvent } from "pixel-react";
 import type { AgentKey } from "../agent/key";
@@ -415,6 +414,7 @@ export class PageInput {
   }
 
   async paste(text: string): Promise<void> {
+    const { clipboard } = require("electron") as typeof import("electron");
     const generation = this.physicalInputGeneration;
     clipboard.writeText(text);
     if (process.platform === "darwin") {
@@ -443,6 +443,7 @@ export class PageInput {
         return;
       case "osc":
       case "file": {
+        const { clipboard, nativeImage } = require("electron") as typeof import("electron");
         const staged = nativeImage.createFromPath(image.path);
         if (staged.isEmpty()) return;
         clipboard.writeImage(staged);

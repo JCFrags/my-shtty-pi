@@ -1911,7 +1911,9 @@ class Session {
 
   private blockingStatus(): BlockingStatus | null {
     const browser = this.tabs.activeController;
-    return (browser?.popup ?? browser)?.blocking({ action: "status" }) ?? null;
+    const target = browser?.popup ?? browser;
+    // Dialog disposal can render before the closed context leaves the tab inventory.
+    return target?.pageVisible ? target.blocking({ action: "status" }) : null;
   }
 
   private blockingLabel(): string | null {

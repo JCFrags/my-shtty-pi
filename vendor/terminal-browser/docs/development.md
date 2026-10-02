@@ -178,6 +178,11 @@ this one fixture.
 A rebuilt CLI does not replace an existing Electron daemon. Follow the exact
 inventory/approval process in [installation](installation.md) before replacement.
 Then verify a fresh process and changed behavior. Source HEAD alone is not evidence.
+The source daemon's main-file digest can stay unchanged when imported compiled
+modules change. For a focused source check, record the changed module hashes and
+verify them before starting a fresh daemon. Do not use the main-file digest alone
+as proof that those changes loaded. Packaged releases have a full runtime inventory
+in their build manifest.
 
 Tests must isolate HOME, all XDG directories, `TERMINAL_BROWSER_APPDATA`,
 `TERMINAL_BROWSER_INTEROP_DIR`, and `PI_CODING_AGENT_DIR`. Remove inherited Herdr

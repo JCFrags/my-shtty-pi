@@ -126,9 +126,14 @@ make an explicitly requested site exception instead of disabling every safeguard
 ## User menus and page delivery
 
 The native three-dot menu and optional Pi `/browser` menu provide explicit control
-choices, Send current page, settings, and exact owned-browser close. Opening or
-canceling a menu does not select Human. Send previews the current page and receiver
-and asks for confirmation. It can request a reply. Do not use terminal paste or
+choices, Send current page, settings, and exact owned-browser close. Pi's command-only
+package profile uses the plain `extensions: ["dist/menu.js"]` allowlist. It keeps
+`/browser` and registers no browser model tools. A bare package source or
+`+dist/menu.js` alone also loads the tools resource. Do not change package settings
+unless the user requests that change.
+
+Opening or canceling a menu does not select Human. Send previews the current page
+and receiver and asks for confirmation. It can request a reply. Do not use terminal paste or
 another agent's draft to deliver a page.
 
 Shared page updates send coalesced informational screenshots to one explicitly
@@ -159,8 +164,9 @@ Never recover a different owner's snapshot or a global last URL.
 
 ## Optional Pi tools
 
-When the user selected the optional package, the five tools are `browser_open`,
-`browser_observe`, `browser_act`, `browser_tabs`, and `browser_control`. These
+Only an explicit tools-enabled profile loads `dist/extension.js` and the five
+tools: `browser_open`, `browser_observe`, `browser_act`, `browser_tabs`, and
+`browser_control`. The command-only menu does not require them. These tools
 translate to the same native CLI. Pi caches observations and epochs and returns
 visual observations as image content. `browser_control` with `action: "blocking"`
 uses `blocking_action` for the same blocker commands. All ownership, takeover,
