@@ -82,14 +82,15 @@ function renderOverlay(surface, activity = { cursor: { x: 80, y: 90 }, target: {
     control: { state: "agent", busy: false }, theme });
 }
 
-test("overlay component places cursor hotspot, target, pulse and pill in terminal coordinates", () => {
+test("overlay component places only cursor, target and pulse in terminal coordinates", () => {
   const pulse = mock.method(pulseModule, "usePulse", () => 0);
   try {
     for (const scale of [1, 1.5, 2]) {
       const surface = { x: 14, y: 56, width: 1200, height: 900, scale };
       const overlay = renderOverlay(surface);
       assert.deepEqual(overlay.props.style.inset, { top: 0, left: 0 });
-      const [targets, cursor, pill] = overlay.props.children;
+      assert.equal(overlay.props.children.length, 2);
+      const [targets, cursor] = overlay.props.children;
       const [ring, pulseRing] = targets.props.children;
       assert.equal(cursor.props.style.inset.left + cursor.props.style.width * 0.18, 14 + 80 * scale);
       assert.equal(cursor.props.style.inset.top + cursor.props.style.height * 0.22, 56 + 90 * scale);
@@ -97,8 +98,6 @@ test("overlay component places cursor hotspot, target, pulse and pill in termina
         assert.equal(node.props.style.inset.left + node.props.style.width / 2, 14 + 100 * scale);
         assert.equal(node.props.style.inset.top + node.props.style.height / 2, 56 + 110 * scale);
       }
-      assert.equal(pill.props.style.inset.top, 62);
-      assert.equal(pill.props.style.inset.left + pill.props.style.width, 1208);
     }
   } finally { pulse.mock.restore(); }
 });

@@ -80,9 +80,10 @@ export function computeLayout(
   devtools: DevtoolsPlacement | null,
   recordBar = 0,
 ): SessionLayout {
-  const toolbarHeight = hideToolbar
-    ? 0
-    : Math.min(info.height - info.cellHeight, Math.round(info.basePx * 2.1));
+  const toolbarHeight = Math.max(0, Math.min(
+    info.height - info.cellHeight,
+    Math.round(info.basePx * (hideToolbar ? 1.8 : 2.1)),
+  ));
   const pad = frameless ? 0 : Math.round(info.basePx * 0.45);
   const padLeft = frameless ? 0 : Math.round(info.basePx * 0.2);
   const padBottom = frameless ? 0 : Math.round(info.basePx * 0.2);
@@ -90,6 +91,7 @@ export function computeLayout(
     width: info.width,
     height: info.height,
     toolbarHeight,
+    compactControls: hideToolbar,
     recordBarHeight: recordBar,
     contentHeight: Math.max(1, info.height - toolbarHeight - recordBar),
     page: {

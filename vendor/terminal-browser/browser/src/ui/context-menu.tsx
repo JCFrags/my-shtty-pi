@@ -1,4 +1,5 @@
-import { Box, Image, Path, Text } from "pixel-react";
+import { useEffect, useRef } from "react";
+import { Box, Image, Path, Text, type NodeHandle } from "pixel-react";
 import type { Theme } from "./theme";
 import type { ChromeActions, ChromeLayout, PageMenuIcon, PageMenuItem, PageMenuView } from "./types";
 
@@ -18,15 +19,24 @@ export function PageContextMenu({
   const charW = rem * 0.82 * 0.6;
   const shortcutW = rem * 0.72 * 0.6;
   const hasIcons = view.items.some((item) => item.icon);
-  const width = Math.round(
+  const width = Math.min(Math.max(1, layout.width - 8), Math.round(
     view.items.reduce((widest, item) => {
       let row = rem * 1.4 + item.label.length * charW;
       if (hasIcons) row += rem * 1.2;
       if (item.shortcut) row += rem * 0.6 + item.shortcut.length * shortcutW;
       return Math.max(widest, row);
     }, rem * 9),
-  );
-  const height = view.items.length * rowH;
+  ));
+  const height = Math.min(view.items.length * rowH + 2, Math.max(rowH, layout.height - 8));
+  const list = useRef<NodeHandle>(null);
+  const scroll = useRef(0);
+  useEffect(() => {
+    const top = (view.selectedIndex ?? 0) * rowH;
+    const next = top < scroll.current ? top : top + rowH > scroll.current + height - 2
+      ? top + rowH - height + 2 : scroll.current;
+    if (next !== scroll.current) list.current?.scrollTo(next, false);
+    scroll.current = next;
+  }, [view.selectedIndex, rowH, height]);
   const x = Math.max(2, Math.min(view.x, layout.width - width - 4));
   const y = Math.max(2, Math.min(view.y, layout.height - height - 4));
   return (
@@ -41,15 +51,18 @@ export function PageContextMenu({
         onClick={() => actions.pageMenuClose()}
       />
       <Box
+        ref={list}
+        onScroll={event => { scroll.current = event.offset; }}
         style={{
           position: "absolute",
           inset: { top: y, left: x },
           width,
+          height,
           flexDirection: "column",
           background: theme.field,
           cornerRadius: rem * 0.45,
           border: { width: 1, color: theme.fieldBorder },
-          overflow: "hidden",
+          overflow: "scroll",
         }}
       >
         {view.items.map((item, i) => (
@@ -63,6 +76,7 @@ export function PageContextMenu({
             first={i === 0}
             last={i === view.items.length - 1}
             alignIcons={hasIcons}
+            selected={i === view.selectedIndex}
           />
         ))}
       </Box>
@@ -79,6 +93,7 @@ function MenuRow({
   first,
   last,
   alignIcons,
+  selected,
 }: {
   item: PageMenuItem;
   rowH: number;
@@ -88,6 +103,7 @@ function MenuRow({
   first: boolean;
   last: boolean;
   alignIcons: boolean;
+  selected: boolean;
 }) {
   const radius = Math.max(2, rem * 0.45 - 1);
   return (
@@ -97,6 +113,7 @@ function MenuRow({
         alignItems: "center",
         padding: { left: rem * 0.7, right: rem * 0.7 },
         hoverBackground: item.enabled ? theme.hover : undefined,
+        background: selected && item.enabled ? theme.hover : undefined,
         cornerRadius: {
           topLeft: first ? radius : 0,
           topRight: first ? radius : 0,
@@ -120,6 +137,7 @@ function MenuRow({
           color: item.enabled ? theme.fg : theme.disabled,
           wrap: false,
           selectable: false,
+          overflow: "hidden",
         }}
       >
         {item.label}

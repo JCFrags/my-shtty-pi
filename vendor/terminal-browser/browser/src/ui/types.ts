@@ -54,6 +54,7 @@ export interface PageMenuView {
   x: number;
   y: number;
   items: PageMenuItem[];
+  selectedIndex?: number;
 }
 
 export interface ChromeActions {
@@ -98,6 +99,7 @@ export interface ChromeLayout {
   width: number;
   height: number;
   toolbarHeight: number;
+  compactControls?: boolean;
   recordBarHeight: number;
   contentHeight: number;
   page: { x: number; y: number; width: number; height: number };
