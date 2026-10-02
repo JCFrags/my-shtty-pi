@@ -18,14 +18,16 @@ jobs:
         working-directory: vendor/terminal-browser
     env:
       CARGO_BUILD_JOBS: 2
-      TERMINAL_BROWSER_NATIVE_TARGET: ${{ runner.temp }}/terminal-browser-native
-      TERMINAL_BROWSER_RELEASE_OUT: ${{ runner.temp }}/terminal-browser-release
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Prepare isolated build paths
+        run: |
+          echo "TERMINAL_BROWSER_NATIVE_TARGET=$RUNNER_TEMP/terminal-browser-native" >> "$GITHUB_ENV"
+          echo "TERMINAL_BROWSER_RELEASE_OUT=$RUNNER_TEMP/terminal-browser-release" >> "$GITHUB_ENV"
       - name: Check product version and tag
         id: version
         env:
