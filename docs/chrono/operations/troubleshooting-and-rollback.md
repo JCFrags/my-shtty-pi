@@ -85,6 +85,8 @@ A code rollback does not authorize service restarts, gate changes, source deleti
 
 ### Data-preserving rollback after new writes
 
+A complete checkpoint still requires a reader compatible with its native history. After the first Workplan `restore` write, older reducers reject the new action in immutable revision records, including inside a complete V1 checkpoint. Retain a restore-compatible Workplan component and the complete stores/source. Reverting Chrono prompt guidance or recovery presentation does not require reverting native reader support. Do not strip revision records, rewrite digests, or present a pre-restore branch as the latest state. No reverse converter is provided.
+
 1. Stop concurrent state mutations at a stable source cut.
 2. Capture complete current Todo, Notes, and Workplan state. Refuse if pending, corrupt, changed, or over the transfer bounds.
 3. Create a fresh replacement with the latest full native checkpoints before any legacy provider events. A checkpoint appended after old state is invalid.

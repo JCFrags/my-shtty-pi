@@ -11,37 +11,35 @@ related:
 
 # Compaction and context budgets
 
-The [session-agent compaction contract](session-agent-compaction.md) supersedes the no-required-summary and state-first V4 design below. The correction is in isolated development. This page records the retained implementation until the replacement is exercised and its actual output is approved.
+V4 follows the implemented [session-agent compaction contract](session-agent-compaction.md): a required same-session continuation summary, compressed chronological evidence, and only the necessary exact tail. Native cards remain in the receipt, not a second model-facing state dump. Source implementation, preview evidence, and loaded activation are separate claims.
 
 ## Public Pi integration
 
 Pi requests compaction through `session_before_compact`. Chrono returns custom context through that public hook. It does not patch private AgentSession methods or create a second compactor.
 
-Pi still owns context-pressure and overflow handling. A separate Chrono proactive threshold can request earlier compaction. `request_compaction` schedules a request at the end of the current turn. It is not a synchronous completed compaction. Save useful project state before requesting it, then stop starting new operations.
+Pi still owns context-pressure and overflow handling. A separate Chrono proactive threshold can request earlier compaction. In V4, `request_compaction({})` returns a same-session summary request. Submit its request ID and summary as the sole tool call, then stop starting new operations. Acceptance is not a completed compaction; source validation and safe-idle settlement must still succeed. Save useful project state before requesting it. Use the [checkpoint-first transition policy](session-agent-compaction.md#meaningful-task-transitions) for meaningful direction changes, not every milestone or checkpoint.
 
 ## Selected paths
 
 | Path | Inputs and result |
 | --- | --- |
 | V3 programmatic memory | Bounded compatible historical selection, a small adaptive raw tail, and optionally an independent regular Pi summary. |
-| V4, selected by `contextCompiler: "v4"` | Frozen current native cards plus compatible historical selection or bounded fallback, whole-record fitting, complete estimated request charges, and a persisted receipt. |
+| V4, selected by `contextCompiler: "v4"` | Required same-session summary plus bounded chronological replay and the necessary exact tail, complete estimated request charges, and a persisted receipt. Native cards are receipt-only evidence. |
 | Compatibility replay | Retained older candidate reconstruction, separate replay limits, and optional value advice. It is not a hidden V3/V4 failure fallback. |
 
 V3 remains the compiled default. The local integration intends explicit V4 selection. Check [evidence and selection](../design/evidence-and-roadmap.md), not the package version alone.
 
 ## V4 capture and compilation
 
-1. Capture the full current native session/leaf, the historical prefix cut, the first retained entry, model metadata, system prompt, active schemas, response reserve, settings, and lifecycle identity.
-2. Select an adaptive recent tail without splitting a tool call from its result. The historical prefix ends before that tail. Native state is captured at the full leaf, not artificially rewound to the historical prefix cut.
-3. Collect bounded pages through the same pure collector used by Recall. The compiler does not invoke native tools or read provider stores directly. Its capture allows up to 16 cards and 128 scanned records per provider, 16 KiB provider replies, a 32 KiB combined collection, and a 150 ms common wait.
-4. Select existing compatible historical state. Missing optional history can use a bounded loaded-prefix fallback. Identity mismatches and corrupt source do not authorize that fallback.
-5. Detach and freeze the admitted inputs. Fit whole admitted records, retain explicit omissions and recovery, then render historical items in source order.
+1. Obtain the session agent's summary through its normal request path. Bind the request and sole submission to the session, consumed source boundary, model, epoch, and expiry. Do not use a separate summarizer or stale summary fallback.
+2. At safe idle, settle the persisted submission result and verify the minimal retained boundary. Keep only content not consumed by the summary-producing request and any messages required for valid tool pairs. Capture the full native session/leaf, replay cut, model metadata, system prompt, active schemas, response reserve, settings, and lifecycle identity.
+3. Collect bounded native pages through the same pure collector used by Recall. The compiler does not invoke native tools or read provider stores directly. Capture allows up to 16 cards and 128 scanned records per provider, 16 KiB provider replies, a 32 KiB combined collection, and a 150 ms common wait. These pages remain in the receipt and do not automatically supply facts to the summary writer.
+4. Capture bounded chronological events from the loaded branch with applicable Pi context edits and saved relevance hints. Keep original roles, source order, omission notices, and exact recovery IDs.
+5. Detach and freeze admitted inputs. Charge the continuation summary and exact tail first, then fit replay within its adaptive allowance and hard ceiling. The current compiler requires both the summary and event replay; old stored/fallback input forms do not substitute for them.
 6. Charge the complete rendered result. Revalidate scope, settings, model, active schemas, cancellation, and source boundary before returning.
 7. Persist `details.contextReceipt` with the actual Pi compaction entry. Correlate `session_compact` or `session_compact_failed` with the pending attempt.
 
-Whole-record fitting means a selected card or already-admitted historical representation is not cut again arbitrarily by the compiler. Providers and historical projectors can already have supplied bounded excerpts. Omitted fields remain unknown.
-
-Selection gives unresolved task states and categories such as constraints, blockers, decisions, and knowledge preference. That is a deterministic priority, not a truth score or a guarantee that every important fact fits.
+Replay reduces optional detail before omitting useful events. It does not promise whole-record retention or semantic completeness. Native rendered tokens remain zero. Saved state, summaries, and relevance hints are fallible context, not new permission. See the [adaptive replay policy](session-agent-compaction.md#adaptive-replay-selection) for selection and omission rules.
 
 ## Budgets
 
@@ -59,17 +57,17 @@ The estimator is named `pi-message-estimator-and-utf16-ceil-div4-v1`. It combine
 
 V3 accounts for its combined summary/tail ceiling with system text, a Chrono reserve, and response reserve. V4 adds explicit active-schema and request-framing accounting. Do not apply the V4 receipt's accounting claim retroactively to older compositions.
 
-The recent tail normally aims for 3,000–6,000 estimated tokens. It examines at most 256 suffix entries, respects the prepared boundary, and can retain less than the minimum when safe boundaries require it. An indivisible suffix that cannot fit the maximum refuses. Fixed or Pi-tail compatibility options do not replace the V3/V4 dynamic-tail rule.
+V3's adaptive recent tail normally aims for 3,000–6,000 estimated tokens and examines at most 256 suffix entries. V4 instead retains the verified necessary suffix after the summary exchange; it does not reserve thousands of tokens merely to meet an old tail preset. Both paths must preserve valid tool structure and refuse an unsafe or over-budget boundary.
 
 Separate finite bounds remain: V4 input is at most 1 MiB and its receipt at most 768 KiB. Historical composition retains its own row, byte, and source-read limits. Raising a token setting does not raise worker memory, transfer size, database limits, or deadlines.
 
 ## Fallback and omission
 
-The programmatic fallback reads already-loaded recent prefix entries, not the archive. Its limits include 128 entries, 16 blocks per entry, 8,192 UTF-16 units per entry, and 128 Ki units total. A bounded previous summary can be retained as explicitly historical text.
+The retained V3/compatibility programmatic fallback reads already-loaded recent prefix entries, not the archive. Its limits include 128 entries, 16 blocks per entry, 8,192 UTF-16 units per entry, and 128 Ki units total. A bounded previous summary can be retained as explicitly historical text.
 
 Fallback reports omitted history, unavailable retrieval, and possible stale memory. Incomplete historical coverage is an honest selection result, not a promise that every old restriction remains verbatim. Unsafe tool structure, incompatible identity, cancellation, or an unusable budget still prevents replacement.
 
-V4 does not require a summary-model call, even when the legacy optional Pi-summary setting is enabled. The optional value worker does not rewrite this frozen plan.
+V4 requires the current session agent's summary turn regardless of the legacy optional Pi-summary setting. It does not call a separate summary model. The optional value worker does not rewrite this frozen input or replace a missing summary.
 
 ## Receipt and recovery
 
@@ -78,7 +76,8 @@ The V4 receipt records:
 - Input, selection, and summary hashes and its receipt ID.
 - Native scope, historical cut, retained boundary, and captured Memory owner.
 - Admitted provider pages and individual record revisions.
-- Selected and omitted card references, unresolved relations, historical selections, exclusions, and recovery descriptors.
+- Receipt-only native cards, chronological selections and omissions, and exact recovery descriptors.
+- The source-bound session summary and its relevance hints.
 - Estimated charges and explicit validation qualifications.
 
 It is not a transaction across providers. A later native read can return a newer record, except where an exact revision selector is supported. Provider exclusions before capture are counts, not invented omitted IDs.
