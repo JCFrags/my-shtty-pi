@@ -36,7 +36,7 @@ export function observationResult(value: Record<string, unknown>) {
 const openParameters = Type.Object({
   url: Type.Optional(Type.String({ maxLength: 8192, description: "Optional URL or local HTML path" })),
   new_tab: Type.Optional(Type.Boolean({ description: "Open the URL in a new tab when reusing the companion" })),
-  focus: Type.Optional(Type.Boolean({ description: "Focus the companion pane; defaults to true" })),
+  focus: Type.Optional(Type.Boolean({ description: "Focus a Herdr companion pane; defaults to true. Outside Herdr, focus the prelaunched terminal manually." })),
 }, { additionalProperties: false });
 
 const tabsParameters = Type.Object({
@@ -101,7 +101,10 @@ const actParameters = Type.Object({
 }, { additionalProperties: false });
 
 const controlParameters = Type.Object({
-  action: StringEnum(["status", "pause", "resume"] as const),
+  action: StringEnum(["status", "pause", "resume", "blocking"] as const),
+  blocking_action: Type.Optional(StringEnum(["status", "enable", "disable", "allow-site", "block-site", "clear-diagnostics", "reload"] as const)),
+  site: Type.Optional(Type.String({ minLength: 1, maxLength: 2048, description: "Exact hostname or HTTP(S) URL for allow-site/block-site" })),
+  context_id: Type.Optional(Type.Integer({ minimum: 1, description: "Context for blocking diagnostics. Omit to use the selected context." })),
 }, { additionalProperties: false });
 
 function browserAction(params: {
@@ -213,9 +216,10 @@ export default async function terminalBrowserExtension(
   pi.registerTool({
     name: "browser_open",
     label: "Browser Open",
-    description: "Open or reuse the companion terminal-browser owned by this Pi pane. Returns bounded tab state and never requires a browser key.",
-    promptSnippet: "Open or reuse this Pi pane's companion browser",
-    promptGuidelines: ["Use browser_open before browser_observe. Reuse the returned companion instead of opening another browser."],
+    description: "Use the optional Pi adapter to open/reuse a Herdr companion, or attach to an explicitly prelaunched native CLI browser owned by this Pi session and project. Outside Herdr, missing-browser errors give the visible-terminal launch command; this tool never takes over Pi's piped terminal. Returns bounded tab state and never requires a browser key.",
+    promptSnippet: "Open or attach to this Pi session's owned browser",
+    promptGuidelines: ["When using the optional Pi browser adapter, call browser_open before browser_observe. Reuse the returned browser."],
+    executionMode: "sequential",
     parameters: openParameters,
     async execute(_id, params, signal, _update, ctx) {
       return result(await client.open(context(ctx, signal), {
@@ -230,6 +234,7 @@ export default async function terminalBrowserExtension(
     name: "browser_tabs",
     label: "Browser Tabs",
     description: "List, wait for, activate, open, or close native tab and popup contexts. Use context_id; wait returns contexts newer than after_context_id without holding the action lane. Results are limited to 32 contexts. downloads lists up to 64 owner-scoped transfers, optionally filtered by context_id. download_wait and download_cancel require an exact download_id. Waits release the action lane. Results include the fixed launch projectRoot and relative savePath. Files are saved under that project and never opened.",
+    executionMode: "sequential",
     parameters: tabsParameters,
     async execute(_id, params, signal, _update, ctx) {
       if ((params.action === "activate" || params.action === "close") && params.context_id === undefined) {
@@ -250,9 +255,10 @@ export default async function terminalBrowserExtension(
   pi.registerTool({
     name: "browser_observe",
     label: "Browser Observe",
-    description: "Read a bounded semantic, visual, or combined observation from the active companion tab. Use filter with native locator steps to narrow the element list. Visual captures cover the containing context viewport or one referenced element. Up to 24 friendly frame summaries are included. Use frame to select fN or main; omission keeps the current frame.",
+    description: "Read a bounded semantic, visual, or combined observation from the active owned browser tab. Use filter with native locator steps to narrow the element list. Visual captures cover the containing context viewport or one referenced element. Up to 24 friendly frame summaries are included. Use frame to select fN or main; omission keeps the current frame.",
     promptSnippet: "Observe the active companion browser tab before acting",
     promptGuidelines: ["Use browser_observe after browser_open and after each page-changing browser_act call. Then use one browser_act action."],
+    executionMode: "sequential",
     parameters: observeParameters,
     async execute(_id, params, signal, _update, ctx) {
       if ((params.scope ?? "viewport") === "element" && !params.ref) {
@@ -280,9 +286,10 @@ export default async function terminalBrowserExtension(
   pi.registerTool({
     name: "browser_act",
     label: "Browser Act",
-    description: "Perform one native action in this Pi pane's companion browser: upload, click, hover, drag, type, press_key, scroll, navigate, get_url, wait_for, or dialog. Dialog responses require the exact dialog_id returned by observe, tabs, resume, or an interrupted action and an explicit accept decision. Optional context_id must match that dialog. Never assume acceptance. Upload clicks a visible input or chooser button through AgentCursor, then assigns 1–16 regular project files (32 MiB each, 64 MiB total); secret paths and project escapes are rejected. Changing cwd does not change the companion project root; reopen the companion to adopt another project. Use exactly one ref or locator (native bounded step array) for click, type, upload or hover; drag accepts from_locator/to_locator. Ambiguous locators fail; scope or nth selects explicitly. wait_for accepts locator and actionable. Coordinates require the latest visual observation. Frame defaults to the selected observation; explicit frame must match it. Select another frame with browser_observe first. Drag endpoints must be in that same frame. Omit frame for context navigation, get_url, and dialog.",
+    description: "Perform one native action in this Pi session's owned browser: upload, click, hover, drag, type, press_key, scroll, navigate, get_url, wait_for, or dialog. Dialog responses require the exact dialog_id returned by observe, tabs, resume, or an interrupted action and an explicit accept decision. Optional context_id must match that dialog. Never assume acceptance. Upload clicks a visible input or chooser button through AgentCursor, then assigns 1–16 regular project files (32 MiB each, 64 MiB total); secret paths and project escapes are rejected. Changing cwd does not change the companion project root; reopen the companion to adopt another project. Use exactly one ref or locator (native bounded step array) for click, type, upload or hover; drag accepts from_locator/to_locator. Ambiguous locators fail; scope or nth selects explicitly. wait_for accepts locator and actionable. Coordinates require the latest visual observation. Frame defaults to the selected observation; explicit frame must match it. Select another frame with browser_observe first. Drag endpoints must be in that same frame. Omit frame for context navigation, get_url, and dialog.",
     promptSnippet: "Perform one native companion-browser action",
     promptGuidelines: ["Use browser_act for exactly one action per call, then use browser_observe again when the page may have changed."],
+    executionMode: "sequential",
     parameters: actParameters,
     async execute(_id, params, signal, _update, ctx) {
       return result(await client.act(context(ctx, signal), { ...browserAction(params), frame: params.frame }));
@@ -292,9 +299,19 @@ export default async function terminalBrowserExtension(
   pi.registerTool({
     name: "browser_control",
     label: "Browser Control",
-    description: "Read, pause, or resume browser-wide agent control for this Pi pane's companion. Resume refreshes the internal observation automatically.",
+    description: "Read, pause, or explicitly resume browser-wide agent control. Resume only when the user asks; it refreshes the internal observation. action blocking calls the same CLI's network blocker: blocking_action defaults to status. enable/disable and exact-host allow-site/block-site change the shared profile, not only this context. site is required for allow-site/block-site. clear-diagnostics affects the selected context; reload rebuilds the bundled filter cache without a network update. Mutations require current agent control and invalidate the adapter observation.",
+    executionMode: "sequential",
     parameters: controlParameters,
     async execute(_id, params, signal, _update, ctx) {
+      if (params.action === "blocking") {
+        const action = params.blocking_action ?? "status";
+        const needsSite = action === "allow-site" || action === "block-site";
+        if (needsSite !== (params.site !== undefined)) throw new Error("site is required only for allow-site or block-site");
+        return result(await client.blocking(context(ctx, signal), { action, site: params.site, contextId: params.context_id }));
+      }
+      if (params.blocking_action !== undefined || params.site !== undefined || params.context_id !== undefined) {
+        throw new Error("blocking_action, site, and context_id require action blocking");
+      }
       return result(await client.control(context(ctx, signal), params.action));
     },
   });

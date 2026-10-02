@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { Terminal } from "pixel-terminals";
+import type { BrowserOwner } from "pixel-store";
 
-import { currentBrowserOwner } from "./companion";
+import { environmentOwner, takeSessionOwner } from "./session";
 import { control } from "./control";
-import { browsers, ownedBy, recordKey, targets } from "./instances";
+import { browsers, recordKey, targets } from "./instances";
 import type { Browser } from "./instances";
 
 const DEFAULT_MAX_ELEMENTS = 200;
@@ -18,27 +19,56 @@ const MAX_SCROLL_DELTA = 20_000;
 const ACTION_TIMEOUT_MS = 30_000;
 const MAX_ACTION_TIMEOUT_MS = 300_000;
 
-export async function agentCommand(terminal: Terminal | null, args: string[]): Promise<number> {
-  const subcommand = args.shift();
-  if (subcommand === "dialog") return dialogCommand(terminal, args);
-  if (subcommand === "observe") return observeCommand(terminal, args);
-  if (subcommand === "upload") return uploadCommand(terminal, args);
-  if (subcommand === "click") return clickCommand(terminal, args);
-  if (subcommand === "hover") return hoverCommand(terminal, args);
-  if (subcommand === "drag") return dragCommand(terminal, args);
-  if (subcommand === "type") return typeCommand(terminal, args);
-  if (subcommand === "press-key") return pressKeyCommand(terminal, args);
-  if (subcommand === "scroll") return scrollCommand(terminal, args);
-  if (subcommand === "navigate") return navigateCommand(terminal, args);
-  if (subcommand === "get-url") return getUrlCommand(terminal, args);
-  if (subcommand === "wait-for") return waitForCommand(terminal, args);
-  if (subcommand === "status") return statusCommand(terminal, args);
-  if (subcommand === "pause") return transitionCommand(terminal, args, "agent.pause");
-  if (subcommand === "resume") return transitionCommand(terminal, args, "agent.resume");
-  throw new Error("agent needs observe, upload, click, hover, drag, type, press-key, scroll, navigate, get-url, wait-for, status, pause, or resume (terminal-browser agent --help)");
+interface AgentRoute {
+  terminal: Terminal | null;
+  owner: BrowserOwner | null;
 }
 
-async function dialogCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+export async function agentCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+  const subcommand = args.shift();
+  const explicitOwner = takeSessionOwner(args);
+  const route: AgentRoute = { terminal: explicitOwner ? null : terminal, owner: explicitOwner };
+  if (subcommand === "blocking") return blockingCommand(route, args);
+  if (subcommand === "dialog") return dialogCommand(route, args);
+  if (subcommand === "observe") return observeCommand(route, args);
+  if (subcommand === "upload") return uploadCommand(route, args);
+  if (subcommand === "click") return clickCommand(route, args);
+  if (subcommand === "hover") return hoverCommand(route, args);
+  if (subcommand === "drag") return dragCommand(route, args);
+  if (subcommand === "type") return typeCommand(route, args);
+  if (subcommand === "press-key") return pressKeyCommand(route, args);
+  if (subcommand === "scroll") return scrollCommand(route, args);
+  if (subcommand === "navigate") return navigateCommand(route, args);
+  if (subcommand === "get-url") return getUrlCommand(route, args);
+  if (subcommand === "wait-for") return waitForCommand(route, args);
+  if (subcommand === "status") return statusCommand(route, args);
+  if (subcommand === "pause") return transitionCommand(route, args, "agent.pause");
+  if (subcommand === "resume") return transitionCommand(route, args, "agent.resume");
+  throw new Error("agent needs observe, upload, click, hover, drag, type, press-key, scroll, navigate, get-url, wait-for, dialog, blocking, status, pause, or resume (terminal-browser agent --help)");
+}
+
+async function blockingCommand(route: AgentRoute, args: string[]): Promise<number> {
+  const action = args.shift();
+  const browserKey = takeValue(args, "--browser");
+  const tabValue = takeValue(args, "--tab");
+  const site = takeValue(args, "--site");
+  const epochValue = takeValue(args, "--control-epoch");
+  if (!action || !["status", "enable", "disable", "allow-site", "block-site", "clear-diagnostics", "reload"].includes(action)) {
+    throw new Error("agent blocking needs status, enable, disable, allow-site, block-site, clear-diagnostics, or reload");
+  }
+  if (args.length) throw new Error(`unexpected ${args[0]}`);
+  const siteAction = action === "allow-site" || action === "block-site";
+  if (siteAction && (!site || site.length > 2048 || /[\u0000-\u001f\u007f]/.test(site))) throw new Error("blocking site action requires --site <site>");
+  if (!siteAction && site !== undefined) throw new Error("--site only applies to allow-site or block-site");
+  if (action === "status" && epochValue !== undefined) throw new Error("blocking status does not need --control-epoch");
+  const expectedControlEpoch = action === "status" ? undefined : parseEpoch(epochValue, "blocking mutation");
+  const browser = await selectBrowser(route, browserKey);
+  const tab = await selectTab(browser, parseTab(tabValue));
+  print(await control(browser.socket, { cmd: "blocking", action, tab, ...(site === undefined ? {} : { site }), ...(expectedControlEpoch === undefined ? {} : { expectedControlEpoch }) }));
+  return 0;
+}
+
+async function dialogCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tab = parseTab(takeValue(args, "--tab"));
   const dialogId = takeValue(args, "--dialog-id");
@@ -52,22 +82,22 @@ async function dialogCommand(terminal: Terminal | null, args: string[]): Promise
   if (args.length) throw new Error(`unexpected ${args[0]}`);
   const text = stdin ? await readStdin(32768) : textFlag;
   if (text !== undefined && text.length > 32768) throw new Error("prompt text too long");
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   print(await control(browser.socket, { cmd: "agent.dialog", tab, dialogId, expectedControlEpoch: epoch, accept, ...(text === undefined ? {} : { text }) }));
   return 0;
 }
 
-async function statusCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function statusCommand(route: AgentRoute, args: string[]): Promise<number> {
   rejectTabOption(args);
   const browserKey = takeValue(args, "--browser");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   print(await control(browser.socket, { cmd: "agent.status" }));
   return 0;
 }
 
 async function transitionCommand(
-  terminal: Terminal | null,
+  route: AgentRoute,
   args: string[],
   cmd: "agent.pause" | "agent.resume",
 ): Promise<number> {
@@ -75,7 +105,7 @@ async function transitionCommand(
   const browserKey = takeValue(args, "--browser");
   const epochValue = takeValue(args, "--control-epoch");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   print(await control(browser.socket, {
     cmd,
     expectedControlEpoch: parseEpoch(epochValue, cmd),
@@ -83,7 +113,7 @@ async function transitionCommand(
   return 0;
 }
 
-async function observeCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function observeCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const frame = takeValue(args, "--frame");
@@ -102,7 +132,7 @@ async function observeCommand(terminal: Terminal | null, args: string[]): Promis
   if (view === "semantic" && imageOutput) throw new Error("agent observe --image-output needs a visual view");
   if (ref) validateAgentString(ref, "agent observe ref");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent observe --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const maxElements = parseMaxElements(maxValue);
   const value = await control(browser.socket, {
@@ -128,7 +158,7 @@ async function observeCommand(terminal: Terminal | null, args: string[]): Promis
   return 0;
 }
 
-async function clickCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function clickCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -138,7 +168,7 @@ async function clickCommand(terminal: Terminal | null, args: string[]): Promise<
   if ((ref !== undefined) === (locator !== undefined)) throw new Error("agent target needs a ref or --locator-json, but not both");
   if (ref !== undefined) validateAgentString(ref, "agent target ref");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent click --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const observation = parseObservation(observationId, "agent.click");
   const expectedControlEpoch = parseEpoch(epochValue, "agent.click");
@@ -154,7 +184,7 @@ async function clickCommand(terminal: Terminal | null, args: string[]): Promise<
   return 0;
 }
 
-async function uploadCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function uploadCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -168,7 +198,7 @@ async function uploadCommand(terminal: Terminal | null, args: string[]): Promise
   if ((ref !== undefined) === (locator !== undefined)) throw new Error("agent target needs a ref or --locator-json, but not both");
   if (ref !== undefined) validateAgentString(ref, "agent target ref");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent upload --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const observation = parseObservation(observationId, "agent.upload");
   const expectedControlEpoch = parseEpoch(epochValue, "agent.upload");
@@ -185,7 +215,7 @@ async function uploadCommand(terminal: Terminal | null, args: string[]): Promise
   return 0;
 }
 
-async function hoverCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function hoverCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -196,7 +226,7 @@ async function hoverCommand(terminal: Terminal | null, args: string[]): Promise<
   const ref = args.shift();
   const target = parseCliTarget(ref, xValue, yValue, "agent hover", locator);
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent hover --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   print(await control(browser.socket, {
     cmd: "agent.hover",
@@ -208,7 +238,7 @@ async function hoverCommand(terminal: Terminal | null, args: string[]): Promise<
   return 0;
 }
 
-async function dragCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function dragCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -232,7 +262,7 @@ async function dragCommand(terminal: Terminal | null, args: string[]): Promise<n
     throw new Error("agent drag --button must be left, middle, or right");
   }
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent drag --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   print(await control(browser.socket, {
     cmd: "agent.drag",
@@ -246,7 +276,7 @@ async function dragCommand(terminal: Terminal | null, args: string[]): Promise<n
   return 0;
 }
 
-async function typeCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function typeCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -266,7 +296,7 @@ async function typeCommand(terminal: Terminal | null, args: string[]): Promise<n
     ? await readStdin(replace ? MAX_REPLACE_TEXT : MAX_NATURAL_TEXT)
     : textFlag!;
   validateTypeText(text, replace);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const observation = parseObservation(observationId, "agent.type");
   const expectedControlEpoch = parseEpoch(epochValue, "agent.type");
@@ -287,7 +317,7 @@ async function typeCommand(terminal: Terminal | null, args: string[]): Promise<n
   return 0;
 }
 
-async function pressKeyCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function pressKeyCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -298,7 +328,7 @@ async function pressKeyCommand(terminal: Terminal | null, args: string[]): Promi
   }
   if (key.length > MAX_KEY) throw new Error("agent press-key key is too long");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent press-key --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const observation = parseObservation(observationId, "agent.press-key");
   const expectedControlEpoch = parseEpoch(epochValue, "agent.press-key");
@@ -312,7 +342,7 @@ async function pressKeyCommand(terminal: Terminal | null, args: string[]): Promi
   return 0;
 }
 
-async function scrollCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function scrollCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -323,7 +353,7 @@ async function scrollCommand(terminal: Terminal | null, args: string[]): Promise
   const dy = parseScrollNumber(dyValue, "--dy");
   const dx = dxValue === undefined ? 0 : parseScrollNumber(dxValue, "--dx");
   validateScroll(dx, dy);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const observation = parseObservation(observationId, "agent.scroll");
   const expectedControlEpoch = parseEpoch(epochValue, "agent.scroll");
@@ -338,7 +368,7 @@ async function scrollCommand(terminal: Terminal | null, args: string[]): Promise
   return 0;
 }
 
-async function navigateCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function navigateCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const epochValue = takeValue(args, "--control-epoch");
@@ -348,7 +378,7 @@ async function navigateCommand(terminal: Terminal | null, args: string[]): Promi
   }
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent navigate --help)`);
   validateNavigation(url);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const expectedControlEpoch = parseEpoch(epochValue, "agent.navigate");
   print(await control(browser.socket, {
@@ -360,12 +390,12 @@ async function navigateCommand(terminal: Terminal | null, args: string[]): Promi
   return 0;
 }
 
-async function getUrlCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function getUrlCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const epochValue = takeValue(args, "--control-epoch");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent get-url --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const expectedControlEpoch = parseEpoch(epochValue, "agent.get-url");
   print(await control(browser.socket, {
@@ -376,7 +406,7 @@ async function getUrlCommand(terminal: Terminal | null, args: string[]): Promise
   return 0;
 }
 
-async function waitForCommand(terminal: Terminal | null, args: string[]): Promise<number> {
+async function waitForCommand(route: AgentRoute, args: string[]): Promise<number> {
   const browserKey = takeValue(args, "--browser");
   const tabValue = takeValue(args, "--tab");
   const observationId = takeValue(args, "--observation");
@@ -398,7 +428,7 @@ async function waitForCommand(terminal: Terminal | null, args: string[]): Promis
   if (text !== undefined) validateWaitText(text);
   const timeoutMs = parseWaitTimeout(timeoutValue);
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent wait-for --help)`);
-  const browser = await selectBrowser(terminal, browserKey);
+  const browser = await selectBrowser(route, browserKey);
   const tab = await selectTab(browser, parseTab(tabValue));
   const observation = parseObservation(observationId, "agent.wait-for");
   const expectedControlEpoch = parseEpoch(epochValue, "agent.wait-for");
@@ -416,26 +446,24 @@ async function waitForCommand(terminal: Terminal | null, args: string[]): Promis
   return 0;
 }
 
-async function selectBrowser(terminal: Terminal | null, key: string | undefined): Promise<Browser> {
-  const found = await browsers(terminal);
+async function selectBrowser(route: AgentRoute, key: string | undefined): Promise<Browser> {
+  const owner = route.owner ?? environmentOwner(process.env, process.cwd());
+  const found = await browsers(owner ? null : route.terminal, owner);
   if (key) {
     const matches = found.filter((browser) => recordKey(browser) === key);
-    if (matches.length === 0) throw new Error(`no browser ${key}`);
+    if (matches.length === 0) throw new Error(`no browser ${key} for this owner`);
     if (matches.length > 1) throw new Error(`browser key ${key} is ambiguous`);
+    if (!owner && matches[0]!.ownerWorkspaceId) throw new Error("owned browser requires its session/project or Herdr owner; --browser does not override ownership");
     return matches[0]!;
   }
-  if (process.env.HERDR_ENV === "1" || process.env.TERMINAL_BROWSER_OWNER_PANE_ID) {
-    const owner = currentBrowserOwner(process.env, process.cwd());
-    const owned = found.filter((browser) => ownedBy(browser, owner));
-    if (owned.length === 1) return owned[0]!;
-    if (owned.length === 0) {
-      throw new Error("no browser companion for this Pi pane; call browser_open first");
-    }
-    throw new Error("multiple browsers claim this Pi pane");
+  if (owner) {
+    if (found.length === 1) return found[0]!;
+    if (found.length === 0) throw new Error("no browser companion or native session for this owner; use companion open in Herdr, or open --session <id> --project <directory>");
+    throw new Error("multiple browsers claim this owner");
   }
-  const here = found.filter((browser) => browser.inCurrentTab);
+  const here = found.filter((browser) => browser.inCurrentTab && !browser.ownerWorkspaceId);
   if (here.length === 1) return here[0]!;
-  if (here.length === 0) throw new Error("no browser in the current terminal tab; use --browser <key>");
+  if (here.length === 0) throw new Error("no unowned browser in the current terminal tab; use --session <id> --project <directory> or --browser <key>");
   throw new Error(`${here.length} browsers in the current terminal tab; use --browser <key>`);
 }
 

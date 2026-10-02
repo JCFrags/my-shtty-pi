@@ -31,7 +31,7 @@ assert.equal(command, '/artifact/bin/terminal-browser');
 assert.match(run(command, args), /terminal-browser/);
 assert.match(run('/bin/bash', ['/artifact/herdr-plugin/launch.sh', 'help']), /terminal-browser/);
 assert(!fs.readFileSync('/artifact/herdr-plugin/herdr-plugin.toml', 'utf8').includes('[[build]]'));
-assert.equal(run('/artifact/agent-browser/bin/agent-browser', ['--version']).trim(), 'agent-browser 0.33.0');
+assert(!fs.existsSync('/artifact/agent-browser'), 'standalone runtime must not bundle the retired action route');
 console.log(run('/artifact/electron/electron', ['/artifact/browser/dist/runtime-check.js', '--ozone-platform=headless', '--screen-info={8192x8192}']));
 await import('/test/packaged-runtime.mjs');
 if (process.env.PI_ROOT) {

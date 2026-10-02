@@ -3,7 +3,7 @@ import net from "node:net";
 import path from "node:path";
 
 import { app } from "electron";
-import { DAEMON_SOCKET, RUNTIME_IDENTITY, runtimeMatches } from "pixel-store";
+import { DAEMON_SOCKET, RUNTIME_IDENTITY, runtimeMatches, parseBrowserOwner } from "pixel-store";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 
@@ -78,14 +78,20 @@ export async function runDaemon(cdpPort: number | null, exit: (code: number) => 
           key = `${process.pid}-${++seq}`;
           const sessionKey = key;
           try {
+            const owner = parseBrowserOwner(message.env ?? {});
+            if (owner && inventory().some((entry) => entry.owner && entry.owner.workspaceId === owner.workspaceId &&
+              entry.owner.tabId === owner.tabId && entry.owner.paneId === owner.paneId)) {
+              reply({ ok: false, errorCode: "SESSION_ALREADY_OPEN", error: "a browser already owns this session; use agent or session tabs with the same owner instead of launching a duplicate" });
+              connection.end(); return;
+            }
             session = createSession({
               tty: message.tty, key: sessionKey, argv: message.argv ?? [], env: message.env ?? {}, cwd: message.cwd ?? process.cwd(), cdpPort,
               onClose: (code) => {
                 sessions.delete(sessionKey); reply({ event: "closed", code }); connection.end(); scheduleIdleExit();
               },
             });
-          } catch {
-            reply({ ok: false, error: "session creation failed" }); connection.end(); scheduleIdleExit(); return;
+          } catch (error) {
+            reply({ ok: false, error: error instanceof Error ? error.message : "session creation failed" }); connection.end(); scheduleIdleExit(); return;
           }
           sessions.set(sessionKey, session);
           reply({ ok: true, session: sessionKey, pid: process.pid });

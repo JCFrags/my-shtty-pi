@@ -11,7 +11,9 @@ import type {
   WheelEvent,
 } from "pixel-react";
 import { normalizeUrl, urlHost } from "../url";
-import { allowClipboardRead, persistentPartition } from "./browser-session";
+import { allowClipboardRead, configureBrowserSession, persistentPartition } from "./browser-session";
+import { controlBlocking } from "../blocking/session";
+import type { BlockingRequest, BlockingStatus } from "../blocking/types";
 import { cursorShapeFor } from "./cursor";
 import { DevtoolsWindow } from "./devtools";
 import type { DevtoolsAction } from "./devtools";
@@ -126,6 +128,7 @@ export class BrowserController {
     this.renderScale = browserRenderScale(layout);
     this.state = initialBrowserState(initialUrl);
     const size = this.contentSize(layout);
+    configureBrowserSession(this.partition);
     this.window = new BrowserWindow({
       width: size.width,
       height: size.height,
@@ -277,6 +280,10 @@ export class BrowserController {
   }
 
   get contentsId(): number { return this.window.webContents.id; }
+
+  blocking(request: BlockingRequest): BlockingStatus {
+    return controlBlocking(this.window.webContents, request);
+  }
 
   requestClose() {
     this.dialogs.runIntent({ type: "close" }, () => this.window.close(), () => this.window.close());

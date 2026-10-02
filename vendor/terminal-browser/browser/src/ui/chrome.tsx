@@ -54,6 +54,7 @@ export function Chrome({
   download,
   toast,
   pageMenu,
+  blockingLabel,
   dividerEngaged,
   record,
   recordSurface,
@@ -82,6 +83,7 @@ export function Chrome({
   download: DownloadView | null;
   toast: { text: string; detail?: string; failed: boolean; alert: boolean } | null;
   pageMenu: PageMenuView | null;
+  blockingLabel?: string | null;
   dividerEngaged: boolean;
   record: RecordView | null;
   recordSurface: Surface | null;
@@ -120,6 +122,7 @@ export function Chrome({
             theme={theme}
             tabs={tabs}
             record={record}
+            blockingLabel={blockingLabel}
           />
         ))}
       <BrowserTabContents
@@ -298,6 +301,7 @@ function Toolbar({
   theme,
   tabs,
   record,
+  blockingLabel,
 }: {
   state: BrowserState;
   actions: ChromeActions;
@@ -305,6 +309,7 @@ function Toolbar({
   theme: Theme;
   tabs: TabRow[];
   record: RecordView | null;
+  blockingLabel?: string | null;
 }) {
   const rem = layout.rem;
   const stopIcon = useStopIcon(state.loading);
@@ -314,7 +319,8 @@ function Toolbar({
     rem * 0.8 -
     rem * 3.3 -
     (nav ? rem * 3.5 : 0) -
-    (record ? rem * 7.25 : 0);
+    (record ? rem * 7.25 : 0) -
+    (blockingLabel ? rem * 6.3 : 0);
   return (
     <Box
       style={{
@@ -358,6 +364,12 @@ function Toolbar({
         url={state.url}
         theme={theme}
       />
+      {blockingLabel && <Box
+        style={{ width: rem * 6, height: rem * 1.6, alignItems: "center", justifyContent: "center", flexShrink: 0, hoverBackground: theme.hover, cornerRadius: rem * 0.3 }}
+        onClick={actions.tabMenu}
+      >
+        <Text style={{ fontSize: rem * 0.75, color: theme.fg, wrap: false, selectable: false }}>{blockingLabel}</Text>
+      </Box>}
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
     </Box>
   );

@@ -3,7 +3,7 @@ const path = require('node:path');
 const environment = { ...process.env, TERMINAL_BROWSER_SHM: '0' };
 delete environment.ELECTRON_RUN_AS_NODE;
 if (process.platform === 'linux' && !environment.DISPLAY) throw new Error('Native dialog fixture requires an X11 display.');
-for (const fixture of ['contexts-electron.cjs', 'files-electron.cjs', 'semantic-electron.cjs', 'frames-electron.cjs']) {
+for (const fixture of ['contexts-electron.cjs', 'files-electron.cjs', 'semantic-electron.cjs', 'frames-electron.cjs', 'blocking-electron.cjs']) {
   const args = [
     ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []),
     path.join(__dirname, 'fixtures', fixture),

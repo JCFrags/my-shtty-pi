@@ -1,5 +1,8 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const {
   browserOwnerColumns,
@@ -8,6 +11,8 @@ const {
   parseBrowserOwner,
   requireHerdrBrowserOwner,
   sameBrowserOwner,
+  nativeBrowserOwner,
+  isNativeBrowserOwner,
 } = require("../dist/owner");
 
 const owner = {
@@ -33,6 +38,30 @@ test("Herdr owner parsing requires complete exact metadata", () => {
   }, "/tmp/project-a", "session-a"), owner);
   assert.throws(() => parseBrowserOwner({ TERMINAL_BROWSER_OWNER_PANE_ID: "w1:p3" }), /workspace id/);
   assert.throws(() => requireHerdrBrowserOwner({}, "/tmp/project-a"), /workspace id/);
+});
+
+test("native ownership binds the canonical project and exact session", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "native-owner-"));
+  try {
+    const project = path.join(directory, "project");
+    const other = path.join(directory, "other");
+    const alias = path.join(directory, "alias");
+    fs.mkdirSync(project);
+    fs.mkdirSync(other);
+    fs.symlinkSync(project, alias);
+    const first = nativeBrowserOwner("work", project);
+    assert.equal(isNativeBrowserOwner(first), true);
+    assert.equal(first.projectDir, fs.realpathSync(project));
+    assert.deepEqual(nativeBrowserOwner("work", alias), first);
+    assert.deepEqual(parseBrowserOwner(browserOwnerEnvironment(first)), first);
+    assert.deepEqual(browserOwnerFromColumns(browserOwnerColumns(first)), first);
+    assert.equal(sameBrowserOwner(first, nativeBrowserOwner("another", project)), false);
+    assert.equal(sameBrowserOwner(first, nativeBrowserOwner("work", other)), false);
+    assert.throws(() => parseBrowserOwner({ ...browserOwnerEnvironment(first), TERMINAL_BROWSER_OWNER_PROJECT_DIR: other }), /does not match/);
+    assert.throws(() => nativeBrowserOwner("", project), /session id/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("owner matching uses workspace, tab, and Pi pane identity", () => {

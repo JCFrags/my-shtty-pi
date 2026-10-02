@@ -15,7 +15,7 @@ const aliases = {
 
 function storeStub(box) {
   const file = path.join(box.home, "pixel-store.ts");
-  if (!fs.existsSync(file)) fs.writeFileSync(file, `import path from "node:path"; export const APP_DIR_NAME="test-profile"; export const INSTALLATION=null; export const DAEMON_SOCKET=path.join(process.env.XDG_RUNTIME_DIR!,APP_DIR_NAME,"daemon.sock"); export const RUNTIME_IDENTITY={build:"test",instanceId:"test"}; export function runtimeMatches(){return true}`);
+  if (!fs.existsSync(file)) fs.writeFileSync(file, `import path from "node:path"; export const APP_DIR_NAME="test-profile"; export const INSTALLATION=null; export const DAEMON_SOCKET=path.join(process.env.XDG_RUNTIME_DIR!,APP_DIR_NAME,"daemon.sock"); export const RUNTIME_IDENTITY={build:"test",instanceId:"test"}; export function runtimeMatches(){return true} export function parseBrowserOwner(){return null}`);
   return file;
 }
 

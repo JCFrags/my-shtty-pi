@@ -1,0 +1,124 @@
+name: Terminal Browser Linux x64 release
+
+on:
+  push:
+    tags:
+      - "terminal-browser-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: vendor/terminal-browser
+    env:
+      CARGO_BUILD_JOBS: 2
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare isolated build paths
+        run: |
+          echo "TERMINAL_BROWSER_NATIVE_TARGET=$RUNNER_TEMP/terminal-browser-native" >> "$GITHUB_ENV"
+          echo "TERMINAL_BROWSER_RELEASE_OUT=$RUNNER_TEMP/terminal-browser-release" >> "$GITHUB_ENV"
+      - name: Check product version and tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'JS' >> "$GITHUB_OUTPUT"
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const { version } = JSON.parse(fs.readFileSync('package.json'));
+          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/);
+          if (process.env.REF_TYPE === 'tag') assert.equal(process.env.REF_NAME, `terminal-browser-v${version}`);
+          console.log(`version=${version}`);
+          JS
+          if [ "$REF_TYPE" = tag ]; then
+            git merge-base --is-ancestor HEAD origin/main
+          fi
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: pnpm
+          cache-dependency-path: vendor/terminal-browser/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.1"
+      - name: Install native build and runtime prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3 unzip bubblewrap xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64 libx11-xcb1 libxkbcommon0 libdrm2 libxshmfence1
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Verify source copy
+        run: node ../../scripts/verify-browser-copy.mjs
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Prepare pinned source Electron and browser assets
+        run: |
+          scripts/fetch-electron.sh --dest "$RUNNER_TEMP/terminal-browser-source-electron"
+          scripts/copy-react-grab.sh
+      - name: Build and verify workspace
+        env:
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ runner.temp }}/terminal-browser-source-electron
+        run: |
+          pnpm -r build
+          # Source pixel-react loads this native module. Bundles use browser/native instead.
+          test -s engine/packages/pixel-react/native/pixel.node
+          pnpm --filter terminal-browser --filter terminal-browser-cli --filter pi-terminal-browser run typecheck
+          pnpm --filter terminal-browser --filter terminal-browser-cli --filter pixel-store --filter pi-terminal-browser run test
+          xvfb-run -a pnpm --filter terminal-browser test:electron
+      - name: Run managed installation and packaged recovery gates
+        run: pnpm test:dist:ci
+      - name: Build versioned product artifact
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/release.sh "$VERSION" stable
+      - name: Verify product archive and isolated runtime
+        run: |
+          ID="$(node -p 'require(process.argv[1]).artifactId' "$TERMINAL_BROWSER_RELEASE_OUT/manifest-linux-x64.json")"
+          node scripts/dist-manifest.mjs verify "$TERMINAL_BROWSER_RELEASE_OUT/$ID/terminal-browser" "$TERMINAL_BROWSER_RELEASE_OUT/manifest-linux-x64.json"
+          pnpm test:dist:smoke "$TERMINAL_BROWSER_RELEASE_OUT/$ID/terminal-browser"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-browser-${{ steps.version.outputs.version }}-linux-x64
+          path: |
+            ${{ runner.temp }}/terminal-browser-release/terminal-browser-*-linux-x64.tar.gz
+            ${{ runner.temp }}/terminal-browser-release/manifest-linux-x64.json
+            ${{ runner.temp }}/terminal-browser-release/terminal-browser-installer-*.tar.gz
+            ${{ runner.temp }}/terminal-browser-release/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/terminal-browser-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: terminal-browser-${{ needs.build.outputs.version }}-linux-x64
+          path: release
+      - name: Publish a new namespaced product release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --title "Terminal Browser $VERSION" \
+            --notes "Standalone Terminal Browser for Linux x64. Pi and Herdr integration is optional. Use the included scripts/install.sh manager. Other platforms are not verified release targets." \
+            "release/terminal-browser-$VERSION-linux-x64.tar.gz" release/manifest-linux-x64.json \
+            "release/terminal-browser-installer-$VERSION.tar.gz" release/SHA256SUMS

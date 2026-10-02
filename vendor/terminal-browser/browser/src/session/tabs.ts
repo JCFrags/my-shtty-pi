@@ -1,4 +1,5 @@
 import { BrowserDownloads } from "../agent/downloads";
+import type { BlockingRequest, BlockingStatus } from "../blocking/types";
 import type { BrowserOwner } from "pixel-store";
 import type { BrowserDialog, BrowserDialogs, DialogResponse } from "../agent/dialogs";
 import type { PopupWindow } from "../page/popup";
@@ -424,6 +425,19 @@ export class TabManager {
     for (const tab of this.tabs) if (tab.controller.dialogs.pending) return tab.controller.dialogs.pending;
     for (const popup of this.popups.values()) if (popup.controller.dialogs.pending) return popup.controller.dialogs.pending;
     return null;
+  }
+
+  blocking(id: number, request: BlockingRequest, epoch?: number): BlockingStatus & { contextId: number } {
+    const context = this.tabs.find(tab => tab.id === id) ?? this.popups.get(id);
+    if (!context) throw new Error(`no context ${id}`);
+    if (request.action !== "status") {
+      if (epoch === undefined) throw new Error("blocking mutation requires a control epoch");
+      this.control.assertAgent(epoch);
+      if (this.control.snapshot.busy || this.pendingDialog) throw new Error("browser input or dialog is busy");
+    }
+    const result = context.controller.blocking(request);
+    if (request.action !== "status") this.host.requestRender();
+    return { ...result, contextId: id };
   }
 
   async agentContext(action: "open" | "activate" | "close", id: number | undefined, url: string | undefined, epoch: number) {

@@ -1,10 +1,12 @@
 {
   "name": "terminal-graphics-engine",
+  "version": "0.1.1",
+  "description": "CLI-first terminal browser with native AgentCursor control and optional agent integrations",
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
     "browser": "pnpm --filter terminal-browser start",
-    "build:dist": "scripts/release.sh \"local-$(git rev-parse --short HEAD)\"",
+    "build:dist": "scripts/release.sh",
     "install:dist": "scripts/install-local.sh",
     "test:dist": "node --test scripts/test/*.test.mjs",
     "test:dist:smoke": "node scripts/test/smoke-dist.mjs",
