@@ -12,7 +12,7 @@ related:
 
 Extensions for [Pi](https://pi.dev): precise coding tools, task and project state, chronological memory, Herdr integration, and terminal interface controls. This repository also maintains a separately built terminal-browser source copy with AgentCursor integration.
 
-The root package is private and is not an all-in-one Pi package or a published npm distribution. Install the individual packages you need.
+The root package is private and is not an all-in-one Pi package or a published npm distribution. Install the individual packages you need. Use the [portable installation guide](docs/installation.md) for prerequisites, locked builds, registration order, configuration, startup, and clean-checkout checks.
 
 ## Get started
 
@@ -213,6 +213,7 @@ This checks historical Git objects only. Keep session files, credentials, runtim
 ## Further reading and license
 
 - [Capability vision](docs/capability-vision.md): roles of native tools, CLIs, skills, and progressive disclosure.
+- [Portable installation](docs/installation.md): prepare one clean checkout on another computer without predecessor source or dependency roots.
 - [Activation and rollback](docs/activation.md): registration ownership and loaded-process checks.
 - [Project Glance archive operations](packages/pi-project-glance/docs/archive.md): import, backup, restore, and compatible rollback.
 - [Chrono user guide](docs/chrono/USER-GUIDE.md): functions, practical controls, connections, and limitations.

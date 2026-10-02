@@ -1,11 +1,48 @@
 # Pi Progressive Tools
 
 A concise catalog keeps tool names visible while policy-managed schemas load on
-request. Version 0.2.0 replaces `search_tools` with exact-name `tool_help`.
+request. Version 0.2.0 replaced `search_tools` with exact-name `tool_help`.
+Version 0.2.1 uses Pi's structured prompt sections, checked with Pi 0.87.1.
 
 - Status: active canonical
 - Pi entrypoint: `extensions/index.ts`
 - Load form: source-loaded
+
+## Fresh setup
+
+Use Node 22.19.0 or later and a Pi host with the structured prompt-options API.
+The section hook was checked with Pi 0.87.1. Older hosts without that API are not
+supported. Keep the checkout at any stable location that Pi can read:
+
+```sh
+git clone https://github.com/JCFrags/my-shtty-pi.git
+cd my-shtty-pi
+pi --version
+pi install "$PWD/packages/pi-progressive-tools"
+```
+
+The package loads TypeScript source directly. It needs no build, package-local
+`npm install`, sibling package, or workstation-specific symlink. Pi supplies
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` from the
+host. `pi install` records the local source without copying it or preparing
+its dependencies. Do not move or delete that checkout while it is selected.
+For a source-only trial without a persistent registration, use:
+
+```sh
+pi -e "$PWD/packages/pi-progressive-tools"
+```
+
+For an existing installation, replace only its verified Progressive Tools
+package source, at the same list position. Do not add a second registration or
+restore an old complete settings file. Preserve the user policy and every
+unrelated package. Keep the previous source until running sessions and scoped
+rollback no longer need it. A new Pi process uses the selection. Existing
+sessions need a safe reload with an empty editor and no jobs that reload would
+interrupt. A settings or link change does not replace loaded code.
+
+This package does not install WebX or browser tools. Their separate owners
+supply those registrations. Hints for tools that are not registered do not add
+them to the catalog.
 
 ## Model tools
 
@@ -21,11 +58,14 @@ request. Version 0.2.0 replaces `search_tools` with exact-name `tool_help`.
   inactive unmanaged names produce clear errors. The full request is checked
   before activation, so an invalid name prevents partial additions.
 
-Before each agent run, `before_agent_start` appends the catalog to the existing
-chained system prompt. It does not replace unrelated instructions or rewrite
+Before each agent run, `before_agent_start` assigns the catalog to
+`systemPromptOptions.sections.progressive_tools`. Pi records changes to that
+named section without a whole-prompt override. This requires Pi's structured
+prompt-options API. The extension preserves other sections and does not rewrite
 provider requests. The catalog and `list_tools` include active tools and inactive
 managed tools. They omit blocked tools and do not advertise inactive unmanaged
-tools. A custom system prompt still receives the appended catalog.
+tools. A custom system prompt still receives the catalog section. A separate
+extension's forced whole-prompt override can still hide or flatten sections.
 
 ## Configuration
 
@@ -90,9 +130,10 @@ scan. The prompt catalog refreshes on the next agent run; `list_tools` can show
 the current inventory sooner.
 
 Pi's native deferred loading is used when the provider supports it. Otherwise,
-Pi sends the updated active schema list normally. A per-run prompt override can
-omit newly active prompt guidelines, so help returns them explicitly. This
-package does not guarantee cache hits or token savings.
+Pi sends the updated active schema list normally. Help returns registered prompt
+guidelines explicitly, without depending on a prompt rebuild. Structured sections
+permit provider-dependent prefix preservation. This package does not guarantee
+cache hits or token savings, including after resume or compaction.
 
 ## Verification
 

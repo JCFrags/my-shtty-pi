@@ -1,7 +1,7 @@
 ---
 title: Implementation, evidence, and future choices
 audience: [users, agents, maintainers, evaluators]
-status: local integration with process-specific activation checks
+status: accepted source with revision-bound activation evidence
 purpose: Identify the implemented version and keep practical evidence, selection, activation, and planned work separate.
 related:
   - evolution-and-decisions.md
@@ -13,7 +13,7 @@ related:
 
 ## Current source boundary
 
-This source contains Chrono `be67e0ec`, version `4.0.5-local.20260926`, and the native ancestry correction `0121b02`. It retains the unified menu and stable tool-result projections, and adds the same-session summary, context-edit handling, and adaptive chronological replay described in the [compaction contract](../context/session-agent-compaction.md).
+Use `packages/pi-chrono-compaction/package.json` for this checkout's exact version and `scripts/verify-chrono-v3-baseline.mjs` for its pinned package tree. Accepted source includes the 4.0.6 system-update continuation correction, the native ancestry corrections, unified menu, stable projections, same-session summary, context-edit handling, and adaptive chronological replay described in the [compaction contract](../context/session-agent-compaction.md).
 
 GitHub acceptance, local code selection, and loaded activation are separate checks. This source record does not establish remote integration or the code currently loaded in an installation.
 
@@ -23,7 +23,7 @@ GitHub acceptance, local code selection, and loaded activation are separate chec
 | Implemented V4 | Independent Context Kit providers, V2 evidence collection, complete asynchronous transfer, and an opt-in same-session summary/replay compiler. |
 | Compiled defaults | `contextCompiler: "v3"`, `memoryOwner: "chrono"`, normal memory engine on. |
 | Intended local selection | `contextCompiler: "v4"`, `memoryOwner: "context-kit"`. Preserve `valueWorkerMode: "off"` and `toolResultProjectionMode: "off"`. |
-| Loaded activation | The local 4.0.5 check verified the coordinating process only, not fleet adoption. Check the private activation receipt and each target process's loaded identity. |
+| Loaded activation | The retained 4.0.5 check verified its coordinating process only. It is not evidence for newer source or fleet adoption. Check the current private activation receipt and each target process's loaded identity. |
 | Existing legacy state | Explicit paged imports are still required. Code selection is not migration. |
 | Background LLM | Compatibility subsystem, paused while the normal engine is enabled. Presets do not enrich V4. |
 
@@ -63,7 +63,7 @@ The local Chrono 4.0.5 verifier reported 704 passed, zero failed, and two skippe
 
 For the context-edit and adaptive replay source at `be67e0ec`, a fixed real prefix reused its saved summary without a model call. Estimated replay decreased from 17,833 to 6,971 tokens, selecting 46 of 156 events. Complete compiled context was 9,833 tokens under the unchanged 40,000-token ceiling. The source and saved summary were preserved. Practical continuation review found no blocking gap in that prefix. This is not semantic completeness, a corrected live high-context summary exchange, or a prompt-cache improvement. See the [verification limits](../context/session-agent-compaction.md#verification-status).
 
-The documentation reconciliation uses local link, source-hash, and factual consistency checks. It adds no runtime tests, model calls, or live changes. Publication acceptance remains a separate integration result.
+The earlier documentation reconciliation used local link, source-hash, and factual consistency checks. It added no runtime tests, model calls, or live changes. Those results belong to that revision. Current GitHub acceptance and installation checks remain separate.
 
 ## What the system does not establish
 
