@@ -7,6 +7,35 @@
 - Test command: `npm test --workspace packages/codex-usage-footer` is not used because this package is not a root workspace; run `npm --prefix packages/codex-usage-footer test`.
 - Repository verification: stage the intended files, then run `npm run verify -- --product codex-usage-footer` from the repository root. Verification reads Git index blobs, not unstaged worktree files.
 
+## Install
+
+Use the full retained checkout described in [installation](../../docs/installation.md).
+Set `REPO` to its absolute path, then register this source-loaded package once:
+
+```sh
+pi install "$REPO/packages/codex-usage-footer"
+```
+
+Local registration does not copy source or install dependencies. No build or
+package-local npm installation is required for runtime use. Keep the entrypoint,
+`quota-history.ts`, and `tibo-forecast.ts` together under `extensions/`. The
+installed Pi loader supplies the Pi and TUI imports. Prepare the root lock before
+running the package tests.
+
+Do not install the package beside an already selected automatic footer alias. For
+an existing installation that uses automatic discovery, preserve its documented
+three-link `codex-usage-footer.ts/` directory until a scoped replacement is planned.
+A single symlink to the entrypoint does not supply its relative helper imports.
+Do not expose either `*.test.ts` file to automatic discovery. See
+[activation and rollback](../../docs/activation.md#codex-usage-footer-activation).
+
+No separate token or settings file is needed. Quota polling uses the active Pi
+provider's resolved OAuth. Ordinary API-key sessions do not poll the ChatGPT quota
+endpoint. Shared cache preferences and branch-local display settings have different
+owners. Preserve both during code changes. A factory check does not start the
+watcher or verify authenticated polling. Existing sessions need a safe reload to
+adopt changed source, without interrupting jobs or overwriting drafts.
+
 ## Shared quota behavior
 
 An upgraded interactive or RPC Pi instance using the built-in `openai-codex` provider with OAuth participates in one account-isolated cache. Ordinary OpenAI API-key sessions do not poll the ChatGPT account endpoint. The extension uses Pi's resolved provider authentication API, which refreshes OAuth when needed; it never reads `auth.json` directly and never writes a token or account ID to the cache.
