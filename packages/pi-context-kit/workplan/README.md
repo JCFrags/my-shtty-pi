@@ -20,13 +20,23 @@ Use one writer. This package is the only supported current Workplan registration
 
 The package uses Grounded's pure Workplan reducers and renderers. It preserves native plan revisions and SHA-256 revision records, child IDs and counters, decisions, evidence, checkpoints, lifecycle gates, and `expectedRevision`. It retains argument aliases, bounded `recover`, recovery markers, and the version-1 Glance summary/activity contracts. Restore sends summary invalidation, not replayed activities.
 
-Supply a nonempty top-level `rationale` for `revise`, `record_decision`, `pause`, `resume`, `complete`, and `archive`. The shared schema marks this field optional because other actions do not accept it. `record_decision` uses `content: { decision }` and keeps the reason in `rationale`, not inside `content`.
+Supply a nonempty top-level `rationale` for `revise`, `record_decision`, `pause`, `resume`, `complete`, `archive`, and `restore`. The shared schema marks this field optional because other actions do not accept it. `record_decision` uses `content: { decision }` and keeps the reason in `rationale`, not inside `content`.
 
 Milestone status uses `pending`, `in_progress`, `blocked`, and `completed`, not Todo's `done`. Start a pending milestone before completing it. Completion requires evidence and completed dependencies.
 
 Question status uses `open` and `resolved`, not `answered`. `record_question` adds a new question. To resolve an existing question, use `revise` with `section: "openQuestions"`, retain every existing question and its ID, and update the selected question's `status` and `answer`.
 
 A checkpoint records project state. It does not grant new authorization. Linked Todo IDs are unverified external references, not synchronized tasks.
+
+### Saved work and recovery
+
+Pause and archive preserve unfinished work. They do not complete a plan or its milestones. Use `list`, `read`, or `recover` to find archived plans. `restore` requires an archived plan, exact `expectedRevision`, and a nonempty `rationale`. It derives the pre-archive status from lifecycle revision history: `draft`, `paused`, or `completed`. It preserves current contents, including edits made while archived, and adds one revision. It never activates a plan or displaces another active plan. A completed archive restores as completed. A draft or paused restore must fit the 64-open-plan limit.
+
+Recover the restored plan and its approval gates before a separate permitted `resume`. A restore emits summary invalidation, not a completion activity or compaction request. There is no destructive plan-delete operation or separate save store.
+
+The bounded recovery view includes project background. Checkpoint focus and actions remain primary saved guidance after only `pause`, `resume`, `archive`, or `restore`. The `Latest checkpoint` label says `(current)` only when its recorded revision equals the plan revision. The recovery marker remains bound to the current plan revision. After content changes, recovery uses current milestone guidance and also shows bounded, possibly stale checkpoint focus/actions. It shows the last four post-checkpoint lifecycle rationales with revisions. Omitted earlier rationales may contain unresolved waits; use `read` for complete history. Later archive/restore reasons do not resolve earlier approval conditions. Saved guidance never grants new permission.
+
+Before a meaningful task or direction change, save purpose, useful code locations, approach/reasons, focus, next actions, unresolved work, and approval gates in the existing plan fields and checkpoint. Then use the available, permitted `request_compaction({})` when substantial earlier detail is no longer useful. An ordinary milestone or temporary wait does not itself warrant compaction. Workplan does not trigger compaction or depend on Chrono. If Chrono is unavailable, keep the checkpoint and report that compaction was not requested.
 
 ## Request context
 
@@ -45,7 +55,7 @@ The default private directory is `$XDG_STATE_HOME/pi-context-kit/workplan/`, or 
 
 `list` reads manifest metadata. Titles have a 512-byte preview and objectives have a 1024-byte preview. Omissions name the complete `read` route. `status` returns exact cached aggregate counts with a status preview of at most 32 KiB. It does not load the native plan. `read` and `recover` load exactly one native object and use the native renderers. Large complete output uses Grounded's private full-output file and exact truncation notice.
 
-Context requests inspect lifecycle metadata from at most 256 manifest entries before loading projection objects. A query with no searchable terms browses only open plans (`draft`, `active`, or `paused`). The active plan comes first. Other open plans retain manifest order. This selection happens before the content-scan, card-count, and wire-byte limits. Completed and archived plans remain unchanged and available through native `list`, `read`, and `recover`.
+Context requests inspect lifecycle metadata from at most 256 manifest entries before loading projection objects. A query with no searchable terms browses only open plans (`draft`, `active`, or `paused`). The active plan comes first. Other open plans retain manifest order. This selection happens before the content-scan, card-count, and wire-byte limits. Completed and archived plans remain unchanged and available through native `list`, `read`, and `recover`. If no open plans remain, the context hint gives an archive-list route without loading archive bodies or selecting an archive as active.
 
 A query with searchable terms includes retained closed plans, scans in manifest order, and ranks matches in bounded fields. It does not search revision history. Context requests scan at most 128 eligible projection records and retain native plan revisions in cards. Coverage counts only eligible content scans. Lifecycle-filtered records are not matches or budget exclusions. `scanComplete` can be true after all open plans were scanned even when closed plans remain. It stays false when metadata, content-scan, query-term, or field bounds prevent complete matching. The provider answers both protocol versions 1 and 2. Native-tool exclusions still apply. Context queries never start legacy import or create canonical state.
 
@@ -98,10 +108,12 @@ The transfer entrypoint returns the mandatory `grounded-state-checkpoint-v1` con
 
 After new writes, rollback requires a fresh replacement session with the latest complete V1 checkpoint before any legacy provider state. Returning to the pre-import session loses those writes. Appending a checkpoint after old Workplan events fails the native loader. Keep the owned objects, receipts, and original sessions for the return path. Refuse before switching writers if complete capture cannot fit.
 
+The first native `restore` write is a reader-compatibility boundary. Older reducers reject `restore` in immutable revision history, even inside a complete V1 transfer checkpoint. The envelope version does not imply reader compatibility. Retain a restore-compatible Workplan reader/writer and complete stores after that write. Chrono guidance or recovery presentation can be reverted separately, but do not strip history, rewrite digests, or select an incompatible old reducer. A pre-restore branch is historical state, not the latest data-preserving rollback. No reverse converter is provided.
+
 ## Integration API
 
 `createWorkplanExtension(pi, { storeRoot?, ancestryPageEntries? })` returns the owner-backed `WorkplanStore`, which permits isolated private fixtures. Public package exports also include the schema, store, `importWorkplanStep`, `finishWorkplanImport`, and `bootstrapWorkplanCheckpoint`.
 
 An import step returns an immutable cursor reference and progress. A completed cursor still needs `finishWorkplanImport` to create its verified Pi binding. `stagePlan` and `stageNativeState` only prepare objects. They do not make those objects visible as committed state.
 
-Use Node 24 and the installed Pi extension API. This package performs no model calls, selection changes, cleanup, or deployment. Whole installed-Pi rollover and rollback acceptance belongs to the integrating application.
+Use Node 24 and the installed Pi extension API. For direct Node 24 TypeScript fixtures, use `--experimental-transform-types`; shared native modules contain parameter properties that strip-only mode cannot load. This package performs no model calls, selection changes, cleanup, or deployment. Whole installed-Pi rollover and rollback acceptance belongs to the integrating application.

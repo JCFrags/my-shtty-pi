@@ -4,8 +4,8 @@ import { Type, type Static } from "typebox";
 export const WorkplanParams = Type.Object({
   action: StringEnum([
     "create", "list", "status", "read", "recover", "revise", "add_milestone", "update_milestone", "record_decision",
-    "record_risk", "record_question", "checkpoint", "pause", "resume", "complete", "archive",
-  ] as const, { description: "recover returns bounded project orientation; read returns the complete plan; mutation actions require expectedRevision" }),
+    "record_risk", "record_question", "checkpoint", "pause", "resume", "complete", "archive", "restore",
+  ] as const, { description: "recover returns bounded project orientation; read returns the complete plan; restore returns an archive to its prior draft, paused, or completed status without activation; mutation actions require expectedRevision" }),
   planId: Type.Optional(Type.String({ description: "Workplan ID. Required except for create and list." })),
   section: Type.Optional(StringEnum([
     "title", "objective", "background", "scope", "nonGoals", "constraints", "approach", "acceptanceCriteria",
@@ -22,7 +22,10 @@ export const WORKPLAN_PROMPT_SNIPPET = "Preserve and recover durable goals, mile
 export const WORKPLAN_GUIDELINES = [
   "Use workplan for durable project goals, constraints, milestones, decisions, checkpoints, and recovery across compaction. Use todo for immediate executable actions.",
   "When [workplan state] names an active plan and the current goal or position is not already clear, call workplan recover before substantial planning or execution. Always do this after compaction, session restore, or branch change.",
-  "Record a workplan checkpoint with currentFocus and nextActions after a major phase and before a pause or handoff. Do not treat linked todo IDs as synchronized state.",
+  "Record a workplan checkpoint with currentFocus and nextActions after a major phase and before a pause or handoff. Preserve useful code locations, unresolved work, external waits, and approval gates. Keep project purpose, approach, and reasons in the plan. Do not treat linked todo IDs as synchronized state.",
+  "At a meaningful task or direction change, save the checkpoint before requesting compaction through an available, permitted request_compaction tool. A routine milestone, checkpoint, or temporary wait does not by itself warrant compaction. Workplan does not trigger compaction automatically.",
+  "Pause and archive preserve unfinished work, not completion. Use list/read/recover to find saved archives. Restore requires expectedRevision and rationale, preserves contents, and never activates a plan. Recover its saved guidance and approval gates before a separate permitted resume. Saved context is not new permission.",
+  "The first restore write requires a restore-compatible Workplan reader thereafter, including for complete transfer checkpoints. Do not roll back to a reader that rejects restore revision records.",
   "Workplan has no direct file export. Use a separate reviewed write call when the user requests a file.",
 ];
 

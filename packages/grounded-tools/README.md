@@ -8,6 +8,49 @@
 - Historical deployment check, from the repository root: `npm run verify:history`
 - Shared current-state contracts: Context Kit Todo publishes its existing version-1 summary with a bounded branch identity, and its existing `pi-todo:summary-changed-v1` envelope may carry the bounded snapshot used by the provider. That changed event is an invalidation for consumers, not an authoritative current-state payload. Workplan publishes `pi-workplan:request-summary-v1`, `pi-workplan:summary-v1`, `pi-workplan:summary-changed-v1`, and post-persistence `pi-workplan:activity-v1` (`checkpoint_recorded`, `milestone_completed`, and `plan_completed`). Workplan request IDs are echoed exactly; branch IDs are bounded opaque identifiers and are not whitespace-normalized. Project Glance consumes these events without importing grounded-tools implementation internals or mutating provider state.
 
+## Install Files, Process, and LSP
+
+Use the full retained checkout described in [installation](../../docs/installation.md).
+Set `REPO` to its absolute path. Prepare the committed repository-root lock before
+registering these source-loaded owners:
+
+```sh
+cd "$REPO"
+npm ci --ignore-scripts --no-audit --no-fund
+pi install "$REPO/packages/grounded-tools/files"
+pi install "$REPO/packages/grounded-tools/process"
+pi install "$REPO/packages/grounded-tools/lsp"
+```
+
+Run this preparation only in a new checkout, not an immutable root used by live
+sessions. There is no lock under `packages/grounded-tools`. Root installation
+creates the workspace `@grounded/pi-core` links and the Files/Process local
+`pi-tool-controls` dependency. Keep the sibling core and presentation source, its
+manifest, and the root dependency tree. Do not register the inactive Tool Controls
+extension or add another owner for the same model tool. Local `pi install` does not
+install dependencies, copy source, or build an entrypoint.
+
+Search requires `rg` (ripgrep) and `fd` on `PATH`. Process requires an available
+shell. Its POSIX pseudo-terminal paths also require `python3` on `PATH` and the
+bundled `core/src/pty_bridge.py` and `core/src/session_pty_bridge.py` resources.
+Keep those files beside their core modules. LSP starts servers lazily. Install only
+the servers needed for the project, or configure their exact executable paths.
+Defaults include `typescript-language-server --stdio`, `pyright-langserver
+--stdio`, `gopls`, and `rust-analyzer`. A selected extension does not prove that a
+server executable exists.
+
+Global LSP overrides use `grounded-tools/lsp.json` under Pi's agent directory.
+Trusted project settings use `.pi/grounded-lsp.json` for `disabledServers` and
+`diagnosticTimeoutMs`. A global custom server replaces the complete default server
+with the same ID, so preserve or supply its document-language mapping explicitly.
+See [LSP document languages](#lsp-document-languages).
+
+Compare complete loader definitions and dependency routes before replacing existing
+owners. Then exercise a harmless file read, finite command, and relevant LSP call
+in a fresh session. Entry-point equality does not prove dependency equality. A
+source selection or fresh check does not reload existing sessions. Grounded Process
+terminates managed resources during reload, so settle jobs and preserve drafts first.
+
 ## Compact human tool display
 
 Files and Process use the pure `pi-tool-controls/presentation` library for `read`, `edit`, `write`, `local_search`, `bash`, `process`, and `session`. This changes only terminal presentation. Tool schemas, model instructions, arguments, execution, and saved result content/details are unchanged. The inactive Tool Controls extension is not loaded.

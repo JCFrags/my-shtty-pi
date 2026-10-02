@@ -10,9 +10,9 @@ related:
 
 # ChronoCompact release compatibility
 
-The [current status page](chrono/design/evidence-and-roadmap.md) identifies local integration `4.0.1-local.20260919` and its activation boundary. It combines the implemented V4 path below with main's 3.0.5 unified `/Chrono` menu, stable projections, and the local report-scroll correction. It is not a published release. The older `/chrono-*` names below describe earlier versions. Use [current configuration](chrono/operations/menu-and-configuration.md).
+Use the checked-out package manifest and [current status page](chrono/design/evidence-and-roadmap.md) for the source version. Current accepted source includes the 4.0.6 system-update continuation correction, the unified `/Chrono` menu, stable projections, and the same-session summary path. Source acceptance does not establish local selection or loaded-session adoption. The V4 4.0.0 and older sections below are revision-bound compatibility records, not a fresh installation recipe. Use [portable installation](installation.md) and [current configuration](chrono/operations/menu-and-configuration.md).
 
-## Implemented 4.0.0 compatibility boundary
+## Historical 4.0.0 compatibility boundary
 
 Version `4.0.0` adds the opt-in V4 compiler and independent Context Kit ownership.
 Set `contextCompiler: "v4"` to select the existing public compaction hook's new
@@ -111,7 +111,7 @@ instructions.
 
 ## Prior 2.0.15 release boundary
 
-The current integration nominates ChronoCompact **2.0.15** from commit
+That historical integration nominated ChronoCompact **2.0.15** from commit
 `b5918dbf952423e86a50a71e03ae1996c4801ea5`. Its upstream package tree is
 `fe3c1df802214b6eba96f39fc36912817058d0d3`.
 

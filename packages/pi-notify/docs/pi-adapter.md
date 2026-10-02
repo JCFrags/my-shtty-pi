@@ -2,6 +2,35 @@
 
 Pi-Notify's service stores and schedules work without a model. This optional adapter delivers that work into one explicitly registered, saved Pi context. It supports Pi 0.85.1 and Node 24.18 or later in the Node 24 line.
 
+## Install the adapter
+
+Use the full retained checkout described in
+[installation](../../../docs/installation.md). Set `REPO` to its absolute path.
+Prepare runtime dependencies from the package-local lock in a new checkout, then
+register the source-loaded adapter once:
+
+```sh
+npm ci --prefix "$REPO/packages/pi-notify" --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund
+pi install "$REPO/packages/pi-notify"
+```
+
+This runtime-only preparation installs `cron-parser` and its `luxon` dependency.
+The installed Pi loader supplies coding-agent and TypeBox imports. No build is
+needed. Local registration does not copy source, install dependencies, start the
+service, provision tokens, or bind a destination. Keep the package's source,
+extension, and dependency directories intact.
+
+The adapter manifest declares Pi `>=0.85.1 <0.86.0`. Loading on a newer Pi host does
+not widen that compatibility range or establish receipt, binding, and wake behavior.
+Verify those operations on the intended host. Do not install another Pi runtime or
+change the peer range to hide an unverified compatibility limit.
+
+Prepare the service and protected consumer credential separately using the
+[service instructions](../README.md#run-from-this-checkout). Keep queued work,
+receiver journals, logical-session data, and credentials outside the checkout. A
+code update must preserve their paths and identity. Do not initialize over an
+existing service or open another receiver on the same saved session.
+
 ## Configuration and explicit registration
 
 The extension factory registers tools, commands, and event-bus handlers only. It does not read credentials, create state, open sockets, or start timers. Configuration is read at `session_start`.

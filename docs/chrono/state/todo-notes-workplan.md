@@ -45,17 +45,31 @@ Native reads retain exact note fields. Bounded renderers and private full-output
 
 ## Workplan
 
-Workplan preserves a durable project goal and an explicit recovery position. Its main operations include create/list/status/read/recover, revision, milestone management, decisions/risks/questions, checkpoints, pause/resume, completion, and archive.
+Workplan preserves a durable project goal and an explicit recovery position. Its main operations include create/list/status/read/recover, revision, milestone management, decisions/risks/questions, checkpoints, pause/resume, completion, archive, and restore.
 
 Use `recover` after compaction or branch restoration when the current goal or next action is unclear. A checkpoint should state current focus and next actions as well as relevant evidence. Do not mark completion only because an agent says it finished.
 
 Native mutation details matter:
 
-- Supply top-level `rationale` for `revise`, `record_decision`, `pause`, `resume`, `complete`, and `archive`.
+- Supply top-level `rationale` for `revise`, `record_decision`, `pause`, `resume`, `complete`, `archive`, and `restore`.
 - `record_decision` uses `content: { decision }`. Its reason belongs in `rationale`.
 - Milestone states include `pending`, `in_progress`, `blocked`, and `completed`, not Todo's `done`.
 - Start a pending milestone before completing it. Completion requires evidence and completed dependencies.
 - Mutation revisions use the native `expectedRevision` contract.
+
+Pause and archive preserve unfinished plans without completing their milestones. `restore` returns an archive to its prior `draft`, `paused`, or `completed` status, not `active`. It preserves contents and archived edits. Recover its saved context and approval gates before a separate permitted `resume`. A completed plan is not reopened by restore. Default Recall still browses open plans with the active plan first; native list/read/recover can access archives.
+
+Recovery retains checkpoint focus/actions as saved guidance after lifecycle-only changes. After content changes, it shows current milestone guidance plus bounded, possibly stale checkpoint guidance. The last four post-checkpoint lifecycle rationales retain their revisions. Omitted earlier history may contain unresolved waits. Read the complete plan when needed; a later archive/restore does not resolve an earlier condition or grant new permission.
+
+At a meaningful task or direction change:
+
+1. Recover missing project facts through permitted native reads. Pending state is not empty state.
+2. Keep purpose, useful exact code locations, approach, and reasons in the plan. Save a checkpoint with actual results, current focus, next actions, unresolved work, external waits, and approval gates.
+3. If leaving the project, pause it. Archive only when the intent is to remove it from current-work views. Keep its ID and recovery route.
+4. After the writes settle, use an available, permitted `request_compaction({})` when substantial earlier detail is no longer useful. Do not trigger it for every ordinary milestone, checkpoint, or temporary wait. If unavailable, retain the checkpoint and report the limit.
+5. Follow the sole-summary-submission exchange. Compaction does not authorize a next task or cross an approval gate.
+
+Before the first `restore` write, account for reader compatibility. Old reducers reject its immutable revision record even in a complete V1 checkpoint. Keep a restore-compatible native reader afterward. A pre-restore branch omits later writes and is not a data-preserving rollback.
 
 Storage separates a bounded manifest, per-plan immutable objects, and bounded projections. A selected-plan mutation does not load unrelated plan bodies. List/status can use metadata and cached projections. Read/recover loads the selected plan.
 

@@ -17,11 +17,23 @@ The session agent helps compact its own context. Ask that agent for the continua
 
 The next model-facing context has this order:
 
-1. **Continuation summary written by the session agent.** Preserve the current goal, the user's latest corrections, decisions and their limits, what actually happened, unfinished work, and necessary next actions. Distinguish evidence from claims. The summary must not invent approval or promote old restrictions into new instructions.
+1. **Continuation summary written by the session agent.** Preserve the project purpose, useful exact code locations, how and why the approach was chosen, and the direction now authorized. Keep the current goal, the user's latest corrections, decisions and their limits, what actually happened, unfinished work, and necessary next actions. Include external waits and approval gates for paused or archived work, with saved plan IDs and native recovery routes. Distinguish evidence from claims and unknown facts. The summary must not invent approval or promote old restrictions into new instructions.
 2. **Programmatically compressed chronological events.** Preserve the natural User, Assistant, tool-call, and tool-result sequence. Keep useful arguments, outcomes, source meaning, and concise exact-recovery routes. Give currently relevant events more detail. Reduce redundant or obsolete detail before dropping useful events. Do not render a category-sorted report or dump native JSON cards.
 3. **Only the necessary exact tail.** Retain content the summary-producing request did not consume and any additional messages needed for valid pending interactions. Preserve complete tool-call/result pairs. Do not reserve thousands of tokens merely because an old tail preset did so.
 
 The summary and chronological replay complement each other. A summary alone, deterministic extracts alone, a rewritten rollover message, and a handwritten output mockup are not substitutes.
+
+## Meaningful task transitions
+
+Use the existing `request_compaction({})` exchange when the authorized task or direction changes and substantial earlier detail is no longer useful. A major milestone is a cue to evaluate that change, not completion proof. Do not compact automatically after every ordinary milestone, checkpoint, successful test, status update, or temporary wait. No Workplan event listener or second compactor is involved.
+
+Before the request, recover missing project facts through permitted reads and save a checkpoint when applicable. Preserve purpose, useful code locations, approach/reasons, current focus, next actions, unresolved obligations, and approval gates. Pending native state is not empty state. If leaving a project, pause it. Archive only when intended, without completing unfinished work, and retain its ID and recovery route.
+
+After state writes settle, request compaction once, preferably as the sole call. The next response submits the summary as its sole tool call. Do not retrieve more state or start another operation between those calls. Reduce superseded alternatives, repetitive troubleshooting, and completed implementation detail before useful evidence. Keep decisive results and uncertainty. Relevance hints should describe the next direction and decisive evidence, not retain all old detail.
+
+Existing source/model/epoch/expiry binding, safe-idle settlement, cancellation, stale-input refusal, and one-ticket rules remain unchanged. Repeated calls do not create a queue or a durable exactly-once transition record. Do not repeat a request merely because a checkpoint, restore, or compaction notice is visible. Continue only previously authorized work after a confirmed commit. If no next task is authorized, preserve the wait or stopping point. Saved guidance and lifecycle status are not new permission.
+
+This policy guides agent judgment; it does not detect semantic task changes in code. If Chrono is unavailable or not permitted, retain the checkpoint and report that compaction was not requested.
 
 ## Selection and source rules
 
@@ -54,7 +66,7 @@ Summary hints are fallible relevance terms. A direct match or two significant wo
 
 The effective allowance can grow only to the preferred-detail cost of expansion-eligible evidence, and never above the compiler's hard limit. Routine and older optional detail cannot cause that growth. Fitting removes optional detail first, then reduces important detail before omitting useful events. Selected excerpts remain in source order. Short histories do not fill unused space.
 
-Receipts retain the existing selected and omitted ID fields. The `adaptive-replay-v1` policy adds the preferred, effective, and hard replay allowances, expansion demand, and content-free selection reasons. The model-facing text discloses selection and allowance omissions, gives a captured-interval `history_range` route, and keeps each selected entry's exact `history_get` reference. Source JSONL, exact recovery, submission freshness guards, and the summary prompt are unchanged.
+Receipts retain the existing selected and omitted ID fields. The `adaptive-replay-v1` policy adds the preferred, effective, and hard replay allowances, expansion demand, and content-free selection reasons. The model-facing text discloses selection and allowance omissions, gives a captured-interval `history_range` route, and keeps each selected entry's exact `history_get` reference. Source JSONL, exact recovery, and submission freshness guards are unchanged. The later `4.0.7-local.20261001` release adds prompt guidance for project purpose, code locations, approach, unresolved work, and approval gates. It does not change replay selection or admission.
 
 Two focused synthetic scenarios check selective admission below the preferred allowance, multiword hints, useful poll output, relevance-driven expansion, stale and repeated errors, source order, recovery IDs, and complete-context fitting. They do not establish semantic completeness, an optimal allowance, or loaded activation. Real-prefix practical verification remains separate.
 

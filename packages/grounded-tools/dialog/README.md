@@ -8,6 +8,23 @@ both cases. Providers must not register a second question facade or change this
 setting. A settings or source change requires an approved runtime reload; tool
 search alone does not refresh the factory or its schema.
 
+## Fresh checkout preparation
+
+Dialog is source-loaded from a retained full checkout. It imports the sibling `@grounded/pi-core` workspace. The repository root owns their dependency lock. Set `REPOSITORY` to the absolute checkout path, then prepare dependencies at that root:
+
+```sh
+cd "$REPOSITORY"
+npm ci --ignore-scripts --no-audit --no-fund
+```
+
+Do not run a separate dependency install under `packages/grounded-tools` or `packages/grounded-tools/dialog`. Dialog has no package-local build. After the complete registration comparison, a fresh installation registers only its package:
+
+```sh
+pi install "$REPOSITORY/packages/grounded-tools/dialog"
+```
+
+Local registration does not copy source or install dependencies. Retain the full checkout and its workspace links. Preserve the existing `grounded-dialog.json` and unrelated settings. Deferred mode requires the separately installed Glance provider and explicit `askUserV1: true`; registration alone does not enable it. Do not register a second question owner. Follow the repository [activation procedure](../../../docs/activation.md#v11-deferred-questions) for an existing selection and safe runtime reload.
+
 ## Herdr blocking state
 
 Dialog reports its own blocking waits through `herdr:blocked`. Herdr Agent State

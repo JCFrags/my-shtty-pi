@@ -10,7 +10,7 @@ related:
 
 # Local activation and rollback
 
-For Chrono and Context Kit, start with [activation and explicit state migration](chrono/operations/activation-and-migration.md) and [data-preserving rollback](chrono/operations/troubleshooting-and-rollback.md). Current Chrono uses one `/Chrono` menu. Product counts and observed identities below belong to their recorded milestones, not a universal current loader inventory.
+For a new computer, start with [portable installation](installation.md). For Chrono and Context Kit, use [activation and explicit state migration](chrono/operations/activation-and-migration.md) and [data-preserving rollback](chrono/operations/troubleshooting-and-rollback.md). Current Chrono uses one `/Chrono` menu. Product counts and observed identities below belong to their recorded milestones, not a universal current loader inventory.
 
 ## Ownership
 
@@ -32,7 +32,7 @@ Do not upgrade global software as part of linking. Check `pi --version`, the ins
 1. Inspect `git status --short`, `git worktree list`, and the baseline tag. Preserve unrelated edits, staged changes, and all user/session data. Use an isolated worktree for implementation. Do not reset, clean, stash, or switch a live activation checkout for convenience.
 2. Inspect `herdr plugin list --json`, each affected plugin's manifest, Pi's resource settings, and package/extension symlink targets. Never print credentials or raw runtime descriptors.
 3. Back up affected settings, link metadata and replaced package bytes in an owner-only directory outside the repository. Record old/new tree identities and file hashes. Keep the backup until activation and user acceptance are complete.
-4. The `pi.herdr.orchestrator` manifest has no startup hook or managed pane. Direct workers do not depend on a broker. Preserve existing agents and retained broker installations. Stop an older broker only through its retained supported CLI after an authorized, verified quiescent maintenance window.
+4. The `pi.herdr.orchestrator` manifest has no startup hook or managed pane. Direct workers do not depend on a broker. Preserve existing agents and active v2 orchestration state. An installation or data store confirmed retired by its owner is not a current dependency. Do not recreate deleted broker resources from historical instructions.
 5. Preserve unrelated package order, registrations, external browser products, and auto-discovered extensions. Remove a predecessor registration only after its package identity and exact ownership are confirmed. Historical session entries are not package registrations and must not be deleted.
 
 ## Build and registration checks
@@ -99,7 +99,7 @@ After an owner-only registration backup and successful candidate loader check:
 
 Same-ID relinking updates plugin metadata without closing existing panes. Confirm this with the installed Herdr version. The direct-only manifest prevents future broker startup but does not stop a broker that already runs. `/agent-settings` and broker policy are removed. Direct spawn routing, registry migrations, child binding, cancellation, and recovery remain unchanged.
 
-Preserve all historical broker data and its compatible retained installation for recovery. The current direct package neither reads nor migrates that data. Never delete state as part of code selection.
+The current direct package neither reads nor migrates historical broker data. Code selection alone does not authorize data deletion. An owner-approved retirement can remove confirmed obsolete broker resources after dependency and running-use checks. Preserve active v2 state, saved Pi sessions, and useful extension data.
 
 ## Activate and confirm
 
@@ -135,7 +135,9 @@ signals. Do not replace either with metadata or title updates.
 3. Check the complete installed loader in an isolated agent directory. Expect one
    fewer extension, unchanged tools, and one new command in place of the two old
    commands. Compare unrelated identities and order, not only aggregate counts.
-4. Select the accepted package source and archive the old Spinner alias. Start a
+4. Select the accepted package source and remove the confirmed old Spinner
+   registration. Preserve its exact previous target until scoped rollback and
+   loaded-session checks permit retirement. Start a
    fresh Pi process, open `/herdr-sidebar-settings`, and save the compact layout.
    This patches only the Pi override in Herdr's sidebar configuration and requests
    a live config reload, not a server restart.
@@ -281,4 +283,4 @@ Rollback removes only the two Context Kit registrations and returns the three pr
 
 Restore only the exact settings entries and links changed by this activation from the owner-only backup. Verify their pre-change hashes and realpaths first. Do not restore a complete old settings file over subsequent unrelated edits. Relink the previous package root with its matching built output, run the loader and doctor checks, then request a safe `/reload`.
 
-Keep the old broker deployment and historical data until no running process or registration needs them. A code rollback does not authorize stopping a running broker, deleting state, moving Git tags, or rewriting history.
+Keep a predecessor only while running processes, registrations, internal dependencies, useful unmerged changes, compatible state recovery, or a current scoped rollback need it. Check these conditions separately before owner-approved deletion. Do not retain redundant copies merely because they appear in an old receipt. A code rollback does not authorize stopping a service, deleting useful state, moving Git tags, or rewriting history.

@@ -82,9 +82,21 @@ metadata uses a separate bounded, coalesced reporter.
 
 ## Installation and verification
 
-Load `extensions/herdr-status.ts` through this package. Remove the old standalone
-Spinner registration or alias when selecting the unified package. Do not load both
-presentation owners. Keep Herdr Agent State and Dialog selected.
+Use the full retained checkout described in [installation](../../docs/installation.md).
+Set `REPO` to its absolute path, then register the source-loaded package once:
+
+```sh
+pi install "$REPO/packages/herdr-status"
+```
+
+No build or package-local npm installation is required for runtime use. The installed
+Pi loader supplies Pi/TUI imports. Keep `extensions/` and its sibling `src/` directory
+intact. Local registration does not copy source or install dependencies. The commands
+below prepare development checks, not runtime activation.
+
+Load `extensions/herdr-status.ts` through this package. Remove only the confirmed old
+standalone Spinner registration or alias during a backed-up scoped replacement.
+Do not load both presentation owners. Keep Herdr Agent State and Dialog selected.
 
 Follow [the activation runbook](../../docs/activation.md#herdr-sidebar-presentation).
 Verify the complete loader inventory, the menu, real title/metadata output, and the

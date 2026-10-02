@@ -1,6 +1,6 @@
 {
   "name": "pi-progressive-tools",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A concise tool catalog, exact-name help, and policy-managed activation for Pi tools.",
   "type": "module",
   "license": "MIT",

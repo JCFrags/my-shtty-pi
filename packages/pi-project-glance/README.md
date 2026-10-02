@@ -44,7 +44,7 @@ The existing Grounded Dialog `ask_user` facade supports unchanged blocking mode 
 
 The bordered question region uses canonical Pi input, explicit Submit, Dismiss without answering, and Retry delivery controls, with isolated keyboard/mouse handling. Unanswered dismissal requires neither text nor a selection. Hiding a submitted answer does not recall it or stop delivery. Pending, stale, and failed-delivery records remain distinguishable. Failed delivery can be retried without submitting a second answer. Recommendations are not selected automatically. At most four unresolved questions/outbox slots are admitted; normalized questions are bounded at 8 KiB and answers at 4 KiB. Records and answers are branch-aware, revision-checked, and persisted before acknowledgement. Queued answers survive reload.
 
-Answers submitted while busy remain saved. At safe idle they enter session history with `triggerTurn: false`, becoming context for the next natural turn; they never start an automatic response. Explicit `deliveryMode` supports only `nextTurn` and `escalationPolicy` only `never`. Native steering/follow-up queues are not used. Saved delivery markers prevent duplicate insertion during reconciliation. The service confirms persisted receipts and synchronizes the current session file before acknowledging durable question transitions. This does not guarantee exactly-once model processing. Readable-file receipts are bounded at 64 MiB per session file and 2 MiB per JSONL line. A persistence or receipt failure is shown rather than acknowledged as success.
+Answers submitted while busy remain saved. At safe idle they enter session history with `triggerTurn: false`, becoming context for the next natural turn; they never start an automatic response. Explicit `deliveryMode` supports only `nextTurn` and `escalationPolicy` only `never`. Native steering/follow-up queues are not used. Saved delivery markers prevent duplicate insertion during reconciliation. The service confirms persisted receipts and synchronizes the current session file before acknowledging durable question transitions. This does not guarantee exactly-once model processing. The receipt reader uses 64 KiB chunks and a 2 MiB JSONL line bound, with no whole-session file-size cap. It retains selected branch receipts and skips oversized ordinary lines, but rejects missing required receipts or incomplete appends. A persistence or receipt failure is shown rather than acknowledged as success.
 
 ### Conservative unanswered expiry
 
@@ -55,6 +55,26 @@ Bash/process/session polling, orchestration, render events, token streaming, idl
 Manual unanswered dismissal queues one durable dismissal notice. Automatic expiry queues the distinct notice "expired unanswered after continued work." Both use the same safe-idle, next-natural-turn path as answers. Neither selects a default, resolves a decision, grants approval, or starts a response. Expiry is a conservative heuristic, not proof that an answer is unnecessary.
 
 Feed rendering uses linear link-span hit targets and an actual-input cache to avoid rebuilding the feed during question typing and unchanged scrolling. The optional `GLANCE_BENCH_LEGACY=1 node --test test/pane-render-performance.test.mjs` benchmark reproduces the previous wide-pane slowdown. See `docs/activation.md` at the repository root for activation and rollback; after changing pane code, close/reopen the pane as well as reloading Pi.
+
+## Fresh checkout preparation
+
+Use a retained full checkout, not a temporary build directory. Local `pi install` registers the source path. It does not copy the package, install its dependencies, or build `dist/`.
+
+Use Linux, Node 24.18.0 for the tested SQLite archive runtime, and Herdr 0.8.2 or compatible later behavior. The package declares Pi/TUI `>=0.85.1 <0.86.0` and locks its development dependencies to 0.85.1. A newer installed Pi is outside that declared range. A successful build or registration check does not establish interactive compatibility with that version.
+
+Set `REPOSITORY` to the absolute full-checkout path:
+
+```sh
+cd "$REPOSITORY/packages/pi-project-glance"
+npm ci --ignore-scripts --no-audit --no-fund
+npm run typecheck
+npm run build
+npm pack --dry-run --json --ignore-scripts
+```
+
+Glance owns this package-local lock. It does not need the root workspace install for its build. Keep its generated entrypoints and local TUI dependencies in the retained checkout: the compiled pane imports `@earendil-works/pi-tui`. Register only this package in Pi, not the whole repository. For fresh Pi and Herdr registration, use `npm run dev:link` from a Herdr-managed pane after the preparation above. Do not use that helper to replace a conflicting existing owner.
+
+Todo and Workplan remain separately installed provider owners. Deferred questions also require the separate Dialog facade with `askUserV1: true`. Glance does not install or migrate those providers. Follow the repository [activation procedure](../../docs/activation.md) for complete registration comparison, safe reload, pane reopening, and data-preserving rollback. Keep the retained checkout while any registration, pane process, or rollback depends on it.
 
 ## Development commands
 

@@ -182,9 +182,7 @@ export default function progressiveToolsExtension(pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", (event, ctx) => {
 		const snapshot = createInventory(pi, ctx, state);
-		return {
-			systemPrompt: `${event.systemPrompt}\n\n${buildCatalog(snapshot.inventory, snapshot.loadedConfig.config)}`,
-		};
+		event.systemPromptOptions.sections.progressive_tools = buildCatalog(snapshot.inventory, snapshot.loadedConfig.config);
 	});
 
 	pi.on("input", (_event, ctx) => {

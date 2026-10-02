@@ -142,6 +142,15 @@ async function rawPeer(t, descriptorPath) {
   await waitFor(() => frames.some((frame) => frame.type === "snapshot"), "authenticated raw snapshot");
   assert.ok(frames.some((frame) => frame.type === "hello"));
   return {
+    async snapshot() {
+      const requestId = `integration-snapshot-${randomUUID()}`;
+      socket.write(encodeFrame({ version: 1, type: "snapshot_request", requestId }));
+      await waitFor(() => frames.some((frame) => frame.requestId === requestId), "correlated current relay snapshot");
+      assert.deepEqual(errors, []);
+      const reply = frames.find((frame) => frame.requestId === requestId);
+      assert.equal(reply.type, "snapshot");
+      return reply.snapshot;
+    },
     async action(snapshot, action, patch = {}) {
       const requestId = `integration-${randomUUID()}`;
       socket.write(encodeFrame({ version: 1, type: "action", requestId, actionId: `action-${randomUUID()}`, sessionKey: descriptor.sessionKey, generation: descriptor.generation, branchId: snapshot.branchId, baseRevision: snapshot.revision, action, ...patch }));
@@ -228,7 +237,10 @@ test("actual relay rejects stale revision/wrong branch envelopes; facade cancel 
   const raw = await rawPeer(t, h.descriptorPath());
   assert.equal((await raw.action(snapshot, action, { branchId: "synthetic-wrong-branch" })).code, "stale_action");
   assert.equal((await raw.action(snapshot, action, { baseRevision: snapshot.revision - 1 })).code, "stale_action");
-  assert.equal((await raw.action(snapshot, { ...action, expectedRevision: 99 })).code, "invalid_action");
+  // Authentication can reconcile the relay after the earlier snapshot. Use a
+  // current envelope so this assertion reaches question-revision validation.
+  await h.pi.lifecycle("tool_execution_start");
+  assert.equal((await raw.action(await raw.snapshot(), { ...action, expectedRevision: 99 })).code, "invalid_action");
   assert.equal(h.entries().length, 1);
   await assert.rejects(h.execute({ operation: "cancel", mode: "deferred", id: queued.details.questionId, expectedRevision: 99, reason: "Synthetic stale cancellation." }, "cancel-stale"), /ASK_USER_/);
   const cancel = { operation: "cancel", mode: "deferred", id: queued.details.displayId, expectedRevision: 1, reason: "Synthetic work no longer needs this answer." };
@@ -255,7 +267,8 @@ test("actual relay rejects stale revision/wrong branch envelopes; facade cancel 
   const branchPeer = await rawPeer(t, h.descriptorPath());
   const orphanAction = { type: "question_answer", questionId: orphan.details.questionId, expectedRevision: 1, answer: { optionIds: ["a"] } };
   assert.equal((await branchPeer.action(oldSnapshot, orphanAction)).code, "stale_action");
-  assert.equal((await branchPeer.action(beforeBranch.snapshot, orphanAction)).code, "invalid_action");
+  await h.pi.lifecycle("tool_execution_start");
+  assert.equal((await branchPeer.action(await branchPeer.snapshot(), orphanAction)).code, "invalid_action");
   assert.equal(h.entries().filter((entry) => entry.data.kind === "ANSWER").length, 0);
 });
 
