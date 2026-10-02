@@ -4,13 +4,16 @@ const CSS_CURSORS = new Set([
   "no-drop", "not-allowed", "grab", "grabbing", "zoom-in", "zoom-out",
   "e-resize", "n-resize", "ne-resize", "nw-resize", "s-resize", "se-resize",
   "sw-resize", "w-resize", "ns-resize", "ew-resize", "nesw-resize",
-  "nwse-resize", "col-resize", "row-resize",
+  "nwse-resize",
 ]);
 
 export function cursorShapeFor(type: string): string {
   // chromium's "pointer" is the plain arrow; its css pointer is "hand"
   if (type === "hand") return "pointer";
   if (CSS_CURSORS.has(type)) return type;
+  // Kitty's pointer shape protocol has no col/row-resize. Use equivalent axis arrows.
+  if (type === "col-resize") return "ew-resize";
+  if (type === "row-resize") return "ns-resize";
   if (type === "nodrop") return "no-drop";
   if (type.endsWith("-panning")) return "all-scroll";
   // pointer, custom, none, null, …
