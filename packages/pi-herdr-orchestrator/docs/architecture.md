@@ -10,6 +10,8 @@ Pi Herdr Orchestrator controls direct Herdr workers. It does not schedule broker
 | `src/orchestrator/tool.ts` | Root actions, owned topology, assignment delivery, cancellation, reuse, and collection. |
 | `src/orchestrator/herdr-cli.ts` | Bounded CLI responses and Herdr's `pi` agent start command. |
 | `src/orchestrator/store.ts` | Domain registry and direct legacy migrations. |
+| `src/orchestrator/capacity.ts` | Validated user-local capacity preferences. |
+| `src/orchestrator/capacity-command.ts` | Root-only `/subagents` draft, Save, and Cancel flow. |
 | `src/orchestrator/channel-store.ts` | Ordered progress/messages, terminal records, and complete results. |
 | `src/orchestrator/child-binding.ts` | Exact registry, Herdr coordinates, and native Pi session validation. |
 | `src/orchestrator/child-tool.ts` | Child channel, assignment checks, and safe startup diagnostics. |
@@ -30,7 +32,7 @@ A validated child appends one versioned `pi-herdr-orchestrator:child-binding` na
 
 State lives under absolute `XDG_STATE_HOME/pi-herdr-orchestrator-v2`, or `$HOME/.local/state/pi-herdr-orchestrator-v2` when the override is absent or relative. This directory name remains a compatibility boundary. Domain IDs hash the absolute project root and parent workspace/tab/pane IDs. Registries track agents and runs. Per-domain channels store ordered events and explicit results.
 
-The root owns a managed `subagents` tab and its recorded worker panes, with at most six active children. Reuse creates a new run and assignment generation on the same worker. Each child call must use the latest assigned pair. Explicit completion and worker process state are separate. Collection retrieves the saved full result. Close acts on an exact owned settled worker, not arbitrary terminal panes.
+The root owns its recorded `subagents` tabs and worker panes. The default limit is eight live workers, with four workers per tab. `/subagents` changes these preferences for each parent/project domain. Present workers with completed assignments still count against total capacity. Reducing a limit does not terminate or move them. Reuse creates a new run and assignment generation on the same worker. Each child call must use the latest assigned pair. Explicit completion and worker process state are separate. Collection retrieves the saved full result. Close acts on an exact owned settled worker, not arbitrary terminal panes.
 
 Portable setup means a fresh installation from the full checkout at another path. Copying historical state is not a cross-machine migration: native locators and domains bind absolute paths and live identities. Preserve state during code replacement. Current direct code neither reads nor migrates retired broker state.
 

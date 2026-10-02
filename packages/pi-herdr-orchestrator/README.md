@@ -41,9 +41,17 @@ Children start with Herdr's `pi` defaults. They do not inherit the parent's curr
 
 Keep `HOME`, `PI_CODING_AGENT_DIR` when customized, and the XDG environment consistent between the Herdr server, parent, and children. A variable set only in the parent shell need not reach a child started by the server. Use an absolute `XDG_STATE_HOME` if you override state storage. There is no `PI_HERDR_STATE_DIR` option.
 
+## Worker capacity
+
+Open `/subagents` in a root Pi TUI to change total workers and workers per tab. Defaults are **8 total** and **4 per tab**. Each setting accepts an integer from 1 to 32. This supported configuration range is not a hardware or provider capacity guarantee. A per-tab value above the total does not increase the total.
+
+The preferences apply to each parent/project domain, not to the whole computer. Completed workers retained for reuse still occupy capacity. New workers use additional owned tabs when a tab is full. Lowering either setting does not move or terminate existing workers, and does not prevent their reuse, supervision, or result collection. Close an unneeded worker explicitly to release its capacity.
+
+The menu edits a draft. Save applies both values, while Cancel or Escape leaves the saved preferences unchanged. These settings do not select child models or change Herdr's Pi command. See [operations](docs/operations.md) for persistence, wait limits, and recovery.
+
 ## Verify actual use
 
-The loader assertion requires one root `orchestrate`, no child channel, and no `/agent-settings`. It does not require Project Glance. It does not start a session, exercise native session reporting, or send a model prompt.
+The loader assertion requires one root `orchestrate` and `/subagents`, no child channel, and no `/agent-settings`. It does not require Project Glance. It does not start a session, exercise native session reporting, or send a model prompt.
 
 In the fresh Herdr parent, ask Pi to:
 

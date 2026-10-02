@@ -14,6 +14,8 @@ Before `/reload`, require settled agent work, no managed jobs that reload would 
 
 Rollback restores only the owned source/link/plugin values from the backup after checking that no later unrelated change would be lost. Retain the old compatible build and helper until no registration or running process needs them. Keep session, registry, channel, and result state. Do not restore whole settings or delete state as a code rollback.
 
+Multi-tab registries use version 6. The current code migrates older direct registries, preserving workers and runs. Version 5 readers cannot read version 6. Before reloading a parent into this version, finish and close its old-code workers, or coordinate their upgrade while preserving exact native identities. Do not let old and new code write one domain. After migration, a code rollback requires a version-6-compatible reader. Restoring a stale registry backup would lose later events and assignments.
+
 An old broker is not a prerequisite. Relinking the current manifest prevents future broker startup, but does not stop an existing broker. Stopping or retiring an old installation needs separate authority, exact process ownership, and verified quiescence. Use that retained version's supported shutdown procedure.
 
 ## Actions and completion
@@ -22,9 +24,23 @@ Roots use `health`, `run`/`spawn`, `list`, `inspect`, `send`, `wait`, `collect`,
 
 A successful spawn means the assignment was delivered, not completed. An idle pane is not a final result. Wait returns bounded event and terminal summaries. Call `collect` for the full saved result, then inspect it against the task. Completion does not close the worker. Reuse or close only the exact owned worker when settled. Cancellation requests an acknowledgement. A timeout does not prove failure, completion, or permission to take over.
 
+## Capacity preferences
+
+Root sessions provide `/subagents`. The menu saves both preferences to `pi-herdr-orchestrator.json` in Pi's agent directory, normally `$HOME/.pi/agent`. Set `PI_CODING_AGENT_DIR` for a different directory. SDK hosts must align this environment variable with their `agentDir` option because Pi does not expose that option through the extension context.
+
+```json
+{"version":1,"total":8,"perTab":4}
+```
+
+Each value must be an integer from 1 to 32. The values are independent, but a per-tab limit above the total does not add capacity. The range bounds supported configuration, not measured machine or provider limits. Start with the defaults and increase deliberately.
+
+Opening or canceling the menu does not write. Save checks that the file has not changed since the menu opened. If another session saved newer preferences, reopen the menu before saving. A missing file uses defaults without creating it. Malformed or unreadable settings refuse new worker admission rather than silently raising capacity. Existing worker management remains available.
+
+New admissions read the preferences without a reload. The total applies separately to each parent/project domain. A worker with an explicitly completed assignment still occupies capacity until closed. Lowering a limit does not terminate, move, or hide workers. Reuse does not need a new slot. An existing tab above its new per-tab limit cannot accept another worker.
+
 ## Finite waits
 
-`wait` accepts 1–8 run IDs. `timeoutMs` defaults to 30000 and has a maximum of 600000. One monotonic budget includes validation, context commands, lock admission, channel work, and event watching. Activity does not reset it. The domain lock is released during watcher sleep, and each later scan loads fresh registry state.
+The `wait` run count follows total capacity, up to the supported pool of 32. Existing current assignments remain watchable together after a decrease. Batch older run history when it exceeds the current watch limit. Event and result replies remain bounded, with fair delivery across watched runs. `timeoutMs` defaults to 30000 and has a maximum of 600000. One monotonic budget includes validation, context commands, lock admission, channel work, and event watching. Activity does not reset it. The domain lock is released during watcher sleep, and each later scan loads fresh registry state.
 
 `timeoutMs: 0` polls once without event-watch sleep, with a fixed 5000 ms work allowance. It does not promise zero elapsed time. Expiry before context and run validation returns `WAIT_DEADLINE_EXCEEDED`. After validation, an empty `timedOut: true` result means no batch was delivered, not that a worker stopped.
 
