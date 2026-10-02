@@ -59,10 +59,14 @@ separate installs inside those workspace subpackages. `core`, `protocol`, and
 `state-store` are libraries, not Pi extensions. The inactive Tool Controls
 extension supplies a pure presentation dependency but must not be registered.
 
-Source-loaded extensions need no TypeScript build. For compiled extensions,
+Source-loaded extensions need no TypeScript build. Context Kit's shared protocol
+needs its local build even when providers load source. For compiled extensions,
 prepare only the packages you select:
 
 ```sh
+# Context Kit shared protocol.
+npm --prefix "$ROOT/packages/pi-context-kit/protocol" run build
+
 # Project Glance.
 npm --prefix "$ROOT/packages/pi-project-glance" ci --ignore-scripts --no-audit --no-fund
 npm --prefix "$ROOT/packages/pi-project-glance" run build
@@ -72,7 +76,7 @@ npm --prefix "$ROOT/packages/pi-herdr-orchestrator" ci --ignore-scripts --no-aud
 npm --prefix "$ROOT/packages/pi-herdr-orchestrator" run build
 
 # Notify runtime dependencies. There is no compilation step.
-npm --prefix "$ROOT/packages/pi-notify" ci --ignore-scripts --no-audit --no-fund
+npm --prefix "$ROOT/packages/pi-notify" ci --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund
 ```
 
 ### Chrono native build
@@ -99,10 +103,25 @@ The non-record route is the stricter recorded-binary reproduction check. Both
 routes currently require Linux x64. Keep generated provenance with the local
 installation, outside the Git index. See [native build details](chrono-release-compatibility.md#dependencies-and-checks).
 
-A build is not worker startup permission. Prepare the exact-root authorization
-and worker gate through the [Chrono startup procedure](chrono/operations/activation-and-migration.md)
+A build is not worker startup permission. First verify that the checkout HEAD
+is accepted and the Chrono package is clean. Use the package's
+[prepare-only authorization command](../packages/pi-chrono-compaction/README.md#exact-root-startup-authorization):
+
+```sh
+node "$ROOT/packages/pi-chrono-compaction/scripts/prepare-startup-authorization.mjs" \
+  --checkout "$ROOT" --commit "$ACCEPTED_COMMIT" \
+  --config "$CHRONO_CONFIG" --output "$PRIVATE_OUTPUT/startup-authorization.candidate.json"
+```
+
+Use absolute real paths and a new private output directory outside the checkout.
+The configuration must contain the four explicit worker-policy fields documented
+in the package README. Preparation verifies runtime bytes and configuration. It
+does not start workers, register packages, or change admission state. Install the
+new exclusive authorization at the reported exact-root path only during the
+authorized selection. Follow the [Chrono startup procedure](chrono/operations/activation-and-migration.md)
 before relying on indexing or compaction. Keep the existing worker policy and
-state when replacing source. Do not initialize or repair an existing worker
+state when replacing source. A healthy code-only update must report startup
+`ready` with `changed: false`. Do not initialize or repair an existing worker
 gate merely to make a code-selection check pass.
 
 ## Register selected packages
