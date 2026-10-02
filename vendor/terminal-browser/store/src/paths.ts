@@ -48,6 +48,7 @@ export const APP_DIR_NAME = INSTALLATION?.namespace ?? `terminal-browser${INSTAL
 
 export const DATA_DIR = path.join(DATA_HOME, APP_DIR_NAME);
 export const LOGS_DIR = path.join(STATE_HOME, APP_DIR_NAME, "logs");
+export const TAB_RECOVERY_DIR = path.join(STATE_HOME, APP_DIR_NAME, "tab-recovery");
 export const FAVICONS_DIR = path.join(CACHE_HOME, APP_DIR_NAME, "favicons");
 export const INSTANCES_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "instances");
 export const AGENT_SOCKETS_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "agent-browser");
