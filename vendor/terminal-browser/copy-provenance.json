@@ -1013,7 +1013,7 @@
       "path": "docs/development.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "601b8653c7eefe6ece354b0cd57d0f15236687172175fc40695497fcd4ce3eab",
+      "sha256": "2e29dbaa03c8bff0fc45195af03a1de5d00f503e161c23c117c783b875f1c77e",
       "modified": true
     },
     {
@@ -2182,8 +2182,8 @@
       "path": "scripts/test/profile-startup-cleanup.test.mjs",
       "sourceSha256": "a1c4b7073095f5dd3d5b8e5c1b1e34950420b055ca19d984c595ea5eca686f2c",
       "mode": 420,
-      "sha256": "a1c4b7073095f5dd3d5b8e5c1b1e34950420b055ca19d984c595ea5eca686f2c",
-      "modified": false
+      "sha256": "ba640eaae8c16711d2f9c6f2bc54f4fb20822124cac26488719b3fd725946284",
+      "modified": true
     },
     {
       "path": "scripts/test/pty-fixture.py",

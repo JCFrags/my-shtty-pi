@@ -54,8 +54,9 @@ a successful TypeScript build alone does not establish native readiness.
 
 Electron remains pinned to **43.3.0** and AgentCursor to commit
 `b23c633c66fd240f836f5edd1034f6fcf678e237`. `upstreams.lock.json` records patched
-Electron archive checksums and the retained legacy `agent-browser` v0.33.0 input.
-The native CLI, not that legacy client, is the agent control interface.
+Electron archive checksums, AgentCursor, and the blocking engine/filter inputs.
+The legacy `agent-browser` input and bundle are removed. The native CLI is the
+agent control interface.
 
 ## Build a complete artifact
 
@@ -66,15 +67,15 @@ pnpm test:dist
 
 Choose a fresh output directory. The build does not replace source `dist`
 directories, install Pi/Herdr packages, run setup, or stop browsers. It stages
-Electron, browser/CLI code, the N-API module, AgentCursor, retained compatibility
-assets, fonts, skills, license notices, the optional Pi extension, and prebuilt
+Electron, browser/CLI code, the N-API module, AgentCursor, bundled blocking
+filters, fonts, skills, license notices, the optional Pi extension, and prebuilt
 Herdr adapter under `<output>/<artifact-id>/terminal-browser/`. Bundling optional
 adapter files does not select or start those integrations.
 
 The build verifies Electron's pinned archive checksum and uses locked Cargo
-inputs with separate outputs. To reuse caches, set `TERMINAL_BROWSER_NATIVE_TARGET`,
-`TERMINAL_BROWSER_AGENT_SOURCE` (a clean pinned checkout), and
-`TERMINAL_BROWSER_AGENT_TARGET`. Never point these at live runtime directories.
+inputs with separate outputs. To reuse the native cache, set
+`TERMINAL_BROWSER_NATIVE_TARGET`. Never point it at a live runtime directory.
+Use `CARGO_BUILD_JOBS=2` to limit native build memory use.
 
 Each `build-manifest.json` records the full source commit, dirty flag, source-input
 digest, lockfile hashes, runtime/tool versions, integration metadata, and runtime
