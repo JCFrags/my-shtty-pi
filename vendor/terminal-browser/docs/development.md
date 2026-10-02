@@ -40,9 +40,20 @@ pnpm --filter terminal-browser --filter terminal-browser-cli --filter pi-termina
 pnpm --filter terminal-browser --filter terminal-browser-cli --filter pixel-store --filter pi-terminal-browser test
 ```
 
-After an `--ignore-scripts` install, `copy-react-grab.sh` supplies
-`assets/react-grab/index.global.js` for source runtime startup. The TypeScript
-build does not replace this step.
+After an `--ignore-scripts` install, source CLI startup also needs the pinned
+patched Electron at the dependency package's `dist` path:
+
+```sh
+bash scripts/fetch-electron.sh
+```
+
+The source CLI uses that path directly. `ELECTRON_OVERRIDE_DIST_PATH` applies to
+Electron's JavaScript wrapper, not the CLI's launch path. The release workflow
+uses `fetch-electron.sh --dest` and that override for Electron fixture imports.
+`copy-react-grab.sh` supplies `assets/react-grab/index.global.js`. A TypeScript
+build does not supply either runtime prerequisite.
+
+UI tests that import `pixel-react` also need its native module. After the ignored-script install, run `CARGO_BUILD_JOBS=2 node engine/packages/pixel-react/scripts/build-native.mjs` before those tests. An absolute private `CARGO_TARGET_DIR` can retain the native cache. The script builds `pixel-node` and supplies the ignored `native/pixel.node`. Build the affected TypeScript first, then run the existing JavaScript test with `node --test`. A `tsx` loader is not needed.
 
 Use pnpm 10.13.1 and a compatible Node host. The repository browser-copy CI uses
 Node 24.18.0 on Ubuntu 22.04 and a Rust toolchain. Native builds need Cargo, a C/C++
@@ -118,7 +129,7 @@ Run retained-manager checks through `scripts/install.sh`, not host Node with
 hashes physical archive bytes and modes. This setting is limited to the installer
 process and its children. It does not change browser launchers or running processes.
 
-The prepared Pi test host defaults to the pinned workspace host, 0.84.2. Set
+The prepared Pi test host defaults to the pinned workspace host, 0.99.1. Set
 `TERMINAL_BROWSER_PI_ROOT` to another prepared host directory, including the
 installed 0.99.1 host, when testing that specific version. Missing host dependencies
 fail rather than skip. A peer dependency wildcard follows Pi's host-module mapping

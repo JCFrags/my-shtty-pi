@@ -24,7 +24,7 @@ The latter is disabled for managed installations.
 Download the release assets from the trusted repository release into a new local
 directory: the installer archive, platform runtime archive, platform manifest,
 and `SHA256SUMS`. Use one release's matching files. The example version below is
-`0.1.1`; replace it only with the version whose assets you reviewed.
+`0.2.0`; replace it only with the version whose assets you reviewed.
 
 Checksums detect transfer changes. They do not authenticate a publisher if the
 checksum file came from an untrusted source. Review the release source before
@@ -32,11 +32,11 @@ executing its installer.
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf terminal-browser-installer-0.1.1.tar.gz
+tar -xzf terminal-browser-installer-0.2.0.tar.gz
 MANAGER="$PWD/terminal-browser-installer/install.sh"
 INSTALL="$HOME/.local/share/terminal-browser-managed"
 "$MANAGER" init "$INSTALL"
-"$MANAGER" stage "$PWD/terminal-browser-0.1.1-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
+"$MANAGER" stage "$PWD/terminal-browser-0.2.0-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
 ```
 
 The installer archive includes `install.sh`, its manager/verifier/extractor,

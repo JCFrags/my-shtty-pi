@@ -374,6 +374,8 @@ export class Registry {
       case "human.share":
       case "human.close":
       case "human.blocking":
+      case "recovery.status":
+      case "recovery.choose":
         if (!this.host.companion) throw new Error("browser companion service is unavailable");
         return this.host.companion.request(request, signal);
       case "agent.control": {

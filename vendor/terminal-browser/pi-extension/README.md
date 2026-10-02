@@ -29,9 +29,12 @@ Use Pi's package filters to select command-only operation:
 ```json
 {
   "source": "/absolute/install/releases/ARTIFACT_ID/terminal-browser/pi-extension",
-  "extensions": ["+dist/menu.js"]
+  "extensions": ["dist/menu.js"]
 }
 ```
+
+The plain pattern is an allowlist. `+dist/menu.js` alone force-includes the menu
+but also leaves the other declared resources enabled. It is not command-only.
 
 For the menu and all five tools, omit `extensions` or select both resources:
 

@@ -194,7 +194,10 @@ export class PopupWindow implements AgentBrowserTarget {
       if (image.isEmpty()) return;
       const dims = image.getSize();
       this.surface.present({ bgra: image.toBitmap(), width: dims.width, height: dims.height });
-      this.onNativePageChange?.({ reason: "paint" });
+      // Screencast frames have no partial damage. Compare the full CSS viewport.
+      this.onNativePageChange?.({ reason: "paint", dirtyRect: {
+        x: 0, y: 0, width: this.stateValue.width, height: this.stateValue.height,
+      } });
     });
     await this.cdp("Page.enable");
     await this.cdp("Emulation.setDeviceMetricsOverride", {

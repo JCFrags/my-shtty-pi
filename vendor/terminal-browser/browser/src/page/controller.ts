@@ -222,7 +222,14 @@ export class BrowserController {
       this.wholeSurfaceNext = false;
       this.lastFrameSize = size;
       this.onFrameSubmitted?.();
-      this.onNativePageChange?.({ reason: "paint", dirtyRect });
+      // Paint damage uses surface pixels. Feed thresholds use the CSS viewport.
+      const viewport = this.viewportSize();
+      if (size.width > 0 && size.height > 0) this.onNativePageChange?.({ reason: "paint", dirtyRect: {
+        x: dirtyRect.x * viewport.width / size.width,
+        y: dirtyRect.y * viewport.height / size.height,
+        width: dirtyRect.width * viewport.width / size.width,
+        height: dirtyRect.height * viewport.height / size.height,
+      } });
     });
     this.window.webContents.on(
       "did-start-navigation",
