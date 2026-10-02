@@ -48,7 +48,7 @@ export function verifyBrowserCopy(root, files) {
 
   const copyRoot = resolve(root, copyRootRel);
   const provenance = json(join(root, provenanceRel));
-  if (provenance.schemaVersion !== 1 || provenance.source?.commit !== sourceCommit || typeof provenance.source?.repository !== 'string' || !provenance.source.repository) {
+  if (![1, 2].includes(provenance.schemaVersion) || provenance.source?.commit !== sourceCommit || typeof provenance.source?.repository !== 'string' || !provenance.source.repository) {
     throw new Error(`${provenanceRel}: invalid or unexpected source`);
   }
   if (!Array.isArray(provenance.excluded) || provenance.excluded.some(path => typeof path !== 'string')) {
@@ -68,12 +68,27 @@ export function verifyBrowserCopy(root, files) {
   for (const record of provenance.files) {
     const path = safeRelative(record?.path, provenanceRel);
     if (records.has(path)) throw new Error(`${provenanceRel}: duplicate file ${path}`);
-    if (!/^[0-9a-f]{64}$/.test(record.sha256) || !/^[0-9a-f]{64}$/.test(record.sourceSha256)
+    const sourceHashValid = /^[0-9a-f]{64}$/.test(record.sourceSha256)
+      || (provenance.schemaVersion === 2 && record.sourceSha256 === null);
+    if (!/^[0-9a-f]{64}$/.test(record.sha256) || !sourceHashValid
         || ![0o644, 0o755].includes(record.mode) || typeof record.modified !== 'boolean') {
       throw new Error(`${provenanceRel}: invalid record ${path}`);
     }
     if (record.modified !== (record.sha256 !== record.sourceSha256)) throw new Error(`${provenanceRel}: inconsistent modified flag ${path}`);
     records.set(path, record);
+  }
+
+  const removed = provenance.removed ?? [];
+  if (!Array.isArray(removed) || (provenance.schemaVersion === 1 && removed.length)) {
+    throw new Error(`${provenanceRel}: invalid removed inventory`);
+  }
+  const removedPaths = new Set();
+  for (const record of removed) {
+    const path = safeRelative(record?.path, provenanceRel);
+    if (records.has(path) || removedPaths.has(path) || !/^[0-9a-f]{64}$/.test(record.sourceSha256)) {
+      throw new Error(`${provenanceRel}: invalid removed record ${path}`);
+    }
+    removedPaths.add(path);
   }
 
   const actual = copied.filter(path => path !== provenanceRel).map(path => path.slice(copyPrefix.length)).sort();

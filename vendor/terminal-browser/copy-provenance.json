@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": {
     "repository": "https://github.com/JCFrags/my-shtty-pi-web",
     "commit": "19c33769a33edddd066b3bac291ce371d2c1aba9"
@@ -1811,7 +1811,7 @@
       "path": "package.json",
       "sourceSha256": "bd1a93e12f6394a5e20bfcb924ce6e343f3595187a7bc4bc1f988f1418f9ebe6",
       "mode": 420,
-      "sha256": "ca58eb6982929b5a47541520db6da89e33609a830ca98d5a7842d43c2c7e607b",
+      "sha256": "b7d82a490f5816d23aadebe450303cbed68db1008bd59f80bb0efddad9373a6a",
       "modified": true
     },
     {
@@ -2591,5 +2591,6 @@
       "sha256": "16a7ac0bf821f5514358e46fe25c84e8ba75e4d4b7c6ca86a91038b7045b1d1d",
       "modified": false
     }
-  ]
+  ],
+  "removed": []
 }
