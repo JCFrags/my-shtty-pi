@@ -1,0 +1,19 @@
+{
+  "name": "pi-self-reload",
+  "version": "0.1.0",
+  "description": "Let the agent reload its own interactive Pi session at a safe idle boundary.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi-extension"],
+  "engines": { "node": ">=22.19.0" },
+  "pi": { "extensions": ["./extensions/index.ts"] },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "syntax": "node --experimental-strip-types --check extensions/index.ts",
+    "test": "node --experimental-strip-types --test test/*.test.mjs"
+  }
+}
