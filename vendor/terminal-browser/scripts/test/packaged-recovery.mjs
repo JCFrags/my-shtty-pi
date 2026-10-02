@@ -21,7 +21,8 @@ const profile=path.join(paths.appData,'terminal-browser-dev-61753e09','Default')
 const downloads=path.join(home,'project','.terminal-browser-downloads');fs.mkdirSync(downloads,{recursive:true});for(const owner of ['one','two'])fs.writeFileSync(path.join(downloads,'history-'+owner+'.json'),JSON.stringify({owner,retained:true}),{mode:0o600});
 function state(){return [fs.readFileSync(path.join(profile,'Preferences'),'utf8'),...['one','two'].map(owner=>fs.readFileSync(path.join(downloads,'history-'+owner+'.json'),'utf8')),fs.readFileSync(path.join(data,'terminal-browser.db'),'utf8'),fs.readFileSync(path.join(data,'terminal-browser.db-wal'),'utf8'),fs.readFileSync(path.join(other,'unchanged'),'utf8')];}
 const beforeState=state();
-function manage(script,...args){return JSON.parse(execFileSync(process.execPath,[script,...args],{env,encoding:'utf8',timeout:120000}));}
+// Use the retained shell entrypoint so validation runs under bundled Electron.
+function manage(script,...args){return JSON.parse(execFileSync(path.join(path.dirname(script),'install.sh'),args,{env,encoding:'utf8',timeout:120000}));}
 const bootstrap='/bootstrap/scripts/install-manager.mjs';
 const read=out=>({out,...JSON.parse(fs.readFileSync(path.join(out,'manifest-linux-x64.json'),'utf8'))});const a=read(outA),b=read(outB);
 const beforeSettings=fs.readFileSync(settings,'utf8'),beforeHerdr=fs.readFileSync(registry,'utf8');

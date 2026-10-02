@@ -24,7 +24,7 @@ The latter is disabled for managed installations.
 Download the release assets from the trusted repository release into a new local
 directory: the installer archive, platform runtime archive, platform manifest,
 and `SHA256SUMS`. Use one release's matching files. The example version below is
-`0.1.0`; replace it only with the version whose assets you reviewed.
+`0.1.1`; replace it only with the version whose assets you reviewed.
 
 Checksums detect transfer changes. They do not authenticate a publisher if the
 checksum file came from an untrusted source. Review the release source before
@@ -32,11 +32,11 @@ executing its installer.
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf terminal-browser-installer-0.1.0.tar.gz
+tar -xzf terminal-browser-installer-0.1.1.tar.gz
 MANAGER="$PWD/terminal-browser-installer/install.sh"
 INSTALL="$HOME/.local/share/terminal-browser-managed"
 "$MANAGER" init "$INSTALL"
-"$MANAGER" stage "$PWD/terminal-browser-0.1.0-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
+"$MANAGER" stage "$PWD/terminal-browser-0.1.1-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
 ```
 
 The installer archive includes `install.sh`, its manager/verifier/extractor,
@@ -167,6 +167,11 @@ history stay in place. The installer does not copy live state. A locked or uncer
 profile is refused; no temporary or numbered profile is substituted.
 
 ## Update and rollback
+
+The 0.1.0 retained manager can refuse valid artifacts because Electron treats
+`.asar` files as virtual directories. To update from 0.1.0, use the reviewed
+0.1.1 bootstrap installer for staging and activation, then keep the new retained
+manager. Do not edit files inside a retained artifact.
 
 After installation, use the retained manager, with no checkout. The new bootstrap
 and retained managers read both legacy schema 1 artifacts and schema 2 artifacts.
