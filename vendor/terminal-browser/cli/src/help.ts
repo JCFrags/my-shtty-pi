@@ -87,11 +87,13 @@ Sets up configuration to make terminal-browser work best, this includes:
 `,
   },
   upgrade: {
-    summary: "Upgrade to the latest release",
+    summary: "Refuse unsupported upstream updates",
     usage: "terminal-browser upgrade",
     body: `
-Checks this install's release channel and installs the latest version. Does
-nothing when already up to date.
+This maintained copy refuses upstream upgrade. Stage and activate a reviewed
+JCFrags/my-shtty-pi artifact with its retained installer. Activation selects the
+next launch, not a running process. Preserve the original failure evidence and
+rollback release. Do not replace a shared daemon without explicit approval.
 `,
   },
   "new-tab": {
@@ -139,17 +141,19 @@ Remove application metadata from ~/.local/share/terminal-browser-interop/apps/<i
 `,
   },
   shutdown: {
-    summary: "Stop the daemon",
-    usage: "terminal-browser shutdown",
+    summary: "Stop the daemon after approval of its exact session inventory",
+    usage: "terminal-browser shutdown --expect STATUS_FILE",
     body: `
-Every browser in a terminal pane shares one browser process as an optimization. To
-fully quit terminal-browser operations, you can use this shutdown command. This will
-close all open browsers.
+First save terminal-browser daemon-status output and obtain explicit approval
+for every affected session. --expect requires that exact status file. The daemon
+refuses changed identity or inventory. This closes all sessions in the daemon.
+Do not use shutdown to close one owner. Use session human close --preview and
+confirm its exact revision instead. Do not retry an uncertain shutdown.
 `,
   },
   agent: {
     summary: "Observe, control, and act through native AgentCursor",
-    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|blocking|status|pause|resume> [options]",
+    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|blocking|status|control|pause|resume> [options]",
     body: `
 Reads a fresh observation and performs native actions on the selected tab.
 Success responses are JSON on stdout. Failures exit nonzero and write
@@ -178,6 +182,7 @@ Commands:
   terminal-browser agent blocking <enable|disable|clear-diagnostics|reload> --control-epoch <n> [options]
   terminal-browser agent blocking <allow-site|block-site> --site <site> --control-epoch <n> [options]
   terminal-browser agent status [--browser <key>]
+  terminal-browser agent control --mode agent|human|shared --control-epoch <n> [--browser <key>] [--runtime-instance <id>]
   terminal-browser agent pause --control-epoch <n> [--browser <key>]
   terminal-browser agent resume --control-epoch <n> [--browser <key>]
 
@@ -210,18 +215,64 @@ Options for observe:
 Locator steps use AgentCursor css, role/name, label, text, placeholder, testid, filter, and nth. Query steps scope the next query. Actions require one match. Arrays have 1–16 steps, each text at most 1024 characters. Disconnecting cancels pending input; already dispatched side effects are not undone.
 
 Type reads stdin only with --stdin. Use --replace to select all and insert
-text as one native edit. Status, pause, and resume are browser-wide and do not
-accept --tab.
+text as one native edit. Status, control, pause, and resume are browser-wide and
+do not accept --tab. Resume explicitly selects Agent. Human is a strict stop.
+Shared yields conflicting input to the human without changing the control epoch.
+Only Shared with the visible updates preference on permits automatic screenshots
+for an explicitly bound receiver. Automatic updates never request a model reply.
 `,
   },
   session: {
-    summary: "Manage native session contexts and downloads",
-    usage: "terminal-browser session tabs --session <id> --project <directory> [options]",
+    summary: "Manage owned contexts, receivers, page updates, and human operations",
+    usage: "terminal-browser session <tabs|receiver|updates|events|human> [owner options] [options]",
     body: `
 Uses the same native controller as agent and the Herdr companion adapter.
 Open the visible browser first: terminal-browser open <url> --session work --project .
+Every command requires --session <id> --project <directory> or the exact Herdr
+owner environment. Explicit native ownership overrides Herdr. --browser <key>
+narrows this owner, never selects a neighbor. Receiver/events/human commands also
+accept --runtime-instance <id> to refuse a replacement runtime. Retain both IDs
+from receiver status for long-lived bindings and waits.
 
-Options:
+Receiver and update commands:
+  session receiver status
+  session receiver bind --receiver-kind pi|cli --receiver-session <id> --receiver-generation <uuid> [--replace-binding <id>]
+  session receiver unbind --binding <id> --receiver-generation <uuid>
+  session updates --enabled true|false --binding <id> --receiver-generation <uuid>
+  session events wait --binding <id> --receiver-generation <uuid> --after <sequence> [--timeout-ms <0..30000>] --image-output <newfile>
+
+One receiver may bind. Replacement must name the exact existing binding. Bind
+returns binding.bindingId and the current sequence. Wait defaults to 25000 ms,
+returns one flat changed:true event, or changed:false without creating a PNG.
+Only one wait can be online. Automatic events retain no observation tokens and
+are not action authority. Capture uses the current visible page only, never a
+background tab. The service coalesces useful changes, not a screenshot timer.
+Images can contain private data. New PNG files use exclusive mode 0600 writes.
+Dispose of private files when they are no longer needed.
+
+Human operations do not borrow Agent permission or resume control:
+  session human capture --format link|visual [--image-output <newfile>]
+  session human share --format link|visual --binding <id> --receiver-generation <uuid> --context <id> --document-generation <n>
+  session human close --preview
+  session human close --confirm <revision>
+  session human blocking <status|enable|disable|allow-site|block-site|clear-diagnostics|reload> [--site <host>]
+
+Preview with human capture --format link, confirm the exact receiver and page,
+then supply its contextId/documentGeneration to human share. A changed page
+refuses Send. Visual capture requires --image-output. A share requires the exact
+receiver wait online, and only one explicit share can be pending. Its queued
+status is not proof of model receipt. Advancing --after retires an attempted or
+rejected share. Do not retry uncertain submission. Human/Paused purges automatic
+images, but permits an explicit confirmed share. Selecting Shared is the opt-in
+for updates according to the displayed preference, which is dormant in Agent.
+
+Close preview covers exact contexts and active transfers. Confirmation first
+stops input and updates in Human. Native beforeunload decisions remain in the
+browser. A refusal, new context, or uncertain outcome stops remaining closes.
+It never force-destroys pages, resumes input, or shuts down the shared daemon.
+Human blocking settings affect the shared profile, not only this owner.
+
+Tabs options:
   --action <action>    list (default), open, activate, close, wait,
                        downloads, download_wait, or download_cancel
   --tab <id>           Exact context ID for activate/close; optional download filter

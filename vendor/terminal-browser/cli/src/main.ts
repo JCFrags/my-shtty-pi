@@ -35,6 +35,7 @@ import { ACTION_MIGRATION, commandError, errorResponse } from "./errors";
 import { requireSessionOwner, takeSessionOwner } from "./session";
 import { agentCommand } from "./agent";
 import { companionTabs, currentBrowserOwner, openCompanion } from "./companion";
+import { companionSessionCommand } from "./companion-session";
 import { control } from "./control";
 import { setupCommand } from "./editors";
 import { linkSkills, markSetupDone } from "./setup";
@@ -667,6 +668,7 @@ function browserOwnerEnvironmentIfPresent(): NodeJS.ProcessEnv {
 async function companionCommand(args: string[], native = false): Promise<number> {
   const subcommand = args.shift();
   const owner = native ? requireSessionOwner(args, process.env, process.cwd()) : currentBrowserOwner(process.env, process.cwd());
+  if (native && subcommand !== "tabs") return companionSessionCommand(owner, [subcommand ?? "", ...args]);
   if (subcommand === "open" && !native) {
     const newTab = takeBoolFlag(args, "--new-tab");
     const noFocus = takeBoolFlag(args, "--no-focus");
@@ -691,7 +693,7 @@ async function companionCommand(args: string[], native = false): Promise<number>
     print(await companionTabs(owner, { action, tab, url, downloadId, afterId: afterValue === undefined ? undefined : Number(afterValue), timeoutMs: timeoutValue === undefined ? undefined : Number(timeoutValue), cwd: process.cwd() }));
     return 0;
   }
-  fail(native ? "session needs tabs; launch with open --session <id> --project <directory>" : "companion needs open or tabs");
+  fail(native ? "session needs tabs, receiver, updates, events, or human; launch with open --session <id> --project <directory>" : "companion needs open or tabs");
 }
 
 async function openCommand(args: string[]) {

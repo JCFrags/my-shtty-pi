@@ -225,7 +225,7 @@ async function reuseBrowser(
   let tabs = found.tabs;
   if (options.url) {
     const status = await control(found.record.socket, { cmd: "agent.status" }) as { state?: string; controlEpoch?: number };
-    if (status.state !== "agent") throw new Error("browser control is with the user; return control before navigating");
+    if (status.state !== "agent" && status.state !== "shared") throw new Error("browser control is with the user; return control before navigating");
     if (options.newTab) {
       const response = await control(found.record.socket, {
         cmd: "agent.context", action: "open", expectedControlEpoch: status.controlEpoch,
