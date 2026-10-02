@@ -146,6 +146,13 @@
         "buildConfig": "tsconfig.build.json"
       },
       {
+        "slug": "pi-self-reload",
+        "status": "active",
+        "entrypoints": [
+          "extensions/index.ts"
+        ]
+      },
+      {
         "slug": "pi-review-ui",
         "status": "inactive",
         "entrypoints": [
