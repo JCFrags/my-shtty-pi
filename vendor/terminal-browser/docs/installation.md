@@ -80,7 +80,7 @@ Do not supply an option merely because its host happens to be installed.
 | Option | Selected integration |
 | --- | --- |
 | `--skill /absolute/skills/terminal-browser` | Link the selected release's `skills/default/terminal-browser`. This gives CLI-first instructions and does not register tools. |
-| `--pi-settings /absolute/pi/settings.json` | Add the optional Pi adapter package to that settings file. Pi remains a separate host application. |
+| `--pi-settings /absolute/pi/settings.json` | Add the optional Pi package. New schema 3 artifacts select the command-only `/browser` menu. Pi remains a separate host application. |
 | `--herdr-registry /absolute/herdr/plugins.json --herdr-link /absolute/terminal-browser-herdr` | Select the prebuilt Herdr plugin and its persisted registry entry. Both options are required together. |
 
 For CLI-first instructions in Pi without native tools:
@@ -94,16 +94,42 @@ hand-edited skill with a blind copy. Other agents can load the same generated sk
 through their own supported discovery path. Launch does not install skills, edit
 terminal configuration, or run setup.
 
-For the optional five Pi tools, include `--pi-settings` instead, or combine it
-with the desired skill destination. The package contains only the adapter, not a
-Pi host. Pi's package filters can disable its extension with `extensions: []`;
-loading the CLI skill alone does not activate native tools. See the
-[adapter guide](../pi-extension/README.md) for exact paths and host checks.
+For the `/browser` menu with CLI-first instructions and no browser model tools,
+combine `--pi-settings` with the desired skill destination. New schema 3 packages
+declare two resources in order: `dist/menu.js` owns the command, receiver lifecycle,
+and one loaded receipt. `dist/extension.js` registers the five optional tools.
+The package does not include a Pi host. A skill alone cannot register `/browser`.
+
+Pi package filters select the profile:
+
+```json
+{"source":"/absolute/release/terminal-browser/pi-extension","extensions":["dist/menu.js"]}
+```
+
+```json
+{"source":"/absolute/release/terminal-browser/pi-extension","extensions":["+dist/menu.js","+dist/extension.js"]}
+```
+
+The first profile is command-only. Use the plain `dist/menu.js` allowlist.
+`+dist/menu.js` alone force-includes menu but still loads the tools resource.
+The second profile adds `browser_open`,
+`browser_observe`, `browser_act`, `browser_tabs`, and `browser_control`. A bare
+package string or omitted `extensions` field loads both resources. An explicit
+`extensions: []` disables both. `--no-extensions` also removes the menu.
+Retained schema 1/2 packages contain only the tools resource, not the menu. See
+the [adapter guide](../pi-extension/README.md) for exact paths and host checks.
 
 When Pi is selected, activation writes the new absolute versioned package source
-at the existing package index and preserves object filters/unrelated settings.
-Do not use a stable symlink as proof that Pi loaded a new module. Reload only an
-idle session with a safe draft state and the required user approval.
+at the existing package index. When targeting schema 3, it changes only the exact
+legacy filter `["+dist/extension.js"]` to
+`["+dist/menu.js", "+dist/extension.js"]`, preserving the five tools. It preserves
+bare strings, omitted filters, explicit empty/custom filters, other package fields,
+and unrelated settings. It does not guess or repair a custom resource selection.
+
+The installer records the exact extension-field change for guarded rollback and
+recovery. It never restores a whole Pi settings snapshot. Do not use a stable
+symlink as proof that Pi loaded a new module. Reload only an idle session with a
+safe draft state and the required user approval.
 
 When Herdr is selected, activation changes only the matching registry entry and
 launch link. It retains the plugin order and enabled flag, uses the retained
@@ -173,11 +199,13 @@ The 0.1.0 retained manager can refuse valid artifacts because Electron treats
 0.1.1 bootstrap installer for staging and activation, then keep the new retained
 manager. Do not edit files inside a retained artifact.
 
-After installation, use the retained manager, with no checkout. The new bootstrap
-and retained managers read both legacy schema 1 artifacts and schema 2 artifacts.
-Old artifact managers cannot read schema 2 artifacts or nullable-integration
-receipts. If you roll the runtime back to an older artifact, keep using the newer
-manager for later operations. Do not change the manager path back with the runtime.
+After installation, use the retained manager, with no checkout. For a schema 3
+update, first use that release's matching reviewed bootstrap installer. Its manager
+reads schema 1, 2, and 3 artifacts. Schema 1/2 managers cannot read schema 3. The
+original schema 1 manager also cannot read schema 2 or nullable-integration
+receipts. If you roll the runtime back to a retained schema 1/2 artifact, keep using
+the schema 3 manager for rollback, recovery, and later updates. Do not change the
+manager path back with the runtime or edit immutable artifacts.
 
 ```sh
 MANAGER="$INSTALL/releases/ARTIFACT_ID/terminal-browser/scripts/install.sh"
@@ -191,12 +219,16 @@ Use the reviewed release's exact archive filename. Repeated stage/activation is
 safe. Retained releases and scoped activation backups provide rollback. There is
 no destructive release cleanup. Rollback validates selected paths and changes
 only this installation's links and selected host entries. It preserves unrelated
-later settings changes. Changed selections or Pi package order can cause a safe
-refusal. Rollback does not change a currently loaded daemon or extension.
+later settings and package-field changes. For a migrated Pi filter, it checks the
+exact recorded extension field, source, and package index before restoring those
+fields. Changed filters, sources, or package order cause a safe refusal. If rollback
+would remove a newly added package, later edits to that package also refuse rather
+than discard those edits. Rollback does not change a loaded daemon or extension.
 
 An interrupted activation/rollback retains a private transaction. Inspect `status`,
 then explicitly run `"$MANAGER" recover "$INSTALL"`. Recovery refuses a live or
-unknown manager-lock owner and changed integration selections. It reverses an
+unknown manager-lock owner and changed integration selections. It uses the same
+exact Pi extension-field, source, and order guards as rollback. It reverses an
 uncommitted operation or confirms a completed selection while preserving unrelated
 later settings. Repeating recovery is safe. It starts/resumes no browser.
 SIGKILL recovery tests do not establish power-loss durability.

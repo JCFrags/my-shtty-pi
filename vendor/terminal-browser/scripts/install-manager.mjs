@@ -134,7 +134,12 @@ export function stage(archive, manifestFile, root) {
   });
 }
 function packageSource(entry) { return typeof entry === "string" ? entry : entry?.source; }
-function changePackage(file, from, to, requiredIndex) {
+const LEGACY_PI_TOOLS = ["+dist/extension.js"];
+// Plain paths restrict resources. A +path only force-includes a default resource.
+const PI_MENU = ["dist/menu.js"];
+const PI_FULL = ["+dist/menu.js", ...LEGACY_PI_TOOLS];
+const extensionField = (entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "extensions") ? { present: true, value: entry.extensions } : { present: false };
+function changePackage(file, from, to, requiredIndex, options = {}) {
   const before = snapshot(file);
   const settings = JSON.parse(before ?? "{}");
   if (settings.packages === undefined && from === null) settings.packages = [];
@@ -142,12 +147,66 @@ function changePackage(file, from, to, requiredIndex) {
   const indices = settings.packages.flatMap((entry, index) => packageSource(entry) === from ? [index] : []);
   if (from !== null) assert.equal(indices.length, 1, "expected exactly one approved Pi package source");
   else assert(!settings.packages.some((entry) => packageSource(entry) === to), "Pi package source already exists");
-  const index = from === null ? settings.packages.length : indices[0];
+  const index = from === null ? options.entryDelta && requiredIndex !== undefined ? requiredIndex : settings.packages.length : indices[0];
+  assert(Number.isSafeInteger(index) && index >= 0 && index <= settings.packages.length, "Pi package order changed");
   if (requiredIndex !== undefined) assert.equal(index, requiredIndex, "Pi package order changed");
-  const entry = settings.packages[index];
+  const entry = from === null ? null : settings.packages[index];
+  let extensions = options.extensions ?? null;
+  let entryDelta = options.entryDelta ?? null;
+  if (entryDelta) assert.deepEqual(entry, entryDelta.before, "Pi package entry changed");
+  if (extensions) assert.deepEqual(extensionField(entry), extensions.before, "Pi extension selection changed");
+  if (!extensions && options.split && entry && typeof entry === "object" && JSON.stringify(entry.extensions) === JSON.stringify(LEGACY_PI_TOOLS)) {
+    extensions = { before: extensionField(entry), after: { present: true, value: PI_FULL } };
+  }
+  let replacement = entryDelta ? entryDelta.after : to === null ? null : from === null || typeof entry === "string" ? to : { ...entry, source: to };
+  if (from === null && !entryDelta && options.split) replacement = { source: to, extensions: PI_MENU };
+  if (extensions && to !== null) {
+    assert(replacement && typeof replacement === "object", "Pi extension field requires an object package");
+    if (extensions.after.present) replacement.extensions = extensions.after.value;
+    else delete replacement.extensions;
+  }
+  if (from === null || to === null) entryDelta ??= { before: entry, after: replacement };
   if (to === null) settings.packages.splice(index, 1);
-  else settings.packages[index] = from === null || typeof entry === "string" ? to : { ...entry, source: to };
-  return { file, before, after: json(settings), index, from, to };
+  else {
+    assert.equal(packageSource(replacement), to, "Pi journal source differs");
+    if (from === null) settings.packages.splice(index, 0, replacement);
+    else settings.packages[index] = replacement;
+  }
+  return { file, before, after: json(settings), index, from, to, extensions, entryDelta };
+}
+function packageEntryDelta(change) {
+  if (change.entryDelta) return change.entryDelta;
+  if (change.from !== null && change.to !== null) return null;
+  // Retained managers journaled only settings bytes. Read just the owned slot.
+  const entry = (side, source) => source === null ? null : JSON.parse(change[side]).packages[change.index];
+  return { before: entry("before", change.from), after: entry("after", change.to) };
+}
+function checkPackage(change, side) {
+  const source = side === "before" ? change.from : change.to;
+  const settings = JSON.parse(snapshot(change.file) ?? "{}");
+  const packages = settings.packages ?? [];
+  assert(Array.isArray(packages), "Pi packages must be an array");
+  if (source === null) {
+    const other = side === "before" ? change.to : change.from;
+    assert(!packages.some(entry => packageSource(entry) === other), "Pi package source changed");
+    return;
+  }
+  const indices = packages.flatMap((entry, index) => packageSource(entry) === source ? [index] : []);
+  assert.deepEqual(indices, [change.index], "Pi package source or order changed");
+  const entry = packages[change.index];
+  const entryDelta = packageEntryDelta(change);
+  if (entryDelta) assert.deepEqual(entry, entryDelta[side], "Pi package entry changed");
+  if (change.extensions) assert.deepEqual(extensionField(entry), change.extensions[side], "Pi extension selection changed");
+}
+function reversePackage(change) {
+  checkPackage(change, "after");
+  const entryDelta = packageEntryDelta(change);
+  const undo = changePackage(change.file, change.to, change.from, change.index, {
+    extensions: change.extensions ? { before: change.extensions.after, after: change.extensions.before } : null,
+    entryDelta: entryDelta ? { before: entryDelta.after, after: entryDelta.before } : null,
+  });
+  if (change.before === null && undo.before === change.after) undo.after = null;
+  return undo;
 }
 const HERDR_ID = "zenbu-labs.terminal-browser";
 const HERDR_FIELDS = ["plugin_id", "name", "version", "min_herdr_version", "description", "manifest_path", "plugin_root", "platforms", "build", "startup", "actions", "panes", "source"];
@@ -208,19 +267,19 @@ export function activate(root, artifactId) {
     const selected = current(root);
     const bundle = path.join(root, "releases", id(artifactId), "terminal-browser");
     privateDirectory(path.dirname(bundle));
-    validateBundle(bundle, artifactId);
-    assert.equal(readJson(path.join(bundle, "build-manifest.json")).identity.platform, platform);
+    const manifest = validateBundle(bundle, artifactId);
+    assert.equal(manifest.identity.platform, platform);
     const source = installation.selection.piSettings === null ? null : path.join(bundle, "pi-extension");
     const expectedSource = selected?.source ?? installation.selection.piSource;
     const links = selectedLinks(installation, bundle).map((link) => ({ ...link, before: linkSnapshot(link.file) }));
     if (installation.selection.skill) assert(fs.statSync(path.join(bundle, "skills/default/terminal-browser/SKILL.md")).isFile(), "artifact has no portable skill");
     if (selected?.artifactId === artifactId) {
       for (const link of links) assert.equal(link.before, link.after);
-      if (source) changePackage(installation.selection.piSettings, source, source, selected.pi.index);
+      if (source) checkPackage(selected.pi, "after");
       if (selected.herdr) changeHerdr(selected.herdr.file, selected.herdr.to, selected.herdr.to);
       return { selected: artifactId, repeated: true };
     }
-    const pi = source ? changePackage(installation.selection.piSettings, expectedSource, source, selected?.pi?.index) : null;
+    const pi = source ? changePackage(installation.selection.piSettings, expectedSource, source, selected?.pi?.index, { split: manifest.schemaVersion === 3 }) : null;
     let herdr = null;
     if (installation.selection.herdrRegistry !== null) {
       const previousHerdr = selected?.herdr?.to ?? herdrEntry(installation.selection.herdrRegistry);
@@ -250,9 +309,8 @@ export function rollback(root) {
     config(root);
     const selected = current(root);
     assert(selected, "no managed activation to roll back");
-    const pi = selected.pi ? changePackage(selected.pi.file, selected.pi.to, selected.pi.from, selected.pi.index) : null;
+    const pi = selected.pi ? reversePackage(selected.pi) : null;
     const herdr = selected.herdr ? changeHerdr(selected.herdr.file, selected.herdr.to, selected.herdr.from) : null;
-    if (pi && selected.pi.before === null && pi.before === selected.pi.after) pi.after = null;
     if (herdr && selected.herdr.before === null && herdr.before === selected.herdr.after) herdr.after = null;
     for (const link of selected.links) assert.equal(linkSnapshot(link.file), link.after, "link changed since activation");
     const selectionFile = path.join(root, "selection.json");
@@ -271,7 +329,13 @@ function reverseTransaction(transaction) {
     assert.deepEqual(actual, link.after, "interrupted link was changed");
     plans.push(() => replaceLink(link.file, link.before, link.after));
   }
-  for (const [change, reverse] of [[herdr, () => changeHerdr(herdr.file, herdr.to, herdr.from)], [pi, () => changePackage(pi.file, pi.to, pi.from, pi.index)]]) {
+  if (pi) {
+    let undo;
+    try { undo = reversePackage(pi); }
+    catch { checkPackage(pi, "before"); }
+    if (undo) plans.push(() => atomic(undo.file, undo.after, undo.before));
+  }
+  for (const [change, reverse] of [[herdr, () => changeHerdr(herdr.file, herdr.to, herdr.from)]]) {
     if (!change) continue;
     const actual = snapshot(change.file);
     if (actual === change.before) continue;
@@ -280,8 +344,7 @@ function reverseTransaction(transaction) {
       let undo;
       try { undo = reverse(); }
       catch {
-        if (change === pi) changePackage(pi.file, pi.from, pi.from, pi.index);
-        else changeHerdr(herdr.file, herdr.from, herdr.from);
+        changeHerdr(herdr.file, herdr.from, herdr.from);
         continue;
       }
       plans.push(() => atomic(undo.file, undo.after, undo.before));
@@ -316,7 +379,7 @@ export function recover(root) {
     assert.equal(transaction.selection.file, path.join(root, "selection.json"));
     const committed = snapshot(transaction.selection.file) === transaction.selection.after;
     if (committed) {
-      if (transaction.pi) changePackage(transaction.pi.file, transaction.pi.to, transaction.pi.to, transaction.pi.index);
+      if (transaction.pi) checkPackage(transaction.pi, "after");
       if (transaction.herdr) changeHerdr(transaction.herdr.file, transaction.herdr.to, transaction.herdr.to);
       for (const link of transaction.links) assert.deepEqual(linkSnapshot(link.file), link.after);
     } else reverseTransaction(transaction);

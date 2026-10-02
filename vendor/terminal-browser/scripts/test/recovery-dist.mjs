@@ -17,7 +17,8 @@ const manifests = outputs.map((output, index) => {
   return manifest;
 });
 assert.notEqual(manifests[0].artifactId, manifests[1].artifactId, "two separately sealed releases required");
-const bootstrap = path.join(outputs[0], manifests[0].artifactId, "terminal-browser");
+// Keep the newer manager even when the selected runtime is retained A.
+const bootstrap = path.join(outputs[1], manifests[1].artifactId, "terminal-browser");
 validateBundle(bootstrap);
 bindings.push([bootstrap, "/bootstrap"]);
 for (const name of ["packaged-recovery.mjs", "packaged-runtime.mjs", "packaged-pi.mjs", "pty-fixture.py"]) bindings.push([path.join(repository, "scripts/test", name), `/test/${name}`]);
