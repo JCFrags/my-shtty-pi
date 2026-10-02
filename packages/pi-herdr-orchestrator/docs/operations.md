@@ -40,7 +40,7 @@ New admissions read the preferences without a reload. The total applies separate
 
 ## Finite waits
 
-The `wait` run count follows total capacity, up to the supported pool of 32. Existing current assignments remain watchable together after a decrease. Batch older run history when it exceeds the current watch limit. Event and result replies remain bounded, with fair delivery across watched runs. `timeoutMs` defaults to 30000 and has a maximum of 600000. One monotonic budget includes validation, context commands, lock admission, channel work, and event watching. Activity does not reset it. The domain lock is released during watcher sleep, and each later scan loads fresh registry state.
+The `wait` run count follows total capacity, up to the supported pool of 32. Existing current assignments remain watchable together after a decrease. Batch older run history when it exceeds the current watch limit. Wait shares a 24-item limit across events and terminal notices, with a 64 KiB JSON reply limit and fair delivery across watched runs. Summaries use at most 2048 characters. `collect` still returns the full result. `timeoutMs` defaults to 30000 and has a maximum of 600000. One monotonic budget includes validation, context commands, lock admission, channel work, and event watching. Activity does not reset it. The domain lock is released during watcher sleep, and each later scan loads fresh registry state.
 
 `timeoutMs: 0` polls once without event-watch sleep, with a fixed 5000 ms work allowance. It does not promise zero elapsed time. Expiry before context and run validation returns `WAIT_DEADLINE_EXCEEDED`. After validation, an empty `timedOut: true` result means no batch was delivered, not that a worker stopped.
 
