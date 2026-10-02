@@ -28,10 +28,19 @@
       "linux-x64": "81480d46732312e4014011b6b9326678d12088ceb108123bd8117295675c41d1"
     }
   },
-  "agentBrowser": {
-    "repository": "https://github.com/vercel-labs/agent-browser",
-    "tag": "v0.33.0",
-    "commit": "1ed371f3af472cc0d6cd8fdaea75d1a085ff7534"
+  "blocking": {
+    "engine": {
+      "package": "@ghostery/adblocker",
+      "version": "2.18.2"
+    },
+    "list": {
+      "file": "assets/blocking/easylist.txt",
+      "sha256": "a7babc0fbb982dfb276cd5f3d80b194988d539a341d07bc73540c07488453e4f",
+      "snapshotRepository": "https://github.com/ghostery/adblocker",
+      "snapshotCommit": "c4c20aa63e3a72113f66777cf35a3f58877a36ee",
+      "upstreamRepository": "https://github.com/easylist/easylist",
+      "upstreamCommit": "3df94464d9bf5ff7fdd16c9fb8daf3ed4787c454"
+    }
   },
   "captureDate": "2026-09-02T23:19:00-07:00"
 }

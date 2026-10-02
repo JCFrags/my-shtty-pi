@@ -2,48 +2,42 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="${1:-dev}"
+VERSION="${1:-$(node -p 'require(process.argv[1]).version' "$ROOT/package.json")}"
 CHANNEL="${2:-dev}"
 OUT="${TERMINAL_BROWSER_RELEASE_OUT:-$ROOT/dist-release}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd -P)"
-if [ -e "$OUT/manifest-linux-x64.json" ] || [ -e "$OUT/manifest-linux-arm64.json" ] || [ -e "$OUT/manifest-darwin-x64.json" ] || [ -e "$OUT/manifest-darwin-arm64.json" ]; then
-  echo "choose a fresh TERMINAL_BROWSER_RELEASE_OUT; existing artifacts are not overwritten" >&2; exit 1
+if [ -n "$(ls -A "$OUT")" ]; then
+  echo "choose an empty TERMINAL_BROWSER_RELEASE_OUT; existing artifacts and build workspaces are not overwritten" >&2; exit 1
 fi
 WORK="$(mktemp -d "$OUT/.build-XXXXXX")"
 STAGE="$WORK/terminal-browser"
 trap 'echo "build workspace: $WORK" >&2' EXIT
 
 case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) TARGET=darwin-arm64; DARWIN_ARCH=arm64 ;;
-  Darwin-x86_64) TARGET=darwin-x64; DARWIN_ARCH=x86_64 ;;
-  Linux-x86_64|Linux-amd64) TARGET=linux-x64; DARWIN_ARCH= ;;
-  Linux-aarch64|Linux-arm64) TARGET=linux-arm64; DARWIN_ARCH= ;;
-  *) echo "unsupported build host: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+  Linux-x86_64|Linux-amd64) TARGET=linux-x64 ;;
+  *) echo "standalone releases currently support Linux x64 only" >&2; exit 1 ;;
 esac
+node -e 'if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(process.argv[1]) || !/^[a-z][a-z0-9-]*$/.test(process.argv[2])) throw Error("invalid version or channel"); if (process.argv[2] !== "dev" && !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) throw Error("release version must be SemVer")' "$VERSION" "$CHANNEL"
 
 node "$ROOT/scripts/dist-manifest.mjs" source "$ROOT" "$WORK/source.json"
+if [ "$CHANNEL" != dev ]; then
+  node -e 'if(require(process.argv[1]).dirty) throw Error("published releases require clean source")' "$WORK/source.json"
+fi
 node -e 'const fs=require("fs"); if(!fs.readFileSync(process.argv[1]).equals(fs.readFileSync(process.argv[2]))) throw Error("installed pnpm lock differs; prepare locked dependencies before building")' "$ROOT/pnpm-lock.yaml" "$ROOT/node_modules/.pnpm/lock.yaml"
-mkdir -p "$STAGE"/{bin,cli/dist,browser/dist,browser/native,agent-browser/bin,assets/fonts,scripts,pi-extension/dist,herdr-plugin,metadata,licenses} "$WORK/build-home"
+mkdir -p "$STAGE"/{bin,cli/dist,browser/dist,browser/native,assets/fonts,scripts,pi-extension/dist,herdr-plugin,metadata,licenses} "$WORK/build-home"
 NATIVE_TARGET="${TERMINAL_BROWSER_NATIVE_TARGET:-$WORK/native}"
 mkdir -p "$NATIVE_TARGET"
 NATIVE_TARGET="$(cd "$NATIVE_TARGET" && pwd -P)"
 case "$NATIVE_TARGET/" in "$ROOT/engine/target/"*) echo "release must not use the development native target directory" >&2; exit 1 ;; esac
-(cd "$ROOT/engine" && CARGO_TARGET_DIR="$NATIVE_TARGET" cargo build --locked -p pixel-node --release)
-if [ -n "$DARWIN_ARCH" ]; then
-  NATIVE_LIB=libpixel_node.dylib
-  swiftc -O -target "$DARWIN_ARCH-apple-macos11" "$ROOT/engine/crates/pixel-core/native-scroll-helper.swift" -o "$STAGE/bin/native-scroll-helper"
-else
-  NATIVE_LIB=libpixel_node.so
-fi
-cp "$NATIVE_TARGET/release/$NATIVE_LIB" "$STAGE/browser/native/pixel.node"
-
-AGENT_SOURCE="${TERMINAL_BROWSER_AGENT_SOURCE:-$WORK/agent-browser-source}"
-AGENT_TARGET="${TERMINAL_BROWSER_AGENT_TARGET:-$WORK/agent-native}"
-mkdir -p "$AGENT_TARGET"
-AGENT_TARGET="$(cd "$AGENT_TARGET" && pwd -P)"
-AGENT_BROWSER_BIN="$("$ROOT/scripts/agent-browser.sh" --build "$AGENT_SOURCE" "$AGENT_TARGET")"
-cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
+# Rust flags do not cover C/C++ dependencies such as tree-sitter.
+CARGO_SOURCE="${CARGO_HOME:-$HOME/.cargo}"
+NATIVE_MAP="-ffile-prefix-map=$HOME=build-home -ffile-prefix-map=$ROOT=terminal-browser -ffile-prefix-map=$CARGO_SOURCE=cargo -ffile-prefix-map=$NATIVE_TARGET=native-build"
+(cd "$ROOT/engine" && CARGO_TARGET_DIR="$NATIVE_TARGET" \
+  RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=build-home --remap-path-prefix=$ROOT=terminal-browser --remap-path-prefix=$CARGO_SOURCE=cargo --remap-path-prefix=$NATIVE_TARGET=native-build" \
+  CFLAGS="${CFLAGS:-} $NATIVE_MAP" CXXFLAGS="${CXXFLAGS:-} $NATIVE_MAP" \
+  cargo build --locked -p pixel-node --release)
+cp "$NATIVE_TARGET/release/libpixel_node.so" "$STAGE/browser/native/pixel.node"
 
 cd "$ROOT"
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
@@ -63,28 +57,19 @@ exec "$root/bin/terminal-browser" "$@"
 EOF
 cp "$ROOT/scripts/apparmor.sh" "$ROOT/scripts/dist-manifest.mjs" "$ROOT/scripts/install-manager.mjs" "$ROOT/scripts/extract-dist.py" "$ROOT/scripts/install.sh" "$ROOT/scripts/install-local.sh" "$STAGE/scripts/"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
-cp "$ROOT/pnpm-lock.yaml" "$ROOT/upstreams.lock.json" "$STAGE/metadata/"
+cp "$ROOT/pnpm-lock.yaml" "$ROOT/upstreams.lock.json" "$ROOT/copy-provenance.json" "$STAGE/metadata/"
 cp "$ROOT/engine/Cargo.lock" "$STAGE/metadata/Cargo.lock"
-cp "$AGENT_SOURCE/cli/Cargo.lock" "$STAGE/metadata/agent-browser-Cargo.lock"
-cp "$AGENT_SOURCE/LICENSE" "$STAGE/licenses/agent-browser-LICENSE"
 env -i PATH="$PATH" HOME="$WORK/build-home" XDG_CONFIG_HOME="$WORK/build-home/config" XDG_DATA_HOME="$WORK/build-home/data" XDG_STATE_HOME="$WORK/build-home/state" XDG_CACHE_HOME="$WORK/build-home/cache" XDG_RUNTIME_DIR="$WORK/build-home/runtime" TERMINAL_BROWSER_APPDATA="$WORK/build-home/appdata" TERMINAL_BROWSER_INTEROP_DIR="$WORK/build-home/interop" PI_CODING_AGENT_DIR="$WORK/build-home/pi" TERMINAL_BROWSER_SKILL_OUT="$STAGE/skills" "$ROOT/scripts/generate-skill.sh"
 cp "$ROOT/assets/fonts/JetBrainsMono-Regular.ttf" "$ROOT/assets/fonts/LICENSE.txt" "$STAGE/assets/fonts/"
+cp -R "$ROOT/assets/blocking" "$STAGE/assets/blocking"
+mkdir -p "$STAGE/licenses/notices"
+cp -R "$ROOT/assets/licenses/easylist" "$ROOT/assets/licenses/ghostery-adblocker" "$STAGE/licenses/notices/"
 mkdir -p "$STAGE/assets/react-grab"
 REACT_GRAB="$(node -e 'console.log(require.resolve("react-grab/dist/index.global.js",{paths:[process.argv[1]]}))' "$ROOT/browser")"
 cp "$REACT_GRAB" "$STAGE/assets/react-grab/index.global.js"
 "$ROOT/scripts/fetch-electron.sh" --dest "$STAGE/electron"
 
-if [ -n "$DARWIN_ARCH" ]; then
-  APP="$STAGE/electron/terminal-browser.app"
-  mv "$STAGE/electron/Electron.app" "$APP"
-  mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/terminal-browser"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable terminal-browser" -c "Set :CFBundleName terminal-browser" -c "Set :CFBundleDisplayName terminal-browser" -c "Set :CFBundleIdentifier dev.zenbu.terminal-browser" -c "Add :LSUIElement bool true" "$APP/Contents/Info.plist" >/dev/null
-  ELECTRON_EXE="electron/terminal-browser.app/Contents/MacOS/terminal-browser"
-  NATIVE_SCROLL='export NATIVE_SCROLL_HELPER="$ROOT/bin/native-scroll-helper"'
-else
-  ELECTRON_EXE="electron/electron"
-  NATIVE_SCROLL=""
-fi
+ELECTRON_EXE="electron/electron"
 cat > "$STAGE/bin/terminal-browser" <<EOF
 #!/bin/sh
 SELF="\$0"
@@ -98,18 +83,23 @@ done
 ROOT="\$(CDPATH= cd -- "\$(dirname -- "\$SELF")/.." && pwd -P)"
 export TERMINAL_BROWSER_DIST_ROOT="\$ROOT"
 export ELECTRON_RUN_AS_NODE=1
-$NATIVE_SCROLL
 exec "\$ROOT/$ELECTRON_EXE" "\$ROOT/cli/dist/main.js" "\$@"
 EOF
 chmod +x "$STAGE/bin/terminal-browser" "$STAGE/herdr-plugin/launch.sh"
-node "$ROOT/scripts/dist-seal.mjs" prepare "$ROOT" "$STAGE" "$WORK/source.json" "$AGENT_SOURCE" "$VERSION" "$CHANNEL" "$TARGET"
-if [ -n "$DARWIN_ARCH" ]; then "$ROOT/scripts/macos-sign.sh" "$STAGE" "$CHANNEL"; fi
+node "$ROOT/scripts/dist-seal.mjs" prepare "$ROOT" "$STAGE" "$WORK/source.json" "$VERSION" "$CHANNEL" "$TARGET"
 ID="$(node "$ROOT/scripts/dist-seal.mjs" seal "$ROOT" "$STAGE" "$WORK/source.json")"
 mkdir "$OUT/$ID"
 mv "$STAGE" "$OUT/$ID/terminal-browser"
 STAGE="$OUT/$ID/terminal-browser"
-TARBALL="$OUT/terminal-browser-$TARGET.tar.gz"
+SEALED_VERSION="$(cat "$STAGE/VERSION")"
+TARBALL="$OUT/terminal-browser-$SEALED_VERSION-$TARGET.tar.gz"
 tar -czf "$TARBALL" -C "$OUT/$ID" terminal-browser
 node "$ROOT/scripts/dist-seal.mjs" archive "$STAGE" "$TARBALL" "$OUT/manifest-$TARGET.json"
 node "$ROOT/scripts/dist-manifest.mjs" verify "$STAGE" "$OUT/manifest-$TARGET.json"
-du -h "$TARBALL"
+BOOTSTRAP="$WORK/terminal-browser-installer"
+mkdir "$BOOTSTRAP"
+cp "$STAGE/scripts/"{install.sh,install-manager.mjs,dist-manifest.mjs,extract-dist.py} "$STAGE/LICENSE" "$STAGE/SOURCE.md" "$BOOTSTRAP/"
+INSTALLER="$OUT/terminal-browser-installer-$SEALED_VERSION.tar.gz"
+tar -czf "$INSTALLER" -C "$WORK" terminal-browser-installer
+(cd "$OUT" && sha256sum "$(basename "$TARBALL")" "manifest-$TARGET.json" "$(basename "$INSTALLER")" > SHA256SUMS)
+du -h "$TARBALL" "$INSTALLER"

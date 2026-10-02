@@ -11,8 +11,6 @@ while IFS='=' read -r name _; do
 done < <(env)
 mkdir -m 700 -p "$HOME" "$XDG_RUNTIME_DIR"
 export TERMINAL_BROWSER_NATIVE_TARGET="${TERMINAL_BROWSER_NATIVE_TARGET:-$WORK/native}"
-export TERMINAL_BROWSER_AGENT_SOURCE="${TERMINAL_BROWSER_AGENT_SOURCE:-$WORK/agent-source}"
-export TERMINAL_BROWSER_AGENT_TARGET="${TERMINAL_BROWSER_AGENT_TARGET:-$WORK/agent-native}"
 cd "$ROOT"
 node --version
 pnpm --version
