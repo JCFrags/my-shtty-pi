@@ -37,7 +37,25 @@ pi install "$PWD/packages/pi-context-kit/recall"
 pi install "$PWD/packages/pi-context-kit/telemetry"
 ```
 
-Use Node 24.18.0 and Pi 0.85.1. These packages load TypeScript through Pi. The protocol includes verified compiled JavaScript for compiled Chrono imports. Do not register the grouping directory or either library as an extension. Do not install dependencies separately inside workspace packages.
+Use Node 24.18.0 and Pi 0.85.1 as the locked integration baseline. Memory and the state store require Node `>=24.18.0 <25`. These packages load TypeScript through Pi. The protocol includes verified compiled JavaScript for compiled Chrono imports. Do not register the grouping directory or either library as an extension. Do not install dependencies separately inside workspace packages.
+
+### Portable checkout installation
+
+Keep a retained full repository checkout at any safe absolute path. Run the commands above from that checkout's root. `pi install` registers local source. It does not copy the checkout, prepare dependencies, or migrate state. Do not remove the checkout while registrations, running sessions, or rollback need it.
+
+The root lock supplies the sibling `@context-kit/protocol`, `@context-kit/state-store`, `@grounded/pi-core`, and `pi-tool-controls/presentation` dependencies. A copied provider directory or grouping tarball alone does not supply that closure. Do not copy another computer's `node_modules` or use its absolute aliases.
+
+Register each needed native owner separately, for example:
+
+```sh
+pi install "$PWD/packages/pi-context-kit/todo"
+pi install "$PWD/packages/pi-context-kit/notes"
+pi install "$PWD/packages/pi-context-kit/workplan"
+```
+
+Register Memory only after the ownership procedure below. Keep Telemetry before Chrono when both are selected. Inspect the installed Pi loader's complete registration set and actual dependency routes before starting a session. Later Pi versions need their own focused installed-host check. The locked development baseline alone does not establish host compatibility.
+
+On a new computer, native stores use that user's `XDG_STATE_HOME` or home-directory default. Do not transfer a running session, provider store, Memory binding, or Chrono authorization by replacing paths in JSON. Existing-state import, complete transfer, and identity recovery have separate proofs and approval boundaries. Keep all source generations needed to read the saved data.
 
 Context Kit supplies the only supported current Todo, Notes, and Workplan registrations. If an older installation still selects a legacy Grounded writer, replace only that source with its Context Kit source. Do not load both writers. Existing native schemas, read-only recovery, and Glance contracts remain available. A preserved legacy branch needs explicit bounded import, not a silent empty store. Read each provider's migration procedure before switching.
 

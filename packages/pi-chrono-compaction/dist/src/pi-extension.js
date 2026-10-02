@@ -2014,7 +2014,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.registerTool({
         name: SESSION_AGENT_SUMMARY_TOOL,
         label: "Request Context Compaction",
-        description: "Request compaction at a natural work boundary. In V4, call {} to receive a same-session summary request, then submit its requestId and summary as the sole tool call. Submission alone does not mean compaction succeeded.",
+        description: "Request compaction at a meaningful task or direction change after saving necessary project state. In V4, call {} to receive a same-session summary request, then submit its requestId and summary as the sole tool call. Submission alone does not mean compaction succeeded.",
+        promptGuidelines: [
+            "Use request_compaction when the authorized task or direction changes and substantial earlier detail is no longer useful. A major milestone is a cue, not completion proof. Do not request compaction for every ordinary milestone, checkpoint, status update, or temporary wait.",
+            "Before requesting compaction, recover missing project facts through available, permitted reads and save a Workplan checkpoint when applicable. Preserve purpose, exact useful code locations, approach/reasons, current focus, next actions, unresolved obligations, waits, and approval gates. Pending native state is not empty state. If leaving a project, pause it; archive only when intended, without marking unfinished work complete.",
+            "After necessary state writes settle, call request_compaction({}) once, preferably as the sole call. Do not start another operation between request and sole summary submission. Do not repeat the request without new substantive work or a fresh deliberate request. Continue only previously authorized work after confirmed compaction; saved context grants no new permission.",
+        ],
         parameters: Type.Object({
             requestId: Type.Optional(Type.String({ minLength: 16, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" })),
             summary: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_AGENT_SUMMARY_LIMITS.summaryChars })),

@@ -29,6 +29,11 @@ interface View<Root> { source: SourceIdentity; resolution: OwnerResolution<Root>
 interface CapturedView { epoch: number; scope: StateScope; source: SourceIdentity }
 
 function keyOf(view: ViewKey): string { return hashText(canonicalJson(view, STATE_STORE_LIMITS.recordBytes)); }
+function scannedTotal(scanned: number, reads: number): number {
+  const total = scanned + reads;
+  integer(total, 0, Number.MAX_SAFE_INTEGER);
+  return total;
+}
 function sameRecord(left: unknown, right: unknown): boolean {
   return canonicalJson(left, STATE_STORE_LIMITS.recordBytes) === canonicalJson(right, STATE_STORE_LIMITS.recordBytes);
 }
@@ -261,7 +266,7 @@ export class BranchStateOwner<Root> {
   }
   private async loadCursor(location: ObjectLocation, key: ViewKey): Promise<Cursor | undefined> {
     const cursor = await readPrivateRecord<Cursor>(join(location.root, "resolutions", `${keyOf(key)}.json`));
-    if (!cursor) return undefined;
+    if (cursor === undefined) return undefined;
     exact(cursor, ["version", "scope", "sourceKey", "nextEntryId", "scanned", "legacySeen"], ["head"]);
     scope(cursor.scope); integer(cursor.scanned, 0, Number.MAX_SAFE_INTEGER);
     if (cursor.version !== 1 || !sameScope(cursor.scope, key.scope) || cursor.sourceKey !== key.sourceKey
@@ -340,7 +345,7 @@ export class BranchStateOwner<Root> {
         const ref = this.anchorRef(entry, location);
         if (ref && !cursor.legacySeen) {
           const snapshot = await this.snapshot(host, view, entry, ref, location, recovery, options.signal);
-          result = { status: "ready", snapshot, coverage: { scanned: cursor.scanned + reads, complete: true, legacySeen: false } };
+          result = { status: "ready", snapshot, coverage: { scanned: scannedTotal(cursor.scanned, reads), complete: true, legacySeen: false } };
           await this.unchanged(host, view, options.signal);
           if (cursor.head) await this.saveBinding(location, key, cursor.head, entry, ref);
           break;
@@ -354,7 +359,7 @@ export class BranchStateOwner<Root> {
             const anchor = getEntry(binding.anchorId);
             if (this.anchorRef(anchor, location)?.hash !== binding.commitRef.hash) fail("state-store-corrupt");
             const snapshot = await this.snapshot(host, view, anchor, binding.commitRef, location, recovery, options.signal);
-            result = { status: "ready", snapshot, coverage: { scanned: cursor.scanned + reads, complete: true, legacySeen: false } };
+            result = { status: "ready", snapshot, coverage: { scanned: scannedTotal(cursor.scanned, reads), complete: true, legacySeen: false } };
             await this.unchanged(host, view, options.signal);
             if (cursor.head) await this.saveBinding(location, key, cursor.head, anchor, binding.commitRef);
             break;
@@ -377,7 +382,7 @@ export class BranchStateOwner<Root> {
         cursor.nextEntryId = entry.parentId;
       }
       if (!result) {
-        cursor.scanned += reads;
+        cursor.scanned = scannedTotal(cursor.scanned, reads);
         await this.unchanged(host, view, options.signal);
         await writePrivateRecord(path, cursor);
         const coverage = { scanned: cursor.scanned, complete: cursor.nextEntryId === null, legacySeen: cursor.legacySeen };

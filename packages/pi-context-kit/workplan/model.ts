@@ -1,6 +1,6 @@
 import type { ObjectRef } from "@context-kit/state-store";
 import {
-  applyWorkplanEvent, performWorkplanAction, WORKPLAN_LIMITS,
+  applyWorkplanEvent, performWorkplanAction, workplanRestoreStatus, WORKPLAN_LIMITS,
   type Workplan, type WorkplanEvent, type WorkplanInput, type WorkplanOperation, type WorkplanState, type WorkplanStatus,
 } from "@grounded/pi-core/workplan";
 import {
@@ -120,7 +120,7 @@ export function metadataFor(plan: Workplan, planRef: ObjectRef, projectionRef: O
 /** Native reducers receive only the selected plan. Global constraints stay here. */
 export function reduceTarget(root: WorkplanRoot, plan: Workplan | undefined, input: WorkplanInput, now?: number): WorkplanOperation {
   admitWorkplanJson(input);
-  checkRootMutation(root, input.action, input.planId, false);
+  checkRootMutation(root, input.action, input.planId, false, plan);
   const current: WorkplanState = { plans: plan ? [plan] : [], nextPlanNumber: root.nextPlanNumber, stateRevision: root.stateRevision };
   return performWorkplanAction(current, input, now);
 }
@@ -128,16 +128,19 @@ export function reduceTarget(root: WorkplanRoot, plan: Workplan | undefined, inp
 export function applyTargetEvent(root: WorkplanRoot, plan: Workplan | undefined, event: WorkplanEvent): WorkplanOperation {
   admitWorkplanJson(event, WORKPLAN_LIMITS.canonicalPlanBytes + 1024 * 1024);
   const planId = event.action === "create" ? undefined : event.data.planId;
-  checkRootMutation(root, event.action, typeof planId === "string" ? planId : undefined, true);
+  checkRootMutation(root, event.action, typeof planId === "string" ? planId : undefined, true, plan);
   const current: WorkplanState = { plans: plan ? [plan] : [], nextPlanNumber: root.nextPlanNumber, stateRevision: root.stateRevision };
   return { state: applyWorkplanEvent(current, event), event, result: undefined };
 }
 
-function checkRootMutation(root: WorkplanRoot, action: string, planId: string | undefined, replay: boolean): void {
+function checkRootMutation(root: WorkplanRoot, action: string, planId: string | undefined, replay: boolean, plan?: Workplan): void {
   if (action === "create") {
     if (root.plans.length >= WORKPLAN_LIMITS.retainedPlans || root.plans.filter((item) => isOpen(item.status)).length >= WORKPLAN_LIMITS.openPlans) throw new StateToolError(replay ? "STATE_CORRUPT" : "STATE_LIMIT_EXCEEDED", "Workplan retained or open plan limit reached");
   } else if (action === "resume" && root.plans.some((item) => item.id !== planId && item.status === "active")) {
     throw new StateToolError(replay ? "STATE_CORRUPT" : "STATE_CONFLICT", "Another workplan is active");
+  } else if (action === "restore" && plan && isOpen(workplanRestoreStatus(plan, replay ? "STATE_CORRUPT" : "STATE_INVALID_TRANSITION"))
+    && root.plans.filter((item) => isOpen(item.status)).length >= WORKPLAN_LIMITS.openPlans) {
+    throw new StateToolError(replay ? "STATE_CORRUPT" : "STATE_LIMIT_EXCEEDED", "Workplan open plan limit reached; complete or archive one before restoring another");
   }
 }
 
@@ -162,7 +165,7 @@ export function metadataContextLine(root: WorkplanRoot, recovered?: { planId: st
   }
   const open = root.plans.filter((plan) => plan.status === "draft" || plan.status === "paused").sort((a, b) => compareNumericIds(a.id, b.id));
   const completed = root.plans.filter((plan) => plan.status === "completed").length, archived = root.plans.filter((plan) => plan.status === "archived").length;
-  if (!open.length) return `[workplan state] active=none open=none openCount=0 retained=${root.plans.length} completed=${completed} archived=${archived}`;
+  if (!open.length) return `[workplan state] active=none open=none openCount=0 retained=${root.plans.length} completed=${completed} archived=${archived}${archived ? " archives=workplan(action=list)" : ""}`;
   const candidate = open.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || compareNumericIds(b.id, a.id))[0]!;
   const visible = open.slice(0, 4).map((plan) => `${plan.id}:${plan.status}@rev${plan.revision}`);
   if (open.length > visible.length) visible.push(`+${open.length - visible.length}`);

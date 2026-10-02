@@ -3,7 +3,7 @@ import { createToolPresentation } from "pi-tool-controls/presentation";
 const object = (value: unknown): Record<string, any> | undefined => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : undefined;
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-const mutations = ["create", "revise", "add_milestone", "update_milestone", "record_decision", "record_risk", "record_question", "checkpoint", "pause", "resume", "complete", "archive"];
+const mutations = ["create", "revise", "add_milestone", "update_milestone", "record_decision", "record_risk", "record_question", "checkpoint", "pause", "resume", "complete", "archive", "restore"];
 const recoveryHeadings = ["Goal", "Scope", "Non-goals", "Constraints", "Approach", "Current position", "Current milestones", "Next actions", "Outstanding acceptance criteria", "Open or accepted risks", "Open questions", "Key decisions", "Verification"].map((name) => `## ${name}`);
 
 // Select only the native, unique ordered sections. Never infer checkpoint currentness.
