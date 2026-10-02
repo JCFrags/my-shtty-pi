@@ -8,6 +8,15 @@ export type { CompanionMode, VisibleContext } from "../agent/change-feed";
 
 export interface CompanionIdentity { owner: BrowserOwner | null; browserSessionKey: string; runtimeInstanceId: string }
 export interface CompanionAddress { schemaVersion: 1; ownerKey: string; browserSessionKey: string; runtimeInstanceId: string }
+export interface RecoveryStatus {
+  state: "unavailable" | "pending" | "restored" | "fresh" | "none";
+  revision: string | null;
+  entries: { kind: "url" | "excluded"; url: string; reason?: string }[];
+  activeIndex: number | null;
+  warning: string;
+}
+export type RecoveryResponse = CompanionAddress & RecoveryStatus;
+export const RECOVERY_WARNING = "Owner-private tab URLs are retained for up to 30 days. Private paths can identify page content. URL filtering is heuristic, not a complete secret detector or a guarantee of read-only navigation.";
 export interface ReceiverBinding { bindingId: string; receiverKind: "pi" | "cli"; receiverSessionId: string; receiverGeneration: string }
 export interface ReceiverTuple { bindingId: string; receiverGeneration: string }
 export interface CloseContext { contextId: number; contextKind: "tab" | "popup"; openerId: number | null; documentGeneration: number; title: string }
@@ -24,6 +33,8 @@ export interface CompanionHost {
   finishClose(): Promise<void>;
   endCloseAttempt(): void;
   blocking(contextId: number, request: BlockingRequest): BlockingStatus;
+  recoveryStatus?(): RecoveryStatus;
+  chooseRecovery?(choice: "restore" | "fresh", revision: string): RecoveryStatus;
   onChange?(): void;
 }
 export interface CompanionStatus extends CompanionAddress {
@@ -86,6 +97,7 @@ export interface CompanionRequest {
   expectedDocumentGeneration?: unknown;
   preview?: unknown;
   revision?: unknown;
+  choice?: unknown;
   action?: unknown;
   site?: unknown;
 }
@@ -135,6 +147,24 @@ export class CompanionService {
       mode: control.state, controlEpoch: control.controlEpoch,
       limits: ["Visual changes are heuristic, not complete page observation.", "Host occlusion and terminal IME preedit are not reported.", "Delivered pixels cannot be recalled from the receiver."],
     };
+  }
+
+  recoveryStatus(): RecoveryResponse {
+    this.assertLive();
+    const status: RecoveryStatus = typeof this.host.recoveryStatus === "function" ? this.host.recoveryStatus() : {
+      state: "unavailable", revision: null, entries: [], activeIndex: null, warning: RECOVERY_WARNING,
+    };
+    return { ...status, ...this.address() };
+  }
+
+  chooseRecovery(choice: "restore" | "fresh", revision: string): RecoveryResponse {
+    this.assertLive();
+    if (choice !== "restore" && choice !== "fresh") throw new Error("recovery choice must be restore or fresh");
+    if (typeof revision !== "string" || !/^[a-f0-9]{64}$/.test(revision)) throw new Error("invalid recovery confirmation revision");
+    if (typeof this.host.recoveryStatus !== "function" || typeof this.host.chooseRecovery !== "function") throw new Error("tab recovery is unavailable for this session");
+    // The host checks this confirmation against the exact loaded pending snapshot.
+    const status = this.host.chooseRecovery(choice, revision);
+    return { ...status, ...this.address() };
   }
 
   bind(options: { receiverKind: "pi" | "cli"; receiverSessionId: string; receiverGeneration: string; replaceBindingId?: string }): CompanionStatus {
@@ -358,6 +388,12 @@ export class CompanionService {
     this.assertScope(request);
     const tuple = () => ({ bindingId: uuid(request.bindingId, "bindingId"), receiverGeneration: uuid(request.receiverGeneration, "receiverGeneration") });
     switch (request.cmd) {
+      case "recovery.status": return this.recoveryStatus();
+      case "recovery.choose": {
+        if (request.choice !== "restore" && request.choice !== "fresh") throw new Error("recovery choice must be restore or fresh");
+        if (typeof request.revision !== "string") throw new Error("recovery confirmation revision required");
+        return this.chooseRecovery(request.choice, request.revision);
+      }
       case "receiver.status": return this.status();
       case "receiver.bind": return this.bind({ receiverKind: receiverKind(request.receiverKind), receiverSessionId: boundedString(request.receiverSessionId, "receiverSessionId", 512), receiverGeneration: uuid(request.receiverGeneration, "receiverGeneration"), ...(request.replaceBindingId === undefined ? {} : { replaceBindingId: uuid(request.replaceBindingId, "replaceBindingId") }) });
       case "receiver.unbind": return this.unbind(tuple());

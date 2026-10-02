@@ -223,16 +223,16 @@ for an explicitly bound receiver. Automatic updates never request a model reply.
 `,
   },
   session: {
-    summary: "Manage owned contexts, receivers, page updates, and human operations",
-    usage: "terminal-browser session <tabs|receiver|updates|events|human> [owner options] [options]",
+    summary: "Manage owned contexts, recovery, receivers, and human operations",
+    usage: "terminal-browser session <tabs|receiver|recovery|updates|events|human> [owner options] [options]",
     body: `
 Uses the same native controller as agent and the Herdr companion adapter.
 Open the visible browser first: terminal-browser open <url> --session work --project .
 Every command requires --session <id> --project <directory> or the exact Herdr
 owner environment. Explicit native ownership overrides Herdr. --browser <key>
-narrows this owner, never selects a neighbor. Receiver/events/human commands also
-accept --runtime-instance <id> to refuse a replacement runtime. Retain both IDs
-from receiver status for long-lived bindings and waits.
+narrows this owner, never selects a neighbor. Receiver, recovery, updates, events,
+and human commands accept --runtime-instance <id> to refuse a replacement runtime.
+Retain both IDs from receiver status for long-lived bindings and waits.
 
 Receiver and update commands:
   session receiver status
@@ -271,6 +271,24 @@ stops input and updates in Human. Native beforeunload decisions remain in the
 browser. A refusal, new context, or uncertain outcome stops remaining closes.
 It never force-destroys pages, resumes input, or shuts down the shared daemon.
 Human blocking settings affect the shared profile, not only this owner.
+
+Owner-private recovery commands:
+  session recovery status
+  session recovery restore --confirm <revision>
+  session recovery fresh --confirm <revision>
+
+An eligible ordinary URL-less owned launch waits paused for an explicit choice.
+An explicit launch URL wins without a simultaneous restore. Read recovery status
+and confirm its exact revision, which is 64 lowercase hexadecimal characters.
+Restore opens the selected retained URL in a fresh context. Other retained URLs
+stay dormant until selected. Excluded entries remain about:blank placeholders.
+Fresh discards only the exact prior snapshot and starts the ordinary default.
+Neither choice resumes Agent control. Unavailable hosts refuse choices. These
+commands never start a missing browser or choose another owner's snapshot.
+
+Owner-private tab URLs are retained for up to 30 days. Private paths can identify
+page content. URL filtering is heuristic, not a complete secret detector or a
+guarantee of read-only navigation. Review the sanitized routes before Restore.
 
 Tabs options:
   --action <action>    list (default), open, activate, close, wait,

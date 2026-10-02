@@ -8,6 +8,14 @@ import { instances } from "./registry";
 export type CompanionMode = "agent" | "human" | "shared" | "paused";
 export type PageFormat = "link" | "visual";
 export interface CompanionAddress { schemaVersion: 1; ownerKey: string; browserSessionKey: string; runtimeInstanceId: string }
+export interface RecoveryStatus {
+  state: "unavailable" | "pending" | "restored" | "fresh" | "none";
+  revision: string | null;
+  entries: { kind: "url" | "excluded"; url: string; reason?: string }[];
+  activeIndex: number | null;
+  warning: string;
+}
+export type RecoveryResponse = CompanionAddress & RecoveryStatus;
 export interface ReceiverTuple { bindingId: string; receiverGeneration: string }
 export interface ReceiverBinding extends ReceiverTuple { receiverKind: "pi" | "cli"; receiverSessionId: string }
 export interface CompanionStatus extends CompanionAddress {
@@ -105,6 +113,14 @@ export function parseCompanionSessionArgs(input: string[]): CompanionCommandOpti
       request = { cmd: "receiver.bind", receiverKind: kind, receiverSessionId, receiverGeneration, ...(replace === undefined ? {} : { replaceBindingId: uuid(replace, "--replace-binding") }) };
     } else if (action === "unbind") request = { cmd: "receiver.unbind", ...tuple() };
     else throw new Error("session receiver needs status, bind, or unbind");
+  } else if (command === "recovery") {
+    const action = args.shift();
+    if (action === "status") request = { cmd: "recovery.status" };
+    else if (action === "restore" || action === "fresh") {
+      const revision = option(args, "--confirm");
+      if (revision === undefined || !/^[a-f0-9]{64}$/.test(revision)) throw new Error("recovery choice requires --confirm with a 64-character lowercase hexadecimal revision");
+      request = { cmd: "recovery.choose", choice: action, revision };
+    } else throw new Error("session recovery needs status, restore, or fresh");
   } else if (command === "updates") {
     const enabled = option(args, "--enabled");
     if (enabled !== "true" && enabled !== "false") throw new Error("--enabled must be true or false");
@@ -149,7 +165,7 @@ export function parseCompanionSessionArgs(input: string[]): CompanionCommandOpti
       else if (site !== undefined) throw new Error("--site requires allow-site or block-site");
       request = { cmd: "human.blocking", action: selected, ...(site === undefined ? {} : { site }) };
     } else throw new Error("session human needs capture, share, close, or blocking");
-  } else throw new Error("session needs receiver, updates, events, human, or tabs");
+  } else throw new Error("session needs receiver, recovery, updates, events, human, or tabs");
   if (args.length) throw new Error(`unexpected ${args[0]}`);
   return { request, timeoutMs, imageOutput, requireImage, browserSessionKey, runtimeInstanceId };
 }

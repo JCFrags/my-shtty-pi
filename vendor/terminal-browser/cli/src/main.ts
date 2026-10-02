@@ -693,7 +693,7 @@ async function companionCommand(args: string[], native = false): Promise<number>
     print(await companionTabs(owner, { action, tab, url, downloadId, afterId: afterValue === undefined ? undefined : Number(afterValue), timeoutMs: timeoutValue === undefined ? undefined : Number(timeoutValue), cwd: process.cwd() }));
     return 0;
   }
-  fail(native ? "session needs tabs, receiver, updates, events, or human; launch with open --session <id> --project <directory>" : "companion needs open or tabs");
+  fail(native ? "session needs tabs, receiver, recovery, updates, events, or human; launch with open --session <id> --project <directory>" : "companion needs open or tabs");
 }
 
 async function openCommand(args: string[]) {
