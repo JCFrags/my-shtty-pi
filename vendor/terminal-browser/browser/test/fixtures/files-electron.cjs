@@ -125,7 +125,6 @@ async function click(manager, id, name) {
   assert.equal(await tab.controller.runJs('hidden.files.length'), 2);
   await tab.controller.runJs('direct.value = ""');
   await tab.controller.runJs("window.releasedKey=false;window.addEventListener('keyup',event=>{if(event.key==='F8')window.releasedKey=true;})");
-  await tab.controller.agentKeyDown(parseAgentKey('F8'));
   const takeoverUpload = { ...await observed(a, tab.id, 'Direct'), files: ['sample.txt'] };
   assert.equal(await tab.controller.runJs('window.releasedKey'), false);
   const debuggerApi = tab.controller.window.webContents.debugger;
@@ -139,10 +138,23 @@ async function click(manager, id, name) {
   let inputReleases = 0;
   tab.controller.releaseAgentInput = () => { inputReleases++; releaseInput(); };
   const listenerCount = debuggerApi.listenerCount('message');
+  const agentPointer = tab.controller.agentPointer.bind(tab.controller);
+  let heldKey = false;
+  // Hold the key inside the guarded upload operation before the chooser opens.
+  tab.controller.agentPointer = async event => {
+    if (event.kind === 'down' && !heldKey) {
+      await tab.controller.agentKeyDown(parseAgentKey('F8'));
+      heldKey = true;
+      assert.equal(await tab.controller.runJs('window.releasedKey'), false);
+    }
+    return agentPointer(event);
+  };
   const onChooser = (_event, method) => { if (method === 'Page.fileChooserOpened') a.control.takeHuman('keyboard'); };
   tab.controller.window.webContents.debugger.on('message', onChooser);
   await assert.rejects(a.tabs.agentUpload(tab.id, takeoverUpload), /stale|control|page changed|cancelled/);
   tab.controller.window.webContents.debugger.off('message', onChooser);
+  tab.controller.agentPointer = agentPointer;
+  assert.equal(heldKey, true);
   assert.equal(await tab.controller.runJs('direct.files.length'), 0);
   assert(inputReleases > 0);
   await until(async () => (await tab.controller.runJs('window.releasedKey')) === true);

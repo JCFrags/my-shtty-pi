@@ -40,7 +40,7 @@
       "path": "README.md",
       "sourceSha256": "cc6be274fb1d624e367c8d6f1924cef4fa63499d0d4141a72192d8442aecdda1",
       "mode": 420,
-      "sha256": "fcd09d2caeb6b60c53578c4836b66b2f3ef9055576121beb2e9581ef92555ddb",
+      "sha256": "c0abf97b5ff4ecd6a1494546b0ae0470d1fb856cba5a36f178af857860847385",
       "modified": true
     },
     {
@@ -747,8 +747,8 @@
       "path": "browser/test/fixtures/files-electron.cjs",
       "sourceSha256": "f44b8dbb3a3dfe7372d1f36b581bed5800057334593cb0eb31447d8ae53aacfc",
       "mode": 420,
-      "sha256": "f44b8dbb3a3dfe7372d1f36b581bed5800057334593cb0eb31447d8ae53aacfc",
-      "modified": false
+      "sha256": "3ec0421457c56955a8a65e92e7f347b4f3f65bb2be9b0939d93994a557930b14",
+      "modified": true
     },
     {
       "path": "browser/test/fixtures/frames-electron.cjs",
@@ -1083,14 +1083,14 @@
       "path": "docs/development.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "c2dcf9ddb4c35b465266285ac867e4c995f73bb5efb4094f554a435ebe4d82bc",
+      "sha256": "58c82ffcaa0571a03fd436d1c94bb1976d657342a2a999145db66778242ea88c",
       "modified": true
     },
     {
       "path": "docs/installation.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "a8234e8bc31bfc82bd0afa332aa3a5447d9fbc0f50e5612aef1413faf423a8d4",
+      "sha256": "cd25c5b2651e985d2ee21dc59e8349412951fab1be835886fd6faffeb6fd8e52",
       "modified": true
     },
     {
@@ -1979,7 +1979,7 @@
       "path": "package.json",
       "sourceSha256": "bd1a93e12f6394a5e20bfcb924ce6e343f3595187a7bc4bc1f988f1418f9ebe6",
       "mode": 420,
-      "sha256": "76ab780a90ce53b03d1bdba14592a04a7f8ae656921d50f2745723dc0c1117f8",
+      "sha256": "e5472c48c9ee8a414b2e096f8ebbcb79cd8e679e900acb21d0dde2f0862d655b",
       "modified": true
     },
     {
