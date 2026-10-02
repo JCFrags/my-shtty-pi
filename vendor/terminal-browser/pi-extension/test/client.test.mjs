@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { BrowserCommandError, BrowserStartupError, PiBrowserClient, actionableError, defaultCommandRunner, ownerCommandRunner } from "../dist/client.js";
 
-const context = { cwd: "/tmp/project", sessionId: "session-a" };
+const context = { cwd: "/tmp/project", sessionId: "pi-session-a", owner: { kind: "native", sessionId: "session-a", projectDir: "/tmp/project" } };
 
 test("native JSON errors preserve codes and do not advise automatic resume or replay", () => {
   const error = actionableError(JSON.stringify({ ok: false, error: { code: "CONTROL_NOT_AGENT", message: "agent control is human" } }));
@@ -27,7 +27,7 @@ test("non-Herdr adapter routes the exact native owner and attaches without termi
     if (request.args[0] === "session") return { tabs: [{ id: 7, active: true }] };
     if (request.args[1] === "status") return { state: "agent", controlEpoch: 4 };
     return { completed: true };
-  }, {});
+  });
   const client = new PiBrowserClient(run);
   assert.equal((await client.open(context, { url: "https://example.test/" })).action, "reused");
   await client.tabs(context, { action: "downloads" });
@@ -35,11 +35,15 @@ test("non-Herdr adapter routes the exact native owner and attaches without termi
   assert(calls.every(args => args[0] === "session" || args[0] === "agent"));
   assert(calls.some(args => args[1] === "navigate" && args.includes("--control-epoch")));
   assert(calls.some(args => args[0] === "session" && args.includes("downloads")));
-  const absent = new PiBrowserClient(ownerCommandRunner(async () => { throw new BrowserCommandError("SESSION_NOT_FOUND", "absent"); }, {}));
+  const absent = new PiBrowserClient(ownerCommandRunner(async () => { throw new BrowserCommandError("SESSION_NOT_FOUND", "absent"); }));
   await assert.rejects(absent.open(context, {}), /separate visible terminal.*--session 'session-a'.*--project '\/tmp\/project'/);
   let forwarded;
-  await ownerCommandRunner(async request => { forwarded = request; return {}; }, { HERDR_ENV: "1" })({ args: ["companion", "open"], context });
+  const herdr = { ...context, owner: { kind: "herdr", workspaceId: "w1", tabId: "t1", paneId: "p1", projectDir: context.cwd } };
+  await ownerCommandRunner(async request => { forwarded = request; return {}; })({ args: ["companion", "open"], context: herdr });
   assert.deepEqual(forwarded.args, ["companion", "open"]);
+  await assert.rejects(ownerCommandRunner(async () => {})({ args: ["agent", "status"], context: { ...context, owner: undefined } }), /No browser associated/);
+  await run({ args: ["session", "receiver", "status"], context: { ...context, cwd: "/another/project" } });
+  assert.deepEqual(calls.at(-1).slice(-4), ["--session", "session-a", "--project", "/tmp/project"]);
 });
 
 test("blocking stays on the native CLI, requires current control, and clears cached observations", async () => {
@@ -67,6 +71,10 @@ test("Pi session changes discard adapter observation state", async () => {
   const client = new PiBrowserClient(async ({ args }) => args[1] === "observe" ? fixtureObservation() : { state: "agent", controlEpoch: 4 });
   await client.observe(context);
   await assert.rejects(client.act({ ...context, sessionId: "another-session" }, { action: "click", ref: "e1" }), /browser_observe/);
+  await client.observe({ ...context, branchIds: ["a", "b"] });
+  await assert.rejects(client.act({ ...context, branchIds: ["a", "c"] }, { action: "click", ref: "e1" }), /browser_observe/);
+  await client.observe(context);
+  await assert.rejects(client.act({ ...context, owner: { ...context.owner, sessionId: "another-owner" } }, { action: "click", ref: "e1" }), /browser_observe/);
 });
 
 test("structured startup failures retain their machine-readable report", () => {
@@ -203,9 +211,22 @@ test("typed text is sent through stdin instead of process arguments", async () =
   assert.equal(typed.args.includes("private words"), false);
 });
 
-test("human takeover blocks actions with an actionable control error", async () => {
-  const client = new PiBrowserClient(async () => ({ state: "human", controlEpoch: 9, reason: "pointer", busy: false }));
+test("Human blocks actions while explicit Shared selection remains agent-eligible", async () => {
+  let state = "human";
+  let last;
+  const client = new PiBrowserClient(async ({ args }) => {
+    last = args;
+    if (args[1] === "observe") return fixtureObservation(10);
+    if (args[1] === "control") state = args[args.indexOf("--mode") + 1];
+    return { state, controlEpoch: state === "human" ? 9 : 10, reason: "pointer", busy: false, url: "about:blank" };
+  });
   await assert.rejects(() => client.act(context, { action: "get_url" }), /control is with the user/);
+  await client.control(context, "mode", "shared");
+  assert.deepEqual(last, ["agent", "control", "--mode", "shared", "--control-epoch", "9"]);
+  assert.deepEqual(await client.act(context, { action: "get_url" }), { url: "about:blank" });
+  await assert.rejects(client.act(context, { action: "scroll", dy: 20 }), /browser_observe/);
+  await client.observe(context);
+  assert.deepEqual(await client.act(context, { action: "scroll", dy: 20 }), { action: "scroll", completed: true, completion: "input-dispatched", movementMeasured: false });
 });
 
 test("resume uses the current epoch and refreshes observation before the next mutation", async () => {

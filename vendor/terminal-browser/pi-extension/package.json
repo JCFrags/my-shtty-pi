@@ -2,7 +2,7 @@
   "name": "pi-terminal-browser",
   "version": "0.1.0",
   "private": true,
-  "description": "Optional Pi tool adapter for the native terminal-browser CLI",
+  "description": "Pi browser command menu, passive page receiver, and optional five native CLI tools",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -14,6 +14,7 @@
   ],
   "pi": {
     "extensions": [
+      "./dist/menu.js",
       "./dist/extension.js"
     ]
   },
@@ -22,8 +23,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.2",
-    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-ai": "0.99.1",
+    "@earendil-works/pi-coding-agent": "0.99.1",
     "@types/node": "24.12.4",
     "typescript": "5.9.3"
   },

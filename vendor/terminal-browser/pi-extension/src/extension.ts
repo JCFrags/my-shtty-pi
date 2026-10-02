@@ -3,12 +3,18 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { PiBrowserClient } from "./client.js";
 import type { BrowserAction, BrowserActionTarget, BrowserElementTarget, LocatorSpec, ToolContext } from "./client.js";
-import { LOADED_IDENTITY, startupReceipt } from "./identity.js";
+import { readAssociation, sessionIdentity } from "./owner-binding.js";
 
 function context(ctx: ExtensionContext, signal?: AbortSignal): ToolContext {
+  const selected = readAssociation(ctx);
+  if (!selected?.association.owner) throw new Error("No browser associated. Use /browser Settings to select an exact owner.");
   return {
     cwd: ctx.cwd,
     sessionId: ctx.sessionManager.getSessionId(),
+    owner: selected.association.owner,
+    storageIdentity: sessionIdentity(ctx),
+    associationId: selected.entryId,
+    branchIds: ctx.sessionManager.getBranch().map(entry => entry.id),
     signal,
   };
 }
@@ -101,7 +107,8 @@ const actParameters = Type.Object({
 }, { additionalProperties: false });
 
 const controlParameters = Type.Object({
-  action: StringEnum(["status", "pause", "resume", "blocking"] as const),
+  action: StringEnum(["status", "pause", "resume", "mode", "blocking"] as const),
+  mode: Type.Optional(StringEnum(["agent", "human", "shared"] as const, { description: "Explicit user-selected mode. Shared permits cooperative input. Never return control automatically." })),
   blocking_action: Type.Optional(StringEnum(["status", "enable", "disable", "allow-site", "block-site", "clear-diagnostics", "reload"] as const)),
   site: Type.Optional(Type.String({ minLength: 1, maxLength: 2048, description: "Exact hostname or HTTP(S) URL for allow-site/block-site" })),
   context_id: Type.Optional(Type.Integer({ minimum: 1, description: "Context for blocking diagnostics. Omit to use the selected context." })),
@@ -164,6 +171,9 @@ function browserAction(params: {
     return { action: "press_key", key: params.key };
   }
   if (params.action === "scroll") {
+    if ([params.ref, params.locator, params.x, params.y, params.from_ref, params.from_locator, params.from_x, params.from_y, params.to_ref, params.to_locator, params.to_x, params.to_y].some(value => value !== undefined)) {
+      throw new Error("scroll does not accept target fields. Hover over the intended scroller first, then scroll in the currently selected frame at the native pointer position.");
+    }
     if (params.dy === undefined) throw new Error("scroll requires dy");
     return { action: "scroll", dy: params.dy, dx: params.dx };
   }
@@ -205,18 +215,10 @@ export default async function terminalBrowserExtension(
   pi: ExtensionAPI,
   client: PiBrowserClient = new PiBrowserClient(),
 ): Promise<void> {
-  let cleanup = () => {};
-  pi.on("session_start", () => {
-    cleanup();
-    cleanup = startupReceipt();
-    pi.events.emit("terminal-browser:loaded", LOADED_IDENTITY);
-  });
-  pi.on("session_shutdown", () => { cleanup(); cleanup = () => {}; });
-
   pi.registerTool({
     name: "browser_open",
     label: "Browser Open",
-    description: "Use the optional Pi adapter to open/reuse a Herdr companion, or attach to an explicitly prelaunched native CLI browser owned by this Pi session and project. Outside Herdr, missing-browser errors give the visible-terminal launch command; this tool never takes over Pi's piped terminal. Returns bounded tab state and never requires a browser key.",
+    description: "Open/reuse the exact browser owner explicitly associated through /browser Settings. A native CLI association overrides Herdr. Outside Herdr, missing-browser errors give the visible-terminal launch command; this tool never takes over Pi's piped terminal. Returns bounded tab state and never requires a browser key.",
     promptSnippet: "Open or attach to this Pi session's owned browser",
     promptGuidelines: ["When using the optional Pi browser adapter, call browser_open before browser_observe. Reuse the returned browser."],
     executionMode: "sequential",
@@ -286,7 +288,7 @@ export default async function terminalBrowserExtension(
   pi.registerTool({
     name: "browser_act",
     label: "Browser Act",
-    description: "Perform one native action in this Pi session's owned browser: upload, click, hover, drag, type, press_key, scroll, navigate, get_url, wait_for, or dialog. Dialog responses require the exact dialog_id returned by observe, tabs, resume, or an interrupted action and an explicit accept decision. Optional context_id must match that dialog. Never assume acceptance. Upload clicks a visible input or chooser button through AgentCursor, then assigns 1–16 regular project files (32 MiB each, 64 MiB total); secret paths and project escapes are rejected. Changing cwd does not change the companion project root; reopen the companion to adopt another project. Use exactly one ref or locator (native bounded step array) for click, type, upload or hover; drag accepts from_locator/to_locator. Ambiguous locators fail; scope or nth selects explicitly. wait_for accepts locator and actionable. Coordinates require the latest visual observation. Frame defaults to the selected observation; explicit frame must match it. Select another frame with browser_observe first. Drag endpoints must be in that same frame. Omit frame for context navigation, get_url, and dialog.",
+    description: "Perform one native action in this Pi session's owned browser: upload, click, hover, drag, type, press_key, scroll, navigate, get_url, wait_for, or dialog. Dialog responses require the exact dialog_id returned by observe, tabs, resume, or an interrupted action and an explicit accept decision. Optional context_id must match that dialog. Never assume acceptance. Upload clicks a visible input or chooser button through AgentCursor, then assigns 1–16 regular project files (32 MiB each, 64 MiB total); secret paths and project escapes are rejected. Changing cwd does not change the fixed launch project. Use /browser Settings to associate another explicit launch project. Use exactly one ref or locator (native bounded step array) for click, type, upload or hover; drag accepts from_locator/to_locator. Ambiguous locators fail; scope or nth selects explicitly. wait_for accepts locator and actionable. Coordinates require the latest visual observation. Frame defaults to the selected observation; explicit frame must match it. Select another frame with browser_observe first. Drag endpoints must be in that same frame. Omit frame for context navigation, get_url, and dialog. Scroll accepts deltas, not ref/locator/x/y target fields. Hover over the intended scroller first. Scroll uses the selected frame and current native pointer position, or viewport center if no pointer position exists. Scroll completion means input dispatch, not measured movement.",
     promptSnippet: "Perform one native companion-browser action",
     promptGuidelines: ["Use browser_act for exactly one action per call, then use browser_observe again when the page may have changed."],
     executionMode: "sequential",
@@ -299,10 +301,11 @@ export default async function terminalBrowserExtension(
   pi.registerTool({
     name: "browser_control",
     label: "Browser Control",
-    description: "Read, pause, or explicitly resume browser-wide agent control. Resume only when the user asks; it refreshes the internal observation. action blocking calls the same CLI's network blocker: blocking_action defaults to status. enable/disable and exact-host allow-site/block-site change the shared profile, not only this context. site is required for allow-site/block-site. clear-diagnostics affects the selected context; reload rebuilds the bundled filter cache without a network update. Mutations require current agent control and invalidate the adapter observation.",
+    description: "Read, pause, or explicitly select browser-wide control. action mode requires mode agent, human, or shared. Select Agent or Shared only when the user asks. Shared permits cooperative input and waits for conflicting human input. Mode selection clears cached observations. Legacy resume means Agent and refreshes the internal observation. action blocking calls the same CLI's network blocker: blocking_action defaults to status. enable/disable and exact-host allow-site/block-site change the shared profile, not only this context. site is required for allow-site/block-site. clear-diagnostics affects the selected context; reload rebuilds the bundled filter cache without a network update. Mutations require Agent or Shared and invalidate the adapter observation.",
     executionMode: "sequential",
     parameters: controlParameters,
     async execute(_id, params, signal, _update, ctx) {
+      if ((params.action === "mode") !== (params.mode !== undefined)) throw new Error("mode is required only for action mode");
       if (params.action === "blocking") {
         const action = params.blocking_action ?? "status";
         const needsSite = action === "allow-site" || action === "block-site";
@@ -312,7 +315,7 @@ export default async function terminalBrowserExtension(
       if (params.blocking_action !== undefined || params.site !== undefined || params.context_id !== undefined) {
         throw new Error("blocking_action, site, and context_id require action blocking");
       }
-      return result(await client.control(context(ctx, signal), params.action));
+      return result(await client.control(context(ctx, signal), params.action, params.mode));
     },
   });
 }
