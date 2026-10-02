@@ -40,7 +40,14 @@
       "path": "README.md",
       "sourceSha256": "cc6be274fb1d624e367c8d6f1924cef4fa63499d0d4141a72192d8442aecdda1",
       "mode": 420,
-      "sha256": "0177af4d3f4c3ef822d90f77efd8e3da15ef791d86b47b4f9a1b967d216f44aa",
+      "sha256": "2d5ccb41ba3a1e1dc386961ea81471f91f80c070e66f6069819751741279834b",
+      "modified": true
+    },
+    {
+      "path": "assets/blocking/easylist.txt",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "a7babc0fbb982dfb276cd5f3d80b194988d539a341d07bc73540c07488453e4f",
       "modified": true
     },
     {
@@ -72,6 +79,34 @@
       "modified": false
     },
     {
+      "path": "assets/licenses/easylist/NOTICE.txt",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "745849d91d2e80824a029b4a5ba4c09cd4ba117550e153db5a248e27bcb1fdbc",
+      "modified": true
+    },
+    {
+      "path": "assets/licenses/ghostery-adblocker/MPL-2.0.txt",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "9a5743e68333a1959b266bee6905ee8ef1250f799c01a5f1bd98211e00cddd3a",
+      "modified": true
+    },
+    {
+      "path": "assets/licenses/ghostery-adblocker/NOTICE.txt",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "c7b981d49f31f015f939463d702ce8fc640093b04ebfc52334981d8a14dc1903",
+      "modified": true
+    },
+    {
+      "path": "assets/licenses/ghostery-adblocker/tldts-MIT.txt",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "c64182d48160db948b6aa97a984f1a32974ce4d2053900361264cd33853796cb",
+      "modified": true
+    },
+    {
       "path": "assets/react-grab/logo.png",
       "sourceSha256": "f46519224adf48273c3968e8031e15e73cdbeb73a95cc4b0a914875c16d186f5",
       "mode": 420,
@@ -82,8 +117,8 @@
       "path": "browser/package.json",
       "sourceSha256": "abc7b3a21f2bf7f6f87d9b14444f858f2fe17405b9be3a90993acab4045b8277",
       "mode": 420,
-      "sha256": "abc7b3a21f2bf7f6f87d9b14444f858f2fe17405b9be3a90993acab4045b8277",
-      "modified": false
+      "sha256": "4d01a26dcb5c80f94e9ab34aa442ddb834db737112a741885f8b673668f26030",
+      "modified": true
     },
     {
       "path": "browser/src/agent/control.ts",
@@ -212,11 +247,32 @@
       "modified": false
     },
     {
+      "path": "browser/src/blocking/profile.ts",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "3ce04b31c4c58359bb334af5438d4131fe4edf3192dbbed20ab3c362538e11cb",
+      "modified": true
+    },
+    {
+      "path": "browser/src/blocking/session.ts",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "448185c9937438c0b0c328d8a10b845cb6d578100b4559977e598d3f0ee5c33e",
+      "modified": true
+    },
+    {
+      "path": "browser/src/blocking/types.ts",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "5b1cb8209a18a130bd38fabfe8634d017b07b1cdf05faa0f02ac364a6250bfcf",
+      "modified": true
+    },
+    {
       "path": "browser/src/daemon.ts",
       "sourceSha256": "444a06f0707985b2042a04bc5d2f56e68290a225079d5bbaa797a75d3fe455b0",
       "mode": 420,
-      "sha256": "444a06f0707985b2042a04bc5d2f56e68290a225079d5bbaa797a75d3fe455b0",
-      "modified": false
+      "sha256": "b64f335c38c8255432b1bc5e4e171d6b20a657ad2515bc215db6d70294420076",
+      "modified": true
     },
     {
       "path": "browser/src/grab/grab.ts",
@@ -236,29 +292,29 @@
       "path": "browser/src/main.tsx",
       "sourceSha256": "846ec088cc492f1f64118001ce8025977b187655453aebf5f05a7b5a438c535b",
       "mode": 420,
-      "sha256": "846ec088cc492f1f64118001ce8025977b187655453aebf5f05a7b5a438c535b",
-      "modified": false
+      "sha256": "76753632a8db62390907d2cbbcaa43c423d99be9d25bd1abdcb9f3f1afbd627a",
+      "modified": true
     },
     {
       "path": "browser/src/page/browser-session.ts",
       "sourceSha256": "4d20c3e48c836cd6b8bfba0f10ff7c80a34e83c73473b266f7582877de543410",
       "mode": 420,
-      "sha256": "4d20c3e48c836cd6b8bfba0f10ff7c80a34e83c73473b266f7582877de543410",
-      "modified": false
+      "sha256": "95a9b6b0fa933bed54aa5c65374f4b104556daac8bd9ee9992d53f1a88d0e9ae",
+      "modified": true
     },
     {
       "path": "browser/src/page/controller.ts",
       "sourceSha256": "4da2062762f42f70a436cd76c16c57259f1e3017fbb096d664744447bd8af7a2",
       "mode": 420,
-      "sha256": "4da2062762f42f70a436cd76c16c57259f1e3017fbb096d664744447bd8af7a2",
-      "modified": false
+      "sha256": "c1b72893352df563296cb322ae0090b4b224460626e402c16118b25a9b7d2eff",
+      "modified": true
     },
     {
       "path": "browser/src/page/cursor.ts",
       "sourceSha256": "20a06f037e2beffc915b3b6de01ac6381b895d1a2cdd7166eb5d4a542f9aa205",
       "mode": 420,
-      "sha256": "20a06f037e2beffc915b3b6de01ac6381b895d1a2cdd7166eb5d4a542f9aa205",
-      "modified": false
+      "sha256": "b809dcbffd238fd45e3a21a8f2e69b47c85544b663bf2d4e0d5a0dd5b174eaf1",
+      "modified": true
     },
     {
       "path": "browser/src/page/devtools.ts",
@@ -306,8 +362,8 @@
       "path": "browser/src/page/popup.ts",
       "sourceSha256": "2c973561b4c192933a03b9c1b4f9118af867d73fe15592ca66d535246f56c80f",
       "mode": 420,
-      "sha256": "2c973561b4c192933a03b9c1b4f9118af867d73fe15592ca66d535246f56c80f",
-      "modified": false
+      "sha256": "6f473c3e190b8cb297b222431c28be3887b245fdc870eebba868945c7bb8ea22",
+      "modified": true
     },
     {
       "path": "browser/src/page/types.ts",
@@ -383,8 +439,8 @@
       "path": "browser/src/registry.ts",
       "sourceSha256": "807a5a0aee7e5140e03d5f281350ff1326d988c9619dc19a1e939e9e15bf1136",
       "mode": 420,
-      "sha256": "807a5a0aee7e5140e03d5f281350ff1326d988c9619dc19a1e939e9e15bf1136",
-      "modified": false
+      "sha256": "e101f0ddbec4568d054cca96c48dcb67b327243885c60207d19c88c00565f515",
+      "modified": true
     },
     {
       "path": "browser/src/session/fuzzy.ts",
@@ -411,8 +467,8 @@
       "path": "browser/src/session/session.tsx",
       "sourceSha256": "a3abe8c042e55ccb152f7aabab04b98f523851fddafba93e81c8d839a170cf4a",
       "mode": 420,
-      "sha256": "a3abe8c042e55ccb152f7aabab04b98f523851fddafba93e81c8d839a170cf4a",
-      "modified": false
+      "sha256": "6abedcdd862a0dabe52cedbfbbba2f123a18ca9cf620ebbd3a7688cc17436351",
+      "modified": true
     },
     {
       "path": "browser/src/session/suggest.ts",
@@ -425,8 +481,8 @@
       "path": "browser/src/session/tabs.ts",
       "sourceSha256": "2dfe42d84d12c22f53fb58505a22e6de66494ba7c6840c929701ffd2ac6af268",
       "mode": 420,
-      "sha256": "2dfe42d84d12c22f53fb58505a22e6de66494ba7c6840c929701ffd2ac6af268",
-      "modified": false
+      "sha256": "cca981d405adfe148e1c8346a4d79b516c66b5f9035b15a150509700a7a7f5ce",
+      "modified": true
     },
     {
       "path": "browser/src/ui/agent-overlay.tsx",
@@ -439,8 +495,8 @@
       "path": "browser/src/ui/chrome.tsx",
       "sourceSha256": "3da27e0fcbe4673e03dde442caed73197dfa4c6a2f78b1ff694f5ae154693f4a",
       "mode": 420,
-      "sha256": "3da27e0fcbe4673e03dde442caed73197dfa4c6a2f78b1ff694f5ae154693f4a",
-      "modified": false
+      "sha256": "f68cfead524ce9892c4241a27b2b717e336524a0a2df9ac3c347a16a996113b2",
+      "modified": true
     },
     {
       "path": "browser/src/ui/context-menu.tsx",
@@ -604,6 +660,13 @@
       "modified": false
     },
     {
+      "path": "browser/test/fixtures/blocking-electron.cjs",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "d88c8259eb7f57492c8f6e0f228291a90cfaa3048925beccc82e8984c330e53a",
+      "modified": true
+    },
+    {
       "path": "browser/test/fixtures/contexts-electron.cjs",
       "sourceSha256": "4ff22ce0312aef1984dfd066618c4f87d467651e12d44cc0f4d39d8e8d800556",
       "mode": 420,
@@ -691,8 +754,8 @@
       "path": "browser/test/run-electron.cjs",
       "sourceSha256": "6f9036e4479fd47c4ae1155a52ef45aba3ee940a17e48ca72fdd9ec2d88ab4c0",
       "mode": 420,
-      "sha256": "6f9036e4479fd47c4ae1155a52ef45aba3ee940a17e48ca72fdd9ec2d88ab4c0",
-      "modified": false
+      "sha256": "798a134ec78141d3b898c83d18e1453fcc784823b24f4ba61be3a4a81d2ad396",
+      "modified": true
     },
     {
       "path": "browser/test/semantic.test.js",
@@ -730,32 +793,25 @@
       "modified": false
     },
     {
-      "path": "cli/src/action.ts",
-      "sourceSha256": "3e8b6b6cd4f7cbd6a4ec61befa42b4280736b489a8c38ca2a5e490ee391fead4",
-      "mode": 420,
-      "sha256": "3e8b6b6cd4f7cbd6a4ec61befa42b4280736b489a8c38ca2a5e490ee391fead4",
-      "modified": false
-    },
-    {
       "path": "cli/src/agent.ts",
       "sourceSha256": "9d666475a98b60289835cfb3d2f406ee0b2b6dff9b9f455a9785277441d975df",
       "mode": 420,
-      "sha256": "9d666475a98b60289835cfb3d2f406ee0b2b6dff9b9f455a9785277441d975df",
-      "modified": false
+      "sha256": "4fc2127af1db03f63cac628daff3c452f0ea7477786732701eb4ab1a463a3127",
+      "modified": true
     },
     {
       "path": "cli/src/companion.ts",
       "sourceSha256": "15f1e9e94440571183822013ce7e3452e6f79e4c17b295f5d1f46617c1d1ff9a",
       "mode": 420,
-      "sha256": "15f1e9e94440571183822013ce7e3452e6f79e4c17b295f5d1f46617c1d1ff9a",
-      "modified": false
+      "sha256": "55df5cbadff720a04708c31e3b281f1afdbd9c597f718c6cc6adc23d770d0e43",
+      "modified": true
     },
     {
       "path": "cli/src/control.ts",
       "sourceSha256": "06709400395f751d8d4f44570804ca8dd98cef337420f34268cb8bacf6e9d80b",
       "mode": 420,
-      "sha256": "06709400395f751d8d4f44570804ca8dd98cef337420f34268cb8bacf6e9d80b",
-      "modified": false
+      "sha256": "fc767aeb3b9c8295931684b1c60835122002e3d20beb95abc7a4532aac72d782",
+      "modified": true
     },
     {
       "path": "cli/src/daemon-status.ts",
@@ -768,8 +824,8 @@
       "path": "cli/src/doctor.ts",
       "sourceSha256": "05c65ee7ab06f17d9bcb3f78d0bbe57938746460bc57bc6115ee0d3c26075d0e",
       "mode": 420,
-      "sha256": "05c65ee7ab06f17d9bcb3f78d0bbe57938746460bc57bc6115ee0d3c26075d0e",
-      "modified": false
+      "sha256": "763a1bc4d5812ec601206b18001e31ffe0004197644b64512708e9db6d75d73f",
+      "modified": true
     },
     {
       "path": "cli/src/editors.ts",
@@ -779,18 +835,25 @@
       "modified": false
     },
     {
+      "path": "cli/src/errors.ts",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "0bbbfb94fd592145bf24b5280ff02ab694b90d25019d767ef38cb4bacd1003ae",
+      "modified": true
+    },
+    {
       "path": "cli/src/help.ts",
       "sourceSha256": "b452384dfb4ca3af79353815d52495845c5280a4878892d69cffaa9181d87ec2",
       "mode": 420,
-      "sha256": "b452384dfb4ca3af79353815d52495845c5280a4878892d69cffaa9181d87ec2",
-      "modified": false
+      "sha256": "8cdc025d39aa0036b7c9db6cb93bd2029e6a6639b7acc9039849a0850aee81f5",
+      "modified": true
     },
     {
       "path": "cli/src/instances.ts",
       "sourceSha256": "f030ebac1f0e1cbafb3dc5b71603f28f09673b388c22d325fe3faadc50ff2b1f",
       "mode": 420,
-      "sha256": "f030ebac1f0e1cbafb3dc5b71603f28f09673b388c22d325fe3faadc50ff2b1f",
-      "modified": false
+      "sha256": "ad5268a0bb560ed701ddda12f810b5f84641813935d5c999069bb5a0026ae94f",
+      "modified": true
     },
     {
       "path": "cli/src/interop.ts",
@@ -810,8 +873,8 @@
       "path": "cli/src/main.ts",
       "sourceSha256": "fd375e711919560f7163976f8f3b2bd6060d308948aa4a0b7486eeef5250c937",
       "mode": 420,
-      "sha256": "fd375e711919560f7163976f8f3b2bd6060d308948aa4a0b7486eeef5250c937",
-      "modified": false
+      "sha256": "7ab4100250c9cc85545287537d5376e4d46550e0a6e4939de93e844c94914861",
+      "modified": true
     },
     {
       "path": "cli/src/profile-ownership.ts",
@@ -833,6 +896,13 @@
       "mode": 420,
       "sha256": "b49d9c31837a65c97a1fe593115ce4fd196e0df9f6e2692b418cf233c497f0b2",
       "modified": false
+    },
+    {
+      "path": "cli/src/session.ts",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "9222299a448e748b60a8a878c4ffa580f7dbd03654cfeabee99d4a3c1981f484",
+      "modified": true
     },
     {
       "path": "cli/src/setup.ts",
@@ -915,8 +985,8 @@
       "path": "cli/test/semantic.test.js",
       "sourceSha256": "92d4ccd4dc55e71704b54d4725a5608849d21799c71a1a8b2f184eb3a9c68f4c",
       "mode": 420,
-      "sha256": "92d4ccd4dc55e71704b54d4725a5608849d21799c71a1a8b2f184eb3a9c68f4c",
-      "modified": false
+      "sha256": "057b93d5d039ce51a0fb1e79bb7281226f9c92dbc5949c6c439a19b50d7a3570",
+      "modified": true
     },
     {
       "path": "cli/test/startup.test.js",
@@ -931,6 +1001,27 @@
       "mode": 420,
       "sha256": "17599b67285446adb24621df7b8e9f3ede2d4e3388046a9e57d26243e91ca557",
       "modified": false
+    },
+    {
+      "path": "docs/agent-control.md",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "a20f2aeb7cdafd6f6132d84e2f961e8f457e29b6b3b1a2932968ee553bf494e1",
+      "modified": true
+    },
+    {
+      "path": "docs/development.md",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "601b8653c7eefe6ece354b0cd57d0f15236687172175fc40695497fcd4ce3eab",
+      "modified": true
+    },
+    {
+      "path": "docs/installation.md",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "ae0beb3bf24b6caf4e9bf553f08bdaca88582043d9c640b5f9575a25c1da87d0",
+      "modified": true
     },
     {
       "path": "engine/Cargo.lock",
@@ -1251,8 +1342,8 @@
       "path": "engine/crates/pixel-core/src/terminal.rs",
       "sourceSha256": "2cdb35d7c9e9e0439486676e001477bd3e2250a8b044ef096a21e853ffcb6845",
       "mode": 420,
-      "sha256": "2cdb35d7c9e9e0439486676e001477bd3e2250a8b044ef096a21e853ffcb6845",
-      "modified": false
+      "sha256": "15c0c64f54bf0b3510f3f83b27f5a4e75d20a1a9c1fce55f17ee273ee210bb18",
+      "modified": true
     },
     {
       "path": "engine/crates/pixel-core/src/text_input.rs",
@@ -1815,24 +1906,31 @@
       "modified": true
     },
     {
+      "path": "pi-extension/README.md",
+      "sourceSha256": null,
+      "mode": 420,
+      "sha256": "3a5786e5c7842f3f4404d623d709e7c45be078bf387cf3d5070830460ad7aecc",
+      "modified": true
+    },
+    {
       "path": "pi-extension/package.json",
       "sourceSha256": "6cd63e89ebe4bc3222b5788b080cb4f963d78d4d48943c812d95965f3555ba54",
       "mode": 420,
-      "sha256": "6cd63e89ebe4bc3222b5788b080cb4f963d78d4d48943c812d95965f3555ba54",
-      "modified": false
+      "sha256": "68b40a909e58aefa1a56b23173d4228c89d2ff18ee960060d3dca23757bbc157",
+      "modified": true
     },
     {
       "path": "pi-extension/src/client.ts",
       "sourceSha256": "7669a83fa3eed0dd7a4206e8b48c355ff95275a59ec5e38383197b8b2531de3a",
       "mode": 420,
-      "sha256": "7669a83fa3eed0dd7a4206e8b48c355ff95275a59ec5e38383197b8b2531de3a",
-      "modified": false
+      "sha256": "912b4990fe43cb6b0b2cb8791ce47f97c2ba024381b45c695889ca615c82aead",
+      "modified": true
     },
     {
       "path": "pi-extension/src/extension.ts",
       "sourceSha256": "cafcb2e98c1fadc9a74d3e7a98602d32399cae837377f4cb3ffa15d015ba48c8",
       "mode": 420,
-      "sha256": "59be987c2b28afd196ab13e1804ad390bf72817d72ad0e534e29341534e53ff3",
+      "sha256": "1ae6e0302108060cdd764c6bf67fce7117ad0c72c71cb23e52c574a78d098a58",
       "modified": true
     },
     {
@@ -1860,14 +1958,14 @@
       "path": "pi-extension/test/client.test.mjs",
       "sourceSha256": "48682a215e709fa4b6ad6b709ebb121cdf26a211f7d768b035c73fbeb837fa05",
       "mode": 420,
-      "sha256": "48682a215e709fa4b6ad6b709ebb121cdf26a211f7d768b035c73fbeb837fa05",
-      "modified": false
+      "sha256": "1a8b553fdb2e806df9a03209c68c992726ff67094ca8dadaabe252cfedd2c6fc",
+      "modified": true
     },
     {
       "path": "pi-extension/test/extension.test.mjs",
       "sourceSha256": "8d8974a1316f478974e0352a237e429c9d0ca30983442624795d348e0eb1c6ee",
       "mode": 420,
-      "sha256": "9eee1a35f3b62c6cb58b5e9c5c0455a7917181281fde95aeaba526b5689ba177",
+      "sha256": "0bf5736a97afe2f317039be4c5f00b33a81e5489e35ced26d7d2624ed527ac46",
       "modified": true
     },
     {
@@ -1881,21 +1979,14 @@
       "path": "pnpm-lock.yaml",
       "sourceSha256": "460e2ab4397869a3a880822d18ef117480822feac4901311e05c0269dc24ca62",
       "mode": 420,
-      "sha256": "460e2ab4397869a3a880822d18ef117480822feac4901311e05c0269dc24ca62",
-      "modified": false
+      "sha256": "7a8af215404508008f699f49dc5f21f7fa347ae6459a1c834a542bbf635b425d",
+      "modified": true
     },
     {
       "path": "pnpm-workspace.yaml",
       "sourceSha256": "4b43583a0c77ad6fd7dc36378b94f1c8acc23d08435bbcd438601bb9b55aad4c",
       "mode": 420,
       "sha256": "4b43583a0c77ad6fd7dc36378b94f1c8acc23d08435bbcd438601bb9b55aad4c",
-      "modified": false
-    },
-    {
-      "path": "scripts/agent-browser.sh",
-      "sourceSha256": "5775b8c60625eca949b3fe6e6d4d67e0dd50575c0afd8e1b9fea242ff4cd1fa6",
-      "mode": 493,
-      "sha256": "5775b8c60625eca949b3fe6e6d4d67e0dd50575c0afd8e1b9fea242ff4cd1fa6",
       "modified": false
     },
     {
@@ -1923,15 +2014,15 @@
       "path": "scripts/dist-manifest.mjs",
       "sourceSha256": "6f020ba70a74a9fa7bba26bd1779ba4fb2fb35ee46641fb5c506b9bcb25c3355",
       "mode": 420,
-      "sha256": "6dc6e4221ceaf9a18cb75d3bf1c56bbc4979a58b2d540bb35abf99a492cddf95",
+      "sha256": "d6090b96e2ba557ddb842d4e30097e56b29377c047feb8db589f17dc3f9f70ff",
       "modified": true
     },
     {
       "path": "scripts/dist-seal.mjs",
       "sourceSha256": "5e5c6aee9a6600879a9568b30a222540f80264e905da9783661d192920d93dde",
       "mode": 420,
-      "sha256": "5e5c6aee9a6600879a9568b30a222540f80264e905da9783661d192920d93dde",
-      "modified": false
+      "sha256": "e337a552c7b36d917b88dab4e2e5850e635c3a5256db6d5cbbc0b29f37600b94",
+      "modified": true
     },
     {
       "path": "scripts/entitlements.plist",
@@ -1972,28 +2063,28 @@
       "path": "scripts/install-manager.mjs",
       "sourceSha256": "5e045fbb6a8a7e83e8d091f68e6f74ec86020f79d21ab2a2063a833202ad96b5",
       "mode": 420,
-      "sha256": "5e045fbb6a8a7e83e8d091f68e6f74ec86020f79d21ab2a2063a833202ad96b5",
-      "modified": false
+      "sha256": "ae4316c51909ed1e10c9ea08814f378f0fa4bd13f745738e92e15910715fc398",
+      "modified": true
     },
     {
       "path": "scripts/install.sh",
       "sourceSha256": "691f013f8ebf89b4955732416b64e2cd37c1ad6bd74f4c90e4332b17041d6e9a",
       "mode": 493,
-      "sha256": "691f013f8ebf89b4955732416b64e2cd37c1ad6bd74f4c90e4332b17041d6e9a",
-      "modified": false
+      "sha256": "541c48a0d2695ce87f65ae3a20802bbbf246f3c2a558691c0b6896e010d2456e",
+      "modified": true
     },
     {
       "path": "scripts/macos-sign.sh",
       "sourceSha256": "fed1b0470a223af4335d08d8338defe0be378d93a4238a4a0cf55ad0d215ad85",
       "mode": 493,
-      "sha256": "fed1b0470a223af4335d08d8338defe0be378d93a4238a4a0cf55ad0d215ad85",
-      "modified": false
+      "sha256": "c915fb5bb462eb6798562b4ae5b934b58ab051fdb6f249d98b943fdca7c38270",
+      "modified": true
     },
     {
       "path": "scripts/release.sh",
       "sourceSha256": "9dc6e8f10329c050ab66b07020b000ea0b5ffcbc858deb33f1c42f4e8a07e856",
       "mode": 493,
-      "sha256": "83ee96423ab7032d66901071f92c45526a440e6788c11b0bcfcc75ecf3d48ef2",
+      "sha256": "27deff3cb2717b6dda2f70f66b3fe016fd3a5abcf057a642c76639092146cedc",
       "modified": true
     },
     {
@@ -2014,15 +2105,15 @@
       "path": "scripts/test/ci-dist.sh",
       "sourceSha256": "8e6455c6712a1ae1eda66f9dd400d2aac844535a9586f3bef9594f13567120fc",
       "mode": 420,
-      "sha256": "8e6455c6712a1ae1eda66f9dd400d2aac844535a9586f3bef9594f13567120fc",
-      "modified": false
+      "sha256": "f4029378aec3ed4cbea6497bda9917e3d45f22907a4cafa11ad4412781bc7903",
+      "modified": true
     },
     {
       "path": "scripts/test/dist-fixture.mjs",
       "sourceSha256": "ae71a945a4eba794cdef28059f0f30595c2406e3aeda37309e676372d4f504e6",
       "mode": 420,
-      "sha256": "ae71a945a4eba794cdef28059f0f30595c2406e3aeda37309e676372d4f504e6",
-      "modified": false
+      "sha256": "a9e9aa753561f0d8cd09f7e4a12a5431d51e305642a9e35fe6ab4dc0f455670f",
+      "modified": true
     },
     {
       "path": "scripts/test/dist-sandbox.mjs",
@@ -2049,8 +2140,8 @@
       "path": "scripts/test/install-manager.test.mjs",
       "sourceSha256": "76738c31eee563b74b5385b395b5519b8b78a89611b15c0201e763a55e1753c7",
       "mode": 420,
-      "sha256": "76738c31eee563b74b5385b395b5519b8b78a89611b15c0201e763a55e1753c7",
-      "modified": false
+      "sha256": "84f30e16e6591100adf8369ef715ee0b62190e429d8fcaad7368ecb21935b60a",
+      "modified": true
     },
     {
       "path": "scripts/test/packaged-pi.mjs",
@@ -2126,7 +2217,7 @@
       "path": "scripts/test/smoke-dist.mjs",
       "sourceSha256": "922683a9df7f6638ff35807655f7abdf8458f2b8a7af508076bafc608fc08f3a",
       "mode": 420,
-      "sha256": "98a9f21547c683a361f83a6618d9de6c904c9c708c0494732fa9df73310c269e",
+      "sha256": "06f0c3145d2902ce210bdb736659bd2b8e698376090e208698f12bd566c3f595",
       "modified": true
     },
     {
@@ -2147,15 +2238,15 @@
       "path": "skill/terminal-browser/SKILL.template.md",
       "sourceSha256": "fd3b2ae04ad254dbef1699b06c6dabb3642d0696d87bac146f01e529daf1d5e5",
       "mode": 420,
-      "sha256": "fd3b2ae04ad254dbef1699b06c6dabb3642d0696d87bac146f01e529daf1d5e5",
-      "modified": false
+      "sha256": "1addae95585ceb537593421b3e77633d6392f57e2aa23149f7fa2b1aca37d2e7",
+      "modified": true
     },
     {
       "path": "skill/terminal-browser/overlays/codex.md",
       "sourceSha256": "890d8d8e5d6e991ed625906caf5486bae2186ad64ac29a6e589eac9c23d62bc6",
       "mode": 420,
-      "sha256": "890d8d8e5d6e991ed625906caf5486bae2186ad64ac29a6e589eac9c23d62bc6",
-      "modified": false
+      "sha256": "7d20fb8fa7076c2c0c2ecf6870275894f0f999db58fe3237732ca79b73e0aa0d",
+      "modified": true
     },
     {
       "path": "store/drizzle.config.ts",
@@ -2273,8 +2364,8 @@
       "path": "store/src/index.ts",
       "sourceSha256": "3fb1ddaa291efedc956ad4eda5fd4d11957098a33e511844290128d640259e37",
       "mode": 420,
-      "sha256": "3fb1ddaa291efedc956ad4eda5fd4d11957098a33e511844290128d640259e37",
-      "modified": false
+      "sha256": "7cf1879551058fafd46adda8575193934f72330cc8880bcbf1f362415095b2b0",
+      "modified": true
     },
     {
       "path": "store/src/installation.ts",
@@ -2315,8 +2406,8 @@
       "path": "store/src/owner.ts",
       "sourceSha256": "c255f556b854ee2e828f7a6756e5489d65d4764e7afc4429e9c12e7ab146770a",
       "mode": 420,
-      "sha256": "c255f556b854ee2e828f7a6756e5489d65d4764e7afc4429e9c12e7ab146770a",
-      "modified": false
+      "sha256": "9815f9ef011a57cc8c41007c83f2bb5c32bd2936077c50cecd452f36c4c0912f",
+      "modified": true
     },
     {
       "path": "store/src/paths.ts",
@@ -2343,8 +2434,8 @@
       "path": "store/test/owner.test.js",
       "sourceSha256": "8ff53c875f55f48a2095cf80af2799790de93966a4ddaf34c2cf5b0b02f8d111",
       "mode": 420,
-      "sha256": "8ff53c875f55f48a2095cf80af2799790de93966a4ddaf34c2cf5b0b02f8d111",
-      "modified": false
+      "sha256": "4017db47124b9a4fc55ae364bf456855bb2e2091ff5ab64e213d37944f158c46",
+      "modified": true
     },
     {
       "path": "store/test/startup-attempt.test.js",
@@ -2588,9 +2679,18 @@
       "path": "upstreams.lock.json",
       "sourceSha256": "16a7ac0bf821f5514358e46fe25c84e8ba75e4d4b7c6ca86a91038b7045b1d1d",
       "mode": 420,
-      "sha256": "16a7ac0bf821f5514358e46fe25c84e8ba75e4d4b7c6ca86a91038b7045b1d1d",
-      "modified": false
+      "sha256": "7a5935c9a9fbfbda2aebb1f734e3935410495bb3b07093084f4edf5a3e41ebd6",
+      "modified": true
     }
   ],
-  "removed": []
+  "removed": [
+    {
+      "path": "cli/src/action.ts",
+      "sourceSha256": "3e8b6b6cd4f7cbd6a4ec61befa42b4280736b489a8c38ca2a5e490ee391fead4"
+    },
+    {
+      "path": "scripts/agent-browser.sh",
+      "sourceSha256": "5775b8c60625eca949b3fe6e6d4d67e0dd50575c0afd8e1b9fea242ff4cd1fa6"
+    }
+  ]
 }

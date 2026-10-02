@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const prefix = 'vendor/terminal-browser/';
 const provenancePath = prefix + 'copy-provenance.json';
-const git = (...args) => execFileSync('git', args, { cwd: root });
+const git = (...args) => execFileSync('git', args, { cwd: root, maxBuffer: 32 * 1024 * 1024 });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 // Hash the intended indexed source, never untracked output or dependencies.
