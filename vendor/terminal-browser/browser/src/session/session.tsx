@@ -378,14 +378,15 @@ class Session {
         },
         onDevtoolsChanged: () => this.syncDevtoolsLayout(),
         onDevtoolsAction: (action) => {
-          this.control.takeHuman("devtools");
+          this.humanChange("devtools");
           if (action === "close") this.tabs.activeController?.closeDevtools();
           else this.setDevtoolsDockSide(action === "dock-bottom" ? "bottom" : "right");
         },
         onPageMenu: (params) => this.openPageMenu(params),
         onTabOpened: (opener, url) => this.records.get(opener)?.linkOpened(url),
         onTabClosed: (id) => {
-          if (this.tabs.count <= 1) this.shutdown();
+          if (this.tabs.sessionClosePending) this.tabs.removeClosed(id);
+          else if (this.tabs.count <= 1) this.shutdown();
           else this.tabs.removeClosed(id);
         },
         tabSwitchAllowed: () => !this.activeRecord()?.reviewing,
@@ -415,8 +416,44 @@ class Session {
     );
   }
 
+  private physicalTail: Promise<void> = Promise.resolve();
+  private chromeReservation = false;
+  private pageMenuIndex = 0;
+
+  beginChromeInput(): void { this.control.input.beginChrome(this.tabs.visibleContextId || null); }
+  endChromeInput(): void { this.control.input.endChrome(); }
+
+  private syncChromeReservation(): void {
+    const open = !!(this.pageMenu || this.palette || this.newTab || this.urlEditOpen || this.findOpen ||
+      this.tabs.activeController?.devtoolsFocused || this.dividerDragging || this.activeRecord()?.reviewing);
+    if (open === this.chromeReservation) return;
+    this.chromeReservation = open;
+    if (open) this.beginChromeInput();
+    else this.endChromeInput();
+  }
+
+  private humanChange(reason: "pointer" | "wheel" | "keyboard" | "paste" | "navigation" | "tabs" | "devtools"): void {
+    if (this.control.state !== "shared") this.control.takeHuman(reason);
+    else if (reason === "navigation" || reason === "tabs" || reason === "devtools") this.invalidateAgentControl();
+  }
+
+  private humanMutation(reason: "navigation" | "tabs" | "devtools" | "pointer", action: () => void): void {
+    this.humanChange(reason);
+    void this.forwardHuman(this.tabs.releaseAgentInput(), action);
+  }
+
+  private forwardHuman(priority: Promise<void>, action: () => void | Promise<void>): Promise<void> {
+    const contextId = this.tabs.visibleContextId;
+    this.physicalTail = this.physicalTail.then(async () => {
+      await priority;
+      if (contextId === this.tabs.visibleContextId) await action();
+    }).catch(() => { this.showToast("Native input could not be submitted. It was not replayed.", "failed"); });
+    return this.physicalTail;
+  }
+
   private releaseBrowserInput() {
     this.tabs.eachController((controller) => controller.releaseAllInput());
+    this.control.input.resetPhysical();
   }
 
   private invalidateAgentControl() {
@@ -437,24 +474,32 @@ class Session {
       keyEventTypes: true,
       onKey: (event) => this.handleKey(event),
       onPaste: (text) => {
-        this.control.takeHuman("paste");
-        if (this.tabs.pendingDialog) return;
+        if (!this.chromeReservation) this.humanChange("paste");
         const browser = this.tabs.activeController;
-        if (browser?.popup) browser.popup.input.paste(text);
-        else if (this.browserFocused && browser?.devtoolsFocused) {
-          browser.devtools?.input.paste(text);
-        } else if (this.browserFocused) browser?.paste(text);
+        this.forwardHuman(this.control.input.paste(this.tabs.visibleContextId), () => {
+          if (this.tabs.pendingDialog) return;
+          if (browser?.popup) return browser.popup.input.paste(text);
+          if (this.browserFocused && browser?.devtoolsFocused) return browser.devtools?.input.paste(text);
+          if (this.browserFocused) return browser?.paste(text);
+        }).finally(() => this.control.input.finishPaste());
       },
       onPasteImage: (image) => {
-        this.control.takeHuman("paste");
-        if (this.tabs.pendingDialog) return;
+        if (!this.chromeReservation) this.humanChange("paste");
         const browser = this.tabs.activeController;
-        if (browser?.popup) browser.popup.input.pasteImage(image);
-        else if (this.browserFocused && browser?.devtoolsFocused) {
-          browser.devtools?.input.pasteImage(image);
-        } else if (this.browserFocused) browser?.pasteImage(image);
+        this.forwardHuman(this.control.input.paste(this.tabs.visibleContextId), () => {
+          if (this.tabs.pendingDialog) return;
+          if (browser?.popup) return browser.popup.input.pasteImage(image);
+          if (this.browserFocused && browser?.devtoolsFocused) return browser.devtools?.input.pasteImage(image);
+          if (this.browserFocused) return browser?.pasteImage(image);
+        }).finally(() => this.control.input.finishPaste());
       },
-      onFocus: (focused) => this.tabs.activeController?.setActive(focused),
+      onFocus: (focused) => {
+        this.tabs.activeController?.setActive(focused);
+        if (!focused) {
+          this.tabs.eachController(controller => controller.releasePhysicalInput());
+          this.control.input.resetPhysical();
+        }
+      },
       onResize: () => {
         this.followCellZoom();
         this.recalculateLayout();
@@ -476,6 +521,7 @@ class Session {
     initOffscreenMode(this.root.sharedTextures);
     this.fontId = await this.root.registerFont(bundledFontPath());
     this.applyKeyBindings(this.root.info.kittyKeyboard);
+    this.control.input.setKeyReleaseReporting(this.root.info.kittyKeyboard);
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
     this.followCellZoom();
@@ -803,6 +849,7 @@ class Session {
   }
 
   private render() {
+    if (this.tabs) this.syncChromeReservation();
     if (!this.root || !this.layout || !this.popupSurface || !this.surfaceLayout) return;
     if (!this.devtoolsSurface) return;
     const pageSurface = this.tabs.activeController?.surface;
@@ -829,7 +876,7 @@ class Session {
         surfaceLayout={this.surfaceLayout}
         dialog={this.tabs.pendingDialog}
         answerDialog={(id, accept, text) => {
-          this.control.takeHuman("keyboard");
+          this.humanChange("keyboard");
           void this.tabs.answerHumanDialog(id, accept, text).catch(error => this.showToast(String(error), "failed"));
         }}
         popup={this.popupView()}
@@ -861,52 +908,41 @@ class Session {
   }
 
   private readonly actions: ChromeActions = {
-    back: () => {
-      this.control.takeHuman("navigation");
-      this.tabs.activeController?.back();
-    },
-    forward: () => {
-      this.control.takeHuman("navigation");
-      this.tabs.activeController?.forward();
-    },
-    reload: () => {
-      this.control.takeHuman("navigation");
+    back: () => this.humanMutation("navigation", () => this.tabs.activeController?.back()),
+    forward: () => this.humanMutation("navigation", () => this.tabs.activeController?.forward()),
+    reload: () => this.humanMutation("navigation", () => {
       this.activeRecord()?.reloaded();
       this.tabs.activeController?.reload();
-    },
-    urlEdit: () => {
-      this.control.takeHuman("navigation");
-      this.openUrlEdit();
-    },
+    }),
+    urlEdit: () => this.openUrlEdit(),
     urlEditCancel: () => this.closeUrlEdit(),
-    urlSubmit: (text) => {
-      this.control.takeHuman("navigation");
+    urlSubmit: (text) => this.humanMutation("navigation", () => {
       this.closeUrlEdit();
       if (text.trim()) this.tabs.activeController?.navigate(searchOrUrl(text, this.ctx.cwd));
-    },
+    }),
     pointer: (event) => {
-      this.browserFocused = true;
-      if (event.kind === "down") this.control.takeHuman("pointer");
-      else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.activeRecord()?.pointerSample(event);
-      this.tabs.activeController?.pointer(event);
+      if (event.kind === "move" && this.control.agentEligible && this.control.busy && !this.control.input.pointerHeld) return;
+      if (event.kind === "down") { this.browserFocused = true; this.humanChange("pointer"); }
+      const priority = this.control.input.pointer(event, this.tabs.visibleContextId);
+      const browser = this.tabs.activeController;
+      this.forwardHuman(priority, () => { this.activeRecord()?.pointerSample(event); browser?.pointer(event); });
     },
     wheel: (event) => {
-      this.browserFocused = true;
-      if (event.deltaX !== 0 || event.deltaY !== 0) this.control.takeHuman("wheel");
-      if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.tabs.activeController?.wheel(event);
+      if (event.deltaX === 0 && event.deltaY === 0) return;
+      this.humanChange("wheel");
+      const browser = this.tabs.activeController;
+      this.forwardHuman(this.control.input.wheel(this.tabs.visibleContextId), () => browser?.wheel(event));
     },
     pageHover: (hovering) => {
       this.pageHover = hovering;
       this.syncCursor();
     },
     findChange: (text) => {
-      this.control.takeHuman("keyboard");
+      this.humanChange("keyboard");
       this.tabs.activeController?.find(text);
     },
     findNext: (forward) => {
-      this.control.takeHuman("keyboard");
+      this.humanChange("keyboard");
       this.tabs.activeController?.findNext(forward);
     },
     findClose: () => this.closeFind(),
@@ -917,54 +953,44 @@ class Session {
       this.render();
     },
     paletteRun: (index) => {
-      this.control.takeHuman("pointer");
+      this.humanChange("pointer");
       this.runPalette(index);
     },
     paletteClose: () => this.closePalette(),
-    tabSwitch: (id) => {
-      this.control.takeHuman("tabs");
-      this.tabs.activate(id);
-    },
-    tabClose: (id) => {
-      this.control.takeHuman("tabs");
-      this.closeOrShutdown(id);
-    },
+    tabSwitch: (id) => this.humanMutation("tabs", () => { this.tabs.activate(id); }),
+    tabClose: (id) => this.humanMutation("tabs", () => this.closeOrShutdown(id)),
     tabNew: () => {
-      this.control.takeHuman("tabs");
+      this.humanChange("tabs");
       this.openNewTabModal();
     },
-    tabMenu: () => {
-      this.control.takeHuman("pointer");
-      this.toggleToolbarMenu();
-    },
+    tabMenu: () => this.toggleToolbarMenu(),
     newTabQuery: (text) => {
-      this.control.takeHuman("keyboard");
+      this.humanChange("keyboard");
       this.newTabQuery(text);
     },
     newTabSubmit: (text) => {
-      this.control.takeHuman("tabs");
+      this.humanChange("tabs");
       this.closeNewTabModal();
       if (text.trim()) this.tabs.create(searchOrUrl(text, this.ctx.cwd));
     },
     newTabPick: (index) => {
-      this.control.takeHuman("pointer");
+      this.humanChange("pointer");
       this.pickNewTab(index);
     },
     newTabCancel: () => this.closeNewTabModal(),
     popupPointer: (event) => {
-      if (event.kind === "down") this.control.takeHuman("pointer");
-      else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.tabs.activeController?.popup?.input.pointer(event);
+      if (event.kind === "move" && this.control.agentEligible && this.control.busy && !this.control.input.pointerHeld) return;
+      if (event.kind === "down") this.humanChange("pointer");
+      const popup = this.tabs.activeController?.popup;
+      this.forwardHuman(this.control.input.pointer(event, this.tabs.visibleContextId), () => popup?.input.pointer(event));
     },
     popupWheel: (event) => {
-      if (event.deltaX !== 0 || event.deltaY !== 0) this.control.takeHuman("wheel");
-      if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.tabs.activeController?.popup?.input.wheel(event);
+      if (event.deltaX === 0 && event.deltaY === 0) return;
+      this.humanChange("wheel");
+      const popup = this.tabs.activeController?.popup;
+      this.forwardHuman(this.control.input.wheel(this.tabs.visibleContextId), () => popup?.input.wheel(event));
     },
-    popupClose: () => {
-      this.control.takeHuman("pointer");
-      this.tabs.activeController?.popup?.close();
-    },
+    popupClose: () => this.humanMutation("tabs", () => this.tabs.activeController?.popup?.close()),
     popupHover: (hovering) => {
       this.popupHover = hovering;
       this.syncCursor();
@@ -972,20 +998,23 @@ class Session {
     devtoolsPointer: (event) => {
       const browser = this.tabs.activeController;
       if (!browser?.devtools) return;
-      this.browserFocused = true;
-      if (event.kind === "down") this.control.takeHuman("devtools");
-      else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      browser.focusDevtools();
-      browser.devtools.input.pointer(event);
+      if (event.kind === "move" && this.control.agentEligible && this.control.busy && !this.control.input.pointerHeld) return;
+      if (event.kind === "down") this.humanChange("devtools");
+      this.forwardHuman(this.control.input.pointer(event, this.tabs.visibleContextId), () => {
+        if (event.kind === "down") { this.browserFocused = true; browser.focusDevtools(); this.syncChromeReservation(); }
+        browser.devtools?.input.pointer(event);
+      });
     },
     devtoolsWheel: (event) => {
       const browser = this.tabs.activeController;
-      if (!browser?.devtools) return;
-      this.browserFocused = true;
-      if (event.deltaX !== 0 || event.deltaY !== 0) this.control.takeHuman("devtools");
-      if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      browser.focusDevtools();
-      browser.devtools.input.wheel(event);
+      if (!browser?.devtools || (event.deltaX === 0 && event.deltaY === 0)) return;
+      this.humanChange("devtools");
+      this.forwardHuman(this.control.input.wheel(this.tabs.visibleContextId), () => {
+        this.browserFocused = true;
+        browser.focusDevtools();
+        this.syncChromeReservation();
+        browser.devtools?.input.wheel(event);
+      });
     },
     devtoolsHover: (hovering) => {
       this.devtoolsHover = hovering;
@@ -997,7 +1026,7 @@ class Session {
       this.render();
     },
     devtoolsDividerDrag: (event) => {
-      if (event.phase === "start") this.control.takeHuman("devtools");
+      if (event.phase === "start") this.humanChange("devtools");
       else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
       const page = this.layout?.page;
       const devtools = this.layout?.devtools;
@@ -1022,10 +1051,7 @@ class Session {
         this.syncDevtoolsLayout({ keepFrame: true });
       }
     },
-    pageMenuAction: (id) => {
-      this.control.takeHuman("pointer");
-      this.runPageMenu(id);
-    },
+    pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
     record: this.recordActions(),
   };
@@ -1141,7 +1167,26 @@ class Session {
   }
 
   private handleKey(event: EngineKeyEvent) {
-    if (event.kind !== "release") this.control.takeHuman("keyboard");
+    const priority = this.control.input.key(event, this.tabs.visibleContextId);
+    // Menu navigation must never select Human or leak its keys into the page.
+    if (this.handlePageMenuKey(event)) return;
+    if (event.kind !== "release" && !this.chromeReservation) this.humanChange("keyboard");
+    this.forwardHuman(priority, () => this.handleReservedKey(event));
+  }
+
+  private handlePageMenuKey(event: EngineKeyEvent): boolean {
+    if (!this.pageMenu) return false;
+    if (event.kind === "release") return true;
+    const items = this.pageMenuView()?.items.filter(item => item.enabled) ?? [];
+    if (event.key === "escape") this.closePageMenu();
+    else if ((event.key === "up" || event.key === "down") && items.length) {
+      this.pageMenuIndex = (this.pageMenuIndex + (event.key === "down" ? 1 : -1) + items.length) % items.length;
+      this.render();
+    } else if (event.key === "enter" && items.length) this.runPageMenu(items[Math.min(this.pageMenuIndex, items.length - 1)].id);
+    return true;
+  }
+
+  private handleReservedKey(event: EngineKeyEvent) {
     const dialog = this.tabs.pendingDialog;
     if (dialog) {
       if (event.kind !== "release" && (event.key === "escape" || (event.key === "enter" && dialog.type !== "prompt"))) {
@@ -1170,8 +1215,7 @@ class Session {
       if (this.isPasteKey(event)) this.root?.requestClipboardImage();
       if (this.isCopyKey(event)) void this.copySelection();
       if (this.isCutKey(event)) void this.mirrorSelection();
-      browser.popup.input.key(event);
-      return;
+      return browser.popup.input.key(event);
     }
     if (event.kind !== "release") {
       const quitKey =
@@ -1180,11 +1224,6 @@ class Session {
         this.shutdown();
         return;
       }
-      if (this.pageMenu) {
-        this.closePageMenu();
-        if (event.key === "escape") return;
-      }
-
       if (this.palette) {
         const step = listStep(event);
         if (event.key === "escape" || matchesBinding(event, this.paletteBinding)) {
@@ -1292,21 +1331,20 @@ class Session {
       }
     }
     if (event.kind === "release") {
-      this.routeKey(event);
-      return;
+      return this.routeKey(event);
     }
     if (this.browserFocused) {
       if (this.isPasteKey(event)) this.root?.requestClipboardImage();
       if (this.isCopyKey(event)) void this.copySelection();
       if (this.isCutKey(event)) void this.mirrorSelection();
-      this.routeKey(event);
+      return this.routeKey(event);
     }
   }
 
   private routeKey(event: EngineKeyEvent) {
     const browser = this.tabs.activeController;
-    if (browser?.devtoolsFocused && browser.devtools) browser.devtools.input.key(event);
-    else browser?.key(event);
+    if (browser?.devtoolsFocused && browser.devtools) return browser.devtools.input.key(event);
+    return browser?.key(event);
   }
 
   private applyZoom(direction: ZoomDirection) {
@@ -1532,6 +1570,7 @@ class Session {
     }
     if (this.palette || this.newTab || this.urlEditOpen) return;
     this.pageMenu = { kind: "toolbar" };
+    this.pageMenuIndex = 0;
     this.render();
   }
 
@@ -1650,7 +1689,7 @@ class Session {
     if (!this.blockingMenuItems().some(item => item.id === id && item.enabled)) return;
     const browser = this.tabs.activeController;
     if (!browser) return;
-    if (action !== "status") this.control.takeHuman("pointer");
+    if (action !== "status") this.humanChange("pointer");
     try {
       const status = (browser.popup ?? browser).blocking({ action });
       const recent = [...new Set(status.diagnostics.recent.map(item => item.host))].slice(-3).join(", ").slice(0, 180);

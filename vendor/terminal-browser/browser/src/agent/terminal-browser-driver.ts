@@ -1,3 +1,4 @@
+import { ALL_INPUT, type InputResource } from "./input-arbiter";
 import { TargetPreparation } from "./target-preparation";
 import type { PreparedTarget } from "./target-preparation";
 import type {
@@ -37,6 +38,7 @@ export interface TerminalBrowserDriverOptions {
   random?: () => number;
   now?: () => number;
   beforeInput?: () => void;
+  permitInput?: (resources: readonly InputResource[], commit: boolean) => Promise<boolean>;
   onPointer?: (event: ProgrammaticPointerEvent) => void;
   onTarget?: (point: Point) => void;
 }
@@ -56,6 +58,8 @@ export class TerminalBrowserDriver implements BrowserDriver {
   private readonly random: () => number;
   private readonly now: () => number;
   private readonly beforeInput: (() => void) | undefined;
+  private readonly permitInput: TerminalBrowserDriverOptions["permitInput"];
+  private dispatchKind: "move" | "down" | "key" | "wheel" | "other" = "other";
   private readonly onPointer: ((event: ProgrammaticPointerEvent) => void) | undefined;
   private readonly onTarget: ((point: Point) => void) | undefined;
   private lastPosition: Point | null = null;
@@ -77,6 +81,7 @@ export class TerminalBrowserDriver implements BrowserDriver {
     this.random = options.random ?? Math.random;
     this.now = options.now ?? Date.now;
     this.beforeInput = options.beforeInput;
+    this.permitInput = options.permitInput;
     this.onPointer = options.onPointer;
     this.onTarget = options.onTarget;
   }
@@ -103,6 +108,22 @@ export class TerminalBrowserDriver implements BrowserDriver {
     this.persona = persona;
   }
 
+  async revalidateAfterFocus(): Promise<void> {
+    if (this.dispatchKind === "down" && this.binding?.primary && this.lastPosition &&
+      !await this.binding.preparation.check(this.binding.primary, this.lastPosition)) throw new Error("target changed during focus wait; input was not replayed");
+    if (this.dispatchKind === "key") await this.assertTypingTarget();
+    if ((this.dispatchKind === "down" && !this.binding?.primary || this.dispatchKind === "wheel") && this.lastPosition) {
+      await this.target.frames?.assertCoordinates(this.lastPosition);
+    }
+  }
+
+  private async permit(resources: readonly InputResource[], commit = false): Promise<boolean> {
+    this.beforeInput?.();
+    const waited = await this.permitInput?.(resources, commit) ?? false;
+    this.beforeInput?.();
+    return waited;
+  }
+
   async cursorState(): Promise<Point> {
     if (this.lastPosition) return { ...this.lastPosition };
     const viewport = this.target.viewportSize();
@@ -125,6 +146,7 @@ export class TerminalBrowserDriver implements BrowserDriver {
     try {
       await this.replayMove(args.samples, true);
       if (args.preClickDwellMs > 0) await this.sleep(args.preClickDwellMs);
+      await this.permit(ALL_INPUT);
       await this.readyAt(args.target, this.binding?.primary);
       if (this.binding?.primary) this.binding.primary.committed = true;
       await this.clickCycle(args.target, args.button, args.pressMs);
@@ -134,13 +156,14 @@ export class TerminalBrowserDriver implements BrowserDriver {
       if (args.dblclick) await this.clickCycle(args.target, args.button, args.pressMs);
       this.lastPosition = { ...args.target };
     } catch (error) {
-      this.releaseAndRethrow(error);
+      return this.releaseAndRethrow(error);
     }
   }
 
   async ensureVisible(ref?: string, _point?: Point) {
     this.beforeInput?.();
     const prepared = [this.binding?.primary, this.binding?.destination].find(target => target?.state.ref === ref);
+    if (!prepared && ref) await this.permit(["focus", "viewport"]);
     const result = prepared ? prepared.state.rect : ref ? await this.observer.ensureVisible(ref) : null;
     this.beforeInput?.();
     return result;
@@ -151,9 +174,12 @@ export class TerminalBrowserDriver implements BrowserDriver {
     validateTypeArgs(args);
     try {
       if (args.replace) {
+        this.dispatchKind = "key";
+        await this.permit(["keyboard", "focus"], true);
         await this.assertTypingTarget();
         this.beforeInput?.();
         await this.target.agentSelectAll();
+        await this.permit(["keyboard", "focus"], true);
         await this.assertTypingTarget();
         this.beforeInput?.();
         await this.target.agentInsertText(args.text);
@@ -177,7 +203,7 @@ export class TerminalBrowserDriver implements BrowserDriver {
         await this.dispatchTextKey(character);
       }
     } catch (error) {
-      this.releaseAndRethrow(error);
+      return this.releaseAndRethrow(error);
     }
   }
 
@@ -206,16 +232,19 @@ export class TerminalBrowserDriver implements BrowserDriver {
         previousX = nextX;
         previousY = nextY;
         if (deltaX === 0 && deltaY === 0) continue;
+        this.dispatchKind = "wheel";
+        if (await this.permit(["pointer", "viewport", "focus"], true)) await this.target.frames?.assertCoordinates(position);
         await this.target.agentWheel(position.x, position.y, deltaX, deltaY);
       }
     } catch (error) {
-      this.releaseAndRethrow(error);
+      return this.releaseAndRethrow(error);
     }
   }
 
   async navigate(url: string): Promise<void> {
     if (!this.target.agentNavigate) this.unsupported("navigate");
-    this.beforeInput?.();
+    this.dispatchKind = "other";
+    await this.permit(ALL_INPUT, true);
     await this.target.agentNavigate(url);
   }
 
@@ -241,7 +270,7 @@ export class TerminalBrowserDriver implements BrowserDriver {
         this.beforeInput?.();
       }
     } catch (error) {
-      this.releaseAndRethrow(error);
+      return this.releaseAndRethrow(error);
     }
   }
 
@@ -281,12 +310,14 @@ export class TerminalBrowserDriver implements BrowserDriver {
       if (!this.binding?.destination) await this.target.frames?.assertCoordinates(args.target);
       if (this.binding?.primary) this.binding.primary.committed = true;
       if (this.binding?.destination) this.binding.destination.committed = true;
-      this.beforeInput?.();
+      this.dispatchKind = "down";
+      await this.permit(ALL_INPUT, true);
+      await this.readyAt(start, this.binding?.primary);
       await this.target.agentStartDrag?.();
       this.beforeInput?.();
       const down = { kind: "down" as const, x: start.x, y: start.y, button: args.button };
-      this.target.agentPointer(down);
-      this.onPointer?.(down);
+      await this.target.agentPointer(down);
+      this.submittedPointer(down);
       held = true;
       await this.replayMove(samples, true);
       if (this.binding?.destination && !await this.binding.preparation.check(this.binding.destination, args.target)) {
@@ -304,14 +335,14 @@ export class TerminalBrowserDriver implements BrowserDriver {
         const releasePoint = this.lastPosition ?? start;
         const up = { kind: "up" as const, x: releasePoint.x, y: releasePoint.y, button: args.button };
         try {
-          this.target.agentPointer(up);
-          this.onPointer?.(up);
+          await this.target.agentPointer(up);
+          this.submittedPointer(up);
         } catch {}
       }
     }
     try { await this.target.agentFinishDrag?.(failure !== undefined); }
     catch (error) { failure ??= error; }
-    if (failure !== undefined) this.releaseAndRethrow(failure);
+    if (failure !== undefined) return this.releaseAndRethrow(failure);
   }
 
   async pressKey(key: string, mode: DeliveryMode): Promise<void> {
@@ -319,7 +350,7 @@ export class TerminalBrowserDriver implements BrowserDriver {
     try {
       await this.dispatchKeyCycle(parseAgentKey(key));
     } catch (error) {
-      this.releaseAndRethrow(error);
+      return this.releaseAndRethrow(error);
     }
   }
 
@@ -330,7 +361,8 @@ export class TerminalBrowserDriver implements BrowserDriver {
     this.beforeInput?.();
     const documentId = await this.observer.currentDocumentId();
     this.beforeInput?.();
-    const preparation = new TargetPreparation(this.observer, documentId, () => this.beforeInput?.(), this.sleep, this.now);
+    const preparation = new TargetPreparation(this.observer, documentId, () => this.beforeInput?.(), this.sleep, this.now,
+      () => this.permit(["focus", "viewport"]));
     return preparation.resolveLocator(spec, opts.timeoutMs, opts.scrollIntoView);
   }
 
@@ -397,7 +429,9 @@ export class TerminalBrowserDriver implements BrowserDriver {
   private async dispatchKeyCycle(key: AgentKey): Promise<void> {
     let held = false;
     try {
-      this.beforeInput?.();
+      this.dispatchKind = "key";
+      await this.permit(["keyboard", "focus"], true);
+      await this.assertTypingTarget();
       await this.target.agentKeyDown(key);
       held = true;
       if (key.character) {
@@ -406,12 +440,12 @@ export class TerminalBrowserDriver implements BrowserDriver {
         await this.target.agentKeyChar(key);
       }
       this.beforeInput?.();
-      this.target.agentKeyUp(key);
+      await this.target.agentKeyUp(key);
       held = false;
     } finally {
       if (held) {
         try {
-          this.target.agentKeyUp(key);
+          await this.target.agentKeyUp(key);
         } catch {}
       }
     }
@@ -419,37 +453,57 @@ export class TerminalBrowserDriver implements BrowserDriver {
 
   private async replayMove(samples: CursorSample[], guard = false): Promise<void> {
     let previousAt = 0;
-    for (const sample of samples) {
+    for (let index = 0; index < samples.length; index++) {
+      const sample = samples[index];
       const at = Number.isFinite(sample.t) ? Math.max(previousAt, sample.t) : previousAt;
       const delay = at - previousAt;
       if (delay > 0) await this.sleep(delay);
       if (guard) this.beforeInput?.();
+      this.dispatchKind = "move";
+      if (await this.permit(["pointer", "viewport"])) {
+        const from = this.target.agentPointerPosition?.() ?? await this.cursorState();
+        const to = samples.at(-1)!;
+        if (!this.binding?.primary) await this.target.frames?.assertCoordinates(to);
+        // Replan the uncommitted approach from the last native point, with normal timing.
+        samples = await this.naturalSamples(from, to);
+        index = -1; previousAt = 0;
+        continue;
+      }
       const move = { kind: "move" as const, x: sample.x, y: sample.y };
-      this.target.agentPointer(move);
+      await this.target.agentPointer(move);
       this.lastPosition = { x: sample.x, y: sample.y };
-      this.onPointer?.(move);
+      this.submittedPointer(move);
       previousAt = at;
     }
   }
 
   private async clickCycle(point: Point, button: ClickArgs["button"], pressMs: number) {
-    this.onTarget?.(point);
-    this.beforeInput?.();
+    this.dispatchKind = "down";
+    await this.permit(ALL_INPUT, true);
+    await this.readyAt(point, this.binding?.primary);
+    this.lastPosition = { ...point };
     const down = { kind: "down" as const, x: point.x, y: point.y, button };
-    this.target.agentPointer(down);
-    this.onPointer?.(down);
+    await this.target.agentPointer(down);
+    this.onTarget?.(point);
+    this.submittedPointer(down);
     try {
       if (pressMs > 0) await this.sleep(pressMs);
     } finally {
       const up = { kind: "up" as const, x: point.x, y: point.y, button };
-      this.target.agentPointer(up);
-      this.onPointer?.(up);
+      await this.target.agentPointer(up);
+      this.submittedPointer(up);
     }
   }
 
-  private releaseAndRethrow(error: unknown): never {
+  private submittedPointer(event: ProgrammaticPointerEvent): void {
+    const submitted = { ...event, x: Math.max(0, Math.round(event.x)), y: Math.max(0, Math.round(event.y)) };
+    this.lastPosition = { x: submitted.x, y: submitted.y };
+    this.onPointer?.(submitted);
+  }
+
+  private async releaseAndRethrow(error: unknown): Promise<never> {
     try {
-      this.target.releaseAgentInput();
+      await this.target.releaseAgentInput();
     } catch {}
     try {
       this.beforeInput?.();

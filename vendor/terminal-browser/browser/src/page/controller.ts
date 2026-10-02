@@ -27,7 +27,7 @@ import { offscreenPreferences } from "./offscreen";
 import { BitmapPresenter, presentPaint, shmFrameOf } from "./paint";
 import { PopupWindow } from "./popup";
 import { cssSize, initialBrowserState } from "./types";
-import type { BrowserState, BrowserSurfaceLayout } from "./types";
+import type { BrowserState, BrowserSurfaceLayout, NativePageChange } from "./types";
 import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
@@ -101,6 +101,21 @@ export class BrowserController {
   onContextMenu: ((params: Electron.ContextMenuParams) => void) | null = null;
   onClosed: (() => void) | null = null;
   onMainFrameNavigationStart: (() => void) | null = null;
+  onNativePageChange: ((change: NativePageChange) => void) | null = null;
+  pageDocumentGeneration = 0;
+  pageViewRevision = 0;
+  get pageContents() { return this.window.webContents; }
+  get pageVisible() { return this.visible && !this.stopped && !this.selectedPopup; }
+  noteGeometryChange() {
+    this.pageViewRevision += 1;
+    this.frames.invalidateGeometry();
+    this.onNativePageChange?.({ reason: "geometry" });
+  }
+  private pageNavigated() {
+    this.pageDocumentGeneration += 1;
+    this.pageViewRevision += 1;
+    this.onNativePageChange?.({ reason: "navigation" });
+  }
 
   constructor(
     surface: Surface,
@@ -154,6 +169,7 @@ export class BrowserController {
       },
     });
     this.frames = new BrowserFrames(this.window.webContents, (method, params, session) => this.cdp(method, params, session), session => this.dialogs.initializeSession(session));
+    this.frames.subscribe(() => this.noteGeometryChange());
     this.dialogs = new BrowserDialogs(this.window.webContents, (method, params, session) => this.cdp(method, params, session));
     this.uploads = new BrowserUploads(this.window.webContents, (method, params, session) => this.cdp(method, params, session), this.frames);
     if (this.clipboardRead) allowClipboardRead(this.window.webContents);
@@ -206,11 +222,14 @@ export class BrowserController {
       this.wholeSurfaceNext = false;
       this.lastFrameSize = size;
       this.onFrameSubmitted?.();
+      this.onNativePageChange?.({ reason: "paint", dirtyRect });
     });
     this.window.webContents.on(
       "did-start-navigation",
       (_event, _url, isInPlace, isMainFrame) => {
         if (!isMainFrame || isInPlace) return;
+        this.pageDocumentGeneration += 1;
+        this.noteGeometryChange();
         this.onMainFrameNavigationStart?.();
         this.updateState({ loading: true });
       },
@@ -219,6 +238,7 @@ export class BrowserController {
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
       this.updateNavigation(this.state.loading, url);
+      this.pageNavigated();
     });
     this.window.webContents.on("page-favicon-updated", (_event, favicons) => {
       void this.loadFavicon(favicons);
@@ -227,6 +247,7 @@ export class BrowserController {
       if (!mainFrame) return;
       this.onMainFrameNavigationStart?.();
       this.updateNavigation(this.state.loading, url);
+      this.pageNavigated();
     });
     this.window.webContents.on("page-title-updated", (_event, title) => {
       this.updateState({ title });
@@ -306,6 +327,7 @@ export class BrowserController {
     if (!options?.keepFrame) this.surface.clear();
     const size = this.contentSize(layout);
     this.window.setContentSize(size.width, size.height, false);
+    this.noteGeometryChange();
   }
 
   navigate(value: string) {
@@ -342,12 +364,14 @@ export class BrowserController {
 
   zoom(direction: ZoomDirection): number {
     const factor = stepZoom(this.window.webContents, direction);
+    this.noteGeometryChange();
     this.updateState({ zoom: factor });
     return factor;
   }
 
   scaleZoom(ratio: number): number {
     const factor = scaleZoom(this.window.webContents, ratio);
+    this.noteGeometryChange();
     this.updateState({ zoom: factor });
     return factor;
   }
@@ -589,10 +613,12 @@ export class BrowserController {
     this.input.pointer(event);
   }
 
+  agentPointerPosition() { return this.input.agentPointerPosition(); }
+  setAgentInputGuard(guard: (focusWaited: boolean) => void | Promise<void>) { this.input.setAgentInputGuard(guard); }
   agentPointer(event: ProgrammaticPointerEvent) {
     if (this.stopped) return;
     if (event.kind === "down" && event.button === "left") this.uploads.acceptChooserFromClick();
-    this.input.programmaticPointer(event);
+    return this.input.programmaticPointer(event);
   }
 
   agentKeyDown(key: AgentKey): Promise<void> {
@@ -605,9 +631,9 @@ export class BrowserController {
     return this.input.programmaticKeyChar(key);
   }
 
-  agentKeyUp(key: AgentKey): void {
+  agentKeyUp(key: AgentKey): Promise<void> | void {
     if (this.stopped) return;
-    this.input.programmaticKeyUp(key);
+    return this.input.programmaticKeyUp(key);
   }
 
   agentSelectAll(): Promise<void> {
@@ -627,9 +653,9 @@ export class BrowserController {
 
   releaseAgentInput() {
     if (this.stopped) return;
-    this.input.releaseProgrammaticInput();
-    for (const popup of this.popups) popup.input.releaseProgrammaticInput();
-    this.devtools?.input.releaseProgrammaticInput();
+    return Promise.all([this.input.releaseProgrammaticInput(),
+      ...this.popups.map(popup => popup.input.releaseProgrammaticInput()),
+      this.devtools?.input.releaseProgrammaticInput()]).then(() => undefined);
   }
 
   releasePhysicalInput() {
@@ -648,9 +674,9 @@ export class BrowserController {
   agentFinishDrag(cancelled: boolean) { return this.input.finishProgrammaticDrag(cancelled); }
   releaseAgentPointer() {
     if (this.stopped) return;
-    this.input.releaseProgrammaticButtons();
-    for (const popup of this.popups) popup.input.releaseProgrammaticButtons();
-    this.devtools?.input.releaseProgrammaticButtons();
+    return Promise.all([this.input.releaseProgrammaticButtons(),
+      ...this.popups.map(popup => popup.input.releaseProgrammaticButtons()),
+      this.devtools?.input.releaseProgrammaticButtons()]).then(() => undefined);
   }
 
   wheel(event: WheelEvent) {
@@ -660,7 +686,7 @@ export class BrowserController {
 
   key(event: EngineKeyEvent) {
     if (this.stopped) return;
-    this.input.key(event);
+    return this.input.key(event);
   }
 
   sendToPage(channel: string, payload: unknown): void {
@@ -674,11 +700,11 @@ export class BrowserController {
   }
 
   paste(text: string) {
-    this.input.paste(text);
+    return this.input.paste(text);
   }
 
   pasteImage(image: PastedImage) {
-    this.input.pasteImage(image);
+    return this.input.pasteImage(image);
   }
 
   setActive(active: boolean) {

@@ -1,3 +1,5 @@
+import type { WebContents } from "electron";
+import { ALL_INPUT } from "../agent/input-arbiter";
 import { BrowserDownloads } from "../agent/downloads";
 import type { BlockingRequest, BlockingStatus } from "../blocking/types";
 import type { BrowserOwner } from "pixel-store";
@@ -25,6 +27,7 @@ import type {
   AgentNavigateRequest,
   AgentNavigateResult,
   AgentObservation,
+  AgentVisualObservation,
   AgentObserveRequest,
   AgentPressKeyRequest,
   AgentPressKeyResult,
@@ -41,6 +44,22 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState } from "../page/types";
 import type { TabRow } from "../ui/types";
 import { displayUrl } from "../url";
+
+export interface VisiblePage {
+  contextId: number;
+  contextKind: "tab" | "popup";
+  documentGeneration: number;
+  viewRevision: number;
+  url: string;
+  title: string;
+  viewport: { width: number; height: number };
+  contents: WebContents;
+}
+export interface VisiblePageChange {
+  contextId: number;
+  reason: "navigation" | "paint" | "context" | "geometry";
+  dirtyRect?: { x: number; y: number; width: number; height: number };
+}
 
 export interface TabApp {
   name: string | null;
@@ -122,6 +141,23 @@ export class TabManager {
   private readonly popups = new Map<number, PopupContext>();
   private readonly contextListeners = new Set<() => void>();
   private seq = 1;
+  private readonly pageListeners = new Set<(change: VisiblePageChange) => void>();
+  private pageObserver: { binding: string; source: string; listener: (hint: import("../agent/frames").FramePageChange & { contextId: number }) => void } | null = null;
+
+  installPageChangeObserver(binding: string, source: string, listener: (hint: import("../agent/frames").FramePageChange & { contextId: number }) => void): void {
+    if (this.pageObserver) throw new Error("page-change observer is already installed");
+    this.pageObserver = { binding, source, listener };
+    for (const context of [...this.tabs, ...this.popups.values()]) this.attachPageObserver(context.id, context.controller);
+  }
+  private attachPageObserver(contextId: number, controller: BrowserController | PopupWindow): void {
+    const observer = this.pageObserver;
+    if (!observer) return;
+    void controller.frames.installPageChangeObserver(observer.binding, observer.source, hint => {
+      if (this.currentVisiblePage()?.contextId === contextId) observer.listener({ contextId, ...hint });
+    }).catch(() => { /* Native paint/navigation remain available if a frame observer is unavailable. */ });
+  }
+  sessionClosePending = false;
+  get visibleContextId(): number { return this.activeContextId; }
   private agentSweep: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -180,6 +216,8 @@ export class TabManager {
       personaProvider: this.personaProvider,
       onActivityChange: () => this.host.requestAgentRender(),
     });
+    tab.controller.onNativePageChange = change => this.emitPageChange({ contextId: tab.id, ...change });
+    this.attachPageObserver(tab.id, tab.controller);
     tab.controller.trackDownloads(this.downloads, tab.id);
     this.bindDialogs(tab.id, tab.controller.dialogs, tab.agentRuntime);
     tab.controller.onPopupCreated = (popup, opener) => this.adoptPopup(tab, popup, opener);
@@ -240,13 +278,26 @@ export class TabManager {
     this.control.assertAgent();
     const dialog = this.pendingDialog;
     if (dialog) return { contextId: dialog.contextId, dialog, completed: false };
-    if (!this.agentActivate(id)) throw new Error("cannot activate context");
+    if (!await this.prepareAgentContext(id, request.signal)) throw new Error("cannot activate context");
     return { ...await tab.agentRuntime.observe(request), contextId: id };
+  }
+
+  private async prepareAgentContext(id: number, signal?: AbortSignal): Promise<boolean> {
+    const epoch = this.control.assertAgent().controlEpoch;
+    if (this.activeContextId !== id) {
+      await this.control.input.permit(ALL_INPUT, () => this.control.assertAgent(epoch), signal);
+      signal?.throwIfAborted();
+      this.control.assertAgent(epoch);
+    }
+    return this.agentActivate(id);
   }
 
   agentActivate(id: number): boolean {
     const context = this.context(id);
-    if (!context || this.control.state !== "agent" || !this.host.agentTabSwitchAllowed() || this.pendingDialog) return false;
+    if (!context || !this.control.agentEligible || this.pendingDialog) return false;
+    // Same-context reads must not steal focus from a human editor or menu.
+    if (this.activeContextId === id) return true;
+    if (!this.host.agentTabSwitchAllowed() || this.control.input.conflicts(ALL_INPUT)) return false;
     const popup = this.popups.get(id);
     if (!popup) return this.activate(id);
     if (this.activeContextId === id) return true;
@@ -266,13 +317,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.click(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -283,13 +334,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.upload(request, this.host.projectRoot ?? null);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -300,13 +351,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.hover(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -317,13 +368,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.drag(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -334,13 +385,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.type(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -351,13 +402,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.pressKey(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -368,13 +419,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.scroll(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -385,13 +436,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.navigate(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -402,13 +453,13 @@ export class TabManager {
     request.signal?.throwIfAborted();
     return this.mutate(id, request.expectedControlEpoch, async () => {
       request.signal?.throwIfAborted();
-      if (!this.agentActivate(id)) {
+      if (!await this.prepareAgentContext(id, request.signal)) {
         throw new Error("cannot activate a tab while terminal-browser is in a modal state");
       }
       try {
         return await tab.agentRuntime.getUrl(request);
       } finally {
-        tab.controller.releaseAgentInput();
+        await tab.controller.releaseAgentInput();
       }
     });
   }
@@ -440,8 +491,18 @@ export class TabManager {
     return { ...result, contextId: id };
   }
 
+  humanBlocking(contextId: number, request: BlockingRequest): BlockingStatus {
+    if (this.currentVisiblePage()?.contextId !== contextId) throw new Error("human settings require the current visible context");
+    const context = this.context(contextId);
+    if (!context) throw new Error("visible context is no longer available");
+    const result = context.controller.blocking(request);
+    if (request.action !== "status") this.host.requestRender();
+    return result;
+  }
+
   async agentContext(action: "open" | "activate" | "close", id: number | undefined, url: string | undefined, epoch: number) {
     return this.mutate(id ?? this.activeContextId, epoch, async () => {
+      await this.control.input.permit(ALL_INPUT, () => this.control.assertAgent(epoch));
       if (action === "open") this.create(url ?? this.fallbackUrl);
       else {
         if (!id || !this.has(id)) throw new Error(`no context ${id}`);
@@ -488,7 +549,7 @@ export class TabManager {
     });
   }
 
-  private context(id: number): { id: number; controller: AgentBrowserTarget & { dialogs: BrowserDialogs }; agentRuntime: BrowserAgentRuntime } | undefined {
+  private context(id: number): { id: number; controller: BrowserController | PopupWindow; agentRuntime: BrowserAgentRuntime } | undefined {
     return this.tabs.find(tab => tab.id === id) ?? this.popups.get(id);
   }
 
@@ -510,6 +571,8 @@ export class TabManager {
     });
     this.popups.set(id, { id, openerId, rootId: root.id, controller, agentRuntime });
     controller.onMainFrameNavigationStart = () => agentRuntime.invalidateDocument();
+    controller.onNativePageChange = change => this.emitPageChange({ contextId: id, ...change });
+    this.attachPageObserver(id, controller);
     controller.trackDownloads(this.downloads, id);
     this.bindDialogs(id, controller.dialogs, agentRuntime);
     this.context(this.activeContextId)?.agentRuntime.invalidateControl();
@@ -536,7 +599,85 @@ export class TabManager {
     this.host.onTabsChanged();
   }
 
-  private contextChanged() { for (const listener of this.contextListeners) listener(); }
+  private contextChanged() {
+    for (const listener of this.contextListeners) listener();
+    this.emitPageChange({ contextId: this.activeContextId, reason: "context" });
+  }
+
+  subscribePageChanges(listener: (change: VisiblePageChange) => void): () => void {
+    this.pageListeners.add(listener);
+    return () => this.pageListeners.delete(listener);
+  }
+  private emitPageChange(change: VisiblePageChange): void {
+    for (const listener of this.pageListeners) listener(change);
+  }
+  currentVisiblePage(): VisiblePage | null {
+    const context = this.context(this.activeContextId);
+    if (!context || !context.controller.pageVisible) return null;
+    const controller = context.controller;
+    const popup = this.popups.get(context.id);
+    return { contextId: context.id, contextKind: popup ? "popup" : "tab",
+      documentGeneration: controller.pageDocumentGeneration, viewRevision: controller.pageViewRevision,
+      url: controller.currentUrl().slice(0, 8192),
+      title: (popup?.controller.state.title ?? this.active?.state.title ?? "").slice(0, 512),
+      viewport: controller.viewportSize(), contents: controller.pageContents };
+  }
+  noteVisibleGeometryChange(contextId: number): void {
+    if (contextId === this.activeContextId) this.context(contextId)?.controller.noteGeometryChange();
+  }
+  async captureVisiblePage(expected: Pick<VisiblePage, "contextId" | "documentGeneration" | "viewRevision">, visual: boolean) {
+    const check = () => {
+      const page = this.currentVisiblePage();
+      if (!page || page.contextId !== expected.contextId || page.documentGeneration !== expected.documentGeneration ||
+        page.viewRevision !== expected.viewRevision) throw new Error("visible page changed during capture");
+      return page;
+    };
+    const page = check();
+    let image: AgentVisualObservation | undefined;
+    if (visual) {
+      const data = await this.context(page.contextId)!.controller.capturePage();
+      check();
+      if (data.byteLength < 24 || data.toString("ascii", 1, 4) !== "PNG" || data.byteLength > 2 * 1024 * 1024) throw new Error("invalid bounded page capture");
+      image = { mimeType: "image/png", width: data.readUInt32BE(16), height: data.readUInt32BE(20),
+        bytes: data.byteLength, scope: "viewport", rect: { x: 0, y: 0, ...page.viewport }, data };
+    }
+    check();
+    const { contents: _contents, viewport: _viewport, ...metadata } = page;
+    return { ...metadata, ...(image ? { visual: image } : {}) };
+  }
+
+  closeInventory() {
+    return { contexts: this.registryView().map(context => ({ contextId: context.id, contextKind: context.kind,
+      openerId: context.openerId, title: context.title,
+      documentGeneration: this.context(context.id)!.controller.pageDocumentGeneration })),
+      transfers: this.downloads.list().map(({ id, contextId, state }) => ({ id, contextId, state })) };
+  }
+  async releaseAgentInput(): Promise<void> {
+    await Promise.all([...this.tabs, ...this.popups.values()].map(context => context.controller.releaseAgentInput()));
+  }
+  /** The whole-session coordinator must verify an empty inventory before teardown. */
+  async closeContext(expected: { contextId: number; documentGeneration: number }, signal?: AbortSignal): Promise<"closed" | "decision-required" | "refused" | "unknown"> {
+    signal?.throwIfAborted();
+    const context = this.context(expected.contextId);
+    if (!context || context.controller.pageDocumentGeneration !== expected.documentGeneration) return "refused";
+    if (this.pendingDialog) return "decision-required";
+    this.sessionClosePending = true;
+    return new Promise(resolve => {
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = (result: "closed" | "decision-required" | "refused" | "unknown") => {
+        clearTimeout(timer); this.contextListeners.delete(check); signal?.removeEventListener("abort", abort); resolve(result);
+      };
+      const check = () => {
+        if (!this.has(expected.contextId)) finish("closed");
+        else if (this.pendingDialog) finish("decision-required");
+      };
+      const abort = () => finish("unknown");
+      this.contextListeners.add(check);
+      signal?.addEventListener("abort", abort, { once: true });
+      timer = setTimeout(() => finish("unknown"), 2_000);
+      try { this.close(expected.contextId); check(); } catch { finish("refused"); }
+    });
+  }
 
   private mutate<T>(id: number, epoch: number, operation: () => Promise<T>): Promise<AgentActionOutcome<T>> {
     if (this.pendingDialog) return Promise.reject(new Error("a browser dialog is pending"));
@@ -578,8 +719,10 @@ export class TabManager {
     if (this.activeId === id) {
       const fallback = this.tabs[Math.min(at, this.tabs.length - 1)];
       if (fallback) this.activate(fallback.id);
-      else this.create(this.fallbackUrl);
+      else if (!this.sessionClosePending) this.create(this.fallbackUrl);
+      else { this.activeId = 0; this.activeContextId = 0; }
     }
+    this.contextChanged();
     this.host.onTabsChanged();
     this.host.requestRender();
   }
@@ -684,7 +827,7 @@ export class TabManager {
         id: popup.id, contextId: popup.id, openerId: popup.openerId, kind: "popup" as const,
         url: popup.controller.state.url.slice(0, 8192), title: popup.controller.state.title.slice(0, 512),
         active: popup.id === this.activeContextId, targetId: null,
-        agentControlled: this.control.state === "agent",
+        agentControlled: this.control.agentEligible,
       })),
     ];
   }
@@ -697,11 +840,11 @@ export class TabManager {
 
   invalidateAgentControl() {
     for (const popup of this.popups.values()) {
-      popup.controller.releaseAllInput();
+      void Promise.resolve(popup.controller.releaseAgentInput()).catch(() => {});
       popup.agentRuntime.invalidateControl();
     }
     for (const tab of this.tabs) {
-      tab.controller.releaseAllInput();
+      void Promise.resolve(tab.controller.releaseAgentInput()).catch(() => {});
       tab.agentRuntime.invalidateControl();
     }
   }

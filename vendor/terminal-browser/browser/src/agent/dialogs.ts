@@ -124,6 +124,7 @@ export class BrowserDialogs {
 
   async respond(request: DialogResponse): Promise<void> {
     this.control?.assertAgent(request.expectedControlEpoch);
+    await this.control?.input.permit(["keyboard", "focus"], () => this.control?.assertAgent(request.expectedControlEpoch));
     if (this.pending?.controlEpoch !== request.expectedControlEpoch) throw new Error("stale control epoch");
     await this.answer(request.dialogId, request.accept, request.text, () => this.control?.assertAgent(request.expectedControlEpoch));
   }

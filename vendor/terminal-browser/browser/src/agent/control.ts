@@ -1,6 +1,7 @@
+import { InputArbiter } from "./input-arbiter";
 import { INTERACTION_STYLE } from "./interaction-profile";
 
-export type AgentControlState = "agent" | "human" | "paused";
+export type AgentControlState = "agent" | "human" | "shared" | "paused";
 
 export type AgentControlReason =
   | "pointer"
@@ -11,7 +12,8 @@ export type AgentControlReason =
   | "tabs"
   | "devtools"
   | "manual-pause"
-  | "manual-resume";
+  | "manual-resume"
+  | "manual-mode";
 
 export interface AgentControlSnapshot {
   state: AgentControlState;
@@ -19,6 +21,8 @@ export interface AgentControlSnapshot {
   reason: AgentControlReason | null;
   busy: boolean;
   interactionStyle: typeof INTERACTION_STYLE;
+  reservation: ReturnType<BrowserControl["reservationStatus"]>;
+  inputCapabilities: InputArbiter["capabilities"];
 }
 
 export interface AgentControlTransition {
@@ -33,7 +37,8 @@ export interface BrowserControlOptions {
 }
 
 export class BrowserControl {
-  private currentValue: AgentControlSnapshot = {
+  readonly input = new InputArbiter(() => this.state === "shared", () => this.notifyChange());
+  private currentValue: Omit<AgentControlSnapshot, "reservation" | "inputCapabilities"> = {
     state: "agent",
     controlEpoch: 1,
     reason: null,
@@ -49,7 +54,7 @@ export class BrowserControl {
   }
 
   get snapshot(): AgentControlSnapshot {
-    return { ...this.currentValue };
+    return { ...this.currentValue, reservation: this.input.summary, inputCapabilities: this.input.capabilities };
   }
 
   get state(): AgentControlState {
@@ -69,7 +74,20 @@ export class BrowserControl {
     return () => this.listeners.delete(listener);
   }
 
-  takeHuman(reason: Exclude<AgentControlReason, "manual-pause" | "manual-resume">): AgentControlSnapshot {
+  reservationStatus() { return this.input.summary; }
+
+  get agentEligible(): boolean { return this.state === "agent" || this.state === "shared"; }
+
+  selectMode(mode: "agent" | "human" | "shared", expectedEpoch: number): AgentControlSnapshot {
+    this.assertExpectedEpoch(expectedEpoch);
+    if (mode !== "agent" && mode !== "human" && mode !== "shared") throw new Error("invalid control mode");
+    if (mode === "agent" && this.state !== "agent") {
+      try { this.options.beforeResume?.(); } catch {}
+    }
+    return this.transition(mode, mode === "agent" ? "manual-resume" : "manual-mode");
+  }
+
+  takeHuman(reason: Exclude<AgentControlReason, "manual-pause" | "manual-resume" | "manual-mode">): AgentControlSnapshot {
     return this.transition("human", reason);
   }
 
@@ -90,7 +108,7 @@ export class BrowserControl {
 
   assertAgent(expectedEpoch?: number): AgentControlSnapshot {
     if (expectedEpoch !== undefined) this.assertExpectedEpoch(expectedEpoch);
-    if (this.currentValue.state !== "agent") {
+    if (!this.agentEligible) {
       throw new Error(`agent control is ${this.currentValue.state}`);
     }
     return this.snapshot;

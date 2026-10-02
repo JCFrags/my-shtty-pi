@@ -1,3 +1,4 @@
+import type { NativePageChange } from "./types";
 import { BrowserFrames } from "../agent/frames";
 import { BrowserUploads } from "../agent/uploads";
 import { registerDownloadSource, waitForDownloadStart, type BrowserDownloads } from "../agent/downloads";
@@ -29,6 +30,21 @@ export class PopupWindow implements AgentBrowserTarget {
   readonly uploads: BrowserUploads;
   readonly frames: BrowserFrames;
   onMainFrameNavigationStart: (() => void) | null = null;
+  onNativePageChange: ((change: NativePageChange) => void) | null = null;
+  pageDocumentGeneration = 0;
+  pageViewRevision = 0;
+  get pageContents() { return this.window.webContents; }
+  get pageVisible() { return this.visible && !this.destroyed; }
+  noteGeometryChange() {
+    this.pageViewRevision += 1;
+    this.frames.invalidateGeometry();
+    this.onNativePageChange?.({ reason: "geometry" });
+  }
+  private pageNavigated() {
+    this.pageDocumentGeneration += 1;
+    this.pageViewRevision += 1;
+    this.onNativePageChange?.({ reason: "navigation" });
+  }
   readonly input: PageInput;
   cursorShape = "default";
   onCursorChange: (() => void) | null = null;
@@ -54,6 +70,7 @@ export class PopupWindow implements AgentBrowserTarget {
   ) {
     this.window = window;
     this.frames = new BrowserFrames(this.window.webContents, (method, params, session) => this.cdp(method, params, session), session => this.dialogs.initializeSession(session));
+    this.frames.subscribe(() => this.noteGeometryChange());
     this.dialogs = new BrowserDialogs(window.webContents, (method, params, session) => this.cdp(method, params, session));
     this.uploads = new BrowserUploads(this.window.webContents, (method, params, session) => this.cdp(method, params, session), this.frames);
     this.surface = surface;
@@ -78,12 +95,16 @@ export class PopupWindow implements AgentBrowserTarget {
     });
     const contents = window.webContents;
     contents.on("page-title-updated", (_event, title) => this.update({ title }));
-    contents.on("did-navigate", (_event, url) => this.update({ url }));
+    contents.on("did-navigate", (_event, url) => { this.update({ url }); this.pageNavigated(); });
     contents.on("did-navigate-in-page", (_event, url, mainFrame) => {
-      if (mainFrame) this.update({ url });
+      if (mainFrame) { this.onMainFrameNavigationStart?.(); this.update({ url }); this.pageNavigated(); }
     });
     contents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
-      if (mainFrame && !inPlace) this.onMainFrameNavigationStart?.();
+      if (mainFrame && !inPlace) {
+        this.pageDocumentGeneration += 1;
+        this.noteGeometryChange();
+        this.onMainFrameNavigationStart?.();
+      }
     });
     contents.on("did-start-loading", () => this.update({ loading: true }));
     contents.on("did-stop-loading", () => this.update({ loading: false }));
@@ -121,7 +142,7 @@ export class PopupWindow implements AgentBrowserTarget {
 
   close() {
     if (this.destroyed) return;
-    this.releaseAgentInput();
+    void this.releaseAgentInput().catch(() => {});
     this.dialogs.runIntent({ type: "close" }, () => this.window.close(), () => this.window.close());
   }
 
@@ -133,11 +154,15 @@ export class PopupWindow implements AgentBrowserTarget {
   }
 
   zoom(direction: ZoomDirection): number {
-    return stepZoom(this.window.webContents, direction);
+    const zoom = stepZoom(this.window.webContents, direction);
+    this.noteGeometryChange();
+    return zoom;
   }
 
   scaleZoom(ratio: number): number {
-    return scaleZoom(this.window.webContents, ratio);
+    const zoom = scaleZoom(this.window.webContents, ratio);
+    this.noteGeometryChange();
+    return zoom;
   }
 
   setVisible(visible: boolean) {
@@ -169,6 +194,7 @@ export class PopupWindow implements AgentBrowserTarget {
       if (image.isEmpty()) return;
       const dims = image.getSize();
       this.surface.present({ bgra: image.toBitmap(), width: dims.width, height: dims.height });
+      this.onNativePageChange?.({ reason: "paint" });
     });
     await this.cdp("Page.enable");
     await this.cdp("Emulation.setDeviceMetricsOverride", {
@@ -221,18 +247,20 @@ export class PopupWindow implements AgentBrowserTarget {
   runJs(source: string): Promise<unknown> { return this.window.webContents.executeJavaScript(source, true); }
   currentUrl(): string { return this.window.webContents.getURL(); }
   viewportSize() { return { width: this.state.width, height: this.state.height }; }
+  agentPointerPosition() { return this.input.agentPointerPosition(); }
+  setAgentInputGuard(guard: (focusWaited: boolean) => void | Promise<void>) { this.input.setAgentInputGuard(guard); }
   agentPointer(event: ProgrammaticPointerEvent) {
     if (event.kind === "down" && event.button === "left") this.uploads.acceptChooserFromClick();
-    this.input.programmaticPointer(event);
+    return this.input.programmaticPointer(event);
   }
   agentStartDrag() { return this.input.startProgrammaticDrag(); }
   agentFinishDrag(cancelled: boolean) { return this.input.finishProgrammaticDrag(cancelled); }
-  releaseAgentPointer() { this.input.releaseProgrammaticButtons(); }
-  releaseAgentInput() { this.input.releaseProgrammaticInput(); }
+  releaseAgentPointer() { return this.input.releaseProgrammaticButtons(); }
+  releaseAgentInput() { return this.input.releaseProgrammaticInput(); }
   releaseAllInput() { this.input.releaseAllInput(); }
   agentKeyDown(key: AgentKey) { return this.input.programmaticKeyDown(key); }
   agentKeyChar(key: AgentKey) { return this.input.programmaticKeyChar(key); }
-  agentKeyUp(key: AgentKey) { this.input.programmaticKeyUp(key); }
+  agentKeyUp(key: AgentKey) { return this.input.programmaticKeyUp(key); }
   agentSelectAll() { return this.input.selectAllProgrammatic(); }
   agentInsertText(text: string) { return this.input.insertTextProgrammatic(text); }
   agentWheel(x: number, y: number, dx: number, dy: number) { return this.input.programmaticWheel(x, y, dx, dy); }

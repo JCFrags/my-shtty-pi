@@ -201,7 +201,8 @@ return { documentId: registry.documentId, count: nodes.length, matches: nodes.sl
     return query;
   }
 
-  async elementState(ref: string, options: { point?: Point; scroll?: boolean; guard?: () => void; documentId?: string } = {}): Promise<{ documentId: string; state: AgentElementState | null }> {
+  async elementState(ref: string, options: { point?: Point; scroll?: boolean; guard?: () => void; permitScroll?: () => Promise<unknown>; documentId?: string } = {}): Promise<{ documentId: string; state: AgentElementState | null }> {
+    if (options.scroll) await options.permitScroll?.();
     options.guard?.();
     const result = await this.target.runJs(`(() => {
 ${REGISTRY_SETUP}
