@@ -17,6 +17,7 @@ jobs:
       run:
         working-directory: vendor/terminal-browser
     env:
+      CARGO_BUILD_JOBS: 2
       TERMINAL_BROWSER_NATIVE_TARGET: ${{ runner.temp }}/terminal-browser-native
       TERMINAL_BROWSER_RELEASE_OUT: ${{ runner.temp }}/terminal-browser-release
     outputs:
