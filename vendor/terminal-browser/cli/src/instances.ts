@@ -83,9 +83,10 @@ export function reusable(
   return candidates.find((browser) => tty !== null && browser.parentTty === tty) ?? candidates[0];
 }
 
-export async function browsers(terminal: Terminal | null): Promise<Browser[]> {
+export async function browsers(terminal: Terminal | null, owner?: BrowserOwner | null): Promise<Browser[]> {
   const current = (await terminal?.getCurrentPane?.({ tty: callerTty().path, cwd: process.cwd() })) ?? null;
-  const records = await instances();
+  const all = await instances();
+  const records = owner ? ownerMatches(all, owner) : all;
   return locate(records, current, terminal?.name ?? null, await asked(records));
 }
 

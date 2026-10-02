@@ -2,6 +2,7 @@
   "name": "pi-terminal-browser",
   "version": "0.1.0",
   "private": true,
+  "description": "Optional Pi tool adapter for the native terminal-browser CLI",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -9,7 +10,6 @@
   "keywords": [
     "pi-package",
     "pi-extension",
-    "herdr",
     "browser"
   ],
   "pi": {
@@ -18,8 +18,8 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.84.2 <0.86.0",
-    "@earendil-works/pi-coding-agent": ">=0.84.2 <0.86.0"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.84.2",

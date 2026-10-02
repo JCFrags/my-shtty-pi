@@ -1,0 +1,43 @@
+Ghostery network blocking dependencies
+
+The browser uses unmodified @ghostery/adblocker 2.18.2. It does not use the
+Electron wrapper's listener installer, extension loader, cosmetic IPC or
+security-warning suppression. No covered upstream source files were modified.
+
+Mozilla Public License 2.0 applies to the following packages. A copy is in
+MPL-2.0.txt. Source code is available without charge at the exact revisions
+below. These source notices and licenses must remain with distributions of
+the bundled code. MPL obligations apply to the covered files, not unrelated
+terminal-browser files. The project's MIT license does not relicense them.
+
+@ghostery/adblocker 2.18.2
+@ghostery/adblocker-content 2.18.2
+@ghostery/adblocker-extended-selectors 2.18.2
+Copyright (c) 2017-present Ghostery GmbH. All rights reserved.
+Source: https://github.com/ghostery/adblocker/tree/c4c20aa63e3a72113f66777cf35a3f58877a36ee/packages
+
+@ghostery/url-parser 1.3.1
+Source: https://github.com/ghostery/url-parser/tree/d866962e2d65f03fc461425801b603d905cb4bbc
+
+@remusao/guess-url-type 2.1.0
+@remusao/small 2.1.0
+@remusao/smaz 2.2.0
+@remusao/smaz-compress 2.2.0
+@remusao/smaz-decompress 2.2.0
+@remusao/trie 2.1.0
+Source: https://github.com/remusao/mono/tree/27c72bf6f12f8e500b19509eef5eb14445e6e2d5/packages
+
+The transitive tldts-core 7.4.16 and tldts-experimental 7.4.16 packages use the
+MIT license, reproduced in tldts-MIT.txt.
+Source: https://github.com/remusao/tldts/tree/b9519e00ba47ad557cc9fc0416ea0cf5f89a4a12
+
+The public-suffix data used by tldts is derived from the Public Suffix List.
+That list carries the Mozilla Public License 2.0, reproduced in MPL-2.0.txt.
+List project: https://publicsuffix.org/list/
+Corresponding generated data and generation source:
+https://github.com/remusao/tldts/blob/b9519e00ba47ad557cc9fc0416ea0cf5f89a4a12/packages/tldts-experimental/src/data/hashes.ts
+https://github.com/remusao/tldts/tree/b9519e00ba47ad557cc9fc0416ea0cf5f89a4a12/packages/tldts-utils
+
+Exact package versions and integrity hashes are in pnpm-lock.yaml. The
+EasyList filter data has a separate license and notice in ../easylist/NOTICE.txt.
+No trademark license or endorsement by any upstream author is implied.

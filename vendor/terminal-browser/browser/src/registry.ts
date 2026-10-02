@@ -1,4 +1,5 @@
 import { parseElementTarget } from "./agent/protocol";
+import { parseBlockingRequest, type BlockingRequest, type BlockingStatus } from "./blocking/types";
 import { parseLocator } from "./agent/locator";
 import type { DialogResponse } from "./agent/dialogs";
 import fs from "node:fs";
@@ -82,6 +83,7 @@ export interface ControlHost {
   activateTab(id: number): boolean;
   agentTabSwitchAllowed(): boolean;
   agentStatus(): AgentControlSnapshot;
+  blocking(id: number, request: BlockingRequest, epoch?: number): BlockingStatus & { contextId: number };
   agentPause(expectedEpoch: number): AgentControlSnapshot;
   agentResume(expectedEpoch: number): AgentControlSnapshot;
   agentObserve(id: number, request: AgentObserveRequest, signal?: AbortSignal): Promise<AgentActionOutcome<AgentObservation>>;
@@ -113,6 +115,7 @@ interface ControlRequest {
   id?: string;
   cmd: string;
   action?: unknown;
+  site?: unknown;
   url?: string;
   cwd?: string;
   tab?: number;
@@ -347,6 +350,11 @@ export class Registry {
         if (typeof after !== "number" || !Number.isSafeInteger(after) || after < 0) throw new Error("afterId must be a nonnegative integer");
         if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 0 || timeout > 60000) throw new Error("invalid context wait timeout");
         return this.host.waitContexts(after, timeout, requiredEpoch(request.expectedControlEpoch, "wait-contexts"));
+      }
+      case "blocking": {
+        const parsed = parseBlockingRequest(request.action, request.site);
+        const epoch = parsed.action === "status" ? undefined : requiredEpoch(request.expectedControlEpoch, "blocking");
+        return this.host.blocking(requiredTab(request, "blocking"), parsed, epoch);
       }
       case "agent.status":
         return this.host.agentStatus();

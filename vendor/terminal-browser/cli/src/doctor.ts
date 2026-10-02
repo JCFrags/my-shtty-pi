@@ -193,22 +193,31 @@ export async function doctor() {
   const installationFile = process.env.TERMINAL_BROWSER_INSTALLATION ?? (dist ? path.resolve(dist, "../../../installation.json") : "");
   let selected: any = { cli: { state: "unknown" }, pi: { state: "unknown" }, herdr: { state: "unknown" } };
   let candidates: string[] = [];
+  let piConfigured: boolean | null = null;
+  let herdrConfigured: boolean | null = null;
   if (INSTALLATION) {
     try {
       const receipt = boundedJson(installationFile);
       selected.cli = selectedArtifact(receipt.selection.cli, "/bin/terminal-browser");
-      const plugins = boundedJson(receipt.selection.herdrRegistry, 1024 * 1024);
-      if (Array.isArray(plugins)) {
-        const matches = plugins.filter((entry: any) => entry?.plugin_id === "zenbu-labs.terminal-browser");
-        if (matches.length === 1 && typeof matches[0].plugin_root === "string" && matches[0].manifest_path === path.join(matches[0].plugin_root, "herdr-plugin.toml")) selected.herdr = { ...selectedArtifact(matches[0].plugin_root, "/herdr-plugin"), enabled: matches[0].enabled === true };
-      }
-      const settings = boundedJson(receipt.selection.piSettings, 1024 * 1024);
-      const packages = settings.packages;
       const releases = path.join(path.dirname(installationFile), "releases");
-      if (Array.isArray(packages)) {
-        const roots = packages.map((entry: any) => typeof entry === "string" ? entry : entry?.source).filter((source: any) => typeof source === "string" && source.startsWith(`${releases}/`) && source.endsWith("/pi-extension"));
-        if (roots.length === 1) selected.pi = selectedArtifact(roots[0], "/pi-extension");
-      }
+      herdrConfigured = receipt.selection.herdr === null || receipt.selection.herdrRegistry === null ? false : true;
+      piConfigured = receipt.selection.piSettings === null ? false : true;
+      if (!herdrConfigured) selected.herdr = { state: "not-configured", artifactId: null };
+      else try {
+        const plugins = boundedJson(receipt.selection.herdrRegistry, 1024 * 1024);
+        if (Array.isArray(plugins)) {
+          const matches = plugins.filter((entry: any) => entry?.plugin_id === "zenbu-labs.terminal-browser");
+          if (matches.length === 1 && typeof matches[0].plugin_root === "string" && matches[0].manifest_path === path.join(matches[0].plugin_root, "herdr-plugin.toml")) selected.herdr = { ...selectedArtifact(matches[0].plugin_root, "/herdr-plugin"), enabled: matches[0].enabled === true };
+        }
+      } catch {}
+      if (!piConfigured) selected.pi = { state: "not-configured", artifactId: null };
+      else try {
+        const packages = boundedJson(receipt.selection.piSettings, 1024 * 1024).packages;
+        if (Array.isArray(packages)) {
+          const roots = packages.map((entry: any) => typeof entry === "string" ? entry : entry?.source).filter((source: any) => typeof source === "string" && source.startsWith(`${releases}/`) && source.endsWith("/pi-extension"));
+          if (roots.length === 1) selected.pi = selectedArtifact(roots[0], "/pi-extension");
+        }
+      } catch {}
       candidates = fs.readdirSync(releases).filter((entry) => Boolean(hex(entry, 64))).slice(0, 128);
     } catch {}
   }
@@ -225,7 +234,9 @@ export async function doctor() {
   }
   const stateHome = INSTALLATION?.paths.stateHome ?? process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state");
   const receipts = path.join(stateHome, APP_DIR_NAME, "pi-loaded");
-  const receiptScan = inspectPiReceipts(receipts, selected.pi.artifactId ?? null);
+  const receiptScan = piConfigured === false
+    ? { state: "not-configured", complete: true, total: 0, counts: { live: 0, history: 0, invalid: 0, unreadable: 0, incomplete: 0 }, evidence: [] as PiReceiptEvidence[] }
+    : inspectPiReceipts(receipts, selected.pi.artifactId ?? null);
   const loadedPi = receiptScan.evidence.filter((entry) => entry.identity).map((entry) => ({
     identity: entry.identity,
     state: entry.state === "live" ? "loaded" : "unverified",
@@ -243,10 +254,10 @@ export async function doctor() {
     profileOwnership: INSTALLATION
       ? profileOwnership(path.join(INSTALLATION.paths.appData, APP_DIR_NAME))
       : { state: "unverifiable", reason: "No active installation receipt; profile path was not inferred from shell defaults." },
-    pi: { loaded: loadedPi, state: loadedPi.length ? "receipts-found" : "unknown", receipts: receiptScan, remedy: "Use an exact versioned package source at the same settings index. Only reload an idle Pi session with an empty draft after approval." },
-    herdrOwnership: "unknown; persisted plugin registration does not prove the running Herdr registration",
+    pi: { loaded: loadedPi, state: piConfigured === false ? "not-configured" : loadedPi.length ? "receipts-found" : "unknown", receipts: receiptScan, ...(piConfigured === false ? {} : { remedy: "Use an exact versioned package source at the same settings index. Only reload an idle Pi session with an empty draft after approval." }) },
+    herdrOwnership: herdrConfigured === false ? "not-configured" : "unknown; persisted plugin registration does not prove the running Herdr registration",
     graphics: { state: "unknown", reason: process.stdout.isTTY ? "visible terminal rendering has not been verified" : "non-TTY invocation; internal Chromium frames are not visible rendering evidence" },
-    dependencies: { bundledRuntime: Boolean(dist && fs.existsSync(path.join(dist, "build-manifest.json"))), systemLibraries: "unknown; not executed", piCompatibility: "requires Pi >=0.84.2 <0.86.0; host availability unknown", herdrCompatibility: "requires separate registration verification" },
+    dependencies: { bundledRuntime: Boolean(dist && fs.existsSync(path.join(dist, "build-manifest.json"))), systemLibraries: "unknown; not executed", piCompatibility: piConfigured === false ? "optional; not configured" : "requires Pi >=0.84.2 <0.86.0; host availability unknown", herdrCompatibility: herdrConfigured === false ? "optional; not configured" : "requires separate registration verification" },
     automaticRepair: false,
   };
 }

@@ -21,22 +21,27 @@ export interface CommandRequest {
 export type CommandRunner = (request: CommandRequest) => Promise<unknown>;
 
 function ownerEnvironment(context: ToolContext): NodeJS.ProcessEnv {
-  if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_WORKSPACE_ID ||
-    !process.env.HERDR_TAB_ID || !process.env.HERDR_PANE_ID) {
-    throw new Error("Browser tools require a Pi pane managed by Herdr.");
+  const environment = { ...process.env };
+  for (const name of Object.keys(environment)) {
+    if (name.startsWith("TERMINAL_BROWSER_OWNER_")) delete environment[name];
+  }
+  if (environment.HERDR_ENV !== "1") return environment;
+  if (!environment.HERDR_WORKSPACE_ID || !environment.HERDR_TAB_ID || !environment.HERDR_PANE_ID) {
+    throw new Error("Incomplete Herdr pane identity. Do not fall back to another browser owner.");
   }
   return {
-    ...process.env,
-    TERMINAL_BROWSER_OWNER_WORKSPACE_ID: process.env.HERDR_WORKSPACE_ID,
-    TERMINAL_BROWSER_OWNER_TAB_ID: process.env.HERDR_TAB_ID,
-    TERMINAL_BROWSER_OWNER_PANE_ID: process.env.HERDR_PANE_ID,
+    ...environment,
+    TERMINAL_BROWSER_OWNER_WORKSPACE_ID: environment.HERDR_WORKSPACE_ID,
+    TERMINAL_BROWSER_OWNER_TAB_ID: environment.HERDR_TAB_ID,
+    TERMINAL_BROWSER_OWNER_PANE_ID: environment.HERDR_PANE_ID,
     TERMINAL_BROWSER_OWNER_SESSION_ID: context.sessionId,
     TERMINAL_BROWSER_OWNER_PROJECT_DIR: context.cwd,
   };
 }
 
-export const defaultCommandRunner: CommandRunner = ({ args, context, stdin, timeoutMs = 30_000 }) =>
+const runCli: CommandRunner = ({ args, context, stdin, timeoutMs = 30_000 }) =>
   new Promise((resolveResult, reject) => {
+    if (context.signal?.aborted) return reject(new Error("Browser operation cancelled before dispatch."));
     const [command, commandArgs] = cliCommand(args);
     const child = spawn(command, commandArgs, {
       cwd: context.cwd,
@@ -60,6 +65,7 @@ export const defaultCommandRunner: CommandRunner = ({ args, context, stdin, time
     const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
     const abort = () => child.kill("SIGTERM");
     context.signal?.addEventListener("abort", abort, { once: true });
+    if (context.signal?.aborted) abort();
     child.once("error", reject);
     child.once("close", (code) => {
       clearTimeout(timer);
@@ -75,6 +81,51 @@ export const defaultCommandRunner: CommandRunner = ({ args, context, stdin, time
     });
     child.stdin.end(stdin);
   });
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+// Keep every adapter operation on the native CLI. Non-Herdr hosts attach only;
+// a piped child process must not take over the terminal that is running Pi.
+export function ownerCommandRunner(run: CommandRunner, environment: NodeJS.ProcessEnv = process.env): CommandRunner {
+  return async (request) => {
+    if (request.context.signal?.aborted) throw new Error("Browser operation cancelled before dispatch.");
+    if (environment.HERDR_ENV === "1") return run(request);
+    const { args, context } = request;
+    const owner = ["--session", context.sessionId, "--project", context.cwd];
+    const call = (command: string[]) => run({ ...request, args: [...command, ...owner] });
+    if (args[0] === "agent") return call(args);
+    if (args[0] !== "companion") throw new Error("Unsupported Pi browser adapter command.");
+    if (args[1] === "tabs") return call(["session", "tabs", ...args.slice(2)]);
+    if (args[1] !== "open") throw new Error("Unsupported Pi browser companion command.");
+
+    const list = () => call(["session", "tabs", "--action", "list"]);
+    let value: unknown;
+    try {
+      value = await list();
+    } catch (error) {
+      if (error instanceof BrowserCommandError && error.code === "SESSION_NOT_FOUND") {
+        throw new BrowserCommandError(error.code,
+          `Launch the owned browser in a separate visible terminal, then call browser_open again: terminal-browser open --session ${shellQuote(context.sessionId)} --project ${shellQuote(context.cwd)}. Pi will not take over its own terminal.`);
+      }
+      throw error;
+    }
+    const url = args.slice(2).find(arg => arg !== "--new-tab" && arg !== "--no-focus");
+    if (args.includes("--new-tab")) {
+      value = await call(["session", "tabs", "--action", "open", "--url", url ?? "about:blank"]);
+    } else if (url) {
+      const status = await call(["agent", "status"]) as ControlStatus;
+      if (status.state !== "agent") throw new Error("Browser control is with the user. Resume only when the user explicitly asks.");
+      const outcome = await call(["agent", "navigate", url, "--control-epoch", String(status.controlEpoch)]) as Record<string, unknown>;
+      if (outcome.dialog) return { ...await list() as Record<string, unknown>, action: "reused", dialog: outcome.dialog };
+      value = await list();
+    }
+    return { ...value as Record<string, unknown>, action: "reused" };
+  };
+}
+
+export const defaultCommandRunner: CommandRunner = ownerCommandRunner(runCli);
 
 export interface BrowserStartupReport {
   version: 1;
@@ -115,18 +166,36 @@ function parseStartupReport(message: string): BrowserStartupReport | null {
   }
 }
 
+export class BrowserCommandError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.name = "BrowserCommandError";
+  }
+}
+
 export function actionableError(stderr: string): Error {
-  const message = stderr.replace(/^terminal-browser:\s*/u, "").trim();
+  let message = stderr.replace(/^terminal-browser:\s*/u, "").trim();
   const startup = parseStartupReport(message);
   if (startup) return new BrowserStartupError(startup);
-  if (/agent control is human|agent control is paused|browser control is with the user/iu.test(message)) {
-    return new Error("Browser control is with the user. Wait until the user returns control, then call browser_control with status or resume.");
+  let code: string | undefined;
+  if (Buffer.byteLength(message) <= 16 * 1024) {
+    try {
+      const response = JSON.parse(message);
+      if (response?.ok === false && /^[A-Z0-9_]{1,64}$/.test(response.error?.code) &&
+          typeof response.error?.message === "string" && Buffer.byteLength(response.error.message) <= 8192) {
+        code = response.error.code;
+        message = response.error.message;
+      }
+    } catch {}
   }
-  if (/stale control epoch|page changed|stale or unknown observation/iu.test(message)) {
-    return new Error("Browser state changed. Call browser_observe and inspect the outcome before deciding on another action.");
+  if (code === "CONTROL_NOT_AGENT" || /agent control is human|agent control is paused|browser control is with the user/iu.test(message)) {
+    message = "Browser control is with the user. Read browser_control status and resume only when the user explicitly asks.";
+  } else if (code === "STATE_CHANGED" || /stale control epoch|page changed|stale or unknown observation/iu.test(message)) {
+    message = "Browser state changed. Call browser_observe and inspect the outcome before deciding on another action.";
+  } else if (code === "SESSION_NOT_FOUND" || /no browser companion/iu.test(message)) {
+    message = "No owned browser is open. Call browser_open for launch or attachment guidance.";
   }
-  if (/no browser companion/iu.test(message)) return new Error("No companion browser is open. Call browser_open first.");
-  return new Error(message || "Browser operation failed.");
+  return code ? new BrowserCommandError(code, message) : new Error(message || "Browser operation failed.");
 }
 
 export interface BrowserStateCache {
@@ -151,6 +220,7 @@ export type LocatorSpec = Array<
 >;
 export type BrowserElementTarget = { ref: string } | { locator: LocatorSpec };
 export type BrowserActionTarget = BrowserElementTarget | { x: number; y: number };
+export type BlockingAction = "status" | "enable" | "disable" | "allow-site" | "block-site" | "clear-diagnostics" | "reload";
 
 export type BrowserAction = { frame?: string } & (
   | { action: "dialog"; contextId?: number; dialogId: string; accept: boolean; text?: string }
@@ -237,6 +307,16 @@ export class PiBrowserClient {
   private observation: BrowserStateCache | null = null;
   private contextId: number | null = null;
   private pendingDialog: { id: string; contextId: number; controlEpoch: number } | null = null;
+  private contextKey: string | null = null;
+
+  private bindContext(context: ToolContext) {
+    const key = JSON.stringify([context.sessionId, context.cwd]);
+    if (key === this.contextKey) return;
+    this.contextKey = key;
+    this.observation = null;
+    this.contextId = null;
+    this.pendingDialog = null;
+  }
 
   private cacheDialog(value: unknown) {
     this.pendingDialog = null;
@@ -255,6 +335,7 @@ export class PiBrowserClient {
   constructor(private readonly runner: CommandRunner = defaultCommandRunner) {}
 
   async open(context: ToolContext, options: { url?: string; newTab?: boolean; focus?: boolean }) {
+    this.bindContext(context);
     const args = ["companion", "open"];
     if (options.newTab) args.push("--new-tab");
     if (options.focus === false) args.push("--no-focus");
@@ -264,10 +345,11 @@ export class PiBrowserClient {
     this.pendingDialog = null;
     const tabs = boundedTabs(value);
     this.contextId = Number(tabs.find(tab => tab.active)?.id) || null;
-    return { action: value.action, tabs };
+    return { action: value.action, tabs, ...(value.dialog ? { dialog: this.cacheDialog(value.dialog), completed: false } : {}) };
   }
 
   async tabs(context: ToolContext, request: { action: "list" | "activate" | "open" | "close" | "wait" | "downloads" | "download_wait" | "download_cancel"; downloadId?: string; contextId?: number; url?: string; afterId?: number; timeoutMs?: number }) {
+    this.bindContext(context);
     const args = ["companion", "tabs", "--action", request.action];
     if (request.contextId !== undefined) args.push("--tab", String(request.contextId));
     if (request.downloadId !== undefined) args.push("--download-id", request.downloadId);
@@ -297,6 +379,7 @@ export class PiBrowserClient {
     filter?: LocatorSpec;
     ref?: string;
   } = {}) {
+    this.bindContext(context);
     const view = options.view ?? "semantic";
     const scope = options.scope ?? "viewport";
     const args = [
@@ -365,6 +448,7 @@ export class PiBrowserClient {
   }
 
   private async status(context: ToolContext): Promise<ControlStatus> {
+    this.bindContext(context);
     const status = await this.runner({ args: ["agent", "status"], context }) as ControlStatus;
     if (status.state !== "agent" || (this.pendingDialog && this.pendingDialog.controlEpoch !== status.controlEpoch)) {
       this.pendingDialog = null;
@@ -393,6 +477,22 @@ export class PiBrowserClient {
     const observation = await this.observe(context);
     const { controlEpoch: _resultEpoch, ...visibleResult } = result;
     return { ...visibleResult, observationReady: !observation.dialog, url: "url" in observation ? observation.url : undefined, ...(observation.dialog ? { dialog: observation.dialog } : {}) };
+  }
+
+  async blocking(context: ToolContext, request: { action: BlockingAction; site?: string; contextId?: number }) {
+    this.bindContext(context);
+    const args = ["agent", "blocking", request.action];
+    if (request.site !== undefined) args.push("--site", request.site);
+    const targetContext = request.contextId ?? this.contextId;
+    if (targetContext !== null) args.push("--tab", String(targetContext));
+    if (request.action !== "status") {
+      const status = await this.status(context);
+      if (status.state !== "agent") throw new Error("Browser control is with the user. Resume only when the user explicitly asks.");
+      args.push("--control-epoch", String(status.controlEpoch));
+      this.observation = null;
+      this.pendingDialog = null;
+    }
+    return this.runner({ args, context });
   }
 
   async act(context: ToolContext, request: BrowserAction) {

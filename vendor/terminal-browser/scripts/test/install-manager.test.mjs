@@ -28,8 +28,8 @@ function sandbox(t, fresh = false) {
   assert(run("configure", root, receipt).repeated);
   return { home, root, settings, selection, paths, run };
 }
-function archive(t, change = () => {}) {
-  const { dir, manifest } = fixture(t);
+function archive(t, change = () => {}, schemaVersion = 2) {
+  const { dir, manifest } = fixture(t, schemaVersion);
   change(dir, manifest);
   fs.unlinkSync(path.join(dir, "build-manifest.json"));
   manifest.files = inventory(dir);
@@ -46,6 +46,55 @@ function archive(t, change = () => {}) {
   writeJson(outerFile, outer);
   return { tarball, outerFile, outer, manifest };
 }
+
+test("fresh core init and each optional integration install and roll back without changing unselected hosts", (t) => {
+  const candidate = archive(t);
+  for (const mode of ["core", "pi", "herdr", "skill"]) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "browser-fresh-"));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const root = path.join(home, "install");
+    const settings = path.join(home, "pi/settings.json");
+    const registry = path.join(home, "herdr/plugins.json");
+    for (const file of [settings, registry]) fs.mkdirSync(path.dirname(file));
+    writeJson(settings, { packages: ["unrelated"], retained: true });
+    writeJson(registry, [{ plugin_id: "unrelated", enabled: false }]);
+    const before = [settings, registry].map(file => fs.readFileSync(file, "utf8"));
+    const env = { PATH: process.env.PATH, HOME: home, XDG_RUNTIME_DIR: path.join(home, "runtime") };
+    const run = (...args) => JSON.parse(execFileSync(process.execPath, [path.join(repository, "scripts/install-manager.mjs"), ...args], { env, encoding: "utf8" }));
+    const options = mode === "pi" ? ["--pi-settings", settings] : mode === "herdr" ? ["--herdr-registry", registry, "--herdr-link", path.join(home, "herdr/terminal-browser")] : mode === "skill" ? ["--skill", path.join(home, "skills/terminal-browser")] : [];
+    const initialized = run("init", root, ...options);
+    assert.equal(fs.statSync(initialized.receipt).mode & 0o777, 0o600);
+    const receipt = JSON.parse(fs.readFileSync(initialized.receipt));
+    assert.match(receipt.namespace, /^terminal-browser-[a-f0-9]{8}$/);
+    assert.equal(receipt.selection.piSettings, mode === "pi" ? settings : null);
+    assert.equal(receipt.selection.herdrRegistry, mode === "herdr" ? registry : null);
+    assert.deepEqual([settings, registry].map(file => fs.readFileSync(file, "utf8")), before);
+    run("stage", candidate.tarball, candidate.outerFile, root);
+    run("activate", root, candidate.manifest.artifactId);
+    assert(run("activate", root, candidate.manifest.artifactId).repeated);
+    assert.equal(fs.readlinkSync(receipt.selection.cli), path.join(root, "releases", candidate.manifest.artifactId, "terminal-browser/bin/terminal-browser"));
+    if (mode !== "pi") assert.equal(fs.readFileSync(settings, "utf8"), before[0]);
+    if (mode !== "herdr") assert.equal(fs.readFileSync(registry, "utf8"), before[1]);
+    if (mode === "skill") assert(fs.readlinkSync(receipt.selection.skill).endsWith("/skills/default/terminal-browser"));
+    const retained = path.join(receipt.paths.dataHome, receipt.namespace, "retained");
+    fs.mkdirSync(path.dirname(retained), { recursive: true });
+    fs.writeFileSync(retained, "keep profile state");
+    run("rollback", root);
+    assert(!fs.existsSync(receipt.selection.cli));
+    assert.equal(fs.readFileSync(retained, "utf8"), "keep profile state");
+    assert.deepEqual([settings, registry].map(file => fs.readFileSync(file, "utf8")), before);
+    assert.equal(run("status", root).candidates.length, 1);
+    assert.equal(run("recover", root).recovered, false);
+    if (mode === "core") {
+      const hook = path.join(home, "crash.cjs");
+      fs.writeFileSync(hook, `const fs=require('node:fs');const rename=fs.renameSync;let writes=0;fs.renameSync=function(...args){const result=rename.apply(this,args);if(++writes===2)process.kill(process.pid,'SIGKILL');return result;};`);
+      assert.throws(() => execFileSync(process.execPath, ["--require", hook, path.join(repository, "scripts/install-manager.mjs"), "activate", root, candidate.manifest.artifactId], { env, stdio: "pipe" }), error => error.signal === "SIGKILL");
+      assert.equal(run("recover", root).committed, false);
+      assert.equal(run("status", root).selected, null);
+      assert(!fs.existsSync(receipt.selection.cli));
+    }
+  }
+});
 
 test("fresh and repeated install; stage never selects; rollback retains releases", (t) => {
   const box = sandbox(t, true);
@@ -69,7 +118,7 @@ test("fresh and repeated install; stage never selects; rollback retains releases
 test("A/B activation preserves exact Pi slot, filters, unrelated subsequent edits and original launcher", (t) => {
   const box = sandbox(t);
   fs.writeFileSync(box.selection.cli, "#!/bin/sh\necho prior\n", { mode: 0o755 });
-  const a = archive(t);
+  const a = archive(t, () => {}, 1);
   const b = archive(t, (dir, manifest) => { fs.appendFileSync(path.join(dir, "browser/dist/main.js"), " B"); manifest.identity.source.commit = "b".repeat(40); });
   stage(a.tarball, a.outerFile, box.root);
   activate(box.root, a.manifest.artifactId);

@@ -6,15 +6,15 @@ import { promisify } from "node:util";
 
 import {
   AGENT_SOCKETS_DIR,
-  BROWSER_OWNER_ENV,
   browserOwnerEnvironment,
-  requireHerdrBrowserOwner,
+  isNativeBrowserOwner,
 } from "pixel-store";
 import type { BrowserOwner, InstanceRow } from "pixel-store";
 
 import { control } from "./control";
 import { ownerMatches, recordKey } from "./instances";
 import { instances } from "./registry";
+import { environmentOwner } from "./session";
 import {
   bindStartupPane,
   createStartupAttempt,
@@ -73,18 +73,9 @@ export interface CompanionTabsRequest {
 }
 
 export function currentBrowserOwner(environment: NodeJS.ProcessEnv, projectDir: string): BrowserOwner {
-  const explicit = environment[BROWSER_OWNER_ENV.paneId];
-  if (explicit) {
-    const parsed = requireHerdrBrowserOwner({
-      ...environment,
-      HERDR_WORKSPACE_ID: environment[BROWSER_OWNER_ENV.workspaceId],
-      HERDR_TAB_ID: environment[BROWSER_OWNER_ENV.tabId],
-      HERDR_PANE_ID: explicit,
-    }, environment[BROWSER_OWNER_ENV.projectDir] ?? projectDir, environment[BROWSER_OWNER_ENV.sessionId]);
-    return parsed;
-  }
-  if (environment.HERDR_ENV !== "1") throw new Error("browser companion requires a Herdr Pi pane");
-  return requireHerdrBrowserOwner(environment, projectDir, environment.PI_SESSION_ID);
+  const owner = environmentOwner(environment, projectDir);
+  if (!owner) throw new Error("browser companion requires a Herdr pane; without Herdr use open --session <id> --project <directory>");
+  return owner;
 }
 
 function ownerLockPath(owner: BrowserOwner): string {
@@ -294,6 +285,7 @@ export async function openCompanion(
   options: CompanionOpenOptions,
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<CompanionOpenResult> {
+  if (isNativeBrowserOwner(owner)) throw new Error("companion open is the Herdr adapter; use open --session <id> --project <directory> for a native session");
   return withOwnerLock(owner, async () => {
     const existing = await liveOwned(owner);
     if (existing.length > 1) throw new Error("multiple browsers claim this Pi pane");
@@ -321,8 +313,8 @@ export async function openCompanion(
 
 export async function ownedBrowser(owner: BrowserOwner): Promise<InstanceRow> {
   const found = await liveOwned(owner);
-  if (found.length === 0) throw new Error("no browser companion for this Pi pane; call browser_open first");
-  if (found.length > 1) throw new Error("multiple browsers claim this Pi pane");
+  if (found.length === 0) throw new Error("no browser companion or native session for this owner; use companion open in Herdr, or open --session <id> --project <directory>");
+  if (found.length > 1) throw new Error("multiple browsers claim this owner");
   return found[0]!.record;
 }
 

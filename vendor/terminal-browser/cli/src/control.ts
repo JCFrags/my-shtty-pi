@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { RUNTIME_IDENTITY, runtimeMatches } from "pixel-store";
+import { commandError } from "./errors";
 
 const MAX_CONTROL_HEADER_BYTES = 256 * 1024;
 const MAX_CONTROL_BINARY_BYTES = 2 * 1024 * 1024;
@@ -21,7 +22,7 @@ function requestControl(
     const connection = net.connect(socketPath);
     const timer = setTimeout(() => {
       connection.destroy();
-      reject(new Error("control request timed out"));
+      reject(commandError("ACTION_OUTCOME_UNKNOWN", "control request timed out; inspect current state before any further action. Do not replay the request."));
     }, timeoutMs);
     let buffer = Buffer.alloc(0);
     let header: {

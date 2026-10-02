@@ -13,6 +13,8 @@ import { cursorShapeFor } from "./cursor";
 import { PageInput } from "./input";
 import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
+import { controlBlocking } from "../blocking/session";
+import type { BlockingRequest, BlockingStatus } from "../blocking/types";
 
 export interface PopupState {
   url: string;
@@ -111,6 +113,10 @@ export class PopupWindow implements AgentBrowserTarget {
 
   get state(): PopupState {
     return this.stateValue;
+  }
+
+  blocking(request: BlockingRequest): BlockingStatus {
+    return controlBlocking(this.window.webContents, request);
   }
 
   close() {

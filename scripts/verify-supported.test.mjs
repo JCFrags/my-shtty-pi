@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { verifyBrowserCopy } from './verify-browser-copy.mjs';
 import { chronoScriptEnvironment, finishChronoBuild, imports, localReference, removeChronoBuildMaps, scanBoundary, scanFile, scanPrivacy, snapshotIndex, validateManifests, verifyStatic, walk } from './verify-supported.mjs';
 
 function fixture(callback) {
@@ -78,6 +80,48 @@ test('privacy rejects credentials and private home paths without exposing values
   assert.throws(() => scanPrivacy('/' + 'home' + '/private-user/project', 'runtime'), /private home path/);
   assert.doesNotThrow(() => scanPrivacy('/' + 'home' + '/fixture/project', 'packages/example/test/privacy.test.mjs'));
 });
+
+test('browser provenance distinguishes local additions and retains removed source hashes', () => fixture(root => {
+  const prefix = 'vendor/terminal-browser/';
+  const copy = join(root, prefix);
+  const original = JSON.parse(readFileSync(join(repository, prefix, 'copy-provenance.json'), 'utf8'));
+  const inputs = {
+    'package.json': JSON.stringify({ packageManager: 'pnpm@10.13.1', scripts: {} }),
+    'pnpm-workspace.yaml': 'packages:\n  - cli\n',
+    'pnpm-lock.yaml': "lockfileVersion: '9.0'\n\nimporters:\n  .:\n  cli:\n\npackages:\n",
+    'cli/package.json': JSON.stringify({ name: 'terminal-browser-cli' }),
+  };
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  const provenance = { schemaVersion: 1, source: original.source, excluded: original.excluded, files: [] };
+  for (const [path, bytes] of Object.entries(inputs)) {
+    mkdirSync(dirname(join(copy, path)), { recursive: true });
+    writeFileSync(join(copy, path), bytes);
+    provenance.files.push({ path, sourceSha256: hash(bytes), sha256: hash(bytes), mode: 0o644, modified: false });
+  }
+  const files = [...Object.keys(inputs), 'copy-provenance.json'].map(path => prefix + path);
+  const save = () => writeFileSync(join(copy, 'copy-provenance.json'), JSON.stringify(provenance));
+  save();
+  assert.equal(verifyBrowserCopy(root, files).files, 4);
+  provenance.schemaVersion = 2;
+  provenance.removed = [{ path: 'cli/legacy.ts', sourceSha256: 'a'.repeat(64) }];
+  const local = { path: 'cli/session.ts', sourceSha256: null, sha256: hash('export {};\n'), mode: 0o644, modified: true };
+  writeFileSync(join(copy, local.path), 'export {};\n');
+  provenance.files.push(local);
+  files.push(prefix + local.path);
+  save();
+  assert.equal(verifyBrowserCopy(root, files).files, 5);
+  provenance.schemaVersion = 1;
+  save();
+  assert.throws(() => verifyBrowserCopy(root, files), /invalid record/);
+  provenance.schemaVersion = 2;
+  local.modified = false;
+  save();
+  assert.throws(() => verifyBrowserCopy(root, files), /inconsistent modified flag/);
+  local.modified = true;
+  provenance.removed[0].path = local.path;
+  save();
+  assert.throws(() => verifyBrowserCopy(root, files), /invalid removed record/);
+}));
 
 test('import discovery covers literal static, dynamic, require and URL resources', () => {
   const specs = imports('import x from "./a.js"; export { y } from "./b.js"; import("./c.js"); require("./d.js"); new URL("./helper.py", import.meta.url);');

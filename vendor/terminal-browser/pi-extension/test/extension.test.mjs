@@ -41,14 +41,27 @@ test("visual tool results emit native image content without image data in text o
   assert.equal(JSON.stringify(value.details).includes(imageData), false);
 });
 
-test("extension registers only the five compact browser tools", async () => {
-  assert.deepEqual((await registeredTools()).map((tool) => tool.name), [
+test("extension registers only the five compact browser tools with sequential cache access", async () => {
+  const tools = await registeredTools();
+  assert(tools.every(tool => tool.executionMode === "sequential"));
+  assert.deepEqual(tools.map((tool) => tool.name), [
     "browser_open",
     "browser_tabs",
     "browser_observe",
     "browser_act",
     "browser_control",
   ]);
+});
+
+test("blocking options use browser_control and reject implicit or unrelated site changes", async () => {
+  let received;
+  const control = (await registeredTools({ blocking: async (_context, request) => { received = request; return { enabled: true }; } })).find(tool => tool.name === "browser_control");
+  const ctx = { cwd: "/tmp/project", sessionManager: { getSessionId: () => "session-a" } };
+  await control.execute("call", { action: "blocking", blocking_action: "allow-site", site: "example.test", context_id: 7 }, undefined, undefined, ctx);
+  assert.deepEqual(received, { action: "allow-site", site: "example.test", contextId: 7 });
+  await assert.rejects(control.execute("call", { action: "blocking", blocking_action: "allow-site" }, undefined, undefined, ctx), /site is required/);
+  await assert.rejects(control.execute("call", { action: "blocking", blocking_action: "status", site: "example.test" }, undefined, undefined, ctx), /site is required only/);
+  await assert.rejects(control.execute("call", { action: "resume", context_id: 7 }, undefined, undefined, ctx), /require action blocking/);
 });
 
 test("tool schemas keep browser keys, sockets, observation ids, and control epochs internal", async () => {

@@ -1,3 +1,4 @@
+import { ACTION_MIGRATION } from "./errors";
 
 interface CommandHelp {
   summary: string;
@@ -14,8 +15,14 @@ Opens the browser in the current pane. Pass --split to open it in a new
 split pane instead.
 
 The url can be a normal url, a localhost port, or a path to an html file.
+For native automation, supply both --session and --project. The project is
+canonicalized at launch. Keep the terminal open and run agent or session tabs
+from another shell with the same options. An owned launch never merges into a
+neighbor browser and refuses a duplicate owner. No host-agent setup runs.
 
 Options:
+  --session <id>        Own this native session without Pi or Herdr
+  --project <directory> Fixed project root for that session's files (with --session)
   --split <direction>   Open in a new pane: right, left, down, up
   --size <fraction>     How much of the space the split takes (0.2 to 0.95)
   --ssh <user@host>     Perform all network requests through a remote server, then
@@ -62,11 +69,11 @@ Examples:
     usage: "terminal-browser ls [options]",
     body: `
 Lists the browsers running in this terminal tab, each with its tabs. The tab
-ids it prints are what --tab takes in terminal-browser action.
+ids it prints are what --tab takes in terminal-browser agent.
 
 Options:
   --all               Every browser, not just this terminal tab
-  --json              Machine readable, including cdp ports and pane ids
+  --json              Machine readable, including browser keys and pane ids
 `,
   },
   setup: {
@@ -142,14 +149,17 @@ close all open browsers.
   },
   agent: {
     summary: "Observe, control, and act through native AgentCursor",
-    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|status|pause|resume> [options]",
+    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|blocking|status|pause|resume> [options]",
     body: `
 Reads a fresh observation and performs native actions on the selected tab.
-Responses are JSON. Observation-bound actions require the latest observation
-and control epoch; navigation invalidates earlier observations.
+Success responses are JSON on stdout. Failures exit nonzero and write
+{ok:false,error:{code,message}} on stderr. Startup failures also retain their
+startup report fields. Observation-bound actions require the latest observation
+and control epoch. Navigation invalidates earlier observations. Never replay a
+possibly delivered action or resume human control without an explicit request.
 
-Uploads accept 1–16 regular files within the owning Pi project, at most 32 MiB each and 64 MiB total. Secret paths and symlink escapes are rejected. The launch project root stays fixed across Pi cwd/session changes; reopen the companion to use another project. CLI relative paths use the current working directory. A visible native click opens the chooser; no file contents are returned.
-Downloads: companion tabs --action downloads [--tab <id>], or --action download_wait|download_cancel --download-id <id> [--timeout-ms <n>]. Saved files stay under .terminal-browser-downloads in the owning project and are never opened.
+Uploads accept 1–16 regular files within the owning project, at most 32 MiB each and 64 MiB total. Secret paths and symlink escapes are rejected. The launch project root stays fixed. Use another explicit session/project or reopen the Herdr companion to change it. CLI relative paths use the current working directory. A visible native click opens the chooser; no file contents are returned.
+Downloads: session tabs --session <id> --project <directory> --action downloads [--tab <id>], or --action download_wait|download_cancel --download-id <id> [--timeout-ms <n>]. Herdr callers can use companion tabs. Saved files stay under .terminal-browser-downloads in the owning project and are never opened.
 
 Commands:
   terminal-browser agent observe [options]
@@ -164,9 +174,16 @@ Commands:
   terminal-browser agent navigate <url> --control-epoch <n> [options]
   terminal-browser agent get-url --control-epoch <n> [options]
   terminal-browser agent wait-for (--ref <ref> | --locator-json <steps> | --text <text>) [--condition exists|visible|text|actionable] [--timeout-ms <n>] --observation <id> --control-epoch <n> [options]
+  terminal-browser agent blocking status [options]
+  terminal-browser agent blocking <enable|disable|clear-diagnostics|reload> --control-epoch <n> [options]
+  terminal-browser agent blocking <allow-site|block-site> --site <site> --control-epoch <n> [options]
   terminal-browser agent status [--browser <key>]
   terminal-browser agent pause --control-epoch <n> [--browser <key>]
   terminal-browser agent resume --control-epoch <n> [--browser <key>]
+
+Blocking status is read-only and remains available while paused. Every blocking
+mutation requires the current control epoch. No command enables blocking or
+resumes control implicitly. Blocking uses the same owner and --tab selectors.
 
 Context waits: companion tabs --action wait --after-id <last-context-id> [--timeout-ms <0..60000>].
 Use companion tabs --action list to read context IDs and opener IDs.
@@ -174,7 +191,9 @@ Dialogs never auto-accept. Use the exact dialog ID, context, and epoch returned 
 observe or an interrupted action. A response can run while that action is blocked.
 
 Common options:
-  --browser <key>       Select a browser from terminal-browser ls --all
+  --session <id>        Select an exact native session (requires --project)
+  --project <directory> Select its canonical owning project
+  --browser <key>       Narrow the owner selection; never override ownership
   --tab <id>            Select a stable tab or native popup context ID
   --observation <id>    Observation id returned by observe
   --control-epoch <n>   Expected control epoch
@@ -195,27 +214,42 @@ text as one native edit. Status, pause, and resume are browser-wide and do not
 accept --tab.
 `,
   },
-  action: {
-    summary: "Use the open browser through the agent-browser CLI",
-    usage: "terminal-browser action [selectors] -- <command>",
+  session: {
+    summary: "Manage native session contexts and downloads",
+    usage: "terminal-browser session tabs --session <id> --project <directory> [options]",
     body: `
-An agent-browser compatible CLI for the browser you already have open.
-Everything after -- is an agent-browser command. With no selectors it targets
-the browser in this terminal tab and that browser's active tab.
+Uses the same native controller as agent and the Herdr companion adapter.
+Open the visible browser first: terminal-browser open <url> --session work --project .
 
-Selectors:
-  --browser <key>     A browser key from terminal-browser ls
-  --tab <id>          A tab id from terminal-browser ls
-  --target <id>       A CDP target id
-  --follow            Bring the tab to the front before running the command
+Options:
+  --action <action>    list (default), open, activate, close, wait,
+                       downloads, download_wait, or download_cancel
+  --tab <id>           Exact context ID for activate/close; optional download filter
+  --url <url>          URL for a new context
+  --after-id <id>      Last context ID for wait
+  --download-id <id>   Exact transfer ID for download_wait/download_cancel
+  --timeout-ms <n>     Wait limit, 0 to 60000 (default 10000)
 
-Examples:
-  terminal-browser action -- snapshot
-  terminal-browser action -- click @e14
-  terminal-browser action -- eval "document.title"
-  terminal-browser action --browser 90107-1 --tab 2 -- fill @e3 "hello"
-  terminal-browser action done
+Success responses are JSON on stdout. Failures are JSON on stderr with a nonzero
+exit. Context changes invalidate observations. File operations stay inside the
+canonical launch project and use owner-scoped download history. Wait timeouts do
+not replay actions. Tabs and popups use stable native context IDs, not CDP IDs.
 `,
+  },
+  companion: {
+    summary: "Open or manage this Herdr pane's browser companion",
+    usage: "terminal-browser companion <open|tabs> [options]",
+    body: `
+The Herdr adapter retains exact workspace/tab/pane ownership. Open accepts an
+optional URL, --new-tab, and --no-focus. Tabs uses the same options as session
+tabs. Pi is optional. Without Herdr, use open --session <id> --project <directory>
+and session tabs or agent with the same explicit owner.
+`,
+  },
+  action: {
+    summary: "Retired legacy route; prints native migration guidance",
+    usage: "terminal-browser action --help",
+    body: ACTION_MIGRATION,
   },
 };
 

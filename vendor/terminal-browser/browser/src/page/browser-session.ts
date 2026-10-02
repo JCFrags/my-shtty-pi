@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { app, net, session } from "electron";
 import type { Session, WebContents } from "electron";
+import { blockingProfile } from "../blocking/session";
 
 export interface DownloadProgress {
   name: string;
@@ -64,8 +65,12 @@ export function configureBrowserSession(
   });
   target.setPermissionCheckHandler((contents, permission) => granted(contents, permission));
 
-  target.webRequest.onBeforeRequest({ urls: ["file://*", "file://*/*"] }, (details, callback) => {
-    callback({ cancel: details.resourceType === "xhr" });
+  const blocking = blockingProfile(target);
+  // Electron retains only the last listener. Keep the file-XHR guard first,
+  // even when ad blocking is disabled, excepted, or unavailable.
+  target.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+    const fileXhr = details.url.startsWith("file:") && details.resourceType === "xhr";
+    callback({ cancel: fileXhr || blocking.shouldBlock(details) });
   });
 
   target.protocol.handle("file", async (request) => {

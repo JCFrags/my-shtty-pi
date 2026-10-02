@@ -14,7 +14,6 @@ CHANNEL="${2:-dev}"
 APP="$STAGE/electron/terminal-browser.app"
 LOOSE_BINARIES=(
   "$STAGE/bin/native-scroll-helper"
-  "$STAGE/agent-browser/bin/agent-browser"
   "$STAGE/browser/native/pixel.node"
 )
 
