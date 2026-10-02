@@ -128,11 +128,9 @@ test("pressKey normalizes Shift+Tab and Control+A", async () => {
 });
 
 test("pressKey releases a held key after takeover and ignores the duplicate up", async () => {
-  let calls = 0;
   const { driver, events } = driverFixture({
     beforeInput: () => {
-      calls += 1;
-      if (calls === 2) throw new Error("agent control is human");
+      if (events.some(event => event.kind === "key-down")) throw new Error("agent control is human");
     },
   });
   await assert.rejects(driver.pressKey("x", "content"), /agent control is human/);
@@ -171,11 +169,9 @@ test("scroll clamps steps and rejects invalid bounds", async () => {
 });
 
 test("scroll stops before a later wheel after the guard refuses", async () => {
-  let calls = 0;
   const { driver, events } = driverFixture({
     beforeInput: () => {
-      calls += 1;
-      if (calls === 2) throw new Error("stale control epoch");
+      if (events.some(event => event.kind === "wheel")) throw new Error("stale control epoch");
     },
   });
   await assert.rejects(driver.scroll({ dx: 0, dy: 20, steps: 3, mode: "content" }), /stale control epoch/);

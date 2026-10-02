@@ -5,7 +5,7 @@ import os from "node:os";
 import { builtinModules } from "node:module";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { fileHash, inventory, objectHash, readJson, sourceIdentity, validateBundle, validateManifest, writeJson } from "./dist-manifest.mjs";
+import { fileHash, inventory, objectHash, piExtensions, readJson, sourceIdentity, validateBundle, validateManifest, writeJson } from "./dist-manifest.mjs";
 
 const command = (bin, args, cwd) => execFileSync(bin, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
 const builtins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
@@ -120,6 +120,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     assert.equal(blocking.list.file, "assets/blocking/easylist.txt");
     assert.equal(fileHash(path.join(stage, blocking.list.file)), blocking.list.sha256, "bundled EasyList differs from its source pin");
     const pi = readJson(path.join(stage, "pi-extension/package.json"));
+    assert.deepEqual(pi.pi.extensions, piExtensions(3), "schema 3 requires menu before optional tools");
     const herdr = fs.readFileSync(path.join(stage, "herdr-plugin/herdr-plugin.toml"), "utf8");
     const field = (name) => herdr.match(new RegExp(`^${name} = "([^"]+)"`, "m"))?.[1];
     const metas = [["cli", "cli/dist/main.js"], ["browser", "browser/dist/main.js"], ["runtime-check", "browser/dist/runtime-check.js"]].map(([name, entry]) => {
@@ -137,17 +138,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       locks: { pnpm: fileHash(path.join(root, "pnpm-lock.yaml")), cargo: fileHash(path.join(root, "engine/Cargo.lock")), upstreams: fileHash(path.join(root, "upstreams.lock.json")) },
       runtimes: { electron: { version: pins.electron.version, archiveSha256: pins.electron.archives[platform] }, agentcursor: { commit: pins.agentcursor.inspectedSha, version: agentcursor.version } },
       tools: { node: process.version, pnpm: command("pnpm", ["--version"], root), rustc: command("rustc", ["--version"], root), esbuild: command(path.join(root, "node_modules/.bin/esbuild"), ["--version"], root), host: process.platform === "linux" ? fs.readFileSync("/etc/os-release", "utf8") : command("sw_vers", [], root) },
-      integrations: { pi: { name: pi.name, version: pi.version, peerDependencies: pi.peerDependencies, node: pi.engines.node }, herdr: { id: field("id"), version: field("version"), minimumVersion: field("min_herdr_version") } },
+      integrations: { pi: { name: pi.name, version: pi.version, peerDependencies: pi.peerDependencies, node: pi.engines.node, extensions: pi.pi.extensions }, herdr: { id: field("id"), version: field("version"), minimumVersion: field("min_herdr_version") } },
     };
     fs.writeFileSync(path.join(stage, "VERSION"), `${version}\n`);
     fs.writeFileSync(path.join(stage, "CHANNEL"), `${channel}\n`);
     writeJson(path.join(stage, "metadata/identity.json"), identity);
-    fs.writeFileSync(path.join(stage, "SOURCE.md"), `# Terminal Browser source\n\nProduct source: https://github.com/JCFrags/my-shtty-pi/tree/${source.commit}/vendor/terminal-browser\n\nUpstream Terminal Browser: https://github.com/zenbu-labs/terminal-browser\nBrowser-only copy origin: https://github.com/JCFrags/my-shtty-pi-web\n\nSee LICENSE, metadata/copy-provenance.json, metadata/upstreams.lock.json, and\nlicenses/ for source attribution, pinned revisions, and dependency notices.\nBundled request blocking uses @ghostery/adblocker and the pinned EasyList\nsnapshot. See licenses/notices/ for MPL 2.0, EasyList, and tldts notices.\nElectron includes its own LICENSE and LICENSES.chromium.html.\n\nVersion: ${version}. Source dirty: ${source.dirty}.\nOnly Linux x64 is a verified standalone release target. Pi and Herdr are optional\nhost integrations. Use this artifact's scripts/install.sh for schema 2 artifacts\nand optional-integration receipts. Older managers cannot install this format.\nInstallation and rollback never restart loaded processes.\n`);
+    fs.writeFileSync(path.join(stage, "SOURCE.md"), `# Terminal Browser source\n\nProduct source: https://github.com/JCFrags/my-shtty-pi/tree/${source.commit}/vendor/terminal-browser\n\nUpstream Terminal Browser: https://github.com/zenbu-labs/terminal-browser\nBrowser-only copy origin: https://github.com/JCFrags/my-shtty-pi-web\n\nSee LICENSE, metadata/copy-provenance.json, metadata/upstreams.lock.json, and\nlicenses/ for source attribution, pinned revisions, and dependency notices.\nBundled request blocking uses @ghostery/adblocker and the pinned EasyList\nsnapshot. See licenses/notices/ for MPL 2.0, EasyList, and tldts notices.\nElectron includes its own LICENSE and LICENSES.chromium.html.\n\nVersion: ${version}. Source dirty: ${source.dirty}.\nOnly Linux x64 is a verified standalone release target. Pi and Herdr are optional\nhost integrations. Use this artifact's scripts/install.sh for schema 3 artifacts\nand optional-integration receipts. It also reads retained schema 1/2 artifacts.\nOlder managers cannot install schema 3. Keep this manager after runtime rollback.\nInstallation and rollback never restart loaded processes.\n`);
   } else if (action === "seal") {
     assert.deepEqual(sourceIdentity(root), readJson(sourceFile), "source inputs changed during build; rebuild from the frozen tree");
     const identity = readJson(path.join(stage, "metadata/identity.json"));
     const files = inventory(stage);
-    const manifest = validateManifest({ schemaVersion: 2, artifactId: objectHash({ identity, files }), identity, files });
+    const manifest = validateManifest({ schemaVersion: 3, artifactId: objectHash({ identity, files }), identity, files });
     writeJson(path.join(stage, "build-manifest.json"), manifest);
     console.log(validateBundle(stage).artifactId);
   } else if (action === "archive") {

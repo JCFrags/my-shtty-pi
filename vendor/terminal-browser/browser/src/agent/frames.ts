@@ -9,6 +9,11 @@ export interface FrameSummary {
   url: string;
   selected: boolean;
 }
+export interface FramePageChange {
+  payload: string;
+  frameRef: string;
+  visibleFraction: number;
+}
 export interface FrameDocument {
   id: string;
   ref: string;
@@ -86,10 +91,50 @@ export class BrowserFrames {
   } | null = null;
   private dragQueue: Promise<unknown> = Promise.resolve();
   private readonly namespace = randomUUID();
-  private lastRoute: {
-    session: string;
-    point: Point;
-  } | null = null;
+  private readonly pointerRoutes = new Map<string, { session: string; point: Point }>();
+  private pageObserver: { binding: string; source: string; listener: (hint: FramePageChange) => void } | null = null;
+  private readonly observerSessions = new Map<string, Promise<void>>();
+  private readonly hintBusy = new Set<string>();
+
+  async installPageChangeObserver(binding: string, source: string, listener: (hint: FramePageChange) => void): Promise<() => void> {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,79}$/.test(binding) || source.length > 32_768) throw new Error("invalid page-change observer");
+    if (this.pageObserver) throw new Error("page-change observer is already installed");
+    const observer = { binding, source, listener };
+    this.pageObserver = observer;
+    if (this.ready) {
+      await this.ready;
+      await Promise.all(["", ...this.sessions.keys()].map(session => this.initializePageObserver(session)));
+    }
+    return () => { if (this.pageObserver === observer) this.pageObserver = null; };
+  }
+  private initializePageObserver(session: string): Promise<void> {
+    const observer = this.pageObserver;
+    if (!observer) return Promise.resolve();
+    let pending = this.observerSessions.get(session);
+    if (!pending) {
+      pending = (async () => {
+        await this.send("Runtime.addBinding", { name: observer.binding }, session);
+        await this.send("Page.addScriptToEvaluateOnNewDocument", { source: observer.source, runImmediately: true }, session);
+      })();
+      this.observerSessions.set(session, pending);
+    }
+    return pending;
+  }
+  private async pageHint(frame: FrameDocument, payload: string): Promise<void> {
+    const observer = this.pageObserver;
+    if (!observer || this.hintBusy.has(frame.id)) return;
+    this.hintBusy.add(frame.id);
+    try {
+      const key = this.documentKey(frame);
+      const geometry = await this.geometry(false, () => {}, undefined, frame, false);
+      if (this.pageObserver !== observer || this.frames.get(frame.id)?.context !== frame.context || key !== this.documentKey(frame)) return;
+      const owner = geometry.owners.at(-1);
+      const area = owner ? owner.width * owner.height : geometry.clip.width * geometry.clip.height;
+      const visibleFraction = area > 0 ? Math.max(0, Math.min(1, geometry.clip.width * geometry.clip.height / area)) : 0;
+      if (visibleFraction > 0) observer.listener({ payload, frameRef: frame.ref, visibleFraction });
+    } catch { /* Unsupported or stale frame hints cannot authorize input or capture. */ }
+    finally { this.hintBusy.delete(frame.id); }
+  }
   constructor(private readonly contents: WebContents, private readonly send: Send, private readonly initializeSession: (session: string) => Promise<void>) {
     contents.debugger.on("message", this.onMessage);
     contents.debugger.on("detach", () => this.invalidateAll());
@@ -111,6 +156,7 @@ export class BrowserFrames {
       await this.send("Runtime.enable");
       await this.send("Target.setAutoAttach", AUTO_ATTACH);
       await this.settle();
+      await this.initializePageObserver("");
     })();
   }
   private async settle(): Promise<void> {
@@ -175,6 +221,7 @@ export class BrowserFrames {
           if (!this.liveSession(child)) return;
           this.tree(tree.frameTree, child, frame.parent);
           await this.initializeSession(child);
+          await this.initializePageObserver(child);
           if (!this.liveSession(child)) return;
           await this.send("Target.setAutoAttach", AUTO_ATTACH, child);
         }
@@ -192,6 +239,7 @@ export class BrowserFrames {
           this.frames.delete(id);
         }
         this.sessions.delete(params.sessionId);
+        this.observerSessions.delete(params.sessionId);
         this.failures.delete(params.sessionId);
       }
     }
@@ -218,6 +266,11 @@ export class BrowserFrames {
           frame.contextId = undefined;
         }
       }
+    }
+    if (method === "Runtime.bindingCalled" && this.pageObserver && params.name === this.pageObserver.binding &&
+      typeof params.payload === "string" && params.payload.length <= 4096 && Number.isSafeInteger(params.executionContextId)) {
+      const frame = [...this.frames.values()].find(frame => frame.session === session && frame.contextId === params.executionContextId && frame.context);
+      if (frame) void this.pageHint({ ...frame }, params.payload);
     }
     if (method === "Runtime.executionContextCreated" && params.context.auxData?.isDefault) {
       const context = params.context;
@@ -270,9 +323,10 @@ export class BrowserFrames {
     if (!frame?.context)
       throw new Error("selected frame changed or detached; observe main to select again"); return { ...frame };
   }
-  chain(): FrameDocument[] {
+  chain(start = this.selectedFrame()): FrameDocument[] {
     const result: FrameDocument[] = [];
-    let frame = this.selectedFrame();
+    let frame = start;
+    if (this.frames.get(frame.id)?.context !== frame.context) throw new Error("frame changed");
     while (true) {
       if (result.some(item => item.id === frame.id) || result.length >= 32)
         throw new Error("invalid frame ancestry");
@@ -287,7 +341,7 @@ export class BrowserFrames {
     }
     return result;
   }
-  documentKey(): string { return createHash("sha256").update(this.namespace + ":" + this.chain().map(frame => frame.context).join(":")).digest("hex"); }
+  documentKey(frame?: FrameDocument): string { return createHash("sha256").update(this.namespace + ":" + this.chain(frame).map(frame => frame.context).join(":")).digest("hex"); }
   summaries(): {
     frame: string;
     frames: FrameSummary[];
@@ -306,16 +360,17 @@ export class BrowserFrames {
     });
     return { frame: this.selectedFrame().ref, frames: values.slice(0, 24).map(frame => ({ ref: frame.ref, ...(frame.parent ? { parent: this.frames.get(frame.parent)?.ref } : {}), name: frame.name.slice(0, 100), url: frame.url.slice(0, 500), selected: frame.id === this.selected })), framesTruncated: values.length > 24 };
   }
-  async evaluate(source: string, frame = this.selectedFrame()): Promise<unknown> {
-    const key = this.documentKey();
-    const result = await this.send("Runtime.evaluate", { expression: source, uniqueContextId: frame.context, returnByValue: true, awaitPromise: true, userGesture: true }, frame.session);
-    if (key !== this.documentKey())
+  async evaluate(source: string, frame = this.selectedFrame(), userGesture = true): Promise<unknown> {
+    const key = this.documentKey(frame);
+    const result = await this.send("Runtime.evaluate", { expression: source, uniqueContextId: frame.context, returnByValue: true, awaitPromise: true, userGesture }, frame.session);
+    if (key !== this.documentKey(frame))
       throw new Error("frame changed during evaluation");
     if (result.exceptionDetails)
       throw new Error(rendererError(result.exceptionDetails, "frame evaluation failed"));
     return result.result?.value;
   }
   rememberGeometry(): void { this.observationGeometry = this.geometryValue?.signature ?? null; }
+  invalidateGeometry(): void { this.observationGeometry = null; }
   async assertCoordinates(point: Point): Promise<void> {
     const expected = this.observationGeometry;
     const geometry = await this.geometry();
@@ -324,16 +379,17 @@ export class BrowserFrames {
     if (!await this.hit(geometry, point))
       throw new Error("coordinate target is outside or obstructed in selected frame");
   }
-  async geometry(scroll = false, guard: () => void = () => {}): Promise<FrameGeometry> {
+  async geometry(scroll = false, guard: () => void = () => {}, permitScroll?: () => Promise<unknown>, frame = this.selectedFrame(), remember = true): Promise<FrameGeometry> {
     guard();
-    const chain = this.chain(), key = this.documentKey(), zoom = this.contents.getZoomFactor();
+    const chain = this.chain(frame), key = this.documentKey(frame), zoom = this.contents.getZoomFactor();
+    const objectGroup = remember ? "terminal-browser-frame-owners" : `terminal-browser-hint-${randomUUID()}`;
     const check = () => {
       guard();
-      if (key !== this.documentKey() || zoom !== this.contents.getZoomFactor()) throw new Error("frame changed during geometry measurement");
+      if (key !== this.documentKey(frame) || zoom !== this.contents.getZoomFactor()) throw new Error("frame changed during geometry measurement");
     };
     const send: Send = async (...args) => { check(); const result = await this.send(...args); check(); return result; };
     let x = 0, y = 0;
-    const root = await this.evaluate("({width:innerWidth,height:innerHeight,scrollX,scrollY})", chain[0]) as {
+    const root = await this.evaluate("({width:innerWidth,height:innerHeight,scrollX,scrollY})", chain[0], remember) as {
       width: number;
       height: number;
     };
@@ -342,12 +398,13 @@ export class BrowserFrames {
     const owners: Owner[] = [];
     try {
       for (const session of new Set(chain.slice(0, -1).map(frame => frame.session)))
-        await send("Runtime.releaseObjectGroup", { objectGroup: "terminal-browser-frame-owners" }, session);
+        await send("Runtime.releaseObjectGroup", { objectGroup }, session);
       for (let index = 1; index < chain.length; index++) {
         const parent = chain[index - 1], child = chain[index];
         const node = await send("DOM.getFrameOwner", { frameId: child.id }, parent.session);
-        const resolved = await send("DOM.resolveNode", { backendNodeId: node.backendNodeId, executionContextId: parent.contextId, objectGroup: "terminal-browser-frame-owners" }, parent.session);
+        const resolved = await send("DOM.resolveNode", { backendNodeId: node.backendNodeId, executionContextId: parent.contextId, objectGroup }, parent.session);
         const objectId = resolved.object.objectId;
+        if (scroll) await permitScroll?.();
         const result = await send("Runtime.callFunctionOn", { objectId, functionDeclaration: OWNER_MEASURE, arguments: [{ value: scroll }], returnByValue: true }, parent.session);
         if (result.exceptionDetails)
           throw new Error(rendererError(result.exceptionDetails, "frame owner measurement failed"));
@@ -359,17 +416,21 @@ export class BrowserFrames {
         x += owner.x;
         y += owner.y;
       }
-      if (key !== this.documentKey() || zoom !== this.contents.getZoomFactor())
+      if (key !== this.documentKey(frame) || zoom !== this.contents.getZoomFactor())
         throw new Error("frame changed during geometry measurement");
-      const local = await this.evaluate("({width:innerWidth,height:innerHeight,scrollX,scrollY})");
+      const local = await this.evaluate("({width:innerWidth,height:innerHeight,scrollX,scrollY})", frame, remember);
       check();
       const geometry = { x, y, zoom, clip, owners, signature: JSON.stringify({ x, y, zoom, clip, root, local, owners: owners.map(({ x, y, width, height, clip, visible }) => ({ x, y, width, height, clip, visible })) }) };
-      this.geometryValue = geometry;
+      if (remember) this.geometryValue = geometry;
       return geometry;
     }
     catch (error) {
-      this.geometryValue = null;
+      if (remember) this.geometryValue = null;
       throw error;
+    } finally {
+      if (!remember) for (const session of new Set(chain.slice(0, -1).map(frame => frame.session))) {
+        await this.send("Runtime.releaseObjectGroup", { objectGroup }, session).catch(() => {});
+      }
     }
   }
   async hit(geometry: FrameGeometry, point: Point): Promise<boolean> {
@@ -474,16 +535,19 @@ export class BrowserFrames {
     return this.input("Input.dispatchKeyEvent", { type: event.type, key, windowsVirtualKeyCode: code, modifiers, ...(event.type === "char" ? { text: event.character, unmodifiedText: event.character } : {}) }, session);
   }
   dispatchPointer(event: Electron.MouseInputEvent | Electron.MouseWheelInputEvent): Promise<unknown> | null {
-    if (event.type === "mouseUp" && !this.geometryValue && !this.lastRoute)
-      return null;
-    let route: {
-      session: string;
-      point: Point;
-    };
-    if (event.type === "mouseUp" && !this.geometryValue && this.lastRoute)
-      route = this.lastRoute;
-    else
+    let route: { session: string; point: Point };
+    if (event.type === "mouseUp") {
+      const held = this.pointerRoutes.get(event.button ?? "left");
+      if (!held) return null;
+      route = held;
+      this.pointerRoutes.delete(event.button ?? "left");
+    } else {
       route = this.inputRoute({ x: event.x, y: event.y });
+      if (event.type === "mouseDown") this.pointerRoutes.set(event.button ?? "left", route);
+      if (event.type === "mouseMove") for (const [button, held] of this.pointerRoutes) {
+        if (held.session === route.session) this.pointerRoutes.set(button, route);
+      }
+    }
     const drag = this.drag;
     if (drag) {
       if (drag.key !== this.documentKey() || drag.session !== route.session)
@@ -510,11 +574,7 @@ export class BrowserFrames {
         return this.dragQueue;
       }
     }
-    if (!route.session) {
-      this.lastRoute = null;
-      return null;
-    }
-    this.lastRoute = route;
+    if (!route.session) return null;
     const type = { mouseMove: "mouseMoved", mouseDown: "mousePressed", mouseUp: "mouseReleased", mouseWheel: "mouseWheel", mouseEnter: "mouseMoved", mouseLeave: "mouseMoved", contextMenu: "mouseMoved" }[event.type];
     const button = event.type === "mouseWheel" ? "none" : event.button ?? (event.modifiers?.includes("leftbuttondown") ? "left" : event.modifiers?.includes("rightbuttondown") ? "right" : event.modifiers?.includes("middlebuttondown") ? "middle" : "none");
     return this.input("Input.dispatchMouseEvent", { type, x: route.point.x, y: route.point.y, button, clickCount: event.type === "mouseWheel" ? 0 : event.clickCount ?? 0, ...(event.type === "mouseWheel" ? { deltaX: -((event as Electron.MouseWheelInputEvent).deltaX ?? 0), deltaY: -((event as Electron.MouseWheelInputEvent).deltaY ?? 0) } : {}), buttons: (event.modifiers?.includes("leftbuttondown") ? 1 : 0) | (event.modifiers?.includes("rightbuttondown") ? 2 : 0) | (event.modifiers?.includes("middlebuttondown") ? 4 : 0) }, route.session);

@@ -65,10 +65,18 @@ uncertain click, edit, upload, or download.
 
 ## Human control and cancellation
 
-Read `agent status` before diagnosing a blocked action. Use the returned epoch
-for `agent pause --control-epoch EPOCH` or an explicitly requested
-`agent resume --control-epoch EPOCH`. Never resume automatically after a human
-uses the browser. Resume changes state. Observe again before input.
+Read `agent status` before diagnosing a blocked action. Agent mode permits agent
+input. Human mode stops agent input and automatic page updates. Shared mode permits
+both and gives brief priority to active human typing, clicks, drags, or scrolls.
+Pointer motion alone does not change control. Reservations do not change the epoch.
+Terminal IME preedit is not available. Known held inputs remain reserved until
+release. Terminals without key-release reporting use a short typing-burst fallback.
+
+Use the returned epoch for `agent control --mode agent|human|shared --control-epoch EPOCH`,
+`agent pause --control-epoch EPOCH`, or an explicitly requested `agent resume`.
+Resume explicitly selects Agent. Never return from Human automatically. Observe
+again after a real mode change. A Shared wait or an input error does not authorize
+replay of a possibly delivered action.
 
 Cancellation or CLI disconnection stops later input and releases held keys and
 buttons. It does not undo input already delivered. Errors are not instructions
@@ -115,10 +123,50 @@ updates or reload the page. Check `effective` and `warning`, not just `enabled`.
 Use a reviewed release to update lists. For a site failure, inspect status and
 make an explicitly requested site exception instead of disabling every safeguard.
 
+## User menus and page delivery
+
+The native three-dot menu and optional Pi `/browser` menu provide explicit control
+choices, Send current page, settings, and exact owned-browser close. Pi's command-only
+package profile uses the plain `extensions: ["dist/menu.js"]` allowlist. It keeps
+`/browser` and registers no browser model tools. A bare package source or
+`+dist/menu.js` alone also loads the tools resource. Do not change package settings
+unless the user requests that change.
+
+Opening or canceling a menu does not select Human. Send previews the current page
+and receiver and asks for confirmation. It can request a reply. Do not use terminal paste or
+another agent's draft to deliver a page.
+
+Shared page updates send coalesced informational screenshots to one explicitly
+associated receiver. They do not start a reply or provide action tokens. Human
+and Paused stop automatic capture. Screenshots can contain private data. Explicit
+human capture remains separate from agent observation.
+
+Use `session receiver`, `session updates`, `session events`, and `session human`
+only with the exact owner, browser key, runtime, binding, and generation from fresh
+status. A stale association refuses instead of choosing a neighbor. Read the
+installed `session --help` for the full flag contract. Close requires the exact
+preview revision. Native dialogs remain explicit decisions. Do not use daemon
+shutdown to close one owner.
+
+## Owner-private tab recovery
+
+An ordinary URL-less owned launch can offer Restore or Fresh and starts Paused.
+An explicit launch URL wins. Recovery retains bounded sanitized root-tab routes,
+not cookies, forms, page memory, dialogs, downloads, or sessionStorage. All queries
+are removed. Sensitive-looking routes become inert placeholders. The heuristic
+is not a complete secret detector. Private routes can still identify content.
+
+Preview with `session recovery status`. Use `session recovery restore|fresh
+--confirm REVISION` only after choosing from that exact preview. Restore loads the
+selected retained page and keeps other tabs dormant until selected. Neither choice
+resumes agent control. Use the usual explicit control command only when authorized.
+Never recover a different owner's snapshot or a global last URL.
+
 ## Optional Pi tools
 
-When the user selected the optional package, the five tools are `browser_open`,
-`browser_observe`, `browser_act`, `browser_tabs`, and `browser_control`. These
+Only an explicit tools-enabled profile loads `dist/extension.js` and the five
+tools: `browser_open`, `browser_observe`, `browser_act`, `browser_tabs`, and
+`browser_control`. The command-only menu does not require them. These tools
 translate to the same native CLI. Pi caches observations and epochs and returns
 visual observations as image content. `browser_control` with `action: "blocking"`
 uses `blocking_action` for the same blocker commands. All ownership, takeover,

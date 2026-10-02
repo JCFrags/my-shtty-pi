@@ -1,3 +1,4 @@
+import { ALL_INPUT, type InputResource } from "./input-arbiter";
 import { FrameObserver } from "./frame-observer";
 import { validateUploadFiles } from "./files";
 import { readiness, sameRect, TargetPreparation } from "./target-preparation";
@@ -96,6 +97,9 @@ interface AgentOperation {
   observationId?: string;
   allowDocumentChange: boolean;
   signal?: AbortSignal;
+  committed?: boolean;
+  canceled?: boolean;
+  unsubscribe?: () => void;
 }
 
 export class BrowserAgentRuntime {
@@ -110,11 +114,13 @@ export class BrowserAgentRuntime {
   ) => Promise<AgentActionService>;
   private readonly observationId: () => string;
   private latestObservation: AgentObservation | null = null;
+  private observationFocusRevision = 0;
   private actionService: Promise<AgentActionService> | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
   private documentGeneration = 0;
   private requestSignal: AbortSignal | undefined;
   private activeOperation: AgentOperation | null = null;
+  private dispatchResources: readonly InputResource[] = ALL_INPUT;
   private activityValue: AgentActivity | null = null;
   private pulseTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -128,14 +134,30 @@ export class BrowserAgentRuntime {
     target.frames?.subscribe(() => this.invalidateDocument());
     this.driver = options.driver ?? new TerminalBrowserDriver(target, this.observer, {
       beforeInput: () => this.assertOperationInput(),
+      permitInput: (resources, commit) => this.permitInput(resources, commit),
       sleep: (ms) => this.operationSleep(ms),
       onPointer: (event) => this.updateActivity(event),
       onTarget: (point) => this.updateTarget(point),
+    });
+    target.setAgentInputGuard?.(async focusWaited => {
+      this.assertOperationInput();
+      this.control.input.assertAvailable(this.dispatchResources);
+      if (focusWaited) {
+        const operation = this.activeOperation!;
+        const documentId = await this.observer.currentDocumentId();
+        this.assertOperation(operation);
+        if (!operation.allowDocumentChange && documentId !== this.latestObservation?.documentId) throw new Error("page changed during focus wait");
+        if (this.driver instanceof TerminalBrowserDriver) await this.driver.revalidateAfterFocus();
+        this.assertOperation(operation);
+        this.control.input.assertAvailable(this.dispatchResources);
+      }
     });
     this.personaProvider = options.personaProvider ?? createSlowNaturalPersonaProvider();
     this.actionServiceFactory = options.actionServiceFactory ?? defaultActionServiceFactory;
     this.observationId = options.observationId ?? randomUUID;
   }
+
+  get generation(): number { return this.documentGeneration; }
 
   get controlEpoch(): number {
     return this.control.snapshot.controlEpoch;
@@ -205,6 +227,7 @@ export class BrowserAgentRuntime {
       this.requestSignal?.throwIfAborted();
       this.target.frames?.rememberGeometry();
       this.latestObservation = observation;
+      this.observationFocusRevision = this.control.input.focusRevision;
       return observation;
     }, options.signal);
   }
@@ -215,7 +238,7 @@ export class BrowserAgentRuntime {
     this.latestObservation = null;
     this.actionService = null;
     try {
-      this.target.releaseAgentInput();
+      void Promise.resolve(this.target.releaseAgentInput()).catch(() => {});
     } catch {}
     this.clearActivity();
   }
@@ -226,7 +249,7 @@ export class BrowserAgentRuntime {
     this.latestObservation = null;
     this.actionService = null;
     try {
-      this.target.releaseAgentInput();
+      void Promise.resolve(this.target.releaseAgentInput()).catch(() => {});
     } catch {}
     this.clearActivity();
   }
@@ -426,7 +449,7 @@ export class BrowserAgentRuntime {
         this.clearOperation(operation);
         this.actionService = null;
         try {
-          this.target.releaseAgentPointer();
+          await this.target.releaseAgentPointer();
         } catch {}
       }
     }, request.signal);
@@ -678,7 +701,8 @@ export class BrowserAgentRuntime {
     if ("x" in from) await this.target.frames?.assertCoordinates(from);
     if (to && "x" in to) await this.target.frames?.assertCoordinates(to);
     const preparation = new TargetPreparation(this.observer, observation.documentId,
-      () => this.assertOperation(operation), ms => this.operationSleep(ms));
+      () => this.assertOperation(operation), ms => this.operationSleep(ms), Date.now,
+      () => this.permitInput(["focus", "viewport"], false));
     const scroll = !("x" in from || to && "x" in to);
     const primary = "x" in from ? undefined : await preparation.prepare(from, editable ? "editable" : "pointer", 5_000, scroll);
     const destination = !to || "x" in to ? undefined : await preparation.prepare(to, "pointer", 5_000, scroll);
@@ -795,10 +819,36 @@ export class BrowserAgentRuntime {
     operation.signal = this.requestSignal;
     operation.signal?.throwIfAborted();
     this.activeOperation = operation;
+    operation.unsubscribe = this.control.input.onPriority(resources => {
+      const used = operation.kind === "hover" ? ["pointer", "viewport"] : ALL_INPUT;
+      if (this.activeOperation !== operation || !operation.committed || !resources.some(resource => used.includes(resource))) return;
+      operation.canceled = true;
+      this.latestObservation = null;
+      this.actionService = null;
+      this.target.uploads?.cancel();
+      this.clearActivity();
+      return Promise.resolve(this.target.releaseAgentInput());
+    });
     return operation;
   }
 
+  private async permitInput(resources: readonly InputResource[], commit = false): Promise<boolean> {
+    const operation = this.activeOperation;
+    if (!operation) throw new Error("agent operation is no longer active");
+    const waited = await this.control.input.permit(resources, () => this.assertOperation(operation), operation.signal);
+    this.assertOperation(operation);
+    if (waited && !operation.allowDocumentChange) {
+      if (await this.observer.currentDocumentId() !== this.latestObservation?.documentId) throw new Error("page changed while agent yielded");
+      this.assertOperation(operation);
+    }
+    this.dispatchResources = resources;
+    this.control.input.assertAvailable(resources);
+    if (commit) operation.committed = true;
+    return waited;
+  }
+
   private clearOperation(operation: AgentOperation): void {
+    operation.unsubscribe?.();
     if (this.activeOperation === operation) {
       this.activeOperation = null;
       if (this.driver instanceof TerminalBrowserDriver) this.driver.clearTargets();
@@ -807,6 +857,7 @@ export class BrowserAgentRuntime {
 
   private async assertClickCompletion(operation: AgentOperation, sequence: number | undefined): Promise<boolean> {
     operation.signal?.throwIfAborted();
+    if (operation.canceled) throw new Error("human input interrupted the operation; input may have been delivered and was not replayed");
     this.control.assertAgent(operation.controlEpoch);
     let downloadStarted = sequence !== undefined &&
       this.target.downloadStartSequence !== undefined && this.target.downloadStartSequence > sequence;
@@ -817,7 +868,7 @@ export class BrowserAgentRuntime {
       operation.signal?.addEventListener("abort", cancel, { once: true });
       if (operation.signal?.aborted) abort.abort();
       const unsubscribe = this.control.subscribe(() => {
-        if (this.control.state !== "agent" || this.control.controlEpoch !== operation.controlEpoch) abort.abort();
+        if (!this.control.agentEligible || this.control.controlEpoch !== operation.controlEpoch) abort.abort();
       });
       try {
         downloadStarted = await this.target.waitForDownloadStart(sequence, abort.signal) &&
@@ -839,11 +890,15 @@ export class BrowserAgentRuntime {
 
   private assertOperation(operation: AgentOperation): void {
     this.target.frames?.assertInput();
+    if (operation.canceled) throw new Error("human input interrupted the operation; input may have been delivered and was not replayed");
     operation.signal?.throwIfAborted();
     if (this.activeOperation !== operation) {
       throw new Error("agent operation is no longer active");
     }
     this.control.assertAgent(operation.controlEpoch);
+    if (operation.kind === "press-key" && this.observationFocusRevision !== this.control.input.focusRevision) {
+      throw new Error("human focus or editing changed since observation; key was not replayed");
+    }
     if (!operation.allowDocumentChange && this.documentGeneration !== operation.documentGeneration) {
       throw new Error("page changed since observation");
     }
@@ -892,7 +947,7 @@ export class BrowserAgentRuntime {
       (operation.kind === "click" || operation.kind === "hover" || operation.kind === "drag" ||
         operation.kind === "type" || operation.kind === "wait-for") &&
       operation.controlEpoch === this.control.snapshot.controlEpoch &&
-      this.control.state === "agent" &&
+      this.control.agentEligible &&
       (operation.allowDocumentChange || operation.documentGeneration === this.documentGeneration) &&
       (!operation.observationId || this.latestObservation?.observationId === operation.observationId)
     );
@@ -939,7 +994,7 @@ export class BrowserAgentRuntime {
       this.requestSignal = signal;
       const abort = () => {
         if (this.requestSignal !== signal) return;
-        try { this.target.releaseAgentInput(); } catch {}
+        try { void Promise.resolve(this.target.releaseAgentInput()).catch(() => {}); } catch {}
         this.target.uploads?.cancel();
         this.actionService = null;
         this.latestObservation = null;

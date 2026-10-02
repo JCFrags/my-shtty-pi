@@ -3,11 +3,17 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliCommand } from "./launch.js";
+import { launchInstruction } from "./owner-binding.js";
+import type { SelectedOwner } from "./owner-binding.js";
 const OUTPUT_LIMIT = 256 * 1024;
 
 export interface ToolContext {
   cwd: string;
   sessionId: string;
+  owner?: SelectedOwner;
+  storageIdentity?: string;
+  associationId?: string;
+  branchIds?: string[];
   signal?: AbortSignal;
 }
 
@@ -25,17 +31,25 @@ function ownerEnvironment(context: ToolContext): NodeJS.ProcessEnv {
   for (const name of Object.keys(environment)) {
     if (name.startsWith("TERMINAL_BROWSER_OWNER_")) delete environment[name];
   }
-  if (environment.HERDR_ENV !== "1") return environment;
-  if (!environment.HERDR_WORKSPACE_ID || !environment.HERDR_TAB_ID || !environment.HERDR_PANE_ID) {
-    throw new Error("Incomplete Herdr pane identity. Do not fall back to another browser owner.");
+  const owner = context.owner;
+  if (!owner) throw new Error("No browser associated. Use /browser Settings to select an exact owner.");
+  // A native association overrides Herdr. Never inherit the containing pane's route.
+  if (owner.kind === "native") {
+    delete environment.HERDR_ENV;
+    delete environment.PI_SESSION_ID;
+    return environment;
   }
   return {
     ...environment,
-    TERMINAL_BROWSER_OWNER_WORKSPACE_ID: environment.HERDR_WORKSPACE_ID,
-    TERMINAL_BROWSER_OWNER_TAB_ID: environment.HERDR_TAB_ID,
-    TERMINAL_BROWSER_OWNER_PANE_ID: environment.HERDR_PANE_ID,
+    HERDR_ENV: "1",
+    HERDR_WORKSPACE_ID: owner.workspaceId,
+    HERDR_TAB_ID: owner.tabId,
+    HERDR_PANE_ID: owner.paneId,
+    TERMINAL_BROWSER_OWNER_WORKSPACE_ID: owner.workspaceId,
+    TERMINAL_BROWSER_OWNER_TAB_ID: owner.tabId,
+    TERMINAL_BROWSER_OWNER_PANE_ID: owner.paneId,
     TERMINAL_BROWSER_OWNER_SESSION_ID: context.sessionId,
-    TERMINAL_BROWSER_OWNER_PROJECT_DIR: context.cwd,
+    TERMINAL_BROWSER_OWNER_PROJECT_DIR: owner.projectDir,
   };
 }
 
@@ -82,20 +96,20 @@ const runCli: CommandRunner = ({ args, context, stdin, timeoutMs = 30_000 }) =>
     child.stdin.end(stdin);
   });
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 // Keep every adapter operation on the native CLI. Non-Herdr hosts attach only;
 // a piped child process must not take over the terminal that is running Pi.
-export function ownerCommandRunner(run: CommandRunner, environment: NodeJS.ProcessEnv = process.env): CommandRunner {
+export function ownerCommandRunner(run: CommandRunner): CommandRunner {
   return async (request) => {
     if (request.context.signal?.aborted) throw new Error("Browser operation cancelled before dispatch.");
-    if (environment.HERDR_ENV === "1") return run(request);
-    const { args, context } = request;
-    const owner = ["--session", context.sessionId, "--project", context.cwd];
+    const selected = request.context.owner;
+    if (!selected) throw new Error("No browser associated. Use /browser Settings to select an exact owner.");
+    // Run under the fixed launch directory, even after Pi changes its working directory.
+    request = { ...request, context: { ...request.context, cwd: selected.projectDir } };
+    if (selected.kind === "herdr") return run(request);
+    const { args } = request;
+    const owner = ["--session", selected.sessionId, "--project", selected.projectDir];
     const call = (command: string[]) => run({ ...request, args: [...command, ...owner] });
-    if (args[0] === "agent") return call(args);
+    if (args[0] === "agent" || args[0] === "session") return call(args);
     if (args[0] !== "companion") throw new Error("Unsupported Pi browser adapter command.");
     if (args[1] === "tabs") return call(["session", "tabs", ...args.slice(2)]);
     if (args[1] !== "open") throw new Error("Unsupported Pi browser companion command.");
@@ -107,7 +121,7 @@ export function ownerCommandRunner(run: CommandRunner, environment: NodeJS.Proce
     } catch (error) {
       if (error instanceof BrowserCommandError && error.code === "SESSION_NOT_FOUND") {
         throw new BrowserCommandError(error.code,
-          `Launch the owned browser in a separate visible terminal, then call browser_open again: terminal-browser open --session ${shellQuote(context.sessionId)} --project ${shellQuote(context.cwd)}. Pi will not take over its own terminal.`);
+          `Launch the owned browser in a separate visible terminal, then open /browser again: ${launchInstruction(selected)}. Pi will not take over its own terminal.`);
       }
       throw error;
     }
@@ -116,7 +130,7 @@ export function ownerCommandRunner(run: CommandRunner, environment: NodeJS.Proce
       value = await call(["session", "tabs", "--action", "open", "--url", url ?? "about:blank"]);
     } else if (url) {
       const status = await call(["agent", "status"]) as ControlStatus;
-      if (status.state !== "agent") throw new Error("Browser control is with the user. Resume only when the user explicitly asks.");
+      if (!agentEligible(status.state)) throw new Error("Browser control is with the user. Resume only when the user explicitly asks.");
       const outcome = await call(["agent", "navigate", url, "--control-epoch", String(status.controlEpoch)]) as Record<string, unknown>;
       if (outcome.dialog) return { ...await list() as Record<string, unknown>, action: "reused", dialog: outcome.dialog };
       value = await list();
@@ -235,8 +249,11 @@ export type BrowserAction = { frame?: string } & (
   | { action: "get_url" }
   | { action: "wait_for"; ref?: string; locator?: LocatorSpec; text?: string; condition?: "exists" | "visible" | "text" | "actionable"; timeoutMs?: number });
 
-interface ControlStatus {
-  state: "agent" | "human" | "paused";
+export type ControlMode = "agent" | "human" | "shared";
+export function agentEligible(state: string): boolean { return state === "agent" || state === "shared"; }
+
+export interface ControlStatus {
+  state: ControlMode | "paused";
   controlEpoch: number;
   reason: string | null;
   busy: boolean;
@@ -308,10 +325,13 @@ export class PiBrowserClient {
   private contextId: number | null = null;
   private pendingDialog: { id: string; contextId: number; controlEpoch: number } | null = null;
   private contextKey: string | null = null;
+  private branchAnchor: string | undefined;
 
   private bindContext(context: ToolContext) {
-    const key = JSON.stringify([context.sessionId, context.cwd]);
-    if (key === this.contextKey) return;
+    const key = JSON.stringify([context.sessionId, context.storageIdentity, context.associationId, context.owner ?? context.cwd]);
+    const sameBranch = !this.branchAnchor || !context.branchIds || context.branchIds.includes(this.branchAnchor);
+    this.branchAnchor = context.branchIds?.at(-1);
+    if (key === this.contextKey && sameBranch) return;
     this.contextKey = key;
     this.observation = null;
     this.contextId = null;
@@ -450,17 +470,25 @@ export class PiBrowserClient {
   private async status(context: ToolContext): Promise<ControlStatus> {
     this.bindContext(context);
     const status = await this.runner({ args: ["agent", "status"], context }) as ControlStatus;
-    if (status.state !== "agent" || (this.pendingDialog && this.pendingDialog.controlEpoch !== status.controlEpoch)) {
+    if (!agentEligible(status.state) || (this.pendingDialog && this.pendingDialog.controlEpoch !== status.controlEpoch)) {
       this.pendingDialog = null;
       this.observation = null;
     }
     return status;
   }
 
-  async control(context: ToolContext, action: "status" | "pause" | "resume") {
+  async control(context: ToolContext, action: "status" | "pause" | "resume" | "mode", mode?: ControlMode) {
+    if (action === "mode" && !mode) throw new Error("mode selection requires agent, human, or shared");
     const before = await this.status(context);
     const { controlEpoch: _epoch, ...visibleBefore } = before;
     if (action === "status") return visibleBefore;
+    if (action === "mode") {
+      const result = await this.runner({ args: ["agent", "control", "--mode", mode!, "--control-epoch", String(before.controlEpoch)], context }) as ControlStatus;
+      this.observation = null;
+      this.pendingDialog = null;
+      const { controlEpoch: _epoch, ...visibleResult } = result;
+      return visibleResult;
+    }
     if (action === "pause") {
       const result = await this.runner({
         args: ["agent", "pause", "--control-epoch", String(before.controlEpoch)], context,
@@ -487,7 +515,7 @@ export class PiBrowserClient {
     if (targetContext !== null) args.push("--tab", String(targetContext));
     if (request.action !== "status") {
       const status = await this.status(context);
-      if (status.state !== "agent") throw new Error("Browser control is with the user. Resume only when the user explicitly asks.");
+      if (!agentEligible(status.state)) throw new Error("Browser control is with the user. Resume only when the user explicitly asks.");
       args.push("--control-epoch", String(status.controlEpoch));
       this.observation = null;
       this.pendingDialog = null;
@@ -497,7 +525,7 @@ export class PiBrowserClient {
 
   async act(context: ToolContext, request: BrowserAction) {
     const status = await this.status(context);
-    if (status.state !== "agent") {
+    if (!agentEligible(status.state)) {
       throw new Error("Browser control is with the user. Wait for control to be returned, or call browser_control with resume when asked.");
     }
     if (request.frame !== undefined && ["navigate", "get_url", "dialog"].includes(request.action)) throw new Error("Frame selection applies to observed element and pointer actions; omit frame for context navigation, URL, or dialogs.");
@@ -582,6 +610,7 @@ export class PiBrowserClient {
     if (request.action !== "get_url" && request.action !== "wait_for") this.observation = null;
     if (request.action === "get_url") return { url: typeof value.url === "string" ? value.url.slice(0, 8192) : "" };
     if (request.action === "wait_for") return { matched: value.matched === true, condition: value.condition };
+    if (request.action === "scroll") return { action: request.action, completed: true, completion: "input-dispatched", movementMeasured: false };
     return { action: request.action, completed: true };
   }
 }

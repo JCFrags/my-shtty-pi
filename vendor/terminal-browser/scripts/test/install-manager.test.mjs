@@ -28,7 +28,7 @@ function sandbox(t, fresh = false) {
   assert(run("configure", root, receipt).repeated);
   return { home, root, settings, selection, paths, run };
 }
-function archive(t, change = () => {}, schemaVersion = 2) {
+function archive(t, change = () => {}, schemaVersion = 3) {
   const { dir, manifest } = fixture(t, schemaVersion);
   change(dir, manifest);
   fs.unlinkSync(path.join(dir, "build-manifest.json"));
@@ -73,7 +73,8 @@ test("fresh core init and each optional integration install and roll back withou
     run("activate", root, candidate.manifest.artifactId);
     assert(run("activate", root, candidate.manifest.artifactId).repeated);
     assert.equal(fs.readlinkSync(receipt.selection.cli), path.join(root, "releases", candidate.manifest.artifactId, "terminal-browser/bin/terminal-browser"));
-    if (mode !== "pi") assert.equal(fs.readFileSync(settings, "utf8"), before[0]);
+    if (mode === "pi") assert.deepEqual(JSON.parse(fs.readFileSync(settings)).packages[1], { source: path.join(root, "releases", candidate.manifest.artifactId, "terminal-browser/pi-extension"), extensions: ["dist/menu.js"] });
+    else assert.equal(fs.readFileSync(settings, "utf8"), before[0]);
     if (mode !== "herdr") assert.equal(fs.readFileSync(registry, "utf8"), before[1]);
     if (mode === "skill") assert(fs.readlinkSync(receipt.selection.skill).endsWith("/skills/default/terminal-browser"));
     const retained = path.join(receipt.paths.dataHome, receipt.namespace, "retained");
@@ -106,7 +107,14 @@ test("fresh and repeated install; stage never selects; rollback retains releases
   const result = activate(box.root, candidate.manifest.artifactId);
   assert.equal(result.selected, candidate.manifest.artifactId);
   assert(activate(box.root, candidate.manifest.artifactId).repeated);
-  assert.equal(JSON.parse(fs.readFileSync(box.settings)).packages.length, 1);
+  const selectedSettings = JSON.parse(fs.readFileSync(box.settings));
+  assert.equal(selectedSettings.packages.length, 1);
+  assert.deepEqual(selectedSettings.packages[0].extensions, ["dist/menu.js"]);
+  selectedSettings.packages[0].skills = ["later"];
+  writeJson(box.settings, selectedSettings);
+  assert.throws(() => rollback(box.root), /Pi package entry changed/);
+  delete selectedSettings.packages[0].skills;
+  writeJson(box.settings, selectedSettings);
   rollback(box.root);
   assert.equal(status(box.root).selected, null);
   assert(!fs.existsSync(box.settings));
@@ -115,44 +123,69 @@ test("fresh and repeated install; stage never selects; rollback retains releases
   assert.equal(status(box.root).candidates.length, 1);
 });
 
-test("A/B activation preserves exact Pi slot, filters, unrelated subsequent edits and original launcher", (t) => {
-  const box = sandbox(t);
-  fs.writeFileSync(box.selection.cli, "#!/bin/sh\necho prior\n", { mode: 0o755 });
-  const a = archive(t, () => {}, 1);
+test("schema 1/2 to 3 activation migrates only the exact legacy filter and rollback preserves unrelated edits", (t) => {
+  const retained = [archive(t, () => {}, 1), archive(t, () => {}, 2)];
   const b = archive(t, (dir, manifest) => { fs.appendFileSync(path.join(dir, "browser/dist/main.js"), " B"); manifest.identity.source.commit = "b".repeat(40); });
-  stage(a.tarball, a.outerFile, box.root);
-  activate(box.root, a.manifest.artifactId);
-  const selected = fs.readlinkSync(box.selection.cli);
-  const before = fs.readFileSync(box.settings, "utf8");
-  stage(b.tarball, b.outerFile, box.root);
-  assert.equal(fs.readlinkSync(box.selection.cli), selected);
-  assert.equal(fs.readFileSync(box.settings, "utf8"), before);
-  activate(box.root, b.manifest.artifactId);
-  const settings = JSON.parse(fs.readFileSync(box.settings));
-  assert.equal(settings.packages[0], "first");
-  assert.equal(settings.packages[2], "last");
-  assert.deepEqual(settings.packages[1].extensions, ["+dist/extension.js"]);
-  const plugins = JSON.parse(fs.readFileSync(box.selection.herdrRegistry));
-  assert.equal(plugins[1].plugin_root, path.join(box.root,"releases",b.manifest.artifactId,"terminal-browser/herdr-plugin"));
-  assert.deepEqual(plugins[1].build,[]);
-  plugins[0].unrelated = "retained"; plugins[1].enabled = false;
-  writeJson(box.selection.herdrRegistry, plugins);
-  settings.unrelated = { retained: true };
-  settings.packages[1].skills = ["+new-skill"];
-  writeJson(box.settings, settings);
-  rollback(box.root);
-  const restored = JSON.parse(fs.readFileSync(box.settings));
-  const restoredHerdr=JSON.parse(fs.readFileSync(box.selection.herdrRegistry));
-  assert.equal(restoredHerdr[0].unrelated,"retained");
-  assert.equal(restoredHerdr[1].enabled,false);
-  assert.equal(restoredHerdr[1].plugin_root,path.join(box.root,"releases",a.manifest.artifactId,"terminal-browser/herdr-plugin"));
-  assert.equal(fs.readlinkSync(box.selection.cli), selected);
-  assert.deepEqual(restored.unrelated, { retained: true });
-  assert.deepEqual(restored.packages[1].skills, ["+new-skill"]);
-  assert.equal(restored.packages[1].source, JSON.parse(before).packages[1].source);
-  rollback(box.root);
-  assert.equal(fs.readFileSync(box.selection.cli, "utf8"), "#!/bin/sh\necho prior\n");
-  assert.equal(JSON.parse(fs.readFileSync(box.selection.herdrRegistry))[1].plugin_root,box.selection.herdrSource);
+  const filters = ["bare", "omitted", [], ["!dist/extension.js"], ["+dist/menu.js"], ["+dist/extension.js"]];
+  for (const [number, filter] of filters.entries()) {
+    const box = sandbox(t), a = retained[number % retained.length];
+    const initial = JSON.parse(fs.readFileSync(box.settings));
+    if (filter === "bare") initial.packages[1] = box.selection.piSource;
+    else if (filter === "omitted") delete initial.packages[1].extensions;
+    else initial.packages[1].extensions = filter;
+    writeJson(box.settings, initial);
+    fs.writeFileSync(box.selection.cli, "#!/bin/sh\necho prior\n", { mode: 0o755 });
+    stage(a.tarball, a.outerFile, box.root);
+    activate(box.root, a.manifest.artifactId);
+    const selected = fs.readlinkSync(box.selection.cli);
+    const before = fs.readFileSync(box.settings, "utf8");
+    stage(b.tarball, b.outerFile, box.root);
+    assert.equal(fs.readlinkSync(box.selection.cli), selected);
+    assert.equal(fs.readFileSync(box.settings, "utf8"), before);
+    activate(box.root, b.manifest.artifactId);
+    const settings = JSON.parse(fs.readFileSync(box.settings));
+    const migrated = JSON.stringify(filter) === JSON.stringify(["+dist/extension.js"]);
+    assert.equal(settings.packages[0], "first");
+    assert.equal(settings.packages[2], "last");
+    assert.deepEqual(settings.packages[1].extensions, migrated ? ["+dist/menu.js", "+dist/extension.js"] : initial.packages[1].extensions);
+    assert.equal(typeof settings.packages[1], typeof initial.packages[1]);
+    if (migrated) {
+      const edited = structuredClone(settings);
+      edited.packages[1].extensions = [];
+      writeJson(box.settings, edited);
+      const bytes = fs.readFileSync(box.settings, "utf8");
+      assert.throws(() => rollback(box.root), /Pi extension selection changed/);
+      assert.equal(fs.readFileSync(box.settings, "utf8"), bytes);
+      assert.equal(status(box.root).selected, b.manifest.artifactId);
+      writeJson(box.settings, settings);
+    }
+    const reordered = structuredClone(settings);
+    [reordered.packages[0], reordered.packages[1]] = [reordered.packages[1], reordered.packages[0]];
+    writeJson(box.settings, reordered);
+    assert.throws(() => rollback(box.root), /Pi package source or order changed/);
+    const plugins = JSON.parse(fs.readFileSync(box.selection.herdrRegistry));
+    assert.equal(plugins[1].plugin_root, path.join(box.root, "releases", b.manifest.artifactId, "terminal-browser/herdr-plugin"));
+    assert.deepEqual(plugins[1].build, []);
+    plugins[0].unrelated = "retained"; plugins[1].enabled = false;
+    writeJson(box.selection.herdrRegistry, plugins);
+    settings.unrelated = { retained: true };
+    if (filter !== "bare") settings.packages[1].skills = ["+new-skill"];
+    writeJson(box.settings, settings);
+    rollback(box.root);
+    const restored = JSON.parse(fs.readFileSync(box.settings));
+    const restoredHerdr = JSON.parse(fs.readFileSync(box.selection.herdrRegistry));
+    assert.equal(restoredHerdr[0].unrelated, "retained");
+    assert.equal(restoredHerdr[1].enabled, false);
+    assert.equal(restoredHerdr[1].plugin_root, path.join(box.root, "releases", a.manifest.artifactId, "terminal-browser/herdr-plugin"));
+    assert.equal(fs.readlinkSync(box.selection.cli), selected);
+    assert.deepEqual(restored.unrelated, { retained: true });
+    if (filter !== "bare") assert.deepEqual(restored.packages[1].skills, ["+new-skill"]);
+    assert.deepEqual(restored.packages[1].extensions, initial.packages[1].extensions);
+    assert.equal(typeof restored.packages[1] === "string" ? restored.packages[1] : restored.packages[1].source, typeof initial.packages[1] === "string" ? JSON.parse(before).packages[1] : JSON.parse(before).packages[1].source);
+    rollback(box.root);
+    assert.equal(fs.readFileSync(box.selection.cli, "utf8"), "#!/bin/sh\necho prior\n");
+    assert.equal(JSON.parse(fs.readFileSync(box.selection.herdrRegistry))[1].plugin_root, box.selection.herdrSource);
+  }
 });
 
 test("Herdr empty build omission allows repeat, update and rollback but rejects changed plans", (t) => {
@@ -263,7 +296,7 @@ test("activation refuses mutable state aliases and release-root state without to
 });
 
 test("SIGKILL at every activation and rollback write has explicit repeatable recovery", (t) => {
-  const box = sandbox(t), a = archive(t), b = archive(t, (dir, manifest) => {
+  const box = sandbox(t), a = archive(t, () => {}, 2), b = archive(t, (dir, manifest) => {
     fs.appendFileSync(path.join(dir, "browser/dist/main.js"), " B");
     manifest.identity.source.commit = "b".repeat(40);
   });
@@ -279,12 +312,23 @@ test("SIGKILL at every activation and rollback write has explicit repeatable rec
       assert.throws(() => execFileSync(process.execPath, args, { env: { PATH: process.env.PATH, CRASH_WRITE: String(write) }, stdio: "pipe" }), error => error.signal === "SIGKILL");
       assert.equal(status(box.root).recoveryRequired, true);
       assert.throws(() => activate(box.root, a.manifest.artifactId));
+      if (write === 2 || write === 6) {
+        const settings = JSON.parse(fs.readFileSync(box.settings));
+        const edited = structuredClone(settings);
+        edited.packages[1].extensions = ["+custom.js"];
+        writeJson(box.settings, edited);
+        assert.throws(() => box.run("recover", box.root));
+        assert.equal(status(box.root).recoveryRequired, true);
+        assert.deepEqual(JSON.parse(fs.readFileSync(box.settings)).packages[1].extensions, ["+custom.js"]);
+        writeJson(box.settings, settings);
+      }
       const result = box.run("recover", box.root);
       assert.equal(result.committed, write === 6);
       assert.equal(status(box.root).selected, write === 6 ? (operation === "activate" ? b : a).manifest.artifactId : before);
       assert.equal(status(box.root).recoveryRequired, false);
       assert.equal(box.run("recover", box.root).recovered, false);
-      activate(box.root, a.manifest.artifactId);
+      if (status(box.root).selected !== a.manifest.artifactId) rollback(box.root);
+      assert.deepEqual(JSON.parse(fs.readFileSync(box.settings)).packages[1].extensions, ["+dist/extension.js"]);
     }
   }
 });
@@ -301,11 +345,13 @@ test("recovery refuses a live manager and preserves later unrelated edits after 
   fs.writeFileSync(hook, `const fs=require('node:fs');const rename=fs.renameSync;let writes=0;fs.renameSync=function(...args){const result=rename.apply(this,args);if(++writes===4)process.kill(process.pid,'SIGKILL');return result;};`);
   assert.throws(() => execFileSync(process.execPath, ["--require", hook, path.join(repository, "scripts/install-manager.mjs"), "activate", box.root, a.manifest.artifactId], { stdio: "pipe" }));
   const settings = JSON.parse(fs.readFileSync(box.settings)); settings.later = true; settings.packages[1].skills = ["later"]; writeJson(box.settings, settings);
+  assert.deepEqual(settings.packages[1].extensions, ["+dist/menu.js", "+dist/extension.js"]);
   const registry = JSON.parse(fs.readFileSync(box.selection.herdrRegistry)); registry[0].later = true; registry[1].enabled = false; writeJson(box.selection.herdrRegistry, registry);
   box.run("recover", box.root);
   assert.equal(JSON.parse(fs.readFileSync(box.settings)).later, true);
   assert.deepEqual(JSON.parse(fs.readFileSync(box.settings)).packages[1].skills, ["later"]);
   assert.equal(JSON.parse(fs.readFileSync(box.settings)).packages[1].source, box.selection.piSource);
+  assert.deepEqual(JSON.parse(fs.readFileSync(box.settings)).packages[1].extensions, ["+dist/extension.js"]);
   assert.equal(JSON.parse(fs.readFileSync(box.selection.herdrRegistry))[0].later, true);
   assert.equal(JSON.parse(fs.readFileSync(box.selection.herdrRegistry))[1].enabled, false);
   assert.equal(status(box.root).selected, null);

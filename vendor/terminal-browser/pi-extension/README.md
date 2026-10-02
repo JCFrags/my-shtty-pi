@@ -1,178 +1,250 @@
-# Optional Pi adapter
+# Pi browser menu and optional tools
 
-The native `terminal-browser` CLI is the default for Pi and other agents.
-This package is an opt-in adapter for five model-callable Pi tools. It spawns the
-same artifact's native CLI and adds observation/epoch bookkeeping and Pi image
-results. It does not connect directly to CDP, inject a second browser backend,
-or install/start Pi or Herdr.
+The native `terminal-browser` CLI is the default for Pi and other agents. This
+package adds the human `/browser` menu and an exact-session page receiver. The
+existing five model tools are optional. Every browser operation uses the same
+artifact's native CLI. There is no second input backend, terminal paste, or Pi
+editor replacement.
 
 Read the [product guide](../README.md), [installation guide](../docs/installation.md),
 and [native control guide](../docs/agent-control.md) for the backend contract.
 
-## Select or omit the package
+## Select package resources
 
-The managed installer's default receipt is CLI-only. Add `--pi-settings` during
-fresh initialization only if the user wants these native tools. A separate
-`--skill` selection installs CLI-first instructions without loading this package.
-Neither launch nor this package auto-installs skills.
+The package declares two resources, in this order:
 
-The selected package source is the exact retained versioned directory:
+1. `dist/menu.js`: `/browser`, receiver lifecycle, and one loaded-identity receipt.
+   It registers no model tools.
+2. `dist/extension.js`: the existing five model tools only. It registers no
+   command, receiver, or lifecycle receipt.
+
+The supported package source is the exact retained versioned directory:
 
 ```text
 /absolute/install/releases/ARTIFACT_ID/terminal-browser/pi-extension
 ```
 
-For one invocation, Pi supports an explicit package path:
-
-```sh
-pi -e /absolute/install/releases/ARTIFACT_ID/terminal-browser/pi-extension
-```
-
-Do not add an additional path if the same package is already selected. A second
-version can cause duplicate tool registrations. Pi settings can narrow the existing
-package entry through supported resource filters:
+Use Pi's package filters to select command-only operation:
 
 ```json
 {
-  "packages": [
-    {
-      "source": "/absolute/install/releases/ARTIFACT_ID/terminal-browser/pi-extension",
-      "extensions": []
-    }
-  ]
+  "source": "/absolute/install/releases/ARTIFACT_ID/terminal-browser/pi-extension",
+  "extensions": ["dist/menu.js"]
 }
 ```
 
-This example disables the adapter but preserves the managed source entry. To opt
-in, select `"extensions": ["+dist/extension.js"]` or omit the filter. Merge the
-change into the existing settings entry, preserving other packages and filters.
-The managed installer preserves these filters during version changes. The package
-contains no declared skills, prompts, or Pi host. Do not rewrite all settings to
-match this minimal example.
+The plain pattern is an allowlist. `+dist/menu.js` alone force-includes the menu
+but also leaves the other declared resources enabled. It is not command-only.
 
-Resource changes take effect in a fresh Pi process or an explicitly approved
-reload of an idle session with a safe draft state. Selection alone does not prove
-that a currently running Pi process loaded that artifact. Doctor's loaded receipts
-and a real tool call provide separate evidence.
+For the menu and all five tools, omit `extensions` or select both resources:
 
-## Launch and ownership
+```json
+{
+  "source": "/absolute/install/releases/ARTIFACT_ID/terminal-browser/pi-extension",
+  "extensions": ["+dist/menu.js", "+dist/extension.js"]
+}
+```
 
-With a complete Herdr pane identity, `browser_open` uses `companion open` and
-`browser_tabs` uses `companion tabs`. Other operations call `agent`. The existing
-pane owner and fixed launch project restrictions remain in force. Incomplete
-Herdr identity is a refusal, not a fallback to another owner's browser.
+Merge the selection into the existing `packages` entry. Do not add a duplicate
+package or replace unrelated settings. `extensions: []` disables both resources.
+A tools-only filter does not load the menu. Direct tools-entrypoint loading is not
+the supported complete profile. See the installation guide for managed filter
+migration.
 
-Without Herdr, the adapter uses the current Pi session ID and cwd as explicit
-`--session`/`--project` arguments. It only attaches to an already launched owned
-browser. It never tries to take over Pi's piped terminal. For a predictable setup,
-start a browser in one visible terminal:
+"Command-only" means no browser model tools, not no Pi extension. A skill cannot
+register `/browser`. Loading a CLI skill alone does not load this package.
+`--no-extensions` or an explicit resource exclusion also removes the command.
+Pure CLI installation must not change Pi settings automatically.
+
+The package has no declared skills, prompts, or Pi host. Resource changes need a
+fresh Pi process or an approved reload of an idle session with a safe draft state.
+Selection alone does not prove loaded activation. The menu's receipt reports the
+menu entrypoint, compiled closure, and registered tool inventory separately.
+
+## Associate an exact owner
+
+An arbitrary native CLI session name need not match Pi's session ID. A Herdr pane
+also does not identify a live Pi conversation. The adapter does not infer either
+association.
+
+1. Run `/browser`, then choose Settings and Owner association.
+2. Choose This Herdr pane only when its complete coordinates are available, or
+   choose Native CLI session and enter its exact launch session ID and project.
+3. Check the owner, fixed launch project, browser-session key, and runtime shown
+   before attaching. A native association overrides Herdr routing.
+
+A missing owner can be saved for a later explicit launch, but is not attached by
+fallback. Outside Herdr, launch the selected owner in a separate visible terminal:
 
 ```sh
-cd /absolute/project
 terminal-browser open https://example.com --session browser-demo --project /absolute/project
 ```
 
-Then start Pi from the same project in another terminal:
+Then choose Open/focus or Reconnect receiver in `/browser`. Pi never launches a
+foreground browser into its own piped terminal. Focus the browser terminal
+manually outside Herdr. Herdr uses its exact-owner companion launch/focus route.
+Changing Pi's cwd does not change the browser's fixed launch project.
 
-```sh
-cd /absolute/project
-pi --session-id browser-demo -e /absolute/install/releases/ARTIFACT_ID/terminal-browser/pi-extension
-```
+Only the explicit versioned association is saved as branch state. The saved Pi
+session ID and storage file must match. Forked or copied history does not attach
+a receiver to another conversation. Ordinary transcript appends do not rotate a
+receiver. Session start and actual tree navigation create a fresh generation.
+Switch, fork, tree, reload, shutdown, and disconnect invalidate locally before
+asynchronous cleanup. A canceled transition can leave the link paused. Choose
+Reconnect receiver instead of guessing that the old association remains live.
 
-Do not use that session ID for another concurrent owner. If no owned browser
-exists, `browser_open` reports the exact visible-terminal launch command for its
-Pi session and project. It can then reuse the browser, navigate a supplied URL,
-or open a requested new tab. Focus the browser terminal manually outside Herdr;
-the `focus` option controls only Herdr pane focus. A supported CLI split is
-available separately, not an automatic non-Herdr adapter fallback.
+A conflicting receiver requires confirmation of that exact binding before
+replacement. Disconnect this Pi receiver leaves the browser open. Routing IDs
+are not authentication against other same-user processes.
 
-Changing the Pi session or cwd discards cached adapter observations. It does not
-transfer a launched browser to a new owner or project. The native backend still
-checks ownership independently. Reopen deliberately when a different launch
-project is needed.
+## Human menu
+
+| Item | Behavior |
+| --- | --- |
+| Open/focus browser | Open or reuse only the selected owner, without implicit navigation. |
+| Reconnect receiver | Bind the exact current Pi session and browser runtime. Confirm any conflicting binding. |
+| Return control to agent | Explicitly select Agent with the current control epoch. No reply or action replay. |
+| Control mode | Agent, Human, or Shared. Legacy Paused remains visible until changed. |
+| Send current page | Preview link/title, choose link or screenshot, then confirm a reply request. |
+| Settings | Owner association, Shared page updates, and profile-wide network blocking. |
+| Close owned browser | Confirm every context ID/title and the transfer scope, then request orderly close. |
+
+Opening or canceling the menu does not select Human. Agent and Shared allow agent
+operations. Human and Paused do not. Shared input arbitration can wait for human
+input without changing the mode. Return control does not edit the Pi draft, paste
+terminal text, send Enter, or start a model turn.
+
+Shared page updates are On by default but dormant outside Shared. The menu labels
+this choice: screenshots go to this Pi conversation and do not start a reply.
+Turn updates Off or select Human to stop automatic delivery. Blocking enable/disable
+and site exceptions affect the shared browser profile, including other owners.
+The human settings path does not resume Agent control.
+
+Close uses the native exact-scope preview revision. It closes only the owned
+session through beforeunload-aware methods, not daemon shutdown or force destroy.
+Native beforeunload decisions remain in the browser. A refusal, unknown outcome,
+or new context stops the remainder. Already closed pages cannot be restored by
+this operation. Partial close leaves control with Human. There is no automatic
+retry or resume.
+
+## Passive updates and explicit Send
+
+The receiver uses one bounded native long-poll wait, not a screenshot timer. It
+pins owner, browser-session key, runtime instance, binding, Pi storage identity,
+and a fresh receiver generation. PNG files are private, limited to 2 MiB, read
+only when visual metadata is present, and removed after reading.
+
+Automatic events contain capture provenance and pixels, not URLs, titles, page
+text, refs, or observation tokens. Page information is untrusted data, not action
+authority. The Pi side retains only the newest pending automatic event:
+
+- While idle, append at most one passive custom message between ordinary requests.
+- On the next ordinary `before_agent_start`, attach the newest pending image to
+  the request that the user already started.
+- While busy, append the newest pending image at `turn_end`, after tool results.
+  The boundary entry does not request continuation.
+- A context filter retains only the latest automatic image for the live capture
+  context. It preserves explicit shares, other messages, and raw session history.
+
+No automatic event calls `sendUserMessage`, changes the editor, or starts a turn.
+Human/Paused, context changes, and receiver changes drop unsent automatic data.
+The selected model must declare image support. Otherwise, Pi receives a bounded
+change notice that explains that no pixels were supplied to the model.
+
+Explicit Send is different. Both menus capture a bounded link/title preview,
+then ask for confirmation. The share request pins that preview's context and
+document generation. If the page changes, start a new explicit Send. The extension
+does not retry the old one.
+
+A confirmed native `human-share` event calls
+`sendUserMessage(..., {deliverAs: "followUp", expandPromptTemplates: false})`.
+The fixed human reply request and serialized untrusted site data use separate
+content blocks. A busy Pi queues the reply after its current work. The draft is
+unchanged. The extension records the attempt before the void API call and does
+not retry an uncertain submission. "Queued in the browser" and "Submitted to Pi;
+reply may be queued" are different states. Neither proves model receipt or a
+completed reply. Already submitted pixels can remain in requests, history, and
+exports. They cannot be recalled.
+
+Native capture/change detection has heuristic and host-visibility limits. The
+receiver does not establish that every visual change was captured, that hidden
+windows are fully detectable, or that terminal IME preedit is available.
 
 ## Five tools, one native backend
 
 | Tool | Native CLI operation |
 | --- | --- |
-| `browser_open` | Herdr `companion open`, or exact native-session attachment through `session tabs` and explicit navigation |
+| `browser_open` | Exact Herdr `companion open`, or attachment to the explicitly selected native owner |
 | `browser_observe` | `agent observe`, including bounded locators, frames, semantic state, and private PNG capture |
 | `browser_act` | One native input, navigation, wait, dialog decision, or project-confined upload |
-| `browser_tabs` | Owned context and download list/open/activate/close/wait/cancel commands |
-| `browser_control` | Control status/pause/explicit resume and `agent blocking` commands |
+| `browser_tabs` | Owned context/download list, open, activate, close, wait, or cancel |
+| `browser_control` | Status, pause, explicit resume/mode selection, or network blocking |
 
-The tools use Pi's sequential execution mode because they share a current
-observation cache. Native browser waits still use the backend's separate wait
-mechanism. Human takeover remains a backend control event, not a queued Pi tool.
+The tools read the same explicit active-branch association as the menu. They use
+Pi's sequential execution mode because they share an observation cache. Native
+waits still use the backend's separate wait mechanism. Owner, storage, and branch
+changes discard cached observations.
 
-Observe before input and after changes. Pi keeps observation IDs and epochs out
-of the model-facing schemas but passes them to the CLI. Coordinate actions map
-from the latest returned image into the current capture geometry. Typed/prompt
-text goes through stdin, not CLI arguments. Visual results contain native Pi image
-content; image bytes are omitted from text/details, and temporary capture files
-are removed after reading.
+Use `browser_control` with `action: "mode"` and `mode: "agent"`, `"human"`, or
+`"shared"` only for an explicit user choice. Mode selection clears cached
+observations. Legacy `action: "resume"` means Agent and refreshes the observation.
+Neither follows a failure automatically. All five tools treat Shared as eligible
+for agent operations while retaining native input arbitration and epoch checks.
 
-Cancellation stops the child CLI, which disconnects from native input. A signal
-already aborted before dispatch prevents child startup. Cancellation cannot undo
-a side effect already delivered. State-change errors require a new observation,
-not replay. New structured CLI errors preserve their code and actionable message;
-startup errors preserve the full bounded startup report.
+Observe before input and after page changes. Visual coordinates map through the
+latest capture geometry. Scroll accepts deltas, not `ref`, `locator`, `x`, or `y`
+target fields. Hover over the intended scroller first. Scroll uses the selected
+frame and current native pointer position, or viewport center if no pointer
+position exists. Its completion means input dispatch, not measured movement.
 
-Use `browser_control` with `action: "resume"` only when the user explicitly asks.
-Resume refreshes the adapter observation. It never follows a failure automatically.
-Dialogs require an exact cached dialog ID and an explicit `accept` decision.
-Uploads and downloads retain the native project and owner restrictions.
+Typed/prompt text uses stdin, not process arguments. Visual tool results contain
+Pi image blocks, without image bytes in text/details. Dialogs require an exact
+cached dialog ID and explicit decision. Uploads/downloads retain fixed-project,
+owner, and file restrictions. Cancellation stops the child CLI and later native
+input, but does not undo a delivered side effect. Never replay an uncertain action.
 
-For blocking:
+For blocking, use `browser_control` with `action: "blocking"`. `blocking_action`
+is `status`, `enable`, `disable`, `allow-site`, `block-site`, `clear-diagnostics`, or
+`reload`. Site actions require an exact hostname or HTTP(S) URL. Mutations require
+Agent or Shared and clear the observation cache. Enable/disable and exceptions
+are profile-wide. `block-site` removes an exception. `reload` rebuilds the bundled
+filter cache without fetching lists or reloading the page.
 
-```json
-{"action":"blocking","blocking_action":"status"}
-```
-
-`blocking_action` can also be `enable`, `disable`, `allow-site`, `block-site`,
-`clear-diagnostics`, or `reload`. Site actions require `site`, an exact hostname
-or HTTP(S) URL. Optional `context_id` selects diagnostics. Mutations obtain the
-current epoch, require agent control, and discard the adapter observation.
-Enable/disable and exceptions change the shared profile. They are not tab-only
-preferences. `block-site` removes an exception; `reload` rebuilds the bundled
-cache without fetching lists or reloading the page.
-
-Do not mix direct CLI mutations with a cached adapter observation. Observe again
-through the adapter after external changes. Neither route may bypass a human
-pause, ownership refusal, stale state, or file/network guard.
+Do not mix direct CLI mutations with cached tool observations. Observe again
+through the adapter after external changes. Neither route bypasses ownership,
+human control, stale state, or file/network guards.
 
 ## Compatibility and development
 
-`package.json` uses `peerDependencies: "*"` for Pi host packages, as Pi 0.99.1's
-package contract requires. Host modules are not bundled or installed as runtime
-dependencies. This wildcard is not a claim that every Pi version was tested.
-The development dependency pins remain at Pi 0.84.2.
+The implemented host contract and development pins are Pi 0.99.1. Host packages
+remain wildcard peer dependencies, as Pi's package contract requires. They are
+not bundled runtime dependencies. Wildcards do not establish compatibility with
+other Pi versions.
 
-Focused checks for this change passed:
+Read the installed Pi extension, TUI, package, session, message, and SDK docs before
+changing lifecycle or message delivery. Pi 0.99.1 supports context-only boundary
+entries. Its `sendMessage` with `triggerTurn: false` appends after tool results
+when busy. `sendUserMessage` always starts or queues a turn and returns void at
+the extension API. Do not replace those distinctions with editor/terminal input.
 
-- Build/typecheck and the adapter/client suite with the pinned 0.84.2 development
-  host. The command runner is substituted in most behavior tests.
-- The existing offline A/B/A package loader and lifecycle receipt fixture with
-  the installed Pi 0.99.1 host, including fresh processes and one reused
-  SettingsManager/ResourceLoader.
+Source files compile to the eight-file JavaScript closure declared in
+`src/identity.ts`. Artifact schema 3 verifies the ordered resources and this
+closure. Schema 1/2 identity reads retain the old single-resource interpretation.
+The menu owns one startup receipt and idempotent shutdown cleanup. Factory loading
+starts no processes, waits, timers, or receipts. Without an explicit association
+or dialog-capable UI, session startup starts no receiver.
 
-Those checks do not establish a visible production browser, non-Herdr terminal
-rendering, or all-version compatibility. Full artifact/runtime acceptance is a
-separate gate. The [development guide](../docs/development.md) lists those checks.
-
-The source entrypoint is `src/extension.ts`, compiled to `dist/extension.js`.
-The source launch mode calls the built source CLI. The release build generates
-bundle mode, which calls the retained artifact's own launcher. Run source checks
-from the browser workspace:
+From the browser workspace:
 
 ```sh
+pnpm --filter pi-terminal-browser build
 pnpm --filter pi-terminal-browser typecheck
 pnpm --filter pi-terminal-browser test
-TERMINAL_BROWSER_PI_ROOT=/absolute/pi-coding-agent node --test scripts/test/pi-reload.test.mjs
 ```
 
-Read the installed Pi SDK/extensions/packages/skills docs for the actual host
-before changing these boundaries. Keep runtime work out of the extension factory.
-Loaded-identity receipts begin at `session_start` and have idempotent
-`session_shutdown` cleanup. No source build, settings edit, or symlink change
-alone proves activation.
+The focused adapter/client checks use a substituted CLI and synthetic page data.
+They cover tool registration, routing, Shared eligibility, passive coalescing,
+explicit Send pins, and exact close confirmation. They do not establish a visible
+browser, installed activation, beforeunload behavior, or full runtime acceptance.
+The parent package-loader and distribution fixtures remain separate checks. See
+[development](../docs/development.md) for those boundaries.

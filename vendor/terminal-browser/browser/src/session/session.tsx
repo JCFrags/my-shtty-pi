@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -27,7 +28,7 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
-import { appId, lastUrl, listApps, parseBrowserOwner, setLastUrl, settings, store } from "pixel-store";
+import { RUNTIME_IDENTITY, TAB_RECOVERY_DIR, appId, lastUrl, listApps, parseBrowserOwner, setLastUrl, settings, store } from "pixel-store";
 import type {
   DevtoolsDock,
   InstanceRow,
@@ -58,7 +59,13 @@ import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight 
 import type { DevtoolsPlacement } from "./layout";
 import { fetchSuggestions } from "./suggest";
 import { TabManager } from "./tabs";
-import type { TabApp } from "./tabs";
+import type { TabApp, VisiblePageChange } from "./tabs";
+import { CompanionService } from "./companion-service";
+import type { CloseContext, VisibleContext } from "./companion-service";
+import { NativeBrowserMenu } from "./browser-menu-controller";
+import { TabRecoveryStore } from "./tab-recovery";
+import { SessionRecovery } from "./session-recovery";
+import { pageChangeObserverSource, parsePageChangeMessage } from "../agent/page-changes";
 import type { NewTabSuggestion } from "../ui/types";
 
 export interface SessionContext {
@@ -234,6 +241,17 @@ class Session {
   private readonly tabs: TabManager;
   private readonly control: BrowserControl;
   private readonly fallbackState: BrowserState;
+  private companion: CompanionService | null = null;
+  private nativeMenu: NativeBrowserMenu | null = null;
+  private recovery: SessionRecovery | null = null;
+  private emptyPageSurface: Surface | null = null;
+  private visibleKey = "";
+  private readonly scrollPositions = new Map<string, { x: number; y: number }>();
+  private closeAttemptActive = false;
+  private pendingApprovedClose: {
+    contextId: number; dialogId: string; accepted: boolean;
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null = null;
 
   private root: PixelRoot | null = null;
   private popupSurface: Surface | null = null;
@@ -270,6 +288,7 @@ class Session {
         selectionText: string;
       }
     | { kind: "toolbar" }
+    | { kind: "recovery" }
     | null = null;
   private sentCursor: string | null = null;
 
@@ -334,7 +353,10 @@ class Session {
     );
     this.control = new BrowserControl({
       beforeResume: () => this.releaseBrowserInput(),
-      onTransition: () => this.invalidateAgentControl(),
+      onTransition: () => {
+        this.invalidateAgentControl();
+        this.companion?.controlChanged();
+      },
       onChange: () => {
         this.registry?.update();
         this.render();
@@ -371,6 +393,7 @@ class Session {
         onActivated: () => {
           this.browserFocused = true;
           this.pageMenu = null;
+          this.nativeMenu?.closed();
           this.reconcileRecord();
           this.syncDevtoolsLayout();
           this.syncCursor();
@@ -378,20 +401,23 @@ class Session {
         },
         onDevtoolsChanged: () => this.syncDevtoolsLayout(),
         onDevtoolsAction: (action) => {
-          this.control.takeHuman("devtools");
+          this.humanChange("devtools");
           if (action === "close") this.tabs.activeController?.closeDevtools();
           else this.setDevtoolsDockSide(action === "dock-bottom" ? "bottom" : "right");
         },
         onPageMenu: (params) => this.openPageMenu(params),
         onTabOpened: (opener, url) => this.records.get(opener)?.linkOpened(url),
         onTabClosed: (id) => {
-          if (this.tabs.count <= 1) this.shutdown();
-          else this.tabs.removeClosed(id);
+          const wholeClose = this.tabs.sessionClosePending;
+          // Actual deletion emits an immediate snapshot, including an empty last tab.
+          this.tabs.removeClosed(id, false);
+          if (!wholeClose && this.tabs.count === 0) this.shutdown();
         },
         tabSwitchAllowed: () => !this.activeRecord()?.reviewing,
         agentTabSwitchAllowed: () => this.agentTabSwitchAllowed(),
         requestAgentRender: () => this.agentOverlayRender.request(),
         onTabsChanged: () => {
+          this.settleApprovedClose();
           this.syncChromeComposition();
           this.registry?.update();
           for (const record of [...this.records.values()]) {
@@ -413,10 +439,241 @@ class Session {
       DEFAULT_URL,
       this.control,
     );
+    this.installRecovery();
+    this.installCompanion();
+  }
+
+  private recoveryEligible(): boolean {
+    return !!this.owner && !this.appIdentity && !flagValue(this.argv, "--ssh") &&
+      !this.socksPort && !this.preload && !this.mainScript;
+  }
+
+  private installRecovery(): void {
+    if (!this.recoveryEligible()) return;
+    const pending = !this.argv.some(argument => !argument.startsWith("-"));
+    this.recovery = new SessionRecovery(new TabRecoveryStore({
+      directory: TAB_RECOVERY_DIR, owner: this.owner, projectRoot: this.owner!.projectDir,
+      profileDir: app.getPath("userData"), partition: this.partition,
+    }), {
+      snapshot: () => this.tabs.recoverySnapshot(),
+      restore: snapshot => { this.tabs.restoreRecovery(snapshot); },
+      fresh: () => { this.tabs.create(DEFAULT_URL); },
+      changed: () => {
+        if (!this.recovery?.pending && this.pageMenu?.kind === "recovery") this.pageMenu = null;
+        this.registry?.update();
+        this.render();
+      },
+    }, pending);
+    this.tabs.subscribeRecoveryChanges(change => this.recovery?.changed(change.immediate));
+    if (pending) {
+      this.control.pause(this.control.controlEpoch);
+      this.fallbackState.loading = false;
+      this.pageMenu = { kind: "recovery" };
+    }
+  }
+
+  private assertRecoveryChosen(): void {
+    if (this.recovery?.pending) throw new Error("Choose Restore or Fresh before using this browser. Recovery stays paused.");
+  }
+
+  private selectControlMode(mode: "agent" | "human" | "shared", epoch: number) {
+    this.assertRecoveryChosen();
+    if (mode !== "human" && this.tabs.sessionClosePending) throw new Error("Resolve the pending owned close before changing control.");
+    return this.control.selectMode(mode, epoch);
+  }
+
+  private installCompanion(): void {
+    if (!this.owner) return;
+    this.companion = new CompanionService({
+      identity: () => ({ owner: this.owner, browserSessionKey: this.ctx.key, runtimeInstanceId: RUNTIME_IDENTITY.instanceId }),
+      control: () => this.control.snapshot,
+      visibleContext: () => this.visibleContext(),
+      captureVisible: async context => {
+        const result = await this.tabs.captureVisiblePage(context, true);
+        if (!result.visual) throw new Error("No visible page image was captured.");
+        return result.visual.data;
+      },
+      stopForHuman: async () => {
+        this.recovery?.freeze();
+        this.closeAttemptActive = true;
+        this.tabs.sessionClosePending = true;
+        this.control.selectMode("human", this.control.controlEpoch);
+        await this.tabs.releaseAgentInput();
+      },
+      closeInventory: () => {
+        const inventory = this.tabs.closeInventory();
+        return { ...inventory, transfers: inventory.transfers.filter(transfer => transfer.state === "progressing") };
+      },
+      closeContext: (context, signal) => this.closeApprovedContext(context, signal),
+      finishClose: async () => {
+        if (this.tabs.closeInventory().contexts.length) throw new Error("Owned contexts remain. The browser was not shut down.");
+        this.shutdown();
+      },
+      endCloseAttempt: () => {
+        this.closeAttemptActive = false;
+        if (!this.pendingApprovedClose) {
+          this.tabs.sessionClosePending = false;
+          if (!this.shuttingDown) this.recovery?.releaseFreeze();
+        }
+        this.settleApprovedClose();
+      },
+      blocking: (contextId, request) => this.tabs.humanBlocking(contextId, request),
+      ...(this.recovery ? {
+        recoveryStatus: () => this.recovery!.status(),
+        chooseRecovery: (choice: "restore" | "fresh", revision: string) => {
+          if (this.tabs.sessionClosePending) throw new Error("Resolve the pending owned close before recovery.");
+          return this.recovery!.choose(choice, revision);
+        },
+      } : {}),
+      onChange: () => this.render(),
+    });
+    this.nativeMenu = new NativeBrowserMenu({
+      service: this.companion, control: this.control,
+      selectMode: mode => { this.selectControlMode(mode, this.control.controlEpoch); },
+      show: () => { this.pageMenu = { kind: "toolbar" }; this.pageMenuIndex = 0; this.render(); },
+      close: () => this.closePageMenu(),
+      focusPage: () => this.refocusPage(),
+      render: () => this.render(),
+      toast: (text, failed) => this.showToast(text, failed ? "failed" : "done"),
+      blockingItems: () => this.blockingMenuItems(),
+      toolItems: () => this.toolMenuItems(),
+    });
+    this.tabs.subscribePageChanges(change => this.companionPageChanged(change));
+    const binding = `__terminal_browser_${randomUUID().replaceAll("-", "")}`;
+    this.tabs.installPageChangeObserver(binding, pageChangeObserverSource(binding), hint => {
+      const data = parsePageChangeMessage(hint.payload);
+      let page = this.visibleContext();
+      if (!data || !page || page.contextId !== hint.contextId) return;
+      if (data.kind === "scroll") {
+        const sourceId = `${hint.frameRef.slice(0, 32)}:${data.sourceId.slice(0, 48)}`;
+        const key = `${page.contextId}:${page.documentGeneration}:${sourceId}`;
+        const previous = this.scrollPositions.get(key);
+        if (!previous && this.scrollPositions.size >= 64) return;
+        this.scrollPositions.set(key, { x: data.x, y: data.y });
+        if (previous && (previous.x !== data.x || previous.y !== data.y)) this.tabs.noteVisibleGeometryChange(page.contextId);
+        page = this.visibleContext();
+        if (!page || page.contextId !== hint.contextId) return;
+        this.companion?.changed({ contextId: page.contextId, documentGeneration: page.documentGeneration,
+          viewRevision: page.viewRevision, ...data, sourceId,
+          visibleFraction: Math.max(0, Math.min(1, data.visibleFraction * hint.visibleFraction)) });
+      } else if (data.kind === "structural") {
+        this.companion?.changed({ contextId: page.contextId, documentGeneration: page.documentGeneration,
+          viewRevision: page.viewRevision, kind: "structural" });
+      }
+    });
+  }
+
+  private visibleContext(): VisibleContext | null {
+    const page = this.tabs.currentVisiblePage();
+    if (!page) return null;
+    const { contents: _contents, ...snapshot } = page;
+    return { ...snapshot, visible: true };
+  }
+
+  private companionPageChanged(change: VisiblePageChange): void {
+    this.settleApprovedClose();
+    const page = this.visibleContext();
+    const key = page ? `${page.contextId}:${page.viewport.width}:${page.viewport.height}` : "";
+    if (key !== this.visibleKey) {
+      this.visibleKey = key;
+      this.scrollPositions.clear();
+      this.companion?.contextChanged();
+    }
+    if (!page || page.contextId !== change.contextId) return;
+    const identity = { contextId: page.contextId, documentGeneration: page.documentGeneration, viewRevision: page.viewRevision };
+    if (change.reason === "navigation") {
+      this.scrollPositions.clear();
+      this.companion?.changed({ ...identity, kind: "navigation" });
+    } else if (change.reason === "paint") {
+      this.companion?.changed({ ...identity, kind: "paint", viewport: page.viewport,
+        ...(change.dirtyRect ? { dirty: change.dirtyRect } : {}) });
+    }
+    // Geometry changes invalidate capture identity, but do not reset scroll baselines.
+  }
+
+  private async closeApprovedContext(context: CloseContext, signal?: AbortSignal) {
+    const outcome = await this.tabs.closeContext(context, signal);
+    const dialog = this.tabs.pendingDialog;
+    if (outcome === "decision-required" && dialog?.contextId === context.contextId &&
+        dialog.type === "beforeunload" && dialog.intent?.type === "close") {
+      this.pendingApprovedClose = { contextId: context.contextId, dialogId: dialog.id, accepted: false, timer: null };
+    }
+    return outcome;
+  }
+
+  private settleApprovedClose(): void {
+    const pending = this.pendingApprovedClose;
+    if (!pending || this.closeAttemptActive || this.shuttingDown) return;
+    if (this.tabs.has(pending.contextId) && (pending.accepted || this.tabs.pendingDialog?.id === pending.dialogId)) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    this.pendingApprovedClose = null;
+    this.tabs.sessionClosePending = false;
+    if (!this.tabs.closeInventory().contexts.length) this.shutdown();
+    else this.recovery?.releaseFreeze();
+  }
+
+  private answerNativeDialog(id: string, accept: boolean, text?: string): Promise<void> {
+    return this.answerApprovedDialog(id, accept, () => this.tabs.answerHumanDialog(id, accept, text));
+  }
+
+  private async answerApprovedDialog<T>(id: string, accept: boolean, answer: () => Promise<T>): Promise<T> {
+    const pending = this.pendingApprovedClose;
+    if (pending?.dialogId === id) pending.accepted = accept;
+    try { return await answer(); }
+    catch (error) { if (pending?.dialogId === id) pending.accepted = false; throw error; }
+    finally {
+      if (pending?.dialogId === id && pending.accepted && this.pendingApprovedClose === pending) {
+        // Match the native beforeunload permit bound. An unknown result is not retried.
+        pending.timer = setTimeout(() => {
+          if (this.pendingApprovedClose !== pending || this.shuttingDown) return;
+          pending.accepted = false;
+          this.settleApprovedClose();
+        }, 5_200);
+      }
+      this.settleApprovedClose();
+    }
+  }
+
+  private physicalTail: Promise<void> = Promise.resolve();
+  private chromeReservation = false;
+  private pageMenuIndex = 0;
+
+  beginChromeInput(): void { this.control.input.beginChrome(this.tabs.visibleContextId || null); }
+  endChromeInput(): void { this.control.input.endChrome(); }
+
+  private syncChromeReservation(): void {
+    const open = !!(this.pageMenu || this.palette || this.newTab || this.urlEditOpen || this.findOpen ||
+      this.tabs.activeController?.devtoolsFocused || this.dividerDragging || this.activeRecord()?.reviewing);
+    if (open === this.chromeReservation) return;
+    this.chromeReservation = open;
+    if (open) this.beginChromeInput();
+    else this.endChromeInput();
+  }
+
+  private humanChange(reason: "pointer" | "wheel" | "keyboard" | "paste" | "navigation" | "tabs" | "devtools"): void {
+    if (this.recovery?.pending) return;
+    if (this.control.state !== "shared") this.control.takeHuman(reason);
+    else if (reason === "navigation" || reason === "tabs" || reason === "devtools") this.invalidateAgentControl();
+  }
+
+  private humanMutation(reason: "navigation" | "tabs" | "devtools" | "pointer", action: () => void): void {
+    if (this.recovery?.pending) return;
+    this.humanChange(reason);
+    void this.forwardHuman(this.tabs.releaseAgentInput(), action);
+  }
+
+  private forwardHuman(priority: Promise<void>, action: () => void | Promise<void>): Promise<void> {
+    const contextId = this.tabs.visibleContextId;
+    this.physicalTail = this.physicalTail.then(async () => {
+      await priority;
+      if (contextId === this.tabs.visibleContextId) await action();
+    }).catch(() => { this.showToast("Native input could not be submitted. It was not replayed.", "failed"); });
+    return this.physicalTail;
   }
 
   private releaseBrowserInput() {
     this.tabs.eachController((controller) => controller.releaseAllInput());
+    this.control.input.resetPhysical();
   }
 
   private invalidateAgentControl() {
@@ -437,24 +694,32 @@ class Session {
       keyEventTypes: true,
       onKey: (event) => this.handleKey(event),
       onPaste: (text) => {
-        this.control.takeHuman("paste");
-        if (this.tabs.pendingDialog) return;
+        if (!this.chromeReservation) this.humanChange("paste");
         const browser = this.tabs.activeController;
-        if (browser?.popup) browser.popup.input.paste(text);
-        else if (this.browserFocused && browser?.devtoolsFocused) {
-          browser.devtools?.input.paste(text);
-        } else if (this.browserFocused) browser?.paste(text);
+        this.forwardHuman(this.control.input.paste(this.tabs.visibleContextId), () => {
+          if (this.tabs.pendingDialog) return;
+          if (browser?.popup) return browser.popup.input.paste(text);
+          if (this.browserFocused && browser?.devtoolsFocused) return browser.devtools?.input.paste(text);
+          if (this.browserFocused) return browser?.paste(text);
+        }).finally(() => this.control.input.finishPaste());
       },
       onPasteImage: (image) => {
-        this.control.takeHuman("paste");
-        if (this.tabs.pendingDialog) return;
+        if (!this.chromeReservation) this.humanChange("paste");
         const browser = this.tabs.activeController;
-        if (browser?.popup) browser.popup.input.pasteImage(image);
-        else if (this.browserFocused && browser?.devtoolsFocused) {
-          browser.devtools?.input.pasteImage(image);
-        } else if (this.browserFocused) browser?.pasteImage(image);
+        this.forwardHuman(this.control.input.paste(this.tabs.visibleContextId), () => {
+          if (this.tabs.pendingDialog) return;
+          if (browser?.popup) return browser.popup.input.pasteImage(image);
+          if (this.browserFocused && browser?.devtoolsFocused) return browser.devtools?.input.pasteImage(image);
+          if (this.browserFocused) return browser?.pasteImage(image);
+        }).finally(() => this.control.input.finishPaste());
       },
-      onFocus: (focused) => this.tabs.activeController?.setActive(focused),
+      onFocus: (focused) => {
+        this.tabs.activeController?.setActive(focused);
+        if (!focused) {
+          this.tabs.eachController(controller => controller.releasePhysicalInput());
+          this.control.input.resetPhysical();
+        }
+      },
       onResize: () => {
         this.followCellZoom();
         this.recalculateLayout();
@@ -476,8 +741,10 @@ class Session {
     initOffscreenMode(this.root.sharedTextures);
     this.fontId = await this.root.registerFont(bundledFontPath());
     this.applyKeyBindings(this.root.info.kittyKeyboard);
+    this.control.input.setKeyReleaseReporting(this.root.info.kittyKeyboard);
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
+    this.emptyPageSurface = this.root.createSurface();
     this.followCellZoom();
     this.recalculateLayout();
     this.root.setPointerShape("default");
@@ -485,7 +752,7 @@ class Session {
     this.installEmbedderApi();
     if (this.appIdentity) {
       this.tabs.create(this.fallbackState.url, true, { app: this.appIdentity });
-    } else {
+    } else if (!this.recovery?.pending) {
       this.tabs.create(this.fallbackState.url);
     }
     this.registry = new Registry({
@@ -510,18 +777,21 @@ class Session {
         mode: this.appIdentity ? ("app" as const) : ("browser" as const),
       }),
       openAppTab: (spec, app) => this.openAppTab(spec, app),
-      openTab: (url, cwd) => this.tabs.create(url ? normalizeUrl(url, cwd) : DEFAULT_URL).id,
+      openTab: (url, cwd) => { this.assertRecoveryChosen(); return this.tabs.create(url ? normalizeUrl(url, cwd) : DEFAULT_URL).id; },
       activateTab: (id) => {
         if (this.activeRecord()?.reviewing) return false;
         return this.tabs.agentActivate(id);
       },
       agentTabSwitchAllowed: () => this.agentTabSwitchAllowed(),
       agentStatus: () => this.control.snapshot,
+      companion: this.companion ?? undefined,
+      agentSelectMode: (mode, expectedEpoch) => this.selectControlMode(mode, expectedEpoch),
       blocking: (id, request, epoch) => this.tabs.blocking(id, request, epoch),
       agentPause: (expectedEpoch) => this.control.pause(expectedEpoch),
-      agentResume: (expectedEpoch) => this.control.resume(expectedEpoch),
+      agentResume: (expectedEpoch) => this.selectControlMode("agent", expectedEpoch),
       agentContext: (action, id, url, epoch) => this.tabs.agentContext(action, id, url, epoch),
-      agentDialog: (id, request) => this.tabs.respondDialog(id, request),
+      agentDialog: (id, request) => this.answerApprovedDialog(request.dialogId, request.accept,
+        () => this.tabs.respondDialog(id, request)),
       waitContexts: (after, timeout, epoch) => this.tabs.waitContexts(after, timeout, epoch),
       agentObserve: (id, request, signal) => this.tabs.agentObserve(id, { ...request, signal }),
       agentUpload: (id, request, signal) => this.tabs.agentUpload(id, { ...request, signal }),
@@ -663,7 +933,12 @@ class Session {
 
   shutdown(code = 0) {
     if (this.shuttingDown) return;
+    this.recovery?.freeze();
+    this.recovery?.dispose();
     this.shuttingDown = true;
+    if (this.pendingApprovedClose?.timer) clearTimeout(this.pendingApprovedClose.timer);
+    this.pendingApprovedClose = null;
+    this.companion?.dispose();
     ipcMain.removeListener("terminal-browser:theme-request", this.onThemeRequest);
     ipcMain.removeListener("terminal-browser:quit", this.onQuitRequest);
     for (const record of this.records.values()) record.dispose();
@@ -687,6 +962,7 @@ class Session {
     try {
       this.popupSurface?.close();
       this.devtoolsSurface?.close();
+      this.emptyPageSurface?.close();
     } catch { }
     this.root?.stop();
     this.ctx.onClose(code);
@@ -803,9 +1079,12 @@ class Session {
   }
 
   private render() {
+    if (this.shuttingDown) return;
+    if (this.recovery?.pending) this.pageMenu = { kind: "recovery" };
+    if (this.tabs) this.syncChromeReservation();
     if (!this.root || !this.layout || !this.popupSurface || !this.surfaceLayout) return;
     if (!this.devtoolsSurface) return;
-    const pageSurface = this.tabs.activeController?.surface;
+    const pageSurface = this.tabs.activeController?.surface ?? this.emptyPageSurface;
     if (!pageSurface) return;
     const noOverlays = this.sessionFlags.noOverlays || this.appIdentity != null || this.appTabActive();
     this.root.render(
@@ -825,12 +1104,13 @@ class Session {
         urlEdit={this.urlEditOpen}
         noOverlays={noOverlays}
         agentControl={this.control.snapshot}
+        controlDetail={this.nativeMenu?.detail()}
         agentActivity={this.tabs.activeAgentActivity}
         surfaceLayout={this.surfaceLayout}
         dialog={this.tabs.pendingDialog}
         answerDialog={(id, accept, text) => {
-          this.control.takeHuman("keyboard");
-          void this.tabs.answerHumanDialog(id, accept, text).catch(error => this.showToast(String(error), "failed"));
+          this.humanChange("keyboard");
+          void this.answerNativeDialog(id, accept, text).catch(error => this.showToast(String(error), "failed"));
         }}
         popup={this.popupView()}
         zoomHud={this.zoomHud}
@@ -861,52 +1141,41 @@ class Session {
   }
 
   private readonly actions: ChromeActions = {
-    back: () => {
-      this.control.takeHuman("navigation");
-      this.tabs.activeController?.back();
-    },
-    forward: () => {
-      this.control.takeHuman("navigation");
-      this.tabs.activeController?.forward();
-    },
-    reload: () => {
-      this.control.takeHuman("navigation");
+    back: () => this.humanMutation("navigation", () => this.tabs.activeController?.back()),
+    forward: () => this.humanMutation("navigation", () => this.tabs.activeController?.forward()),
+    reload: () => this.humanMutation("navigation", () => {
       this.activeRecord()?.reloaded();
       this.tabs.activeController?.reload();
-    },
-    urlEdit: () => {
-      this.control.takeHuman("navigation");
-      this.openUrlEdit();
-    },
+    }),
+    urlEdit: () => this.openUrlEdit(),
     urlEditCancel: () => this.closeUrlEdit(),
-    urlSubmit: (text) => {
-      this.control.takeHuman("navigation");
+    urlSubmit: (text) => this.humanMutation("navigation", () => {
       this.closeUrlEdit();
       if (text.trim()) this.tabs.activeController?.navigate(searchOrUrl(text, this.ctx.cwd));
-    },
+    }),
     pointer: (event) => {
-      this.browserFocused = true;
-      if (event.kind === "down") this.control.takeHuman("pointer");
-      else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.activeRecord()?.pointerSample(event);
-      this.tabs.activeController?.pointer(event);
+      if (event.kind === "move" && this.control.agentEligible && this.control.busy && !this.control.input.pointerHeld) return;
+      if (event.kind === "down") { this.browserFocused = true; this.humanChange("pointer"); }
+      const priority = this.control.input.pointer(event, this.tabs.visibleContextId);
+      const browser = this.tabs.activeController;
+      this.forwardHuman(priority, () => { this.activeRecord()?.pointerSample(event); browser?.pointer(event); });
     },
     wheel: (event) => {
-      this.browserFocused = true;
-      if (event.deltaX !== 0 || event.deltaY !== 0) this.control.takeHuman("wheel");
-      if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.tabs.activeController?.wheel(event);
+      if (event.deltaX === 0 && event.deltaY === 0) return;
+      this.humanChange("wheel");
+      const browser = this.tabs.activeController;
+      this.forwardHuman(this.control.input.wheel(this.tabs.visibleContextId), () => browser?.wheel(event));
     },
     pageHover: (hovering) => {
       this.pageHover = hovering;
       this.syncCursor();
     },
     findChange: (text) => {
-      this.control.takeHuman("keyboard");
+      this.humanChange("keyboard");
       this.tabs.activeController?.find(text);
     },
     findNext: (forward) => {
-      this.control.takeHuman("keyboard");
+      this.humanChange("keyboard");
       this.tabs.activeController?.findNext(forward);
     },
     findClose: () => this.closeFind(),
@@ -917,54 +1186,44 @@ class Session {
       this.render();
     },
     paletteRun: (index) => {
-      this.control.takeHuman("pointer");
+      this.humanChange("pointer");
       this.runPalette(index);
     },
     paletteClose: () => this.closePalette(),
-    tabSwitch: (id) => {
-      this.control.takeHuman("tabs");
-      this.tabs.activate(id);
-    },
-    tabClose: (id) => {
-      this.control.takeHuman("tabs");
-      this.closeOrShutdown(id);
-    },
+    tabSwitch: (id) => this.humanMutation("tabs", () => { this.tabs.activate(id); }),
+    tabClose: (id) => this.humanMutation("tabs", () => this.closeOrShutdown(id)),
     tabNew: () => {
-      this.control.takeHuman("tabs");
+      this.humanChange("tabs");
       this.openNewTabModal();
     },
-    tabMenu: () => {
-      this.control.takeHuman("pointer");
-      this.toggleToolbarMenu();
-    },
+    tabMenu: () => this.toggleToolbarMenu(),
     newTabQuery: (text) => {
-      this.control.takeHuman("keyboard");
+      this.humanChange("keyboard");
       this.newTabQuery(text);
     },
     newTabSubmit: (text) => {
-      this.control.takeHuman("tabs");
+      this.humanChange("tabs");
       this.closeNewTabModal();
       if (text.trim()) this.tabs.create(searchOrUrl(text, this.ctx.cwd));
     },
     newTabPick: (index) => {
-      this.control.takeHuman("pointer");
+      this.humanChange("pointer");
       this.pickNewTab(index);
     },
     newTabCancel: () => this.closeNewTabModal(),
     popupPointer: (event) => {
-      if (event.kind === "down") this.control.takeHuman("pointer");
-      else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.tabs.activeController?.popup?.input.pointer(event);
+      if (event.kind === "move" && this.control.agentEligible && this.control.busy && !this.control.input.pointerHeld) return;
+      if (event.kind === "down") this.humanChange("pointer");
+      const popup = this.tabs.activeController?.popup;
+      this.forwardHuman(this.control.input.pointer(event, this.tabs.visibleContextId), () => popup?.input.pointer(event));
     },
     popupWheel: (event) => {
-      if (event.deltaX !== 0 || event.deltaY !== 0) this.control.takeHuman("wheel");
-      if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      this.tabs.activeController?.popup?.input.wheel(event);
+      if (event.deltaX === 0 && event.deltaY === 0) return;
+      this.humanChange("wheel");
+      const popup = this.tabs.activeController?.popup;
+      this.forwardHuman(this.control.input.wheel(this.tabs.visibleContextId), () => popup?.input.wheel(event));
     },
-    popupClose: () => {
-      this.control.takeHuman("pointer");
-      this.tabs.activeController?.popup?.close();
-    },
+    popupClose: () => this.humanMutation("tabs", () => this.tabs.activeController?.popup?.close()),
     popupHover: (hovering) => {
       this.popupHover = hovering;
       this.syncCursor();
@@ -972,20 +1231,23 @@ class Session {
     devtoolsPointer: (event) => {
       const browser = this.tabs.activeController;
       if (!browser?.devtools) return;
-      this.browserFocused = true;
-      if (event.kind === "down") this.control.takeHuman("devtools");
-      else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      browser.focusDevtools();
-      browser.devtools.input.pointer(event);
+      if (event.kind === "move" && this.control.agentEligible && this.control.busy && !this.control.input.pointerHeld) return;
+      if (event.kind === "down") this.humanChange("devtools");
+      this.forwardHuman(this.control.input.pointer(event, this.tabs.visibleContextId), () => {
+        if (event.kind === "down") { this.browserFocused = true; browser.focusDevtools(); this.syncChromeReservation(); }
+        browser.devtools?.input.pointer(event);
+      });
     },
     devtoolsWheel: (event) => {
       const browser = this.tabs.activeController;
-      if (!browser?.devtools) return;
-      this.browserFocused = true;
-      if (event.deltaX !== 0 || event.deltaY !== 0) this.control.takeHuman("devtools");
-      if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
-      browser.focusDevtools();
-      browser.devtools.input.wheel(event);
+      if (!browser?.devtools || (event.deltaX === 0 && event.deltaY === 0)) return;
+      this.humanChange("devtools");
+      this.forwardHuman(this.control.input.wheel(this.tabs.visibleContextId), () => {
+        this.browserFocused = true;
+        browser.focusDevtools();
+        this.syncChromeReservation();
+        browser.devtools?.input.wheel(event);
+      });
     },
     devtoolsHover: (hovering) => {
       this.devtoolsHover = hovering;
@@ -997,7 +1259,7 @@ class Session {
       this.render();
     },
     devtoolsDividerDrag: (event) => {
-      if (event.phase === "start") this.control.takeHuman("devtools");
+      if (event.phase === "start") this.humanChange("devtools");
       else if (this.control.snapshot.state === "agent" && this.control.snapshot.busy) return;
       const page = this.layout?.page;
       const devtools = this.layout?.devtools;
@@ -1022,10 +1284,7 @@ class Session {
         this.syncDevtoolsLayout({ keepFrame: true });
       }
     },
-    pageMenuAction: (id) => {
-      this.control.takeHuman("pointer");
-      this.runPageMenu(id);
-    },
+    pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
     record: this.recordActions(),
   };
@@ -1044,6 +1303,7 @@ class Session {
       !this.urlEditOpen &&
       !this.findOpen &&
       !this.pageMenu &&
+      !this.recovery?.pending &&
       !browser?.devtoolsFocused;
   }
 
@@ -1141,11 +1401,34 @@ class Session {
   }
 
   private handleKey(event: EngineKeyEvent) {
-    if (event.kind !== "release") this.control.takeHuman("keyboard");
+    const priority = this.control.input.key(event, this.tabs.visibleContextId);
+    // Menu navigation must never select Human or leak its keys into the page.
+    if (this.recovery?.pending && event.kind !== "release" && event.mods.ctrl && event.key === "q") { this.shutdown(); return; }
+    if (this.handlePageMenuKey(event)) return;
+    if (event.kind !== "release" && !this.chromeReservation) this.humanChange("keyboard");
+    this.forwardHuman(priority, () => this.handleReservedKey(event));
+  }
+
+  private handlePageMenuKey(event: EngineKeyEvent): boolean {
+    if (!this.pageMenu) return false;
+    if (event.kind === "release") return true;
+    const items = this.pageMenuView()?.items.filter(item => item.enabled) ?? [];
+    if (event.key === "escape") {
+      if (this.pageMenu.kind === "toolbar" && this.nativeMenu) this.nativeMenu.back();
+      else this.closePageMenu();
+    }
+    else if ((event.key === "up" || event.key === "down") && items.length) {
+      this.pageMenuIndex = (this.pageMenuIndex + (event.key === "down" ? 1 : -1) + items.length) % items.length;
+      this.render();
+    } else if (event.key === "enter" && items.length) this.runPageMenu(items[Math.min(this.pageMenuIndex, items.length - 1)].id);
+    return true;
+  }
+
+  private handleReservedKey(event: EngineKeyEvent) {
     const dialog = this.tabs.pendingDialog;
     if (dialog) {
       if (event.kind !== "release" && (event.key === "escape" || (event.key === "enter" && dialog.type !== "prompt"))) {
-        void this.tabs.answerHumanDialog(dialog.id, event.key === "enter" && dialog.canAccept).catch(() => {});
+        void this.answerNativeDialog(dialog.id, event.key === "enter" && dialog.canAccept).catch(() => {});
       }
       return;
     }
@@ -1170,8 +1453,7 @@ class Session {
       if (this.isPasteKey(event)) this.root?.requestClipboardImage();
       if (this.isCopyKey(event)) void this.copySelection();
       if (this.isCutKey(event)) void this.mirrorSelection();
-      browser.popup.input.key(event);
-      return;
+      return browser.popup.input.key(event);
     }
     if (event.kind !== "release") {
       const quitKey =
@@ -1180,11 +1462,6 @@ class Session {
         this.shutdown();
         return;
       }
-      if (this.pageMenu) {
-        this.closePageMenu();
-        if (event.key === "escape") return;
-      }
-
       if (this.palette) {
         const step = listStep(event);
         if (event.key === "escape" || matchesBinding(event, this.paletteBinding)) {
@@ -1292,21 +1569,20 @@ class Session {
       }
     }
     if (event.kind === "release") {
-      this.routeKey(event);
-      return;
+      return this.routeKey(event);
     }
     if (this.browserFocused) {
       if (this.isPasteKey(event)) this.root?.requestClipboardImage();
       if (this.isCopyKey(event)) void this.copySelection();
       if (this.isCutKey(event)) void this.mirrorSelection();
-      this.routeKey(event);
+      return this.routeKey(event);
     }
   }
 
   private routeKey(event: EngineKeyEvent) {
     const browser = this.tabs.activeController;
-    if (browser?.devtoolsFocused && browser.devtools) browser.devtools.input.key(event);
-    else browser?.key(event);
+    if (browser?.devtoolsFocused && browser.devtools) return browser.devtools.input.key(event);
+    return browser?.key(event);
   }
 
   private applyZoom(direction: ZoomDirection) {
@@ -1520,22 +1796,36 @@ class Session {
   }
 
   private closePageMenu() {
-    if (!this.pageMenu) return;
+    if (!this.pageMenu || this.recovery?.pending) return;
     this.pageMenu = null;
+    this.nativeMenu?.closed();
     this.render();
   }
 
   private toggleToolbarMenu() {
+    if (this.recovery?.pending) { this.pageMenu = { kind: "recovery" }; this.render(); return; }
     if (this.pageMenu?.kind === "toolbar") {
       this.closePageMenu();
       return;
     }
     if (this.palette || this.newTab || this.urlEditOpen) return;
+    if (this.nativeMenu) { this.nativeMenu.open(); return; }
     this.pageMenu = { kind: "toolbar" };
+    this.pageMenuIndex = 0;
     this.render();
   }
 
   private runPageMenu(id: string) {
+    if (!this.pageMenuView()?.items.some(item => item.id === id && item.enabled)) return;
+    if (id.startsWith("recovery:")) {
+      if (id === "recovery:quit") { this.shutdown(); return; }
+      const revision = this.recovery?.status().revision;
+      if (!revision || (id !== "recovery:restore" && id !== "recovery:fresh")) return;
+      try { this.companion?.chooseRecovery(id === "recovery:restore" ? "restore" : "fresh", revision); }
+      catch (error) { this.showToast(error instanceof Error ? error.message : "Recovery choice failed. It was not replayed.", "failed"); }
+      return;
+    }
+    if (id.startsWith("browser:")) { void this.nativeMenu?.run(id); return; }
     const menu = this.pageMenu;
     this.closePageMenu();
     const browser = this.tabs.activeController;
@@ -1621,7 +1911,9 @@ class Session {
 
   private blockingStatus(): BlockingStatus | null {
     const browser = this.tabs.activeController;
-    return (browser?.popup ?? browser)?.blocking({ action: "status" }) ?? null;
+    const target = browser?.popup ?? browser;
+    // Dialog disposal can render before the closed context leaves the tab inventory.
+    return target?.pageVisible ? target.blocking({ action: "status" }) : null;
   }
 
   private blockingLabel(): string | null {
@@ -1650,7 +1942,7 @@ class Session {
     if (!this.blockingMenuItems().some(item => item.id === id && item.enabled)) return;
     const browser = this.tabs.activeController;
     if (!browser) return;
-    if (action !== "status") this.control.takeHuman("pointer");
+    if (action !== "status") this.humanChange("pointer");
     try {
       const status = (browser.popup ?? browser).blocking({ action });
       const recent = [...new Set(status.diagnostics.recent.map(item => item.host))].slice(-3).join(", ").slice(0, 180);
@@ -1684,9 +1976,33 @@ class Session {
 
   private pageMenuView(): PageMenuView | null {
     if (!this.pageMenu || !this.layout) return null;
-    if (this.pageMenu.kind === "toolbar") {
-      return { x: this.layout.width, y: this.layout.toolbarHeight, items: this.toolMenuItems() };
+    const selectedIndex = (items: PageMenuItem[]) => {
+      const enabled = items.filter(item => item.enabled);
+      const selected = enabled[Math.min(this.pageMenuIndex, Math.max(0, enabled.length - 1))];
+      return selected ? items.indexOf(selected) : -1;
+    };
+    if (this.pageMenu.kind === "recovery" && this.recovery) {
+      const status = this.recovery.status();
+      const row = (id: string, label: string, enabled = false): PageMenuItem => ({ id: `recovery:${id}`, label, enabled, shortcut: "" });
+      const items = [
+        row("restore", `Restore saved tabs (${status.entries.length}), stay paused`, this.recovery.canRestore),
+        row("fresh", "Fresh: discard saved tabs and open the default page, stay paused", true),
+        ...(!this.recovery.canRestore ? [row("unavailable", "No valid saved tabs. If Fresh is refused, relaunch with an explicit URL")] : []),
+        row("retention", "Owner-private routes, retained for up to 30 days"),
+        row("privacy", "Private paths can identify page content"),
+        row("heuristic", "URL filters are heuristic, not a complete secret detector"),
+        row("navigation", "Restore is not a guarantee of read-only navigation"),
+        row("lifetime", "No page memory, sessionStorage, or login is restored"),
+        ...status.entries.map((entry, index) => row(`tab-${index}`, `${index === status.activeIndex ? "Active " : ""}tab ${index + 1}: ${entry.kind === "url" ? entry.url : `about:blank (${entry.reason})`}`)),
+        row("quit", "Quit without choosing", true),
+      ];
+      return { x: Math.round(this.layout.width / 8), y: this.layout.toolbarHeight, items, selectedIndex: selectedIndex(items) };
     }
+    if (this.pageMenu.kind === "toolbar") {
+      const items = this.nativeMenu?.items() ?? this.toolMenuItems();
+      return { x: this.layout.width, y: this.layout.toolbarHeight, items, selectedIndex: selectedIndex(items) };
+    }
+    if (this.pageMenu.kind !== "page") return null;
     const items: PageMenuItem[] = [
       ...(this.pageMenu.selectionText
         ? [
@@ -1706,11 +2022,11 @@ class Session {
         : []),
       ...this.toolMenuItems(),
     ];
-    return { x: this.pageMenu.x, y: this.pageMenu.y, items };
+    return { x: this.pageMenu.x, y: this.pageMenu.y, items, selectedIndex: selectedIndex(items) };
   }
 
   private openUrlEdit() {
-    if (this.urlEditOpen) return;
+    if (this.urlEditOpen || this.recovery?.pending) return;
     this.urlEditOpen = true;
     this.blurToOverlay();
     this.render();
@@ -1724,6 +2040,7 @@ class Session {
   }
 
   private openNewTabModal() {
+    if (this.recovery?.pending) return;
     if (this.newTab) return;
     this.newTab = {
       query: "",
@@ -1967,6 +2284,7 @@ class Session {
   private initialUrl(): string {
     const arg = this.argv.find((argument) => !argument.startsWith("-"));
     if (arg) return arg;
+    if (this.recoveryEligible()) return "about:blank";
     try {
       const last = lastUrl()?.trim();
       if (last && /^https?:\/\//.test(last)) return last;

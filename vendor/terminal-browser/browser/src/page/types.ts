@@ -1,5 +1,10 @@
 import type { TextureInfo } from "electron";
 
+export interface NativePageChange {
+  reason: "navigation" | "paint" | "geometry";
+  dirtyRect?: { x: number; y: number; width: number; height: number };
+}
+
 export interface BrowserState {
   url: string;
   title: string;

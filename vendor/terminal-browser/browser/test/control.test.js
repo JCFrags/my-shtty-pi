@@ -13,6 +13,8 @@ test("BrowserControl starts in agent state at epoch one", () => {
     reason: null,
     busy: false,
     interactionStyle: "slow-natural",
+    reservation: { active: [], waiting: false },
+    inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false },
   });
 });
 
@@ -28,6 +30,8 @@ test("BrowserControl changes epoch only for real transitions", () => {
     reason: "pointer",
     busy: false,
     interactionStyle: "slow-natural",
+    reservation: { active: [], waiting: false },
+    inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false },
   });
   assert.deepEqual(control.takeHuman("keyboard"), {
     state: "human",
@@ -35,6 +39,8 @@ test("BrowserControl changes epoch only for real transitions", () => {
     reason: "pointer",
     busy: false,
     interactionStyle: "slow-natural",
+    reservation: { active: [], waiting: false },
+    inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false },
   });
   assert.deepEqual(control.pause(2), {
     state: "paused",
@@ -42,6 +48,8 @@ test("BrowserControl changes epoch only for real transitions", () => {
     reason: "manual-pause",
     busy: false,
     interactionStyle: "slow-natural",
+    reservation: { active: [], waiting: false },
+    inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false },
   });
   assert.deepEqual(control.pause(3), {
     state: "paused",
@@ -49,6 +57,8 @@ test("BrowserControl changes epoch only for real transitions", () => {
     reason: "manual-pause",
     busy: false,
     interactionStyle: "slow-natural",
+    reservation: { active: [], waiting: false },
+    inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false },
   });
   assert.deepEqual(control.resume(3), {
     state: "agent",
@@ -56,6 +66,8 @@ test("BrowserControl changes epoch only for real transitions", () => {
     reason: "manual-resume",
     busy: false,
     interactionStyle: "slow-natural",
+    reservation: { active: [], waiting: false },
+    inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false },
   });
   assert.deepEqual(order, ["transition", "transition", "release", "transition"]);
   assert.deepEqual(control.resume(4), {
@@ -64,6 +76,8 @@ test("BrowserControl changes epoch only for real transitions", () => {
     reason: "manual-resume",
     busy: false,
     interactionStyle: "slow-natural",
+    reservation: { active: [], waiting: false },
+    inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false },
   });
   assert.throws(() => control.pause(3), /stale control epoch/);
 });

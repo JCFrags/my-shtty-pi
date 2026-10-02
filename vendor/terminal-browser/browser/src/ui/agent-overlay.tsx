@@ -1,5 +1,5 @@
 import { cloneElement, createElement, Fragment, type ReactElement } from "react";
-import { Box, Text, type Style } from "pixel-react";
+import { Box, type Style } from "pixel-react";
 import type { Point } from "agentcursor" with { "resolution-mode": "import" };
 import type { BrowserSurfaceLayout } from "../page/types";
 import type { AgentActivity } from "../agent/types";
@@ -130,8 +130,6 @@ export function AgentActivityOverlay({
       : control.state === "paused"
         ? theme.muted
         : theme.accent;
-  const label = `${control.state}${control.busy ? " · busy" : ""}`;
-  const pillWidth = Math.round(unit * (control.busy ? 7.5 : 5.5));
   const targetRing = target
     ? createElement(Box, {
         style: {
@@ -182,39 +180,6 @@ export function AgentActivityOverlay({
         createElement(Icon, { icon: "cursor", size: cursorSize, color: stateColor, weight: 1.7 }),
       )
     : null;
-  const pill = createElement(
-    Box,
-    {
-      style: {
-        position: "absolute",
-        inset: {
-          top: layout.y + Math.max(4, Math.round(unit * 0.55)),
-          left: layout.x + layout.width - pillWidth - Math.round(unit * 0.55),
-        },
-        width: pillWidth,
-        height: Math.max(16, Math.round(unit * 1.65)),
-        alignItems: "center",
-        justifyContent: "center",
-        padding: { left: Math.round(unit * 0.55), right: Math.round(unit * 0.55) },
-        background: withAlpha(theme.bg, 232),
-        cornerRadius: Math.round(unit * 0.45),
-        border: { width: 1, color: withAlpha(stateColor, 210) },
-      },
-    },
-    createElement(
-      Text,
-      {
-        style: {
-          color: stateColor,
-          fontSize: Math.max(8, Math.round(unit * 0.72)),
-          wrap: false,
-          selectable: false,
-        },
-      },
-      label,
-    ),
-  );
-
   return createElement(
     Box,
     {
@@ -228,6 +193,5 @@ export function AgentActivityOverlay({
     },
     createElement(Fragment, null, clipOverlayNode(targetRing, layout), clipOverlayNode(targetPulse, layout)),
     clipOverlayNode(cursorNode, layout),
-    clipOverlayNode(pill, layout),
   );
 }
