@@ -111,6 +111,13 @@ loaded identity against next-launch selection and explicit A/B lifecycle changes
 These fixtures do not touch a real Herdr API, production installation, or live
 Pi session. SIGKILL recovery checks do not establish power-loss durability.
 
+Run retained-manager checks through `scripts/install.sh`, not host Node with
+`install-manager.mjs`. The shell entrypoint selects bundled Electron. Its normal
+`fs` API exposes `.asar` files as virtual directories even with
+`ELECTRON_RUN_AS_NODE=1`. The installer also sets `ELECTRON_NO_ASAR=1` so validation
+hashes physical archive bytes and modes. This setting is limited to the installer
+process and its children. It does not change browser launchers or running processes.
+
 The prepared Pi test host defaults to the pinned workspace host, 0.84.2. Set
 `TERMINAL_BROWSER_PI_ROOT` to another prepared host directory, including the
 installed 0.99.1 host, when testing that specific version. Missing host dependencies
