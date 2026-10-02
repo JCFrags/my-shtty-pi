@@ -23,6 +23,7 @@ export class PageChanges {
   private scrollStart = 0;
   private lastScroll = 0;
   private scrollInterim = false;
+  private scrollPaintUntil = 0;
 
   reset() {
     this.reasons.clear();
@@ -32,6 +33,7 @@ export class PageChanges {
     this.painted = false;
     this.paintStart = this.lastPaint = this.scrollStart = this.lastScroll = 0;
     this.paintSuppressed = this.scrollInterim = false;
+    this.scrollPaintUntil = 0;
   }
 
   start(reason: "context" | "follow-start", now = Date.now()) { this.reasons.set(reason, now + 200); }
@@ -51,6 +53,12 @@ export class PageChanges {
         scroll = { current: { x: 0, y: 0 }, baseline: { x: 0, y: 0 }, material: false };
         this.scrolls.set(hint.sourceId, scroll);
       }
+      if (scroll.current.x !== hint.x || scroll.current.y !== hint.y) {
+        // Scroll can dirty the entire paint surface. Do not let paint bypass the net-scroll threshold.
+        this.scrollPaintUntil = now + 400;
+        this.reasons.delete("visual");
+        this.dirty.clear();
+      }
       scroll.current = { x: hint.x, y: hint.y };
       scroll.material = Math.abs(hint.x - scroll.baseline.x) >= hint.width * 0.25 || Math.abs(hint.y - scroll.baseline.y) >= hint.height * 0.25;
       if (!scroll.material) {
@@ -62,7 +70,10 @@ export class PageChanges {
       this.reasons.set("scroll", this.scrollInterim ? now + 180 : Math.min(now + 180, this.scrollStart + 750));
       return;
     }
-    if (hint.kind === "paint") this.painted = true;
+    if (hint.kind === "paint") {
+      this.painted = true;
+      if (now < this.scrollPaintUntil) return;
+    }
     if (now - this.lastPaint >= 400) {
       this.paintStart = now;
       this.paintSuppressed = false;
