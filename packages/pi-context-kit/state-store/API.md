@@ -28,8 +28,8 @@ const owner = new BranchStateOwner<NativeRoot>({
 });
 const host = { sessionManager: ctx.sessionManager,
   appendEntry: (type: string, data: unknown) => pi.appendEntry(type, data) };
-const resolved = await owner.resolve(host);
-// pending: call resolve again later. Each call advances one bounded ancestry page.
+const resolved = await owner.resolveUntilReady(host, { signal: ctx.signal });
+// pending: the native deadline/page budget expired; saved progress remains available.
 // legacy: run the provider's explicit bounded importer. Never substitute empty state.
 // empty: the complete ancestry contained neither an owned anchor nor legacy state.
 // ready: resolved.snapshot.root is detached and recursively frozen.
@@ -38,7 +38,9 @@ const committed = await owner.commit(host, nextRoot, {
 });
 ```
 
-`resolve(host, {signal?})` returns `OwnerResolution<Root>`. It uses direct bindings or at most `ancestryPageEntries` native `getEntry()` calls. Continuation state is persisted per exact source view. No `getBranch()` call or unlimited replay exists. `status()` is synchronous. `invalidate()` increments this instance's epoch and clears its selected view. Call it before a session-tree transition/rebind. `close()` prevents further work. Neither method deletes objects.
+`resolveUntilReady(host, {signal?, maxPages?, deadlineMs?})` drives the existing resolver inside the provider's serialized native operation. It defaults to at most 32 pages and a two-second absolute deadline. It yields between pages, preserves progress, and stops on non-pending results, cancellation, or changed scope. It does not retry mutations, import legacy state, or recover old source identity. Timeout can return pending. If no page finished, it returns `state-store-unresolved`. Native tools use this driver instead of asking the model to repeat routine page calls.
+
+`resolve(host, {signal?})` retains the single-page `OwnerResolution<Root>` API for bounded lifecycle and explicit callers. It uses direct bindings or at most `ancestryPageEntries` native `getEntry()` calls. Continuation state is persisted per exact source view. No `getBranch()` call or unlimited replay exists. `status()` is synchronous. `invalidate()` increments this instance's epoch and clears its selected view. Call it before a session-tree transition/rebind. `close()` prevents further work. Neither method deletes objects.
 
 Continuation records retain the original leaf's native signature in the optional `head` field. Completion can therefore publish that leaf's binding after several pages or an owner restart. Later ordinary messages can reach the completed binding instead of repeating the full ancestry walk. Old records without `head` remain readable. A resumed old record recovers the signature with one counted entry read. With a one-entry page, that call saves the signature and the next call advances ancestry.
 
@@ -46,7 +48,7 @@ A changing leaf can also reuse incomplete progress. After the normal anchor, leg
 
 Each candidate lookup requires a counted native entry visit. There are at most `ancestryPageEntries` additional cursor lookups, each bounded to 64 KiB. No native read exceeds the existing page budget. `coverage.scanned` counts reads charged to this original view, including head recovery. It does not add reused cursors' counters or count unique ancestry edges. A present null or malformed cursor refuses instead of starting a new scan. Scan-count additions must remain safe integers. The shortcut trusts the saved interval under the existing stable-native-ancestry and private-derived-index assumptions. The head signature covers ID, parent, type, and custom type, not the complete skipped payloads or source prefix. Normal snapshot and source-anchor validation still govern readiness.
 
-Existing headed cursors need no migration. If an old cursor origin is too far away, a new bounded call establishes a current cursor that a later short continuation can reach. This prevents loss of pending progress, not new lag during inactivity. A distant anchor can still require several calls, including across cold owners. When newly appended entries consume the page budget, completion is not guaranteed. Explicit source recovery and legacy import retain their separate pinned-view requirements.
+Existing headed cursors need no migration. If an old cursor origin is too far away, a new bounded call establishes a current cursor that a later short continuation can reach. This prevents loss of pending progress, not new lag during inactivity. A distant anchor can require several pages, including across cold owners. Native calls drive these pages internally within their deadline. The driver pins its source session and leaf and refuses a changed scope. When the page or time budget expires, completion is not guaranteed and progress remains saved. Explicit source recovery and legacy import retain their separate pinned-view requirements.
 
 Code-rollback limit: ancestor-cursor reuse does not change the version-1 cursor or binding formats. Head-aware predecessor owners can resume these saved positions at the same view, but lose moving-leaf reuse. Older owners, including the local 4.0.4 selection, reject resolution records that contain `head` because they validate exact keys. Old-cursor admission, immutable objects, committed receipts, and source bytes remain unchanged. Keep compatible owner code and rollback evidence. Do not clear indexes or rewrite canonical state to force a rollback.
 
@@ -55,6 +57,16 @@ Providers must serialize their full `resolve`/compute/`commit` transaction acros
 `commit(host, root, options)` returns `OwnedSnapshot<Root>`. It requires the exact resolved view and `expectedCommitId`. The provider computes its native mutation, including native revision checks. The store verifies the scope again after asynchronous work. An immutable root/object and prepared receipt precede a small `context-kit:state-anchor:v1` custom entry. The exact live entry and bounded disk append are verified and synced before disk success. A thrown append can leave a live or partial anchor. Such an operation becomes uncertain, and `resolve` reconciles it before another mutation.
 
 Default commit policy is `require-disk`. A missing session path is `ephemeral`; an assigned path with no persisted file is `deferred`. These cases fail before an anchor unless `durability:"allow-volatile"` is explicit. Volatile success reports its actual durability and must not be advertised as a persisted provider checkpoint. Owned objects can be durable while their Pi binding is not. If Pi later materializes a deferred anchor, the root remains readable but retains its original non-disk durability report. A new verified disk commit establishes the new boundary.
+
+## Source locks
+
+New Linux writers hold a stable, private per-source `.guard` descriptor with kernel `flock`, then acquire the compatible O_EXCL `.lock`. The short util-linux `flock` child inherits FD 3. The parent retains the lock until its descriptor closes. The wait is bounded to two seconds and honors cancellation. Linux without `flock` refuses with `state-store-identity-unavailable`. Other platforms retain strict O_EXCL behavior without automatic stale-owner recovery.
+
+All new recovery clients use the same guard inode. Never unlink a guard while writers can use it. Existing live, malformed, unsupported, or inaccessible owners remain protected. A supported dead lock is checked through a held no-follow descriptor, then checked again for exact inode and contents before retirement. If an older writer wins the O_EXCL path afterward, the new writer re-admits that record instead of removing it.
+
+Version-2 coordination records include hashed host identity, boot identity, PID namespace, process start time, PID, and operation ID. Same-host old boots and same-namespace PID reuse can prove a dead owner. Version-1 PID-only recovery assumes an owner-only, host-local store in the same PID namespace. A live v1 PID is ambiguous and stays protected. Shared remote or cross-namespace stores are not supported by this automatic recovery rule. These checks are not a sandbox against a same-UID process that changes paths outside the locking protocol.
+
+Lock coordination does not change immutable native formats, source proofs, or uncertain-append reconciliation. Code rollback can retain these files, but older code restores the old crash-lock limitation. Do not remove live locks manually.
 
 ## Per-plan objects
 

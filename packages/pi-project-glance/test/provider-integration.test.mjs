@@ -328,7 +328,7 @@ test("actual Todo, Workplan, and Project Glance entrypoints work in both lifecyc
           focus: "Integration focus",
         });
         ctx.sessionManager.appendMessage({ role: "user", content: "Normal fixture continuation", timestamp: 0 });
-        const todoState = (await callTool(todoPi, "todo", { action: "list" })).details.state;
+        const todoState = (await callTool(todoPi, "todo", { action: "list", view: "all" })).details.state;
         const planRead = (await callTool(workplanPi, "workplan", { action: "read", planId: "WP1" })).content;
         const source = (await readFile(ctx.sessionManager.getSessionFile(), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
         assert.ok(source.some((entry) => entry.customType === "context-kit:state-anchor:v1" && entry.data.providerId === "todo"));
@@ -348,7 +348,7 @@ test("actual Todo, Workplan, and Project Glance entrypoints work in both lifecyc
             coldController.start(branchIdForContext(coldTodo.context));
             await waitFor(() => coldController.current.step === expected.step && coldController.current.focus === expected.focus);
             assert.deepEqual(coldController.current, expected);
-            assert.deepEqual((await callTool(coldTodo, "todo", { action: "list" })).details.state, todoState);
+            assert.deepEqual((await callTool(coldTodo, "todo", { action: "list", view: "all" })).details.state, todoState);
             assert.deepEqual((await callTool(coldWorkplan, "workplan", { action: "read", planId: "WP1" })).content, planRead);
           } finally {
             coldController.dispose();

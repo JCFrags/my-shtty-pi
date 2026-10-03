@@ -78,9 +78,9 @@ export default function contextTodo(pi: ExtensionAPI, options: TodoOptions = {})
   });
   pi.registerTool({
     name: "todo", label: "Todo",
-    description: "Manage a visible, branch-aware task plan. Supports valid task dependencies, external wait reasons, one in-progress task, completion, blocking, reordering, and complete replacement. Up to 256 tasks and 1 MiB canonical state. Complete results are bounded to 32 KiB; large lists provide an exact native state file.",
+    description: "Manage a visible, branch-aware task plan. Supports valid task dependencies, external wait reasons, one in-progress task, completion, blocking, reordering, and complete replacement. Up to 256 tasks and 1 MiB canonical state. list defaults to current tasks and hides done tasks without removal; view=all returns complete retained native state. Results are bounded to 32 KiB; large lists provide a file for the selected view.",
     promptSnippet: "Track multi-step work in a branch-aware task plan",
-    promptGuidelines: ["Use todo for work with multiple meaningful steps; do not create todos for trivial one-step requests.", "Mark a todo done only after implementation and relevant verification are complete."],
+    promptGuidelines: ["Use todo for immediate executable steps, not an append-only task log. Revise, reorder, or remove obsolete tasks when direction changes. Do not create todos for trivial one-step requests.", "Mark a todo done only after implementation and relevant verification are complete. Done tasks leave the default current view but remain available with list view=all. Use clear_done/remove only when the current task set should change."],
     parameters: TodoParams, executionMode: "sequential",
     async execute(_id, input, signal, _update, ctx) {
       const operation = await execute(input, ctx, signal);

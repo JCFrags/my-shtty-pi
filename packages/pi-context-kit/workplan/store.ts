@@ -1,5 +1,5 @@
 import {
-  BranchStateOwner, type CommitOptions, type ObjectRef, type OwnedSnapshot, type OwnerResolution, type StateAnchorHost,
+  BranchStateOwner, StateStoreError, type CommitOptions, type ObjectRef, type OwnedSnapshot, type OwnerResolution, type StateAnchorHost,
 } from "@context-kit/state-store";
 import {
   createWorkplanContextRecord, projectWorkplanPage, selectContextRecords, type WorkplanContextRecord,
@@ -103,15 +103,17 @@ export class WorkplanStore {
   }
   close(): void { this.invalidate(); this.owner.close(); }
 
-  async resolve(host: StateAnchorHost, signal?: AbortSignal): Promise<OwnerResolution<WorkplanRoot>> {
+  async resolve(host: StateAnchorHost, signal?: AbortSignal, untilReady = false): Promise<OwnerResolution<WorkplanRoot>> {
     const epoch = this.epoch;
     try {
-      const resolution = await this.owner.resolve(host, { signal });
+      const resolution = await (untilReady ? this.owner.resolveUntilReady(host, { signal }) : this.owner.resolve(host, { signal }));
       if (epoch !== this.epoch) throw new StateToolError("STATE_CONFLICT", "Workplan branch changed during resolution");
       this.resolution = resolution; this.failure = false;
       return resolution;
     } catch (error) {
-      if (epoch === this.epoch && !signal?.aborted) this.failure = true;
+      if (epoch === this.epoch && !signal?.aborted) this.failure = error instanceof StateStoreError
+        && ["state-store-corrupt", "state-store-missing", "state-store-unsafe-path"].includes(error.code)
+        || error instanceof StateToolError && error.code === "STATE_CORRUPT";
       throw error;
     }
   }
@@ -128,8 +130,8 @@ export class WorkplanStore {
   }
 
   async requireRoot(host: StateAnchorHost, signal?: AbortSignal): Promise<WorkplanRoot> {
-    const result = await this.resolve(host, signal);
-    if (result.status === "pending") throw new StateToolError("STATE_CONFLICT", "Workplan ancestry resolution is pending. Retry to advance one bounded page");
+    const result = await this.resolve(host, signal, true);
+    if (result.status === "pending") throw new StateToolError("STATE_CONFLICT", "Workplan state did not finish within the native resolution budget; saved progress is retained");
     if (result.status === "legacy") throw new StateToolError("STATE_CONFLICT", "Workplan legacy state needs bounded import. Run /workplan-import before native operations");
     return result.status === "ready" ? result.snapshot.root as WorkplanRoot : emptyWorkplanRoot();
   }
@@ -233,6 +235,11 @@ export class WorkplanStore {
         requireExactObject(input, ["action"], [], "list input");
         return { text: renderMetadataList(root), result: root.plans.map(({ id, title, status, revision, updatedAt }) => ({ id, title, status, revision, updatedAt })), metadataOmissions: root.plans.filter((item) => item.omittedFields.length).map((item) => item.id) };
       }
+      if (input.action !== "create" && input.planId === undefined) {
+        const active = root.plans.find((item) => item.status === "active");
+        if (!active) throw new StateToolError("STATE_INVALID_INPUT", "No active workplan. Supply planId for a saved plan, or create and resume one");
+        input = { ...input, planId: active.id };
+      }
       if (input.action !== "create" && (typeof input.planId !== "string" || !/^WP[1-9][0-9]*$/u.test(input.planId))) throw new StateToolError("STATE_INVALID_INPUT", "planId must be a workplan ID");
       if (input.action === "status") {
         requireExactObject(input, ["action", "planId"], [], "status input");
@@ -240,9 +247,10 @@ export class WorkplanStore {
         if (!metadata) throw new StateToolError("STATE_NOT_FOUND", `Workplan ${input.planId} does not exist on the current branch`);
         const projected = await this.projection(metadata, signal);
         if (epoch !== this.epoch || !sameView(source, host)) throw new StateToolError("STATE_CONFLICT", "Workplan branch changed during status");
-        return { text: projected.statusText + (projected.statusOmitted ? `\n[Status cache omits complete fields; use workplan read for ${metadata.id}]\n` : ""), result: metadata.statusMetadata };
+        return { text: `Last saved revision: ${metadata.revision}\nLast saved at: ${metadata.updatedAt}\n` + projected.statusText + (projected.statusOmitted ? `\n[Status cache omits complete fields; use workplan read for ${metadata.id}]\n` : ""), result: metadata.statusMetadata };
       }
       const plan = input.action === "create" ? undefined : await this.readSelected(root, input.planId ?? "", signal);
+      if (plan && input.expectedRevision === undefined && !["read", "recover"].includes(input.action)) input = { ...input, expectedRevision: plan.revision };
       await planBoundary(signal);
       operation = reduceTarget(root, plan, input);
       await planBoundary(signal);

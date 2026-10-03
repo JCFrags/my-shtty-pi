@@ -139,7 +139,7 @@ function freezeScope(scope: SessionAgentSummaryScope): SessionAgentSummaryScope 
     ...(scope.sessionFile === undefined ? {} : { sessionFile: scope.sessionFile }),
     model: Object.freeze({ provider: scope.model.provider, id: scope.model.id, api: scope.model.api, thinkingLevel: scope.model.thinkingLevel }) });
 }
-function validateRequest(request: SessionAgentSummaryRequest, scope: SessionAgentSummaryScope, now: number): void {
+function validateRequest(request: Pick<SessionAgentSummaryRequest, "scope" | "createdAt" | "expiresAt">, scope: SessionAgentSummaryScope, now: number): void {
   clock(now);
   if (now < request.createdAt || now >= request.expiresAt) fail("request-expired");
   const source = request.scope;
@@ -239,6 +239,27 @@ function suffix(view: SessionAgentSummaryObservation, anchorId: string): readonl
   }
   if (view.getEntry(anchorId)?.id !== anchorId) fail("source-boundary-unavailable");
   return entries.reverse();
+}
+
+/** A code-owned abort intent is not a summary ticket. Admit its replacement
+ * only after the run settles, on the same native ancestry. No ordinary tool,
+ * user message, branch rewind or partial assistant output may intervene. */
+export function validateDeferredSessionSummaryIntent(intent: Pick<SessionAgentSummaryRequest, "scope" | "createdAt" | "expiresAt">,
+  view: SessionAgentSummaryObservation): void {
+  validateRequest(intent, view.scope, view.now);
+  let interruptedAssistants = 0;
+  for (const entry of suffix(view, intent.scope.leafId)) {
+    if (metadata(entry)) continue;
+    const message = entry.type === "message" ? record(entry.message) : undefined;
+    if (message?.role === "system") continue;
+    if (message?.role === "assistant" && ["aborted", "error"].includes(String(message.stopReason))
+      && ++interruptedAssistants <= 1 && Array.isArray(message.content)
+      && message.content.every(value => {
+        const block = record(value);
+        return (block?.type === "text" && block.text === "") || (block?.type === "thinking" && block.thinking === "");
+      })) continue;
+    fail("request-interrupted");
+  }
 }
 
 /** Call once when the pending request is actually visible in the normal context

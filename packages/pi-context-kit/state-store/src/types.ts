@@ -122,6 +122,12 @@ export type OwnerResolution<Root> =
   | { status: "pending"; scope: StateScope; continuation: string; coverage: ResolutionCoverage }
   | { status: "empty" | "legacy"; scope: StateScope; coverage: ResolutionCoverage };
 export interface ResolveOptions { signal?: AbortSignal }
+export interface ResolveUntilReadyOptions extends ResolveOptions {
+  /** At most 32 existing ancestry pages per native call by default. */
+  maxPages?: number;
+  /** Absolute deadline. Default: two seconds from the start of this call. */
+  deadlineMs?: number;
+}
 export interface CommitOptions {
   /** Null only after a proven empty/legacy resolution. */
   expectedCommitId: string | null;

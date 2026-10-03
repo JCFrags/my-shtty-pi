@@ -18,6 +18,8 @@ Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) 
 
 The `todo` tool retains `list`, `add`, `update`, `start`, `done`, `block`, `remove`, `reorder`, `clear_done`, and `replace`. Dependencies, external waits, and the single in-progress task rule use the native reducers. `replace` retains the native ID-counter reset behavior. Existing source timestamps are not converted into owner revisions.
 
+Todo is current actionable work, not an append-only log. Revise or remove obsolete tasks when direction changes. `list` defaults to `view:"current"`, which hides done tasks without removing their IDs or satisfied dependency edges. `view:"all"` returns the complete retained task set. `clear_done` and `remove` remain explicit mutations. Earlier immutable roots remain historical evidence.
+
 `/todo-add` and the native tool use one serialized owner transaction. Glance reads Todo summaries and does not perform task actions. `/todos [full|compact|plan]`, its scrolling view, and `ctrl+shift+u` retain the existing display behavior. Display preferences remain global in `grounded-tasks.json` under Pi's agent directory. They do not modify task state or task revisions.
 
 Admission limits apply before commit or import:
@@ -33,7 +35,7 @@ Admission limits apply before commit or import:
 | Dependencies per task | 64 |
 | Complete tool result | 32 KiB |
 
-Over-limit state is refused intact. State is never shortened. Mutation results contain a small owner identity and bounded display rows, not the full store. `list` returns complete native state in `details.state` when the complete result fits. Otherwise it supplies a private `state.json` recovery file and whole display rows that fit. The file includes descriptions, IDs, counters, dependencies, and timestamps. Display clipping is not a transfer mechanism.
+Over-limit state is refused intact. State is never shortened. Mutation results contain a small owner identity and bounded display rows, not the full store. The default current list returns visible tasks in `details.tasks`, plus `view` and `retainedDone`. It is not complete native state. `list` with `view:"all"` returns complete native state in `details.state` when the result fits. Otherwise either view supplies a private `state.json` file for that selected view and whole display rows that fit. Only the all-view file is complete native state, including descriptions, IDs, counters, dependencies, and timestamps. Complete transfer always uses the unfiltered store. Display clipping is not a transfer mechanism.
 
 ## Persistence and lifecycle
 
@@ -43,7 +45,7 @@ The owner publishes immutable root objects and a prepared receipt before appendi
 
 An ephemeral session or a deferred session file refuses mutations with `state-store-unpersisted`. This includes `/todo-add` before Pi has persisted a new session. No volatile success is enabled. An unbound object is an orphan, not visible state. An uncertain append remains pending until the backend reconciles the exact operation. Missing or corrupt objects are not replaced with empty state.
 
-Session start and tree navigation use direct bindings or one bounded ancestry-resolution page. They never call `getBranch()` or replay all history. Native tools can advance a pending resolution one page per call. `agent_settled` can resolve one further page. Context queries read only an already resolved state and never restore it. Forked anchors retain their original provenance and new writes create a new source-bound commit.
+Session start and tree navigation use direct bindings or one bounded ancestry-resolution page. They never call `getBranch()` or replay all history. Native tools resolve routine pending pages internally, with cancellation, at most 32 pages, and a two-second deadline. A timeout retains saved progress rather than resetting state or requesting migration. `agent_settled` can resolve one further page. Context queries read only an already resolved state and never restore it. Forked anchors retain their original provenance and new writes create a new source-bound commit.
 
 An already owned branch that reports `state-store-source-recovery-required` needs the [state-store identity recovery procedure](../state-store/API.md#explicit-recovery-of-old-disk-commits), not `/todo-import`. It requires an independently established complete source-prefix hash. New Linux Btrfs commits have reboot-stable identity checks. Unsupported filesystems keep strict device checks. Recovery preserves old immutable state and does not make previous code versions compatible with new commits.
 

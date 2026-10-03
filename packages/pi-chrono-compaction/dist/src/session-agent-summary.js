@@ -186,6 +186,28 @@ function suffix(view, anchorId) {
         fail("source-boundary-unavailable");
     return entries.reverse();
 }
+/** A code-owned abort intent is not a summary ticket. Admit its replacement
+ * only after the run settles, on the same native ancestry. No ordinary tool,
+ * user message, branch rewind or partial assistant output may intervene. */
+export function validateDeferredSessionSummaryIntent(intent, view) {
+    validateRequest(intent, view.scope, view.now);
+    let interruptedAssistants = 0;
+    for (const entry of suffix(view, intent.scope.leafId)) {
+        if (metadata(entry))
+            continue;
+        const message = entry.type === "message" ? record(entry.message) : undefined;
+        if (message?.role === "system")
+            continue;
+        if (message?.role === "assistant" && ["aborted", "error"].includes(String(message.stopReason))
+            && ++interruptedAssistants <= 1 && Array.isArray(message.content)
+            && message.content.every(value => {
+                const block = record(value);
+                return (block?.type === "text" && block.text === "") || (block?.type === "thinking" && block.thinking === "");
+            }))
+            continue;
+        fail("request-interrupted");
+    }
+}
 /** Call once when the pending request is actually visible in the normal context
  * hook. Later context/payload hooks remain outside this observation's coverage. */
 export function consumeSessionAgentSummaryRequest(request, view, messages) {

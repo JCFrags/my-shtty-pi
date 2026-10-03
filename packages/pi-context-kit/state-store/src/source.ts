@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { lstat, open, unlink } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { ObjectLocation, SessionEntryView, SourceIdentity, SourcePrefixProof, StateScope, StateSessionManager } from "./types.ts";
+import { dirname, isAbsolute, resolve } from "node:path";
+import type { SessionEntryView, SourceIdentity, SourcePrefixProof, StateScope, StateSessionManager } from "./types.ts";
 import { durableIdentity } from "./identity.ts";
 import { currentScope } from "./ancestry.ts";
 import { checkDirectory, syncDirectory } from "./objects.ts";
@@ -221,20 +221,4 @@ export async function verifySourcePrefix(source: SourceIdentity, proof: SourcePr
     checkSignal(signal);
   } finally { await handle.close(); }
 }
-export async function acquireSourceLock(location: ObjectLocation, source: SourceIdentity, operationId: string): Promise<() => Promise<void>> {
-  const directory = join(location.root, "locks");
-  await checkDirectory(directory);
-  const name = hashText(source.durability === "ephemeral" ? source.sessionId : source.file);
-  const path = join(directory, `${name}.lock`);
-  let handle: FileHandle;
-  try { handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
-  catch (error) { if (isErrno(error, "EEXIST")) fail("state-store-busy"); throw error; }
-  const identity = await handle.stat();
-  try { await handle.writeFile(canonicalJson({ version: 1, pid: process.pid, operationId }, STATE_STORE_LIMITS.recordBytes)); await handle.sync(); }
-  finally { await handle.close(); }
-  return async () => {
-    const current = await lstat(path);
-    if (current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino) fail("state-store-unsafe-path");
-    await unlink(path);
-  };
-}
+export { acquireSourceLock } from "./source-lock.ts";

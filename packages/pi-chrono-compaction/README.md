@@ -31,11 +31,11 @@ Chrono selects useful chronological context and provides source-linked historica
 | Configuration, workers, caches, migration, and rollback | [Operations](../../docs/chrono/operations/README.md) |
 | Version boundary, changes, evidence, and limitations | [Design and evidence](../../docs/chrono/design/README.md) |
 
-V4 is an explicit compiler choice, not a second compactor. Independent Memory also needs a startup ownership handoff. Existing legacy state requires explicit import. Background LLM presets belong to the compatibility advice worker, which is paused under the normal memory engine. They do not enrich V4 indexed compaction.
+V4 is an explicit compiler choice, not a second compactor. It keeps the same-session `{}` followed by sole-summary submission exchange. Failed exchanges pause ordinary model work until a freshly admitted summary-only recovery reaches a correlated commit. See the [failure barrier and cancellation limits](../../docs/chrono/context/session-agent-compaction.md#failure-barrier-and-deliberate-recovery). The 16,384-token planning reservation is not an output cap. Independent Memory also needs a startup ownership handoff. Existing legacy state requires explicit import. Background LLM presets belong to the compatibility advice worker, which is paused under the normal memory engine. They do not enrich V4 indexed compaction.
 
 ## Build and installation boundary
 
-Use the root [verification workflow](../../README.md#verification) and [release compatibility](../../docs/chrono-release-compatibility.md), not old campaign commands as new release gates. Chrono's native SQLite build must enforce allocation refusal. Prepare the root lock before the package-local lock because compiled Chrono imports the sibling Context Kit protocol. A lone package tarball is not the supported V4 retained installation.
+Use the root [verification workflow](../../README.md#verification) and [release compatibility](../../docs/chrono-release-compatibility.md), not old campaign commands as new release gates. Chrono's native SQLite build must enforce allocation refusal. Prepare the root lock before the package-local lock because compiled Chrono imports the sibling Context Kit protocol. Use Chrono's package-local TypeScript and Node declarations for its typecheck and build. The retained root and package-local Node declaration versions can differ. Do not change worker source merely to accommodate the wrong dependency route. A lone package tarball is not the supported V4 retained installation.
 
 ### Portable checkout preparation
 

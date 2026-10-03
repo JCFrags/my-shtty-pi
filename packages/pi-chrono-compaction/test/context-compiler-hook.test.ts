@@ -32,7 +32,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const events = createEventBus(), sm = SessionManager.inMemory(directory);
   const mirrors: unknown[] = [], requests: any[] = [], sent: any[] = [];
   let schemaDescription = "Independent task state", mutateDuringCollect = false, idle = true, summaryToolActive = true;
-  let contextTokens = 12000;
+  let contextTokens: number | null = 12000;
   const model = { provider: "fixture", id: "fixture", api: "openai-completions", contextWindow: 32000, maxTokens: 2000 };
   let compactionTask: Promise<void> | undefined, returned: any, committedId: string | undefined, referenceReady: SessionAgentSummaryReady | undefined;
   let checkPreview = true, aborts = 0, previewMode = false, compactCalls = 0, authCalls = 0, commands = 0, flags = 0;
@@ -74,7 +74,8 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   } as unknown as Parameters<typeof capturePreparedV4Context>[2]["preparation"];
   const event = (reason = "manual") => ({ branchEntries: sm.getBranch() as unknown as SessionEntryLike[], preparation, reason, willRetry: reason === "overflow", signal: new AbortController().signal });
   const ctx = { sessionManager: { getSessionId: () => sm.getSessionId(), getSessionFile: () => source,
-      getLeafId: () => sm.getLeafId(), getEntry: (id: string) => sm.getEntry(id), getBranch: () => sm.getBranch() },
+      getLeafId: () => sm.getLeafId(), getEntry: (id: string) => sm.getEntry(id), getBranch: () => sm.getBranch(),
+      buildContextEntries: () => sm.buildContextEntries() },
     hasUI: false, ui: { notify() {} }, isIdle: () => idle, hasPendingMessages: () => false,
     get signal() { return idle ? undefined : run.signal; }, abort() { aborts++; },
     model, thinkingLevel: "off",
@@ -103,8 +104,10 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
           options.onError(new Error("Compaction cancelled"));
           return;
         }
-        assert.equal(returned.compaction.summary, preview?.summary);
-        assert.equal(returned.compaction.details.contextReceipt.inputHash, preview?.receipt.inputHash);
+        if (preview) {
+          assert.equal(returned.compaction.summary, preview.summary);
+          assert.equal(returned.compaction.details.contextReceipt.inputHash, preview.receipt.inputHash);
+        }
         const before = sm.getLeafId();
         committedId = sm.appendCompaction(returned.compaction.summary, returned.compaction.firstKeptEntryId, returned.compaction.tokensBefore, returned.compaction.details, true);
         assert.equal(sm.getEntry(committedId)!.parentId, before);
@@ -189,6 +192,13 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal((await status()).terminal.state, "committed");
     assert.equal((await status()).committedReceipt.compactionEntryId, committedId);
     assert.deepEqual((await status()).committedReceipt.recovery.args, { entryId: committedId });
+    contextTokens = null;
+    idle = false;
+    await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
+    await hooks.get("before_provider_request")!({ payload: { messages: sm.buildSessionContext().messages } }, ctx);
+    assert.equal(aborts, 0, "the first null-usage post-commit request uses the current projection");
+    contextTokens = 12000;
+    idle = true;
 
     // A new context cycle must not wait for growth above the old pre-commit count.
     process.env.PI_CHRONO_TRIGGER_TOKENS = "12000";
@@ -221,6 +231,21 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.deepEqual(returned, { cancel: true });
     assert.equal((await status()).lastFailure.code, "context-v4-input-changed");
     assert.equal(sm.getBranch().filter(entry => entry.type === "compaction").length, 1);
+    assert.equal((await status()).providerBarrier.state, "paused");
+    await hooks.get("before_agent_start")!({}, ctx);
+    const beforePausedAbort = aborts;
+    idle = false;
+    await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
+    assert.equal(aborts, beforePausedAbort + 1, "a new agent run cannot release the failed barrier");
+    assert.equal((await status()).lastFailure.code, "context-v4-input-changed");
+    idle = true;
+    const beforeUncorrelated = sent.length;
+    await hooks.get("session_compact")!({ compactionEntry: sm.getEntry(committedId!), fromExtension: true,
+      reason: "manual", willRetry: false }, ctx);
+    assert.equal((await status()).providerBarrier.state, "paused", "a V4 event without a pending receipt cannot release the barrier");
+    assert.equal((await status()).lastFailure.code, "session-agent-summary-commit-uncorrelated");
+    await tick();
+    assert.equal(sent.length, beforeUncorrelated);
 
     await hooks.get("input")!({ text: "Check summary tool readiness", source: "interactive" }, ctx);
     summaryToolActive = false;
@@ -246,7 +271,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal((await status()).sessionSummary.state, "idle");
     const leaf = sm.getLeafId();
     assert.deepEqual(await hooks.get("session_before_compact")!(event("overflow"), ctx), { cancel: true });
-    assert.equal((await status()).lastFailure.code, "session-agent-summary-overflow-unavailable");
+    assert.equal((await status()).lastFailure.code, "session-agent-summary-tool-unavailable", "a paused overflow preserves the blocker instead of attempting a fallback");
     assert.equal(sm.getLeafId(), leaf);
     assert.equal(sent.length, beforeSend + 1, "overflow did not start another model request");
 
@@ -272,31 +297,55 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await hooks.get("input")!({ text: "Check strict admission boundary", source: "interactive" }, ctx);
     contextTokens = admissionLimit;
     const beforeHeadroomRefusal = sent.length, beforeRefusalLeaf = sm.getLeafId();
-    await assert.rejects(tools.get("request_compaction").execute("refused-request", {}, run.signal, undefined, ctx), /headroom-unavailable/);
+    const refused = await tools.get("request_compaction").execute("refused-request", {}, run.signal, undefined, ctx);
+    assert.equal(refused.terminate, true);
+    assert.equal(refused.isError, true);
+    assert.equal(refused.details.code, "session-agent-summary-headroom-unavailable");
+    assert.equal((await status()).providerBarrier.state, "paused");
     assert.equal(sent.length, beforeHeadroomRefusal);
     assert.equal(sm.getLeafId(), beforeRefusalLeaf);
 
-    await hooks.get("input")!({ text: "Check normal proactive timing", source: "interactive" }, ctx);
+    const recover = async (suffix: string) => {
+      await hooks.get("input")!({ text: "Recover only through a fresh summary", source: "interactive" }, ctx);
+      contextTokens = 12000;
+      await submit(suffix);
+      assert.equal((await status()).providerBarrier.retryPaused, true, "submission does not release the failure latch");
+      idle = true;
+      compactionTask = undefined;
+      await hooks.get("agent_settled")!({}, ctx);
+      await tick();
+      assert.ok(compactionTask);
+      await compactionTask;
+      await tick();
+      assert.equal((await status()).providerBarrier.state, "open");
+    };
+    await recover("recovery-before-timing");
+    const beforeTiming = sent.length;
     contextTokens = 199999;
     idle = true;
     await hooks.get("agent_settled")!({}, ctx);
     await tick();
-    assert.equal(sent.length, beforeHeadroomRefusal, "no proactive request below the configured threshold");
+    assert.equal(sent.length, beforeTiming, "no proactive request below the configured threshold");
     contextTokens = 200000;
     idle = false;
     const turn = { message: assistant("timing", "read", {}) };
     await hooks.get("turn_end")!(turn, ctx);
-    assert.equal(sent.length, beforeHeadroomRefusal + 1);
-    assert.deepEqual(sent.at(-1).options, { deliverAs: "steer", triggerTurn: true });
+    assert.equal(sent.length, beforeTiming, "no ticket is delivered to the run that is being aborted");
+    idle = true;
+    await hooks.get("agent_settled")!({}, ctx);
+    await tick();
+    assert.equal(sent.length, beforeTiming + 1);
+    assert.deepEqual(sent.at(-1).options, { triggerTurn: true });
     assert.ok(contextTokens < admissionLimit);
+    idle = false;
     await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
     await hooks.get("turn_end")!(turn, ctx);
     assert.equal((await status()).lastFailure.code, "session-agent-summary-submission-unavailable");
-    assert.equal(sent.length, beforeHeadroomRefusal + 1, "an unusable response cannot silently retry");
+    assert.equal(sent.length, beforeTiming + 1, "an unusable response cannot silently retry");
 
     // A smaller window must trigger from headroom, not the later 75% warning or
     // configured threshold. The idle path uses the same admission calculation.
-    await hooks.get("input")!({ text: "Check headroom-based timing", source: "interactive" }, ctx);
+    await recover("recovery-before-headroom");
     Object.assign(model, { contextWindow: 64000, maxTokens: 64000 });
     const headroomThreshold = 64000 - Math.ceil(SESSION_AGENT_SUMMARY_LIMITS.promptBytes / 4) - 16384 - 1500 - 1024 - 4096;
     assert.equal(headroomThreshold, 37924);
@@ -311,13 +360,15 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await tick();
     assert.equal(sent.length, beforeHeadroomTrigger + 1);
     assert.deepEqual(sent.at(-1).options, { triggerTurn: true });
-    await hooks.get("input")!({ text: "Check a single-turn overshoot", source: "interactive" }, ctx);
+    await recover("recovery-before-overshoot");
+    const beforeOvershoot = sent.length, beforeOvershootAbort = aborts;
+    idle = false;
     contextTokens = 100; // The assistant's newer observation must still win.
     await hooks.get("turn_end")!({ message: { ...turn.message, usage: { ...usage,
       totalTokens: model.contextWindow - promptTokens - 16384 - 1500 - 1024 } } }, ctx);
     assert.equal((await status()).lastFailure.code, "session-agent-summary-headroom-unavailable");
-    assert.equal(sent.length, beforeHeadroomTrigger + 1, "an overshoot refuses without sending another request");
-    assert.equal(aborts, 0);
+    assert.equal(sent.length, beforeOvershoot, "an overshoot refuses without sending another request");
+    assert.equal(aborts, beforeOvershootAbort + 1);
     Object.assign(model, smallModel);
     contextTokens = 12000;
 

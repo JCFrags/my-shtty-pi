@@ -980,8 +980,8 @@ export function renderWorkplanRecovery(plan: Workplan): string {
   const lines: string[] = [
     `# Recovery for ${plan.id}: ${recoveryText(plan.title, 500)}`,
     `Status: ${plan.status}`,
-    `Revision: ${plan.revision}`,
-    `Updated: ${plan.updatedAt}`,
+    `Last saved revision: ${plan.revision}`,
+    `Last saved at: ${plan.updatedAt}`,
     "",
     "## Goal",
     ...block(recoveryText(plan.objective)),
@@ -999,9 +999,10 @@ export function renderWorkplanRecovery(plan: Workplan): string {
     "## Approach",
     ...block(recoveryText(plan.approach, 6000)),
     "",
-    "## Current position",
+    "## Saved current position",
+    "The latest checkpoint replaces the saved position. Earlier checkpoints remain history. This view cannot establish freshness after unsaved work.",
     `Milestones completed: ${completed}/${orderedMilestones.length}`,
-    ...labeled("Latest checkpoint", latestCheckpoint ? `${latestCheckpoint.id} at revision ${checkpointRevision ?? "unknown"}${checkpointCurrent ? " (current)" : " (plan changed afterward)"}: ${recoveryText(latestCheckpoint.summary)}` : "None"),
+    ...labeled("Latest checkpoint", latestCheckpoint ? `${latestCheckpoint.id} at revision ${checkpointRevision ?? "unknown"}${checkpointCurrent ? " (at saved plan revision)" : " (plan changed afterward)"}: ${recoveryText(latestCheckpoint.summary)}` : "None"),
     ...labeled("Current focus", checkpointGuidanceRetained && latestCheckpoint?.currentFocus ? recoveryText(latestCheckpoint.currentFocus) : "Use the current milestone state below"),
   ];
   if (latestCheckpoint) {
@@ -1047,14 +1048,14 @@ export function workplanContextLine(state: WorkplanState, recovered?: { planId: 
     const visible = open.slice(0, 4).map((plan) => `${plan.id}:${plan.status}@rev${plan.revision}`);
     if (open.length > visible.length) visible.push(`+${open.length - visible.length}`);
     const recovery = recovered?.planId === candidate.id && recovered.revision === candidate.revision
-      ? "current"
+      ? "saved"
       : `required:workplan(action=recover,planId=${candidate.id})`;
-    return `[workplan state] active=none open=${visible.join(",")} openCount=${open.length} retained=${state.plans.length} completed=${completedPlans} archived=${archivedPlans} recovery=${recovery}`;
+    return `[workplan state] active=none open=${visible.join(",")} openCount=${open.length} retained=${state.plans.length} completed=${completedPlans} archived=${archivedPlans} savedPlan=${candidate.id} savedRev=${candidate.revision} savedAt=${candidate.updatedAt} recovery=${recovery}`;
   }
   const completed = active.milestones.filter((item) => item.status === "completed").length;
   const blocked = active.milestones.filter((item) => item.status === "blocked").length;
   const recovery = recovered?.planId === active.id && recovered.revision === active.revision
-    ? "current"
+    ? "saved"
     : `required:workplan(action=recover,planId=${active.id})`;
-  return `[workplan state] active=${active.id} status=${active.status} rev=${active.revision} milestones=${completed}/${active.milestones.length} blocked=${blocked} recovery=${recovery}`;
+  return `[workplan state] active=${active.id} status=${active.status} savedRev=${active.revision} savedAt=${active.updatedAt} milestones=${completed}/${active.milestones.length} blocked=${blocked} recovery=${recovery}`;
 }

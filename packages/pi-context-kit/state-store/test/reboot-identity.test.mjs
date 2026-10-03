@@ -88,13 +88,13 @@ async function observeResolution(t, manager, root, names) {
   let reads = 0;
   const getEntry = manager.getEntry.bind(manager);
   t.mock.method(manager, "getEntry", (id) => { reads++; return getEntry(id); });
-  return async (name, phase, operation) => {
+  return async (name, phase, operation, maxReads = 128) => {
     const before = await readFile(manager.getSessionFile());
     reads = 0;
     let result, error;
     try { result = await operation(); } catch (caught) { error = caught; }
     const count = reads;
-    assert.ok(count <= 128, `${name} ${phase} read ${count} entries`);
+    assert.ok(count <= maxReads, `${name} ${phase} read ${count} entries`);
     assert.deepEqual(await readFile(manager.getSessionFile()), before, "resolution must not change source bytes");
     assert.deepEqual(await immutableState(root, names), immutable, "resolution must preserve immutable state");
     const { cursor } = await savedCursor(root, name, manager);
@@ -109,7 +109,7 @@ async function observeResolution(t, manager, root, names) {
   };
 }
 
-test("multi-page resolution retains pending progress across moving leaves and cold owners", async (t) => {
+test("native calls finish bounded pages across moving leaves and cold owners", async (t) => {
   const root = await mkdtemp(join(process.cwd(), ".state-ancestry-fixture-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const manager = await session(root);
@@ -122,29 +122,26 @@ test("multi-page resolution retains pending progress across moving leaves and co
   const names = Object.keys(inputs), expected = {};
   for (const name of names) expected[name] = await providers.execute(name, inputs[name]);
   const observe = await observeResolution(t, manager, root, names);
-  const read = (name, phase) => observe(name, phase, () => providers.execute(name, inputs[name]));
+  const read = (name, phase) => observe(name, phase, () => providers.execute(name, inputs[name]), 32 * 128);
   const append = (text) => manager.appendMessage({ role: "user", content: text, timestamp: 0 });
   const appendResult = (name, phase, isError) => manager.appendMessage({ role: "toolResult",
     toolCallId: `${phase}-${name}`, toolName: name, content: [{ type: "text", text: phase }], isError, timestamp: 0 });
   for (let index = 0; index < 300; index++) append(`Ordinary message ${index}`);
-  const pending = {};
   for (const name of names) {
-    append(`First pending ${name}`);
-    pending[name] = await read(name, "first-pending");
-    assert.match(pending[name].error?.message ?? "", /STATE_CONFLICT.*pending/);
-    assert.equal(pending[name].reads, 128);
-    assert.ok(pending[name].cursor.head);
-    assert.equal(pending[name].cursor.legacySeen, false);
-    appendResult(name, "first-pending", true);
+    append(`First native read ${name}`);
+    const observed = await read(name, "first-ready");
+    assert.equal(observed.error, undefined);
+    assert.deepEqual(observed.result, expected[name]);
+    assert.ok(observed.reads > 128, "one native call must advance more than one page");
+    appendResult(name, "first-ready", false);
   }
   for (const name of names) {
-    append(`Moving pending ${name}`);
-    const moved = await read(name, "moving-pending");
-    assert.match(moved.error?.message ?? "", /STATE_CONFLICT.*pending/);
-    assert.equal(moved.reads, 128);
-    assert.ok(moved.nextIndex < pending[name].nextIndex, `${name} restarted pending ancestry at a new leaf`);
-    assert.notEqual(moved.cursor.scope.leafId, pending[name].cursor.scope.leafId);
-    appendResult(name, "moving-pending", true);
+    append(`Moving leaf ${name}`);
+    const moved = await read(name, "moving-ready");
+    assert.equal(moved.error, undefined);
+    assert.deepEqual(moved.result, expected[name]);
+    assert.ok(moved.reads <= 8, `${name} restarted a completed ancestry walk`);
+    appendResult(name, "moving-ready", false);
   }
   const coldStart = async (phase) => {
     await providers.lifecycle("session_shutdown");
@@ -155,7 +152,7 @@ test("multi-page resolution retains pending progress across moving leaves and co
       assert.equal(observed.error, undefined);
     }
   };
-  await coldStart("cold-pending");
+  await coldStart("cold-after-pages");
   for (let turn = 0; turn < 2; turn++) {
     for (const name of names) {
       append(`Normal continuation ${turn} ${name}`);
@@ -210,7 +207,7 @@ test("multi-page resolution retains pending progress across moving leaves and co
   owner.close();
 });
 
-test("moving legacy cursors preserve import refusal and exclude an off-branch suffix", async (t) => {
+test("native paging preserves explicit legacy import refusal and excludes an off-branch suffix", async (t) => {
   const root = await mkdtemp(join(process.cwd(), ".state-legacy-ancestry-fixture-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const manager = await session(root), providers = new ProviderHost(manager, root);
@@ -226,43 +223,29 @@ test("moving legacy cursors preserve import refusal and exclude an off-branch su
   const cleanLeaf = manager.getLeafId();
   // These markers require explicit import. This check never replays their payloads.
   for (const provider of names) manager.appendCustomEntry("grounded-state-checkpoint-v1", { version: 1, provider });
-  const pending = {};
   for (const name of names) {
-    append(`Legacy pending ${name}`);
-    pending[name] = await observe(name, "legacy-first", () => providers.execute(name, inputs[name]));
-    assert.match(pending[name].error?.message ?? "", /STATE_CONFLICT.*pending/);
-    assert.equal(pending[name].cursor.legacySeen, true);
+    append(`Legacy native read ${name}`);
+    const observed = await observe(name, "legacy-first", () => providers.execute(name, inputs[name]), 32 * 128);
+    assert.equal(observed.result, undefined, "legacy ancestry cannot expose an older owned root");
+    assert.match(observed.error?.message ?? "", /STATE_CONFLICT.*legacy state requires/);
+    assert.equal(observed.cursor.legacySeen, true);
+    assert.equal(observed.cursor.nextEntryId, null);
   }
   for (const name of names) {
-    let complete = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      append(`Legacy continuation ${name} ${attempt}`);
-      const observed = await observe(name, `legacy-${attempt}`, () => providers.execute(name, inputs[name]));
-      assert.equal(observed.result, undefined, "legacy ancestry cannot expose an older owned root");
-      assert.equal(observed.cursor.legacySeen, true);
-      assert.ok(observed.nextIndex < pending[name].nextIndex, "legacy cursor must advance at a moving leaf");
-      if (observed.cursor.nextEntryId === null) {
-        assert.match(observed.error?.message ?? "", /STATE_CONFLICT.*legacy state requires/);
-        complete = true; break;
-      }
-      assert.match(observed.error?.message ?? "", /STATE_CONFLICT.*pending/);
-    }
-    assert.ok(complete, `${name} must finish the bounded legacy fixture`);
+    append(`Legacy continuation ${name}`);
+    const observed = await observe(name, "legacy-moving", () => providers.execute(name, inputs[name]), 32 * 128);
+    assert.equal(observed.result, undefined, "new input does not authorize legacy import");
+    assert.match(observed.error?.message ?? "", /STATE_CONFLICT.*legacy state requires/);
+    assert.equal(observed.cursor.legacySeen, true);
+    assert.equal(observed.cursor.nextEntryId, null);
   }
   manager.branch(cleanLeaf);
   await providers.lifecycle("session_tree");
   for (const name of names) {
-    let ready = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      append(`Clean branch ${name} ${attempt}`);
-      const observed = await observe(name, `clean-branch-${attempt}`, () => providers.execute(name, inputs[name]));
-      if (!observed.error) {
-        assert.deepEqual(observed.result, expected[name]); ready = true; break;
-      }
-      assert.match(observed.error.message, /STATE_CONFLICT.*pending/);
-      assert.equal(observed.cursor.legacySeen, false, "off-branch legacy cursor must not be reused");
-    }
-    assert.ok(ready, `${name} must resolve the clean selected branch`);
+    append(`Clean branch ${name}`);
+    const observed = await observe(name, "clean-branch", () => providers.execute(name, inputs[name]), 32 * 128);
+    assert.equal(observed.error, undefined);
+    assert.deepEqual(observed.result, expected[name], "off-branch legacy state must not be selected");
   }
   await providers.lifecycle("session_shutdown");
 });
