@@ -16,15 +16,15 @@ settings, register a Herdr plugin, install a skill, or start a browser.
 
 Download the installer archive, Linux x64 runtime archive, platform manifest, and
 `SHA256SUMS` from the same trusted release. No checkout or pnpm is required. The
-example uses version `0.2.2`:
+example uses version `0.2.3`:
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf terminal-browser-installer-0.2.2.tar.gz
+tar -xzf terminal-browser-installer-0.2.3.tar.gz
 MANAGER="$PWD/terminal-browser-installer/install.sh"
 INSTALL="$HOME/.local/share/terminal-browser-managed"
 "$MANAGER" init "$INSTALL"
-"$MANAGER" stage "$PWD/terminal-browser-0.2.2-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
+"$MANAGER" stage "$PWD/terminal-browser-0.2.3-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
 # Use the artifact ID returned by stage after reviewing the selection.
 "$MANAGER" activate "$INSTALL" ARTIFACT_ID
 terminal-browser doctor --json
@@ -83,6 +83,7 @@ and cooperative Shared modes, explicit page delivery, settings, and scoped close
 The control indicator opens only control modes. The Ads indicator opens only
 blocking options. Escape or Dismiss closes either quick menu without opening
 full options or changing control. The three-dot button opens full options.
+In native menus, clicks on inactive rows or menu padding keep the menu open.
 Shared gives brief priority to active human input and can send coalesced page
 images without requesting a reply. Human never returns control automatically.
 
