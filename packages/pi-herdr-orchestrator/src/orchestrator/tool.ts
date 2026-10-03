@@ -4,6 +4,7 @@ import { isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ChannelStore, ChannelStoreError } from "./channel-store.js";
+import { DEFAULT_CAPACITY, MAX_CAPACITY, readCapacitySettings, type CapacitySettings } from "./capacity.js";
 import { HerdrCli, HerdrCliError } from "./herdr-cli.js";
 import { RegistryError, RegistryStore } from "./store.js";
 import { DEFAULT_WAIT_MS, MAX_WAIT_MS, runWaitCommand, WaitScope, WaitStopped } from "./wait-scope.js";
@@ -11,7 +12,9 @@ import { orchestratePresentation } from "./presentation.js";
 import {
   PROTOCOL,
   PROTOCOL_VERSION,
+  REGISTRY_VERSION,
   type AgentRecord,
+  type ChannelEvent,
   type JsonObject,
   type ManagedTabRecord,
   type OrchestrateParams,
@@ -26,10 +29,11 @@ const MAX_MESSAGE_BYTES = 8192;
 const MAX_LABEL_BYTES = 160;
 const MAX_PATH_BYTES = 4096;
 const MAX_LINES = 40;
-const MAX_ACTIVE_CHILDREN = 6;
-const MAX_LIST_AGENTS = 32;
+const MAX_LIST_AGENTS = MAX_CAPACITY;
+const MAX_DELIVERY_ITEMS = 24;
+const MAX_DELIVERY_BYTES = 64 * 1024;
 const MAX_RECENT_RUNS = 8;
-const MAX_RECONCILE_RUNS_PER_DRAIN = 32;
+const MAX_RECONCILE_RUNS_PER_DRAIN = MAX_CAPACITY;
 const MANAGED_TAB_LABEL = "subagents";
 const CAPABILITIES = {
   visiblePaneCreation: true,
@@ -112,7 +116,8 @@ const ORCHESTRATE_SCHEMA = {
         runIds: {
           type: "array",
           minItems: 1,
-          maxItems: 8,
+          maxItems: MAX_CAPACITY,
+          description: "Watch up to the configured total, or existing current assignments after a reduction, within the supported 32-worker pool. Batch historical runs when needed.",
           uniqueItems: true,
           items: stringProperty(128),
         },
@@ -283,6 +288,9 @@ function publicError(error: unknown): OrchestrationError {
   if (error instanceof RegistryError || error instanceof ChannelStoreError)
     return new OrchestrationError(error.code);
   if (error instanceof HerdrCliError) return new OrchestrationError(error.code);
+  const code = object(error)?.code;
+  if (code === "CAPACITY_SETTINGS_INVALID" || code === "CAPACITY_SETTINGS_UNREADABLE")
+    return new OrchestrationError(code);
   return new OrchestrationError("ORCHESTRATION_OPERATION_FAILED");
 }
 
@@ -456,7 +464,7 @@ function recordView(
 
 function listRecordView(
   agent: AgentRecord,
-  identityState?: IdentityResult["kind"],
+  identityState?: IdentityResult["kind"] | "unknown",
 ): JsonObject {
   return {
     agentId: agent.agentId,
@@ -523,9 +531,9 @@ function recentRunHistory(agent: AgentRecord): JsonObject[] {
 
 function newestAgents(agents: AgentRecord[]): AgentRecord[] {
   const priority = (agent: AgentRecord) =>
-    agent.processState === "live" && !agent.terminal
+    agent.processState === "live"
       ? 0
-      : !agent.terminal && agent.processState !== "closed" && agent.processState !== "failed"
+      : agent.processState !== "closed" && agent.processState !== "failed"
         ? 1
         : 2;
   return [...agents]
@@ -536,34 +544,6 @@ function newestAgents(agents: AgentRecord[]): AgentRecord[] {
         left.agentId.localeCompare(right.agentId),
     )
     .slice(0, MAX_LIST_AGENTS);
-}
-
-async function refresh(
-  store: RegistryStore,
-  cli: HerdrCli,
-  agent: AgentRecord,
-): Promise<{ agent: AgentRecord; identityState: IdentityResult["kind"] }> {
-  if (agent.processState === "closed")
-    return { agent, identityState: "absent" };
-  const result = await identity(cli, agent);
-  if (result.kind === "present") {
-    const updated = await store.updateAgent(agent.agentId, {
-      processState: "live",
-      herdrAttention: result.attention,
-    });
-    return { agent: updated, identityState: "present" };
-  }
-  const updated = await store.updateAgent(agent.agentId, {
-    processState: "missing",
-    runPhase:
-      agent.terminal ||
-      agent.runPhase === "failed" ||
-      agent.runPhase === "cancel_requested"
-        ? agent.runPhase
-        : "unknown",
-    herdrAttention: "unknown",
-  });
-  return { agent: updated, identityState: result.kind };
 }
 
 async function verifyTab(
@@ -584,40 +564,43 @@ async function verifyTab(
     : "mismatch";
 }
 
-async function activeManagedAgents(
-  current: OrchestrationContext,
-  tabId: string,
-): Promise<AgentRecord[]> {
-  const active: AgentRecord[] = [];
+type OwnedWorkers = {
+  present: AgentRecord[];
+  identities: Map<string, IdentityResult["kind"] | "unknown">;
+};
+
+async function inspectOwnedWorkers(current: OrchestrationContext): Promise<OwnedWorkers> {
+  const present: AgentRecord[] = [];
+  const identities: OwnedWorkers["identities"] = new Map();
+  // Inspect all owned records, not a recent display window. Failed starts can
+  // still own a process when cleanup was uncertain. Closed records are settled.
   for (const agent of await current.store.list()) {
-    if (
-      agent.topology !== "managed-subagents-tab-v2" ||
-      agent.tabId !== tabId ||
-      agent.processState === "closed" ||
-      agent.processState === "failed"
-    )
+    if (agent.processState === "closed") {
+      identities.set(agent.agentId, "absent");
       continue;
-    const result = await identity(current.cli, agent);
-    if (result.kind === "mismatch") throw new OrchestrationError("IDENTITY_MISMATCH");
-    if (result.kind === "present") {
-      active.push(
-        await current.store.updateAgent(agent.agentId, {
-          processState: "live",
-          herdrAttention: result.attention,
-        }),
-      );
-    } else {
+    }
+    let exact: IdentityResult;
+    try {
+      exact = await identity(current.cli, agent);
+    } catch {
+      identities.set(agent.agentId, "unknown");
+      continue;
+    }
+    identities.set(agent.agentId, exact.kind);
+    if (exact.kind === "present") {
+      present.push(await current.store.updateAgent(agent.agentId, {
+        processState: "live", herdrAttention: exact.attention,
+      }));
+    } else if (exact.kind === "absent") {
       await current.store.updateAgent(agent.agentId, {
         processState: "missing",
-        runPhase:
-          agent.terminal || agent.runPhase === "cancel_requested"
-            ? agent.runPhase
-            : "unknown",
+        runPhase: agent.terminal || agent.runPhase === "failed" || agent.runPhase === "cancel_requested"
+          ? agent.runPhase : "unknown",
         herdrAttention: "unknown",
       });
     }
   }
-  return active;
+  return { present, identities };
 }
 
 async function clearMissingTab(
@@ -716,24 +699,33 @@ async function ensureManagedSubagentTab(
   current: OrchestrationContext,
   cwd: string,
   environment: Record<string, string>,
+  settings: CapacitySettings,
+  owned: OwnedWorkers,
 ): Promise<ManagedTabResult> {
-  const existing = await current.store.managedTab();
-  if (!existing) return createManagedTab(current, cwd, environment);
-  const state = await verifyTab(current, existing);
-  if (state === "mismatch")
-    throw new OrchestrationError("MANAGED_TAB_IDENTITY_MISMATCH");
-  if (state === "missing") {
-    await clearMissingTab(current, existing);
-    return createManagedTab(current, cwd, environment);
+  const candidates: ManagedTabResult[] = [];
+  for (const existing of await current.store.managedTabs()) {
+    const state = await verifyTab(current, existing);
+    if (state === "mismatch")
+      throw new OrchestrationError("MANAGED_TAB_IDENTITY_MISMATCH");
+    if (state === "missing") {
+      await clearMissingTab(current, existing);
+      continue;
+    }
+    const active = owned.present.filter((agent) =>
+      agent.workspaceId === existing.workspaceId && agent.tabId === existing.tabId);
+    if (active.length === 0) {
+      // No exact owned pane can be a split target. Leave unrelated panes alone.
+      await current.store.clearManagedTab(existing.tabId);
+      continue;
+    }
+    const verified = { ...existing, verifiedAt: now() };
+    await current.store.setManagedTab(verified);
+    if (active.length < settings.perTab)
+      candidates.push({ record: verified, created: false, active });
   }
-  const verified = { ...existing, verifiedAt: now() };
-  await current.store.setManagedTab(verified);
-  const active = await activeManagedAgents(current, existing.tabId);
-  if (active.length === 0) {
-    await current.store.clearManagedTab(existing.tabId);
-    return createManagedTab(current, cwd, environment);
-  }
-  return { record: verified, created: false, active };
+  candidates.sort((a, b) => a.active.length - b.active.length ||
+    a.record.createdAt.localeCompare(b.record.createdAt) || a.record.tabId.localeCompare(b.record.tabId));
+  return candidates[0] ?? createManagedTab(current, cwd, environment);
 }
 
 function layoutChoice(
@@ -785,8 +777,6 @@ async function createChildPane(
       throw new OrchestrationError("MANAGED_TAB_HAS_NO_ROOT_PANE");
     return managed.rootPaneId;
   }
-  if (managed.active.length >= MAX_ACTIVE_CHILDREN)
-    throw new OrchestrationError("SUBAGENT_CAPACITY_REACHED");
   let layout: JsonObject = {};
   try {
     const first = managed.active[0];
@@ -893,41 +883,80 @@ function requireAgentId(params: OrchestrateParams): string {
   return params.agentId;
 }
 
-async function managedHealth(current: OrchestrationContext): Promise<{
-  tabId: string | null;
-  state: ManagedTabState;
-  activePaneCount: number;
-}> {
-  const record = await current.store.managedTab();
-  if (!record) return { tabId: null, state: "absent", activePaneCount: 0 };
-  const state = await verifyTab(current, record);
-  if (state === "missing") {
-    await clearMissingTab(current, record);
-    return { tabId: record.tabId, state, activePaneCount: 0 };
-  }
-  if (state === "mismatch")
-    return { tabId: record.tabId, state, activePaneCount: 0 };
-  await current.store.setManagedTab({ ...record, verifiedAt: now() });
+type CapacityStatus = { settings: CapacitySettings | null; errorCode: string | null };
+
+async function managementCapacity(): Promise<CapacityStatus> {
   try {
-    const active = await activeManagedAgents(current, record.tabId);
-    if (active.length === 0) {
-      await current.store.clearManagedTab(record.tabId);
-      return { tabId: null, state: "absent", activePaneCount: 0 };
-    }
-    return {
-      tabId: record.tabId,
-      state: "live",
-      activePaneCount: active.length,
-    };
+    return { settings: await readCapacitySettings(), errorCode: null };
   } catch (error) {
-    if (error instanceof OrchestrationError && error.code === "IDENTITY_MISMATCH")
-      return { tabId: record.tabId, state: "mismatch", activePaneCount: 0 };
-    throw error;
+    // Invalid settings deny new admission, not supervision of existing workers.
+    return { settings: null, errorCode: publicError(error).code };
   }
+}
+
+function waitRunLimit(agents: AgentRecord[], settings: CapacitySettings | null): number {
+  const currentAssignments = agents.filter((agent) => agent.processState !== "closed").length;
+  return Math.min(MAX_CAPACITY, Math.max(settings?.total ?? DEFAULT_CAPACITY.total, currentAssignments));
+}
+
+async function capacityReport(
+  current: OrchestrationContext,
+  owned: OwnedWorkers,
+  capacity: CapacityStatus,
+): Promise<JsonObject> {
+  const agents = await current.store.list();
+  const counts = (items: AgentRecord[]) => {
+    const present = items.filter((agent) => owned.identities.get(agent.agentId) === "present");
+    return {
+      occupiedWorkerCount: present.length,
+      unfinishedWorkerCount: present.filter((agent) => !agent.terminal).length,
+      completedRetainedWorkerCount: present.filter((agent) => !!agent.terminal).length,
+      unknownWorkerCount: items.filter((agent) =>
+        ["mismatch", "unknown"].includes(owned.identities.get(agent.agentId) ?? "unknown")).length,
+    };
+  };
+  const totals = counts(agents);
+  const tabs = [];
+  for (const record of await current.store.managedTabs()) {
+    const state = await verifyTab(current, record).catch(() => "mismatch" as const);
+    if (state === "live") await current.store.setManagedTab({ ...record, verifiedAt: now() });
+    else if (state === "missing") await clearMissingTab(current, record);
+    const tabCounts = counts(agents.filter((agent) =>
+      agent.workspaceId === record.workspaceId && agent.tabId === record.tabId));
+    tabs.push({
+      workspaceId: record.workspaceId, tabId: record.tabId, state,
+      ...tabCounts,
+      capacityLimit: capacity.settings?.perTab ?? null,
+      availablePaneCount: state === "live" && capacity.settings && !tabCounts.unknownWorkerCount
+        ? Math.max(0, capacity.settings.perTab - tabCounts.occupiedWorkerCount) : 0,
+    });
+  }
+  const managedTabState: ManagedTabState = tabs.some((tab) => tab.state === "mismatch")
+    ? "mismatch" : tabs.some((tab) => tab.state === "live") ? "live"
+      : tabs.length ? "missing" : "absent";
+  const availableWorkerCount = capacity.settings && !totals.unknownWorkerCount && managedTabState !== "mismatch"
+    ? Math.max(0, capacity.settings.total - totals.occupiedWorkerCount) : 0;
+  // Current live tabs precede missing history in the bounded representation.
+  tabs.sort((a, b) => b.occupiedWorkerCount - a.occupiedWorkerCount || a.tabId.localeCompare(b.tabId));
+  return {
+    ...totals,
+    capacityLimit: capacity.settings?.total ?? null,
+    perTabLimit: capacity.settings?.perTab ?? null,
+    capacitySettingsError: capacity.errorCode,
+    availableWorkerCount,
+    waitRunLimit: waitRunLimit(agents, capacity.settings),
+    managedTabs: tabs.slice(0, MAX_CAPACITY),
+    managedTabCount: tabs.length,
+    managedTabsTruncated: tabs.length > MAX_CAPACITY,
+    managedTabId: tabs.length === 1 ? tabs[0]!.tabId : null,
+    managedTabState,
+    managedActivePaneCount: tabs.reduce((sum, tab) => sum + tab.occupiedWorkerCount, 0),
+  };
 }
 
 async function health(context: PiContext): Promise<JsonObject> {
   const cli = new HerdrCli();
+  const capacity = await managementCapacity();
   const [herdrVersion, piVersion] = await Promise.all([
     cli.version().catch(() => undefined),
     cli.piVersion(),
@@ -943,7 +972,7 @@ async function health(context: PiContext): Promise<JsonObject> {
     ok: true,
     protocol: PROTOCOL,
     protocolVersion: PROTOCOL_VERSION,
-    registryVersion: 5,
+    registryVersion: REGISTRY_VERSION,
     domainId: null,
     parent: null,
     piVersion: piVersion ?? null,
@@ -962,7 +991,9 @@ async function health(context: PiContext): Promise<JsonObject> {
     managedTabId: null,
     managedTabState: "absent",
     managedActivePaneCount: 0,
-    capacityLimit: MAX_ACTIVE_CHILDREN,
+    capacityLimit: capacity.settings?.total ?? null,
+    perTabLimit: capacity.settings?.perTab ?? null,
+    capacitySettingsError: capacity.errorCode,
   };
   if (!inside) return { ...base, ok: false, errorCode: "NOT_IN_HERDR" };
   if (!running) return { ...base, ok: false, errorCode: "HERDR_UNAVAILABLE" };
@@ -970,7 +1001,9 @@ async function health(context: PiContext): Promise<JsonObject> {
     const scope = await requireContext(context);
     return await withDomainLock(scope.store.domainId, async () => {
       const current = await requireContext(context);
-      const managed = await managedHealth(current);
+      const owned = await inspectOwnedWorkers(current);
+      await reconcile(current, new Set(owned.present.map((agent) => agent.runId)));
+      const report = await capacityReport(current, owned, capacity);
       const agents = await current.store.list();
       return {
         ...base,
@@ -978,9 +1011,7 @@ async function health(context: PiContext): Promise<JsonObject> {
         parent: current.parent,
         registryPath: current.store.path,
         trackedAgentCount: agents.length,
-        managedTabId: managed.tabId,
-        managedTabState: managed.state,
-        managedActivePaneCount: managed.activePaneCount,
+        ...report,
       };
     });
   } catch (error) {
@@ -1024,10 +1055,20 @@ async function spawnUnlocked(
     PI_HERDR_AGENT_GENERATION: "1",
     PI_HERDR_ASSIGNMENT_GENERATION: "1",
   };
-  const managed = await ensureManagedSubagentTab(current, cwd, environment);
+  // Reopen settings on every admission. Never substitute defaults after a bad read.
+  const settings = await readCapacitySettings();
+  const owned = await inspectOwnedWorkers(current);
+  if ([...owned.identities.values()].some((state) => state === "mismatch"))
+    throw new OrchestrationError("IDENTITY_MISMATCH");
+  if ([...owned.identities.values()].some((state) => state === "unknown"))
+    throw new OrchestrationError("OWNED_WORKER_IDENTITY_UNAVAILABLE");
+  if (owned.present.length >= settings.total)
+    throw new OrchestrationError("SUBAGENT_CAPACITY_REACHED");
+  const managed = await ensureManagedSubagentTab(current, cwd, environment, settings, owned);
   let paneId: string | undefined;
   let recordAdded = false;
   let childStarted = false;
+  let startAttempted = false;
   const initialRun: RunRecord = {
     runId,
     assignmentGeneration: 1,
@@ -1074,6 +1115,7 @@ async function spawnUnlocked(
     agent.paneId = paneId;
     await current.store.addAgent(agent);
     recordAdded = true;
+    startAttempted = true;
     await current.cli.agentStart(herdrAgentName, paneId, extensionPath);
     const started = await identity(current.cli, agent);
     if (started.kind !== "present") throw new OrchestrationError("AGENT_START_FAILED");
@@ -1109,9 +1151,9 @@ async function spawnUnlocked(
       cwd: live.cwd,
     };
   } catch (error) {
-    // Preserve an exact started child and its durable pending assignment. A
-    // failed prompt call is delivery uncertainty, not proof of non-delivery.
-    if (childStarted) throw publicError(error);
+    // Preserve a started or possibly started child and its pending assignment.
+    // A start/prompt failure is delivery uncertainty, not proof of non-delivery.
+    if (childStarted || startAttempted) throw publicError(error);
     if (paneId) {
       if (managed.created) {
         await cleanCreatedTab(current, managed.record.tabId, paneId).catch(
@@ -1260,7 +1302,44 @@ async function reconcile(
   }
 }
 
-const MAX_NOTIFICATIONS_PER_DRAIN = 24;
+function rotatedRunIds(ids: Iterable<string>, cursor: string | null): string[] {
+  const sorted = [...ids].sort();
+  const next = cursor === null ? 0 : sorted.findIndex((id) => id > cursor);
+  const start = next < 0 ? 0 : next;
+  return [...sorted.slice(start), ...sorted.slice(0, start)];
+}
+
+type FairItem = { runId: string; view: JsonObject };
+
+function fairBatch<T extends FairItem>(queues: Map<string, T[]>, cursor: string | null): T[] {
+  const ids = rotatedRunIds(queues.keys(), cursor);
+  const selected: T[] = [];
+  // Leave space for the response envelope. JSON byte size also covers escaping
+  // and multi-byte summaries instead of treating a character cap as a byte cap.
+  let bytes = 1024;
+  for (let offset = 0; ; offset++) {
+    let found = false;
+    for (const id of ids) {
+      const item = queues.get(id)?.[offset];
+      if (!item) continue;
+      found = true;
+      const size = Buffer.byteLength(JSON.stringify(item.view)) + 1;
+      if (selected.length >= MAX_DELIVERY_ITEMS || bytes + size > MAX_DELIVERY_BYTES)
+        return selected;
+      selected.push(item);
+      bytes += size;
+    }
+    if (!found) return selected;
+  }
+}
+
+function eventMatches(event: ChannelEvent, agent: AgentRecord, run: RunRecord): boolean {
+  return event.version === 2 && event.domainId === agent.domainId &&
+    event.agentId === agent.agentId && event.runId === run.runId &&
+    event.agentGeneration === agent.agentGeneration &&
+    event.assignmentGeneration === run.assignmentGeneration &&
+    Number.isSafeInteger(event.sequence);
+}
 
 function notify(
   context: PiContext,
@@ -1283,12 +1362,14 @@ async function drainNotificationsUnlocked(
 ): Promise<void> {
   scope?.check();
   if (!context.hasUI || !context.ui?.notify) return;
-  const selectedAgents = newestAgents(await current.store.list());
-  const candidates = selectedAgents
+  const registry = await current.store.load();
+  const candidates = registry.agents
     .flatMap((agent) => {
-      // startAssignment appends the authoritative current run; inspect only a
-      // fixed tail window so the periodic path never traverses full history.
-      const currentRun = agent.runs.at(-1)!;
+      // Normal assignments append the current run. Keep a legacy fallback but
+      // reconcile only the current run and a fixed tail, never all history.
+      const lastRun = agent.runs.at(-1)!;
+      const currentRun = lastRun.runId === agent.runId ? lastRun
+        : agent.runs.find((run) => run.runId === agent.runId)!;
       const fixedWindow = [currentRun, ...agent.runs.slice(-2)].filter(
         (run, index, runs) =>
           runs.findIndex((candidate) => candidate.runId === run.runId) === index,
@@ -1304,25 +1385,22 @@ async function drainNotificationsUnlocked(
         (current && !run.terminal) ||
         run.notifiedSequence < (run.latestProgress?.eventSequence ?? 0) ||
         (!!run.terminal && !run.terminalNotified),
-    )
-    .sort(
-      (left, right) =>
-        Number(right.current) - Number(left.current) ||
-        right.run.updatedAt.localeCompare(left.run.updatedAt) ||
-        left.run.runId.localeCompare(right.run.runId),
-    )
+    );
+  const byId = new Map(candidates.map((entry) => [entry.run.runId, entry]));
+  const selectedIds = rotatedRunIds(byId.keys(), registry.notificationCursor)
     .slice(0, MAX_RECONCILE_RUNS_PER_DRAIN);
   const channel = new ChannelStore(current.store.domainId);
-  let remaining = MAX_NOTIFICATIONS_PER_DRAIN;
+  type Notice = FairItem & { agentId: string; sequence?: number; terminal?: boolean };
+  const queues = new Map<string, Notice[]>();
 
-  for (const { run: snapshot } of candidates) {
+  for (const runId of selectedIds) {
+    const snapshot = byId.get(runId)!.run;
     scope?.check();
-    if (remaining <= 0) return;
     try {
       await reconcile(current, new Set([snapshot.runId]), {
         migrateLegacy: false, ...(scope ? { scope } : {}),
       });
-      let entry = await current.store.getRun(snapshot.runId);
+      const entry = await current.store.getRun(snapshot.runId);
       if (!entry) continue;
       const fresh = (await channel.events(
         [snapshot.runId],
@@ -1330,54 +1408,38 @@ async function drainNotificationsUnlocked(
         { migrateLegacy: false, ...(scope ? { scope } : {}) },
       ))
         .filter(
-          (event) =>
-            event.version === 2 &&
-            event.domainId === entry!.agent.domainId &&
-            event.agentId === entry!.agent.agentId &&
-            event.runId === entry!.run.runId &&
-            event.agentGeneration === entry!.agent.agentGeneration &&
-            event.assignmentGeneration === entry!.run.assignmentGeneration &&
-            event.sequence > entry!.run.notifiedSequence,
+          (event) => eventMatches(event, entry.agent, entry.run) &&
+            event.sequence > entry.run.notifiedSequence,
         )
-        .sort((left, right) => left.sequence - right.sequence)
-        .slice(0, remaining);
-
-      for (const event of fresh) {
-        scope?.check();
-        notify(
-          context,
-          event.kind,
-          event.summary.slice(0, 2048),
-          event.agentId,
-          event.runId,
-        );
-        await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
-          notifiedSequence: event.sequence,
+        .sort((left, right) => left.sequence - right.sequence);
+      const notices: Notice[] = fresh.map((event) => ({
+        runId, agentId: entry.agent.agentId, sequence: event.sequence,
+        view: { status: event.kind, summary: event.summary.slice(0, 2048), agentId: event.agentId, runId },
+      }));
+      if (entry.run.terminal && !entry.run.terminalNotified)
+        notices.unshift({
+          runId, agentId: entry.agent.agentId, terminal: true,
+          view: { status: entry.run.terminal.status, summary: entry.run.terminal.summary.slice(0, 2048),
+            agentId: entry.agent.agentId, runId },
         });
-        remaining -= 1;
-      }
-
-      entry = await current.store.getRun(snapshot.runId);
-      if (!entry || remaining <= 0) return;
-      if (entry.run.terminal && !entry.run.terminalNotified) {
-        scope?.check();
-        notify(
-          context,
-          entry.run.terminal.status,
-          entry.run.terminal.summary.slice(0, 2048),
-          entry.agent.agentId,
-          entry.run.runId,
-        );
-        await current.store.updateRun(entry.agent.agentId, entry.run.runId, {
-          terminalNotified: true,
-        });
-        remaining -= 1;
-      }
+      queues.set(runId, notices);
     } catch (error) {
       if (error instanceof WaitStopped) throw error;
       scope?.check();
       // One malformed or concurrently removed run must not block other notices.
     }
+  }
+  const batch = fairBatch(queues, registry.notificationCursor);
+  for (const item of batch) {
+    scope?.check();
+    notify(context, String(item.view.status), String(item.view.summary), item.agentId, item.runId);
+    await current.store.updateRun(item.agentId, item.runId, item.terminal
+      ? { terminalNotified: true } : { notifiedSequence: item.sequence! });
+  }
+  const cursor = batch.at(-1)?.runId ?? selectedIds.at(-1);
+  if (cursor) {
+    scope?.check();
+    await current.store.setDeliveryCursor("notificationCursor", cursor);
   }
 }
 
@@ -1385,7 +1447,7 @@ function validateWaitParams(params: OrchestrateParams): number {
   if (
     !Array.isArray(params.runIds) ||
     params.runIds.length < 1 ||
-    params.runIds.length > 8 ||
+    params.runIds.length > MAX_CAPACITY ||
     new Set(params.runIds).size !== params.runIds.length ||
     params.runIds.some(
       (id) => typeof id !== "string" || !/^r-[0-9a-f-]{36}$/u.test(id),
@@ -1413,7 +1475,11 @@ async function waitRuns(
       scope.check();
       // Never reuse loaded registry state across a lock release.
       const current = { ...base, store: new RegistryStore(base.root, base.parent) };
-      await current.store.load();
+      const registry = await current.store.load();
+      const capacity = await managementCapacity();
+      scope.check();
+      if (wanted.size > waitRunLimit(registry.agents, capacity.settings))
+        throw new OrchestrationError("WAIT_CAPACITY_EXCEEDED");
       for (const runId of wanted) {
         scope.check();
         if (!(await current.store.getRun(runId)))
@@ -1431,31 +1497,30 @@ async function waitRuns(
         new Map(entries.map((entry) => [entry.run.runId, entry.run.deliveredSequence])),
         { scope },
       );
-      const fresh = all
-        .filter((e) => {
-          const entry = entries.find((x) => x.run.runId === e.runId);
-          return (
-            !!entry &&
-            e.version === 2 &&
-            e.domainId === entry.agent.domainId &&
-            e.agentId === entry.agent.agentId &&
-            e.agentGeneration === entry.agent.agentGeneration &&
-            e.assignmentGeneration === entry.run.assignmentGeneration &&
-            e.sequence > entry.run.deliveredSequence
-          );
-        })
-        .sort((a, b) => a.runId.localeCompare(b.runId) || a.sequence - b.sequence)
-        .slice(0, 24);
-      const results = entries
-        .filter((x) => x.run.terminal && !x.run.terminalDelivered)
-        .map((x) => ({
-          runId: x.run.runId,
-          agentId: x.agent.agentId,
-          status: x.run.terminal!.status,
-          summary: x.run.terminal!.summary,
-          completedAt: x.run.terminal!.completedAt,
-          resultAvailable: true,
-        }));
+      type Delivery = FairItem & { event?: ChannelEvent; terminal?: boolean };
+      const queues = new Map<string, Delivery[]>();
+      for (const { agent, run } of entries) {
+        const items: Delivery[] = all
+          .filter((event) => eventMatches(event, agent, run) && event.sequence > run.deliveredSequence)
+          .sort((a, b) => a.sequence - b.sequence)
+          .map((event) => ({
+            runId: run.runId, event,
+            view: { eventSequence: event.sequence, kind: event.kind, runId: event.runId,
+              agentId: event.agentId, target: event.target, summary: event.summary.slice(0, 2048),
+              createdAt: event.createdAt },
+          }));
+        if (run.terminal && !run.terminalDelivered)
+          items.unshift({
+            runId: run.runId, terminal: true,
+            view: { runId: run.runId, agentId: agent.agentId, status: run.terminal.status,
+              summary: run.terminal.summary.slice(0, 2048), completedAt: run.terminal.completedAt,
+              resultAvailable: true },
+          });
+        queues.set(run.runId, items);
+      }
+      const batch = fairBatch(queues, registry.waitCursor);
+      const fresh = batch.flatMap((item) => item.event ? [item.event] : []);
+      const results = batch.filter((item) => item.terminal).map((item) => item.view);
       scope.check();
       if (fresh.length || results.length) {
         // Delivery admission: finish this bounded commit even if a stop arrives.
@@ -1485,18 +1550,11 @@ async function waitRuns(
             }
           }
         }
+        await current.store.setDeliveryCursor("waitCursor", batch.at(-1)!.runId);
         return {
           ok: true,
           action: "wait",
-          events: fresh.map((e) => ({
-            eventSequence: e.sequence,
-            kind: e.kind,
-            runId: e.runId,
-            agentId: e.agentId,
-            target: e.target,
-            summary: e.summary.slice(0, 2048),
-            createdAt: e.createdAt,
-          })),
+          events: batch.filter((item) => item.event).map((item) => item.view),
           results,
           timedOut: false,
         };
@@ -1561,18 +1619,17 @@ async function collect(
 
 async function list(context: PiContext): Promise<JsonObject> {
   const current = await requireContext(context);
-  const tracked = await current.store.list();
-  const selected = newestAgents(tracked);
+  const owned = await inspectOwnedWorkers(current);
+  const selected = newestAgents(await current.store.list());
   await reconcile(current, new Set(selected.map((agent) => agent.runId)));
-  const rows: JsonObject[] = [];
-  for (const agent of selected) {
-    const refreshed = await refresh(current.store, current.cli, agent);
-    rows.push(listRecordView(refreshed.agent, refreshed.identityState));
-  }
+  const tracked = await current.store.list();
+  const rows = newestAgents(tracked).map((agent) => listRecordView(agent, owned.identities.get(agent.agentId)));
+  const report = await capacityReport(current, owned, await managementCapacity());
   return {
     ok: true,
     action: "list",
     domainId: current.store.domainId,
+    ...report,
     agents: rows,
     returnedAgentCount: rows.length,
     trackedAgentCount: tracked.length,
@@ -1932,22 +1989,16 @@ async function recover(context: PiContext): Promise<JsonObject> {
   const current = await requireContext(context);
   await current.store.load();
   await reconcile(current);
-  const managed = await current.store.managedTab();
-  let managedTabState: ManagedTabState = "absent";
-  if (managed) {
-    managedTabState = await verifyTab(current, managed);
-    if (managedTabState === "live")
-      await current.store.setManagedTab({ ...managed, verifiedAt: now() });
-    else if (managedTabState === "missing")
-      await current.store.markManagedTabAgentsMissing(managed.tabId);
-  }
+  const owned: OwnedWorkers = { present: [], identities: new Map() };
   const recovered: JsonObject[] = [];
   for (const agent of await current.store.list()) {
     if (agent.processState === "closed") {
+      owned.identities.set(agent.agentId, "absent");
       recovered.push(listRecordView(agent, "absent"));
       continue;
     }
     const exact = await identity(current.cli, agent);
+    owned.identities.set(agent.agentId, exact.kind);
     if (exact.kind === "mismatch") {
       recovered.push({
         ...listRecordView(agent, "mismatch"),
@@ -2011,23 +2062,21 @@ async function recover(context: PiContext): Promise<JsonObject> {
         { assignmentState: "delivered", pendingTask: null },
       );
     }
+    if (exact.kind === "present") owned.present.push(updated);
     recovered.push({
       ...listRecordView(updated, exact.kind),
       recoveryStatus: exact.kind,
     });
   }
+  const report = await capacityReport(current, owned, await managementCapacity());
+  const recoveredById = new Map(recovered.map((row) => [row.agentId, row]));
   return {
     ok: true,
     action: "recover",
     domainId: current.store.domainId,
     parent: current.parent,
-    managedTabId: managed?.tabId ?? null,
-    managedTabState,
-    agents: recovered
-      .sort((left, right) =>
-        String(right.updatedAt).localeCompare(String(left.updatedAt)),
-      )
-      .slice(0, MAX_LIST_AGENTS),
+    ...report,
+    agents: newestAgents(await current.store.list()).map((agent) => recoveredById.get(agent.agentId)!),
     returnedAgentCount: Math.min(recovered.length, MAX_LIST_AGENTS),
     trackedAgentCount: recovered.length,
     truncated: recovered.length > MAX_LIST_AGENTS,
@@ -2043,8 +2092,7 @@ async function detachIfNoManagedPanes(
     if (
       agent.topology !== "managed-subagents-tab-v2" ||
       agent.tabId !== tabId ||
-      agent.processState === "closed" ||
-      agent.processState === "failed"
+      agent.processState === "closed"
     )
       continue;
     const result = await identity(current.cli, agent);
@@ -2186,7 +2234,7 @@ export function registerOrchestrate(
     name: "orchestrate",
     label: "Orchestrate",
     description:
-      "Run and manage direct-Herdr agents in one shared subagents tab. Supports run/spawn, list, inspect, wait, collect, send, reuse, recover, cooperative cancellation, and exact close. Full results are available only through collect.",
+      "Run and manage direct-Herdr agents in owned subagents tabs within configured total and per-tab capacity. Supports run/spawn, list, inspect, wait, collect, send, reuse, recover, cooperative cancellation, and exact close. Wait watches up to configured total or existing current assignments (maximum 32), with fair bounded batches. Full results are available only through collect.",
     promptSnippet:
       "Run and manage direct Herdr subagents with exact identity and explicit results",
     parameters:

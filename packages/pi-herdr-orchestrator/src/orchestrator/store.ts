@@ -198,7 +198,11 @@ function validateRegistry(v: unknown, domainId: string): Registry {
     !x ||
     x.version !== REGISTRY_VERSION ||
     !commonValid(x, domainId) ||
-    (x.managedTab !== null && !tabValid(x.managedTab)) ||
+    !Array.isArray(x.managedTabs) ||
+    !x.managedTabs.every(tabValid) ||
+    new Set(x.managedTabs.map((tab) => tab.tabId)).size !== x.managedTabs.length ||
+    (x.waitCursor !== null && !stringField(x, "waitCursor", 128)) ||
+    (x.notificationCursor !== null && !stringField(x, "notificationCursor", 128)) ||
     !(x.agents as unknown[]).every((a) => agentValid(a, domainId))
   )
     throw new RegistryError("REGISTRY_MALFORMED");
@@ -248,16 +252,31 @@ function migrate(v: unknown, domainId: string): Registry | undefined {
   const x = record(v);
   if (
     !x ||
-    ![1, 2, 3, 4].includes(Number(x.version)) ||
+    ![1, 2, 3, 4, 5].includes(Number(x.version)) ||
     !commonValid(x, domainId)
   )
     return undefined;
   const version = Number(x.version);
-  if (version === 4) {
+  if (version >= 4) {
+    if (x.managedTab !== null && !tabValid(x.managedTab))
+      throw new RegistryError("REGISTRY_MALFORMED");
+    const { managedTab, ...retained } = x;
+    if (version === 5)
+      return validateRegistry({
+        ...retained,
+        version: REGISTRY_VERSION,
+        managedTabs: managedTab ? [managedTab] : [],
+        waitCursor: null,
+        notificationCursor: null,
+        updatedAt: new Date().toISOString(),
+      }, domainId);
     const timestamp = new Date().toISOString();
     const candidate = {
-      ...x,
+      ...retained,
       version: REGISTRY_VERSION,
+      managedTabs: managedTab ? [managedTab] : [],
+      waitCursor: null,
+      notificationCursor: null,
       updatedAt: timestamp,
       agents: (x.agents as unknown[]).map((value) => {
         const agent = record(value) ?? {};
@@ -354,10 +373,10 @@ function migrate(v: unknown, domainId: string): Registry | undefined {
     domainId,
     projectRoot: x.projectRoot as string,
     parent: x.parent as unknown as ParentIdentity,
-    managedTab:
-      version >= 2 && (x.managedTab === null || tabValid(x.managedTab))
-        ? (x.managedTab as ManagedTabRecord | null)
-        : null,
+    managedTabs:
+      version >= 2 && tabValid(x.managedTab) ? [x.managedTab] : [],
+    waitCursor: null,
+    notificationCursor: null,
     createdAt: x.createdAt as string,
     updatedAt: timestamp,
     agents,
@@ -445,7 +464,9 @@ export class RegistryStore {
         domainId: this.domainId,
         projectRoot: this.projectRoot,
         parent: { ...this.parent },
-        managedTab: null,
+        managedTabs: [],
+        waitCursor: null,
+        notificationCursor: null,
         createdAt: t,
         updatedAt: t,
         agents: [],
@@ -596,23 +617,33 @@ export class RegistryStore {
     await this.save({ ...r, agents, updatedAt: new Date().toISOString() });
     return updated;
   }
-  async setManagedTab(tab: ManagedTabRecord | null) {
+  async setManagedTab(tab: ManagedTabRecord) {
     const r = await this.load();
+    const existing = r.managedTabs.find((item) => item.tabId === tab.tabId);
+    if (existing && existing.workspaceId !== tab.workspaceId)
+      throw new RegistryError("REGISTRY_MALFORMED");
     await this.save({
       ...r,
-      managedTab: tab,
+      managedTabs: existing
+        ? r.managedTabs.map((item) => item.tabId === tab.tabId ? tab : item)
+        : [...r.managedTabs, tab],
       updatedAt: new Date().toISOString(),
     });
   }
   async clearManagedTab(expected: string): Promise<boolean> {
     const r = await this.load();
-    if (r.managedTab?.tabId !== expected) return false;
+    if (!r.managedTabs.some((tab) => tab.tabId === expected)) return false;
     await this.save({
       ...r,
-      managedTab: null,
+      managedTabs: r.managedTabs.filter((tab) => tab.tabId !== expected),
       updatedAt: new Date().toISOString(),
     });
     return true;
+  }
+  async setDeliveryCursor(kind: "waitCursor" | "notificationCursor", runId: string) {
+    const r = await this.load();
+    if (r[kind] === runId) return;
+    await this.save({ ...r, [kind]: runId, updatedAt: new Date().toISOString() });
   }
   async markManagedTabAgentsMissing(tabId: string) {
     const r = await this.load(),
@@ -659,8 +690,7 @@ export class RegistryStore {
   async list() {
     return [...(await this.load()).agents];
   }
-  async managedTab() {
-    const t = (await this.load()).managedTab;
-    return t ? { ...t } : null;
+  async managedTabs() {
+    return (await this.load()).managedTabs.map((tab) => ({ ...tab }));
   }
 }

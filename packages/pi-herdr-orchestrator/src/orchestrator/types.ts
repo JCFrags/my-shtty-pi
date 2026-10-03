@@ -1,4 +1,4 @@
-export const REGISTRY_VERSION = 5 as const;
+export const REGISTRY_VERSION = 6 as const;
 export const PROTOCOL_VERSION = 1 as const;
 export const PROTOCOL = "pi-herdr-orchestrator" as const;
 
@@ -81,7 +81,9 @@ export interface Registry {
   domainId: string;
   projectRoot: string;
   parent: ParentIdentity;
-  managedTab: ManagedTabRecord | null;
+  managedTabs: ManagedTabRecord[];
+  waitCursor: string | null;
+  notificationCursor: string | null;
   createdAt: string;
   updatedAt: string;
   agents: AgentRecord[];

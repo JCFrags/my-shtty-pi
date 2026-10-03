@@ -199,6 +199,7 @@ async function boundedWaitCheck(state, parent, registry, previousRun, previousAg
   Object.assign(process.env, {
     PATH: "/usr/local/bin:/usr/bin:/bin", HOME: join(state, "home"),
     XDG_STATE_HOME: state, XDG_CONFIG_HOME: join(state, "config"),
+    PI_CODING_AGENT_DIR: join(state, "agent"),
     XDG_RUNTIME_DIR: join(state, "runtime"), PI_OFFLINE: "1", PI_TELEMETRY: "0",
     HERDR_ENV: "1", HERDR_SOCKET_PATH: join(state, "unused.sock"),
     HERDR_WORKSPACE_ID: parent.workspaceId, HERDR_TAB_ID: parent.tabId,
@@ -249,6 +250,7 @@ setTimeout(() => console.log(JSON.stringify({ result: { pane: {
   };
   try {
     assert.equal(tool.parameters.oneOf.find(x => x.properties.action.const === "wait").properties.timeoutMs.maximum, 600_000);
+    assert.equal(tool.parameters.oneOf.find(x => x.properties.action.const === "wait").properties.runIds.maxItems, 32);
     await assert.rejects(wait(600_001), /INVALID_TIMEOUT/);
     const pollStart = performance.now(), pollScope = new WaitScope(pollStart, 0);
     assert.equal(pollScope.deadline, pollStart + POLL_WORK_MS);
@@ -342,6 +344,7 @@ setTimeout(() => console.log(JSON.stringify({ result: { pane: {
     assert.equal(terminal.results[0].finalResult, undefined);
     assert.equal((await call({ action: "collect", runId })).finalResult, result.finalResult);
     console.log("Bounded wait check passed: entry budget, zero poll, lock release/freshness, queue abort, watcher abort, arm-gap recheck, caps and collect");
+    await capacityWaitCheck(state, parent, channel, call, run, notices);
   } finally {
     clearTimeout(watchdog);
     ChannelStore.prototype.armChangeWait = originalArm;
@@ -349,4 +352,62 @@ setTimeout(() => console.log(JSON.stringify({ result: { pane: {
     ChannelStore.prototype.events = originalEvents;
     await hooks.get("session_shutdown")();
   }
+}
+
+// The existing read-only fake Herdr command supplies context. Pool workers and
+// channel publications below are fixture state, not native lifecycle acceptance.
+async function capacityWaitCheck(state, parent, channel, call, template, notices) {
+  const { RegistryStore } = await import("../dist/src/orchestrator/store.js");
+  const { capacitySettingsPath } = await import("../dist/src/orchestrator/capacity.js");
+  await mkdir(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+  const configure = (total) => writeFile(capacitySettingsPath(), JSON.stringify({ version: 1, total, perTab: 1 }));
+  await configure(32);
+  const store = new RegistryStore(state, parent);
+  const seed = (await store.list())[0];
+  for (let index = (await store.list()).length; index < 32; index++) {
+    const suffix = `50000000-0000-0000-0000-${String(index).padStart(12, "0")}`;
+    const runId = `r-${suffix}`, run = { ...template, runId };
+    await store.addAgent({ ...seed, agentId: `a-${suffix}`, runId,
+      herdrAgentName: `capacity-${index}`, paneId: `capacity-pane-${index}`,
+      terminal: null, latestProgress: null, runPhase: "running", processState: "live", runs: [run] });
+  }
+  const agents = (await store.list()).sort((a, b) => a.runId.localeCompare(b.runId));
+  const runIds = agents.map(agent => agent.runId);
+  const publish = async (agent, summary, kind = "progress") => channel.appendEvent({ version: 2,
+    domainId: channel.domainId, agentId: agent.agentId, runId: agent.runId,
+    agentGeneration: agent.agentGeneration, assignmentGeneration: agent.assignmentGeneration,
+    kind, target: "parent", summary, createdAt: template.createdAt,
+  }, (await new RegistryStore(state, parent).getRun(agent.runId)).run.deliveredSequence);
+  for (const agent of agents) await publish(agent, "one update for every watched worker");
+  for (let index = 0; index < 30; index++) await publish(agents[0], `chatty ${index}`);
+  const startNotice = notices.length;
+  const watch = () => call({ action: "wait", runIds, timeoutMs: 0 });
+  const first = await watch();
+  assert.equal(first.events.length + first.results.length, 24);
+  assert.equal(new Set([...first.events, ...first.results].map(item => item.runId)).size, 24);
+  // A new publication by the early run must not reset the persisted rotation.
+  await publish(agents[0], "still chatty");
+  const second = await watch();
+  assert.equal(new Set([...first.events, ...first.results, ...second.events, ...second.results]
+    .map(item => item.runId)).size, 32, "later run IDs must not starve behind an early chatty worker");
+  assert.equal(new Set(notices.slice(startNotice).map(item => item.runId)).size, 32,
+    "notification delivery must also rotate across the whole pool");
+  await configure(2);
+  assert.equal((await watch()).ok, true, "lowered total must grandfather all existing current assignments");
+  for (const agent of agents) await publish(agent, "🌍".repeat(1024), "message");
+  const unicodeBatch = await watch();
+  assert(Buffer.byteLength(JSON.stringify(unicodeBatch)) <= 64 * 1024);
+  assert(unicodeBatch.events.length + unicodeBatch.results.length <= 24);
+  assert(unicodeBatch.events.length > 0);
+  const fresh = new RegistryStore(state, parent);
+  for (const agent of agents.slice(2)) await fresh.updateAgent(agent.agentId, { processState: "closed" });
+  await assert.rejects(call({ action: "wait", runIds: runIds.slice(0, 9), timeoutMs: 0 }), /WAIT_CAPACITY_EXCEEDED/);
+  await configure(9);
+  assert.equal((await call({ action: "wait", runIds: runIds.slice(0, 9), timeoutMs: 0 })).ok, true,
+    "historical runs remain available in batches within configured capacity");
+  await writeFile(capacitySettingsPath(), "{bad config");
+  assert.equal((await call({ action: "wait", runIds: runIds.slice(0, 2), timeoutMs: 0 })).ok, true);
+  assert.equal((await call({ action: "collect", runId: agents[0].runId })).status, "completed");
+  await assert.rejects(call({ action: "wait", runIds: [...runIds, "r-90000000-0000-0000-0000-000000000000"], timeoutMs: 0 }), /INVALID_RUN_IDS/);
+  console.log("Capacity wait check passed: 32 watched runs, fair events/notices, 24-item/64-KiB bounds, lower-limit grandfathering, historical batches, invalid-settings management");
 }

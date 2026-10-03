@@ -62,7 +62,7 @@ test("managed child lifecycle restores exact channel and explicit collection", {
     const tools = [], commands = [];
     extension({ registerTool: tool => tools.push(tool.name), registerCommand: command => commands.push(command), on() {} });
     assert.deepEqual(tools, ["orchestrate"]);
-    assert.deepEqual(commands, []);
+    assert.deepEqual(commands, ["subagents"]);
 
     const fakeHerdr = join(root, "herdr");
     await writeFile(fakeHerdr, `#!${process.execPath}\nimport { readFileSync } from 'node:fs';
@@ -80,6 +80,7 @@ console.log(JSON.stringify({ result: { [kind]: value } }));\n`, { mode: 0o700 })
       ORCHESTRATOR_FIXTURE_STATE: statePath,
     });
     setPane(child);
+    process.env.PI_CODING_AGENT_DIR = agentDir;
     const store = new RegistryStore(cwd, parent);
     const timestamp = new Date().toISOString();
     const makeRun = (id, generation) => ({
@@ -131,6 +132,7 @@ console.log(JSON.stringify({ result: { [kind]: value } }));\n`, { mode: 0o700 })
       assert(names.includes("subagent_channel"));
       assert(!names.includes("orchestrate"));
       assert.equal(session.extensionRunner.getCommand("agent-settings"), undefined);
+      assert.equal(session.extensionRunner.getCommand("subagents"), undefined);
     };
     const sm = sdk.SessionManager.create(cwd, join(root, "sessions"));
     const fresh = await create(sm, true);
@@ -148,11 +150,24 @@ console.log(JSON.stringify({ result: { [kind]: value } }));\n`, { mode: 0o700 })
       api: "fixture", provider: "fixture", model: "fixture", stopReason: "stop", timestamp: Date.now(),
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
     const savedFile = sm.getSessionFile();
+    // A v5 registry migrates without changing the exact child/native locator.
+    const savedRegistry = JSON.parse(await readFile(store.path, "utf8"));
+    const { managedTabs, waitCursor, notificationCursor, ...v5 } = savedRegistry;
+    const tab = { workspaceId: child.workspaceId, tabId: child.tabId, requestedLabel: "subagents",
+      createdAt: timestamp, verifiedAt: timestamp };
+    await writeFile(store.path, JSON.stringify({ ...v5, version: 5, managedTab: tab }));
+    const migrated = await new RegistryStore(cwd, parent).load();
+    assert.equal(migrated.version, 6);
+    assert.deepEqual(migrated.managedTabs, [tab]);
+    assert.deepEqual(migrated.agents, savedRegistry.agents);
+    assert.equal(migrated.waitCursor, null);
+    assert.equal(migrated.notificationCursor, null);
+    assert.equal("managedTab" in migrated, false);
     assert.equal((await readFile(savedFile, "utf8")).split("\n").filter(line => line && JSON.parse(line).customType === CHILD_BINDING_ENTRY).length, 1);
     await shutdown(fresh);
 
     const nextRun = `r-${randomUUID()}`;
-    await store.startAssignment(agentId, makeRun(nextRun, 2));
+    await new RegistryStore(cwd, parent).startAssignment(agentId, makeRun(nextRun, 2));
     clearChildEnvironment();
     const restoredManager = sdk.SessionManager.open(savedFile);
     const restored = await create(restoredManager);
@@ -180,6 +195,7 @@ console.log(JSON.stringify({ result: { [kind]: value } }));\n`, { mode: 0o700 })
     assert(catalog.tools.some(tool => tool.name === "orchestrate"));
     assert(!catalog.tools.some(tool => tool.name === "subagent_channel"));
     assert.equal(rootSession.extensionRunner.getCommand("agent-settings"), undefined);
+    assert(rootSession.extensionRunner.getCommand("subagents"));
     await call(rootSession, "tool_help", { names: ["orchestrate"] });
     const collected = await call(rootSession, "orchestrate", { action: "collect", runId: nextRun });
     assert.equal(collected.status, "completed");

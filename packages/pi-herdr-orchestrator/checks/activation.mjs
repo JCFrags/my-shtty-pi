@@ -11,5 +11,7 @@ export function assertRootOrchestration({ extensions, commands, tools, candidate
   assert.equal(owners.length, 1, "Exactly one root orchestrate registration is required");
   assert(!tools.includes("subagent_channel"), "Factory inventory must not expose a managed-child channel");
   assertOrchestratorCommands(commands);
+  assert.equal(commands.filter((name) => name === "subagents").length, 1, "Exactly one subagent capacity command is required");
+  assert(owners[0].commands.has("subagents"), "The root orchestration owner must register the capacity command");
   if (candidate) assert.equal(resolve(owners[0].resolvedPath), join(resolve(candidate), "packages/pi-herdr-orchestrator/dist/extensions/pi-herdr-orchestrator.js"));
 }
