@@ -34,7 +34,7 @@ use crate::scroll::profiles::Smooth;
 use crate::style::Color;
 use crate::surfaces::Rect;
 use crate::terminal::{
-    Event, KeyEvent, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors,
+    Event, KeyEvent, Mods, MouseButton, MouseKind, Terminal, TerminalColors,
 };
 use crate::text_input::InputReply;
 use crate::throttle::CpuThrottle;
@@ -314,9 +314,7 @@ pub struct Engine {
     scroll_burst: u32,
     last_scroll_mark: Option<Instant>,
     clipboard: ClipboardFlows,
-    focus_click: Option<(Instant, (f32, f32))>,
     last_pointer_activity: Option<Instant>,
-    last_pointer_click: Option<Instant>,
     next_pasted_mark: u64,
     pending: Vec<EngineEvent>,
     color_request_at: Option<Instant>,
@@ -414,9 +412,7 @@ impl Engine {
             scroll_burst: 0,
             last_scroll_mark: None,
             clipboard: ClipboardFlows::new(),
-            focus_click: None,
             last_pointer_activity: None,
-            last_pointer_click: None,
             next_pasted_mark: 1 << 48,
             pending: Vec::new(),
             color_request_at: None,
@@ -622,11 +618,7 @@ impl Engine {
         } else {
             wait
         };
-        let deadlines = [
-            self.clipboard.osc_deadline(),
-            self.focus_click.as_ref().map(|(deadline, _)| *deadline),
-            self.color_request_at,
-        ];
+        let deadlines = [self.clipboard.osc_deadline(), self.color_request_at];
         for deadline in deadlines.into_iter().flatten() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             first_wait = Some(first_wait.map_or(remaining, |w| w.min(remaining)));
@@ -662,23 +654,6 @@ impl Engine {
         while let Some(current) = event {
             self.handle_event(current, &mut out)?;
             event = self.term.poll_event(Some(Duration::ZERO))?;
-        }
-        if let Some((deadline, point)) = self.focus_click
-            && Instant::now() >= deadline
-        {
-            self.focus_click = None;
-            for kind in [MouseKind::Down, MouseKind::Up] {
-                self.handle_mouse(
-                    Mouse {
-                        kind,
-                        button: MouseButton::Left,
-                        mods: Mods::default(),
-                        x: point.0 as u32,
-                        y: point.1 as u32,
-                    },
-                    &mut out,
-                )?;
-            }
         }
         self.check_resize(&mut out)?;
         self.drain_native(&mut out);
@@ -889,18 +864,6 @@ impl Engine {
                 self.term_focused = focused;
                 if gained {
                     self.recheck_colors_on_focus();
-                }
-                if !focused {
-                    self.focus_click = None;
-                } else if gained
-                    && let Some(at) = self.last_pointer_activity
-                    && at.elapsed() <= Duration::from_millis(1000)
-                    && self
-                        .last_pointer_click
-                        .is_none_or(|click| click.elapsed() > Duration::from_millis(1000))
-                    && let Some(point) = self.cursor
-                {
-                    self.focus_click = Some((Instant::now() + Duration::from_millis(75), point));
                 }
                 out.push(EngineEvent::Focus { focused });
             }

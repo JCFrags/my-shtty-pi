@@ -1,4 +1,3 @@
-import { clipboard, nativeImage } from "electron";
 import type { WebContents } from "electron";
 import type { EngineKeyEvent, PastedImage, PointerEvent, WheelEvent } from "pixel-react";
 import type { AgentKey } from "../agent/key";
@@ -38,8 +37,31 @@ export class PageInput {
   private sentKeys = new Set<string>();
   private programmaticKeys = new Map<string, AgentKey>();
   private programmaticInputGeneration = 0;
+  private physicalInputGeneration = 0;
   private superHeld = false;
   private focusGate: Promise<void> | null = null;
+  private agentGuard: ((focusWaited: boolean) => void | Promise<void>) | undefined;
+  private agentPending = new Set<Promise<unknown>>();
+  private releaseGate: Promise<void> | null = null;
+  private releaseFailure: Error | null = null;
+  private agentX = 0;
+  private agentY = 0;
+
+  agentPointerPosition() { return { x: this.lastSentX, y: this.lastSentY }; }
+  setAgentInputGuard(guard: (focusWaited: boolean) => void | Promise<void>) { this.agentGuard = guard; }
+  private track<T>(task: Promise<T>): Promise<T> {
+    this.agentPending.add(task);
+    void task.then(() => this.agentPending.delete(task), () => this.agentPending.delete(task));
+    return task;
+  }
+  private async ready(generation: number, focus = true): Promise<void> {
+    if (this.releaseFailure) throw this.releaseFailure;
+    const gate = focus ? this.syncFocus() : null;
+    if (gate) await gate;
+    if (generation !== this.programmaticInputGeneration) throw new Error("agent input was released");
+    await this.agentGuard?.(!!gate);
+    if (generation !== this.programmaticInputGeneration) throw new Error("agent input was released");
+  }
 
   constructor(target: InputTarget) {
     this.target = target;
@@ -52,23 +74,20 @@ export class PageInput {
     this.focusGate = gate;
     void gate.then(() => {
       if (this.focusGate === gate) this.focusGate = null;
-    });
+    }, () => { if (this.focusGate === gate) this.focusGate = null; });
     return gate;
   }
 
-  private send(event: SendableInputEvent, programmaticGeneration?: number) {
+  private send(event: SendableInputEvent, programmaticGeneration?: number): Promise<void> | void {
     const contents = this.target.contents();
-    const deliver = () => {
-      if (
-        programmaticGeneration !== undefined &&
-        programmaticGeneration !== this.programmaticInputGeneration
-      ) return;
-      try {
-        void Promise.resolve(programmaticGeneration !== undefined && event.type.startsWith("mouse")
-          ? this.target.programmaticPointer?.(event as Electron.MouseInputEvent) ?? contents.sendInputEvent(event)
-          : contents.sendInputEvent(event)).catch(() => {});
-      } catch {}
-    };
+    if (programmaticGeneration !== undefined) {
+      if (programmaticGeneration !== this.programmaticInputGeneration) throw new Error("agent input was released");
+      return this.track(Promise.resolve(event.type.startsWith("mouse")
+        ? this.target.programmaticPointer?.(event as Electron.MouseInputEvent) ?? contents.sendInputEvent(event)
+        : contents.sendInputEvent(event)).then(() => undefined));
+    }
+    const generation = this.physicalInputGeneration;
+    const deliver = () => { if (generation === this.physicalInputGeneration) try { contents.sendInputEvent(event); } catch {} };
     if (this.focusGate) void this.focusGate.then(deliver, () => {});
     else deliver();
   }
@@ -89,7 +108,7 @@ export class PageInput {
   }
 
   pointer(event: PointerEvent) {
-    this.syncFocus();
+    if (event.kind !== "move") this.syncFocus();
     const scale = this.target.scale();
     const x = Math.max(0, Math.round(event.x / scale));
     const y = Math.max(0, Math.round(event.y / scale));
@@ -101,18 +120,15 @@ export class PageInput {
     );
   }
 
-  programmaticPointer(event: ProgrammaticPointerEvent) {
+  async programmaticPointer(event: ProgrammaticPointerEvent): Promise<void> {
     if (event.kind === "up" && event.button && !this.programmaticPressed.has(event.button)) return;
     const generation = this.programmaticInputGeneration;
-    this.syncFocus();
+    // Release-only cleanup never takes focus or waits for a reservation.
+    if (event.kind !== "up") await this.ready(generation, event.kind === "down");
     const x = Math.max(0, Math.round(event.x));
     const y = Math.max(0, Math.round(event.y));
-    this.dispatchPointer(
-      { kind: event.kind, x, y, button: event.button },
-      [],
-      this.programmaticPressed,
-      generation,
-    );
+    this.agentX = x; this.agentY = y;
+    await this.dispatchPointer({ kind: event.kind, x, y, button: event.button }, [], this.programmaticPressed, generation);
   }
 
   releasePhysicalButtons() {
@@ -128,106 +144,92 @@ export class PageInput {
     this.pressed.clear();
   }
 
-  releaseProgrammaticButtons() {
-    void this.target.programmaticDrag?.("cancel").catch(() => {});
-    this.programmaticInputGeneration += 1;
-    this.releaseProgrammaticButtonsNow();
-  }
+  releaseProgrammaticButtons(): Promise<void> { return this.releaseProgrammaticInput(); }
 
-  private releaseProgrammaticButtonsNow() {
+  private releaseProgrammaticButtonsNow(): Promise<void> {
+    const pending: Promise<void>[] = [];
     for (const button of [...this.programmaticPressed]) {
       try {
-        this.dispatchPointer(
-          { kind: "up", x: this.lastX, y: this.lastY, button },
-          [],
-          this.programmaticPressed,
-          this.programmaticInputGeneration,
-        );
-      } catch {}
+        pending.push(Promise.resolve(this.dispatchPointer(
+          { kind: "up", x: this.agentX, y: this.agentY, button }, [],
+          this.programmaticPressed, this.programmaticInputGeneration)));
+      } catch (error) { pending.push(Promise.reject(error)); }
     }
     this.programmaticPressed.clear();
+    return Promise.all(pending).then(() => undefined);
   }
 
   async programmaticKeyDown(key: AgentKey): Promise<void> {
     const generation = this.programmaticInputGeneration;
-    const focus = this.syncFocus();
-    if (focus) await focus;
-    if (generation !== this.programmaticInputGeneration) throw new Error("agent input was released");
+    await this.ready(generation);
     if (this.programmaticKeys.has(key.identity)) return;
     this.programmaticKeys.set(key.identity, key);
-    try {
-      await this.sendAgentKey({ type: "rawKeyDown", key });
-    } catch (error) {
-      this.programmaticKeys.delete(key.identity);
-      throw error;
-    }
+    // Retain the held key on an uncertain native failure so cleanup still sends keyUp.
+    await this.track(this.sendAgentKey({ type: "rawKeyDown", key }));
   }
 
   async programmaticKeyChar(key: AgentKey): Promise<void> {
     if (!key.character || !this.programmaticKeys.has(key.identity)) return;
-    await this.sendAgentKey({ type: "char", key, character: key.character });
+    await this.ready(this.programmaticInputGeneration, false);
+    await this.track(this.sendAgentKey({ type: "char", key, character: key.character }));
   }
 
-  programmaticKeyUp(key: AgentKey): void {
+  async programmaticKeyUp(key: AgentKey): Promise<void> {
     if (!this.programmaticKeys.delete(key.identity)) return;
-    try {
-      void Promise.resolve(this.sendAgentKey({ type: "keyUp", key })).catch(() => {});
-    } catch {}
+    await this.track(this.sendAgentKey({ type: "keyUp", key }));
   }
 
-  releaseProgrammaticKeys() {
-    this.programmaticInputGeneration += 1;
-    this.releaseProgrammaticKeysNow();
-  }
+  releaseProgrammaticKeys(): Promise<void> { return this.releaseProgrammaticInput(); }
 
-  private releaseProgrammaticKeysNow() {
-    for (const key of [...this.programmaticKeys.values()]) {
-      this.programmaticKeys.delete(key.identity);
-      try {
-        void this.sendAgentKey({ type: "keyUp", key }).catch(() => {});
-      } catch {}
-    }
+  private releaseProgrammaticKeysNow(): Promise<void> {
+    const pending = [...this.programmaticKeys.values()].map(key => this.programmaticKeyUp(key));
+    return Promise.all(pending).then(() => undefined);
   }
 
   async startProgrammaticDrag(): Promise<void> {
     const generation=this.programmaticInputGeneration;
-    const focus=this.syncFocus();
-    if(focus) await focus;
-    if(generation!==this.programmaticInputGeneration) throw new Error("agent input was released");
+    await this.ready(generation);
     await this.target.programmaticDrag?.("start");
     if(generation!==this.programmaticInputGeneration) {await this.target.programmaticDrag?.("cancel");throw new Error("agent input was released");}
   }
 
   async finishProgrammaticDrag(cancelled: boolean): Promise<void> { await this.target.programmaticDrag?.(cancelled ? "cancel" : "finish"); }
 
-  releaseProgrammaticInput() {
-    void this.target.programmaticDrag?.("cancel").catch(() => {});
+  releaseProgrammaticInput(): Promise<void> {
     this.programmaticInputGeneration += 1;
-    this.releaseProgrammaticButtonsNow();
-    this.releaseProgrammaticKeysNow();
+    if (this.releaseGate) return this.releaseGate;
+    const pending = [...this.agentPending];
+    const release = async () => {
+      if (pending.length) await Promise.allSettled(pending);
+      // Cancel drag interception before releasing its button, never after human input.
+      const results = await Promise.allSettled([Promise.resolve().then(() => this.target.programmaticDrag?.("cancel"))]);
+      results.push(...await Promise.allSettled([this.releaseProgrammaticButtonsNow(), this.releaseProgrammaticKeysNow()]));
+      if (results.some(result => result.status === "rejected")) {
+        this.releaseFailure = new Error("native input release is uncertain; further input was stopped without replay");
+      }
+      if (this.releaseFailure) throw this.releaseFailure;
+    };
+    const task = release();
+    this.releaseGate = task;
+    void task.then(() => { if (this.releaseGate === task) this.releaseGate = null; }, () => { if (this.releaseGate === task) this.releaseGate = null; });
+    return task;
   }
 
   async selectAllProgrammatic(): Promise<void> {
     const generation = this.programmaticInputGeneration;
-    const focus = this.syncFocus();
-    if (focus) await focus;
-    if (generation !== this.programmaticInputGeneration) throw new Error("agent input was released");
-    await (this.target.programmaticEdit?.() ?? this.target.contents().selectAll());
+    await this.ready(generation);
+    await this.track(Promise.resolve(this.target.programmaticEdit?.() ?? this.target.contents().selectAll()));
   }
 
   async insertTextProgrammatic(text: string): Promise<void> {
     const generation = this.programmaticInputGeneration;
-    const focus = this.syncFocus();
-    if (focus) await focus;
-    if (generation !== this.programmaticInputGeneration) throw new Error("agent input was released");
-    await (this.target.programmaticEdit?.(text) ?? this.target.contents().insertText(text));
+    await this.ready(generation);
+    await this.track(Promise.resolve(this.target.programmaticEdit?.(text) ?? this.target.contents().insertText(text)));
   }
 
   async programmaticWheel(x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
     const generation = this.programmaticInputGeneration;
-    const focus = this.syncFocus();
-    if (focus) await focus;
-    if (generation !== this.programmaticInputGeneration) throw new Error("agent input was released");
+    await this.ready(generation);
     const event: Electron.MouseWheelInputEvent = {
       type: "mouseWheel",
       x: Math.max(0, Math.round(x)),
@@ -240,10 +242,11 @@ export class PageInput {
       canScroll: true,
       modifiers: [],
     };
-    await (this.target.programmaticPointer?.(event) ?? this.target.contents().sendInputEvent(event));
+    await this.track(Promise.resolve(this.target.programmaticPointer?.(event) ?? this.target.contents().sendInputEvent(event)));
   }
 
   releasePhysicalInput() {
+    this.physicalInputGeneration += 1;
     this.releasePhysicalButtons();
     this.releaseKeys();
     this.releaseModifiers();
@@ -251,7 +254,7 @@ export class PageInput {
 
   releaseAllInput() {
     this.releasePhysicalInput();
-    this.releaseProgrammaticInput();
+    void this.releaseProgrammaticInput().catch(() => {});
   }
 
   private async sendAgentKey(event: { type: "rawKeyDown" | "keyUp" | "char"; key: AgentKey; character?: string }): Promise<void> {
@@ -283,7 +286,7 @@ export class PageInput {
     const held = new Set([...this.pressed, ...this.programmaticPressed]);
     if (event.kind === "up" && event.button) held.delete(event.button);
     for (const pressed of held) modifiers.push(`${pressed}buttondown`);
-    this.send({
+    const submitted = this.send({
       type:
         event.kind === "down"
           ? "mouseDown"
@@ -301,6 +304,7 @@ export class PageInput {
     if (event.kind === "up" && event.button) originPressed.delete(event.button);
     this.lastSentX = event.x;
     this.lastSentY = event.y;
+    return submitted;
   }
 
   wheel(event: WheelEvent) {
@@ -375,13 +379,11 @@ export class PageInput {
   key(event: EngineKeyEvent) {
     this.rememberModifiers(event);
     if (event.key === "enter") {
-      void this.dispatchEnter(event).catch(() => { });
-      return;
+      return this.dispatchEnter(event);
     }
     const commands = process.platform === "darwin" ? editingCommands(event) : null;
     if (commands) {
-      void this.dispatchEditing(event, commands).catch(() => { });
-      return;
+      return this.dispatchEditing(event, commands);
     }
     const keyCode = electronKey(event.key);
     if (event.kind === "release") {
@@ -411,14 +413,15 @@ export class PageInput {
     }
   }
 
-  paste(text: string) {
+  async paste(text: string): Promise<void> {
+    const { clipboard } = require("electron") as typeof import("electron");
+    const generation = this.physicalInputGeneration;
     clipboard.writeText(text);
     if (process.platform === "darwin") {
-      void this.dispatchPaste().catch(() => { });
-      return;
+      return this.dispatchPaste();
     }
-    this.syncFocus();
-    this.target.contents().paste();
+    await this.syncFocus();
+    if (generation === this.physicalInputGeneration) this.target.contents().paste();
   }
 
 
@@ -430,14 +433,17 @@ export class PageInput {
     return "";
   }
 
-  pasteImage(image: PastedImage) {
-    this.syncFocus();
+  async pasteImage(image: PastedImage): Promise<void> {
+    const generation = this.physicalInputGeneration;
+    await this.syncFocus();
+    if (generation !== this.physicalInputGeneration) return;
     switch (image.source) {
       case "clipboard":
         this.target.contents().paste();
         return;
       case "osc":
       case "file": {
+        const { clipboard, nativeImage } = require("electron") as typeof import("electron");
         const staged = nativeImage.createFromPath(image.path);
         if (staged.isEmpty()) return;
         clipboard.writeImage(staged);
@@ -467,6 +473,7 @@ export class PageInput {
    */
 
   private async dispatchEnter(event: EngineKeyEvent) {
+    const generation = this.physicalInputGeneration;
     const base = {
       key: "Enter",
       code: "Enter",
@@ -475,21 +482,25 @@ export class PageInput {
       modifiers: cdpModifiers(event.mods),
     };
     if (event.kind === "release") {
+      this.sentKeys.delete(event.key);
       await this.target.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...base });
       return;
     }
     await this.syncFocus();
+    if (generation !== this.physicalInputGeneration) return;
+    this.sentKeys.add(event.key);
     await this.target.cdp("Input.dispatchKeyEvent", {
       type: "rawKeyDown",
       ...base,
       autoRepeat: event.kind === "repeat",
     });
-    if (!event.mods.ctrl && !event.mods.super && !event.mods.alt) {
+    if (generation === this.physicalInputGeneration && !event.mods.ctrl && !event.mods.super && !event.mods.alt) {
       await this.target.cdp("Input.dispatchKeyEvent", { type: "char", text: "\r", ...base });
     }
   }
 
   private async dispatchPaste() {
+    const generation = this.physicalInputGeneration;
     const base = {
       key: "v",
       code: "KeyV",
@@ -498,6 +509,7 @@ export class PageInput {
       modifiers: 4,
     };
     await this.syncFocus();
+    if (generation !== this.physicalInputGeneration) return;
     await this.target.cdp("Input.dispatchKeyEvent", {
       type: "rawKeyDown",
       ...base,
@@ -507,6 +519,7 @@ export class PageInput {
   }
 
   private async dispatchEditing(event: EngineKeyEvent, commands: string[]) {
+    const generation = this.physicalInputGeneration;
     const info = EDITING_KEY_INFO[event.key];
     if (!info) return;
     const base = {
@@ -521,6 +534,8 @@ export class PageInput {
       return;
     }
     await this.syncFocus();
+    if (generation !== this.physicalInputGeneration) return;
+    this.sentKeys.add(event.key);
     await this.target.cdp("Input.dispatchKeyEvent", {
       type: "rawKeyDown",
       ...base,

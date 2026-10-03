@@ -20,9 +20,9 @@ function inputFixture(options = {}) {
 
 const mods = { shift: false, alt: false, ctrl: false, super: false };
 
-test("PageInput releases physical buttons without releasing programmatic buttons", () => {
+test("PageInput releases physical buttons without releasing programmatic buttons", async () => {
   const { input, events } = inputFixture();
-  input.programmaticPointer({ kind: "down", x: 10, y: 12, button: "left" });
+  await input.programmaticPointer({ kind: "down", x: 10, y: 12, button: "left" });
   input.pointer({ kind: "down", x: 20, y: 22, button: "right", mods });
   input.releasePhysicalInput();
 
@@ -31,14 +31,14 @@ test("PageInput releases physical buttons without releasing programmatic buttons
     { type: "mouseDown", button: "right" },
     { type: "mouseUp", button: "right" },
   ]);
-  input.releaseProgrammaticButtons();
+  await input.releaseProgrammaticButtons();
   assert.equal(events.at(-1)?.type, "mouseUp");
   assert.equal(events.at(-1)?.button, "left");
 });
 
-test("PageInput ignores an unmatched programmatic pointer up", () => {
+test("PageInput ignores an unmatched programmatic pointer up", async () => {
   const { input, events } = inputFixture();
-  input.programmaticPointer({ kind: "up", x: 10, y: 12, button: "left" });
+  await input.programmaticPointer({ kind: "up", x: 10, y: 12, button: "left" });
   assert.deepEqual(events, []);
 });
 
@@ -53,7 +53,7 @@ test("PageInput keeps physical and programmatic keys independent", async () => {
     character: null,
   });
   input.releasePhysicalInput();
-  input.releaseProgrammaticKeys();
+  await input.releaseProgrammaticKeys();
   assert.deepEqual(events.map(({ type, keyCode, modifiers }) => ({ type, keyCode, modifiers })), [
     { type: "rawKeyDown", keyCode: "a", modifiers: [] },
     { type: "char", keyCode: "a", modifiers: [] },
@@ -74,8 +74,8 @@ test("PageInput programmatic key cycle dispatches down, character, and up", asyn
   };
   await input.programmaticKeyDown(key);
   await input.programmaticKeyChar(key);
-  input.programmaticKeyUp(key);
-  input.programmaticKeyUp(key);
+  await input.programmaticKeyUp(key);
+  await input.programmaticKeyUp(key);
   assert.deepEqual(events.map(({ type, keyCode }) => ({ type, keyCode })), [
     { type: "rawKeyDown", keyCode: "x" },
     { type: "char", keyCode: "x" },
@@ -93,8 +93,8 @@ test("PageInput releases a held programmatic key only once", async () => {
     character: "\\r",
   };
   await input.programmaticKeyDown(key);
-  input.releaseProgrammaticInput();
-  input.programmaticKeyUp(key);
+  await input.releaseProgrammaticInput();
+  await input.programmaticKeyUp(key);
   assert.deepEqual(events.map(({ type }) => type), ["rawKeyDown", "keyUp"]);
 });
 
@@ -120,7 +120,7 @@ test("PageInput cancels a programmatic key waiting for focus after release", asy
     character: "x",
   };
   const pending = input.programmaticKeyDown(key);
-  input.releaseProgrammaticInput();
+  await input.releaseProgrammaticInput();
   resolveFocus();
   await assert.rejects(pending, /agent input was released/);
   assert.deepEqual(events, []);

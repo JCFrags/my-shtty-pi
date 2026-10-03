@@ -1,4 +1,5 @@
 import { parseElementTarget } from "./agent/protocol";
+import type { CompanionService, CompanionRequest } from "./session/companion-service";
 import { parseBlockingRequest, type BlockingRequest, type BlockingStatus } from "./blocking/types";
 import { parseLocator } from "./agent/locator";
 import type { DialogResponse } from "./agent/dialogs";
@@ -83,6 +84,8 @@ export interface ControlHost {
   activateTab(id: number): boolean;
   agentTabSwitchAllowed(): boolean;
   agentStatus(): AgentControlSnapshot;
+  companion?: CompanionService;
+  agentSelectMode?(mode: "agent" | "human" | "shared", expectedEpoch: number): AgentControlSnapshot;
   blocking(id: number, request: BlockingRequest, epoch?: number): BlockingStatus & { contextId: number };
   agentPause(expectedEpoch: number): AgentControlSnapshot;
   agentResume(expectedEpoch: number): AgentControlSnapshot;
@@ -109,7 +112,8 @@ export interface ControlHost {
   viewport(): { width: number; height: number } | null;
 }
 
-interface ControlRequest {
+interface ControlRequest extends CompanionRequest {
+  mode?: unknown;
   identity?: unknown;
   expectedInstance?: unknown;
   id?: string;
@@ -208,6 +212,7 @@ export class Registry {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.host.companion?.dispose();
     this.server?.close();
     this.server = null;
     void removeInstance(this.host.key).catch(() => {});
@@ -292,10 +297,14 @@ export class Registry {
         return;
       }
       if (request.cmd !== "hello" && (!runtimeMatches(request.identity) || request.expectedInstance !== RUNTIME_IDENTITY.instanceId)) throw new Error("runtime identity mismatch; explicit replacement is required");
+      if (request.expectedBrowserSessionKey !== undefined && request.expectedBrowserSessionKey !== this.host.key) throw new Error("browser session key mismatch");
+      if (request.expectedRuntimeInstanceId !== undefined && request.expectedRuntimeInstanceId !== RUNTIME_IDENTITY.instanceId) throw new Error("browser runtime instance mismatch");
       const data = await this.handle(request, signal);
       signal.throwIfAborted();
       const response = binaryResponse(id, data);
-      connection.write(`${JSON.stringify(response.header)}\n`);
+      const header = JSON.stringify(response.header);
+      if (Buffer.byteLength(header, "utf8") > MAX_CONTROL_LINE_BYTES) throw new Error("control response header is too large");
+      connection.write(`${header}\n`);
       if (response.binary) connection.end(response.binary);
       else connection.end();
     } catch (error) {
@@ -355,6 +364,24 @@ export class Registry {
         const parsed = parseBlockingRequest(request.action, request.site);
         const epoch = parsed.action === "status" ? undefined : requiredEpoch(request.expectedControlEpoch, "blocking");
         return this.host.blocking(requiredTab(request, "blocking"), parsed, epoch);
+      }
+      case "receiver.status":
+      case "receiver.bind":
+      case "receiver.unbind":
+      case "updates.set":
+      case "events.wait":
+      case "human.capture":
+      case "human.share":
+      case "human.close":
+      case "human.blocking":
+      case "recovery.status":
+      case "recovery.choose":
+        if (!this.host.companion) throw new Error("browser companion service is unavailable");
+        return this.host.companion.request(request, signal);
+      case "agent.control": {
+        if (request.mode !== "agent" && request.mode !== "human" && request.mode !== "shared") throw new Error("mode must be agent, human, or shared");
+        if (!this.host.agentSelectMode) throw new Error("browser control mode selection is unavailable");
+        return this.host.agentSelectMode(request.mode, requiredEpoch(request.expectedControlEpoch, "agent.control"));
       }
       case "agent.status":
         return this.host.agentStatus();
@@ -503,6 +530,7 @@ function binaryResponse(id: string, data: unknown): {
     return { header: { id, ok: true, data } };
   }
   const binary = observation.visual.data;
+  if (binary.byteLength > 2 * 1024 * 1024) throw new Error("control response image is too large");
   const visual = { ...observation.visual };
   delete (visual as Partial<typeof visual>).data;
   return {

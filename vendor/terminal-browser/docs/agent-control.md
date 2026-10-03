@@ -1,6 +1,6 @@
 # Native CLI agent control
 
-[Product guide](../README.md) · [Optional Pi adapter](../pi-extension/README.md)
+[Product guide](../README.md) · [User controls and recovery](user-controls.md) · [Optional Pi adapter](../pi-extension/README.md)
 
 The native CLI is the default for Pi and other agents. It uses one AgentCursor
 backend for observations and input. Optional native Pi tools translate calls to
@@ -86,6 +86,12 @@ match. Ambiguity returns bounded candidate summaries, not a guessed target.
 Role/name matching uses DOM roles and accessible labels, not a complete browser
 accessibility-tree query. Open shadow roots are included; closed roots are not.
 
+`hover` moves the pointer without clicking. `press-key` uses the current native
+focus, and `scroll` uses the current pointer location. Scroll does not accept a ref,
+locator, or pointer coordinates. Observe and use explicit hover first when the
+scroll destination matters. A returned coordinate describes the submitted native
+input, not proof of its page effect.
+
 Input preparation checks attachment, visibility, enablement, editability where
 needed, stable geometry, and pointer obstruction. Pointer motion uses slow-natural
 AgentCursor. The actual point is checked again before input. A locator can resolve
@@ -153,10 +159,17 @@ requests can only be dismissed.
 
 ## Human control and cancellation
 
-`agent status`, `pause`, and `resume` are browser-wide, not per-tab. Pause/resume
-require the current epoch from status. Never resume automatically after human
-control or a failed action. When the user explicitly asks to resume, do so and
-then observe before input. A changed epoch invalidates previous commands.
+`agent status`, `control`, `pause`, and `resume` are browser-wide, not per-tab.
+Use `agent control --mode agent|human|shared --control-epoch EPOCH` for an explicit
+choice. Pause/resume also require the current epoch from status. Resume selects
+Agent. Never return from Human automatically or treat an input error as permission
+to resume. Observe again after a real mode change.
+
+Shared gives brief priority to active human input. Reservations do not change the
+epoch, and harmless pointer motion does not invalidate observations. A waiting
+agent action still rechecks genuine document, target, frame, focus, and geometry
+changes. See [user controls](user-controls.md) for input-release and terminal IME
+limits. A possibly delivered action is never replayed automatically.
 
 Cancellation or socket disconnection stops later input and releases held keys
 and buttons. It cannot undo delivered side effects. Timeouts, output-limit

@@ -67,12 +67,14 @@ export function sourceIdentity(root) {
 }
 
 export const electronExecutable = (platform) => platform.startsWith("linux") ? "electron/electron" : "electron/terminal-browser.app/Contents/MacOS/terminal-browser";
-// Schema 1 remains readable for retained managed releases. New builds use schema 2.
-export const requiredFiles = (platform, schemaVersion = 2) => ["VERSION", "CHANNEL", "LICENSE", "bin/terminal-browser", "browser/dist/main.js", "browser/dist/runtime-check.js", "browser/dist/package.json", "browser/native/pixel.node", "cli/dist/main.js", "cli/dist/package.json", electronExecutable(platform), "assets/fonts/JetBrainsMono-Regular.ttf", "assets/fonts/LICENSE.txt", "assets/react-grab/index.global.js", "pi-extension/package.json", "pi-extension/dist/extension.js", "pi-extension/dist/identity.js", "pi-extension/dist/client.js", "pi-extension/dist/launch.js", "pi-extension/dist/launch-mode.js", "herdr-plugin/herdr-plugin.toml", "herdr-plugin/launch.sh", "herdr-plugin/focus-companion.sh", "herdr-plugin/open-companion.sh", "scripts/dist-manifest.mjs", "scripts/install-manager.mjs", "scripts/extract-dist.py", "scripts/install.sh", "scripts/install-local.sh", "metadata/pnpm-lock.yaml", "metadata/Cargo.lock", "metadata/upstreams.lock.json", "licenses/node-packages.json", "licenses/rust-packages.json", ...(schemaVersion === 1 ? ["agent-browser/bin/agent-browser", "metadata/agent-browser-Cargo.lock"] : ["SOURCE.md", "metadata/copy-provenance.json", "skills/default/terminal-browser/SKILL.md", "assets/blocking/easylist.txt", "licenses/notices/easylist/NOTICE.txt", "licenses/notices/ghostery-adblocker/NOTICE.txt", "licenses/notices/ghostery-adblocker/MPL-2.0.txt", "licenses/notices/ghostery-adblocker/tldts-MIT.txt"])];
+// Retained schema 1/2 releases keep their single-resource layout. New builds use schema 3.
+export const piExtensions = (schemaVersion) => schemaVersion === 3 ? ["./dist/menu.js", "./dist/extension.js"] : ["./dist/extension.js"];
+export const piCompiledFiles = ["bridge.js", "client.js", "extension.js", "identity.js", "launch-mode.js", "launch.js", "menu.js", "owner-binding.js"];
+export const requiredFiles = (platform, schemaVersion = 3) => ["VERSION", "CHANNEL", "LICENSE", "bin/terminal-browser", "browser/dist/main.js", "browser/dist/runtime-check.js", "browser/dist/package.json", "browser/native/pixel.node", "cli/dist/main.js", "cli/dist/package.json", electronExecutable(platform), "assets/fonts/JetBrainsMono-Regular.ttf", "assets/fonts/LICENSE.txt", "assets/react-grab/index.global.js", "pi-extension/package.json", ...(schemaVersion === 3 ? piCompiledFiles : ["extension.js", "identity.js", "client.js", "launch.js", "launch-mode.js"]).map(file => `pi-extension/dist/${file}`), "herdr-plugin/herdr-plugin.toml", "herdr-plugin/launch.sh", "herdr-plugin/focus-companion.sh", "herdr-plugin/open-companion.sh", "scripts/dist-manifest.mjs", "scripts/install-manager.mjs", "scripts/extract-dist.py", "scripts/install.sh", "scripts/install-local.sh", "metadata/pnpm-lock.yaml", "metadata/Cargo.lock", "metadata/upstreams.lock.json", "licenses/node-packages.json", "licenses/rust-packages.json", ...(schemaVersion === 1 ? ["agent-browser/bin/agent-browser", "metadata/agent-browser-Cargo.lock"] : ["SOURCE.md", "metadata/copy-provenance.json", "skills/default/terminal-browser/SKILL.md", "assets/blocking/easylist.txt", "licenses/notices/easylist/NOTICE.txt", "licenses/notices/ghostery-adblocker/NOTICE.txt", "licenses/notices/ghostery-adblocker/MPL-2.0.txt", "licenses/notices/ghostery-adblocker/tldts-MIT.txt"])];
 
 export function validateManifest(manifest) {
   keys(manifest, ["schemaVersion", "artifactId", "identity", "files"]);
-  assert([1, 2].includes(manifest.schemaVersion));
+  assert([1, 2, 3].includes(manifest.schemaVersion));
   const legacy = manifest.schemaVersion === 1;
   digest(manifest.artifactId);
   const identity = manifest.identity;
@@ -101,7 +103,8 @@ export function validateManifest(manifest) {
   keys(identity.tools, ["node", "pnpm", "rustc", "esbuild", "host"]);
   for (const value of Object.values(identity.tools)) assert.equal(typeof value, "string");
   keys(identity.integrations, ["pi", "herdr"]);
-  keys(identity.integrations.pi, ["name", "version", "peerDependencies", "node"]);
+  keys(identity.integrations.pi, ["name", "version", "peerDependencies", "node", ...(manifest.schemaVersion === 3 ? ["extensions"] : [])]);
+  if (manifest.schemaVersion === 3) assert.deepEqual(identity.integrations.pi.extensions, piExtensions(3));
   assert.equal(identity.integrations.pi.name, "pi-terminal-browser");
   keys(identity.integrations.pi.peerDependencies, ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]);
   for (const value of Object.values(identity.integrations.pi.peerDependencies)) assert.equal(typeof value, "string");
@@ -135,6 +138,9 @@ export function validateManifest(manifest) {
   for (const required of requiredFiles(identity.platform, manifest.schemaVersion)) {
     assert(paths.has(required), `missing required artifact file: ${required}`);
   }
+  if (manifest.schemaVersion === 3) for (const file of piCompiledFiles) {
+    assert.equal(manifest.files.find(entry => entry.path === `pi-extension/dist/${file}`)?.type, "file", `Pi compiled dependency must be a regular file: ${file}`);
+  }
   for (const executable of ["bin/terminal-browser", electron, ...(legacy ? ["agent-browser/bin/agent-browser"] : [])]) {
     const entry = manifest.files.find((file) => file.path === executable);
     assert(entry.type === "file" && (entry.mode & 0o111), `not executable: ${executable}`);
@@ -155,7 +161,7 @@ export function validateBundle(root, expectedArtifactId) {
   for (const [file, expected] of Object.entries(lockFiles)) assert.equal(fileHash(path.join(root, "metadata", file)), expected);
   const pins = readJson(path.join(root, "metadata/upstreams.lock.json"));
   assert.equal(pins.electron.archives[manifest.identity.platform], manifest.identity.runtimes.electron.archiveSha256);
-  if (manifest.schemaVersion === 2) {
+  if (manifest.schemaVersion >= 2) {
     assert.equal(pins.blocking.engine.package, "@ghostery/adblocker");
     assert.equal(pins.blocking.engine.version, "2.18.2");
     assert.equal(pins.blocking.list.file, "assets/blocking/easylist.txt");
@@ -166,7 +172,7 @@ export function validateBundle(root, expectedArtifactId) {
   assert.deepEqual(pi.peerDependencies, manifest.identity.integrations.pi.peerDependencies);
   assert.equal(pi.name, manifest.identity.integrations.pi.name);
   assert.equal(pi.version, manifest.identity.integrations.pi.version);
-  assert.deepEqual(pi.pi.extensions, ["./dist/extension.js"]);
+  assert.deepEqual(pi.pi.extensions, piExtensions(manifest.schemaVersion));
   return manifest;
 }
 

@@ -136,11 +136,9 @@ test("takeover during the natural drag approach prevents button-down", async () 
 });
 
 test("driver drag releases before reporting an invalidated operation", async () => {
-  let guards = 0;
   const { driver, events } = driverFixture({
     beforeInput: () => {
-      guards += 1;
-      if (guards === 3) throw new Error("page changed since observation");
+      if (events.some(event => event.kind === "down")) throw new Error("page changed since observation");
     },
   });
   driver.usePersona(await createSlowNaturalPersona({ seed: 42, now: () => 0 }));
@@ -640,7 +638,7 @@ test("socket request parsing rejects malformed observe and click requests", asyn
     }
     assert.deepEqual(
       (await registryRequest(registry.socketPath, { id: "6", cmd: "agent.status" })).data,
-      { state: "agent", controlEpoch: 1, reason: null, busy: false, interactionStyle: "slow-natural" },
+      { state: "agent", controlEpoch: 1, reason: null, busy: false, interactionStyle: "slow-natural", reservation: { active: [], waiting: false }, inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false } },
     );
     assert.deepEqual(
       (await registryRequest(registry.socketPath, {
@@ -648,11 +646,11 @@ test("socket request parsing rejects malformed observe and click requests", asyn
         cmd: "agent.pause",
         expectedControlEpoch: 1,
       })).data,
-      { state: "paused", controlEpoch: 2, reason: "manual-pause", busy: false, interactionStyle: "slow-natural" },
+      { state: "paused", controlEpoch: 2, reason: "manual-pause", busy: false, interactionStyle: "slow-natural", reservation: { active: [], waiting: false }, inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false } },
     );
     assert.deepEqual(
       (await registryRequest(registry.socketPath, { id: "8", cmd: "agent.status" })).data,
-      { state: "paused", controlEpoch: 2, reason: "manual-pause", busy: false, interactionStyle: "slow-natural" },
+      { state: "paused", controlEpoch: 2, reason: "manual-pause", busy: false, interactionStyle: "slow-natural", reservation: { active: [], waiting: false }, inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false } },
     );
     assert.deepEqual(
       (await registryRequest(registry.socketPath, {
@@ -660,7 +658,7 @@ test("socket request parsing rejects malformed observe and click requests", asyn
         cmd: "agent.resume",
         expectedControlEpoch: 2,
       })).data,
-      { state: "agent", controlEpoch: 3, reason: "manual-resume", busy: false, interactionStyle: "slow-natural" },
+      { state: "agent", controlEpoch: 3, reason: "manual-resume", busy: false, interactionStyle: "slow-natural", reservation: { active: [], waiting: false }, inputCapabilities: { keyRelease: "unknown", composition: "commit-only", terminalImePreedit: false } },
     );
     const stale = await registryRequest(registry.socketPath, {
       id: "10",

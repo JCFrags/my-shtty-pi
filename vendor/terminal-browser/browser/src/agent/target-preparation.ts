@@ -19,6 +19,7 @@ export class TargetPreparation {
     private readonly guard: () => void,
     private readonly sleep: (ms: number) => Promise<void>,
     private readonly now: () => number = Date.now,
+    private readonly permitScroll?: () => Promise<unknown>,
   ) {}
 
   async resolveLocator(spec: LocatorSpec, timeoutMs: number, scrollIntoView = false): Promise<LocatorMatch> {
@@ -102,7 +103,9 @@ export class TargetPreparation {
 
   private async state(ref: string, scroll: boolean, point?: Point) {
     this.assertActive();
-    const result = await this.wait(this.observer.elementState(ref, { documentId: this.documentId, scroll, point, guard: () => this.assertActive() }));
+    if (scroll) await this.permitScroll?.();
+    this.assertActive();
+    const result = await this.wait(this.observer.elementState(ref, { documentId: this.documentId, scroll, point, guard: () => this.assertActive(), permitScroll: this.permitScroll }));
     this.assertActive();
     if (result.documentId !== this.documentId) throw new Error("page changed since observation");
     return result.state;

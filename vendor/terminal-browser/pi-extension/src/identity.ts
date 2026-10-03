@@ -3,11 +3,16 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { runtimeRoot } from "./launch.js";
 
+export const COMPILED_RESOURCES = ["menu.js", "extension.js"] as const;
+export const COMPILED_CLOSURE = ["bridge.js", "client.js", "extension.js", "identity.js", "launch-mode.js", "launch.js", "menu.js", "owner-binding.js"] as const;
+
 function capturedIdentity() {
   let artifactId: string | null = null;
   let sourceRevision: string | null = null;
   let build: string | null = null;
   let extensionBuild: string | null = null;
+  let menuBuild: string | null = null;
+  let closureBuild: string | null = null;
   let processStart: string | null = null;
   try {
     const stat = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8");
@@ -19,13 +24,26 @@ function capturedIdentity() {
     const file = path.join(runtimeRoot, "build-manifest.json");
     if (fs.statSync(file).size > 2 * 1024 * 1024) throw new Error("invalid manifest");
     const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-    const hash = createHash("sha256").update(fs.readFileSync(path.join(runtimeRoot, "pi-extension/dist/extension.js"))).digest("hex");
-    if (!/^[a-f0-9]{64}$/.test(manifest.artifactId) || !/^[a-f0-9]{40}$/.test(manifest.identity?.source?.commit) || manifest.files?.find((entry: { path: string }) => entry.path === "pi-extension/dist/extension.js")?.sha256 !== hash) throw new Error("invalid artifact");
+    const files = manifest.schemaVersion === 3 ? COMPILED_CLOSURE : ["extension.js"];
+    if (![1, 2, 3].includes(manifest.schemaVersion)) throw new Error("unsupported artifact");
+    if (manifest.schemaVersion === 3 && JSON.stringify(manifest.identity?.integrations?.pi?.extensions) !==
+        JSON.stringify(COMPILED_RESOURCES.map(name => `./dist/${name}`))) throw new Error("invalid Pi resource layout");
+    const hashes = files.map(name => {
+      const file = `pi-extension/dist/${name}`;
+      const hash = createHash("sha256").update(fs.readFileSync(path.join(runtimeRoot, file))).digest("hex");
+      if (manifest.files?.find((entry: { path: string }) => entry.path === file)?.sha256 !== hash) throw new Error("invalid extension closure");
+      return [name, hash] as const;
+    });
+    const hash = hashes.find(([name]) => name === "extension.js")![1];
+    if (!/^[a-f0-9]{64}$/.test(manifest.artifactId) || !/^[a-f0-9]{40}$/.test(manifest.identity?.source?.commit)) throw new Error("invalid artifact");
     const browser = manifest.files?.find((entry: { path: string }) => entry.path === "browser/dist/main.js")?.sha256;
     if (!/^[a-f0-9]{64}$/.test(browser)) throw new Error("missing browser build");
     artifactId = manifest.artifactId; sourceRevision = manifest.identity.source.commit; build = browser; extensionBuild = hash;
+    menuBuild = hashes.find(([name]) => name === "menu.js")?.[1] ?? null;
+    closureBuild = manifest.schemaVersion === 3 ? createHash("sha256").update(JSON.stringify(hashes)).digest("hex") : null;
   } catch {}
-  return Object.freeze({ artifactId, sourceRevision, build, protocol: 2, pid: process.pid, processStart, instanceId: randomUUID(), extensionBuild });
+  return Object.freeze({ artifactId, sourceRevision, build, protocol: 2, pid: process.pid, processStart, instanceId: randomUUID(), extensionBuild,
+    menuBuild, closureBuild, packageResources: COMPILED_RESOURCES, receiptEntrypoint: "dist/menu.js" });
 }
 
 export const LOADED_IDENTITY = capturedIdentity();
@@ -38,7 +56,7 @@ function nextReceiptSequence() {
   return sequence;
 }
 
-export function startupReceipt(): () => void {
+export function startupReceipt(identity: typeof LOADED_IDENTITY & { loadedResources?: string[]; toolNames?: string[] } = LOADED_IDENTITY): () => void {
   const file = process.env.TERMINAL_BROWSER_INSTALLATION ?? path.resolve(runtimeRoot, "../../../installation.json");
   if (!fs.existsSync(file)) return () => {};
   const stat = fs.lstatSync(file);
@@ -50,7 +68,7 @@ export function startupReceipt(): () => void {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const receiptId = randomUUID();
   const destination = path.join(directory, `${receiptId}.json`);
-  const bytes = `${JSON.stringify({ identity: LOADED_IDENTITY, receipt: { id: receiptId, createdAt: new Date().toISOString(), sequence: nextReceiptSequence() } })}\n`;
+  const bytes = `${JSON.stringify({ identity, receipt: { id: receiptId, createdAt: new Date().toISOString(), sequence: nextReceiptSequence() } })}\n`;
   fs.writeFileSync(destination, bytes, { mode: 0o600, flag: "wx" });
   return () => { try { if (fs.readFileSync(destination, "utf8") === bytes) fs.unlinkSync(destination); } catch {} };
 }

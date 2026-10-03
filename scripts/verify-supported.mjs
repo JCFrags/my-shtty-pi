@@ -406,23 +406,32 @@ export function executeProducts(root, files, state, selected) {
 export function main(args = process.argv.slice(2)) {
   let selected;
   let staticOnly = false;
+  let skipShared = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--static-only') staticOnly = true;
+    else if (args[i] === '--skip-shared-checks') skipShared = true;
     else if (args[i] === '--product' && args[i + 1] && !args[i + 1].startsWith('-')) selected = args[++i];
     else throw new Error(`unknown or incomplete argument: ${args[i]}`);
   }
+  if (skipShared && (!selected || staticOnly)) throw new Error('--skip-shared-checks requires a selected executable product');
   const temp = mkdtempSync(join(tmpdir(), 'pi-supported-verify-'));
   chmodSync(temp, 0o700);
   try {
     const root = join(temp, 'repo');
-    verifyFrozenChrono(here);
+    if (!skipShared) verifyFrozenChrono(here);
     const files = snapshotIndex(here, root);
-    const state = verifyStatic(root, files);
+    // CI uses this option only after the required shared-invariant job passes.
+    // Keep default local verification complete and retain indexed product inputs.
+    const state = skipShared ? {
+      products: json(join(root, 'package.json')).piConsolidation.products,
+      manifests: files.filter(path => path.endsWith('/package.json') && !path.startsWith('vendor/terminal-browser/'))
+        .map(path => ({ path, dir: dirname(join(root, path)), data: json(join(root, path)) })),
+    } : verifyStatic(root, files);
     if (selected && !state.products.some(p => p.slug === selected)) throw new Error(`unknown product: ${selected}`);
-    // Run the indexed root regression suite, never an untracked local substitute.
-    run(process.execPath, ['--test', 'scripts/verify-supported.test.mjs'], root);
+    // Run the indexed root regression suite once, never a local substitute.
+    if (!skipShared) run(process.execPath, ['--test', 'scripts/verify-supported.test.mjs'], root);
     if (!staticOnly) executeProducts(root, files, state, selected);
-    console.log(JSON.stringify({ status: 'pass', inputs: 'Git index', staticOnly, product: selected ?? 'all', products: state.products.length, files: files.length }));
+    console.log(JSON.stringify({ status: 'pass', inputs: 'Git index', staticOnly, sharedChecks: !skipShared, product: selected ?? 'all', products: state.products.length, files: files.length }));
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

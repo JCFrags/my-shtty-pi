@@ -6,6 +6,7 @@ import type { BrowserSurfaceLayout, BrowserState } from "../page/types";
 import type { AgentControlSnapshot } from "../agent/control";
 import type { AgentActivity } from "../agent/types";
 import { AgentActivityOverlay } from "./agent-overlay";
+import { ControlStrip } from "./control-strip";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
 import { PageContextMenu } from "./context-menu";
@@ -61,6 +62,7 @@ export function Chrome({
   pageSurface,
   surfaceLayout,
   agentControl,
+  controlDetail,
   agentActivity,
   popupSurface,
   devtoolsSurface,
@@ -90,6 +92,7 @@ export function Chrome({
   pageSurface: Surface;
   surfaceLayout: BrowserSurfaceLayout;
   agentControl: AgentControlSnapshot;
+  controlDetail?: string;
   agentActivity: AgentActivity | null;
   popupSurface: Surface;
   devtoolsSurface: Surface;
@@ -112,8 +115,14 @@ export function Chrome({
       }}
     >
       {layout.toolbarHeight > 0 &&
-        (record?.stopped ? (
-          <ReviewToolbar view={record} actions={actions} layout={layout} theme={theme} />
+        (layout.compactControls || record?.stopped ? (
+          <Box style={{ height: layout.toolbarHeight, alignItems: "center", flexShrink: 0, padding: { right: layout.rem * 0.4 } }}>
+            <Box style={{ flexGrow: 1, flexBasis: 0, overflow: "hidden" }}>
+              {record?.stopped && <ReviewToolbar view={record} actions={actions} layout={layout} theme={theme} />}
+            </Box>
+            <ControlStrip control={agentControl} detail={controlDetail} compact={layout.width < layout.rem * 40}
+              rem={layout.rem} theme={theme} openMenu={actions.tabMenu} />
+          </Box>
         ) : (
           <Toolbar
             state={state}
@@ -123,6 +132,8 @@ export function Chrome({
             tabs={tabs}
             record={record}
             blockingLabel={blockingLabel}
+            control={agentControl}
+            controlDetail={controlDetail}
           />
         ))}
       <BrowserTabContents
@@ -163,11 +174,8 @@ export function Chrome({
       {record && layout.recordBarHeight > 0 && (
         <RecordBar view={record} actions={actions} layout={layout} theme={theme} />
       )}
-      {record && layout.toolbarHeight === 0 && (
+      {record && layout.compactControls && (
         <RecordCornerButton view={record} actions={actions} layout={layout} theme={theme} />
-      )}
-      {pageMenu && (
-        <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
       )}
       {findOpen && (
         <FindBar state={state} actions={actions} layout={layout} theme={theme} />
@@ -194,6 +202,9 @@ export function Chrome({
         rem={layout.rem}
         theme={theme}
       />}
+      {pageMenu && (
+        <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
+      )}
       {dialog && <BrowserDialogCard key={dialog.id} dialog={dialog} answer={answerDialog} layout={layout} theme={theme} />}
       {progress != null && (
         <Box
@@ -302,6 +313,8 @@ function Toolbar({
   tabs,
   record,
   blockingLabel,
+  control,
+  controlDetail,
 }: {
   state: BrowserState;
   actions: ChromeActions;
@@ -310,8 +323,11 @@ function Toolbar({
   tabs: TabRow[];
   record: RecordView | null;
   blockingLabel?: string | null;
+  control: AgentControlSnapshot;
+  controlDetail?: string;
 }) {
   const rem = layout.rem;
+  const compact = layout.width < rem * 40;
   const stopIcon = useStopIcon(state.loading);
   const nav = state.canGoBack || state.canGoForward;
   const stripWidth =
@@ -320,7 +336,8 @@ function Toolbar({
     rem * 3.3 -
     (nav ? rem * 3.5 : 0) -
     (record ? rem * 7.25 : 0) -
-    (blockingLabel ? rem * 6.3 : 0);
+    (blockingLabel ? rem * 6.3 : 0) -
+    rem * (compact ? 6.45 : 12.95);
   return (
     <Box
       style={{
@@ -371,6 +388,7 @@ function Toolbar({
         <Text style={{ fontSize: rem * 0.75, color: theme.fg, wrap: false, selectable: false }}>{blockingLabel}</Text>
       </Box>}
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
+      <ControlStrip control={control} detail={controlDetail} compact={compact} rem={rem} theme={theme} openMenu={actions.tabMenu} />
     </Box>
   );
 }

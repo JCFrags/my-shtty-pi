@@ -16,15 +16,15 @@ settings, register a Herdr plugin, install a skill, or start a browser.
 
 Download the installer archive, Linux x64 runtime archive, platform manifest, and
 `SHA256SUMS` from the same trusted release. No checkout or pnpm is required. The
-example uses version `0.1.1`:
+example uses version `0.2.1`:
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf terminal-browser-installer-0.1.1.tar.gz
+tar -xzf terminal-browser-installer-0.2.1.tar.gz
 MANAGER="$PWD/terminal-browser-installer/install.sh"
 INSTALL="$HOME/.local/share/terminal-browser-managed"
 "$MANAGER" init "$INSTALL"
-"$MANAGER" stage "$PWD/terminal-browser-0.1.1-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
+"$MANAGER" stage "$PWD/terminal-browser-0.2.1-linux-x64.tar.gz" "$PWD/manifest-linux-x64.json" "$INSTALL"
 # Use the artifact ID returned by stage after reviewing the selection.
 "$MANAGER" activate "$INSTALL" ARTIFACT_ID
 terminal-browser doctor --json
@@ -76,6 +76,22 @@ locators, dialogs, cancellation, uploads, downloads, and migration from legacy
 `action`. The generated [source skill](skill/terminal-browser/SKILL.template.md)
 uses this CLI workflow for Pi and other agents. Launch no longer runs setup.
 
+## User controls and recovery
+
+The native three-dot menu and optional Pi `/browser` menu provide Agent, Human,
+and cooperative Shared modes, explicit page delivery, settings, and scoped close.
+Shared gives brief priority to active human input and can send coalesced page
+images without requesting a reply. Human never returns control automatically.
+
+An ordinary URL-less owned launch offers explicit paused Restore/Fresh recovery
+from bounded private root-tab routes. An explicit URL wins. Recovery does not
+restore cookies, page memory, forms, or sessionStorage. The route filter is a
+heuristic, not complete secret detection.
+
+Read [user controls and tab recovery](docs/user-controls.md) for the privacy
+warning, exact receiver/preview boundaries, CLI commands, storage lifetimes, and
+supported limits.
+
 ## Built-in network blocking
 
 Network blocking is enabled by default. Ghostery's core engine uses a bundled,
@@ -91,8 +107,8 @@ before changing shared-profile policy.
 
 ## Optional integrations
 
-The [Pi adapter](pi-extension/README.md) keeps five tools for users who explicitly
-choose them: `browser_open`, `browser_observe`, `browser_act`, `browser_tabs`, and
+The [Pi adapter](pi-extension/README.md) provides a command-only `/browser` menu
+resource and five optional tools for users who explicitly choose them: `browser_open`, `browser_observe`, `browser_act`, `browser_tabs`, and
 `browser_control`. These call the artifact's native CLI. They do not introduce a
 second browser backend. The adapter manages observation and epoch bookkeeping
 and returns PNG captures as Pi image content.

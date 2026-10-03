@@ -42,9 +42,10 @@ export async function agentCommand(terminal: Terminal | null, args: string[]): P
   if (subcommand === "get-url") return getUrlCommand(route, args);
   if (subcommand === "wait-for") return waitForCommand(route, args);
   if (subcommand === "status") return statusCommand(route, args);
+  if (subcommand === "control") return transitionCommand(route, args, "agent.control");
   if (subcommand === "pause") return transitionCommand(route, args, "agent.pause");
   if (subcommand === "resume") return transitionCommand(route, args, "agent.resume");
-  throw new Error("agent needs observe, upload, click, hover, drag, type, press-key, scroll, navigate, get-url, wait-for, dialog, blocking, status, pause, or resume (terminal-browser agent --help)");
+  throw new Error("agent needs observe, upload, click, hover, drag, type, press-key, scroll, navigate, get-url, wait-for, dialog, blocking, status, control, pause, or resume (terminal-browser agent --help)");
 }
 
 async function blockingCommand(route: AgentRoute, args: string[]): Promise<number> {
@@ -99,15 +100,21 @@ async function statusCommand(route: AgentRoute, args: string[]): Promise<number>
 async function transitionCommand(
   route: AgentRoute,
   args: string[],
-  cmd: "agent.pause" | "agent.resume",
+  cmd: "agent.pause" | "agent.resume" | "agent.control",
 ): Promise<number> {
   rejectTabOption(args);
   const browserKey = takeValue(args, "--browser");
   const epochValue = takeValue(args, "--control-epoch");
+  const mode = cmd === "agent.control" ? takeValue(args, "--mode") : undefined;
+  const runtimeInstanceId = takeValue(args, "--runtime-instance");
+  if (cmd === "agent.control" && mode !== "agent" && mode !== "human" && mode !== "shared") throw new Error("--mode must be agent, human, or shared");
   if (args.length > 0) throw new Error(`unexpected ${args[0]} (terminal-browser agent --help)`);
   const browser = await selectBrowser(route, browserKey);
   print(await control(browser.socket, {
     cmd,
+    ...(mode ? { mode } : {}),
+    expectedBrowserSessionKey: recordKey(browser),
+    ...(runtimeInstanceId ? { expectedRuntimeInstanceId: runtimeInstanceId } : {}),
     expectedControlEpoch: parseEpoch(epochValue, cmd),
   }));
   return 0;
@@ -479,7 +486,7 @@ async function selectTab(browser: Browser, requested: number | undefined): Promi
 
 function rejectTabOption(args: string[]) {
   if (args.some((arg) => arg === "--tab" || arg.startsWith("--tab="))) {
-    throw new Error("agent status, pause, and resume do not accept --tab");
+    throw new Error("agent status, control, pause, and resume do not accept --tab");
   }
 }
 

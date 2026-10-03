@@ -5,12 +5,24 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import test from "node:test";
-import { fileHash, inventory, objectHash, readJson, requiredFiles, validateArchive, validateBundle, validateManifest, writeJson } from "../dist-manifest.mjs";
+import { fileHash, inventory, objectHash, piCompiledFiles, piExtensions, readJson, requiredFiles, validateArchive, validateBundle, validateManifest, writeJson } from "../dist-manifest.mjs";
 import { validateClosure } from "../dist-seal.mjs";
 
 import { root, fixture } from "./dist-fixture.mjs";
 
 test("bundle verifier checks all bytes, modes, unexpected files and identity", (t) => {
+  for (const schema of [1, 2, 3]) {
+    const { dir, manifest } = fixture(t, schema);
+    assert.equal(validateBundle(dir).artifactId, manifest.artifactId);
+    const metadata = path.join(dir, "pi-extension/package.json");
+    const pi = readJson(metadata);
+    pi.pi.extensions = piExtensions(schema === 3 ? 2 : 3);
+    writeJson(metadata, pi);
+    manifest.files = inventory(dir, ["build-manifest.json"]);
+    manifest.artifactId = objectHash({ identity: manifest.identity, files: manifest.files });
+    writeJson(path.join(dir, "build-manifest.json"), manifest);
+    assert.throws(() => validateBundle(dir), "schema pins the exact ordered Pi resources");
+  }
   const { dir, manifest } = fixture(t);
   assert.equal(validateBundle(dir).artifactId, manifest.artifactId);
   assert.throws(() => validateBundle(dir, "0".repeat(64)));
@@ -34,9 +46,13 @@ test("manifest rejects omitted components, traversal, duplicates, wrong pins and
     (m) => { m.identity.runtimes.electron.version = "43.3.1"; },
     (m) => { m.identity.source.dirty = "false"; },
     (m) => { m.extra = true; },
+    (m) => { m.identity.integrations.pi.extensions.reverse(); },
+    (m) => { delete m.identity.integrations.pi.extensions; },
+    ...piCompiledFiles.map(file => (m) => { m.files = m.files.filter(entry => entry.path !== `pi-extension/dist/${file}`); }),
   ]) {
     const candidate = structuredClone(manifest);
     mutate(candidate);
+    candidate.artifactId = objectHash({ identity: candidate.identity, files: candidate.files });
     assert.throws(() => validateManifest(candidate));
   }
 });

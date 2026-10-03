@@ -8,9 +8,17 @@ on:
     branches:
       - main
   workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * 3"
 
 permissions:
   contents: read
+
+# Replace only obsolete runs of this workflow for the same PR. Main, manual,
+# scheduled, and release evidence never share a cancellation group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   scope:
@@ -42,7 +50,7 @@ jobs:
 
   verify-repository:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.mode != 'lsp' }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.mode != 'lsp' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,27 +60,24 @@ jobs:
         with:
           node-version: "24.18.0"
           cache: npm
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm test
       - name: Prepare verified Chrono native build headers
-        if: needs.scope.result != 'success' || needs.scope.outputs.mode != 'affected'
+        if: needs.scope.outputs.mode == 'full'
         run: |
           npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
           node packages/pi-chrono-compaction/node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
           echo "CHRONO_CATALOG_NODE_HEADERS=$RUNNER_TEMP/chrono-node-headers/24.18.0" >> "$GITHUB_ENV"
-      - if: needs.scope.result != 'success' || needs.scope.outputs.mode != 'affected'
+      - if: needs.scope.outputs.mode == 'full'
         run: npm run verify
-      - name: Verify shared repository invariants
-        if: needs.scope.result == 'success' && needs.scope.outputs.mode == 'affected'
+      - name: Verify shared repository invariants once, without installs or builds
+        if: needs.scope.outputs.mode == 'affected' || needs.scope.outputs.mode == 'docs'
         run: npm run verify:static
-      - name: Verify preserved Chrono corrective package
-        run: node scripts/verify-chrono-v3-baseline.mjs --allow-missing-live --static-only
       - name: Verify separate historical capture
+        if: needs.scope.outputs.mode != 'docs'
         run: npm run verify:history
 
   verify-products:
-    needs: scope
-    if: needs.scope.result == 'success' && needs.scope.outputs.mode == 'affected' && needs.scope.outputs.products != '[]'
+    needs: [scope, verify-repository]
+    if: needs.scope.result == 'success' && needs.verify-repository.result == 'success' && needs.scope.outputs.mode == 'affected' && needs.scope.outputs.products != '[]' && github.event_name != 'push'
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -96,7 +101,7 @@ jobs:
       - name: Verify selected product and its existing invariants
         env:
           PRODUCT: ${{ matrix.product }}
-        run: npm run verify -- --product "$PRODUCT"
+        run: npm run verify -- --product "$PRODUCT" --skip-shared-checks
 
   verify-lsp:
     needs: scope
@@ -121,7 +126,7 @@ jobs:
 
   browser-copy:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.mode != 'lsp' && (needs.scope.result != 'success' || needs.scope.outputs.mode != 'affected' || needs.scope.outputs.browser == 'true') }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && (needs.scope.outputs.mode == 'full' || (needs.scope.outputs.mode == 'affected' && needs.scope.outputs.browser == 'true' && github.event_name != 'push')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -154,6 +159,7 @@ jobs:
     steps:
       - name: Require all selected verification checks
         env:
+          EVENT_NAME: ${{ github.event_name }}
           MODE: ${{ needs.scope.outputs.mode }}
           BROWSER: ${{ needs.scope.outputs.browser }}
           PRODUCTS: ${{ needs.scope.outputs.products }}
@@ -169,6 +175,7 @@ jobs:
           import assert from 'node:assert/strict';
           const env = process.env;
           assert.equal(env.SCOPE_RESULT, 'success', 'scope');
+          assert.ok(['pull_request', 'push', 'workflow_dispatch', 'schedule'].includes(env.EVENT_NAME), 'known event');
           const products = JSON.parse(env.PRODUCTS);
           assert.ok(Array.isArray(products) && products.every(name => typeof name === 'string' && /^[a-z][a-z0-9-]+$/.test(name)));
           assert.equal(new Set(products).size, products.length);
@@ -191,11 +198,19 @@ jobs:
             assert.equal(env.BROWSER, 'true');
             assert.equal(env.PRODUCTS_RESULT, 'skipped');
             assert.equal(env.BROWSER_RESULT, 'success');
+          } else if (env.MODE === 'docs') {
+            assert.deepEqual(products, []);
+            assert.equal(env.BROWSER, 'false');
+            assert.equal(env.PRODUCTS_RESULT, 'skipped');
+            assert.equal(env.BROWSER_RESULT, 'skipped');
           } else {
             assert.equal(env.MODE, 'affected', 'known verification mode');
             assert.ok(products.length || env.BROWSER === 'true', 'nonempty selection');
-            assert.equal(env.PRODUCTS_RESULT, products.length ? 'success' : 'skipped', 'selected products');
-            assert.equal(env.BROWSER_RESULT, env.BROWSER === 'true' ? 'success' : 'skipped', 'selected browser');
+            // Strict fresh-base PR checks already validated routine merges.
+            // Main still requires static/history checks and selected LSP checks.
+            const productBuilds = env.EVENT_NAME !== 'push';
+            assert.equal(env.PRODUCTS_RESULT, productBuilds && products.length ? 'success' : 'skipped', 'selected products');
+            assert.equal(env.BROWSER_RESULT, productBuilds && env.BROWSER === 'true' ? 'success' : 'skipped', 'selected browser');
           }
           console.log(`Passed ${env.MODE} verification.`);
           JS

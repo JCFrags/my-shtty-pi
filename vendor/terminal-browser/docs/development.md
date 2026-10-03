@@ -40,9 +40,20 @@ pnpm --filter terminal-browser --filter terminal-browser-cli --filter pi-termina
 pnpm --filter terminal-browser --filter terminal-browser-cli --filter pixel-store --filter pi-terminal-browser test
 ```
 
-After an `--ignore-scripts` install, `copy-react-grab.sh` supplies
-`assets/react-grab/index.global.js` for source runtime startup. The TypeScript
-build does not replace this step.
+After an `--ignore-scripts` install, source CLI startup also needs the pinned
+patched Electron at the dependency package's `dist` path:
+
+```sh
+bash scripts/fetch-electron.sh
+```
+
+The source CLI uses that path directly. `ELECTRON_OVERRIDE_DIST_PATH` applies to
+Electron's JavaScript wrapper, not the CLI's launch path. The release workflow
+uses `fetch-electron.sh --dest` and that override for Electron fixture imports.
+`copy-react-grab.sh` supplies `assets/react-grab/index.global.js`. A TypeScript
+build does not supply either runtime prerequisite.
+
+UI tests that import `pixel-react` also need its native module. After the ignored-script install, run `CARGO_BUILD_JOBS=2 node engine/packages/pixel-react/scripts/build-native.mjs` before those tests. An absolute private `CARGO_TARGET_DIR` can retain the native cache. The script builds `pixel-node` and supplies the ignored `native/pixel.node`. Build the affected TypeScript first, then run the existing JavaScript test with `node --test`. A `tsx` loader is not needed.
 
 Use pnpm 10.13.1 and a compatible Node host. The repository browser-copy CI uses
 Node 24.18.0 on Ubuntu 22.04 and a Rust toolchain. Native builds need Cargo, a C/C++
@@ -118,7 +129,7 @@ Run retained-manager checks through `scripts/install.sh`, not host Node with
 hashes physical archive bytes and modes. This setting is limited to the installer
 process and its children. It does not change browser launchers or running processes.
 
-The prepared Pi test host defaults to the pinned workspace host, 0.84.2. Set
+The prepared Pi test host defaults to the pinned workspace host, 0.99.1. Set
 `TERMINAL_BROWSER_PI_ROOT` to another prepared host directory, including the
 installed 0.99.1 host, when testing that specific version. Missing host dependencies
 fail rather than skip. A peer dependency wildcard follows Pi's host-module mapping
@@ -147,11 +158,18 @@ baseline checks are not a substitute for packaged runtime acceptance.
 `pnpm --filter terminal-browser test:electron` runs pinned Electron fixtures.
 Linux needs an X11 display, for example `xvfb-run -a`: the native Wayland dialog
 backend can fail on hidden windows. An isolated private XDG runtime may not contain
-the host Wayland socket. Use `--ozone-platform=x11` for an approved X11 runtime
-check in that environment; do not weaken isolation merely to find the socket. The fixtures cover root/popup/frame input,
+the host Wayland socket. Pass `--ozone-platform=x11` to the existing Electron
+fixture or daemon entrypoint for an approved X11 runtime check in that environment.
+Source CLI `open` does not forward Chromium flags. Do not weaken isolation merely
+to find the socket. The fixtures cover root/popup/frame input,
 opener communication, dialogs and beforeunload decisions, project files,
 transfers, cancellation, takeover, and locator/frame geometry limits. Tests for
 terminal overlay positions do not prove alignment on a particular terminal.
+
+Controller input in a fixture must run inside an active agent operation. To test
+held-key release on takeover, hold the key during that operation's guarded input
+callback, before triggering takeover. Do not disable the runtime input guard for
+fixture setup.
 
 For a focused visible check, run `node browser/test/fixtures/dynamic-live.cjs`
 and open its loopback URL. Choose the right card, wait for the replaced delayed
@@ -165,6 +183,11 @@ this one fixture.
 A rebuilt CLI does not replace an existing Electron daemon. Follow the exact
 inventory/approval process in [installation](installation.md) before replacement.
 Then verify a fresh process and changed behavior. Source HEAD alone is not evidence.
+The source daemon's main-file digest can stay unchanged when imported compiled
+modules change. For a focused source check, record the changed module hashes and
+verify them before starting a fresh daemon. Do not use the main-file digest alone
+as proof that those changes loaded. Packaged releases have a full runtime inventory
+in their build manifest.
 
 Tests must isolate HOME, all XDG directories, `TERMINAL_BROWSER_APPDATA`,
 `TERMINAL_BROWSER_INTEROP_DIR`, and `PI_CODING_AGENT_DIR`. Remove inherited Herdr

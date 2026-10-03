@@ -16,12 +16,14 @@ export interface AgentBrowserTarget {
   runJs(source: string): Promise<unknown>;
   agentStartDrag?(): Promise<void>;
   agentFinishDrag?(cancelled: boolean): Promise<void>;
-  agentPointer(event: ProgrammaticPointerEvent): void;
-  releaseAgentPointer(): void;
-  releaseAgentInput(): void;
+  setAgentInputGuard?(guard: (focusWaited: boolean) => void | Promise<void>): void;
+  agentPointerPosition?(): Point;
+  agentPointer(event: ProgrammaticPointerEvent): Promise<void> | void;
+  releaseAgentPointer(): Promise<void> | void;
+  releaseAgentInput(): Promise<void> | void;
   agentKeyDown(key: AgentKey): Promise<void>;
   agentKeyChar(key: AgentKey): Promise<void>;
-  agentKeyUp(key: AgentKey): void;
+  agentKeyUp(key: AgentKey): Promise<void> | void;
   agentSelectAll(): Promise<void>;
   agentInsertText(text: string): Promise<void>;
   agentWheel(x: number, y: number, deltaX: number, deltaY: number): Promise<void>;
@@ -54,7 +56,7 @@ export interface AgentLocatorQuery {
 
 export interface AgentPageObserver {
   queryLocator(spec: LocatorSpec): Promise<AgentLocatorQuery>;
-  elementState(ref: string, options?: { point?: Point; scroll?: boolean; guard?: () => void; documentId?: string }): Promise<{ documentId: string; state: AgentElementState | null }>;
+  elementState(ref: string, options?: { point?: Point; scroll?: boolean; guard?: () => void; permitScroll?: () => Promise<unknown>; documentId?: string }): Promise<{ documentId: string; state: AgentElementState | null }>;
 
   observe(maxElements: number, includeText: boolean, filter?: LocatorSpec): Promise<ObservedPage>;
   currentDocumentId(): Promise<string>;
