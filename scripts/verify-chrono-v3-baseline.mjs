@@ -21,9 +21,9 @@ export const CHRONO_PREDECESSOR_BASELINE = Object.freeze({
   "version": "4.0.6-local.20260927"
 });
 export const CHRONO_BASELINE = Object.freeze({
-  "commit": "e68d6edc19a4cfcd4640e66578f3e28fadede316",
-  "upstreamTree": "0ad50609239f488198dcdb63811a9d9b1c6baed4",
-  "tree": "0ad50609239f488198dcdb63811a9d9b1c6baed4",
+  "commit": "d93b4e3c74c311015b90b42f29925031152ac57e",
+  "upstreamTree": "7d9016cb9136e9d4f692169da0b94db067476272",
+  "tree": "7d9016cb9136e9d4f692169da0b94db067476272",
   "files": 456,
   "maps": 143,
   "package": "packages/pi-chrono-compaction",
