@@ -40,9 +40,11 @@ Defaults include `typescript-language-server --stdio`, `pyright-langserver
 server executable exists.
 
 Global LSP overrides use `grounded-tools/lsp.json` under Pi's agent directory.
-Trusted project settings use `.pi/grounded-lsp.json` for `disabledServers` and
-`diagnosticTimeoutMs`. A global custom server replaces the complete default server
-with the same ID, so preserve or supply its document-language mapping explicitly.
+Trusted project settings use `.pi/grounded-lsp.json`. Automatic edit/write LSP
+checks are off by default. Explicit LSP tools remain available. See
+[LSP policy and diagnostics](#lsp-policy-and-diagnostics) for the independent
+policy keys. A global custom server replaces the complete default server with the
+same ID, so preserve or supply its document-language mapping explicitly.
 See [LSP document languages](#lsp-document-languages).
 
 Compare complete loader definitions and dependency routes before replacing existing
@@ -101,13 +103,89 @@ The default TypeScript server uses these language fields:
 
 Global server configuration is the `servers` array in `grounded-tools/lsp.json` under Pi's agent directory. A custom server replaces the complete default entry with the same `id`. Existing custom entries without `languageIds` keep their scalar language for all routed extensions. To use the mapping above, add it to the existing TypeScript server entry and preserve its other settings. Explicit map values take precedence over the scalar fallback, including intentional nonstandard language choices.
 
+## LSP policy and diagnostics
+
+The global LSP file accepts policy defaults beside its `servers` array. Trusted
+`.pi/grounded-lsp.json` policy values override those defaults:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `automaticDiagnostics` | `false` | Opt in to expensive LSP checks after successful edit/write tools. |
+| `idleTimeoutMs` | `60000` | Non-Rust idle retention. Finite integers clamp to 1000–300000 ms. |
+| `diagnosticTimeoutMs` | `3000` | Diagnostic publication wait. Finite integers clamp to 100–30000 ms. |
+
+Invalid non-integer or non-finite budgets use the inherited/default value. There
+is no unlimited idle budget. Trusted-project `disabledServers` still disables
+both explicit and automatic use of each listed server. Server `timeoutMs` is a
+separate initialize/navigation request budget, with a 5000 ms fallback.
+
+When `automaticDiagnostics` is false, edit/write hooks do not inspect the file,
+probe an executable, start a server, synchronize a warm document, or deliver LSP
+diagnostics. This does not disable Files' separate cheap syntax checker. When
+true, Rust still requires explicit startup and its separate reuse window.
+
+Non-Rust clients retire after the last owned operation releases its lease and
+the idle budget expires. Startup, synchronization, requests, and diagnostic waits
+hold leases. Idle expiry never interrupts an active operation. A stopping client
+retains ownership until exact-child close is confirmed, so a second client cannot
+replace it early. Session shutdown still stops session-owned clients. This is an
+idle retention policy, not a fleet concurrency or memory cap.
+
+Successful admitted edit/write hooks synchronize the current saved disk text.
+They send `textDocument/didSave` only if the initialized server requests save
+notifications, with text only if it requests `includeText`. Local-session hooks
+use confirmed Files session metadata for the path and root fallback. SSH or
+missing/inconsistent session metadata produces an explicit skip before local
+filesystem work. The explicit LSP tool remains local. LSP policy does not load a
+different session directory's project configuration without a trust decision.
+
+Navigation and explicit read-only diagnostics do not fabricate save events.
+Unchanged content keeps its document version and sends no redundant didChange.
+A cold explicit Rust diagnostic request can lack compiler-on-save results because
+reading a file is not an actual save. The client does not start another analyzer
+or send a fictitious save to hide that limit.
+
+Diagnostic results distinguish `published`, `cached`, `pending`, and `timeout`.
+Policy skips and hook cancellation use `skipped` and `cancelled`. Results retain
+raw diagnostic items and document/publication versions, receipt time, wait budget,
+wait-end reason, and save-notification state when available. Freshness is
+`version-matched`, `unversioned`, `stale`, or `unknown`. Pathless diagnostics only
+return cached/pending snapshots and never start a server.
+
+`checked: true` means a post-synchronization publication matched the requested
+document version. It does not mean workspace analysis or a compiler run finished.
+An old version cannot satisfy the wait or replace a current version-matched cache.
+A newer local document version supersedes the wait instead of silently changing
+its target. An empty cache or timeout is not a clean current check. Output labels
+cached errors and warnings and qualifies empty lists.
+
+Servers may omit diagnostic versions. A new unversioned publication is observable,
+but its analyzed version is unknown. A delayed old unversioned publication cannot
+be distinguished from a current one. Push diagnostics also have no save-completion
+acknowledgment. Results therefore report `analysisComplete: "unknown"`. Actual-save
+waits use the full configured budget to sample later compiler publications.
+Open/change-only waits can use a 200 ms quiet sampling interval, which is not a
+completion signal. `ready` status means initialized transport, not finished
+workspace indexing.
+
+Caller cancellation stops owned startup waits, file reads, requests, and diagnostic
+waits. Canceling one shared initialization caller does not stop another owner.
+An abandoned pending launch remains owned until its eventual child is closed.
+Request cancellation and timeout send `$/cancelRequest` best effort to that exact
+generation and remove local timers/listeners. Diagnostic pushes have no request
+ID, so their waits cancel locally. A server can ignore cancellation. No result
+claims that remote work stopped. Hook cancellation preserves the successful file
+save and reports that no LSP check completed.
+
 ## Rust server lifetime
 
 Rust requires Linux and executable `/usr/bin/flock`. Automatic edit/write checks
 never start or restart a Rust server. Use an explicit `lsp` navigation or
-diagnostics request first. Automatic checks can reuse that initialized client for
-60 seconds after the last successful explicit operation. Automatic checks do not
-renew the window. One operation uses a Rust client at a time. A busy automatic
+diagnostics request first. Opted-in automatic checks can reuse that initialized
+client for 60 seconds after the last successful explicit operation. Successful
+navigation responses, including null, or usable explicit diagnostic publications
+and version-matched caches can renew the window. Timeout, cancellation, stale
+cache, and pending outcomes cannot. Automatic checks never renew the window. One operation uses a Rust client at a time. A busy automatic
 check is skipped, and a concurrent explicit request reports request-active.
 Expiry waits for an active operation to finish, then stops the client unless a
 successful explicit operation renewed the window. Status and pathless diagnostics
@@ -134,9 +212,10 @@ the lock file or kill another owner to reclaim admission.
 
 One slot is a process-count bound, **not an RSS memory limit**. One analyzer, its
 helpers, old loaded clients, nonparticipating processes, or Pi can still exhaust
-memory. This policy does not provide cgroup containment. Non-Rust server policy
-and document-language mappings are unchanged. Reload or restart existing Pi
-sessions only after their work is settled to activate changed source.
+memory. This policy does not provide cgroup containment. Non-Rust clients use the
+separate bounded idle policy above. Document-language mappings are unchanged.
+Reload or restart existing Pi sessions only after their work is settled to activate
+changed source.
 
 For an LSP-only staged change, run `node scripts/verify-lsp.mjs` from the repository
 root. This standalone command uses the Git index, prepares committed-lock

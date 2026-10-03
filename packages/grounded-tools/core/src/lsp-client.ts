@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +9,43 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  removeAbort: () => void;
+  sent: boolean;
+}
+
+export class LspRequestTimeout extends Error {}
+
+export function lspAbortError(signal?: AbortSignal): Error {
+  const error = new Error(signal?.reason instanceof Error ? signal.reason.message : "LSP operation cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+export function throwIfLspAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw lspAbortError(signal);
+}
+
+function withSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  throwIfLspAborted(signal);
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(lspAbortError(signal)); };
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then((value) => { cleanup(); resolve(value); }, (error) => { cleanup(); reject(error); });
+    if (signal.aborted) abort();
+  });
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfLspAborted(signal);
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    const abort = () => { clearTimeout(timer); cleanup(); reject(lspAbortError(signal)); };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
 }
 
 export interface LspDiagnostic {
@@ -46,7 +84,44 @@ export interface LspClientOptions {
   stopTimeouts?: { shutdown: number; exit: number; term: number; kill: number };
 }
 
+export interface LspDocumentTicket {
+  readonly generation: number;
+  readonly uri: string;
+  readonly documentVersion: number;
+  readonly baseline: number;
+  readonly changed: boolean;
+  readonly saveNotification: "sent" | "not-supported" | "not-requested";
+}
+
+export interface LspDiagnosticResult {
+  outcome: "published" | "cached" | "pending" | "timeout";
+  freshness: "version-matched" | "unversioned" | "stale" | "unknown";
+  checked: boolean;
+  uri: string;
+  documentVersion?: number;
+  diagnosticVersion?: number;
+  publicationRevision?: number;
+  publishedAt?: number;
+  diagnostics: LspDiagnostic[];
+  waitedMs: number;
+  timeoutMs: number;
+  waitEnded?: "quiet" | "deadline" | "cached" | "superseded";
+  saveNotification: LspDocumentTicket["saveNotification"];
+  analysisComplete: "unknown";
+  reason?: string;
+}
+
+interface DiagnosticPublication {
+  diagnostics: LspDiagnostic[];
+  version?: number;
+  documentVersion?: number;
+  revision: number;
+  receivedAt: number;
+}
+
 interface Generation extends LspLaunch {
+  id: number;
+  textDocumentSync?: number | { save?: boolean | { includeText?: boolean } };
   closed: boolean;
   initialized: boolean;
   closing?: Promise<void>;
@@ -62,13 +137,14 @@ export class LspClient {
   private stopRequested = false;
   private buffer = Buffer.alloc(0);
   private nextId = 1;
+  private nextGeneration = 1;
   private pending = new Map<number, PendingRequest>();
-  private documents = new Map<string, number>();
-  private diagnostics = new Map<string, LspDiagnostic[]>();
+  private documents = new Map<string, { version: number; digest: string }>();
+  private diagnostics = new Map<string, DiagnosticPublication>();
   private diagnosticRevision = new Map<string, number>();
-  private diagnosticBaseline = new Map<string, number>();
   private stderr: string[] = [];
   private startPromise: Promise<void> | undefined;
+  private startWaiters = 0;
 
   constructor(config: LspServerConfig, root: string, options: LspClientOptions = {}) {
     this.config = config;
@@ -95,17 +171,28 @@ export class LspClient {
     return this.stderr.slice(-20).join("");
   }
 
-  async start(): Promise<void> {
+  async start(signal?: AbortSignal): Promise<void> {
+    throwIfLspAborted(signal);
     if (this.stopRequested || this.generation?.closing) throw new Error(`${this.config.id} is stopping`);
     if (this.ready) return;
-    if (this.startPromise) return this.startPromise;
-    if (this.generation) throw new Error(`${this.config.id} is awaiting child close`);
-    this.startPromise = this.startFresh();
+    if (!this.startPromise) {
+      if (this.generation) throw new Error(`${this.config.id} is awaiting child close`);
+      const startup = this.startFresh();
+      this.startPromise = startup;
+      const settled = () => {
+        if (this.startPromise === startup) this.startPromise = undefined;
+        if (!this.generation) this.stopRequested = false;
+      };
+      // Retain the launch promise even when every caller cancels its own wait.
+      startup.then(settled, settled);
+    }
+    this.startWaiters++;
     try {
-      await this.startPromise;
+      await withSignal(this.startPromise, signal);
+      throwIfLspAborted(signal);
     } finally {
-      this.startPromise = undefined;
-      if (!this.generation) this.stopRequested = false;
+      this.startWaiters--;
+      if (signal?.aborted && this.startWaiters === 0 && !this.ready) await this.stop();
     }
   }
 
@@ -114,7 +201,6 @@ export class LspClient {
     this.documents.clear();
     this.diagnostics.clear();
     this.diagnosticRevision.clear();
-    this.diagnosticBaseline.clear();
   }
 
   private async startFresh(): Promise<void> {
@@ -127,7 +213,7 @@ export class LspClient {
       }) };
     let resolveClosed!: () => void;
     const closedPromise = new Promise<void>((resolve) => { resolveClosed = resolve; });
-    const generation: Generation = { ...launched, closed: false, initialized: false, closedPromise, resolveClosed };
+    const generation: Generation = { ...launched, id: this.nextGeneration++, closed: false, initialized: false, closedPromise, resolveClosed };
     this.generation = generation;
     const child = generation.child;
     child.stdout.on("data", (chunk: Buffer) => {
@@ -164,13 +250,14 @@ export class LspClient {
 
   private async initialize(generation: Generation): Promise<void> {
     const rootUri = pathToFileURL(this.root).href;
-    await this.requestOn(generation, "initialize", {
+    const result = await this.requestOn(generation, "initialize", {
       processId: process.pid,
       rootUri,
       workspaceFolders: [{ uri: rootUri, name: this.root.split(/[\\/]/).pop() ?? "workspace" }],
       capabilities: {
         textDocument: {
-          publishDiagnostics: { relatedInformation: true },
+          synchronization: { didSave: true, dynamicRegistration: false },
+          publishDiagnostics: { relatedInformation: true, versionSupport: true },
           hover: { contentFormat: ["markdown", "plaintext"] },
           definition: {},
           references: {},
@@ -181,97 +268,144 @@ export class LspClient {
       initializationOptions: this.config.initializationOptions,
     });
     if (this.generation !== generation || generation.closed || generation.closing) throw new Error(`${this.config.id} stopped during initialization`);
+    generation.textDocumentSync = (result as { capabilities?: { textDocumentSync?: Generation["textDocumentSync"] } } | null)?.capabilities?.textDocumentSync;
     this.send({ jsonrpc: "2.0", method: "initialized", params: {} }, generation);
     generation.initialized = true;
   }
 
-  async open(path: string, content?: string): Promise<string> {
-    await this.start();
+  async open(path: string, content?: string, options: { saved?: boolean; signal?: AbortSignal } = {}): Promise<LspDocumentTicket> {
+    const { signal } = options;
+    await this.start(signal);
     const generation = this.generation;
     const uri = pathToFileURL(path).href;
-    const text = content ?? (await readFile(path, "utf8"));
+    const text = content ?? (await readFile(path, { encoding: "utf8", signal }));
+    throwIfLspAborted(signal);
     this.assertReady(generation);
+    const digest = createHash("sha256").update(text).digest("hex");
     const current = this.documents.get(uri);
-    const version = (current ?? 0) + 1;
-    this.documents.set(uri, version);
-    this.diagnosticBaseline.set(uri, this.diagnosticRevision.get(uri) ?? 0);
-    if (current === undefined) {
-      const languageId = this.config.languageIds?.[extname(path).toLowerCase()] ?? this.config.languageId;
-      this.notify("textDocument/didOpen", {
-        textDocument: { uri, languageId, version, text },
-      });
-    } else {
-      this.notify("textDocument/didChange", {
-        textDocument: { uri, version },
-        contentChanges: [{ text }],
-      });
+    const changed = current === undefined || current.digest !== digest;
+    const version = (current?.version ?? 0) + (changed ? 1 : 0);
+    let baseline = this.diagnosticRevision.get(uri) ?? 0;
+    if (changed) {
+      this.documents.set(uri, { version, digest });
+      if (current === undefined) {
+        const languageId = this.config.languageIds?.[extname(path).toLowerCase()] ?? this.config.languageId;
+        this.notify("textDocument/didOpen", { textDocument: { uri, languageId, version, text } });
+      } else {
+        this.notify("textDocument/didChange", { textDocument: { uri, version }, contentChanges: [{ text }] });
+      }
     }
-    return uri;
+    let saveNotification: LspDocumentTicket["saveNotification"] = "not-requested";
+    if (options.saved) {
+      const sync = generation!.textDocumentSync;
+      const save = sync && typeof sync === "object" ? sync.save : undefined;
+      if (save === true || (save !== null && typeof save === "object" && !Array.isArray(save))) {
+        baseline = this.diagnosticRevision.get(uri) ?? 0;
+        this.notify("textDocument/didSave", { textDocument: { uri }, ...(typeof save === "object" && save.includeText === true ? { text } : {}) });
+        saveNotification = "sent";
+      } else saveNotification = "not-supported";
+    }
+    return Object.freeze({ generation: generation!.id, uri, documentVersion: version, baseline, changed, saveNotification });
   }
 
   getDiagnostics(path: string): LspDiagnostic[] {
-    return this.diagnostics.get(pathToFileURL(path).href) ?? [];
+    return this.diagnostics.get(pathToFileURL(path).href)?.diagnostics ?? [];
   }
 
-  allDiagnostics(): Array<{ uri: string; diagnostics: LspDiagnostic[] }> {
-    return [...this.diagnostics.entries()].map(([uri, diagnostics]) => ({ uri, diagnostics }));
+  private observation(uri: string, documentVersion = this.documents.get(uri)?.version): LspDiagnosticResult {
+    const publication = this.diagnostics.get(uri);
+    let freshness: LspDiagnosticResult["freshness"] = "unknown";
+    if (publication) {
+      if (publication.version !== undefined && documentVersion !== undefined) {
+        freshness = publication.version === documentVersion ? "version-matched" : "stale";
+      } else if (publication.version === undefined) {
+        freshness = publication.documentVersion !== undefined && documentVersion !== undefined && publication.documentVersion !== documentVersion ? "stale" : "unversioned";
+      }
+    }
+    return {
+      outcome: publication ? "cached" : "pending", freshness, checked: false, uri, documentVersion,
+      diagnosticVersion: publication?.version, publicationRevision: publication?.revision, publishedAt: publication?.receivedAt,
+      diagnostics: publication?.diagnostics ?? [], waitedMs: 0, timeoutMs: 0,
+      saveNotification: "not-requested", analysisComplete: "unknown",
+    };
+  }
+
+  allDiagnostics(): LspDiagnosticResult[] {
+    const uris = new Set([...this.documents.keys(), ...this.diagnostics.keys()]);
+    return [...uris].map((uri) => this.observation(uri));
   }
 
   private assertReady(generation: Generation | undefined): void {
     if (!generation || this.generation !== generation || !this.ready) throw new Error(`${this.config.id} stopped or changed generation; diagnostics unavailable`);
   }
 
-  async waitForDiagnostics(path: string, timeoutMs = 3000): Promise<LspDiagnostic[]> {
+  async waitForDiagnostics(ticket: LspDocumentTicket, timeoutMs = 3000, signal?: AbortSignal): Promise<LspDiagnosticResult> {
     const generation = this.generation;
-    this.assertReady(generation);
-    const uri = pathToFileURL(path).href;
-    const initial = this.diagnosticBaseline.get(uri) ?? (this.diagnosticRevision.get(uri) ?? 0);
-    this.diagnosticBaseline.delete(uri);
     const started = Date.now();
-    let seen = false;
-    let stableSince = Date.now();
-    let revision = initial;
-    while (Date.now() - started < timeoutMs) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    const deadline = started + timeoutMs;
+    let revision = ticket.baseline;
+    let stableSince = started;
+    while (true) {
+      throwIfLspAborted(signal);
       this.assertReady(generation);
-      const current = this.diagnosticRevision.get(uri) ?? 0;
-      if (current !== revision) {
-        revision = current;
-        seen = true;
+      if (generation!.id !== ticket.generation) throw new Error(`${this.config.id} changed generation; diagnostics unavailable`);
+      const result = this.observation(ticket.uri, ticket.documentVersion);
+      result.saveNotification = ticket.saveNotification;
+      result.waitedMs = Date.now() - started;
+      result.timeoutMs = timeoutMs;
+      if (this.documents.get(ticket.uri)?.version !== ticket.documentVersion) {
+        return { ...result, outcome: "pending", waitEnded: "superseded", reason: "document-changed-during-wait" };
+      }
+      const eligible = result.freshness === "version-matched" || result.freshness === "unversioned";
+      const published = eligible && (result.publicationRevision ?? 0) > ticket.baseline;
+      if (!ticket.changed && ticket.saveNotification !== "sent" && eligible && !published) {
+        return { ...result, outcome: "cached", waitEnded: "cached" };
+      }
+      if (published && result.publicationRevision !== revision) {
+        revision = result.publicationRevision!;
         stableSince = Date.now();
       }
-      if (seen && Date.now() - stableSince >= 200) break;
+      const expired = Date.now() >= deadline;
+      // Quiet is only a sampling heuristic. Push diagnostics have no completion ack.
+      const quiet = published && ticket.saveNotification !== "sent" && Date.now() - stableSince >= 200;
+      if (expired || quiet) {
+        return {
+          ...result, outcome: published ? "published" : "timeout",
+          checked: published && result.freshness === "version-matched",
+          waitEnded: expired ? "deadline" : "quiet",
+          ...(!published ? { reason: "no-current-publication" } : {}),
+        };
+      }
+      await delay(Math.min(50, Math.max(1, deadline - Date.now())), signal);
     }
-    this.assertReady(generation);
-    return this.getDiagnostics(path);
   }
 
-  async hover(path: string, line: number, character: number): Promise<unknown> {
-    const uri = await this.open(path);
-    return this.request("textDocument/hover", { textDocument: { uri }, position: { line, character } });
+  async hover(path: string, line: number, character: number, signal?: AbortSignal): Promise<unknown> {
+    const { uri } = await this.open(path, undefined, { signal });
+    return this.request("textDocument/hover", { textDocument: { uri }, position: { line, character } }, undefined, signal);
   }
 
-  async definition(path: string, line: number, character: number): Promise<unknown> {
-    const uri = await this.open(path);
-    return this.request("textDocument/definition", { textDocument: { uri }, position: { line, character } });
+  async definition(path: string, line: number, character: number, signal?: AbortSignal): Promise<unknown> {
+    const { uri } = await this.open(path, undefined, { signal });
+    return this.request("textDocument/definition", { textDocument: { uri }, position: { line, character } }, undefined, signal);
   }
 
-  async references(path: string, line: number, character: number): Promise<unknown> {
-    const uri = await this.open(path);
+  async references(path: string, line: number, character: number, signal?: AbortSignal): Promise<unknown> {
+    const { uri } = await this.open(path, undefined, { signal });
     return this.request("textDocument/references", {
       textDocument: { uri },
       position: { line, character },
       context: { includeDeclaration: true },
-    });
+    }, undefined, signal);
   }
 
-  async renamePreview(path: string, line: number, character: number, newName: string): Promise<unknown> {
-    const uri = await this.open(path);
+  async renamePreview(path: string, line: number, character: number, newName: string, signal?: AbortSignal): Promise<unknown> {
+    const { uri } = await this.open(path, undefined, { signal });
     return this.request("textDocument/rename", {
       textDocument: { uri },
       position: { line, character },
       newName,
-    });
+    }, undefined, signal);
   }
 
   async stop(): Promise<void> {
@@ -292,7 +426,7 @@ export class LspClient {
 
   private async closeChild(generation: Generation): Promise<void> {
     const limits = this.options.stopTimeouts ?? { shutdown: 1000, exit: 500, term: 500, kill: 500 };
-    this.rejectAll(generation, new Error(`${this.config.id} is stopping`));
+    this.rejectAll(generation, new Error(`${this.config.id} is stopping`), true);
     const wait = async (ms: number) => {
       if (generation.closed) return;
       let timer: NodeJS.Timeout | undefined;
@@ -315,29 +449,41 @@ export class LspClient {
     // close keeps this generation in stopping state and prohibits restart.
   }
 
-  async request(method: string, params: unknown, timeoutMs = this.config.timeoutMs ?? 5000): Promise<unknown> {
-    await this.start();
+  async request(method: string, params: unknown, timeoutMs = this.config.timeoutMs ?? 5000, signal?: AbortSignal): Promise<unknown> {
+    await this.start(signal);
     const generation = this.generation;
     this.assertReady(generation);
-    return this.requestOn(generation!, method, params, timeoutMs);
+    return this.requestOn(generation!, method, params, timeoutMs, signal);
   }
 
-  private requestOn(generation: Generation, method: string, params: unknown, timeoutMs = this.config.timeoutMs ?? 5000): Promise<unknown> {
+  private finishPending(id: number, error?: Error, result?: unknown, cancel = false): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+    clearTimeout(pending.timer);
+    pending.removeAbort();
+    if (cancel && pending.sent) {
+      try { this.send({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }, pending.generation); }
+      catch { /* The exact generation may already be closed. Cancellation is best effort. */ }
+    }
+    if (error) pending.reject(error);
+    else pending.resolve(result);
+  }
+
+  private requestOn(generation: Generation, method: string, params: unknown, timeoutMs = this.config.timeoutMs ?? 5000, signal?: AbortSignal): Promise<unknown> {
+    throwIfLspAborted(signal);
     const id = this.nextId++;
     const message = { jsonrpc: "2.0", id, method, params };
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`${this.config.id} timed out waiting for ${method}`));
-      }, timeoutMs);
+      const abort = () => this.finishPending(id, lspAbortError(signal), undefined, true);
+      const timer = setTimeout(() => this.finishPending(id, new LspRequestTimeout(`${this.config.id} timed out waiting for ${method}`), undefined, true), timeoutMs);
       timer.unref();
-      this.pending.set(id, { generation, resolve, reject, timer });
-      try { this.send(message, generation); }
-      catch (error) {
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(error);
-      }
+      const pending: PendingRequest = { generation, resolve, reject, timer, sent: false, removeAbort: () => signal?.removeEventListener("abort", abort) };
+      this.pending.set(id, pending);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) { abort(); return; }
+      try { pending.sent = true; this.send(message, generation); }
+      catch (error) { this.finishPending(id, error instanceof Error ? error : new Error(String(error))); }
     });
   }
 
@@ -378,42 +524,37 @@ export class LspClient {
 
   private handle(message: Record<string, unknown>, generation: Generation): void {
     if (this.generation !== generation || generation.closed) return;
-    if (typeof message.id === "number") {
-      const pending = this.pending.get(message.id);
-      if (!pending) {
-        if (typeof message.method === "string") {
-          const result = message.method === "workspace/configuration" || message.method === "workspace/workspaceFolders" ? [] : null;
-          this.send({ jsonrpc: "2.0", id: message.id, result });
-        }
+    if (typeof message.method === "string") {
+      // Server request IDs have a separate namespace from our outgoing IDs.
+      if (typeof message.id === "number" || typeof message.id === "string") {
+        const result = message.method === "workspace/configuration" || message.method === "workspace/workspaceFolders" ? [] : null;
+        this.send({ jsonrpc: "2.0", id: message.id, result }, generation);
         return;
       }
-      if (pending.generation !== generation) return;
-      this.pending.delete(message.id);
-      clearTimeout(pending.timer);
-      if (message.error && typeof message.error === "object") {
-        pending.reject(new Error(JSON.stringify(message.error)));
-      } else pending.resolve(message.result);
-      return;
-    }
-    if (typeof message.id === "string" && typeof message.method === "string") {
-      const result = message.method === "workspace/configuration" || message.method === "workspace/workspaceFolders" ? [] : null;
-      this.send({ jsonrpc: "2.0", id: message.id, result });
-      return;
-    }
-    if (message.method === "textDocument/publishDiagnostics" && message.params && typeof message.params === "object") {
-      const params = message.params as { uri?: unknown; diagnostics?: unknown };
+      if (message.method !== "textDocument/publishDiagnostics" || !message.params || typeof message.params !== "object") return;
+      const params = message.params as { uri?: unknown; version?: unknown; diagnostics?: unknown };
       if (typeof params.uri !== "string" || !Array.isArray(params.diagnostics)) return;
-      this.diagnostics.set(params.uri, params.diagnostics as LspDiagnostic[]);
-      this.diagnosticRevision.set(params.uri, (this.diagnosticRevision.get(params.uri) ?? 0) + 1);
+      if (params.version !== undefined && (typeof params.version !== "number" || !Number.isInteger(params.version))) return;
+      const version = params.version as number | undefined;
+      const document = this.documents.get(params.uri);
+      const revision = (this.diagnosticRevision.get(params.uri) ?? 0) + 1;
+      this.diagnosticRevision.set(params.uri, revision);
+      if (document && version !== undefined && version !== document.version) return;
+      this.diagnostics.set(params.uri, {
+        diagnostics: params.diagnostics as LspDiagnostic[], version, documentVersion: document?.version, revision, receivedAt: Date.now(),
+      });
+      return;
     }
+    if (message.method !== undefined || typeof message.id !== "number" || !("result" in message || "error" in message)) return;
+    const pending = this.pending.get(message.id);
+    if (!pending || pending.generation !== generation) return;
+    const error = message.error && typeof message.error === "object" ? new Error(JSON.stringify(message.error)) : undefined;
+    this.finishPending(message.id, error, message.result);
   }
 
-  private rejectAll(generation: Generation, error: Error): void {
+  private rejectAll(generation: Generation, error: Error, cancel = false): void {
     for (const [id, pending] of this.pending) {
-      if (pending.generation !== generation) continue;
-      clearTimeout(pending.timer);
-      pending.reject(error);
-      this.pending.delete(id);
+      if (pending.generation === generation) this.finishPending(id, error, undefined, cancel);
     }
   }
 }
