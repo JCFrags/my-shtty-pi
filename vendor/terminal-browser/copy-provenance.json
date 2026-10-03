@@ -467,7 +467,7 @@
       "path": "browser/src/session/browser-menu-controller.ts",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "8a896d24fe7ecd88c415942a357d4a401c09d0175a4996e840a7d9b09cb375d0",
+      "sha256": "7bcfd478073a811dc2ee2433af830e771cc6dd494151b145a0c3113e33ee2876",
       "modified": true
     },
     {
@@ -544,7 +544,7 @@
       "path": "browser/src/ui/browser-menu.ts",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "344b1633f8a66e137ca72ad33d4ccc3984dfcbf859279d4c92c126961e5839d8",
+      "sha256": "0d1eb76a3418ae9639c5af7d7261be20a392abea55cedb01413e60c85f9ce1b9",
       "modified": true
     },
     {
@@ -1104,7 +1104,7 @@
       "path": "docs/user-controls.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "41e8899d570599dcf70e5fcc405f2fd89dd414d38efa20c13a1792f77a65b1e3",
+      "sha256": "b986c5b35639cee47c717d50090dc210825fe5753c7e7d9bed36e508aceeb924",
       "modified": true
     },
     {

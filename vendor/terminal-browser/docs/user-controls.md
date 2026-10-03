@@ -13,6 +13,16 @@ Both full menus provide Open/focus, Return control to agent, control modes, Send
 settings, and Close owned browser. Opening or canceling a menu does not select
 Human. A menu holds focus while it is open.
 
+In an owned native browser, settings and tools require at most two navigation steps:
+
+1. Open full options with the three-dot button.
+2. Select Tools, Ad blocking (shared profile), or Settings to see that group's controls.
+
+Tools includes recording and inspection. Settings includes receiver information,
+Shared page updates, and receiver disconnection. Back from Tools or Ad blocking
+returns to full options. The Control and Ads quick menus and the Pi menu stay
+separate. Send, Close, and Disconnect still require their safety confirmations.
+
 | Mode | Behavior |
 | --- | --- |
 | Agent | Agent input is permitted. Active human input selects Human. |

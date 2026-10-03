@@ -46,7 +46,7 @@ export class NativeBrowserMenu {
   back(): void {
     if (this.page === this.entryPage) this.host.close();
     else this.show(this.page === "send-link" || this.page === "send-visual" ? "send"
-      : this.page === "blocking" || this.page === "tools" || this.page === "disconnect" ? "settings" : "main");
+      : this.page === "disconnect" ? "settings" : "main");
   }
 
   items(): PageMenuItem[] {
