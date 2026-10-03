@@ -126,9 +126,12 @@ make an explicitly requested site exception instead of disabling every safeguard
 ## User menus and page delivery
 
 The native three-dot menu and optional Pi `/browser` menu provide explicit control
-choices, Send current page, settings, and exact owned-browser close. Pi's command-only
-package profile uses the plain `extensions: ["dist/menu.js"]` allowlist. It keeps
-`/browser` and registers no browser model tools. A bare package source or
+choices, Send current page, settings, and exact owned-browser close. The control
+indicator opens only control modes. The Ads indicator opens only blocking options.
+Escape or Dismiss closes either quick menu without changing control or opening
+full options. Pi's command-only package profile uses the plain
+`extensions: ["dist/menu.js"]` allowlist. It keeps `/browser` and registers no
+browser model tools. A bare package source or
 `+dist/menu.js` alone also loads the tools resource. Do not change package settings
 unless the user requests that change.
 

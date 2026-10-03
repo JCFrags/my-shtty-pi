@@ -4,9 +4,12 @@
 
 ## Select a control mode
 
-The native three-dot menu sits beside the control indicator. The optional Pi
-package adds `/browser`, even when its model tools are not selected. Both menus
-provide Open/focus, Return control to agent, control modes, Send current page,
+The native three-dot button opens full options. The control indicator opens only
+control modes. The Ads indicator opens only blocking options. Escape or Dismiss
+closes either quick menu without opening full options or changing control. Click
+the same indicator to close its menu, or a different indicator to replace it.
+The optional Pi package adds `/browser`, even when its model tools are not selected.
+Both full menus provide Open/focus, Return control to agent, control modes, Send current page,
 settings, and Close owned browser. Opening or canceling a menu does not select
 Human. A menu holds focus while it is open.
 
