@@ -158,10 +158,10 @@ export function metadataContextLine(root: WorkplanRoot, recovered?: { planId: st
   if (!root.plans.length) return undefined;
   const active = root.plans.find((plan) => plan.status === "active");
   const recovery = (plan: PlanMetadata) => recovered?.planId === plan.id && recovered.revision === plan.revision
-    ? "current" : `required:workplan(action=recover,planId=${plan.id})`;
+    ? "saved" : `required:workplan(action=recover,planId=${plan.id})`;
   if (active) {
     const { milestones, blocked } = active.statusMetadata;
-    return `[workplan state] active=${active.id} status=${active.status} rev=${active.revision} milestones=${milestones.completed}/${milestones.total} blocked=${blocked} recovery=${recovery(active)}`;
+    return `[workplan state] active=${active.id} status=${active.status} savedRev=${active.revision} savedAt=${active.updatedAt} milestones=${milestones.completed}/${milestones.total} blocked=${blocked} recovery=${recovery(active)}`;
   }
   const open = root.plans.filter((plan) => plan.status === "draft" || plan.status === "paused").sort((a, b) => compareNumericIds(a.id, b.id));
   const completed = root.plans.filter((plan) => plan.status === "completed").length, archived = root.plans.filter((plan) => plan.status === "archived").length;
@@ -169,5 +169,5 @@ export function metadataContextLine(root: WorkplanRoot, recovered?: { planId: st
   const candidate = open.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || compareNumericIds(b.id, a.id))[0]!;
   const visible = open.slice(0, 4).map((plan) => `${plan.id}:${plan.status}@rev${plan.revision}`);
   if (open.length > visible.length) visible.push(`+${open.length - visible.length}`);
-  return `[workplan state] active=none open=${visible.join(",")} openCount=${open.length} retained=${root.plans.length} completed=${completed} archived=${archived} recovery=${recovery(candidate)}`;
+  return `[workplan state] active=none open=${visible.join(",")} openCount=${open.length} retained=${root.plans.length} completed=${completed} archived=${archived} savedPlan=${candidate.id} savedRev=${candidate.revision} savedAt=${candidate.updatedAt} recovery=${recovery(candidate)}`;
 }

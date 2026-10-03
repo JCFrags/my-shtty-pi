@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { setImmediate as yieldPage } from "node:timers/promises";
 import type { CommitOptions, ImportReceiptInput, LegacySourceRecovery, ObjectLocation, ObjectRef, OwnedSnapshot, OwnerResolution,
-  OwnerStatus, ResolveOptions, SessionEntryView, StateAnchorHost, StateOwnerOptions, StateScope } from "./types.ts";
+  OwnerStatus, ResolveOptions, ResolveUntilReadyOptions, SessionEntryView, StateAnchorHost, StateOwnerOptions, StateScope } from "./types.ts";
 import { checkedEntry, currentScope } from "./ancestry.ts";
 import { OwnedObjectStore, publishPrivateBytes, readPrivateRecord, writePrivateRecord } from "./objects.ts";
 import { acquireSourceLock, anchorDataMatches, captureSource, sameDurableSource, sameSource, sameSourceFields, sourceKey, validateSource,
@@ -301,6 +302,38 @@ export class BranchStateOwner<Root> {
   async resolve(host: StateAnchorHost, options: ResolveOptions = {}): Promise<OwnerResolution<Root>> {
     return this.resolveView(host, options);
   }
+  /** Finish routine pending pages internally. Do not retry commits, legacy import, or conflicts. */
+  async resolveUntilReady(host: StateAnchorHost, options: ResolveUntilReadyOptions = {}): Promise<OwnerResolution<Root>> {
+    const maxPages = options.maxPages ?? 32, deadline = options.deadlineMs ?? Date.now() + 2000;
+    integer(maxPages, 1, 32); integer(deadline, 1, Number.MAX_SAFE_INTEGER);
+    this.active(options.signal);
+    const pinned = currentScope(host.sessionManager), file = host.sessionManager.getSessionFile(), epoch = this.epoch;
+    const assertPinned = () => {
+      if (epoch !== this.epoch || !sameScope(pinned, currentScope(host.sessionManager)) || file !== host.sessionManager.getSessionFile()) fail("state-store-scope-changed");
+    };
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(abort, Math.max(1, deadline - Date.now()));
+    let result: OwnerResolution<Root> | undefined;
+    try {
+      for (let page = 0; page < maxPages; page++) {
+        checkSignal(options.signal);
+        if (Date.now() >= deadline) break;
+        assertPinned();
+        result = await this.resolve(host, { signal: controller.signal });
+        assertPinned();
+        if (result.status !== "pending") return result;
+        await yieldPage();
+      }
+    } catch (error) {
+      if (!(controller.signal.aborted && !options.signal?.aborted && error instanceof StateStoreError && error.code === "state-store-cancelled")) throw error;
+    } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
+    checkSignal(options.signal);
+    assertPinned();
+    if (!result) fail("state-store-unresolved");
+    return result;
+  }
   /** Explicit operator recovery. One call still advances at most one ancestry page. */
   async recoverSourceIdentity(host: StateAnchorHost, evidence: LegacySourceRecovery, options: ResolveOptions = {}): Promise<OwnerResolution<Root>> {
     const recovery = detach(evidence, STATE_STORE_LIMITS.recordBytes);
@@ -320,7 +353,7 @@ export class BranchStateOwner<Root> {
       if (recovery) {
         if (!sameScope(recovery.scope, view.scope) || !sameRecord(recovery.target, view.source)) fail("state-store-conflict");
         this.belongs(recovery.commitRef, location);
-        release = await acquireSourceLock(location, view.source, randomUUID());
+        release = await acquireSourceLock(location, view.source, randomUUID(), options.signal);
         await this.unchanged(host, view, options.signal);
       }
       const hash = keyOf(key), path = join(location.root, "resolutions", `${hash}.json`);
@@ -447,7 +480,7 @@ export class BranchStateOwner<Root> {
       const root = detach(nextRoot, this.rootMaximum);
       this.options.validateRoot(root);
       const operationId = randomUUID();
-      release = await acquireSourceLock(location, view.source, operationId);
+      release = await acquireSourceLock(location, view.source, operationId, options.signal);
       const rootRef = await this.objects.publish(root, { maxBytes: this.rootObjectMaximum, signal: options.signal });
       const importReceipt = options.importReceipt ? await this.objects.publish({ version: 1, providerId: location.providerId,
         ...detach(options.importReceipt, STATE_STORE_LIMITS.recordBytes), rootRef }, { maxBytes: STATE_STORE_LIMITS.recordBytes, signal: options.signal }) : undefined;

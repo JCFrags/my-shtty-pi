@@ -4,7 +4,7 @@ import {
   SESSION_AGENT_SUMMARY_CUSTOM_TYPE, SESSION_AGENT_SUMMARY_LIMITS,
   acceptSessionAgentSummary, consumeSessionAgentSummaryRequest, createSessionAgentSummaryRequest,
   parseSessionAgentSummarySubmission, renderSessionAgentSummaryRequest,
-  settleSessionAgentSummary, validateSessionAgentSummary,
+  settleSessionAgentSummary, validateSessionAgentSummary, validateDeferredSessionSummaryIntent,
   type SessionAgentSummaryScope,
 } from "../src/session-agent-summary.js";
 import type { SessionEntryLike } from "../src/types.js";
@@ -78,6 +78,25 @@ test("same-session summary requires observed request, sole assistant submission 
   assert.throws(() => settleSessionAgentSummary(accepted, view("new-input")), /result-invalid/);
   assert.throws(() => consumeSessionAgentSummaryRequest(request, view("new-input"), [custom]), /request-interrupted/);
   assert.throws(() => consumeSessionAgentSummaryRequest(request, view("missing-branch"), [custom]), /source-boundary-unavailable/);
+
+  const intent = { scope, createdAt: request.createdAt, expiresAt: request.expiresAt };
+  entries.set("aborted", { type: "message", id: "aborted", parentId: "system", message: {
+    role: "assistant", content: [], stopReason: "aborted",
+  } });
+  validateDeferredSessionSummaryIntent(intent, view("aborted"));
+  assert.throws(() => validateDeferredSessionSummaryIntent(intent, view("request")), /request-interrupted/);
+  assert.throws(() => validateDeferredSessionSummaryIntent(intent, view("new-input")), /request-interrupted/);
+  assert.throws(() => validateDeferredSessionSummaryIntent(intent, view("missing-branch")), /source-boundary-unavailable/);
+  assert.throws(() => validateDeferredSessionSummaryIntent(intent, view("aborted", request.expiresAt)), /expired/);
+  assert.throws(() => validateDeferredSessionSummaryIntent(intent, { ...view("aborted"), scope: { ...scope, epoch: 2 } }), /session-changed/);
+  entries.set("partial-abort", { type: "message", id: "partial-abort", parentId: "system", message: {
+    role: "assistant", content: [{ type: "text", text: "Unconsumed partial output" }], stopReason: "aborted",
+  } });
+  assert.throws(() => validateDeferredSessionSummaryIntent(intent, view("partial-abort")), /request-interrupted/);
+  entries.set("late-tool", { type: "message", id: "late-tool", parentId: "aborted", message: {
+    role: "toolResult", content: "An intervening operation",
+  } });
+  assert.throws(() => validateDeferredSessionSummaryIntent(intent, view("late-tool")), /request-interrupted/);
 
   // {} uses the existing tool's normal response, including a completed sibling.
   const toolRequest = createSessionAgentSummaryRequest({ requestId: "tool_request_012345", scope: { ...scope, leafId: "assistant" },

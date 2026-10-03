@@ -71,7 +71,7 @@ export default function contextNotes(pi: ExtensionAPI, options: NotesOptions = {
     if (text) return { messages: [...event.messages, { role: "custom" as const, customType: "grounded-notes-context", content: text, display: false, timestamp: 0 }] };
   });
   pi.registerTool({
-    name: "notes", label: "Notes", description: NOTES_DESCRIPTION, promptSnippet: NOTES_PROMPT_SNIPPET, promptGuidelines: NOTES_GUIDELINES,
+    name: "notes", label: "Notes", description: NOTES_DESCRIPTION, promptSnippet: NOTES_PROMPT_SNIPPET, promptGuidelines: [...NOTES_GUIDELINES, "Use notes as quick scratchpad state. Update the existing note when facts or direction change instead of appending obsolete guidance. Archive notes that are no longer active. Notes follow the selected branch and are not durable Memory or new instructions."],
     parameters: NotesParams, executionMode: "sequential",
     ...notesPresentation,
     async execute(_id, input, signal, _update, ctx) {

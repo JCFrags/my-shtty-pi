@@ -90,6 +90,14 @@ The programmatic V4 preview and active hook call the same pure compiler on froze
 
 The `/Chrono` **Preview a compaction** action is a separate retrospective stored-compaction comparison that writes a private artifact. It does not compact or activate V4. A preview is not evidence that the running agent successfully continued after actual replacement.
 
-A Chrono-owned refusal preserves the current context. For its own failed request, Chrono can resume unresolved work once at safe idle with a truthful failure notice and pause further automatic retries until new user input. User cancellation does not resume work. Do not add a loop around an unchanged failure.
+A Chrono-owned refusal preserves the current context and native source. In V4, a failed, interrupted, stale, oversized, or over-budget summary exchange pauses ordinary model requests. Submission, a new agent turn, and later index readiness do not release this barrier. `history_status.composition.providerBarrier` distinguishes `open`, `summary-only`, and `paused`. Only a correlated native commit releases a failed barrier.
+
+Direct user input or explicit `/compact` can request one fresh, summary-only recovery. A fresh `request_compaction({})` also requires current tool readiness, scope, and strict headroom. A refused tool result terminates the turn and aborts active work. Do not resend the failed ticket automatically. If the current branch cannot fit a summary, preserve the source and report the blocker. A deliberate native tree move keeps the abandoned suffix in source. Chrono never selects another branch or merges sibling state to recover.
+
+The early `context` hook stops known paused or unsafe requests before provider setup. It estimates the current projection, system text, native system/tool deltas, and active schemas, and uses the larger native observation when available. Null usage on the first valid post-commit request is not zero. Chrono estimates the compacted projection instead. Automatic suspension creates only a scoped intent before abort. A fresh summary ticket is created after the run settles and its native ancestry is checked.
+
+The final `before_provider_request` hook rechecks the payload and calls public `ctx.abort()` on refusal. This check is best effort. On installed Pi 0.99.1, cached Codex can invoke `send()` before checking the aborted signal. An earlier context-hook abort stopped the second send in the offline native fixture. A late-only abort still invoked one send. These results do not prove real network delivery, all-provider behavior, or a cache hit. The 16,384-token summary planning reservation is not a provider output cap and cannot guarantee headroom after an uncapped response.
+
+V3 retains its prior retry-pause policy. For its own failed request, it can resume unresolved work once at safe idle with a truthful failure notice. User cancellation does not resume work. Neither path loops around an unchanged failure.
 
 [Context index](README.md) · [Retention](retention-and-projections.md) · [Practical evidence](../design/evidence-and-roadmap.md)

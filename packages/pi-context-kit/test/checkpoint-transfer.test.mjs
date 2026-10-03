@@ -86,7 +86,7 @@ test("native checkpoint transfer preserves exact state, subsequent actions, and 
   assert.equal((await restored.execute("notes", { action: "add", body: "After transfer" })).details.result.id, "N4");
   await restored.execute("notes", { action: "update", id: "N1", expectedRevision: 2, title: "Updated after transfer" });
   await restored.execute("todo", { action: "add", text: "New task" });
-  assert.equal((await restored.execute("todo", { action: "list" })).details.state.tasks.at(-1).id, "T20");
+  assert.equal((await restored.execute("todo", { action: "list", view: "all" })).details.state.tasks.at(-1).id, "T20");
   await restored.execute("todo", { action: "update", id: "T19", waitReason: "" });
   await restored.execute("workplan", { action: "checkpoint", planId: "WP1", expectedRevision: 4, content: { summary: "Next recovery" } });
   const after = states(await exported(restored));

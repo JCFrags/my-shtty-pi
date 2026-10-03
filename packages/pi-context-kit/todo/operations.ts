@@ -23,6 +23,7 @@ const ReplacementTaskSchema = Type.Object({
 }, { additionalProperties: false });
 export const TodoParams = Type.Object({
   action: StringEnum(["list", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"] as const),
+  view: Type.Optional(StringEnum(["current", "all"] as const, { description: "List view. Default current hides done tasks without removing them. all returns complete retained native state." })),
   id: Type.Optional(Id()), text: Type.Optional(Text()), description: Type.Optional(Description()),
   blockedBy: Type.Optional(Dependencies()), waitReason: Type.Optional(WaitReason()),
   position: Type.Optional(Type.Number({ minimum: 0, description: "Zero-based target position for reorder" })),
@@ -51,8 +52,9 @@ function fields(value: Record<string, unknown>, code: StateErrorCode): void {
 }
 /** Admit bounded shapes before recursive native validation or serialization. */
 export function admitTodoInput(value: unknown): asserts value is TodoInput {
-  requireExactObject(value, ["action"], ["id", "text", "description", "blockedBy", "waitReason", "position", "tasks"], "input");
+  requireExactObject(value, ["action"], ["id", "text", "description", "blockedBy", "waitReason", "position", "tasks", "view"], "input");
   if (!["list", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"].includes(value.action as string)) fail("STATE_INVALID_INPUT", "Unknown todo action");
+  if (value.view !== undefined && (value.action !== "list" || !["current", "all"].includes(value.view as string))) fail("STATE_INVALID_INPUT", "view must be current or all and is only accepted for list");
   fields(value, "STATE_INVALID_INPUT");
   if (value.position !== undefined && (typeof value.position !== "number" || !Number.isFinite(value.position) || value.position < 0)) fail("STATE_INVALID_INPUT", "position must be a finite non-negative number");
   if (value.tasks !== undefined) {
@@ -104,7 +106,13 @@ export function performTodoAction(current: TaskState, value: unknown, now = Date
     if (!input.id) fail("STATE_INVALID_INPUT", `id is required for ${input.action}`);
     return input.id;
   };
-  if (input.action === "list") return { state, message: state.tasks.length ? state.tasks.map(formatTask).join("\n") : "No todos", changed: false };
+  if (input.action === "list") {
+    const tasks = input.view === "all" ? state.tasks : state.tasks.filter((task) => task.status !== "done");
+    const hidden = state.tasks.length - tasks.length;
+    message = tasks.length ? tasks.map(formatTask).join("\n") : "No current todos";
+    if (hidden) message += `\n${hidden} done task(s) retained. Use todo(action=list,view=all) to read them`;
+    return { state, message, changed: false };
+  }
   if (input.action === "add") {
     if (!input.text) fail("STATE_INVALID_INPUT", "text is required for add");
     const task = addTask(state, { text: input.text, ...(input.description !== undefined ? { description: input.description } : {}),

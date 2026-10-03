@@ -116,9 +116,9 @@ export class TodoStore {
     if (!this.host) throw new StateToolError("STATE_CONFLICT", "Todo has no active session");
     return this.host;
   }
-  private async resolveNow(signal?: AbortSignal): Promise<void> {
+  private async resolveNow(signal?: AbortSignal, untilReady = false): Promise<void> {
     try {
-      const resolution = await this.owner.resolve(this.currentHost(), { signal });
+      const resolution = await (untilReady ? this.owner.resolveUntilReady(this.currentHost(), { signal }) : this.owner.resolve(this.currentHost(), { signal }));
       this.legacy = resolution.status === "legacy";
       this.selected = resolution.status === "ready" ? resolution.snapshot : undefined;
       if (resolution.status === "ready") { this.root = resolution.snapshot.root as TodoRoot; this.phase = "ready"; }
@@ -142,7 +142,7 @@ export class TodoStore {
   }
   private requireRoot(): TodoRoot {
     if (!this.root || this.phase !== "ready") throw new StateToolError(this.phase === "corrupt" ? "STATE_CORRUPT" : "STATE_CONFLICT",
-      this.legacy ? "Todo legacy state requires /todo-import. Each invocation advances one bounded step" : "Todo state is pending or unavailable. Retry the native operation to resolve another bounded page");
+      this.legacy ? "Todo legacy state requires /todo-import. Each invocation advances one bounded step" : "Todo state did not finish within the native resolution budget; saved progress is retained");
     return this.root;
   }
   async open(host: StateAnchorHost): Promise<void> {
@@ -152,7 +152,7 @@ export class TodoStore {
   refresh(signal?: AbortSignal): Promise<void> { return this.serial(() => this.resolveNow(signal), signal); }
   execute(input: TodoInput, signal?: AbortSignal): Promise<TodoOperation & { owner: TodoOwnerMetadata }> {
     return this.serial(async () => {
-      await this.resolveNow(signal);
+      await this.resolveNow(signal, true);
       const current = this.requireRoot();
       const operation = performTodoAction(current.native, input);
       cancelled(signal);
@@ -179,7 +179,7 @@ export class TodoStore {
     return this.metadata();
   }
   checkpoint(signal?: AbortSignal): Promise<{ state: TaskState; owner: TodoOwnerMetadata }> {
-    return this.serial(async () => { await this.resolveNow(signal); return { state: cloneTaskState(this.requireRoot().native), owner: this.metadata() }; }, signal);
+    return this.serial(async () => { await this.resolveNow(signal, true); return { state: cloneTaskState(this.requireRoot().native), owner: this.metadata() }; }, signal);
   }
   revisionForTask(id: string): string {
     const root = this.requireRoot();

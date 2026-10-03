@@ -48,6 +48,31 @@ export function captureContextBudget(input) {
         estimator: CONTEXT_ESTIMATOR,
         qualification: "Estimated public-hook request, not an exact model tokenizer or final provider payload. Includes Pi compaction conversion, complete raw-tail messages, system, active schemas, framing allowance and response reserve. Later context/payload extensions and provider serialization can change the request." };
 }
+/** Estimate the current outgoing projection, not lifetime history. This also
+ * charges newer native system/tool deltas that the locked Pi converter omits.
+ * Native usage and this estimate are complementary, not exact token counts. */
+export function estimateCurrentRequestTokens(input) {
+    let tokens = textTokens(input.systemPrompt) + 512;
+    for (const name of new Set(input.activeTools)) {
+        const tool = input.allTools.find(value => value.name === name);
+        if (!tool || tool.parameters === undefined)
+            throw new Error("context-v4-tool-schema-unavailable");
+        tokens += textTokens(JSON.stringify({ name, description: tool.description, parameters: tool.parameters })) + 32;
+    }
+    for (const value of input.messages) {
+        const message = value;
+        if (message.role === "system") {
+            tokens += textTokens(JSON.stringify({ content: message.content, sections: message.sections })) + 32;
+            continue;
+        }
+        const converted = convertToLlm([value]);
+        tokens += converted.length ? converted.reduce((sum, item) => sum + estimateTokens(item) + 32, 0)
+            : textTokens(JSON.stringify(value)) + 32;
+    }
+    if (!Number.isFinite(tokens) || tokens <= 0)
+        throw new Error("session-agent-summary-headroom-unavailable");
+    return tokens;
+}
 /** Public conversion includes Pi's compaction prefix and <summary> wrapper. */
 export function chargeCompactionSummary(summary) {
     return convertToLlm([{ role: "compactionSummary", summary, tokensBefore: 0, timestamp: 0 }])

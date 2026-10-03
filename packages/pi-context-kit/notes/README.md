@@ -16,7 +16,7 @@ Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) 
 
 ## Native interface
 
-The `notes` tool retains `add`, `list`, `read`, `append`, `update`, `search`, `archive`, `remove`, and `clear_archived`. Existing field normalization, metadata pagination, search windows, archive/remove rules, IDs, timestamps, and `expectedRevision` checks are unchanged.
+The `notes` tool retains `add`, `list`, `read`, `append`, `update`, `search`, `archive`, `remove`, and `clear_archived`. Existing field normalization, metadata pagination, search windows, archive/remove rules, IDs, timestamps, and `expectedRevision` checks are unchanged. Use Notes as a quick scratchpad. Update existing text when facts or direction change instead of appending obsolete guidance. Archive inactive notes. Notes remain branch-local and are not durable Memory.
 
 The native limits remain 256 retained notes, 32 KiB UTF-8 per body, and 1 MiB total bodies. Archived notes count toward these limits. Titles, tags, and native revision rules use the existing validators. Complete root admission allows 8 MiB of canonical JSON so escaped text and metadata do not reduce the body allowance. Over-limit or corrupt input is refused, not shortened.
 
@@ -30,7 +30,7 @@ Each mutation resolves its source view, validates the operation, publishes the o
 
 `message_end` does not acknowledge persistence. There is no corresponding handler. Ephemeral and deferred sessions refuse writes with `state-store-unpersisted`. A prepared object without a verified anchor is not visible state. An uncertain append remains pending until reconciliation. A missing or corrupt owned root never becomes an empty scratchpad.
 
-Session start and tree navigation use a direct binding or one bounded ancestry-resolution page. Native operations can advance resolution one page per invocation. `agent_settled` can advance one further page. Normal startup never calls `getBranch()` or replays legacy note events. Context queries do not perform restoration or import. Forks inherit exact anchored source state and new writes create a new source-bound commit.
+Session start and tree navigation use a direct binding or one bounded ancestry-resolution page. Native operations resolve routine pending pages internally, with cancellation, at most 32 pages, and a two-second deadline. A timeout retains progress. Genuine legacy import and source-identity recovery remain explicit. `agent_settled` can advance one further page. Normal startup never calls `getBranch()` or replays legacy note events. Context queries do not perform restoration or import. Forks inherit exact anchored source state and new writes create a new source-bound commit.
 
 An already owned branch that reports `state-store-source-recovery-required` needs the [state-store identity recovery procedure](../state-store/API.md#explicit-recovery-of-old-disk-commits), not `/notes-import`. It requires an independently established complete source-prefix hash. New Linux Btrfs commits have reboot-stable identity checks. Unsupported filesystems keep strict device checks. Recovery preserves old immutable state and does not make previous code versions compatible with new commits.
 

@@ -29,7 +29,9 @@ Dependencies, external waits, and one in-progress task are native state rules. `
 
 Admission allows at most 256 retained tasks and 1 MiB complete canonical native state. Task text, descriptions, waits, IDs, and dependency counts have separate bounds. An over-limit mutation or import refuses intact.
 
-A large `list` can return a private complete-state recovery file with bounded display rows. The file is private output, not a transfer checkpoint. A short visible list must not be mistaken for all fields or all state.
+`list` defaults to `view:"current"`. It hides done tasks without deleting their IDs or satisfied dependency edges. Use `view:"all"` to read complete retained native state. `clear_done` and `remove` remain explicit mutations. Revise current tasks when direction changes instead of keeping an append-only log.
+
+A large `list` can return a private file for the selected view with bounded display rows. Only the all-view file is complete native state. The file is private output, not a transfer checkpoint. A short visible list must not be mistaken for all fields or all state.
 
 [Todo native reference](../../../packages/pi-context-kit/todo/README.md)
 
@@ -39,7 +41,7 @@ Actions are `add`, `list`, `read`, `append`, `update`, `search`, `archive`, `rem
 
 Notes can retain 256 records, 32 KiB UTF-8 per body, and 1 MiB total bodies. Archived notes count toward those limits. Complete root admission separately allows metadata and escaped text. Invalid or oversized state is refused, not shortened.
 
-Native reads retain exact note fields. Bounded renderers and private full-output recovery are display mechanisms, not the canonical store. Updating or removing a note does not rewrite earlier immutable owned roots.
+Native reads retain exact note fields. Bounded renderers and private full-output recovery are display mechanisms, not the canonical store. Update scratchpad text when facts or direction change. Archive inactive notes. Updating or removing a note does not rewrite earlier immutable owned roots.
 
 [Notes native reference](../../../packages/pi-context-kit/notes/README.md)
 
@@ -55,9 +57,12 @@ Native mutation details matter:
 - `record_decision` uses `content: { decision }`. Its reason belongs in `rationale`.
 - Milestone states include `pending`, `in_progress`, `blocked`, and `completed`, not Todo's `done`.
 - Start a pending milestone before completing it. Completion requires evidence and completed dependencies.
-- Mutation revisions use the native `expectedRevision` contract.
+- Except for untargeted `create` and `list`, omitted `planId` selects the active plan. If no plan is active, supply an ID. No plan is activated implicitly.
+- Omitted `expectedRevision` uses the selected plan's latest saved revision under serialization. An explicit stale revision still fails. Scope and commit conflicts remain enforced.
 
 Pause and archive preserve unfinished plans without completing their milestones. `restore` returns an archive to its prior `draft`, `paused`, or `completed` status, not `active`. It preserves contents and archived edits. Recover its saved context and approval gates before a separate permitted `resume`. A completed plan is not reopened by restore. Default Recall still browses open plans with the active plan first; native list/read/recover can access archives.
+
+Revise plan sections when direction changes. The latest checkpoint replaces the saved current position and next actions. Earlier checkpoints and revisions remain history. Recovery labels the last saved revision and time. `recovery=saved` means a visible recovery matches that saved revision, not that unsaved work is current.
 
 Recovery retains checkpoint focus/actions as saved guidance after lifecycle-only changes. After content changes, it shows current milestone guidance plus bounded, possibly stale checkpoint guidance. The last four post-checkpoint lifecycle rationales retain their revisions. Omitted earlier history may contain unresolved waits. Read the complete plan when needed; a later archive/restore does not resolve an earlier condition or grant new permission.
 
@@ -85,7 +90,7 @@ All three providers follow the selected branch. Forked anchors can inherit exact
 
 A successful native write requires an existing persisted session and verified durable Pi anchor. Ephemeral or deferred sessions do not receive a false durable success. A missing or corrupt root does not become empty state.
 
-Startup resolves direct bindings or a bounded ancestry page. Native calls can advance pending resolution. Todo and Notes context queries read already-selected state. Workplan context queries can advance bounded resolution and write derived indexes or receipts. These queries do not import or mutate canonical state, but Workplan's query is not a filesystem-read-only diagnostic.
+Startup resolves direct bindings or a bounded ancestry page. Native calls resolve routine pending pages internally, with cancellation, at most 32 pages, and a two-second deadline. A timeout retains progress. Legacy import and source-identity recovery remain explicit. Todo and Notes context queries read already-selected state. Workplan context queries can advance bounded resolution and write derived indexes or receipts. These queries do not import or mutate canonical state, but Workplan's query is not a filesystem-read-only diagnostic.
 
 ## Migration and integration
 
