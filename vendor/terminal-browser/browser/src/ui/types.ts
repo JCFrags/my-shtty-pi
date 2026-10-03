@@ -77,6 +77,8 @@ export interface ChromeActions {
   tabClose(id: number): void;
   tabNew(): void;
   tabMenu(): void;
+  controlMenu(): void;
+  blockingMenu(): void;
   newTabQuery(text: string): void;
   newTabSubmit(text: string): void;
   newTabPick(index: number): void;

@@ -14,13 +14,14 @@ export function controlLabel(state: string): string {
 }
 
 /** Keep control visible in browser chrome, outside the captured page. */
-export function ControlStrip({ control, detail, compact, rem, theme, openMenu }: {
+export function ControlStrip({ control, detail, compact, rem, theme, openMenu, openControl }: {
   control: AgentControlSnapshot;
   detail?: string;
   compact: boolean;
   rem: number;
   theme: Theme;
   openMenu(): void;
+  openControl(): void;
 }) {
   const color = control.state === "human" ? theme.yellow
     : control.state === "paused" ? theme.muted : theme.accent;
@@ -41,7 +42,7 @@ export function ControlStrip({ control, detail, compact, rem, theme, openMenu }:
           hoverBackground: theme.hover,
           overflow: "hidden",
         }}
-        onClick={openMenu}
+        onClick={openControl}
       >
         <Text style={{ fontSize: rem * 0.72, color, wrap: false, selectable: false, overflow: "hidden" }}>
           {label}

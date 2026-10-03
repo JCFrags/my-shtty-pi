@@ -1,7 +1,8 @@
 import { controlLabel } from "./control-strip";
 import type { PageMenuItem } from "./types";
 
-export type BrowserMenuPage = "main" | "control" | "settings" | "send" | "send-link" | "send-visual" | "close" | "disconnect" | "blocking" | "tools";
+export type BrowserMenuEntryPage = "main" | "control" | "blocking";
+export type BrowserMenuPage = BrowserMenuEntryPage | "settings" | "send" | "send-link" | "send-visual" | "close" | "disconnect" | "tools";
 
 export interface BrowserMenuState {
   mode: string;
