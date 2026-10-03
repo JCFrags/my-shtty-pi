@@ -464,3 +464,68 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     for (const [key, value] of old) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
 });
+
+test("late V4 admission keeps the native floor, charges visible growth and handles Codex opaque replay explicitly", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "chrono-v4-admission-"));
+  const environment = { PI_CHRONO_CONFIG_PATH: join(directory, "config.json"), PI_CHRONO_CONTEXT_COMPILER: "v4",
+    PI_CHRONO_MEMORY_OWNER: "context-kit", PI_CHRONO_SEARCH_INDEX: "false", PI_CHRONO_MEMORY_ENGINE: "false",
+    PI_CHRONO_AUTOMATIC_ROLLOVER: "false", PI_CHRONO_VALUE_WORKER_MODE: "off", PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false",
+    PI_CHRONO_CATALOG_SHADOW: "false", PI_CHRONO_ROLLUP_SHADOW: "false", PI_CHRONO_TOOL_RESULT_PROJECTION: "off",
+    PI_CHRONO_TRIGGER_TOKENS: "200000", PI_CHRONO_TRIGGER_MIN_GROWTH: "4000", PI_CHRONO_CONTEXT_RESERVE: "1500" };
+  const old = new Map(Object.keys(environment).map(key => [key, process.env[key]]));
+  Object.assign(process.env, environment);
+  writeFileSync(environment.PI_CHRONO_CONFIG_PATH, "{}", { mode: 0o600 });
+  const cases = [
+    { name: "opaque-only", native: 184068, opaque: 1020000, refused: false },
+    { name: "conversation", native: 184068, opaque: 1020000, refused: true },
+    { name: "instructions", native: 184068, opaque: 1020000, refused: true },
+    { name: "schemas", native: 184068, opaque: 1020000, refused: true },
+    { name: "post-commit-null", native: null, opaque: 0, refused: false },
+    { name: "null-opaque-fallback", native: null, opaque: 1020000, refused: true },
+    { name: "unknown-api-fallback", native: 184068, opaque: 1020000, refused: true },
+    { name: "invalid-native", native: 184068, opaque: 0, refused: true },
+    { name: "malformed-opaque", native: 184068, opaque: 0, refused: true },
+  ];
+  try {
+    for (const fixture of cases) {
+      const hooks = new Map<string, (event: any, ctx: any) => any>(), tools = new Map<string, any>();
+      const sm = SessionManager.inMemory(directory);
+      sm.appendMessage({ role: "user", content: "The same small visible conversation.", timestamp: 1 });
+      let aborts = 0, nativeTokens: number | null = fixture.native;
+      const pi = { events: createEventBus(), getActiveTools: () => ["request_compaction"], getAllTools: () => [...tools.values()],
+        registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerFlag() {},
+        on: (name: string, handler: any) => hooks.set(name, handler),
+        appendEntry() { throw new Error("Unexpected source write"); }, sendMessage() { throw new Error("Unexpected message send"); } };
+      const ctx = { sessionManager: sm,
+        model: { provider: "openai-codex", id: "fixture", api: fixture.name === "unknown-api-fallback" ? "unknown-api" : "openai-codex-responses",
+          contextWindow: 272000, maxTokens: 128000 }, thinkingLevel: "off", hasUI: false, ui: { notify() {} },
+        isIdle: () => false, hasPendingMessages: () => false, abort: () => { aborts++; },
+        getSystemPrompt: () => "Offline bounded fixture.", getContextUsage: () => ({ contextWindow: 272000, tokens: nativeTokens }) };
+      extension(pi as unknown as ExtensionAPI, { schedulerDirectory: directory });
+      try {
+        const source = JSON.stringify(sm.getEntries());
+        await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
+        assert.equal(aborts, 0, `${fixture.name}: early admission`);
+        const payload = { model: "fixture", instructions: "Offline bounded fixture.",
+          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "The same small visible conversation." }] },
+            { type: "reasoning", summary: [], encrypted_content: "A".repeat(fixture.opaque) }], tools: [] } as any;
+        if (fixture.name === "conversation") payload.input[0].content[0].text += "V".repeat(320000);
+        if (fixture.name === "instructions") payload.instructions += "V".repeat(320000);
+        if (fixture.name === "schemas") payload.tools.push({ type: "function", name: "read", description: "V".repeat(320000), parameters: { type: "object" } });
+        if (fixture.name === "invalid-native") nativeTokens = NaN;
+        if (fixture.name === "malformed-opaque") payload.input[1].encrypted_content = { unknown: "transport" };
+        const serialized = JSON.stringify(payload), event = { payload };
+        assert.equal(await hooks.get("before_provider_request")!(event, ctx), undefined);
+        assert.equal(event.payload, payload, "the accounting view never replaces the request");
+        assert.equal(JSON.stringify(payload), serialized, "the original opaque replay and visible fields remain unchanged");
+        assert.equal(JSON.stringify(sm.getEntries()), source, "admission does not rewrite source");
+        const composition = (await tools.get("history_status").execute()).details.composition;
+        assert.equal(aborts, fixture.refused ? 1 : 0, fixture.name);
+        assert.equal(composition.providerBarrier.state, fixture.refused ? "paused" : "open", fixture.name);
+        if (fixture.refused) assert.equal(composition.lastFailure.code, "session-agent-summary-headroom-unavailable", fixture.name);
+      } finally { await hooks.get("session_shutdown")!({}, ctx); }
+    }
+  } finally {
+    for (const [key, value] of old) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});

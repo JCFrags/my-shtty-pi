@@ -109,6 +109,44 @@ export function estimateCurrentRequestTokens(input: {
   return tokens;
 }
 
+/** Recheck the final public payload against the admitted projection. Native
+ * usage remains an estimated floor, not proof of exact provider tokenization.
+ * Positive serialization/late growth is added to that floor.
+ * Codex ciphertext length is not a tokenizer estimate. Only a positive native
+ * observation permits that known replay field to use the native bound instead.
+ * With null usage or an unknown API, retain the full transport estimate. */
+export function estimateProviderRequestTokens(input: {
+  readonly api: string;
+  readonly payload: unknown;
+  readonly projectionTokens: number;
+  readonly admittedTokens: number;
+  readonly nativeTokens: number | null | undefined;
+}): number {
+  if (!input.api || !Number.isFinite(input.projectionTokens) || input.projectionTokens <= 0
+    || !Number.isFinite(input.admittedTokens) || input.admittedTokens < input.projectionTokens
+    || (input.nativeTokens != null && (!Number.isFinite(input.nativeTokens) || input.nativeTokens < 0))
+    || !input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) {
+    throw new Error("session-agent-summary-headroom-unavailable");
+  }
+  const payload = input.payload as Record<string, unknown>;
+  let accountingPayload = payload;
+  if (input.api === "openai-codex-responses" && Array.isArray(payload.input)) {
+    const items = payload.input.map(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+      const item = value as Record<string, unknown>;
+      if (item.type !== "reasoning" || item.encrypted_content == null) return item;
+      if (typeof item.encrypted_content !== "string") throw new Error("session-agent-summary-headroom-unavailable");
+      // Do not alter the request or remove visible summaries and unknown fields.
+      return input.nativeTokens != null && input.nativeTokens > 0 ? { ...item, encrypted_content: "" } : item;
+    });
+    accountingPayload = { ...payload, input: items };
+  }
+  const serialized = JSON.stringify(accountingPayload);
+  if (!serialized) throw new Error("session-agent-summary-headroom-unavailable");
+  const payloadTokens = textTokens(serialized) + 512;
+  return Math.max(input.admittedTokens, input.nativeTokens ?? 0) + Math.max(0, payloadTokens - input.projectionTokens);
+}
+
 /** Public conversion includes Pi's compaction prefix and <summary> wrapper. */
 export function chargeCompactionSummary(summary: string): number {
   return convertToLlm([{ role: "compactionSummary", summary, tokensBefore: 0, timestamp: 0 }])

@@ -141,7 +141,7 @@ import {
 } from "./logical-session-integration.js";
 import { logicalSessionStatus } from "./logical-session-status.js";
 import { CHRONO_VERSION, captureRuntimeIdentity } from "./runtime-identity.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling, captureContextBudget, chargeRawTail, estimateCurrentRequestTokens } from "./context-budget.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling, captureContextBudget, chargeRawTail, estimateCurrentRequestTokens, estimateProviderRequestTokens } from "./context-budget.js";
 
 const EXTENSION_VERSION = CHRONO_VERSION;
 const LOADED_RUNTIME_IDENTITY = captureRuntimeIdentity(import.meta.url);
@@ -1581,7 +1581,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   let summaryRecoveryRequested = false;
   let summaryIntent: { scope: SessionAgentSummaryScope; createdAt: number; expiresAt: number;
     reason: "manual" | "threshold"; customInstructions?: string } | undefined;
-  let providerAdmission: { scope: SessionAgentSummaryScope; tokens: number; requestId?: string } | undefined;
+  let providerAdmission: { scope: SessionAgentSummaryScope; tokens: number; projectionTokens: number; requestId?: string } | undefined;
   let summaryEpoch = 0;
   type ActiveSessionSummary = { request: SessionAgentSummaryRequest; delivery: "deferred" | "sent"; deferrals: number;
     consumed?: SessionAgentSummaryConsumedRequest; accepted?: SessionAgentSummaryAccepted;
@@ -1851,19 +1851,21 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     return model.contextWindow - Math.ceil(promptChars / 4) - Math.min(model.maxTokens, SESSION_AGENT_SUMMARY_HEADROOM.planningTokens)
       - searchSettings().contextReserveTokens - SESSION_AGENT_SUMMARY_HEADROOM.safetyTokens;
   };
-  const currentRequestTokens = (ctx: ExtensionContext, messages?: readonly unknown[], observedTokens = 0): number => {
+  const currentRequestBudget = (ctx: ExtensionContext, messages?: readonly unknown[], observedTokens = 0) => {
     // Ask Pi for its current compaction-aware projection only. Do not read the
     // source file, lifetime bodies or native-state stores to estimate a request.
     const projection = messages ?? ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
     const estimated = estimateCurrentRequestTokens({ messages: projection, systemPrompt: ctx.getSystemPrompt(),
       activeTools: pi.getActiveTools(), allTools: pi.getAllTools() });
     const reported = ctx.getContextUsage()?.tokens;
-    if ((reported != null && (!Number.isFinite(reported) || reported < 0)) || !Number.isFinite(observedTokens)) {
+    if ((reported != null && (!Number.isFinite(reported) || reported < 0)) || !Number.isFinite(observedTokens) || observedTokens < 0) {
       throw new Error("session-agent-summary-headroom-unavailable");
     }
     // Null is expected on the first post-commit request. It is not zero usage.
-    return Math.max(estimated, reported ?? 0, observedTokens);
+    return { tokens: Math.max(estimated, reported ?? 0, observedTokens), projectionTokens: estimated };
   };
+  const currentRequestTokens = (ctx: ExtensionContext, messages?: readonly unknown[], observedTokens = 0): number =>
+    currentRequestBudget(ctx, messages, observedTokens).tokens;
   const summaryHeadroom = (ctx: ExtensionContext, prompt: string, observedTokens?: number): void => {
     // A summary must be submitted immediately. Do not activate a managed tool
     // here: reactivation can rewrite an earlier deferred-schema position.
@@ -2159,7 +2161,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     if (searchSettings().contextCompiler === "v4") {
       try {
         const messages = projected?.messages ?? event.messages;
-        const tokens = currentRequestTokens(ctx, messages);
+        const { tokens, projectionTokens } = currentRequestBudget(ctx, messages);
         const state = sessionSummary;
         if (state) {
           if (state.delivery !== "sent" || state.consumed || state.accepted || triggerPending) throw new Error("session-agent-summary-provider-suspended");
@@ -2179,7 +2181,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         } else {
           summaryHeadroom(ctx, " ".repeat(SESSION_AGENT_SUMMARY_LIMITS.promptBytes), tokens);
         }
-        providerAdmission = { scope: sessionSummaryScope(ctx, summaryEpoch), tokens,
+        providerAdmission = { scope: sessionSummaryScope(ctx, summaryEpoch), tokens, projectionTokens,
           ...(state ? { requestId: state.request.requestId } : {}) };
       } catch (error) { refuseSessionSummary(ctx, error); }
     }
@@ -2197,10 +2199,9 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       }
       // Public late cancellation is best effort. Installed cached Codex can
       // invoke send before checking abort. The earlier context hook is primary.
-      const payload = JSON.stringify(event.payload);
-      if (!payload) throw new Error("session-agent-summary-headroom-unavailable");
       summaryHeadroom(ctx, state ? "" : " ".repeat(SESSION_AGENT_SUMMARY_LIMITS.promptBytes),
-        Math.max(admission.tokens, ctx.getContextUsage()?.tokens ?? 0, Math.ceil(payload.length / 4) + 512));
+        estimateProviderRequestTokens({ api: ctx.model?.api ?? "", payload: event.payload,
+          projectionTokens: admission.projectionTokens, admittedTokens: admission.tokens, nativeTokens: ctx.getContextUsage()?.tokens }));
     } catch (error) { refuseSessionSummary(ctx, error); }
     // Do not throw, return a malformed payload or change the normal request.
   });
