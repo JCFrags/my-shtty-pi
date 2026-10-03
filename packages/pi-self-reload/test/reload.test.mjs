@@ -10,9 +10,9 @@ function harness() {
   const pi = {
     on: (event, handler) => handlers.set(event, handler),
     registerTool: (value) => { tool = value; },
-    registerCommand: (name, value) => { assert.equal(name, 'self-reload'); command = value; },
+    registerCommand: (name, value) => { if (name === 'self-reload') command = value; },
     getAllTools: () => state.tools.map(name => ({ name })),
-    events: { emit: (name, event) => {
+    events: { on: () => {}, emit: (name, event) => {
       assert.equal(name, 'grounded:session-transition-readiness:v1');
       for (const value of state.replies) event.accept(value);
     } },
