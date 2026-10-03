@@ -52,6 +52,8 @@ export function PageContextMenu({
       />
       <Box
         ref={list}
+        // Keep inactive rows and menu padding from reaching the dismiss backdrop.
+        onClick={() => {}}
         onScroll={event => { scroll.current = event.offset; }}
         style={{
           position: "absolute",
