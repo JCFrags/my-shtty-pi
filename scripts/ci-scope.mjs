@@ -35,6 +35,16 @@ const sharedPrefixes = [
   'packages/pi-tool-controls/presentation/',
 ];
 const browserPrefix = 'vendor/terminal-browser/';
+// Human documentation only. Markdown fixtures and generated skill templates
+// remain product inputs. Shared runtime directories do not make prose executable.
+export function isDocumentation(path) {
+  if (!path.endsWith('.md')) return false;
+  if (path === 'README.md' || path.startsWith('docs/') || path.startsWith('skills/')) return true;
+  if (Object.hasOwn(dependents, owner(path))) {
+    return /\/(?:README|AGENTS|API|CONTRACT)\.md$/.test(path) || /\/docs\/.+\.md$/.test(path);
+  }
+  return path.startsWith(browserPrefix) && (/\/(?:README)\.md$/.test(path) || path.startsWith(`${browserPrefix}docs/`));
+}
 // This exact subproject contract overrides the shared-core fallback, not its
 // parent directories. The standalone runner is delivered with the LSP repair.
 export const lspFiles = [
@@ -106,6 +116,18 @@ export function lspReadiness(root) {
         && !git(root, 'log', '--full-history', '-1', '--format=%H', 'HEAD', '--', ...newLspFiles).trim()) return 'legacy';
   } catch { /* Missing or unsafe Git evidence is not a legacy installation. */ }
   return 'invalid';
+}
+
+// A documentation hash refresh is not a browser runtime change. Keep inventory,
+// source attribution, modes, removed records, and all non-document records exact.
+function documentationProvenance(root, base, head) {
+  const path = `${browserPrefix}copy-provenance.json`;
+  const projection = commit => {
+    const data = JSON.parse(git(root, 'show', `${commit}:${path}`));
+    return canonical({ ...data, files: data.files.map(record => isDocumentation(`${browserPrefix}${record.path}`)
+      ? { ...record, sha256: null, modified: null } : record) });
+  };
+  return JSON.stringify(projection(base)) === JSON.stringify(projection(head));
 }
 
 function verifyLspConsumers(root, files) {
@@ -187,19 +209,28 @@ export function selectScope(root, env = process.env) {
       }
       return selection;
     }
-    if (paths.some(path => lspFiles.includes(path))) return full('Mixed LSP and other changes.');
     if (!regularChanges) return full('File type or uncertain status change.');
+    if (paths.some(path => /[\x00-\x1f\x7f]/u.test(path)
+        || path.split('/').some(part => !part || part === '.' || part === '..'))) return full('Uncertain changed path.');
+    const files = git(root, 'ls-files', '-z').split('\0').filter(Boolean);
+    const documentation = new Set(paths.filter(isDocumentation));
+    const provenance = `${browserPrefix}copy-provenance.json`;
+    if (paths.includes(provenance) && documentationProvenance(root, base, head)) documentation.add(provenance);
+    if (paths.every(path => documentation.has(path))) {
+      verifyMapping(root, files);
+      return finish({ mode: 'docs', browser: false, products: [], reason: 'Human documentation only.' });
+    }
+    if (paths.some(path => lspFiles.includes(path))) return full('Mixed LSP and other changes.');
     const selected = new Set();
     let browser = false;
     for (const path of paths) {
-      if (/[\x00-\x1f\x7f]/u.test(path)
-          || path.split('/').some(part => !part || part === '.' || part === '..')) return full('Uncertain changed path.');
+      if (documentation.has(path)) continue;
       if (sharedPrefixes.some(prefix => path.startsWith(prefix) || path === prefix.slice(0, -1))) return full('Shared helper change.');
       if (path.startsWith(browserPrefix)) browser = true;
       else if (Object.hasOwn(dependents, owner(path))) selected.add(owner(path));
       else return full('Shared infrastructure or unknown ownership.');
     }
-    verifyMapping(root, git(root, 'ls-files', '-z').split('\0').filter(Boolean));
+    verifyMapping(root, files);
     return finish({ mode: 'affected', browser, products: affectedProducts(selected), reason: 'Known projects and mapped dependents.' });
   } catch {
     return full('Unavailable history or uncertain dependency evidence.');

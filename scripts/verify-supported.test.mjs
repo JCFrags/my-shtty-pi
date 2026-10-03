@@ -7,13 +7,24 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { verifyBrowserCopy } from './verify-browser-copy.mjs';
-import { chronoScriptEnvironment, finishChronoBuild, imports, localReference, removeChronoBuildMaps, scanBoundary, scanFile, scanPrivacy, snapshotIndex, validateManifests, verifyStatic, walk } from './verify-supported.mjs';
+import { isDocumentation } from './ci-scope.mjs';
+import { chronoScriptEnvironment, finishChronoBuild, imports, localReference, removeChronoBuildMaps, scanBoundary, scanFile, scanPrivacy, snapshotIndex, validateManifests, verifyStatic, walk, main } from './verify-supported.mjs';
 
 function fixture(callback) {
   const root = mkdtempSync(join(tmpdir(), 'pi-verifier-test-'));
   try { return callback(root); } finally { rmSync(root, { recursive: true, force: true }); }
 }
 const git = (root, ...args) => execFileSync('git', args, { cwd: root, stdio: 'pipe', env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+
+test('documentation ownership excludes runtime templates, fixtures, and unknown roots', () => {
+  for (const path of ['README.md', 'docs/activation.md', 'skills/example/SKILL.md', 'packages/pi-herdr-orchestrator/docs/operations.md', 'packages/pi-context-kit/state-store/API.md', 'vendor/terminal-browser/docs/development.md']) assert.equal(isDocumentation(path), true, path);
+  for (const path of ['unknown.md', 'packages/unknown/README.md', 'packages/files-ui/test/fixture.md', 'vendor/terminal-browser/skill/terminal-browser/SKILL.template.md', '.github/workflows/verify.yml']) assert.equal(isDocumentation(path), false, path);
+});
+
+test('CI shared-check omission requires a selected executable product', () => {
+  assert.throws(() => main(['--skip-shared-checks']), /requires a selected executable product/);
+  assert.throws(() => main(['--product', 'files-ui', '--static-only', '--skip-shared-checks']), /requires a selected executable product/);
+});
 
 test('snapshot uses indexed bytes and excludes ignored and untracked inputs', () => fixture(root => {
   const source = join(root, 'source');
