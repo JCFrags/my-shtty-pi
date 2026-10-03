@@ -40,7 +40,7 @@
       "path": "README.md",
       "sourceSha256": "cc6be274fb1d624e367c8d6f1924cef4fa63499d0d4141a72192d8442aecdda1",
       "mode": 420,
-      "sha256": "c0abf97b5ff4ecd6a1494546b0ae0470d1fb856cba5a36f178af857860847385",
+      "sha256": "f22abeef18e0c48476f8d5369dc3be3acc0d1b6778a003a4317acb849a8fb189",
       "modified": true
     },
     {
@@ -467,7 +467,7 @@
       "path": "browser/src/session/browser-menu-controller.ts",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "e777cb7f5e6752fd704344a414752e71a5709276bb969d239372c9e39ac48fb5",
+      "sha256": "8a896d24fe7ecd88c415942a357d4a401c09d0175a4996e840a7d9b09cb375d0",
       "modified": true
     },
     {
@@ -509,7 +509,7 @@
       "path": "browser/src/session/session.tsx",
       "sourceSha256": "a3abe8c042e55ccb152f7aabab04b98f523851fddafba93e81c8d839a170cf4a",
       "mode": 420,
-      "sha256": "2bc10c2781ed71fb27c3589c5b882f42b7611917afa523b8dcb01dd54d256e89",
+      "sha256": "725b66a26f779e9c4a72e6c87d87437efd0485fd4a31dbfbc7cb7bb0d4ef61fd",
       "modified": true
     },
     {
@@ -544,14 +544,14 @@
       "path": "browser/src/ui/browser-menu.ts",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "1b16f47a85e045096b134ef7a2d48b2e9b3e9934b6911550e67fb989c2b0cfc8",
+      "sha256": "344b1633f8a66e137ca72ad33d4ccc3984dfcbf859279d4c92c126961e5839d8",
       "modified": true
     },
     {
       "path": "browser/src/ui/chrome.tsx",
       "sourceSha256": "3da27e0fcbe4673e03dde442caed73197dfa4c6a2f78b1ff694f5ae154693f4a",
       "mode": 420,
-      "sha256": "5e9d92526c9bf823d47cc2a6747991106360d6df2da8b824530159af8ee39bc1",
+      "sha256": "0ad8dd93b172c85d3bf29289938491af98cde8177c893d8a5aa72d48158cafe7",
       "modified": true
     },
     {
@@ -565,7 +565,7 @@
       "path": "browser/src/ui/control-strip.tsx",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "fa5ef8f348f6a08be06c199c5f03988451170ff18da2032f3dca6f17f7a7ca4a",
+      "sha256": "d1dcc6b1522b3bd41c4b086dcffac3b3098a79fc1e0fe77a1073f1c6823673e2",
       "modified": true
     },
     {
@@ -642,7 +642,7 @@
       "path": "browser/src/ui/types.ts",
       "sourceSha256": "ab5b22f2f3f835e4c94ed1f02f660fa042669306ebaa2feac48a2751a6e3fed3",
       "mode": 420,
-      "sha256": "8d128f6e6c47295b289fbe4dbf99861093146802a4fd7601c6cee87965a9d99b",
+      "sha256": "8cf4ef6bc149128ac8c1bd9e0bf9d98f3dc8157f628b6f2efdfcb5b72c9f81f2",
       "modified": true
     },
     {
@@ -1090,14 +1090,14 @@
       "path": "docs/installation.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "cd25c5b2651e985d2ee21dc59e8349412951fab1be835886fd6faffeb6fd8e52",
+      "sha256": "4f3d25c85b5f258f8c6af592abc74b57a2464f5f9b31114f6249e23981c39b6d",
       "modified": true
     },
     {
       "path": "docs/user-controls.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "35a49bb43e6f94bc9bed7079d3605d97fa52d4bc8738494dd06ea74ec3bc0dcc",
+      "sha256": "41e8899d570599dcf70e5fcc405f2fd89dd414d38efa20c13a1792f77a65b1e3",
       "modified": true
     },
     {
@@ -1979,7 +1979,7 @@
       "path": "package.json",
       "sourceSha256": "bd1a93e12f6394a5e20bfcb924ce6e343f3595187a7bc4bc1f988f1418f9ebe6",
       "mode": 420,
-      "sha256": "e5472c48c9ee8a414b2e096f8ebbcb79cd8e679e900acb21d0dde2f0862d655b",
+      "sha256": "746651731e1d4b93d8d75210124aa7810b7efa505ce04df4a89c677ac908d847",
       "modified": true
     },
     {
@@ -2336,7 +2336,7 @@
       "path": "skill/terminal-browser/SKILL.template.md",
       "sourceSha256": "fd3b2ae04ad254dbef1699b06c6dabb3642d0696d87bac146f01e529daf1d5e5",
       "mode": 420,
-      "sha256": "bc010a7e77f769789ed766f8cf03dde7857c3942787b09a2a8a81fb896e12b09",
+      "sha256": "af4d19b2b545d329732f4bb4cdfad87ce75e13c76fad8539b6d85e5c5213a752",
       "modified": true
     },
     {

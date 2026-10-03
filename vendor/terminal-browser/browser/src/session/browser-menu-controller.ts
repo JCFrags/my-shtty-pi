@@ -1,5 +1,5 @@
 import type { BrowserControl } from "../agent/control";
-import { browserMenuItems, type BrowserMenuPage, type BrowserMenuState } from "../ui/browser-menu";
+import { browserMenuItems, type BrowserMenuEntryPage, type BrowserMenuPage, type BrowserMenuState } from "../ui/browser-menu";
 import type { PageMenuItem } from "../ui/types";
 import type { ClosePreview, CompanionService, HumanCapture, ReceiverBinding } from "./companion-service";
 
@@ -7,7 +7,7 @@ interface BrowserMenuHost {
   service: CompanionService;
   control: BrowserControl;
   selectMode(mode: "agent" | "human" | "shared"): void;
-  show(): void;
+  show(entryPage: BrowserMenuEntryPage): void;
   close(): void;
   focusPage(): void;
   render(): void;
@@ -19,6 +19,7 @@ interface BrowserMenuHost {
 /** Native user choices use the same service as the owner-scoped CLI. */
 export class NativeBrowserMenu {
   private page: BrowserMenuPage = "main";
+  private entryPage: BrowserMenuEntryPage = "main";
   private preview: { page: HumanCapture; receiver: ReceiverBinding } | null = null;
   private closePreview: ClosePreview | null = null;
   private disconnectPreview: ReceiverBinding | null = null;
@@ -27,21 +28,23 @@ export class NativeBrowserMenu {
 
   constructor(private readonly host: BrowserMenuHost) {}
 
-  open(): void {
+  open(entryPage: BrowserMenuEntryPage = "main"): void {
     this.closed();
-    this.show("main");
+    this.entryPage = entryPage;
+    this.show(entryPage);
   }
 
   closed(): void {
     this.generation++;
     this.page = "main";
+    this.entryPage = "main";
     this.preview = null;
     this.closePreview = null;
     this.disconnectPreview = null;
   }
 
   back(): void {
-    if (this.page === "main") this.host.close();
+    if (this.page === this.entryPage) this.host.close();
     else this.show(this.page === "send-link" || this.page === "send-visual" ? "send"
       : this.page === "blocking" || this.page === "tools" || this.page === "disconnect" ? "settings" : "main");
   }
@@ -63,6 +66,9 @@ export class NativeBrowserMenu {
     let items = browserMenuItems(this.page, state);
     if (this.page === "blocking") items = [...this.host.blockingItems(), ...items];
     if (this.page === "tools") items = [...this.host.toolItems().filter(item => !item.id.startsWith("blocking:")), ...items];
+    if (this.page === this.entryPage && this.entryPage !== "main") {
+      items = items.map(item => item.id === "browser:back" ? { ...item, label: "Dismiss" } : item);
+    }
     return this.busy ? items.map(item => ({ ...item, enabled: item.id === "browser:back" && item.enabled })) : items;
   }
 
@@ -146,6 +152,6 @@ export class NativeBrowserMenu {
 
   private show(page: BrowserMenuPage): void {
     this.page = page;
-    this.host.show();
+    this.host.show(this.entryPage);
   }
 }

@@ -121,7 +121,7 @@ export function Chrome({
               {record?.stopped && <ReviewToolbar view={record} actions={actions} layout={layout} theme={theme} />}
             </Box>
             <ControlStrip control={agentControl} detail={controlDetail} compact={layout.width < layout.rem * 40}
-              rem={layout.rem} theme={theme} openMenu={actions.tabMenu} />
+              rem={layout.rem} theme={theme} openMenu={actions.tabMenu} openControl={actions.controlMenu} />
           </Box>
         ) : (
           <Toolbar
@@ -382,13 +382,14 @@ function Toolbar({
         theme={theme}
       />
       {blockingLabel && <Box
+        id="browser-blocking"
         style={{ width: rem * 6, height: rem * 1.6, alignItems: "center", justifyContent: "center", flexShrink: 0, hoverBackground: theme.hover, cornerRadius: rem * 0.3 }}
-        onClick={actions.tabMenu}
+        onClick={actions.blockingMenu}
       >
         <Text style={{ fontSize: rem * 0.75, color: theme.fg, wrap: false, selectable: false }}>{blockingLabel}</Text>
       </Box>}
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
-      <ControlStrip control={control} detail={controlDetail} compact={compact} rem={rem} theme={theme} openMenu={actions.tabMenu} />
+      <ControlStrip control={control} detail={controlDetail} compact={compact} rem={rem} theme={theme} openMenu={actions.tabMenu} openControl={actions.controlMenu} />
     </Box>
   );
 }

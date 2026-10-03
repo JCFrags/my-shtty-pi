@@ -42,6 +42,7 @@ import type { RecordActions } from "../record/types";
 import { Registry } from "../registry";
 import { Chrome } from "../ui/chrome";
 import { AgentOverlayRenderCoalescer } from "../ui/agent-overlay";
+import { browserMenuItems, type BrowserMenuEntryPage } from "../ui/browser-menu";
 import { ICONS } from "../ui/icons";
 import type {
   ChromeActions,
@@ -287,7 +288,7 @@ class Session {
         linkURL: string;
         selectionText: string;
       }
-    | { kind: "toolbar" }
+    | { kind: "toolbar"; page: BrowserMenuEntryPage }
     | { kind: "recovery" }
     | null = null;
   private sentCursor: string | null = null;
@@ -530,7 +531,7 @@ class Session {
     this.nativeMenu = new NativeBrowserMenu({
       service: this.companion, control: this.control,
       selectMode: mode => { this.selectControlMode(mode, this.control.controlEpoch); },
-      show: () => { this.pageMenu = { kind: "toolbar" }; this.pageMenuIndex = 0; this.render(); },
+      show: page => { this.pageMenu = { kind: "toolbar", page }; this.pageMenuIndex = 0; this.render(); },
       close: () => this.closePageMenu(),
       focusPage: () => this.refocusPage(),
       render: () => this.render(),
@@ -1197,6 +1198,8 @@ class Session {
       this.openNewTabModal();
     },
     tabMenu: () => this.toggleToolbarMenu(),
+    controlMenu: () => this.toggleToolbarMenu("control"),
+    blockingMenu: () => this.toggleToolbarMenu("blocking"),
     newTabQuery: (text) => {
       this.humanChange("keyboard");
       this.newTabQuery(text);
@@ -1802,15 +1805,15 @@ class Session {
     this.render();
   }
 
-  private toggleToolbarMenu() {
+  private toggleToolbarMenu(page: BrowserMenuEntryPage = "main") {
     if (this.recovery?.pending) { this.pageMenu = { kind: "recovery" }; this.render(); return; }
-    if (this.pageMenu?.kind === "toolbar") {
+    if (this.pageMenu?.kind === "toolbar" && this.pageMenu.page === page) {
       this.closePageMenu();
       return;
     }
     if (this.palette || this.newTab || this.urlEditOpen) return;
-    if (this.nativeMenu) { this.nativeMenu.open(); return; }
-    this.pageMenu = { kind: "toolbar" };
+    if (this.nativeMenu) { this.nativeMenu.open(page); return; }
+    this.pageMenu = { kind: "toolbar", page };
     this.pageMenuIndex = 0;
     this.render();
   }
@@ -1825,7 +1828,16 @@ class Session {
       catch (error) { this.showToast(error instanceof Error ? error.message : "Recovery choice failed. It was not replayed.", "failed"); }
       return;
     }
-    if (id.startsWith("browser:")) { void this.nativeMenu?.run(id); return; }
+    if (id.startsWith("browser:")) {
+      if (this.nativeMenu) { void this.nativeMenu.run(id); return; }
+      if (id === "browser:back") { this.closePageMenu(); return; }
+      const mode = id.slice("browser:mode-".length);
+      if (id.startsWith("browser:mode-") && (mode === "agent" || mode === "human" || mode === "shared")) {
+        try { this.selectControlMode(mode, this.control.controlEpoch); this.closePageMenu(); }
+        catch (error) { this.showToast(error instanceof Error ? error.message : "Control change failed.", "failed"); }
+      }
+      return;
+    }
     const menu = this.pageMenu;
     this.closePageMenu();
     const browser = this.tabs.activeController;
@@ -1999,7 +2011,13 @@ class Session {
       return { x: Math.round(this.layout.width / 8), y: this.layout.toolbarHeight, items, selectedIndex: selectedIndex(items) };
     }
     if (this.pageMenu.kind === "toolbar") {
-      const items = this.nativeMenu?.items() ?? this.toolMenuItems();
+      const items = this.nativeMenu?.items() ?? (this.pageMenu.page === "control"
+        ? browserMenuItems("control", { mode: this.control.state, receiverLabel: null, receiverOnline: false,
+          pendingShare: false, updatesEnabled: false, updatesActive: false })
+          .map(item => item.id === "browser:back" ? { ...item, label: "Dismiss" } : item)
+        : this.pageMenu.page === "blocking"
+          ? [...this.blockingMenuItems(), { id: "browser:back", label: "Dismiss", enabled: true, shortcut: "Esc" }]
+          : this.toolMenuItems());
       return { x: this.layout.width, y: this.layout.toolbarHeight, items, selectedIndex: selectedIndex(items) };
     }
     if (this.pageMenu.kind !== "page") return null;
