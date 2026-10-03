@@ -21,13 +21,13 @@ export const CHRONO_PREDECESSOR_BASELINE = Object.freeze({
   "version": "4.0.6-local.20260927"
 });
 export const CHRONO_BASELINE = Object.freeze({
-  "commit": "b3a73d508a1b162e5c3f93b7d4c58651cafd3b6c",
-  "upstreamTree": "38352e77238e11fae79f687c74af292b9276921c",
-  "tree": "38352e77238e11fae79f687c74af292b9276921c",
+  "commit": "e68d6edc19a4cfcd4640e66578f3e28fadede316",
+  "upstreamTree": "0ad50609239f488198dcdb63811a9d9b1c6baed4",
+  "tree": "0ad50609239f488198dcdb63811a9d9b1c6baed4",
   "files": 456,
   "maps": 143,
   "package": "packages/pi-chrono-compaction",
-  "version": "4.0.8-local.20261002",
+  "version": "4.0.9-local.20261003",
   "integrationDifferences": []
 });
 const fail = code => { throw new Error(code); };
