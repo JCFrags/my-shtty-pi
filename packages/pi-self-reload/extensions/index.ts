@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import reloadAll from "./reload-all.ts";
 
 const VERSION = "0.1.0";
 const READINESS_EVENT = "grounded:session-transition-readiness:v1";
@@ -13,6 +14,7 @@ interface Request {
 }
 
 export default function selfReload(pi: ExtensionAPI): void {
+  reloadAll(pi);
   // Capture loaded bytes, not whatever a later edit leaves at this path.
   const loaded = {
     version: VERSION,

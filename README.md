@@ -57,7 +57,7 @@ The [registry](package.json) contains 17 owned products: 15 active and two inact
 | [Pi Pixel CUA Portal](packages/pi-pixel-cua/README.md) | Observe and control one explicitly granted native GNOME Wayland window through pixels. | `cua_portal_start`, `cua_portal_observe`, `cua_portal_act`, `cua_portal_stop`, `/pixel-cua-status`, `/pixel-cua-stop` |
 | [Pi Progressive Tools](packages/pi-progressive-tools/README.md) | Keep a short tool catalog visible and enable permitted tools through exact-name help. | `list_tools`, `tool_help`, `/tool-audit`, `/tool-reset` |
 | [Pi Project Glance](packages/pi-project-glance/README.md) | Show current task state, 10 rolling recent updates, complete History, and deferred questions in a Herdr pane. | `/project-glance`. No model-facing tool. |
-| [Pi-SelfReload](packages/pi-self-reload/README.md) | Let the agent reload its own interactive Pi session after work settles, with draft and managed-job checks. Requires Pi 0.99.1 or compatible later behavior. | `self_reload`, `/self-reload` |
+| [Pi-SelfReload](packages/pi-self-reload/README.md) | Reload one session or local Pi agents with native input and job checks. Fleet reload resumes only interrupted runs, not idle or completed agents. Requires Pi 0.99.1 or compatible later behavior. | `self_reload`, `/self-reload`, `/reload-all` |
 
 ### Inactive products
 
