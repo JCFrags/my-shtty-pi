@@ -101,7 +101,7 @@ test("session summary precedes bounded chronological events and charges the comp
 test("native replay terms are bounded current data and never displace explicit model hints", () => {
   const providers: ProviderId[] = ["todo", "notes", "workplan", "memory"];
   const statuses = { todo: "in_progress", notes: "active", workplan: "paused", memory: "active" };
-  const recovery = (provider: ProviderId, id: string): ContextCard["recovery"] => provider === "todo" ? { tool: "todo", args: { action: "list" } }
+  const recovery = (provider: ProviderId, id: string): ContextCard["recovery"] => provider === "todo" ? { tool: "todo", args: { action: "read", id } }
     : provider === "notes" ? { tool: "notes", args: { action: "read", id } }
       : provider === "workplan" ? { tool: "workplan", args: { action: "recover", planId: id } }
         : { tool: "memory_get", args: { memoryId: id, revision: "3" } };
@@ -139,6 +139,12 @@ test("native replay terms are bounded current data and never displace explicit m
   const proposalOnly = { ...native, providers: [{ ...native.providers[3]!, page: { ...native.providers[3]!.page!,
     cards: [native.providers[3]!.page!.cards[3]!] } }] };
   assert.deepEqual(nativeReplayRelevance(proposalOnly, []), []);
+  const activePlan = structuredClone(native.providers[2]!);
+  activePlan.page!.cards = [activePlan.page!.cards[2]!, { ...activePlan.page!.cards[3]!, status: "active", title: "Selected project",
+    text: "currentFocus: src/selected-project.ts" }];
+  const activeTerms = nativeReplayRelevance({ ...native, providers: [activePlan] }, []);
+  assert.ok(activeTerms.includes("src/selected-project.ts"));
+  assert.ok(!activeTerms.includes("src/workplan-current-2.ts"), "a paused project does not drive hints when an active plan is captured");
   assert.deepEqual(nativeReplayRelevance(native, modelHints), terms);
   assert.equal(JSON.stringify(native), original);
   assert.equal(JSON.stringify(modelHints), modelOriginal);

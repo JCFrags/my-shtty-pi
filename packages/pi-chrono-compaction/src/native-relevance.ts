@@ -34,9 +34,13 @@ function cardTerms(card: ContextCard): string[] {
 export function nativeReplayRelevance(native: ContextCollection, modelHints: readonly string[]): readonly string[] {
   const terms = [...new Set(modelHints.slice(0, CHRONOLOGICAL_REPLAY_LIMITS.relevanceTerms).map(normalize).filter(Boolean))];
   const seen = new Set(terms);
-  const queues = native.providers.map(provider => provider.status === "ok" && provider.page?.readiness === "ready"
-    ? provider.page.cards.filter(card => CURRENT_STATUSES[provider.providerId].includes(card.status)
-      && (provider.providerId !== "memory" || card.category === "knowledge")).flatMap(cardTerms) : []);
+  const queues = native.providers.map(provider => {
+    if (provider.status !== "ok" || provider.page?.readiness !== "ready") return [];
+    const activePlan = provider.providerId === "workplan" && provider.page.cards.some(card => card.status === "active");
+    return provider.page.cards.filter(card => CURRENT_STATUSES[provider.providerId].includes(card.status)
+      && (!activePlan || card.status === "active")
+      && (provider.providerId !== "memory" || card.category === "knowledge")).flatMap(cardTerms);
+  });
   const positions = queues.map(() => 0);
   let added = 0, progress = true;
   while (progress && added < NATIVE_RELEVANCE_LIMITS.terms && terms.length < CHRONOLOGICAL_REPLAY_LIMITS.relevanceTerms) {
