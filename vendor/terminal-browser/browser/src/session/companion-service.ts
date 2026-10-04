@@ -42,7 +42,7 @@ export interface CompanionStatus extends CompanionAddress {
   binding: ReceiverBinding | null;
   receiverOnline: boolean;
   pendingShareId: string | null;
-  updates: { enabled: boolean; active: boolean; description: string };
+  updates: { enabled: boolean; suspended: boolean; active: boolean; description: string };
   mode: CompanionMode;
   controlEpoch: number;
   limits: string[];
@@ -89,6 +89,7 @@ export interface CompanionRequest {
   receiverGeneration?: unknown;
   bindingId?: unknown;
   replaceBindingId?: unknown;
+  suspendAutomatic?: unknown;
   enabled?: unknown;
   after?: unknown;
   timeoutMs?: unknown;
@@ -110,6 +111,7 @@ export class CompanionService {
   private binding: ReceiverBinding | null = null;
   private former: ReceiverTuple | null = null;
   private updatesEnabled = true;
+  private automaticSuspended = false;
   private sequence = 0;
   private automatic: CompanionEvent | null = null;
   private shareEvent: CompanionEvent | null = null;
@@ -143,7 +145,7 @@ export class CompanionService {
     return {
       ...this.address(), sequence: this.sequence, binding: this.binding ? { ...this.binding } : null,
       receiverOnline: !!this.waiter, pendingShareId: this.shareEvent?.shareId ?? null,
-      updates: { enabled: this.updatesEnabled, active: this.autoEligible(), description: "Shared page screenshots go to the associated receiver. They do not request an automatic reply." },
+      updates: { enabled: this.updatesEnabled, suspended: this.automaticSuspended, active: this.autoEligible(), description: this.automaticSuspended ? "Automatic screenshots are suspended for this connection. Select Shared or set the updates preference explicitly to clear suspension." : "Shared page screenshots go to the associated receiver. They do not request an automatic reply." },
       mode: control.state, controlEpoch: control.controlEpoch,
       limits: ["Visual changes are heuristic, not complete page observation.", "Host occlusion and terminal IME preedit are not reported.", "Delivered pixels cannot be recalled from the receiver."],
     };
@@ -167,15 +169,20 @@ export class CompanionService {
     return { ...status, ...this.address() };
   }
 
-  bind(options: { receiverKind: "pi" | "cli"; receiverSessionId: string; receiverGeneration: string; replaceBindingId?: string }): CompanionStatus {
+  bind(options: { receiverKind: "pi" | "cli"; receiverSessionId: string; receiverGeneration: string; replaceBindingId?: string; suspendAutomatic?: boolean }): CompanionStatus {
     this.assertLive();
     receiverKind(options.receiverKind);
     boundedString(options.receiverSessionId, "receiverSessionId", 512);
     uuid(options.receiverGeneration, "receiverGeneration");
     if (options.replaceBindingId !== undefined) uuid(options.replaceBindingId, "replaceBindingId");
+    if (options.suspendAutomatic !== undefined && typeof options.suspendAutomatic !== "boolean") throw new Error("suspendAutomatic must be boolean");
     const same = this.binding && this.binding.receiverKind === options.receiverKind && this.binding.receiverSessionId === options.receiverSessionId && this.binding.receiverGeneration === options.receiverGeneration;
     if (same) {
       if (options.replaceBindingId !== undefined && options.replaceBindingId !== this.binding!.bindingId) throw new Error("receiver replacement binding changed");
+      if (options.suspendAutomatic === true && !this.automaticSuspended) {
+        this.automaticSuspended = true;
+        this.refreshAutomatic();
+      }
       return this.status();
     }
     if (this.binding) {
@@ -184,6 +191,7 @@ export class CompanionService {
     this.clearBindingData("receiver binding changed");
     this.binding = { bindingId: randomUUID(), receiverKind: options.receiverKind, receiverSessionId: options.receiverSessionId, receiverGeneration: options.receiverGeneration };
     this.former = null;
+    this.automaticSuspended = options.suspendAutomatic === true;
     if (this.autoEligible()) this.feed.start("follow-start");
     this.notify();
     return this.status();
@@ -196,6 +204,7 @@ export class CompanionService {
     this.requireBinding(tuple);
     this.clearBindingData("receiver was unbound");
     this.binding = null;
+    this.automaticSuspended = false;
     this.former = { ...tuple };
     this.notify();
     return { ...this.address(), unbound: true };
@@ -204,15 +213,28 @@ export class CompanionService {
   setUpdates(options: ReceiverTuple & { enabled: boolean }): CompanionStatus {
     this.requireBinding(options);
     if (typeof options.enabled !== "boolean") throw new Error("enabled must be boolean");
-    if (this.updatesEnabled === options.enabled) return this.status();
+    if (this.updatesEnabled === options.enabled && !this.automaticSuspended) return this.status();
     this.updatesEnabled = options.enabled;
+    this.automaticSuspended = false;
+    this.refreshAutomatic();
+    return this.status();
+  }
+
+  /** Call only after an explicit Shared choice succeeds, including a same-mode choice. */
+  explicitSharedChoice() {
+    this.assertLive();
+    if (this.host.control().state !== "shared" || !this.binding || !this.automaticSuspended) return;
+    this.automaticSuspended = false;
+    this.refreshAutomatic();
+  }
+
+  private refreshAutomatic() {
     this.captureGeneration++;
     this.automatic = null;
     this.feed.clear();
     if (this.autoEligible()) this.feed.start("follow-start");
     else this.publishControl();
     this.notify();
-    return this.status();
   }
 
   controlChanged() {
@@ -395,7 +417,10 @@ export class CompanionService {
         return this.chooseRecovery(request.choice, request.revision);
       }
       case "receiver.status": return this.status();
-      case "receiver.bind": return this.bind({ receiverKind: receiverKind(request.receiverKind), receiverSessionId: boundedString(request.receiverSessionId, "receiverSessionId", 512), receiverGeneration: uuid(request.receiverGeneration, "receiverGeneration"), ...(request.replaceBindingId === undefined ? {} : { replaceBindingId: uuid(request.replaceBindingId, "replaceBindingId") }) });
+      case "receiver.bind": {
+        if (request.suspendAutomatic !== undefined && typeof request.suspendAutomatic !== "boolean") throw new Error("suspendAutomatic must be boolean");
+        return this.bind({ receiverKind: receiverKind(request.receiverKind), receiverSessionId: boundedString(request.receiverSessionId, "receiverSessionId", 512), receiverGeneration: uuid(request.receiverGeneration, "receiverGeneration"), ...(request.replaceBindingId === undefined ? {} : { replaceBindingId: uuid(request.replaceBindingId, "replaceBindingId") }), ...(request.suspendAutomatic === undefined ? {} : { suspendAutomatic: request.suspendAutomatic }) });
+      }
       case "receiver.unbind": return this.unbind(tuple());
       case "updates.set": {
         if (typeof request.enabled !== "boolean") throw new Error("enabled must be boolean");
@@ -442,7 +467,7 @@ export class CompanionService {
   }
 
   private autoEligible() {
-    return !this.disposed && !this.closing && !!this.binding && this.updatesEnabled && this.host.control().state === "shared";
+    return !this.disposed && !this.closing && !!this.binding && this.updatesEnabled && !this.automaticSuspended && this.host.control().state === "shared";
   }
 
   private clearBindingData(reason: string) {

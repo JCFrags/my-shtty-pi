@@ -64,7 +64,14 @@ A conflict refuses unless the user confirms replacement of the exact old binding
 A missing owner never falls back to a neighboring or latest browser. Owner IDs
 route same-user processes. They are not authentication credentials.
 
-The Pi menu stores an explicit association in the active Pi branch. A native CLI
+An agent-opened browser connects to its opening Pi conversation when exact
+current launch origin is available. For a user-opened or older browser, run
+`/browser` in the intended conversation and choose Connect existing browser.
+Select the terminal, owner, and launch project. This connects the existing
+browser without typed IDs or a duplicate launch. Connection does not capture or
+send page data.
+
+The Pi menu stores the exact association in the active Pi branch. A native CLI
 owner can override pane-based Herdr ownership. Branch or session changes invalidate
 the live receiver before cleanup. An inherited association is inert when the Pi
 session does not match. Loading the package factory does not start a browser,
@@ -80,8 +87,10 @@ a PNG file. Image output creates a new private file and refuses overwrite.
 ## Page updates and Send
 
 Shared page updates are on by default but remain dormant outside Shared or
-without an associated receiver. The settings menu shows the preference and its
-active state. Human and Paused purge pending automatic pixels. Disconnect stops
+without an associated receiver. A new Pi binding suspends automatic capture
+without changing this preference or control mode. An explicit Shared or updates
+choice can permit capture for the binding. The settings menu shows the preference
+and its active state. Human and Paused purge pending automatic pixels. Disconnect stops
 the wait and discards pending data. Previously delivered pixels cannot be recalled.
 
 Automatic updates are informational page captures, not observations or action

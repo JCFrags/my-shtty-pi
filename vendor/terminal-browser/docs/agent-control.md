@@ -27,8 +27,15 @@ pane-based ownership for its optional adapter. Do not alternate those owners wit
 a neutral `--session` owner and assume they refer to the same browser.
 
 Launch does not install skills or run setup. If the environment cannot create a
-visible pane safely, ask the human to launch in a separate terminal. A browser
-without an explicit owner is not a fallback for project transfers.
+visible pane safely, ask the human to launch in a separate terminal. Ordinary
+launches without owner flags receive an internal owner. Use explicit task IDs
+for stable scripted commands, or the exact connected route reported by Pi.
+Never adopt an unrelated browser as a fallback for project transfers.
+
+The optional Pi menu carries exact conversation origin separately from the task
+owner. A successful current-origin launch connects to that conversation without
+capturing or sending a page. For user or legacy launches, `/browser` offers
+Connect existing browser. See the [connection guide](../pi-extension/README.md#connect-a-browser).
 
 ## JSON, observations, and epochs
 

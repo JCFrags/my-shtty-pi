@@ -19,7 +19,7 @@ import {
   upsertInstance,
   withdrawInstance,
 } from "pixel-store";
-import type { BrowserOwner, InstanceRow, OpenResult, OpenSpec } from "pixel-store";
+import type { BrowserOwner, PiOrigin, InstanceRow, OpenResult, OpenSpec } from "pixel-store";
 
 import type { AgentControlSnapshot } from "./agent/control";
 import {
@@ -73,6 +73,7 @@ export interface ControlHost {
   key: string;
   tty: string | null;
   owner: BrowserOwner | null;
+  origin?: PiOrigin | null;
   startupAttempt: string | null;
   where(): Promise<Where>;
   splitDir: InstanceRow["splitDir"];
@@ -233,6 +234,8 @@ export class Registry {
       socket: this.socketPath,
       startedAt: this.startedAt,
       owner: this.host.owner,
+      origin: this.host.origin ?? null,
+      runtime: RUNTIME_IDENTITY,
     });
   }
 
@@ -319,7 +322,7 @@ export class Registry {
     signal.throwIfAborted();
     switch (request.cmd) {
       case "hello":
-        return { identity: RUNTIME_IDENTITY, key: this.host.key, owner: this.host.owner ? { workspaceId: this.host.owner.workspaceId, tabId: this.host.owner.tabId, paneId: this.host.owner.paneId } : null, where: await this.host.where() };
+        return { identity: RUNTIME_IDENTITY, key: this.host.key, owner: this.host.owner, origin: this.host.origin ?? null, where: await this.host.where() };
       case "state":
         return this.record();
       case "where":

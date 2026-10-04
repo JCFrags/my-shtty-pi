@@ -52,6 +52,12 @@ This occupies that terminal. Run agent commands from another terminal or pane.
 Add `--split right` only when the terminal's adapter supports it. Do not launch
 an interactive browser over the agent's own piped input/output.
 
+For user browsing, `terminal-browser open https://example.com` creates an internal
+owner. With the Pi menu loaded, a launch from that conversation connects through
+its exact current launch origin. For a user-opened or older browser, choose
+`/browser` then Connect existing browser. No typed ID or second browser is needed.
+Connection does not change control or send page data. See the [Pi connection guide](pi-extension/README.md#connect-a-browser).
+
 ```sh
 terminal-browser session tabs --session task-a --project /absolute/project --action list
 terminal-browser agent observe --session task-a --project /absolute/project --max-elements 120

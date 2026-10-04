@@ -28,8 +28,10 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
-import { RUNTIME_IDENTITY, TAB_RECOVERY_DIR, appId, lastUrl, listApps, parseBrowserOwner, setLastUrl, settings, store } from "pixel-store";
+import { RUNTIME_IDENTITY, TAB_RECOVERY_DIR, appId, lastUrl, listApps, parseBrowserOwner, piOriginFromEnvironment, setLastUrl, settings, store } from "pixel-store";
 import type {
+  BrowserOwner,
+  PiOrigin,
   DevtoolsDock,
   InstanceRow,
   OpenResult,
@@ -81,7 +83,8 @@ export interface SessionContext {
 
 export interface SessionMetadata {
   key: string;
-  owner: { workspaceId: string; tabId: string; paneId: string } | null;
+  owner: BrowserOwner | null;
+  origin: PiOrigin | null;
   terminal: string | null;
   tab: string | null;
   pane: string | null;
@@ -200,6 +203,7 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
 class Session {
   private readonly ctx: SessionContext;
   private readonly owner: ReturnType<typeof parseBrowserOwner>;
+  private readonly origin: PiOrigin | null;
   private readonly terminal: Terminal | null;
   private readonly marker: string;
   private ownPane: Pane | null = null;
@@ -316,6 +320,7 @@ class Session {
     this.ctx = ctx;
     const owner = parseBrowserOwner(ctx.env);
     this.owner = owner ? { ...owner, projectDir: fs.realpathSync(owner.projectDir) } : null;
+    this.origin = piOriginFromEnvironment(ctx.env);
     this.terminal = detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
     this.argv = ctx.argv;
@@ -480,7 +485,9 @@ class Session {
   private selectControlMode(mode: "agent" | "human" | "shared", epoch: number) {
     this.assertRecoveryChosen();
     if (mode !== "human" && this.tabs.sessionClosePending) throw new Error("Resolve the pending owned close before changing control.");
-    return this.control.selectMode(mode, epoch);
+    const state = this.control.selectMode(mode, epoch);
+    if (mode === "shared") this.companion?.explicitSharedChoice();
+    return state;
   }
 
   private installCompanion(): void {
@@ -760,6 +767,7 @@ class Session {
       key: this.ctx.key,
       tty: this.ctx.tty ?? null,
       owner: this.owner,
+      origin: this.origin,
       startupAttempt: /^[a-f0-9-]{36}$/.test(this.ctx.env.TERMINAL_BROWSER_STARTUP_ATTEMPT ?? "")
         ? this.ctx.env.TERMINAL_BROWSER_STARTUP_ATTEMPT!
         : null,
@@ -831,7 +839,8 @@ class Session {
   metadata(): SessionMetadata {
     return {
       key: this.ctx.key,
-      owner: this.owner ? { workspaceId: this.owner.workspaceId, tabId: this.owner.tabId, paneId: this.owner.paneId } : null,
+      owner: this.owner ? { ...this.owner } : null,
+      origin: this.origin,
       terminal: this.terminal?.name ?? null,
       tab: this.ownPane?.tab ?? null,
       pane: this.ownPane?.id ?? null,

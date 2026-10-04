@@ -10,6 +10,7 @@ export interface BrowserMenuState {
   receiverOnline: boolean;
   pendingShare: boolean;
   updatesEnabled: boolean;
+  updatesSuspended?: boolean;
   updatesActive: boolean;
   page?: { title: string; url: string };
   close?: {
@@ -50,7 +51,8 @@ export function browserMenuItems(page: BrowserMenuPage, state: BrowserMenuState)
     case "settings":
       return [
         item("receiver-info", `Receiver: ${receiver}`, false),
-        item("updates", `Shared page updates: ${state.updatesEnabled ? "On" : "Off"}${state.updatesActive ? " (active)" : ""}`, state.receiverLabel !== null),
+        item("updates", `Shared page updates: ${state.updatesEnabled ? "On" : "Off"}${state.updatesSuspended ? " (suspended)" : state.updatesActive ? " (active)" : ""}`, state.receiverLabel !== null),
+        ...(state.updatesSuspended ? [item("suspension-info", "Select Shared explicitly to clear suspension", false)] : []),
         item("updates-info", "Page screenshots can contain private data", false),
         item("disconnect", "Disconnect this receiver", state.receiverLabel !== null),
         back(),
