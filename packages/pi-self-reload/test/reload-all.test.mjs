@@ -35,6 +35,7 @@ function host(options = {}) {
     const pi = {
       on: (name, handler) => { const list = handlers.get(name) ?? []; list.push(handler); handlers.set(name, list); },
       registerCommand: (name, command) => commands.set(name, command),
+      registerTool: () => {},
       getAllTools: () => { check(); return state.tools.map(name => ({ name })); },
       events: {
         on: (name, handler) => bus.set(name, handler),
@@ -103,7 +104,7 @@ test('drafts, input, prompts, tools, jobs, cancelling runs, and changed target i
       await create({ idle: false }),
     ];
     protectedHosts[3].blocked();
-    await protectedHosts[4].emit('tool_execution_start');
+    await protectedHosts[4].emit('tool_execution_start', { toolCallId: 'protected-write', toolName: 'write' });
     await protectedHosts[5].emit('agent_start');
     protectedHosts[5].controller.abort();
     await caller.command('');
