@@ -1,7 +1,7 @@
 {
   "name": "pi-self-reload",
-  "version": "0.1.0",
-  "description": "Let the agent reload its own interactive Pi session at a safe idle boundary.",
+  "version": "0.3.0",
+  "description": "One native reload tool and safety engine for the current Pi session or local agents.",
   "private": true,
   "type": "module",
   "license": "MIT",

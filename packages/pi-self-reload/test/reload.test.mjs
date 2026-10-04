@@ -6,6 +6,7 @@ function harness() {
   let tool, command, commandRun;
   const handlers = new Map();
   const idle = Promise.withResolvers();
+  const operation = new AbortController();
   const state = { draft: '', queued: false, idle: false, reloads: 0, replies: [{ protocolVersion: 1, runningProcesses: 0, openSessions: 0 }], tools: ['process'], mode: 'tui', errors: [], notifications: [] };
   const pi = {
     on: (event, handler) => handlers.set(event, handler),
@@ -25,7 +26,11 @@ function harness() {
     get mode() { return state.mode; },
     hasPendingMessages: () => state.queued,
     isIdle: () => state.idle,
-    sessionManager: { getSessionId: () => 'session-a' },
+    signal: operation.signal,
+    sessionManager: {
+      getSessionId: () => 'session-a',
+      getBranch: () => [{ type: 'message', message: { role: 'assistant', content: state.batch ?? [{ type: 'toolCall', id: 'call-a', name: 'self_reload', arguments: {} }] } }],
+    },
     ui: { getEditorText: () => state.draft, notify: text => state.notifications.push(text) },
     waitForIdle: () => idle.promise,
     reload: async () => {
@@ -39,9 +44,20 @@ function harness() {
     },
   };
   selfReload(pi);
+  handlers.get('agent_start')();
   return {
     state, handlers,
-    call: (params = {}, signal) => tool.execute('call-a', params, signal, undefined, ctx),
+    call: async (params = {}, signal) => {
+      handlers.get('tool_execution_start')({ toolCallId: 'call-a', toolName: 'self_reload' });
+      try {
+        const result = await tool.execute('call-a', params, signal, undefined, ctx);
+        handlers.get('tool_execution_end')({ toolCallId: 'call-a', toolName: 'self_reload', result, isError: false });
+        return result;
+      } catch (error) {
+        handlers.get('tool_execution_end')({ toolCallId: 'call-a', toolName: 'self_reload', isError: true });
+        throw error;
+      }
+    },
     finish: async () => { state.idle = true; idle.resolve(); await commandRun; },
   };
 }
@@ -49,7 +65,8 @@ function harness() {
 test('tool returns before idle, dispatches a command, and reloads once without stale access', async () => {
   const h = harness();
   const status = await h.call({ action: 'status' });
-  assert.equal(status.details.version, '0.1.0');
+  assert.equal(status.details.version, '0.3.0');
+  assert.equal(status.details.scope, 'self');
   assert.match(status.details.sha256, /^[a-f0-9]{64}$/);
   const result = await h.call();
   assert.equal(result.details.status, 'queued');
@@ -70,6 +87,7 @@ test('safety gates refuse or cancel instead of discarding drafts, jobs, or abort
     { replies: [{ protocolVersion: 1, runningProcesses: 0, openSessions: 1 }] },
     { replies: [{}] },
     { replies: [] },
+    { batch: [{ type: 'toolCall', id: 'call-a', name: 'self_reload' }, { type: 'toolCall', id: 'call-b', name: 'write' }] },
   ]) {
     const h = harness();
     Object.assign(h.state, patch);
@@ -81,7 +99,7 @@ test('safety gates refuse or cancel instead of discarding drafts, jobs, or abort
   draft.state.draft = 'typed while waiting';
   await draft.finish();
   assert.equal(draft.state.reloads, 0);
-  assert.match(draft.state.errors[0].message, /draft/);
+  assert.match(draft.state.notifications[0], /draft/);
   assert.equal(draft.state.draft, 'typed while waiting');
 
   const cancelled = harness();
