@@ -185,7 +185,7 @@ package's README before enabling its optional integrations:
 | Extension | Required setup or startup check |
 | --- | --- |
 | Progressive Tools | Review `progressive-tools.json` policy. `/tool-audit` shows allowed names and schema exposure. |
-| Grounded Tools | Configure language-server executables in `grounded-tools/lsp.json` when needed. Stateless file/process tools need no SSH route. |
+| Grounded Tools | Configure language servers/presets in `grounded-tools/lsp.json` and optional Pyright CLI/Ruff/Vale/ShellCheck executables in `grounded-tools/checks.json`. See [checks](../packages/grounded-tools/lsp/CHECKS.md) and [server prerequisites](../packages/grounded-tools/lsp/SERVERS.md). Stateless file/process tools need no SSH route. |
 | Dialog and Glance | Set `askUserV1: true` in `grounded-dialog.json` for the `ask_user` facade. Deferred questions require Glance. Do not load a retired blocking bridge. |
 | Context Kit and Chrono | Use one writer per provider. Set `contextCompiler: "v4"` and `memoryOwner: "context-kit"` before loading independent Memory. Existing branches need explicit native imports. Code selection does not migrate state. |
 | Native SSH | Configure approved OpenSSH routes privately. Start with `session` capabilities and `/remote`; do not copy another user's routes or keys. |

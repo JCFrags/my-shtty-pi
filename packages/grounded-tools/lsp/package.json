@@ -10,7 +10,12 @@
     ]
   },
   "dependencies": {
-    "@grounded/pi-core": "0.1.0"
+    "@grounded/pi-core": "0.1.0",
+    "github-slugger": "2.0.0",
+    "markdownlint": "0.41.1",
+    "micromark-util-decode-string": "2.0.1",
+    "smol-toml": "1.9.0",
+    "yaml": "2.9.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.83.0 <1",

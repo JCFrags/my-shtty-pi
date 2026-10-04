@@ -1,0 +1,18 @@
+extends: existence
+message: "Review contraction '%s'. Expand it in prose if that keeps the meaning."
+level: warning
+scope: text & ~blockquote & ~frontmatter & ~quote
+ignorecase: true
+tokens:
+  - "can['’]t"
+  - "don['’]t"
+  - "doesn['’]t"
+  - "isn['’]t"
+  - "aren['’]t"
+  - "wasn['’]t"
+  - "weren['’]t"
+  - "won['’]t"
+  - "shouldn['’]t"
+  - "couldn['’]t"
+  - "wouldn['’]t"
+  - "mustn['’]t"
