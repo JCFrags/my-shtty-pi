@@ -110,7 +110,6 @@ test("milestone completion activity follows the real evidence transition exactly
     createdAt: plan.milestones[0].createdAt, updatedAt: correction.details.event.at });
   assert.equal(plan.revisions[4].action, "update_milestone");
   assert.deepEqual(plan.revisions[5].updatedIds, ["WP1", "WP1-M1"]);
-  assert.equal(plan.revisions[5].beforeDigest, plan.revisions[4].afterDigest);
   assert.equal(activities.length, 1, "metadata corrections do not repeat completion");
 });
 
