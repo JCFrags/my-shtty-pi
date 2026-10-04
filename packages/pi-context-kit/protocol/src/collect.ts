@@ -102,7 +102,7 @@ export async function collectContext(host: ContextHost, raw: ContextQuery, view:
   const deadlineMs = Date.now() + budget.waitMs;
   const active = new Set(host.getActiveTools());
   const requests = selected.map((providerId) => validateRequest({
-    version: 2, requestId, providerId, scope, query: result.query,
+    version: providerId === "todo" ? 3 : 2, requestId, providerId, scope, query: result.query,
     categories: providerId === "memory" && !result.categories.length ? ["knowledge"] : result.categories,
     limits: { records: budget.records, scan: budget.scan, bytes: budget.providerBytes }, deadlineMs,
   }));
@@ -125,7 +125,7 @@ export async function collectContext(host: ContextHost, raw: ContextQuery, view:
     };
     const abort = () => finish("cancelled");
     try {
-      remove = host.events.on(responseChannel(request.providerId, 2), (rawResponse: unknown) => {
+      remove = host.events.on(responseChannel(request.providerId, request.version), (rawResponse: unknown) => {
         if (settled) return;
         if (Date.now() > deadlineMs) { finish("missing_or_timeout"); return; }
         // Read correlation without accessors. Unrelated requests are ignored.
@@ -141,7 +141,7 @@ export async function collectContext(host: ContextHost, raw: ContextQuery, view:
       timer = setTimeout(() => finish("missing_or_timeout"), Math.max(0, deadlineMs - Date.now()));
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) { abort(); return; }
-      host.events.emit(requestChannel(request.providerId, 2), request);
+      host.events.emit(requestChannel(request.providerId, request.version), request);
     } catch { finish("provider_error"); }
   })));
   let viewMatches = false;

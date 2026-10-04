@@ -20,15 +20,22 @@ class Fields {
   values: Field[] = [];
   omitted = new Set<string>();
   complete = true;
-  private remaining = SCAN_CHARS;
+  private remaining: number;
 
+  constructor(maximum = SCAN_CHARS) { this.remaining = maximum; }
   omit(name: string): void { this.omitted.add(name); this.complete = false; }
-  add(name: string, value: string | undefined, category: Category): void {
+  add(name: string, value: string | undefined, category: Category, maximum = SCAN_CHARS): void {
     if (!value) return;
-    const text = value.slice(0, this.remaining);
+    const text = value.slice(0, Math.min(this.remaining, maximum));
     this.remaining -= text.length;
     if (text.length !== value.length) this.omit(name);
     if (text) this.values.push({ name, text, category });
+  }
+  group(name: string, category: Category, maximum: number, populate: (fields: Fields) => void): void {
+    const fields = new Fields(maximum);
+    populate(fields);
+    if (!fields.complete) this.omit(name);
+    this.add(name, fields.values.map((field) => `${field.name}: ${field.text}`).join("\n"), category, maximum);
   }
   array<T>(name: string, items: readonly T[], add: (item: T) => void, recent = false): void {
     if (items.length > ARRAY_ITEMS) this.omit(name);
@@ -86,18 +93,28 @@ function noteView(note: Note): RecordView {
 }
 function planView(plan: Workplan): RecordView {
   const fields = new Fields();
-  fields.add("title", plan.title, "plan");
-  fields.add("objective", plan.objective, "plan");
-  fields.array("constraints", plan.constraints, (text) => fields.add("constraints", text, "constraint"));
-  fields.array("decisions", plan.decisions, (decision) => {
-    fields.add("decisions", decision.decision, "decision");
-    fields.add("decisions", decision.rationale, "decision");
-  }, true);
+  fields.add("title", plan.title, "plan", 128);
+  fields.add("objective", plan.objective, "plan", 384);
+  const checkpoint = plan.checkpoints.at(-1);
+  const checkpointRevision = checkpoint
+    ? plan.revisions.findLast((record) => record.action === "checkpoint" && record.addedIds.includes(checkpoint.id))?.planRevision
+    : undefined;
+  const checkpointCurrent = checkpointRevision !== undefined
+    && plan.revisions.slice(checkpointRevision).every((record) => ["pause", "resume", "archive", "restore"].includes(record.action));
+  if (plan.checkpoints.length > 1 || checkpoint && !checkpointCurrent) fields.omit("checkpoints");
+  if (checkpoint && checkpointCurrent) fields.group("checkpoints", "plan", 768, (group) => {
+    group.add("currentFocus", checkpoint.currentFocus, "plan", 384);
+    group.array("nextActions", checkpoint.nextActions ?? [], (text) => group.add("nextActions", text, "plan", 128));
+    group.add("summary", checkpoint.summary, "plan", 256);
+    if (checkpoint.criterionEvidence.length) group.omit("checkpoints");
+  });
+  const priority = { in_progress: 0, blocked: 1, pending: 2, completed: 3 };
+  const current = plan.milestones.filter((milestone) => milestone.status !== "completed")
+    .sort((a, b) => priority[a.status] - priority[b.status] || b.updatedAt.localeCompare(a.updatedAt));
+  if (current.length !== plan.milestones.length || current.length > ARRAY_ITEMS) fields.omit("milestones");
+  const milestones = current.slice(0, ARRAY_ITEMS);
   const relations: Relations = [];
-  fields.array("milestones", plan.milestones, (milestone) => {
-    const category = milestone.status === "blocked" ? "blocker" : "plan";
-    fields.add("milestones", milestone.title, category);
-    fields.add("milestones", milestone.description, category);
+  for (const milestone of milestones) {
     const linked = links(milestone.linkedTodoIds, "linked_todo", fields, "milestones.linkedTodoIds");
     for (const relation of linked) {
       if (relations.some((existing) => existing.id === relation.id)) continue;
@@ -105,27 +122,42 @@ function planView(plan: Workplan): RecordView {
       else fields.omit("milestones.linkedTodoIds");
     }
     if (milestone.dependsOn.length || milestone.evidence.length || milestone.acceptanceCriteria.length) fields.omit("milestones");
+  }
+  for (const category of ["blocker", "plan"] as const) fields.group("milestones", category, 384, (group) => {
+    for (const milestone of milestones) {
+      if ((milestone.status === "blocked") !== (category === "blocker")) continue;
+      group.add(`${milestone.id} ${milestone.status}`, milestone.title, category, 128);
+      group.add("description", milestone.description, category, 128);
+    }
   });
-  fields.array("checkpoints", plan.checkpoints, (checkpoint) => {
-    fields.add("checkpoints", checkpoint.summary, "plan");
-    fields.add("checkpoints", checkpoint.currentFocus, "plan");
-    fields.array("checkpoints", checkpoint.nextActions ?? [], (text) => fields.add("checkpoints", text, "plan"));
-    if (checkpoint.criterionEvidence.length) fields.omit("checkpoints");
-  }, true);
-  fields.add("approach", plan.approach, "plan");
+  fields.group("constraints", "constraint", 768, (group) => {
+    group.array("constraints", plan.constraints, (text) => group.add("constraint", text, "constraint"));
+  });
+  const questions = plan.openQuestions.filter((question) => question.status === "open");
+  if (questions.length !== plan.openQuestions.length) fields.omit("openQuestions");
+  fields.group("openQuestions", "plan", 256, (group) => {
+    group.array("openQuestions", questions, (question) => group.add(question.id, question.question, "plan"), true);
+  });
+  const risks = plan.risks.filter((risk) => risk.status !== "mitigated");
+  if (risks.length !== plan.risks.length) fields.omit("risks");
+  fields.group("risks", "plan", 256, (group) => {
+    group.array("risks", risks, (risk) => {
+      group.add(risk.id, risk.description, "plan", 128);
+      group.add("mitigation", risk.mitigation, "plan", 128);
+      if (risk.impact) group.omit("risks");
+    }, true);
+  });
+  fields.group("decisions", "decision", 256, (group) => {
+    group.array("decisions", plan.decisions, (decision) => {
+      group.add("decision", decision.decision, "decision", 128);
+      group.add("rationale", decision.rationale, "decision", 128);
+    }, true);
+  });
+  fields.add("approach", plan.approach, "plan", 256);
   fields.add("background", plan.background, "plan");
   for (const name of ["scope", "nonGoals", "verification"] as const) fields.array(name, plan[name], (text) => fields.add(name, text, "plan"));
   fields.array("acceptanceCriteria", plan.acceptanceCriteria, (item) => fields.add("acceptanceCriteria", item.text, "plan"));
-  fields.array("risks", plan.risks, (risk) => {
-    fields.add("risks", risk.description, "plan");
-    fields.add("risks", risk.impact, "plan");
-    fields.add("risks", risk.mitigation, "plan");
-  });
-  fields.array("openQuestions", plan.openQuestions, (question) => {
-    fields.add("openQuestions", question.question, "plan");
-    fields.add("openQuestions", question.answer, "plan");
-  });
-  // Revision history and internal counters are not current-state search fields.
+  // Native history remains complete. Current-state fields do not search old checkpoints or closed work.
   return { id: plan.id, revision: String(plan.revision), status: plan.status, title: plan.title, fields, relations };
 }
 
@@ -143,7 +175,7 @@ function card(view: RecordView, request: ContextRequest, terms: string[]): { val
   const selected = new Set<Field>();
   let text = "";
   for (const { field } of ranked) {
-    if (field.category !== category || selected.size >= 3) continue;
+    if (field.category !== category || selected.size >= 3 || request.providerId === "workplan" && field.name === "title") continue;
     const lower = field.text.toLowerCase();
     const positions = terms.map((term) => lower.indexOf(term)).filter((position) => position >= 0);
     const start = positions.length ? Math.max(0, Math.min(...positions) - 96) : 0;
@@ -157,7 +189,8 @@ function card(view: RecordView, request: ContextRequest, terms: string[]): { val
     selected.add(field);
   }
   for (const field of fields.values) if (!selected.has(field) && field.name !== "title") fields.omit(field.name);
-  const recovery: ContextCard["recovery"] = request.providerId === "todo" ? { tool: "todo", args: { action: "list" } }
+  const recovery: ContextCard["recovery"] = request.providerId === "todo" ? request.version === 3
+    ? { tool: "todo", args: { action: "read", id: view.id } } : { tool: "todo", args: { action: "list" } }
     : request.providerId === "notes" ? { tool: "notes", args: { action: "read", id: view.id } }
       : { tool: "workplan", args: { action: "recover", planId: view.id } };
   return { score: ranked[0]!.score, matched: true, value: {
