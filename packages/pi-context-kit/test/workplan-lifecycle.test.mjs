@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { captureStateTransfer, NATIVE_CHECKPOINT_ENTRY } from "@context-kit/protocol/transfer";
 import { validateWorkplanActivity, WORKPLAN_ACTIVITY_EVENT, WORKPLAN_SUMMARY_CHANGED_EVENT,
   WORKPLAN_SUMMARY_EVENT, WORKPLAN_SUMMARY_REQUEST_EVENT } from "@grounded/pi-core/workplan-summary";
 import { fixtureDirectory, persistedSession, NativeProviderHost } from "./fixtures/native-providers.mjs";
@@ -92,7 +93,25 @@ test("milestone completion activity follows the real evidence transition exactly
   assert.equal(activities.length, 1);
   await assert.rejects(() => execute(pi, { action: "update_milestone", planId: "WP1", milestoneId: "WP1-M1",
     expectedRevision: 4, content: { status: "completed" } }));
-  assert.equal(activities.length, 1);
+  for (const content of [{ status: "in_progress" }, { status: "completed" }, { dependsOn: [] }, { evidence: ["verified"] }]) {
+    await assert.rejects(() => execute(pi, { action: "update_milestone", planId: "WP1", milestoneId: "WP1-M1",
+      expectedRevision: 5, content }), /Only title, description, and linkedTodoIds/);
+  }
+  const correction = await execute(pi, { action: "update_milestone", planId: "WP1", milestoneId: "WP1-M1", expectedRevision: 5,
+    content: { title: "Corrected milestone", description: "Corrected metadata", linkedTodoIds: ["task:release", "T128"] } });
+  assert.equal(correction.details.activity, undefined);
+  const read = await execute(pi, { action: "read", planId: "WP1" });
+  assert.match(read.content[0].text, /Corrected milestone/);
+  const transfer = await captureStateTransfer(pi.events, () => pi.scope(), { providers: ["workplan"], waitMs: 3000 });
+  const plan = transfer.find((entry) => entry.customType === NATIVE_CHECKPOINT_ENTRY).data.state.plans[0];
+  assert.equal(plan.revision, 6);
+  assert.deepEqual(plan.milestones[0], { id: "WP1-M1", title: "Corrected milestone", description: "Corrected metadata",
+    status: "completed", dependsOn: [], acceptanceCriteria: [], evidence: ["verified"], linkedTodoIds: ["task:release", "T128"],
+    createdAt: plan.milestones[0].createdAt, updatedAt: correction.details.event.at });
+  assert.equal(plan.revisions[4].action, "update_milestone");
+  assert.deepEqual(plan.revisions[5].updatedIds, ["WP1", "WP1-M1"]);
+  assert.equal(plan.revisions[5].beforeDigest, plan.revisions[4].afterDigest);
+  assert.equal(activities.length, 1, "metadata corrections do not repeat completion");
 });
 
 test("plan completion activity requires actual completion and checkpoint evidence", async (t) => {

@@ -88,7 +88,7 @@ export async function collectContext(host, raw, view) {
     const deadlineMs = Date.now() + budget.waitMs;
     const active = new Set(host.getActiveTools());
     const requests = selected.map((providerId) => validateRequest({
-        version: 2, requestId, providerId, scope, query: result.query,
+        version: providerId === "todo" ? 3 : 2, requestId, providerId, scope, query: result.query,
         categories: providerId === "memory" && !result.categories.length ? ["knowledge"] : result.categories,
         limits: { records: budget.records, scan: budget.scan, bytes: budget.providerBytes }, deadlineMs,
     }));
@@ -125,7 +125,7 @@ export async function collectContext(host, raw, view) {
         };
         const abort = () => finish("cancelled");
         try {
-            remove = host.events.on(responseChannel(request.providerId, 2), (rawResponse) => {
+            remove = host.events.on(responseChannel(request.providerId, request.version), (rawResponse) => {
                 if (settled)
                     return;
                 if (Date.now() > deadlineMs) {
@@ -155,7 +155,7 @@ export async function collectContext(host, raw, view) {
                 abort();
                 return;
             }
-            host.events.emit(requestChannel(request.providerId, 2), request);
+            host.events.emit(requestChannel(request.providerId, request.version), request);
         }
         catch {
             finish("provider_error");
