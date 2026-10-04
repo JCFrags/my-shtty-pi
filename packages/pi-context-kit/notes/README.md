@@ -16,7 +16,30 @@ Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) 
 
 ## Native interface
 
-The `notes` tool retains `add`, `list`, `read`, `append`, `update`, `search`, `archive`, `remove`, and `clear_archived`. Existing field normalization, metadata pagination, search windows, archive/remove rules, IDs, timestamps, and `expectedRevision` checks are unchanged. Use Notes as a quick scratchpad. Update existing text when facts or direction change instead of appending obsolete guidance. Archive inactive notes. Notes remain branch-local and are not durable Memory.
+The `notes` tool retains `add`, `list`, `read`, `append`, `update`, `search`, `archive`, `remove`, and `clear_archived`. Existing field normalization, metadata pagination, search windows, archive/remove rules, IDs, timestamps, and `expectedRevision` checks are unchanged. Use Notes as a quick scratchpad. Notes remain branch-local and are not durable Memory.
+
+| Action | Required fields and revision rule |
+| --- | --- |
+| `add` | `body`. Optional `title` and `tags`. No `expectedRevision`. |
+| `list` | Optional `cursor` and `limit`. No `expectedRevision`. |
+| `read` | `id`. No `expectedRevision`. |
+| `search` | `query`. Optional `cursor` and `limit`. No `expectedRevision`. |
+| `append` | `id`, `body`, and `expectedRevision`. |
+| `update` | `id`, `expectedRevision`, and at least one of `title`, `body`, or `tags`. |
+| `archive`, `remove` | `id` and `expectedRevision`. |
+| `clear_archived` | No other fields, including `expectedRevision`. |
+
+Get the current revision from `read`, `list`, or `search` before a guarded write. A missing or stale `expectedRevision` refuses the write. Supplying it to another action is invalid, not an optional guard.
+
+`append` adds the supplied body directly after the existing body. It adds no space, separator, or newline. Native text normalization converts CR/CRLF line endings to LF. To append a new line, include the newline in the JSON string:
+
+```json
+{"action":"append","id":"N1","expectedRevision":1,"body":"\nNext line"}
+```
+
+If revision 1 has body `First line`, this produces revision 2 with body `First line\nNext line`. Without `\n`, the result is `First lineNext line`. `update` with `body` replaces the whole body instead.
+
+For a long-lived agent, update current scratchpad text when goals or facts change instead of appending obsolete guidance. Archive an inactive note to preserve its ID and exact `read` recovery. `list` and `search` still include archived metadata with status `archived`; archive does not hide the note from those inventories. Native Notes has no active-only list or unarchive action. `remove` and `clear_archived` remove notes from the retained set. They are not undo controls. Earlier immutable roots remain evidence, but native `read` cannot read a removed note. Preserve unfinished project recovery in Workplan when changing the active goal.
 
 The native limits remain 256 retained notes, 32 KiB UTF-8 per body, and 1 MiB total bodies. Archived notes count toward these limits. Titles, tags, and native revision rules use the existing validators. Complete root admission allows 8 MiB of canonical JSON so escaped text and metadata do not reduce the body allowance. Over-limit or corrupt input is refused, not shortened.
 

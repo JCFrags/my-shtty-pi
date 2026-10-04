@@ -43,7 +43,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     if (mutateDuringCollect) { schemaDescription = "Changed active schema"; mutateDuringCollect = false; }
     return { readiness: "ready", coverage: { scanned: 1, matched: 1, excluded: 0, scanComplete: true }, cards: [
       { id: "T2", revision: "2", status: "blocked", category: "task", title: "Atomic replacement", text: "Verify T1 first.",
-        omittedFields: [], recovery: { tool: "todo", args: { action: "list" } }, relations: [{ type: "blocked_by", providerId: "todo", id: "T1" }] },
+        omittedFields: [], recovery: { tool: "todo", args: { action: "read", id: "T2" } }, relations: [{ type: "blocked_by", providerId: "todo", id: "T1" }] },
     ] };
   });
   const removePlan = registerContextProvider(events, "workplan", () => ({

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { jsonBytes } from "@context-kit/protocol";
+import { captureStateTransfer, NATIVE_CHECKPOINT_ENTRY } from "@context-kit/protocol/transfer";
 import { createWorkplanContextRecord, projectNotesPage, projectTodoPage, projectWorkplanPage } from "@grounded/pi-core/context-adapters";
 import { emptyWorkplanState, performWorkplanAction } from "@grounded/pi-core/workplan";
 import { WorkplanStore } from "@context-kit/workplan/store";
@@ -148,6 +149,8 @@ test("current-state browse selects open records before scan and reply limits wit
     tasks.push({ ...tasks[0], id: "T21", text: "Pending task", status: "pending" }, { ...tasks[0], id: "T22", text: "Current task", status: "in_progress" });
     const todo = { tasks, nextId: 23 };
     assert.equal(projectTodoPage({ ...bounded, providerId: "todo" }, todo).cards[0].id, "T22");
+    assert.deepEqual(projectTodoPage({ ...bounded, version: 3, providerId: "todo" }, todo).cards[0].recovery,
+      { tool: "todo", args: { action: "read", id: "T22" } });
     assert.equal(projectTodoPage(request({ providerId: "todo", query: "retired" }), todo).cards[0].status, "done");
     const notes = Array.from({ length: 20 }, (_, index) => ({ id: `N${index + 1}`, title: "Retired note", body: "Source text", tags: [], status: "archived", revision: 1, createdAt: "1", updatedAt: "1" }));
     notes.push({ ...notes[0], id: "N21", title: "Current note", status: "active" });
@@ -160,6 +163,47 @@ test("current-state browse selects open records before scan and reply limits wit
   } finally {
     store.close();
   }
+});
+
+test("current Workplan cards keep a changed goal, checkpoint, and open milestone ahead of retained history", async (t) => {
+  const root = await fixtureDirectory("context-changing-goal");
+  const host = new NativeProviderHost(await persistedSession(root), root, { providers: ["workplan"] });
+  t.after(() => host.lifecycle("session_shutdown"));
+  await host.lifecycle("session_start");
+  const apply = (input) => host.execute("workplan", { ...(input.action === "create" ? {} : { planId: "WP1" }), ...input });
+  await apply({ action: "create", content: { title: "Long-lived project", objective: "Old objective", approach: "Earlier narrative. ".repeat(300),
+    constraints: ["Retained constraint. ".repeat(300)] } });
+  await apply({ action: "resume", rationale: "Start" });
+  await apply({ action: "add_milestone", content: { title: "Obsolete milestone" } });
+  await apply({ action: "update_milestone", milestoneId: "WP1-M1", content: { status: "in_progress", linkedTodoIds: ["old-task"] } });
+  await apply({ action: "update_milestone", milestoneId: "WP1-M1", content: { status: "completed", evidence: ["Retained evidence"] } });
+  await apply({ action: "checkpoint", content: { summary: "Old saved position", currentFocus: "obsolete/path.ts", nextActions: ["Old action"] } });
+  await apply({ action: "add_milestone", content: { title: "Current milestone" } });
+  await apply({ action: "update_milestone", milestoneId: "WP1-M2", content: { status: "in_progress", linkedTodoIds: ["task:current"] } });
+  await apply({ action: "revise", section: "objective", content: "Current goal", rationale: "Direction changed" });
+  await apply({ action: "checkpoint", content: { summary: "Current saved position", currentFocus: "src/current.ts", nextActions: ["Exercise current behavior"] } });
+  const before = host.manager.getEntries().length;
+  const current = await host.query("workplan");
+  assert.match(current.cards[0].text, /Current goal/);
+  assert.match(current.cards[0].text, /src\/current.ts/);
+  assert.match(current.cards[0].text, /Current milestone/);
+  assert.doesNotMatch(current.cards[0].text, /obsolete\/path|Obsolete milestone|Old saved position/);
+  assert.deepEqual(current.cards[0].relations, [{ type: "linked_todo", providerId: "todo", id: "task:current" }]);
+  assert.ok(current.cards[0].omittedFields.includes("checkpoints"));
+  assert.ok(current.cards[0].omittedFields.includes("constraints"));
+  assert.match((await apply({ action: "read" })).content[0].text, /Old saved position/);
+  const transfer = await captureStateTransfer(host.events, () => host.scope(), { providers: ["workplan"], waitMs: 3000 });
+  const native = transfer.find((entry) => entry.customType === NATIVE_CHECKPOINT_ENTRY).data.state.plans[0];
+  assert.equal(native.checkpoints.length, 2);
+  assert.equal(native.milestones[0].status, "completed");
+  assert.deepEqual(native.milestones[0].evidence, ["Retained evidence"]);
+  assert.equal(native.checkpoints[0].currentFocus, "obsolete/path.ts");
+  // Query and native read can have tool-result messages, but no new owned anchors.
+  assert.equal(host.manager.getEntries().slice(before).filter((entry) => entry.customType === "context-kit:state-anchor:v1").length, 0);
+  await apply({ action: "revise", section: "objective", content: "Next goal", rationale: "Another direction change" });
+  const changed = await host.query("workplan");
+  assert.match(changed.cards[0].text, /Next goal/);
+  assert.doesNotMatch(changed.cards[0].text, /src\/current.ts/, "a semantically stale checkpoint is not a current term");
 });
 
 test("bounded query excerpts and native relations survive a hidden peer without changing tool state", async (t) => {

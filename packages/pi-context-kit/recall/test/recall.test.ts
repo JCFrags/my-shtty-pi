@@ -3,6 +3,7 @@ import test from "node:test";
 import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   registerContextProvider, requestChannel, responseChannel, jsonBytes,
+  validateRequest, validateResponse,
   type ContextCard, type ContextRequest, type ProviderId, type ProviderPage,
 } from "@context-kit/protocol";
 import { createRecallTool, type RecallInput, type RecallResult } from "../src/index.ts";
@@ -13,7 +14,7 @@ function card(providerId: Exclude<ProviderId, "memory">, index = 1, text = "Sour
     id, revision: "1", status: providerId === "todo" ? "pending" : "active",
     category: providerId === "todo" ? "task" : providerId === "notes" ? "note" : "plan",
     title: `Record ${index}`, text, omittedFields: [],
-    recovery: providerId === "todo" ? { tool: "todo", args: { action: "list" } }
+    recovery: providerId === "todo" ? { tool: "todo", args: { action: "read", id } }
       : providerId === "notes" ? { tool: "notes", args: { action: "read", id } }
       : { tool: "workplan", args: { action: "recover", planId: id } },
   };
@@ -51,6 +52,7 @@ test("real Recall factory preserves a healthy peer across malformed, missing, la
   assert.deepEqual(first.providers.map((item) => item.status), ["ok", "malformed", "missing_or_timeout"]);
   assert.equal(first.providers[0]!.page!.cards[0]!.status, "pending");
   assert.equal(first.providers[0]!.page!.cards[0]!.text, "Source-known current fact");
+  assert.deepEqual(first.providers[0]!.page!.cards[0]!.recovery, { tool: "todo", args: { action: "read", id: "todo-1" } });
   assert.equal(first.complete, false);
   assert.equal(getterCalls, 0);
 
@@ -102,4 +104,24 @@ test("real Recall factory charges complete metadata and escaping, preserves whol
   assert.equal(changed.providers[0]!.status, "scope_changed");
   assert.equal(changed.providers[0]!.page, undefined);
   stopChanged(); h.events.clear();
+});
+
+test("Todo V3 requires precise recovery while V1/V2 keep their unchanged list contract", () => {
+  for (const version of [1, 2, 3] as const) {
+    const request = validateRequest({ version, requestId: "compatibility", providerId: "todo", scope: { sessionId: "session", leafId: null },
+      query: "", categories: [], limits: { records: 1, scan: 1, bytes: 8192 }, deadlineMs: Date.now() + 1000 });
+    const item = card("todo");
+    if (version !== 3) item.recovery = { tool: "todo", args: { action: "list" } };
+    const response = { version, requestId: request.requestId, providerId: "todo", scope: request.scope, ...page([item]) };
+    assert.equal(validateResponse(response, request).cards[0]!.id, item.id);
+    const wrong = structuredClone(response);
+    wrong.cards[0]!.recovery = version === 3 ? { tool: "todo", args: { action: "list" } }
+      : { tool: "todo", args: { action: "read", id: item.id } };
+    assert.throws(() => validateResponse(wrong, request));
+    if (version === 3) {
+      wrong.cards[0]!.recovery = { tool: "todo", args: { action: "read", id: "different-task" } };
+      assert.throws(() => validateResponse(wrong, request));
+      assert.throws(() => validateRequest({ ...request, providerId: "notes" }));
+    }
+  }
 });
