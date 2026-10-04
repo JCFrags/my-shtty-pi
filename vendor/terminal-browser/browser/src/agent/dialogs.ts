@@ -27,13 +27,15 @@ export interface DialogResponse {
 }
 
 export const PROMPT_SOURCE = `(() => { const stringify = String; const slice = Function.prototype.call.bind(String.prototype.slice);
-const prompt = function terminalBrowserPrompt(message = '', defaultValue = '') {
+const makeDialog = type => function terminalBrowserPrompt(message = '', defaultValue = '') {
   const promptMessage = slice(stringify(message), 0, 4096);
-  const promptDefault = slice(stringify(defaultValue), 0, 4096);
-  let promptResult = null;
+  const promptDefault = type === 'prompt' ? slice(stringify(defaultValue), 0, 4096) : '';
+  let promptResult = type === 'prompt' ? null : type === 'confirm' ? false : undefined;
   debugger;
   return promptResult;
-}; Object.defineProperty(window, "prompt", { configurable: true, get: () => prompt, set: () => {} });
+};
+for (const type of ['alert', 'confirm', 'prompt']) { const dialog = makeDialog(type);
+  Object.defineProperty(window, type, { configurable: true, get: () => dialog, set: () => {} }); }
 })();
 //# sourceURL=terminal-browser-prompt.js`;
 const PROMPT_HASH = createHash("sha256").update(PROMPT_SOURCE).digest("hex");
@@ -240,20 +242,9 @@ export class BrowserDialogs {
     if (method === "Runtime.executionContextDestroyed") this.scripts.delete(session+":"+Number(params.executionContextId));
     if (method === "Debugger.scriptParsed") {
       const context = session+":"+Number(params.executionContextId);
-      if (!this.scripts.has(context) && params.url === "terminal-browser-prompt.js" && params.hash === PROMPT_HASH && params.startLine === 0 && params.endLine === 9) {
+      if (!this.scripts.has(context) && params.url === "terminal-browser-prompt.js" && params.hash === PROMPT_HASH && params.startLine === 0 && params.endLine === 11) {
         this.scripts.set(context, session+":"+String(params.scriptId));
       }
-    }
-    if (method === "Page.javascriptDialogOpening" && (params.type === "alert" || params.type === "confirm")) {
-      if (!this.value) this.pendingSession = session;
-      this.open(params.type, String(params.message ?? ""), "", true, async (accept) => {
-        await this.send("Page.handleJavaScriptDialog", { accept }, session);
-      });
-    }
-    if (method === "Page.javascriptDialogClosed" && session === this.pendingSession && this.value?.value.type !== "prompt" && this.value?.value.type !== "beforeunload") {
-      if (this.value) clearTimeout(this.value.timer);
-      this.value = null;
-      this.changed();
     }
     if (method === "Debugger.paused") void this.paused(params, session).catch(async () => {
       await this.send("Debugger.resume", {}, session).catch(() => {});
@@ -268,20 +259,23 @@ export class BrowserDialogs {
     }
     const result = await this.send("Debugger.evaluateOnCallFrame", {
       callFrameId: frame.callFrameId,
-      expression: "({message:promptMessage,defaultValue:promptDefault})",
+      expression: "({type,message:promptMessage,defaultValue:promptDefault})",
       returnByValue: true,
-    }, session) as { result?: { value?: { message: string; defaultValue: string } }; exceptionDetails?: unknown };
-    if (result.exceptionDetails || !result.result?.value) throw new Error("cannot read prompt");
-    const { message, defaultValue } = result.result.value;
+    }, session) as { result?: { value?: { type: "alert" | "confirm" | "prompt"; message: string; defaultValue: string } }; exceptionDetails?: unknown };
+    if (result.exceptionDetails || !result.result?.value) throw new Error("cannot read dialog");
+    const { type, message, defaultValue } = result.result.value;
+    if (type !== "alert" && type !== "confirm" && type !== "prompt") throw new Error("unknown dialog type");
     if (!this.value) this.pendingSession = session;
-    this.open("prompt", message, defaultValue, true, async (accept, text) => {
+    this.open(type, message, defaultValue, true, async (accept, text, guard) => {
       try {
+        guard?.();
+        const response = type === "alert" ? "undefined" : JSON.stringify(type === "confirm" ? accept : accept ? text ?? defaultValue : null);
         const written = await this.send("Debugger.evaluateOnCallFrame", {
           callFrameId: frame.callFrameId,
-          expression: `promptResult = ${JSON.stringify(accept ? text ?? defaultValue : null)}`,
+          expression: `promptResult = ${response}`,
           returnByValue: true,
         }, session) as { exceptionDetails?: unknown };
-        if (written.exceptionDetails) throw new Error("cannot set prompt response");
+        if (written.exceptionDetails) throw new Error("cannot set dialog response");
       } finally {
         await this.send("Debugger.resume", {}, session);
       }

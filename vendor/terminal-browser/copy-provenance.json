@@ -138,7 +138,7 @@
       "path": "browser/src/agent/dialogs.ts",
       "sourceSha256": "5c5820613e5f78faa288c60f01e66f5dc930e0f7b7abc96097fd4a44e80c756c",
       "mode": 420,
-      "sha256": "66b92cba5ac966696167f81a4f0defa80960d3b87a7e955b8f6e04c9ca2581a6",
+      "sha256": "66784c528850f8e0cd54782333e66a24138eb626c098642e0522f91cab2d13c7",
       "modified": true
     },
     {
@@ -327,7 +327,7 @@
       "path": "browser/src/page/controller.ts",
       "sourceSha256": "4da2062762f42f70a436cd76c16c57259f1e3017fbb096d664744447bd8af7a2",
       "mode": 420,
-      "sha256": "3330fe0b0eb2980fd7cba64a8a98222f25cf922c2688c06f7340a6f1c63fe0d0",
+      "sha256": "6f74893bf2cb69697d0be477f73ca9127b8c888e446b1509c0afcf4ce7fae5cf",
       "modified": true
     },
     {
@@ -691,8 +691,8 @@
       "path": "browser/test/contexts.test.js",
       "sourceSha256": "19e7010233b343c73d2209d66a10ab386a1dd496f66028de322bd6ed79b3d09e",
       "mode": 420,
-      "sha256": "19e7010233b343c73d2209d66a10ab386a1dd496f66028de322bd6ed79b3d09e",
-      "modified": false
+      "sha256": "895eb60cf55fdaff8eba33bfb60f8c97ba28dc92f33b4f70672ca79089fb5641",
+      "modified": true
     },
     {
       "path": "browser/test/control.test.js",
@@ -705,8 +705,8 @@
       "path": "browser/test/dialogs.test.js",
       "sourceSha256": "52c73db346f19637f8f57f5925814aa32183a1eafd37c1e51c40c5c382f2366f",
       "mode": 420,
-      "sha256": "52c73db346f19637f8f57f5925814aa32183a1eafd37c1e51c40c5c382f2366f",
-      "modified": false
+      "sha256": "6a0f55bebcc1cc8a8af6fb62eb13f9a05efdca7f601e31a9d95f1bb8dd0d15f5",
+      "modified": true
     },
     {
       "path": "browser/test/downloads.test.js",
@@ -740,8 +740,8 @@
       "path": "browser/test/fixtures/contexts-electron.cjs",
       "sourceSha256": "4ff22ce0312aef1984dfd066618c4f87d467651e12d44cc0f4d39d8e8d800556",
       "mode": 420,
-      "sha256": "4ff22ce0312aef1984dfd066618c4f87d467651e12d44cc0f4d39d8e8d800556",
-      "modified": false
+      "sha256": "9224b081b9015cb3ecaeb770900b8e2fcc4555ae2b54b7382579d9f1a2d8cece",
+      "modified": true
     },
     {
       "path": "browser/test/fixtures/dynamic-live.cjs",
@@ -1104,7 +1104,7 @@
       "path": "docs/development.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "58c82ffcaa0571a03fd436d1c94bb1976d657342a2a999145db66778242ea88c",
+      "sha256": "23d74d3354394c49f27bbaa65b1814b41b23296c219ee28f1db04a200737a94c",
       "modified": true
     },
     {

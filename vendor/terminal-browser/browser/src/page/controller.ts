@@ -167,7 +167,8 @@ export class BrowserController {
         // with sandbox true this is safe, we enable so a users preload script runs inside iframes/webviews
         nodeIntegrationInSubFrames: true,
         contextIsolation: true,
-        disableDialogs: false,
+        // Keep JavaScript dialogs in the owner-controlled handler.
+        disableDialogs: true,
         backgroundThrottling: false,
         additionalArguments: this.preloadArgv(),
       },
@@ -845,7 +846,7 @@ export class BrowserController {
             nodeIntegration: false,
             nodeIntegrationInSubFrames: true,
             contextIsolation: true,
-            disableDialogs: false,
+            disableDialogs: true,
             backgroundThrottling: false,
             additionalArguments: this.preloadArgv(),
           },

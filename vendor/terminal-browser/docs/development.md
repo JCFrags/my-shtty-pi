@@ -156,12 +156,21 @@ baseline checks are not a substitute for packaged runtime acceptance.
 ## Native and visible checks
 
 `pnpm --filter terminal-browser test:electron` runs pinned Electron fixtures.
-Linux needs an X11 display, for example `xvfb-run -a`: the native Wayland dialog
-backend can fail on hidden windows. An isolated private XDG runtime may not contain
-the host Wayland socket. Pass `--ozone-platform=x11` to the existing Electron
-fixture or daemon entrypoint for an approved X11 runtime check in that environment.
-Source CLI `open` does not forward Chromium flags. Do not weaken isolation merely
-to find the socket. The fixtures cover root/popup/frame input,
+The Linux runner uses an X11 display, for example `xvfb-run -a`. Hidden windows
+must not open stock JavaScript dialogs: the Wayland dialog backend can terminate
+the process. The dialog controller handles alert, confirm, and prompt through a
+source-verified synchronous wrapper. Root and popup preferences disable stock
+dialogs as a fail-closed backstop. Explicit responses and beforeunload decisions
+remain separate from that backstop.
+
+An X11 pass alone does not verify the Wayland dialog path. For an approved focused
+Wayland check, run `browser/test/fixtures/contexts-electron.cjs` directly through
+the pinned Electron with `--ozone-platform=wayland` and a reachable host Wayland
+socket. A private XDG runtime may need an explicit absolute `WAYLAND_DISPLAY`.
+Keep HOME, application data, interop, and Pi routes isolated. For an approved X11
+check in that environment, pass `--ozone-platform=x11` to the existing fixture or
+daemon entrypoint. Source CLI `open` does not forward Chromium flags. Do not
+weaken isolation merely to find the socket. The fixtures cover root/popup/frame input,
 opener communication, dialogs and beforeunload decisions, project files,
 transfers, cancellation, takeover, and locator/frame geometry limits. Tests for
 terminal overlay positions do not prove alignment on a particular terminal.
