@@ -231,7 +231,8 @@ test('independent processes contend and inherited lock survives parent death', a
   process.kill(inheritedPid, 'SIGTERM');
   await until(() => !live(inheritedPid), 'owned orphan closes');
   orphanPids.delete(inheritedPid);
-  assert.equal((await loser.call(params)).details.result.languageId, 'rust', 'close releases slot');
+  const released = await loser.call(params);
+  assert.equal(released.details.result?.languageId, 'rust', `close releases slot: ${JSON.stringify(released)}`);
   await loser.stop();
 });
 
