@@ -92,7 +92,7 @@ export function createRustLauncher(fixture: {
     });
     try {
       const child = spawn(config.command, config.args, {
-        cwd: root, env: process.env, stdio: ["pipe", "pipe", "pipe", fd],
+        cwd: root, env: { ...process.env, ...config.env }, stdio: ["pipe", "pipe", "pipe", fd],
       }) as ChildProcessWithoutNullStreams;
       child.once("close", release);
       return { child, release };
