@@ -23,7 +23,7 @@ These providers form the Chrono context-state stack. Progressive Tools controls 
 
 ## Todo
 
-Actions are `list`, `add`, `update`, `start`, `done`, `block`, `remove`, `reorder`, `clear_done`, and `replace`.
+Actions are `list`, `read`, `add`, `update`, `start`, `done`, `block`, `remove`, `reorder`, `clear_done`, and `replace`.
 
 Dependencies, external waits, and one in-progress task are native state rules. `/todo-add` and supported Glance actions use the same serialized owner transaction as the tool. `/todos` changes presentation, not task state. Display preferences are separate from task revisions.
 
@@ -31,13 +31,15 @@ Admission allows at most 256 retained tasks and 1 MiB complete canonical native 
 
 `list` defaults to `view:"current"`. It hides done tasks without deleting their IDs or satisfied dependency edges. Use `view:"all"` to read complete retained native state. `clear_done` and `remove` remain explicit mutations. Revise current tasks when direction changes instead of keeping an append-only log.
 
+Use `read` with an exact task ID for all saved task fields, including descriptions and retained done tasks. Large single-task output uses a private exact JSON file. Generated IDs advance across replacements instead of restarting. Explicit IDs remain exact, and replacement preserves creation times for retained IDs. Mutation receipts report automatic status changes, including a displaced running task, with consistent update times.
+
 A large `list` can return a private file for the selected view with bounded display rows. Only the all-view file is complete native state. The file is private output, not a transfer checkpoint. A short visible list must not be mistaken for all fields or all state.
 
 [Todo native reference](../../../packages/pi-context-kit/todo/README.md)
 
 ## Notes
 
-Actions are `add`, `list`, `read`, `append`, `update`, `search`, `archive`, `remove`, and `clear_archived`. `expectedRevision` supports stale-write refusal.
+Actions are `add`, `list`, `read`, `append`, `update`, `search`, `archive`, `remove`, and `clear_archived`. `append`, `update`, `archive`, and `remove` require `expectedRevision` from a native read or list. `append` adds the supplied body literally, with no inserted separator. Include a newline when needed. `update` replaces only the supplied fields.
 
 Notes can retain 256 records, 32 KiB UTF-8 per body, and 1 MiB total bodies. Archived notes count toward those limits. Complete root admission separately allows metadata and escaped text. Invalid or oversized state is refused, not shortened.
 
@@ -56,7 +58,9 @@ Native mutation details matter:
 - Supply top-level `rationale` for `revise`, `record_decision`, `pause`, `resume`, `complete`, `archive`, and `restore`.
 - `record_decision` uses `content: { decision }`. Its reason belongs in `rationale`.
 - Milestone states include `pending`, `in_progress`, `blocked`, and `completed`, not Todo's `done`.
-- Start a pending milestone before completing it. Completion requires evidence and completed dependencies.
+- Use `pending -> in_progress`, `in_progress -> blocked/completed`, or `blocked -> in_progress/completed`. Completion requires evidence and completed dependencies.
+- In an editable plan, a completed milestone permits only title, description, or Todo-link corrections through a guarded revision. Status, dependencies, and evidence stay terminal. No second completion activity is emitted. Add a new milestone for new work.
+- Todo links preserve exact generated or custom IDs. New links are nonempty and at most 128 UTF-8 bytes. The first custom link requires a compatible reader afterward.
 - Except for untargeted `create` and `list`, omitted `planId` selects the active plan. If no plan is active, supply an ID. No plan is activated implicitly.
 - Omitted `expectedRevision` uses the selected plan's latest saved revision under serialization. An explicit stale revision still fails. Scope and commit conflicts remain enforced.
 
@@ -79,6 +83,8 @@ Before the first `restore` write, account for reader compatibility. Old reducers
 Storage separates a bounded manifest, per-plan immutable objects, and bounded projections. A selected-plan mutation does not load unrelated plan bodies. List/status can use metadata and cached projections. Read/recover loads the selected plan.
 
 Limits include 256 plan references, 64 open plans, one active plan, a 1 MiB manifest, and 64 MiB per complete native plan including revision history. The per-plan context projection is limited to 64 KiB. Work still depends on the admitted selected plan and its collections. This is not constant-cost processing.
+
+Long-lived agents can revise goals, replace current checkpoints, and pause or archive projects while retaining stable IDs and native history. Bounded current views keep closed work out of the default selection. Newly saved Workplan projections reserve current checkpoint, open milestone, and constraint fields before older narrative. Old projections update on the next native save, not during a query. This supports changing work, not unlimited storage. Archives still consume retained-record and native byte limits. No automatic history deletion is provided.
 
 A plan may fit native storage but exceed the 8 MiB complete transfer budget. Refuse rollover before switching rather than trimming history.
 

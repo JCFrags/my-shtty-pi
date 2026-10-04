@@ -3,7 +3,7 @@ import { createToolPresentation } from "pi-tool-controls/presentation";
 const object = (value: unknown): Record<string, any> | undefined => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : undefined;
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-const actions = ["list", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"];
+const actions = ["list", "read", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"];
 
 export const todoPresentation = createToolPresentation({
   call: (args) => `todo ${text(args.action)}${args.id ? ` ${text(args.id)}` : ""}`,
@@ -22,13 +22,28 @@ export const todoPresentation = createToolPresentation({
     }
     const notices: string[] = [];
     if (typeof details.fullOutputPath === "string") {
-      notices.push(`Native result bounded; ${count(details.omittedTasks) ? details.omittedTasks : "unknown"} task rows omitted`);
-      notices.push(`${details.view === "current" ? "Current Todo view" : "Complete native state"}: ${details.fullOutputPath}`);
+      if (details.action === "list") {
+        notices.push(`Native result bounded; ${count(details.omittedTasks) ? details.omittedTasks : "unknown"} task rows omitted`);
+        notices.push(`${details.view === "current" ? "Current Todo view" : "Complete native state"}: ${details.fullOutputPath}`);
+      } else notices.push(`${details.action === "read" ? "Exact task fields" : "Complete action result"}: ${details.fullOutputPath}`);
     }
+    if (details.action === "read") {
+      const task = object(details.task);
+      return {
+        summary: task ? `${text(task.id)} [${text(task.status)}] ${text(task.text).slice(0, 1024)}` : `Todo ${text(details.taskId)} saved read result`,
+        notices, lines: options.expanded ? excerpt : [], omitted: true,
+      };
+    }
+    const changes = Array.isArray(details.statusChanges) ? details.statusChanges.filter((change: unknown) => {
+      const value = object(change);
+      return value && typeof value.id === "string" && typeof value.from === "string" && typeof value.to === "string";
+    }) : [];
+    if (changes.length) notices.push(`${changes.length} automatic status change(s)`);
+    if (count(details.omittedStatusChanges)) notices.push(`${details.omittedStatusChanges} automatic status change(s) in the full result`);
     if (details.action !== "list") return {
-      summary: saved.slice(0, 1024) || "Todo saved mutation result",
-      notices, lines: options.expanded ? details.rows.slice(0, 8) : [],
-      omitted: details.rows.length > 0 || saved.length > 1024,
+      summary: saved.split("\n")[0]!.slice(0, 1024) || "Todo saved mutation result",
+      notices, lines: options.expanded ? [...changes.slice(0, 8).map((change) => `${change.id}: ${change.from} to ${change.to}`), ...details.rows].slice(0, 8) : [],
+      omitted: details.rows.length > 0 || changes.length > 0 || saved.length > 1024,
     };
     const current = details.view === "current";
     const tasks = current ? details.tasks : object(details.state)?.tasks;

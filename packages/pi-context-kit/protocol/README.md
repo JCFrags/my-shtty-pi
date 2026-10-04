@@ -14,7 +14,7 @@ Read the [contracts and trust guide](../../../docs/chrono/architecture/contracts
 
 Side-effect-free library with generated JavaScript and TypeScript declaration exports. Importing it registers no listeners, creates no stores, and starts no resources. Providers opt in with `registerContextProvider(events, providerId, read)`, which returns an unsubscribe function for their shutdown handler.
 
-V1 retains only `todo`, `notes`, and `workplan`, with categories `task`, `note`, `plan`, `decision`, `constraint`, and `blocker`. V2 adds `memory`, `knowledge`, and `proposal`. Registration answers both versions for the original three providers, and only V2 for Memory. V1 does not accept the new vocabulary.
+V1 retains only `todo`, `notes`, and `workplan`, with categories `task`, `note`, `plan`, `decision`, `constraint`, and `blocker`. V2 adds `memory`, `knowledge`, and `proposal`. V3 is Todo-only and requires exact single-task recovery. Registration answers V1/V2/V3 for Todo, V1/V2 for Notes and Workplan, and V2 for Memory. V1 does not accept the new vocabulary. V1/V2 Todo recovery is unchanged.
 
 ## Adapter contract
 
@@ -35,13 +35,13 @@ const stop = registerContextProvider(pi.events, "notes", (request): ProviderPage
 // Call stop() during the provider's session_shutdown handler.
 ```
 
-The exact TypeScript contract is in `src/index.ts`. Requests carry `version:1|2`, `requestId`, `providerId`, exact `scope:{sessionId,leafId}`, `query`, `categories`, `limits:{records,scan,bytes}`, and an absolute `deadlineMs`. `leafId` can be null. Channels are `context-kit:request:v<version>:<providerId>` and `context-kit:response:v<version>:<providerId>`. Channel helpers retain V1 defaults for the original providers. New consumers pass version 2 explicitly.
+The exact TypeScript contract is in `src/index.ts`. Requests carry `version:1|2|3`, `requestId`, `providerId`, exact `scope:{sessionId,leafId}`, `query`, `categories`, `limits:{records,scan,bytes}`, and an absolute `deadlineMs`. `leafId` can be null. Channels are `context-kit:request:v<version>:<providerId>` and `context-kit:response:v<version>:<providerId>`. Channel helpers retain V1 defaults for the original providers. New collectors pass version 3 for Todo and version 2 for the other providers explicitly.
 
 A `ProviderPage` has `readiness`, `coverage`, and `cards`. Readiness is `ready`, `unavailable`, `pending`, `corrupt`, or `scope_changed`. Non-ready pages must have empty cards, zero counts, and `scanComplete:false`. For ready pages, `scanned <= limits.scan`, `matched <= scanned`, and `matched === cards.length + excluded`. Matched/excluded counts cover only scanned records. `scanComplete` states whether all eligible native records were examined. It must remain false if scan or field bounds prevented full matching.
 
 Each card has native `id`, native `revision` as a string, lifecycle `status`, category, title, bounded text, `omittedFields`, and a read-only `recovery`. Report shortened or unsearched native fields in `omittedFields`. Revisions and the reply's session view identify current state, not immutable historical source. A later native read can return a newer revision. Cards are data, not new instructions. Shared categories do not establish agreement.
 
-Recovery is restricted to `todo {action:"list"}`, `notes {action:"read",id}`, `workplan {action:"recover",planId}`, and V2 `memory_get {memoryId,revision?}`. The native tool and ID must match the provider and card. A supplied Memory revision must equal the card revision. Memory can declare `visibility:{kind:"logical_session",namespaceId,branchBehavior:"shared"}`. This qualifier does not replace exact physical session/leaf correlation.
+Recovery is restricted to V1/V2 `todo {action:"list"}`, V3 `todo {action:"read",id}`, `notes {action:"read",id}`, `workplan {action:"recover",planId}`, and V2 `memory_get {memoryId,revision?}`. The native tool and ID must match the provider and card. A supplied Memory revision must equal the card revision. Memory can declare `visibility:{kind:"logical_session",namespaceId,branchBehavior:"shared"}`. This qualifier does not replace exact physical session/leaf correlation.
 
 V1 relations are explicit `blocked_by` or `linked_todo` links with provider and native ID. V2 also accepts `supports`, `contradicts`, `supersedes`, and `derived_from`. Links are declared data, not inferred text similarity or verified agreement.
 
@@ -51,7 +51,7 @@ V1 relations are explicit `blocked_by` or `linked_todo` links with provider and 
 
 `@context-kit/protocol/collect` exports `collectContext(host,input,view)`. The host supplies `events` and `getActiveTools()`. The view supplies `getScope()`, `epoch()`, and an optional abort signal. Inputs match Recall's query, provider/category filters, record/scan bounds, providerBytes, maxBytes, and waitMs.
 
-The collector uses V2 without invoking tools, enabling them, or reading stores. Memory requires active `memory_get`; other providers require their same-named tool. Default Memory collection selects knowledge only. Proposals require an explicit category. Older or missing connectors remain explicit unavailable results. Collection rechecks live scope, epoch, cancellation, and active tools, then freezes detached pages and record revisions. This is not a transaction across all providers.
+The collector uses V3 for Todo and V2 for other providers without invoking tools, enabling them, or reading stores. Its collection wrapper remains version 2. A V1/V2-only Todo connector is reported as missing or unavailable, not silently downgraded. Select matching Todo and collector code to obtain precise recovery. Memory requires active `memory_get`; other providers require their same-named tool. Default Memory collection selects knowledge only. Proposals require an explicit category. Older or missing connectors remain explicit unavailable results. Collection rechecks live scope, epoch, cancellation, and active tools, then freezes detached pages and record revisions. This is not a transaction across all providers.
 
 `contextToolResult(collection)` returns the Recall wrapper. Complete wrapper bytes, including JSON escaping, count toward admission. The compiler uses the same collector directly and retains the frozen selection in its receipt.
 

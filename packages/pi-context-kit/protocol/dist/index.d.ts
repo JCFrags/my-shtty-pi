@@ -2,7 +2,7 @@
 export declare const V1_PROVIDER_IDS: readonly ["todo", "notes", "workplan"];
 export declare const PROVIDER_IDS: readonly ["todo", "notes", "workplan", "memory"];
 export type ProviderId = typeof PROVIDER_IDS[number];
-export type ProtocolVersion = 1 | 2;
+export type ProtocolVersion = 1 | 2 | 3;
 export declare const V1_CATEGORIES: readonly ["task", "note", "plan", "decision", "constraint", "blocker"];
 export declare const CATEGORIES: readonly ["task", "note", "plan", "decision", "constraint", "blocker", "knowledge", "proposal"];
 export type Category = typeof CATEGORIES[number];
@@ -47,6 +47,12 @@ export type NativeRecovery = {
     tool: "todo";
     args: {
         action: "list";
+    };
+} | {
+    tool: "todo";
+    args: {
+        action: "read";
+        id: string;
     };
 } | {
     tool: "notes";

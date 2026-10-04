@@ -2,8 +2,8 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import {
   addTask, clearDone, cloneTaskState, completeTask, refreshBlockedStatuses,
-  removeTask, reorderTask, startTask, updateTask, validateTaskState,
-  type Task, type TaskState,
+  removeTask, reorderTask, startTask, taskById, updateTask, validateTaskState,
+  type Task, type TaskState, type TaskStatus,
 } from "@grounded/pi-core/tasks";
 import { requireExactObject, requirePlainJson, stableJson, StateToolError, type StateErrorCode } from "@grounded/pi-core/state";
 
@@ -22,15 +22,16 @@ const ReplacementTaskSchema = Type.Object({
   blockedBy: Type.Optional(Dependencies()), waitReason: Type.Optional(WaitReason()),
 }, { additionalProperties: false });
 export const TodoParams = Type.Object({
-  action: StringEnum(["list", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"] as const),
+  action: StringEnum(["list", "read", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"] as const, { description: "list shows summaries. read with id returns exact task fields, including retained done tasks" }),
   view: Type.Optional(StringEnum(["current", "all"] as const, { description: "List view. Default current hides done tasks without removing them. all returns complete retained native state." })),
-  id: Type.Optional(Id()), text: Type.Optional(Text()), description: Type.Optional(Description()),
+  id: Type.Optional(Type.String({ maxLength: TODO_LIMITS.idBytes, description: "Task ID. Required for read and targeted mutations; optional explicit ID for add." })), text: Type.Optional(Text()), description: Type.Optional(Description()),
   blockedBy: Type.Optional(Dependencies()), waitReason: Type.Optional(WaitReason()),
   position: Type.Optional(Type.Number({ minimum: 0, description: "Zero-based target position for reorder" })),
-  tasks: Type.Optional(Type.Array(ReplacementTaskSchema, { maxItems: TODO_LIMITS.tasks, description: "Complete desired task list for replace" })),
+  tasks: Type.Optional(Type.Array(ReplacementTaskSchema, { maxItems: TODO_LIMITS.tasks, description: "Complete desired task list for replace. Omitted rows leave the retained set. Supplied IDs keep identity; generated IDs do not reset." })),
 }, { additionalProperties: false });
 export type TodoInput = Static<typeof TodoParams>;
-export interface TodoOperation { state: TaskState; message: string; changed: boolean }
+export interface TodoStatusChange { id: string; from: TaskStatus; to: TaskStatus }
+export interface TodoOperation { state: TaskState; message: string; changed: boolean; task?: Task; statusChanges?: TodoStatusChange[] }
 
 function fail(code: StateErrorCode, message: string): never { throw new StateToolError(code, message); }
 function textLimit(value: unknown, maximum: number, field: string, code: StateErrorCode): void {
@@ -53,7 +54,8 @@ function fields(value: Record<string, unknown>, code: StateErrorCode): void {
 /** Admit bounded shapes before recursive native validation or serialization. */
 export function admitTodoInput(value: unknown): asserts value is TodoInput {
   requireExactObject(value, ["action"], ["id", "text", "description", "blockedBy", "waitReason", "position", "tasks", "view"], "input");
-  if (!["list", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"].includes(value.action as string)) fail("STATE_INVALID_INPUT", "Unknown todo action");
+  if (!["list", "read", "add", "update", "start", "done", "block", "remove", "reorder", "clear_done", "replace"].includes(value.action as string)) fail("STATE_INVALID_INPUT", "Unknown todo action");
+  if (value.action === "read") requireExactObject(value, ["action", "id"], [], "read input");
   if (value.view !== undefined && (value.action !== "list" || !["current", "all"].includes(value.view as string))) fail("STATE_INVALID_INPUT", "view must be current or all and is only accepted for list");
   fields(value, "STATE_INVALID_INPUT");
   if (value.position !== undefined && (typeof value.position !== "number" || !Number.isFinite(value.position) || value.position < 0)) fail("STATE_INVALID_INPUT", "position must be a finite non-negative number");
@@ -95,12 +97,41 @@ export function formatTask(task: Task): string {
   return `${marker} ${task.id} ${task.text}${blockers}${task.waitReason ? ` [waiting: ${task.waitReason}]` : ""}`;
 }
 
-/** Native task operations. replace deliberately resets the native ID counter. */
+export function formatTaskSummary(task: Task): string {
+  const row = formatTask(task).replace(/\s+/gu, " ");
+  return row.length <= 240 ? row : `${row.slice(0, 239)}…`;
+}
+
+/** Replace the retained set without reusing generated IDs or resetting retained identities. */
+function replaceTasks(current: TaskState, tasks: NonNullable<TodoInput["tasks"]>, now: number): TaskState {
+  const supplied = new Set(tasks.flatMap((task) => task.id === undefined ? [] : [task.id]));
+  let nextId = current.nextId;
+  for (const id of supplied) if (/^T\d+$/.test(id)) nextId = Math.max(nextId, Number(id.slice(1)) + 1);
+  if (!Number.isSafeInteger(nextId)) fail("STATE_LIMIT_EXCEEDED", "The next task number cannot increase safely");
+  const previous = new Map(current.tasks.map((task) => [task.id, task]));
+  const state: TaskState = { nextId, tasks: tasks.map((input) => {
+    let id = input.id;
+    if (id === undefined) {
+      if (nextId === Number.MAX_SAFE_INTEGER) fail("STATE_LIMIT_EXCEEDED", "The next task number cannot increase safely");
+      id = `T${nextId++}`;
+    }
+    const retained = previous.get(id);
+    return { id, text: input.text.trim(),
+      ...(input.description?.trim() ? { description: input.description.trim() } : {}), status: input.status ?? "pending",
+      blockedBy: [...(input.blockedBy ?? [])], ...(input.waitReason?.trim() ? { waitReason: input.waitReason.trim() } : {}),
+      createdAt: retained?.createdAt ?? now, updatedAt: retained?.updatedAt ?? now };
+  }) };
+  state.nextId = nextId;
+  return state;
+}
+
+/** Native task operations. Read actions never create a state commit. */
 export function performTodoAction(current: TaskState, value: unknown, now = Date.now()): TodoOperation {
   admitTodoInput(value);
   validateTodoState(current);
   const input = value;
   let state = cloneTaskState(current);
+  let statusSource = current;
   let message: string;
   const id = () => {
     if (!input.id) fail("STATE_INVALID_INPUT", `id is required for ${input.action}`);
@@ -109,14 +140,19 @@ export function performTodoAction(current: TaskState, value: unknown, now = Date
   if (input.action === "list") {
     const tasks = input.view === "all" ? state.tasks : state.tasks.filter((task) => task.status !== "done");
     const hidden = state.tasks.length - tasks.length;
-    message = tasks.length ? tasks.map(formatTask).join("\n") : "No current todos";
-    if (hidden) message += `\n${hidden} done task(s) retained. Use todo(action=list,view=all) to read them`;
+    message = tasks.length ? tasks.map(formatTaskSummary).join("\n") : input.view === "all" ? "No todos" : "No current todos";
+    if (hidden) message += `\n${hidden} done task(s) retained. Use todo(action=list,view=all) or todo(action=read,id=...) to read them`;
     return { state, message, changed: false };
+  }
+  if (input.action === "read") {
+    const task = taskById(state, id());
+    return { state, message: JSON.stringify(task, null, 2), changed: false, task };
   }
   if (input.action === "add") {
     if (!input.text) fail("STATE_INVALID_INPUT", "text is required for add");
-    const task = addTask(state, { text: input.text, ...(input.description !== undefined ? { description: input.description } : {}),
+    const task = addTask(state, { text: input.text, ...(input.id !== undefined ? { id: input.id } : {}), ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.blockedBy !== undefined ? { blockedBy: input.blockedBy } : {}), ...(input.waitReason !== undefined ? { waitReason: input.waitReason } : {}) }, now);
+    statusSource = { ...current, tasks: [...current.tasks, { ...task, status: "pending" }] };
     message = `Added ${task.id}: ${task.text}`;
   } else if (input.action === "update" || input.action === "block") {
     const task = updateTask(state, id(), { ...(input.text !== undefined ? { text: input.text } : {}),
@@ -133,20 +169,32 @@ export function performTodoAction(current: TaskState, value: unknown, now = Date
     if (input.position === undefined) fail("STATE_INVALID_INPUT", "id and position are required for reorder");
     reorderTask(state, id(), input.position); message = `Moved ${input.id} to position ${input.position}`;
   } else if (input.action === "clear_done") {
-    message = `Cleared ${clearDone(state)} completed task(s)`;
+    message = `Cleared ${clearDone(state, now)} completed task(s)`;
   } else {
     if (!input.tasks) fail("STATE_INVALID_INPUT", "tasks is required for replace");
-    const ids = input.tasks.map((task, index) => task.id ?? `T${index + 1}`);
-    state = { nextId: ids.reduce((max, taskId) => Math.max(max, /^T(\d+)$/.test(taskId) ? Number(taskId.slice(1)) + 1 : 1), 1),
-      tasks: input.tasks.map((task, index) => ({ id: ids[index]!, text: task.text.trim(),
-        ...(task.description?.trim() ? { description: task.description.trim() } : {}), status: task.status ?? "pending",
-        blockedBy: [...(task.blockedBy ?? [])], ...(task.waitReason?.trim() ? { waitReason: task.waitReason.trim() } : {}), createdAt: now, updatedAt: now })) };
+    state = replaceTasks(current, input.tasks, now);
     validateTaskState(state);
+    const previous = new Map(current.tasks.map((task) => [task.id, task]));
+    statusSource = cloneTaskState(state);
+    for (const [index, task] of statusSource.tasks.entries()) {
+      if (input.tasks[index]!.status === undefined) task.status = previous.get(task.id)?.status ?? task.status;
+    }
     const running = state.tasks.find((task) => task.status === "in_progress");
-    refreshBlockedStatuses(state);
-    if (running) startTask(state, running.id, now);
+    refreshBlockedStatuses(state, now);
+    if (running && running.status !== "in_progress") fail("STATE_INVALID_INPUT", `Task ${running.id} cannot start while blocked or waiting`);
+    for (const task of state.tasks) {
+      const before = previous.get(task.id);
+      if (before) task.updatedAt = stableJson(before) === stableJson({ ...task, updatedAt: before.updatedAt }) ? before.updatedAt : now;
+    }
     message = `Replaced task plan with ${state.tasks.length} task(s)`;
   }
   validateTodoState(state);
-  return { state, message, changed: true };
+  const previousStatuses = new Map(statusSource.tasks.map((task) => [task.id, task.status]));
+  const statusChanges = state.tasks.flatMap((task): TodoStatusChange[] => {
+    const from = previousStatuses.get(task.id);
+    const direct = (input.action === "start" || input.action === "done") && task.id === input.id;
+    return from !== undefined && from !== task.status && !direct ? [{ id: task.id, from, to: task.status }] : [];
+  });
+  if (statusChanges.length) message += `\nAutomatic status changes:\n${statusChanges.map((change) => `${change.id}: ${change.from} to ${change.to}`).join("\n")}`;
+  return { state, message, changed: true, ...(statusChanges.length ? { statusChanges } : {}) };
 }

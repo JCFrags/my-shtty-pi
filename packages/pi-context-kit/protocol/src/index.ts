@@ -2,7 +2,7 @@
 export const V1_PROVIDER_IDS = Object.freeze(["todo", "notes", "workplan"] as const);
 export const PROVIDER_IDS = Object.freeze([...V1_PROVIDER_IDS, "memory"] as const);
 export type ProviderId = typeof PROVIDER_IDS[number];
-export type ProtocolVersion = 1 | 2;
+export type ProtocolVersion = 1 | 2 | 3;
 export const V1_CATEGORIES = Object.freeze(["task", "note", "plan", "decision", "constraint", "blocker"] as const);
 export const CATEGORIES = Object.freeze([...V1_CATEGORIES, "knowledge", "proposal"] as const);
 export type Category = typeof CATEGORIES[number];
@@ -25,6 +25,7 @@ export interface ContextRequest {
 }
 export type NativeRecovery =
   | { tool: "todo"; args: { action: "list" } }
+  | { tool: "todo"; args: { action: "read"; id: string } }
   | { tool: "notes"; args: { action: "read"; id: string } }
   | { tool: "workplan"; args: { action: "recover"; planId: string } }
   | { tool: "memory_get"; args: { memoryId: string; revision?: string } };
@@ -131,9 +132,9 @@ export function sameScope(a: ContextScope, b: ContextScope): boolean {
 }
 export function validateRequest(value: unknown): ContextRequest {
   const request = object(copyPlainData(value, 4096), ["version", "requestId", "providerId", "scope", "query", "categories", "limits", "deadlineMs"]);
-  if (request.version !== 1 && request.version !== 2) fail();
+  if (request.version !== 1 && request.version !== 2 && request.version !== 3) fail();
   text(request.requestId, 128);
-  member(request.providerId, request.version === 1 ? V1_PROVIDER_IDS : PROVIDER_IDS);
+  member(request.providerId, request.version === 3 ? ["todo"] : request.version === 1 ? V1_PROVIDER_IDS : PROVIDER_IDS);
   request.scope = validateScope(request.scope);
   text(request.query, HARD_LIMITS.queryBytes, true);
   if (!Array.isArray(request.categories) || request.categories.length > CATEGORIES.length) fail();
@@ -161,7 +162,10 @@ function validateCard(value: unknown, providerId: ProviderId, version: ProtocolV
   const recovery = object(card.recovery, ["tool", "args"]);
   if (recovery.tool !== nativeTool(providerId)) fail();
   if (providerId === "todo") {
-    if (object(recovery.args, ["action"]).action !== "list") fail();
+    if (version === 3) {
+      const args = object(recovery.args, ["action", "id"]);
+      if (args.action !== "read" || args.id !== card.id) fail();
+    } else if (object(recovery.args, ["action"]).action !== "list") fail();
   } else if (providerId === "notes") {
     const args = object(recovery.args, ["action", "id"]);
     if (args.action !== "read" || args.id !== card.id) fail();
@@ -234,7 +238,7 @@ export function registerContextProvider(
 ): () => void {
   member(providerId, PROVIDER_IDS);
   let active = true;
-  const versions: ProtocolVersion[] = providerId === "memory" ? [2] : [1, 2];
+  const versions: ProtocolVersion[] = providerId === "todo" ? [1, 2, 3] : providerId === "memory" ? [2] : [1, 2];
   const removers = versions.map((version) => events.on(requestChannel(providerId, version), (raw) => {
     let request: ContextRequest;
     try { request = validateRequest(raw); } catch { return; }

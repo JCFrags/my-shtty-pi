@@ -154,7 +154,23 @@ export const WORKPLAN_LIMITS = Object.freeze({
 
 const PLAN_ID = /^WP([1-9][0-9]*)$/;
 const TODO_ID = /^T[1-9][0-9]*$/;
+const TODO_ID_BYTES = 128;
 const HEX = /^[0-9a-f]{64}$/;
+
+function validTodoLink(id: unknown): id is string {
+  // Retain legacy numeric IDs. New custom IDs use Todo's native byte bound.
+  return typeof id === "string" && id.length > 0
+    && (TODO_ID.test(id) || Buffer.byteLength(id, "utf8") <= TODO_ID_BYTES);
+}
+function todoLinks(value: unknown): string[] {
+  requireStringArray(value, "linkedTodoIds");
+  if (value.length > WORKPLAN_LIMITS.milestoneListItems) stateError("STATE_LIMIT_EXCEEDED", "Too many linked Todo IDs");
+  if (value.some((id) => !validTodoLink(id) || Buffer.byteLength(id, "utf8") > TODO_ID_BYTES)) {
+    stateError("STATE_INVALID_LINK", "Linked Todo IDs must be nonempty and at most 128 UTF-8 bytes");
+  }
+  requireUnique(value, "linkedTodoIds");
+  return [...value];
+}
 
 export function emptyWorkplanState(): WorkplanState { return { plans: [], nextPlanNumber: 1, stateRevision: 0 } }
 export function cloneWorkplanState(state: WorkplanState): WorkplanState { return cloneJson(state) }
@@ -276,7 +292,7 @@ export function validateWorkplan(plan: Workplan, code: StateErrorCode = "STATE_C
     if (milestone.dependsOn.length > WORKPLAN_LIMITS.milestoneListItems || milestone.acceptanceCriteria.length > WORKPLAN_LIMITS.milestoneListItems || milestone.evidence.length > WORKPLAN_LIMITS.milestoneListItems || milestone.linkedTodoIds.length > WORKPLAN_LIMITS.milestoneListItems) stateError(code, "A milestone list limit is exceeded");
     if (!milestone.acceptanceCriteria.every((item) => typeof item === "string" && /\S/u.test(item) && [...item].length <= WORKPLAN_LIMITS.narrativeCodePoints)) stateError(code, "A milestone criterion is invalid");
     if (!milestone.evidence.every((item) => typeof item === "string" && /\S/u.test(item) && [...item].length <= WORKPLAN_LIMITS.narrativeCodePoints)) stateError(code, "Milestone evidence is invalid");
-    if (!milestone.linkedTodoIds.every((id) => typeof id === "string" && TODO_ID.test(id))) stateError(code, "A linked todo ID is invalid");
+    if (!milestone.linkedTodoIds.every(validTodoLink)) stateError(code, "A linked todo ID is invalid");
     for (const values of [milestone.acceptanceCriteria, milestone.evidence, milestone.linkedTodoIds]) if (new Set(values).size !== values.length) stateError(code, "A milestone list contains a duplicate");
     if (!["pending", "in_progress", "blocked", "completed"].includes(milestone.status) || typeof milestone.createdAt !== "string" || typeof milestone.updatedAt !== "string") stateError(code, "A milestone status or time is invalid");
     if (milestone.status === "completed" && milestone.evidence.length === 0) stateError(code, "A completed milestone has no evidence");
@@ -684,9 +700,11 @@ export function performWorkplanAction(current: WorkplanState, inputValue: unknow
     } else if (input.action === "update_milestone") {
       if (typeof input.milestoneId !== "string") stateError("STATE_INVALID_INPUT", "milestoneId is required");
       const milestone = milestoneById(next, input.milestoneId);
-      if (milestone.status === "completed") stateError("STATE_INVALID_TRANSITION", `Milestone ${milestone.id} is completed and terminal`);
       const content = contentObject(input.content, [], ["title", "description", "dependsOn", "status", "evidence", "linkedTodoIds"]);
       if (Object.keys(content).length === 0) stateError("STATE_INVALID_INPUT", "update_milestone requires at least one content field");
+      if (milestone.status === "completed" && Object.keys(content).some((field) => !["title", "description", "linkedTodoIds"].includes(field))) {
+        stateError("STATE_INVALID_TRANSITION", `Milestone ${milestone.id} is completed. Only title, description, and linkedTodoIds can be corrected. Keep status, dependencies, and evidence unchanged; add a new milestone for new work`);
+      }
       const changes: Record<string, unknown> = {};
       if (content.title !== undefined) { milestone.title = stringValue(content.title, "milestone title"); changes.title = milestone.title; }
       if (Object.hasOwn(content, "description")) {
@@ -695,10 +713,10 @@ export function performWorkplanAction(current: WorkplanState, inputValue: unknow
       }
       if (content.dependsOn !== undefined) { const values = stringList(content.dependsOn, "dependsOn", WORKPLAN_LIMITS.milestoneListItems, 100); milestone.dependsOn = validateDependencies(next, milestone.id, values); changes.dependsOn = [...values]; }
       if (content.evidence !== undefined) { const values = stringList(content.evidence, "evidence", WORKPLAN_LIMITS.milestoneListItems, WORKPLAN_LIMITS.narrativeCodePoints); requireUnique(values, "evidence", "STATE_INVALID_INPUT"); milestone.evidence = values; changes.evidence = [...values]; }
-      if (content.linkedTodoIds !== undefined) { const values = stringList(content.linkedTodoIds, "linkedTodoIds", WORKPLAN_LIMITS.milestoneListItems, 100); if (values.some((id) => !TODO_ID.test(id))) stateError("STATE_INVALID_LINK", "A linked todo ID is invalid"); requireUnique(values, "linkedTodoIds"); milestone.linkedTodoIds = values; changes.linkedTodoIds = [...values]; }
+      if (content.linkedTodoIds !== undefined) { const values = todoLinks(content.linkedTodoIds); milestone.linkedTodoIds = values; changes.linkedTodoIds = [...values]; }
       if (content.status !== undefined) {
         requireString(content.status, "status"); const target = content.status as MilestoneStatus;
-        if (!transitionAllowed(milestone.status, target)) stateError("STATE_INVALID_TRANSITION", `Milestone transition ${milestone.status} -> ${target} is not permitted`);
+        if (!transitionAllowed(milestone.status, target)) stateError("STATE_INVALID_TRANSITION", `Milestone transition ${milestone.status} -> ${target} is not permitted. Use pending -> in_progress, in_progress -> blocked or completed, and blocked -> in_progress or completed. New work needs a new milestone`);
         if ((target === "in_progress" || target === "completed") && incompleteDependency(next, milestone)) stateError("STATE_INVALID_LINK", `Milestone ${milestone.id} has an incomplete dependency`);
         if (target === "completed" && milestone.evidence.length === 0) stateError("STATE_EVIDENCE_REQUIRED", `Milestone ${milestone.id} needs evidence before completion`);
         milestone.status = target; changes.status = target;
