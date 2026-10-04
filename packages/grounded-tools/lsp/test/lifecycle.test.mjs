@@ -302,7 +302,7 @@ test('fresh generation resets transport/documents; failed starts and uncertain c
 test('automatic diagnostics default off even for warm clients; policy bounds and trusted overrides', async t => {
   const fixture = nonRust(files('automatic-off'));
   const h = await host(fixture, {}, {}); t.after(h.stop);
-  assert.deepEqual((await h.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 60000, diagnosticTimeoutMs: 3000 });
+  assert.deepEqual((await h.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 60000, diagnosticTimeoutMs: 3000, maxServers: 4 });
   const event = { toolName: 'write', content: [{ type: 'text', text: 'saved' }], details: { preserved: true }, get input() { throw new Error('disabled hook must not inspect paths'); } };
   assert.equal(await h.result(event), undefined);
   assert.equal(starts(fixture).length, 0);
@@ -317,7 +317,7 @@ test('automatic diagnostics default off even for warm clients; policy bounds and
   mkdirSync(join(bounds.root, '.pi'));
   writeFileSync(join(bounds.root, '.pi', 'grounded-lsp.json'), JSON.stringify({ automaticDiagnostics: false, idleTimeoutMs: 0, diagnosticTimeoutMs: 999999, disabledServers: ['typescript'] }));
   const trusted = await host(bounds, { context: { isProjectTrusted: () => true } }, { automaticDiagnostics: true, idleTimeoutMs: 999999, diagnosticTimeoutMs: 0 }); t.after(trusted.stop);
-  assert.deepEqual((await trusted.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 1000, diagnosticTimeoutMs: 30000 });
+  assert.deepEqual((await trusted.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 1000, diagnosticTimeoutMs: 30000, maxServers: 4 });
   await assert.rejects(trusted.hover(), /No available language server/);
   assert.equal(starts(bounds).length, 0);
   await trusted.stop();

@@ -48,16 +48,76 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+export interface LspPosition {
+  line: number;
+  character: number;
+}
+
+export interface LspRange {
+  start: LspPosition;
+  end: LspPosition;
+}
+
 export interface LspDiagnostic {
-  range: {
-    start: { line: number; character: number };
-    end: { line: number; character: number };
-  };
+  range: LspRange;
   severity?: number;
   code?: string | number;
+  codeDescription?: { href: string };
   source?: string;
   message: string;
+  tags?: number[];
   relatedInformation?: unknown[];
+  data?: unknown;
+}
+
+export interface LspFormattingOptions {
+  tabSize: number;
+  insertSpaces: boolean;
+  trimTrailingWhitespace?: boolean;
+  insertFinalNewline?: boolean;
+  trimFinalNewlines?: boolean;
+  [key: string]: string | number | boolean | undefined;
+}
+
+export interface LspServerCapabilities {
+  readonly [key: string]: unknown;
+  readonly textDocumentSync?: number | { readonly save?: boolean | { readonly includeText?: boolean } };
+  readonly documentFormattingProvider?: boolean | Readonly<Record<string, unknown>>;
+  readonly codeActionProvider?: boolean | {
+    readonly codeActionKinds?: readonly string[];
+    readonly resolveProvider?: boolean;
+    readonly [key: string]: unknown;
+  };
+}
+
+export type LspPreviewMethod = "textDocument/formatting" | "textDocument/codeAction" | "codeAction/resolve";
+
+export type LspPreviewResult = {
+  readonly method: LspPreviewMethod;
+  readonly ticket: LspDocumentTicket;
+} & ({
+  readonly supported: true;
+  readonly result: unknown;
+} | {
+  readonly supported: false;
+  readonly reason: "capability-not-supported";
+  readonly capability: string;
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function freezeJson<T>(value: T): Readonly<T> {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const item of Object.values(value)) freezeJson(item);
+  }
+  return value;
+}
+
+function comparePositions(a: LspPosition, b: LspPosition): number {
+  return a.line - b.line || a.character - b.character;
 }
 
 export interface LspServerConfig {
@@ -69,12 +129,16 @@ export interface LspServerConfig {
   languageIds?: Record<string, string>;
   rootMarkers: string[];
   initializationOptions?: unknown;
+  settings?: Record<string, unknown>;
+  env?: Record<string, string>;
+  resourceClass?: "normal" | "expensive";
   timeoutMs?: number;
 }
 
 export interface LspLaunch {
   child: ChildProcessWithoutNullStreams;
   release?: () => void;
+  signal?: (signal: NodeJS.Signals) => void;
 }
 
 // Internal injection points for the Rust owner and bounded fake-server checks.
@@ -122,6 +186,7 @@ interface DiagnosticPublication {
 interface Generation extends LspLaunch {
   id: number;
   textDocumentSync?: number | { save?: boolean | { includeText?: boolean } };
+  capabilities?: Readonly<LspServerCapabilities>;
   closed: boolean;
   initialized: boolean;
   closing?: Promise<void>;
@@ -134,6 +199,7 @@ export class LspClient {
   readonly root: string;
   private generation: Generation | undefined;
   private options: LspClientOptions;
+  private readonly settings: Readonly<Record<string, unknown>>;
   private stopRequested = false;
   private buffer = Buffer.alloc(0);
   private nextId = 1;
@@ -150,6 +216,8 @@ export class LspClient {
     this.config = config;
     this.root = root;
     this.options = options;
+    if (config.settings !== undefined && !isRecord(config.settings)) throw new Error(`${config.id} settings must be a static object`);
+    this.settings = freezeJson(structuredClone(config.settings ?? {}));
   }
 
   get running(): boolean {
@@ -169,6 +237,11 @@ export class LspClient {
 
   get recentStderr(): string {
     return this.stderr.slice(-20).join("");
+  }
+
+  get capabilities(): Readonly<LspServerCapabilities> | undefined {
+    const generation = this.generation;
+    return generation?.initialized && !generation.closed ? generation.capabilities : undefined;
   }
 
   async start(signal?: AbortSignal): Promise<void> {
@@ -209,7 +282,7 @@ export class LspClient {
     const launched = this.options.launch
       ? await this.options.launch(this.config, this.root)
       : { child: spawn(this.config.command, this.config.args, {
-        cwd: this.root, env: process.env, stdio: ["pipe", "pipe", "pipe"],
+        cwd: this.root, env: { ...process.env, ...this.config.env }, stdio: ["pipe", "pipe", "pipe"],
       }) };
     let resolveClosed!: () => void;
     const closedPromise = new Promise<void>((resolve) => { resolveClosed = resolve; });
@@ -257,19 +330,36 @@ export class LspClient {
       capabilities: {
         textDocument: {
           synchronization: { didSave: true, dynamicRegistration: false },
-          publishDiagnostics: { relatedInformation: true, versionSupport: true },
+          publishDiagnostics: { relatedInformation: true, versionSupport: true, dataSupport: true },
+          formatting: { dynamicRegistration: false },
+          codeAction: {
+            dynamicRegistration: false,
+            codeActionLiteralSupport: { codeActionKind: { valueSet: ["", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports", "source.fixAll"] } },
+            isPreferredSupport: true, disabledSupport: true, dataSupport: true,
+            resolveSupport: { properties: ["edit", "command"] },
+          },
           hover: { contentFormat: ["markdown", "plaintext"] },
           definition: {},
           references: {},
           rename: { prepareSupport: true },
         },
-        workspace: { workspaceEdit: { documentChanges: true } },
+        workspace: {
+          applyEdit: false,
+          workspaceEdit: { documentChanges: true },
+          configuration: true,
+          didChangeConfiguration: { dynamicRegistration: false },
+          workspaceFolders: true,
+        },
       },
       initializationOptions: this.config.initializationOptions,
     });
     if (this.generation !== generation || generation.closed || generation.closing) throw new Error(`${this.config.id} stopped during initialization`);
-    generation.textDocumentSync = (result as { capabilities?: { textDocumentSync?: Generation["textDocumentSync"] } } | null)?.capabilities?.textDocumentSync;
+    generation.capabilities = freezeJson(isRecord(result) && isRecord(result.capabilities) ? result.capabilities : {});
+    generation.textDocumentSync = generation.capabilities.textDocumentSync;
     this.send({ jsonrpc: "2.0", method: "initialized", params: {} }, generation);
+    if (this.config.settings !== undefined) {
+      this.send({ jsonrpc: "2.0", method: "workspace/didChangeConfiguration", params: { settings: this.settings } }, generation);
+    }
     generation.initialized = true;
   }
 
@@ -408,6 +498,64 @@ export class LspClient {
     }, undefined, signal);
   }
 
+  private previewGeneration(ticket: LspDocumentTicket, signal?: AbortSignal): Generation {
+    throwIfLspAborted(signal);
+    const generation = this.generation;
+    if (!generation || generation.id !== ticket.generation || !this.ready) throw new Error(`${this.config.id} stopped or changed generation; preview unavailable`);
+    if (this.documents.get(ticket.uri)?.version !== ticket.documentVersion) throw new Error(`${this.config.id} document changed; preview unavailable`);
+    return generation;
+  }
+
+  private async previewRequest(ticket: LspDocumentTicket, method: LspPreviewMethod, params: unknown, signal?: AbortSignal): Promise<LspPreviewResult> {
+    const generation = this.previewGeneration(ticket, signal);
+    const result = await this.requestOn(generation, method, params, undefined, signal);
+    this.previewGeneration(ticket, signal);
+    return { supported: true, method, ticket, result };
+  }
+
+  validatePreviewTicket(ticket: LspDocumentTicket, signal?: AbortSignal): void {
+    this.previewGeneration(ticket, signal);
+  }
+
+  async formattingPreview(path: string, options: LspFormattingOptions, signal?: AbortSignal): Promise<LspPreviewResult> {
+    const ticket = await this.open(path, undefined, { signal });
+    const generation = this.previewGeneration(ticket, signal);
+    const provider = generation.capabilities?.documentFormattingProvider;
+    if (provider !== true && !isRecord(provider)) {
+      return { supported: false, method: "textDocument/formatting", ticket, reason: "capability-not-supported", capability: "documentFormattingProvider" };
+    }
+    return this.previewRequest(ticket, "textDocument/formatting", { textDocument: { uri: ticket.uri }, options }, signal);
+  }
+
+  async codeActionPreview(path: string, range: LspRange, only?: readonly string[], signal?: AbortSignal): Promise<LspPreviewResult> {
+    const ticket = await this.open(path, undefined, { signal });
+    const generation = this.previewGeneration(ticket, signal);
+    const provider = generation.capabilities?.codeActionProvider;
+    if (provider !== true && !isRecord(provider)) {
+      return { supported: false, method: "textDocument/codeAction", ticket, reason: "capability-not-supported", capability: "codeActionProvider" };
+    }
+    const observation = this.observation(ticket.uri, ticket.documentVersion);
+    // Preserve raw fields, including data. A stale publication is not current context.
+    const diagnostics = observation.freshness === "version-matched" || observation.freshness === "unversioned"
+      ? observation.diagnostics.filter((diagnostic) => comparePositions(diagnostic.range.start, range.end) <= 0 && comparePositions(range.start, diagnostic.range.end) <= 0)
+      : [];
+    return this.previewRequest(ticket, "textDocument/codeAction", {
+      textDocument: { uri: ticket.uri }, range,
+      context: { diagnostics, ...(only !== undefined ? { only } : {}), triggerKind: 1 },
+    }, signal);
+  }
+
+  async resolveCodeActionPreview(ticket: LspDocumentTicket, action: Record<string, unknown>, signal?: AbortSignal): Promise<LspPreviewResult> {
+    // Do not start a new generation to resolve an action from an old server.
+    const generation = this.previewGeneration(ticket, signal);
+    const provider = generation.capabilities?.codeActionProvider;
+    if (!isRecord(provider) || provider.resolveProvider !== true) {
+      return { supported: false, method: "codeAction/resolve", ticket, reason: "capability-not-supported", capability: "codeActionProvider.resolveProvider" };
+    }
+    if (!isRecord(action) || typeof action.title !== "string" || typeof action.command === "string") throw new Error("Only a CodeAction literal can be resolved for preview");
+    return this.previewRequest(ticket, "codeAction/resolve", action, signal);
+  }
+
   async stop(): Promise<void> {
     this.stopRequested = true;
     try {
@@ -441,15 +589,22 @@ export class LspClient {
         await wait(limits.exit);
       } catch { /* Continue with bounded signal cleanup. */ }
     }
-    if (!generation.closed) generation.child.kill("SIGTERM");
+    if (!generation.closed) {
+      if (generation.signal) generation.signal("SIGTERM");
+      else generation.child.kill("SIGTERM");
+    }
     await wait(limits.term);
-    if (!generation.closed) generation.child.kill("SIGKILL");
+    if (!generation.closed) {
+      if (generation.signal) generation.signal("SIGKILL");
+      else generation.child.kill("SIGKILL");
+    }
     await wait(limits.kill);
     // Only the exact child's close event releases ownership. An unconfirmed
     // close keeps this generation in stopping state and prohibits restart.
   }
 
   async request(method: string, params: unknown, timeoutMs = this.config.timeoutMs ?? 5000, signal?: AbortSignal): Promise<unknown> {
+    if (method === "workspace/executeCommand") throw new Error("LSP previews do not execute workspace commands");
     await this.start(signal);
     const generation = this.generation;
     this.assertReady(generation);
@@ -488,6 +643,7 @@ export class LspClient {
   }
 
   notify(method: string, params: unknown): void {
+    if (method === "workspace/executeCommand") throw new Error("LSP previews do not execute workspace commands");
     this.send({ jsonrpc: "2.0", method, params });
   }
 
@@ -522,12 +678,46 @@ export class LspClient {
     }
   }
 
+  private configurationItem(item: unknown): unknown {
+    if (!isRecord(item) || (item.section !== undefined && typeof item.section !== "string")) return null;
+    if (item.scopeUri !== undefined) {
+      if (typeof item.scopeUri !== "string") return null;
+      let scopeUri: string;
+      try { scopeUri = new URL(item.scopeUri).href; } catch { return null; }
+      const rootUri = pathToFileURL(this.root).href;
+      if (scopeUri !== rootUri && !scopeUri.startsWith(rootUri.endsWith("/") ? rootUri : `${rootUri}/`)) return null;
+    }
+    const section = item.section;
+    if (section === undefined || section === "") return this.settings;
+    if (Object.hasOwn(this.settings, section)) return this.settings[section] ?? null;
+    let value: unknown = this.settings;
+    for (const key of section.split(".")) {
+      if (!isRecord(value) || !Object.hasOwn(value, key)) return null;
+      value = value[key];
+    }
+    return value ?? null;
+  }
+
   private handle(message: Record<string, unknown>, generation: Generation): void {
     if (this.generation !== generation || generation.closed) return;
     if (typeof message.method === "string") {
       // Server request IDs have a separate namespace from our outgoing IDs.
       if (typeof message.id === "number" || typeof message.id === "string") {
-        const result = message.method === "workspace/configuration" || message.method === "workspace/workspaceFolders" ? [] : null;
+        let result: unknown = null;
+        if (message.method === "workspace/configuration") {
+          if (!isRecord(message.params) || !Array.isArray(message.params.items)) {
+            this.send({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "workspace/configuration requires items" } }, generation);
+            return;
+          }
+          result = message.params.items.map((item) => this.configurationItem(item));
+        } else if (message.method === "workspace/workspaceFolders") {
+          result = [{ uri: pathToFileURL(this.root).href, name: this.root.split(/[\\/]/).pop() ?? "workspace" }];
+        } else if (message.method === "workspace/applyEdit") {
+          result = { applied: false, failureReason: "LSP previews do not apply workspace edits" };
+        } else if (message.method === "workspace/executeCommand") {
+          this.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "LSP previews do not execute workspace commands" } }, generation);
+          return;
+        }
         this.send({ jsonrpc: "2.0", id: message.id, result }, generation);
         return;
       }

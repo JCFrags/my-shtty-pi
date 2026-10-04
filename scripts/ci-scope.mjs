@@ -46,19 +46,33 @@ export function isDocumentation(path) {
   return path.startsWith(browserPrefix) && (/\/(?:README)\.md$/.test(path) || path.startsWith(`${browserPrefix}docs/`));
 }
 // This exact subproject contract overrides the shared-core fallback, not its
-// parent directories. The standalone runner is delivered with the LSP repair.
+// parent directories. The runner covers the explicit check toolkit's complete
+// helper/configuration contract. Dependency and shared CI changes still use full CI.
 export const lspFiles = [
   'scripts/verify-lsp.mjs',
   'packages/grounded-tools/lsp/index.ts',
   'packages/grounded-tools/core/src/lsp-client.ts',
   'packages/grounded-tools/README.md',
   'packages/grounded-tools/lsp/rust-launch.ts',
+  'packages/grounded-tools/lsp/check-types.ts',
+  'packages/grounded-tools/lsp/check-tool.ts',
+  'packages/grounded-tools/lsp/check-project.ts',
+  'packages/grounded-tools/lsp/check-runtime.ts',
+  'packages/grounded-tools/lsp/check-analyzers.ts',
+  'packages/grounded-tools/lsp/check-documents.ts',
+  'packages/grounded-tools/lsp/check-preview.ts',
+  'packages/grounded-tools/lsp/resource-launch.ts',
+  'packages/grounded-tools/lsp/server-presets.ts',
+  'packages/grounded-tools/lsp/CHECKS.md',
+  'packages/grounded-tools/lsp/SERVERS.md',
+  'packages/grounded-tools/lsp/vale/.vale.ini',
+  'packages/grounded-tools/lsp/vale/styles/Grounded/Contractions.yml',
   'packages/grounded-tools/lsp/test/lifecycle.test.mjs',
   'packages/grounded-tools/lsp/test/fixtures/fake-lsp.mjs',
   'packages/grounded-tools/lsp/test/fixtures/owner.mjs',
 ];
 const newLspFiles = lspFiles.filter((_, index) => index === 0 || index >= 4);
-const manifestEvidenceSha256 = '8936ccd783a0bf9763f18a38ee677b505cd1f58d630bc548852abaa0b008520f';
+const manifestEvidenceSha256 = '9cfdc8d43902781c8b4866e9cb5816780383d3fe5fc63910df3e64336e9b3db8';
 const metadata = new Set(['name', 'version', 'description', 'author', 'contributors', 'keywords', 'license', 'repository', 'homepage', 'bugs', 'funding']);
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
