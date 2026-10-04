@@ -111,10 +111,10 @@ export function sameScope(a, b) {
 }
 export function validateRequest(value) {
     const request = object(copyPlainData(value, 4096), ["version", "requestId", "providerId", "scope", "query", "categories", "limits", "deadlineMs"]);
-    if (request.version !== 1 && request.version !== 2)
+    if (request.version !== 1 && request.version !== 2 && request.version !== 3)
         fail();
     text(request.requestId, 128);
-    member(request.providerId, request.version === 1 ? V1_PROVIDER_IDS : PROVIDER_IDS);
+    member(request.providerId, request.version === 3 ? ["todo"] : request.version === 1 ? V1_PROVIDER_IDS : PROVIDER_IDS);
     request.scope = validateScope(request.scope);
     text(request.query, HARD_LIMITS.queryBytes, true);
     if (!Array.isArray(request.categories) || request.categories.length > CATEGORIES.length)
@@ -152,7 +152,12 @@ function validateCard(value, providerId, version) {
     if (recovery.tool !== nativeTool(providerId))
         fail();
     if (providerId === "todo") {
-        if (object(recovery.args, ["action"]).action !== "list")
+        if (version === 3) {
+            const args = object(recovery.args, ["action", "id"]);
+            if (args.action !== "read" || args.id !== card.id)
+                fail();
+        }
+        else if (object(recovery.args, ["action"]).action !== "list")
             fail();
     }
     else if (providerId === "notes") {
@@ -240,7 +245,7 @@ export function validateResponse(value, request) {
 export function registerContextProvider(events, providerId, read) {
     member(providerId, PROVIDER_IDS);
     let active = true;
-    const versions = providerId === "memory" ? [2] : [1, 2];
+    const versions = providerId === "todo" ? [1, 2, 3] : providerId === "memory" ? [2] : [1, 2];
     const removers = versions.map((version) => events.on(requestChannel(providerId, version), (raw) => {
         let request;
         try {

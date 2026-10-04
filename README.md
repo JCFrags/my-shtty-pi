@@ -57,7 +57,7 @@ The [registry](package.json) contains 17 owned products: 15 active and two inact
 | [Pi Pixel CUA Portal](packages/pi-pixel-cua/README.md) | Observe and control one explicitly granted native GNOME Wayland window through pixels. | `cua_portal_start`, `cua_portal_observe`, `cua_portal_act`, `cua_portal_stop`, `/pixel-cua-status`, `/pixel-cua-stop` |
 | [Pi Progressive Tools](packages/pi-progressive-tools/README.md) | Keep a short tool catalog visible and enable permitted tools through exact-name help. | `list_tools`, `tool_help`, `/tool-audit`, `/tool-reset` |
 | [Pi Project Glance](packages/pi-project-glance/README.md) | Show current task state, 10 rolling recent updates, complete History, and deferred questions in a Herdr pane. | `/project-glance`. No model-facing tool. |
-| [Pi-SelfReload](packages/pi-self-reload/README.md) | Let the agent reload its own interactive Pi session after work settles, with draft and managed-job checks. Requires Pi 0.99.1 or compatible later behavior. | `self_reload`, `/self-reload` |
+| [Pi Reload](packages/pi-self-reload/README.md) | One safety engine and model tool for current-session or explicit local-fleet reload. Continue only runs stopped by the request. Idle/completed agents stay idle. Requires Pi 0.99.1 or compatible later behavior. | `self_reload` (`scope: self` or `all`), `/self-reload`, `/reload-all` |
 
 ### Inactive products
 
@@ -76,7 +76,7 @@ One product supplies four Pi entrypoints. The internal `core` subpackage supplie
 | --- | --- | --- |
 | `files` | `read`, `edit`, `write`, `local_search` | Verbatim reads, optional outline/symbol/anchor views, strict edits, atomic replacement where supported, and explicit text/file/fuzzy search. |
 | `process` | `bash`, `process`, `session` | Exact command output, complete logs, managed background processes, and explicit persistent local or SSH sessions. |
-| `lsp` | `lsp` | Language Server Protocol diagnostics and navigation, including a rename preview that does not edit files. |
+| `lsp` | `lsp`, `check` | Freshness-qualified language diagnostics/navigation, non-writing edit previews, and explicit project-native or complementary analyzer checks. |
 | `dialog` | `ask_user` when enabled, otherwise legacy `ask_user_question` | Structured blocking questions with Herdr state reporting and a provider-based deferred question interface. |
 
 [Context Kit's independent providers](packages/pi-context-kit/README.md) are the only supported current registrations for Todo, Notes, and Workplan. Grounded core supplies their shared primitives, not another writer. The [pre-retirement source](https://github.com/JCFrags/my-shtty-pi/tree/84bbb994ddda237f5df7a98cca30b1ed1f5ec2ed/packages/grounded-tools) remains in Git history. Preserve legacy sessions, import readers, and compatible retained installations. Select exactly one writer per native tool.
@@ -213,11 +213,24 @@ The LSP-only route accepts a nonempty diff entirely within these exact files:
 - `packages/grounded-tools/core/src/lsp-client.ts`
 - `packages/grounded-tools/README.md`
 - `packages/grounded-tools/lsp/rust-launch.ts`
+- `packages/grounded-tools/lsp/check-types.ts`
+- `packages/grounded-tools/lsp/check-tool.ts`
+- `packages/grounded-tools/lsp/check-project.ts`
+- `packages/grounded-tools/lsp/check-runtime.ts`
+- `packages/grounded-tools/lsp/check-analyzers.ts`
+- `packages/grounded-tools/lsp/check-documents.ts`
+- `packages/grounded-tools/lsp/check-preview.ts`
+- `packages/grounded-tools/lsp/resource-launch.ts`
+- `packages/grounded-tools/lsp/server-presets.ts`
+- `packages/grounded-tools/lsp/CHECKS.md`
+- `packages/grounded-tools/lsp/SERVERS.md`
+- `packages/grounded-tools/lsp/vale/.vale.ini`
+- `packages/grounded-tools/lsp/vale/styles/Grounded/Contractions.yml`
 - `packages/grounded-tools/lsp/test/lifecycle.test.mjs`
 - `packages/grounded-tools/lsp/test/fixtures/fake-lsp.mjs`
 - `packages/grounded-tools/lsp/test/fixtures/owner.mjs`
 
-That route runs only `node scripts/verify-lsp.mjs`, which owns the scoped static, privacy, dependency, and lifecycle checks. It does not run root, product-packaging, Chrono, history, or browser suites. Missing, partial, non-regular, or newly unmapped LSP inputs fail the selected LSP job instead of starting unrelated suites. Mixed LSP and other paths use full verification, except a diff that contains only human documentation. The exact LSP-only route takes precedence, including its existing README path. Once the runner and fixtures are present, full runs and selected Grounded runs also require the LSP job. The CI router can land before the separate runner: legacy full runs skip LSP only when all five newly introduced files are absent, the three existing inputs are regular files, and complete history shows no earlier copy of those five files. Partial inputs or deletion after delivery cannot restore that skip.
+That route runs only `node scripts/verify-lsp.mjs`, which owns the scoped static, strict TypeScript, privacy, dependency/helper closure, and lifecycle checks. It does not run root, product-packaging, Chrono, history, or browser suites. Missing, partial, non-regular, or newly unmapped LSP inputs fail the selected LSP job instead of starting unrelated suites. Mixed LSP and other paths use full verification, except a diff that contains only human documentation. The exact LSP-only route takes precedence, including its existing README path. Once the runner and fixtures are present, full runs and selected Grounded runs also require the LSP job. The CI router can land before the separate runner: legacy full runs skip LSP only when every introduced runner/fixture/toolkit input is absent, the three original inputs are regular files, and complete history shows no earlier copy of the introduced inputs. Partial inputs or deletion after delivery cannot restore that skip.
 
 Known routine pushes to `main` run shared static/regression and historical checks instead of repeating product/browser builds that passed the strict, fresh-base PR gate. Selected LSP checks still run. Documentation-only pushes remain static-only. Shared runtime, CI controls, dependencies, or uncertain changes still run full checks on both the PR and `main`. Full scheduled verification runs each Wednesday at 05:23 UTC. `workflow_dispatch` also runs the full suite.
 
@@ -240,7 +253,7 @@ console.log(dependencyEvidence(process.cwd(), files).sha256);
 JS
 ```
 
-Do not refresh the digest merely to suppress full verification. Literal import discovery is an extra guard, not a complete dependency proof. Computed loads, test fixtures, and event contracts need explicit map review. The LSP exception separately rejects literal `lsp-client` consumers outside its exact path set. Update or withdraw the narrow route if its consumers or verification contract change.
+Do not refresh the digest merely to suppress full verification. Literal import discovery is an extra guard, not a complete dependency proof. Computed loads, test fixtures, and event contracts need explicit map review. The LSP exception separately rejects literal `lsp-client` consumers outside its exact path set and verifies every enrolled toolkit helper/configuration input. Root locks, manifest dependencies, and shared CI changes are not part of that narrow exception. Update or withdraw the narrow route if its consumers or verification contract change.
 
 Some retained package READMEs contain historical verifier commands. Use this root workflow for current source. The `deployed-baseline-2026-09-01` tag preserves the earlier deployment; its counts and hashes do not constrain current products or establish activation.
 

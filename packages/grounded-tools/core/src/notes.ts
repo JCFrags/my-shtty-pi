@@ -293,6 +293,9 @@ function requireId(input: NotesInput): string {
 }
 
 function requireRevision(input: NotesInput): number {
+  if (input.expectedRevision === undefined) {
+    stateError("STATE_INVALID_INPUT", `expectedRevision is required for ${input.action}; read the note or list/search metadata for its current revision`);
+  }
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision! < 1) {
     stateError("STATE_INVALID_INPUT", "expectedRevision must be a positive safe integer");
   }

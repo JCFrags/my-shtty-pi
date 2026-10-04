@@ -14,6 +14,19 @@ const LSP_FILES = Object.freeze([
   'packages/grounded-tools/core/src/lsp-client.ts',
   'packages/grounded-tools/README.md',
   'packages/grounded-tools/lsp/rust-launch.ts',
+  'packages/grounded-tools/lsp/check-types.ts',
+  'packages/grounded-tools/lsp/check-tool.ts',
+  'packages/grounded-tools/lsp/check-project.ts',
+  'packages/grounded-tools/lsp/check-runtime.ts',
+  'packages/grounded-tools/lsp/check-analyzers.ts',
+  'packages/grounded-tools/lsp/check-documents.ts',
+  'packages/grounded-tools/lsp/check-preview.ts',
+  'packages/grounded-tools/lsp/resource-launch.ts',
+  'packages/grounded-tools/lsp/server-presets.ts',
+  'packages/grounded-tools/lsp/CHECKS.md',
+  'packages/grounded-tools/lsp/SERVERS.md',
+  'packages/grounded-tools/lsp/vale/.vale.ini',
+  'packages/grounded-tools/lsp/vale/styles/Grounded/Contractions.yml',
   'packages/grounded-tools/lsp/test/lifecycle.test.mjs',
   'packages/grounded-tools/lsp/test/fixtures/fake-lsp.mjs',
   'packages/grounded-tools/lsp/test/fixtures/owner.mjs',
@@ -47,6 +60,7 @@ function checkRoutes(root) {
       if (spec.startsWith('.')) {
         const target = resolve(dirname(join(root, path)), spec);
         assert.ok(target.startsWith(`${root}/`) && existsSync(target), `${path}: unresolved local import ${spec}`);
+        if (target.startsWith(join(root, lspDir) + '/')) assert.ok(LSP_FILES.includes(relative(root, target)), `${path}: local LSP helper is outside the verifier contract`);
       } else if (spec.startsWith('@grounded/pi-core/')) {
         assert.ok(manifest === core || manifest.dependencies?.[core.name]);
         const exported = core.exports[`./${spec.slice('@grounded/pi-core/'.length)}`];
@@ -83,6 +97,7 @@ export function main() {
     run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], root, { env, timeout: 180_000 });
     assert.equal(realpathSync(join(root, 'node_modules/@grounded/pi-core')), join(root, 'packages/grounded-tools/core'));
     assert.equal(relative(root, realpathSync(join(root, 'node_modules/@grounded/pi-lsp'))), 'packages/grounded-tools/lsp');
+    run(join(root, 'node_modules/.bin/tsc'), ['--noEmit', '--target', 'es2023', '--module', 'nodenext', '--moduleResolution', 'nodenext', '--allowImportingTsExtensions', '--strict', '--skipLibCheck', 'packages/grounded-tools/lsp/index.ts'], root, { env, timeout: 60_000 });
     const started = Date.now();
     run(process.execPath, ['--experimental-transform-types', '--test', '--test-concurrency=1', '--test-timeout=60000', 'packages/grounded-tools/lsp/test/lifecycle.test.mjs'], root, {
       env, timeout: 60_000, killSignal: 'SIGKILL',
