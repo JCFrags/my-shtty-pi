@@ -16,9 +16,17 @@ Read the [state-tools guide](../../../docs/chrono/state/todo-notes-workplan.md) 
 
 ## Native interface
 
-The `todo` tool retains `list`, `add`, `update`, `start`, `done`, `block`, `remove`, `reorder`, `clear_done`, and `replace`. Dependencies, external waits, and the single in-progress task rule use the native reducers. `replace` retains the native ID-counter reset behavior. Existing source timestamps are not converted into owner revisions.
+The `todo` tool supports `list`, `read`, `add`, `update`, `start`, `done`, `block`, `remove`, `reorder`, `clear_done`, and `replace`. Dependencies, external waits, and the single in-progress task rule use the native reducers. Existing source timestamps are not converted into owner revisions.
 
-Todo is current actionable work, not an append-only log. Revise or remove obsolete tasks when direction changes. `list` defaults to `view:"current"`, which hides done tasks without removing their IDs or satisfied dependency edges. `view:"all"` returns the complete retained task set. `clear_done` and `remove` remain explicit mutations. Earlier immutable roots remain historical evidence.
+`read` requires `id` and accepts no other action fields. It returns the exact retained task as JSON in model-facing text and `details.task`. This includes `description` and `waitReason` when present, status, dependency IDs, and numeric `createdAt`/`updatedAt` timestamps in Unix milliseconds. Done tasks remain readable by ID. A read does not create an owner commit or change timestamps. It reads the selected branch's current record, not an earlier revision.
+
+Generated IDs use a high-water counter. `replace`, including an empty replacement, does not reset it. Explicit IDs supplied to `add` or replacement rows remain unchanged. IDs must be nonempty, unique strings within the limits below. Supplied `T<number>` IDs raise the counter. A replacement reserves all supplied IDs before it generates missing IDs, so a later explicit row cannot collide with an earlier generated row. Retain an ID for the same task. Use a new explicit ID or omit the ID for a new task.
+
+Starting a task returns any other in-progress task to pending. Completing a dependency can release blocked tasks to pending. Updating blockers or waits can change the target's status. Replacement rows default to pending when status is omitted, then receive dependency/wait normalization. Reports include implicit status changes to retained tasks and normalized supplied statuses. Mutation text and `details.statusChanges` report these automatic transitions with IDs and old/new statuses. The changed tasks receive the same operation timestamp, including tasks changed indirectly. Replacement preserves a retained task's `createdAt` and preserves `updatedAt` when its fields are unchanged. More than one requested in-progress task or a blocked requested start is refused intact.
+
+Todo is current actionable work, not an append-only log. Revise and reorder tasks when direction changes. `list` defaults to `view:"current"`, which hides done tasks without removing their IDs or satisfied dependency edges. Model-facing list rows are compact summaries, not exact task fields. Use `read` for those fields. `view:"all"` includes the complete retained task set.
+
+For a long-lived agent, preserve unfinished obligations and recovery in a paused Workplan or an archived Note before an approved goal transition. Keep continuing tasks under their existing IDs. Mark only completed work done. Done tasks leave the current view without deletion. `remove`, `clear_done`, and rows omitted from `replace` leave the retained set. They are explicit removals, not an archive or undo system. Earlier immutable roots remain historical evidence, but native `read` cannot read a task removed from the current branch.
 
 `/todo-add` and the native tool use one serialized owner transaction. Glance reads Todo summaries and does not perform task actions. `/todos [full|compact|plan]`, its scrolling view, and `ctrl+shift+u` retain the existing display behavior. Display preferences remain global in `grounded-tasks.json` under Pi's agent directory. They do not modify task state or task revisions.
 
@@ -35,7 +43,11 @@ Admission limits apply before commit or import:
 | Dependencies per task | 64 |
 | Complete tool result | 32 KiB |
 
-Over-limit state is refused intact. State is never shortened. Mutation results contain a small owner identity and bounded display rows, not the full store. The default current list returns visible tasks in `details.tasks`, plus `view` and `retainedDone`. It is not complete native state. `list` with `view:"all"` returns complete native state in `details.state` when the result fits. Otherwise either view supplies a private `state.json` file for that selected view and whole display rows that fit. Only the all-view file is complete native state, including descriptions, IDs, counters, dependencies, and timestamps. Complete transfer always uses the unfiltered store. Display clipping is not a transfer mechanism.
+Over-limit state is refused intact. State is never shortened. Retained done tasks count toward the 256-task and state-byte limits. Mutation results contain a small owner identity, automatic transitions, and bounded display rows, not the full store. If the complete mutation result is too large, a private `result.json` preserves its message and transitions, and `details.omittedStatusChanges` reports the omitted count.
+
+The default current list returns visible tasks in `details.tasks`, plus `view` and `retainedDone`. It is not complete native state. `list` with `view:"all"` returns complete native state in `details.state` when the result fits. Otherwise either view supplies a private `state.json` file for that selected view and whole summary rows that fit. Only the all-view file is complete native state, including descriptions, IDs, counters, dependencies, and timestamps.
+
+If a complete `read` result exceeds 32 KiB, `details.task` is omitted and `details.fullOutputPath` points to a private `task.json` with every exact selected-task field. The model-facing notice gives the same path. Read that file with the file reader rather than treat the notice as the task body. Each full-output file has mode `0600` in a task-specific private directory. These files are output recovery, not persistent task identity or transfer checkpoints. Complete transfer always uses the unfiltered store. Display clipping is not a transfer mechanism.
 
 ## Persistence and lifecycle
 

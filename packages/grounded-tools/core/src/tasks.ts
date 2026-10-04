@@ -67,13 +67,16 @@ export function validateTaskState(state: TaskState): void {
   }
 }
 
-export function refreshBlockedStatuses(state: TaskState): void {
+/** Without a time, normalization is suitable for read-only consistency checks. */
+export function refreshBlockedStatuses(state: TaskState, now?: number): void {
   const done = new Set(state.tasks.filter((task) => task.status === "done").map((task) => task.id));
   for (const task of state.tasks) {
     if (task.status === "done") continue;
+    const previous = task.status;
     const blocked = Boolean(task.waitReason) || task.blockedBy.some((id) => !done.has(id));
     if (blocked) task.status = "blocked";
     else if (task.status === "blocked") task.status = "pending";
+    if (task.status !== previous && now !== undefined) task.updatedAt = now;
   }
 }
 
@@ -101,7 +104,7 @@ export function addTask(
   state.tasks.push(task);
   try {
     validateTaskState(state);
-    refreshBlockedStatuses(state);
+    refreshBlockedStatuses(state, now);
     return task;
   } catch (error) {
     state.tasks.pop();
@@ -117,7 +120,7 @@ export function taskById(state: TaskState, id: string): Task {
 }
 
 export function startTask(state: TaskState, id: string, now = Date.now()): Task {
-  refreshBlockedStatuses(state);
+  refreshBlockedStatuses(state, now);
   const task = taskById(state, id);
   if (task.waitReason) throw new Error(`Task ${id} is waiting: ${task.waitReason}`);
   if (task.blockedBy.some((blocker) => taskById(state, blocker).status !== "done")) {
@@ -125,9 +128,12 @@ export function startTask(state: TaskState, id: string, now = Date.now()): Task 
   }
   if (task.status === "done") throw new Error(`Task ${id} is already done`);
   for (const other of state.tasks) {
-    if (other.status === "in_progress") other.status = "pending";
+    if (other.id !== id && other.status === "in_progress") {
+      other.status = "pending";
+      other.updatedAt = now;
+    }
   }
-  refreshBlockedStatuses(state);
+  refreshBlockedStatuses(state, now);
   task.status = "in_progress";
   task.updatedAt = now;
   return task;
@@ -141,7 +147,7 @@ export function completeTask(state: TaskState, id: string, now = Date.now()): Ta
   }
   task.status = "done";
   task.updatedAt = now;
-  refreshBlockedStatuses(state);
+  refreshBlockedStatuses(state, now);
   return task;
 }
 
@@ -169,7 +175,7 @@ export function updateTask(
   task.updatedAt = now;
   try {
     validateTaskState(state);
-    refreshBlockedStatuses(state);
+    refreshBlockedStatuses(state, now);
     return task;
   } catch (error) {
     Object.assign(task, previous);
@@ -194,11 +200,17 @@ export function reorderTask(state: TaskState, id: string, position: number): voi
   state.tasks.splice(Math.max(0, Math.min(state.tasks.length, position)), 0, task!);
 }
 
-export function clearDone(state: TaskState): number {
+export function clearDone(state: TaskState, now = Date.now()): number {
   const done = new Set(state.tasks.filter((task) => task.status === "done").map((task) => task.id));
   const before = state.tasks.length;
   state.tasks = state.tasks.filter((task) => !done.has(task.id));
-  for (const task of state.tasks) task.blockedBy = task.blockedBy.filter((id) => !done.has(id));
-  refreshBlockedStatuses(state);
+  for (const task of state.tasks) {
+    const blockers = task.blockedBy.filter((id) => !done.has(id));
+    if (blockers.length !== task.blockedBy.length) {
+      task.blockedBy = blockers;
+      task.updatedAt = now;
+    }
+  }
+  refreshBlockedStatuses(state, now);
   return before - state.tasks.length;
 }
