@@ -33,8 +33,8 @@ V3 remains the compiled default. The local integration intends explicit V4 selec
 
 1. Obtain the session agent's summary through its normal request path. Bind the request and sole submission to the session, consumed source boundary, model, epoch, and expiry. Do not use a separate summarizer or stale summary fallback.
 2. At safe idle, settle the persisted submission result and verify the minimal retained boundary. Keep only content not consumed by the summary-producing request and any messages required for valid tool pairs. Capture the full native session/leaf, replay cut, model metadata, system prompt, active schemas, response reserve, settings, and lifecycle identity.
-3. Collect bounded native pages through the same pure collector used by Recall. The compiler does not invoke native tools or read provider stores directly. Capture allows up to 16 cards and 128 scanned records per provider, 16 KiB provider replies, a 32 KiB combined collection, and a 150 ms common wait. These pages remain in the receipt and do not automatically supply facts to the summary writer.
-4. Capture bounded chronological events from the loaded branch with applicable Pi context edits and saved relevance hints. Keep original roles, source order, omission notices, and exact recovery IDs.
+3. Collect bounded native pages through the same pure collector used by Recall, before replay selection. The compiler does not invoke native tools or read provider stores directly. Capture allows up to 16 cards and 128 scanned records per provider, 16 KiB provider replies, a 32 KiB combined collection, and a 150 ms common wait. Reuse this one collection for the receipt. Do not scan providers again. These pages do not automatically supply facts to the summary writer.
+4. Combine the submitted model hints first with bounded topic, ID, and path terms from ready current cards. Add at most 16 native terms within the existing 24-term replay limit, with at most 160 UTF-16 units per term. Completed, done, archived, unknown-status, and unaccepted proposal cards cannot supply implicit hints. Share the native allowance across available owners. Capture bounded chronological events from the loaded branch with these terms and applicable Pi context edits. Keep original roles, source order, omission notices, and exact recovery IDs.
 5. Detach and freeze admitted inputs. Charge the continuation summary and exact tail first, then fit replay within its adaptive allowance and hard ceiling. The current compiler requires both the summary and event replay; old stored/fallback input forms do not substitute for them.
 6. Charge the complete rendered result. Revalidate scope, settings, model, active schemas, cancellation, and source boundary before returning.
 7. Persist `details.contextReceipt` with the actual Pi compaction entry. Correlate `session_compact` or `session_compact_failed` with the pending attempt.
@@ -77,7 +77,7 @@ The V4 receipt records:
 - Native scope, historical cut, retained boundary, and captured Memory owner.
 - Admitted provider pages and individual record revisions.
 - Receipt-only native cards, chronological selections and omissions, and exact recovery descriptors.
-- The source-bound session summary and its relevance hints.
+- The source-bound session summary and its unchanged submitted relevance hints. The replay receipt also records the bounded combined terms actually used for selection.
 - Estimated charges and explicit validation qualifications.
 
 It is not a transaction across providers. A later native read can return a newer record, except where an exact revision selector is supported. Provider exclusions before capture are counts, not invented omitted IDs.

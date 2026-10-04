@@ -3,6 +3,7 @@ import { collectContext, type ContextCollection, type ContextQuery } from "@cont
 import type { ContextEventBus, ContextScope } from "@context-kit/protocol";
 import { compileContext, freezeContextInput, type FrozenContextInput, type SessionSummaryInput } from "./context-compiler.js";
 import type { ChronologicalReplaySelection } from "./chronological-replay.js";
+import { nativeReplayRelevance } from "./native-relevance.js";
 import type { CapsuleCatalogView, ScopedBodySourceRef, ScopedRawSourceRef } from "./capsule-contract.js";
 import type { EpisodeStateSelection } from "./episode-state-contract.js";
 import { isSafeCompactionCut } from "./tail-selection.js";
@@ -21,14 +22,15 @@ export interface CompositionPreviewReader {
 }
 
 /** Read-only preparation shared by preview and the active public hook.
- * The caller validates the session-agent submission and captures a bounded event
- * suffix. Native pages remain diagnostic evidence, not the summary's authority.
+ * The caller validates the session-agent submission. Collect native pages once,
+ * then use current cards as bounded replay hints. Keep those same pages in the
+ * receipt, not a rendered native dump or the summary's authority.
  * This function does not load history or write a session, artifact or store. */
 export async function captureContextCompilation(
   host: { events: ContextEventBus; getActiveTools(): string[] },
   input: Omit<FrozenContextInput, "native" | "history"> & {
     readonly sessionSummary: SessionSummaryInput;
-    readonly replay: ChronologicalReplaySelection;
+    readonly replay: (relevance: readonly string[]) => ChronologicalReplaySelection;
     readonly query?: ContextQuery;
   },
   view: { getScope(): ContextScope; epoch(): number; signal?: AbortSignal; revalidate(): void },
@@ -38,9 +40,11 @@ export async function captureContextCompilation(
     records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150,
   }, view);
   view.revalidate();
+  const replay = input.replay(nativeReplayRelevance(native, input.sessionSummary.relevanceHints));
+  view.revalidate();
   return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
     memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native,
-    sessionSummary: input.sessionSummary, history: { kind: "events", selection: input.replay } });
+    sessionSummary: input.sessionSummary, history: { kind: "events", selection: replay } });
 }
 
 /** The compiler returns the same receipt and bytes when the frozen input is used
