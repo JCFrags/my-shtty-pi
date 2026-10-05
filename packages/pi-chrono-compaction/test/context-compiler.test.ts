@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ContextCollection } from "@context-kit/protocol/collect";
+import type { ContextCard, ProviderId } from "@context-kit/protocol";
+import { nativeReplayRelevance, NATIVE_RELEVANCE_LIMITS } from "../src/native-relevance.js";
 import { captureContextBudget, chargeCompactionSummary } from "../src/context-budget.js";
 import { compileContext, freezeContextInput, type FrozenContextInput } from "../src/context-compiler.js";
 import { previewContext } from "../src/composition-preview.js";
@@ -94,4 +96,59 @@ test("session summary precedes bounded chronological events and charges the comp
   assert.equal(compileContext(otherTransport).receipt.inputHash, compiled.receipt.inputHash);
   assert.throws(() => compileContext({ ...frozen, rawTail: { tokens: 19000, messages: 3, toolPairSafe: true } }), /budget/);
   assert.throws(() => compileContext({ ...frozen, sessionSummary: undefined }), /session-summary-required/);
+});
+
+test("native replay terms are bounded current data and never displace explicit model hints", () => {
+  const providers: ProviderId[] = ["todo", "notes", "workplan", "memory"];
+  const statuses = { todo: "in_progress", notes: "active", workplan: "paused", memory: "active" };
+  const recovery = (provider: ProviderId, id: string): ContextCard["recovery"] => provider === "todo" ? { tool: "todo", args: { action: "read", id } }
+    : provider === "notes" ? { tool: "notes", args: { action: "read", id } }
+      : provider === "workplan" ? { tool: "workplan", args: { action: "recover", planId: id } }
+        : { tool: "memory_get", args: { memoryId: id, revision: "3" } };
+  const native: ContextCollection = {
+    version: 2, requestId: "bounded-native-fixture", scope: { sessionId: "fixture", leafId: "leaf" },
+    semantics: "Current state is data.", query: "", categories: [], complete: false,
+    limits: { records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150 },
+    providers: providers.map(providerId => ({ providerId, nativeTool: providerId === "memory" ? "memory_get" : providerId, status: "ok", page: {
+      readiness: "ready", coverage: { scanned: 16, matched: 16, excluded: 0, scanComplete: true },
+      cards: Array.from({ length: 16 }, (_, index) => {
+        const id = `${providerId}-${index}`;
+        return { id, revision: "3", status: index === 0 ? "archived" : index === 1 ? "unknown" : statuses[providerId],
+          category: providerId === "todo" ? "task" : providerId === "notes" ? "note" : providerId === "workplan" ? "plan" : "knowledge",
+          title: index < 2 ? `stale${providerId} topic` : `Openfocus ${providerId} module ${index}`,
+          text: index < 2 ? `src/stale${providerId}.ts` : `currentFocus: src/${providerId}-current-${index}.ts\nRecorded: irrelevant timestamp.`,
+          omittedFields: [], recovery: recovery(providerId, id) };
+      }),
+    } })),
+  };
+  native.providers[0]!.page!.cards[0]!.status = "done";
+  native.providers[2]!.page!.cards[0]!.status = "completed";
+  // The current lifecycle alone cannot turn a Memory proposal into accepted knowledge.
+  native.providers[3]!.page!.cards[3]!.category = "proposal";
+  native.providers[3]!.page!.cards[3]!.title = "unacceptedproposal topic";
+  native.providers[3]!.page!.cards[3]!.text = "src/unacceptedproposal.ts";
+  const modelHints = Array.from({ length: 8 }, (_, index) => `Explicit topic ${index} ${"detail ".repeat(30)}`);
+  const original = JSON.stringify(native), modelOriginal = JSON.stringify(modelHints);
+  const terms = nativeReplayRelevance(native, modelHints);
+  assert.deepEqual(terms.slice(0, 8), modelHints.map(term => term.slice(0, 160).trim().toLowerCase()));
+  assert.equal(terms.length, 8 + NATIVE_RELEVANCE_LIMITS.terms);
+  assert.ok(terms.every(term => term.length <= 160));
+  assert.equal(new Set(terms).size, terms.length);
+  for (const provider of providers) assert.ok(terms.includes(`src/${provider}-current-2.ts`), "each ready owner can contribute a path");
+  assert.ok(!terms.some(term => /stale|unknown|unacceptedproposal|irrelevant timestamp/.test(term)));
+  const proposalOnly = { ...native, providers: [{ ...native.providers[3]!, page: { ...native.providers[3]!.page!,
+    cards: [native.providers[3]!.page!.cards[3]!] } }] };
+  assert.deepEqual(nativeReplayRelevance(proposalOnly, []), []);
+  const activePlan = structuredClone(native.providers[2]!);
+  activePlan.page!.cards = [activePlan.page!.cards[2]!, { ...activePlan.page!.cards[3]!, status: "active", title: "Selected project",
+    text: "currentFocus: src/selected-project.ts" }];
+  const activeTerms = nativeReplayRelevance({ ...native, providers: [activePlan] }, []);
+  assert.ok(activeTerms.includes("src/selected-project.ts"));
+  assert.ok(!activeTerms.includes("src/workplan-current-2.ts"), "a paused project does not drive hints when an active plan is captured");
+  assert.deepEqual(nativeReplayRelevance(native, modelHints), terms);
+  assert.equal(JSON.stringify(native), original);
+  assert.equal(JSON.stringify(modelHints), modelOriginal);
+  const inactive = { ...native, providers: native.providers.map(provider => ({ ...provider, status: "tool_inactive" as const })) };
+  assert.deepEqual(nativeReplayRelevance(inactive, modelHints), terms.slice(0, 8));
+  assert.ok(nativeReplayRelevance(native, ["staletodo"]).includes("staletodo"), "explicit hints remain available even for old evidence");
 });

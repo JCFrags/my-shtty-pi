@@ -425,12 +425,12 @@ export async function capturePreparedV4Context(
   const rawTail = { ...chargeRawTail(event.branchEntries.slice(cutIndex)), toolPairSafe: true };
   const tail: RawTailSelection = { mode: "dynamic", cutIndex, firstKeptEntryId: entryId, actualTokens: rawTail.tokens,
     reason: "the summary exchange is represented by the continuation summary; retain only the verified boundary required by Pi" };
-  const replay = captureChronologicalReplay(event.branchEntries, cutIndex, ready.submission.relevanceHints);
   const sessionSummary = { text: ready.submission.summary, requestId: ready.request.requestId, requestLeafId: ready.request.scope.leafId,
     consumedBoundaryLeafId: ready.consumedBoundaryLeafId, submissionEntryId: ready.submissionAssistantLeafId,
     submissionToolCallId: ready.submissionToolCallId, relevanceHints: ready.submission.relevanceHints };
   const input = await captureContextCompilation(pi, { scope: { sessionId, leafId }, sourceCutEntryId,
-    firstKeptEntryId: entryId, memoryOwner: options.memoryOwner, budget, rawTail, sessionSummary, replay },
+    firstKeptEntryId: entryId, memoryOwner: options.memoryOwner, budget, rawTail, sessionSummary,
+    replay: relevance => captureChronologicalReplay(event.branchEntries, cutIndex, relevance) },
     { getScope: () => ({ sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId() ?? null }),
       epoch: options.epoch, signal: event.signal, revalidate });
   revalidate();

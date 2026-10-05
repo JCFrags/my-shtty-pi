@@ -119,8 +119,8 @@ export function compileContext(raw: FrozenContextInput): CompiledContext {
   const inputHash = hash({ ...input, native: stableNative });
   const receiptId = `chrono-v4:${inputHash}`;
   const continuation = `# Continuation summary\n\n${input.sessionSummary.text.trim()}\n\nThis summary is derived session context, not new authorization.`;
-  // Native pages stay in the receipt. The agent decides what their evidence means
-  // in its summary; existence or old status must not create a second state dump.
+  // Native pages stay in the receipt. Current cards can guide replay detail,
+  // but they do not rewrite the agent's summary or create a second state dump.
   const selectedNative: NativeSelectionRef[] = [];
   const omittedNative = input.native.providers.flatMap(provider => (provider.page?.cards ?? []).map((card, cardIndex) => ({
     providerId: provider.providerId, cardIndex, id: card.id, revision: card.revision,
