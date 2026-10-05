@@ -84,6 +84,13 @@
         ]
       },
       {
+        "slug": "pi-date-reference",
+        "status": "active",
+        "entrypoints": [
+          "extensions/index.ts"
+        ]
+      },
+      {
         "slug": "pi-diagnostics",
         "status": "active",
         "entrypoints": [
