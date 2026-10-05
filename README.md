@@ -57,7 +57,7 @@ The [registry](package.json) contains 17 owned products: 15 active and two inact
 | [Pi Pixel CUA Portal](packages/pi-pixel-cua/README.md) | Observe and control one explicitly granted native GNOME Wayland window through pixels. | `cua_portal_start`, `cua_portal_observe`, `cua_portal_act`, `cua_portal_stop`, `/pixel-cua-status`, `/pixel-cua-stop` |
 | [Pi Progressive Tools](packages/pi-progressive-tools/README.md) | Keep a short tool catalog visible and enable permitted tools through exact-name help. | `list_tools`, `tool_help`, `/tool-audit`, `/tool-reset` |
 | [Pi Project Glance](packages/pi-project-glance/README.md) | Show current task state, 10 rolling recent updates, complete History, and deferred questions in a Herdr pane. | `/project-glance`. No model-facing tool. |
-| [Pi Reload](packages/pi-self-reload/README.md) | One safety engine and model tool for current-session or explicit local-fleet reload. Continue only runs stopped by the request. Idle/completed agents stay idle. Requires Pi 0.99.1 or compatible later behavior. | `self_reload` (`scope: self` or `all`), `/self-reload`, `/reload-all` |
+| [Pi Reload](packages/pi-self-reload/README.md) | Cooperative current-session or local-fleet reload. Preserve tools, prepare blocked resources, and acknowledge readiness. Resume only original unfinished tasks or reload-cancelled question waits. Requires Pi 0.99.1 or compatible later behavior. | `reload-pi` (`reload`, `status`, `ready`), one `/reload+` menu |
 
 ### Inactive products
 

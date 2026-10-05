@@ -11,7 +11,7 @@ function harness() {
   const pi = {
     on: (event, handler) => handlers.set(event, handler),
     registerTool: (value) => { tool = value; },
-    registerCommand: (name, value) => { if (name === 'self-reload') command = value; },
+    registerCommand: (name, value) => { assert.equal(name, 'reload+'); command = value; },
     getAllTools: () => state.tools.map(name => ({ name })),
     events: { on: () => {}, emit: (name, event) => {
       assert.equal(name, 'grounded:session-transition-readiness:v1');
@@ -19,7 +19,7 @@ function harness() {
     } },
     sendUserMessage: (text, options) => {
       assert.deepEqual(options, { expandPromptTemplates: true });
-      commandRun = command.handler(text.slice('/self-reload '.length), ctx).catch(error => state.errors.push(error));
+      commandRun = command.handler(text.slice('/reload+ '.length), ctx).catch(error => state.errors.push(error));
     },
   };
   const ctx = {
@@ -29,14 +29,14 @@ function harness() {
     signal: operation.signal,
     sessionManager: {
       getSessionId: () => 'session-a',
-      getBranch: () => [{ type: 'message', message: { role: 'assistant', content: state.batch ?? [{ type: 'toolCall', id: 'call-a', name: 'self_reload', arguments: {} }] } }],
+      getBranch: () => [{ type: 'message', message: { role: 'assistant', content: state.batch ?? [{ type: 'toolCall', id: 'call-a', name: 'reload-pi', arguments: {} }] } }],
     },
     ui: { getEditorText: () => state.draft, notify: text => state.notifications.push(text) },
     waitForIdle: () => idle.promise,
     reload: async () => {
       assert.equal(state.idle, true);
       state.reloads++;
-      handlers.get('session_shutdown')();
+      handlers.get('session_shutdown')({ reason: 'reload' });
       // Any use of the old API/context after reload must fail the check.
       for (const target of [pi, ctx]) for (const key of Object.keys(target)) {
         Object.defineProperty(target, key, { configurable: true, get() { throw new Error('stale runtime'); } });
@@ -48,13 +48,13 @@ function harness() {
   return {
     state, handlers,
     call: async (params = {}, signal) => {
-      handlers.get('tool_execution_start')({ toolCallId: 'call-a', toolName: 'self_reload' });
+      handlers.get('tool_execution_start')({ toolCallId: 'call-a', toolName: 'reload-pi' });
       try {
         const result = await tool.execute('call-a', params, signal, undefined, ctx);
-        handlers.get('tool_execution_end')({ toolCallId: 'call-a', toolName: 'self_reload', result, isError: false });
+        handlers.get('tool_execution_end')({ toolCallId: 'call-a', toolName: 'reload-pi', result, isError: false });
         return result;
       } catch (error) {
-        handlers.get('tool_execution_end')({ toolCallId: 'call-a', toolName: 'self_reload', isError: true });
+        handlers.get('tool_execution_end')({ toolCallId: 'call-a', toolName: 'reload-pi', isError: true });
         throw error;
       }
     },
@@ -65,7 +65,7 @@ function harness() {
 test('tool returns before idle, dispatches a command, and reloads once without stale access', async () => {
   const h = harness();
   const status = await h.call({ action: 'status' });
-  assert.equal(status.details.version, '0.3.0');
+  assert.equal(status.details.version, '0.4.0');
   assert.equal(status.details.scope, 'self');
   assert.match(status.details.sha256, /^[a-f0-9]{64}$/);
   const result = await h.call();
@@ -87,7 +87,7 @@ test('safety gates refuse or cancel instead of discarding drafts, jobs, or abort
     { replies: [{ protocolVersion: 1, runningProcesses: 0, openSessions: 1 }] },
     { replies: [{}] },
     { replies: [] },
-    { batch: [{ type: 'toolCall', id: 'call-a', name: 'self_reload' }, { type: 'toolCall', id: 'call-b', name: 'write' }] },
+    { batch: [{ type: 'toolCall', id: 'call-a', name: 'reload-pi' }, { type: 'toolCall', id: 'call-b', name: 'write' }] },
   ]) {
     const h = harness();
     Object.assign(h.state, patch);
