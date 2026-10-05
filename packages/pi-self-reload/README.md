@@ -1,6 +1,6 @@
 # Pi Reload
 
-One extension, one model-callable `self_reload` tool, and one safety engine for the current interactive Pi session or local Pi agents. `/self-reload` and `/reload-all` use that same engine. Reload uses Pi's native handler, not terminal input or a process restart. The package name remains `pi-self-reload` for installation compatibility.
+One `reload-pi` agent tool, one `/reload+` operator menu, and one safety engine for the current interactive Pi session or local fleet. Reload uses Pi's native handler, not terminal input or a process restart. The installation package name remains `pi-self-reload`.
 
 ## Install
 
@@ -10,60 +10,80 @@ Requires Pi 0.99.1 or compatible later behavior, in TUI mode. Pi supplies the ho
 pi install "$PWD/packages/pi-self-reload"
 ```
 
-Select only this package's entrypoint. When replacing a separate SelfReload package and explicit `extensions/reload-all.ts` registration, replace the package source and remove that exact explicit registration. Do not load both entrypoints. Preserve unrelated package order and settings. Follow the [activation procedure](../../docs/activation.md).
+Select only the package entrypoint. Do not also register `extensions/reload-all.ts`. Preserve unrelated package order and settings. Follow the [activation procedure](../../docs/activation.md). Source selection does not change code already loaded by a session.
 
-Existing sessions need one safe initial reload to load the unified extension. New sessions load it at startup. A loaded local SelfReload 0.2.0 tool can perform that bootstrap. The new factory consumes its same-session handoff once and continues only an active, noncancelled requesting run after the native handler returns. An idle legacy operator request does not gain a continuation.
+Existing sessions need a safe initial native reload to load this version. The private bootstrap adapter accepts a safe request from the previous fleet engine and consumes its same-session handoff once. It does not add old public tool or command aliases. Unloaded, older, unavailable, and noninteractive sessions cannot participate in cooperative preparation. The extension does not type into those sessions or force them to join.
 
-## Model tool
+## Agent tool
 
-The tool name remains `self_reload`. Defaults are `action: "reload"`, `scope: "self"`, and `resume: true`.
+The tool is `reload-pi`. Defaults are `action: "reload"`, `scope: "self"`, and `resume: true`.
 
 ```json
 {"action":"reload"}
 {"action":"reload","scope":"all"}
-{"action":"reload","resume":false}
+{"action":"reload","scope":"all","resume":false}
 {"action":"status"}
 {"action":"status","scope":"all"}
 ```
 
-Use the default single-session scope when loaded extensions, tools, or other reloadable resources are stale or inconsistent after a correction. Use `scope: "all"` for an approved local Pi extension rollout after the updated resources are installed. Pushing source alone does not install it. Reload does not build packages, install dependencies, repair arbitrary environment faults, migrate state, or certify resource health.
+Use self scope for stale reloadable resources in this session. Use all scope only for an approved local rollout after installing the update. A push does not install it. Reload does not build packages, install dependencies, migrate state, repair unrelated failures, or certify resource health.
 
-1. Save task state and finish useful background jobs.
-2. Call reload alone as the last action. Mixed or nested tool batches are refused.
-3. The tool returns a queued result with `terminate: true`. The native command waits for that exact successful terminating result and for the run to become idle. It does not abort its own executing tool or lose the result.
-4. The shared engine reloads peers first for `scope: "all"`, then the caller. The fresh runtime can continue the requesting run once, only after the native reload handler returns. `resume: false` keeps the caller idle and does not disable a confirmed interrupted peer's continuation.
-5. Check the loaded status and Pi's native reload diagnostics after the wake. A queued result is not completion. A fresh instance proves a new factory, not that every extension is healthy. Do not repeat an uncertain reload.
+1. Save necessary task state and finish useful background jobs.
+2. Call reload alone as the final action. Mixed and nested batches are refused.
+3. The tool returns `terminate: true`. The native command waits for that exact successful result and native idle. It does not abort its own executing tool.
+4. Fleet peers prepare and reload independently. The caller reloads after their outcomes are known or their bounded deadline ends.
+5. By default, original unfinished tasks interrupted by this operation can resume once, after the native handler returns. Idle/completed tasks stay idle. `resume: false` disables continuation for every participant, not only the caller.
+6. Check fresh loaded status and native diagnostics. A queued result is not completion. Never repeat an uncertain reload.
 
-Status returns the loaded version, instance ID, engine source SHA-256, pending state, and mode. Fleet status also lists participating local processes. Status does not reload or start a model request.
+Status returns loaded version, instance ID, engine SHA-256, mode, and pending operation. All scope includes participants and unavailable-endpoint errors. Status does not reload or start a model request. Participant count is not total Pi process count.
 
-## Operator commands
+## Operator menu
 
-- `/self-reload` reloads only this session through the shared engine. An active run can resume once if this operation interrupted it. An idle or completed session stays idle.
-- `/self-reload --no-resume` disables the caller's continuation.
-- `/self-reload status` shows the loaded identity.
-- `/reload-all` reloads participating local Pi agents and the caller last.
-- `/reload-all status` lists participants. The built-in `/reload` remains unchanged.
+Run `/reload+` without arguments. Its TUI menu contains:
 
-The private same-user Unix sockets work without Herdr, including for Pi sessions outside Herdr. They do not cross machines or OS users. Unloaded, exited, RPC, JSON, and print sessions do not participate. Participant count is not total Pi process count. The extension never types into an old session to bootstrap it.
+- Reload this session.
+- Reload this session, do not resume.
+- Reload all local sessions.
+- Reload all local sessions, do not resume.
+- Status and pending operations.
 
-For a peer or operator-command request, the engine checks the current native state. It captures a live nonaborted agent signal immediately before native abort and confirms that this operation changed that signal to aborted. A run that already ended or was already cancelling gets no wake. A model-tool request instead proves ownership through its exact successful terminating tool result. These are separate stop mechanisms in the same engine.
+Cancel closes the menu without a change. The built-in `/reload` remains unchanged. The extension no longer registers `/self-reload` or `/reload-all`. Resolve this caller's open prompt before opening another menu.
 
-## Safety and limits
+## Cooperative preparation
 
-- Drafts, queued input, reported questions or approvals, other executing tools, managed jobs, and open shell sessions block or skip reload. The engine checks again at idle. It does not clear input, answer questions, force-kill tools, or relaunch jobs.
-- The optional `grounded:session-transition-readiness:v1` event reports managed process and shell-session counts. A loaded `process` or `grounded_process` tool without a valid response fails closed. This protocol and extension prompt events do not cover every third-party resource or core dialog. Inspect other session-owned work before use. Other extensions can stop resources during `session_shutdown`.
-- New input, tree navigation, cancellation, expiry, or a session change suppresses continuation. The process-local handoff is claimed once and never replays after restart or an unrelated reload. Idle/completed peers never receive a broadcast continuation.
-- The caller tool run and each native stop have 15 seconds to settle. Peer connections have a 30-second deadline. A timeout or missing fresh-runtime acknowledgement is unconfirmed, not permission to retry. Fleet `last-result.json` stores local identities and outcomes, never prompts.
-- Reload requires interactive TUI bindings. Status remains available in other modes. An SDK test host must explicitly bind TUI-equivalent idle and reload operations.
-- Stable compiled-module paths can retain cached code. Use the repository's scoped activation procedure and check native diagnostics. Native Pi can catch late reload errors without rethrowing them.
+An executing tool is not immediately skipped or interrupted. The engine waits for the entire batch's persisted result boundary. A safe peer can reload while another peer waits. A busy peer that finishes its task naturally does not gain a continuation.
 
-The default private socket directory is `pi-reload-all-<uid>` below the OS temporary directory. It has mode `0700`, and sockets have mode `0600`. Set an absolute `PI_RELOAD_ALL_DIR` before startup to isolate a test or separate fleet. Each member must use that same directory. A private lock prevents competing fleet operations. After a coordinator crashes, prove its recorded process is gone before removing only its stale `fleet.lock`. Never remove another live owner's lock.
+If managed jobs, shell sessions, or a supported question wait block a peer, the engine can send a clearly labeled Pi Reload preparation message. An idle-but-blocked peer can start a preparation turn. The engine records the original active, idle, or waiting state before preparation. Preparation activity cannot turn an idle task into an unfinished task.
+
+The preparation agent may use multiple calls to save state, settle useful jobs, or close unused task-owned shells. The first tool or turn end does not mean ready. The agent acknowledges the existing operation with its exact request ID:
+
+```json
+{"action":"ready","requestId":"00000000-0000-4000-8000-000000000000","outcome":"ready"}
+{"action":"ready","requestId":"00000000-0000-4000-8000-000000000000","outcome":"finished"}
+{"action":"ready","requestId":"00000000-0000-4000-8000-000000000000","outcome":"needs-attention","reason":"A useful job must remain running."}
+```
+
+Replace the example ID with the preparation message's ID. `finished` also declares the original task complete, which suppresses continuation. `needs-attention` preserves the session without reload. A successful ready result terminates that preparation run. The command still waits for its exact result, native idle, and fresh safety checks. Readiness never starts a second reload operation.
+
+For a reported blocking `ask_user` or legacy `ask_user_question`, native abort can cancel the question-only wait to permit preparation. No other executing tool may accompany that exception. The saved conversation remains the source for re-asking. A reload-specific message states that Pi Reload cancelled the question, not the user. Cancellation provides no answer or approval. After reload, the default return message instructs only re-asking or re-entering the previous wait, not unrelated task work. No question store or suspend/restore subsystem is added. With continuation disabled, the session stays idle. Unknown prompts and approvals that cannot safely cancel remain protected and need attention.
+
+## Safety and outcomes
+
+- Preserve drafts, queued input, useful jobs, and user-owned resources. The engine never clears input, kills useful jobs, or relaunches them to pass a check. Other extensions can stop resources during `session_shutdown`.
+- New input, session/tree changes, cancellation, or expiry prevent the affected pending reload or continuation. Accepted peers have independent identities and deadlines. Changing the coordinator's input does not resend or replace their requests.
+- Preparation has a five-minute deadline. Each native stop/result wait has a 15-second limit. Cooperative sockets return a queued acknowledgement promptly. The coordinator polls only status, including the fresh endpoint after reload. It never retries preparation or reload after uncertainty.
+- Expiry or refusal records a skipped outcome and ends the pending request. An active preparation receives a bounded-operation-ended message, not another reload. Useful executing calls can still settle normally. A missing fresh-runtime acknowledgement records unknown, never success.
+- Fleet `last-result.json` contains identities, readiness phases, and outcomes, not conversation prompts. Process-local receipts remain bounded and available for status reconciliation after reload. They are not durable task state or permission to replay work.
+- The optional `grounded:session-transition-readiness:v1` event reports managed process and shell-session counts. Missing or invalid owner data fails closed. This protocol and prompt events do not cover every third-party resource or core dialog. Inspect other session-owned work before use.
+- Original-run interruption requires a captured live signal that this operation changes to aborted. A model-tool request instead requires its exact terminating result. Fresh continuation uses a one-shot process-local handoff after native handler return. It never replays after a restart or unrelated reload.
+
+The private same-user Unix sockets work without Herdr. They do not cross machines or OS users. The default directory is `pi-reload-all-<uid>` below the OS temporary directory, mode `0700`, with sockets at `0600`. Set absolute `PI_RELOAD_ALL_DIR` before startup to partition a fleet. Each member must use the same directory. Do not remove a live coordinator's `fleet.lock`. After a crash, inspect its owner and prove that process is gone before removing only the stale lock.
 
 ## Implementation and checks
 
-`extensions/index.ts` only re-exports the unified `reload-all.ts` factory. There is no separate single-session engine. That factory owns the model tool, both commands, readiness checks, peer sockets, and one-shot handoff.
+`extensions/index.ts` only re-exports the `reload-all.ts` factory. The factory owns the tool, menu, private queued-operation dispatch, readiness checks, sockets, and handoff. Internal command tokens are not user options.
 
-The tool dispatches a native command with `sendUserMessage(..., { expandPromptTemplates: true })`. Explicit expansion is required in Pi 0.99.1. The tool never waits for its own command. Only command contexts expose `waitForIdle()` and `reload()`. After reload invalidates the old runtime, the old code uses only plain completion and receipt data, never its old `pi` or `ctx`.
+Pi 0.99.1 requires `sendUserMessage(..., { expandPromptTemplates: true })` for intentional command dispatch. Only command contexts expose `waitForIdle()` and `reload()`. Lifecycle hooks never await their own idle boundary. After reload invalidates a runtime, old code uses only plain completion/receipt data, not its old `pi` or `ctx`.
 
 After repository-root locked dependency preparation:
 
@@ -72,6 +92,6 @@ npm --prefix packages/pi-self-reload run syntax
 npm --prefix packages/pi-self-reload test
 ```
 
-Focused checks cover tool dispatch and termination, idle waits, stale-context boundaries, duplicate requests, fleet interruption ownership, and safety refusals. An installed-Pi tool-driven lifecycle check is needed before activation. Factory inventory alone does not prove reload behavior.
+The four focused checks cover dispatch/termination, stale contexts, independent multi-call preparation, persisted batch boundaries, fleet-wide no-resume, question-wait messaging, protected input/resources, and expiry. Exercise the changed behavior through installed Pi before activation. Factory inventory alone does not establish reload behavior.
 
-See Pi's [extension documentation](https://github.com/earendil-works/pi/blob/v0.99.1/packages/coding-agent/docs/extensions.md). Require its native `Reloaded keybindings, extensions, skills, prompts, themes, and context files` notification and available diagnostics rather than treating a queued tool message as completion.
+See Pi's [extension documentation](https://github.com/earendil-works/pi/blob/v0.99.1/packages/coding-agent/docs/extensions.md). Native Pi can catch late reload errors without rethrowing them. Require the `Reloaded keybindings, extensions, skills, prompts, themes, and context files` notification and available diagnostics when exposed. Fresh factory identity, native handler return, and resource health are separate evidence.

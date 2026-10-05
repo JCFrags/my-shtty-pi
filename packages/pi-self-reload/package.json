@@ -1,7 +1,7 @@
 {
   "name": "pi-self-reload",
-  "version": "0.3.0",
-  "description": "One native reload tool and safety engine for the current Pi session or local agents.",
+  "version": "0.4.0",
+  "description": "Cooperative native Pi reload with one agent tool and one operator menu.",
   "private": true,
   "type": "module",
   "license": "MIT",
