@@ -1,12 +1,14 @@
 import { composeStoredSelection, persistPrivateCompositionArtifact } from "./context-composer.js";
 import { collectContext } from "@context-kit/protocol/collect";
 import { compileContext, freezeContextInput } from "./context-compiler.js";
+import { nativeReplayRelevance } from "./native-relevance.js";
 import { isSafeCompactionCut } from "./tail-selection.js";
 import { byteCount, estimateTokensFromText, getRecord, getString, stableStringify } from "./utils.js";
 import { validateContextCeiling } from "./context-budget.js";
 /** Read-only preparation shared by preview and the active public hook.
- * The caller validates the session-agent submission and captures a bounded event
- * suffix. Native pages remain diagnostic evidence, not the summary's authority.
+ * The caller validates the session-agent submission. Collect native pages once,
+ * then use current cards as bounded replay hints. Keep those same pages in the
+ * receipt, not a rendered native dump or the summary's authority.
  * This function does not load history or write a session, artifact or store. */
 export async function captureContextCompilation(host, input, view) {
     view.revalidate();
@@ -14,9 +16,11 @@ export async function captureContextCompilation(host, input, view) {
         records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150,
     }, view);
     view.revalidate();
+    const replay = input.replay(nativeReplayRelevance(native, input.sessionSummary.relevanceHints));
+    view.revalidate();
     return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
         memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native,
-        sessionSummary: input.sessionSummary, history: { kind: "events", selection: input.replay } });
+        sessionSummary: input.sessionSummary, history: { kind: "events", selection: replay } });
 }
 /** The compiler returns the same receipt and bytes when the frozen input is used
  * for active compaction. Preview adds no hidden fields to its deterministic hash. */

@@ -417,6 +417,7 @@ export function renderChronologicalReplay(selection, maxTokens) {
             budget: { preferredTokens: PREFERRED_REPLAY_TOKENS, maxTokens, effectiveTokens, expansionDemandTokens, expansionEvents },
             inspectedEntries: selection.inspectedEntries, inspectedRange: selection.inspectedRange,
             earlierPrefixOmitted: selection.earlierPrefixOmitted, omittedMetadata: selection.omittedMetadata,
+            relevanceTerms: selection.relevanceTerms,
             selected: rows.filter(row => !row.omitted).map(row => ({ id: row.event.id, index: row.event.index,
                 detail: row.event.representations[row.level].detail, sourceLimited: row.event.sourceLimited, reasons: row.reasons })),
             omitted: rows.filter(row => row.omitted).map(row => ({ id: row.event.id, index: row.event.index, reason: row.omitted })),
