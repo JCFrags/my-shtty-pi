@@ -26,6 +26,7 @@ function host() {
     emit: (name: string, event: any = {}) => handlers.get(name)?.(event) };
 }
 const usage = { input: 10, output: 4, cacheRead: 2, cacheWrite: 1, totalTokens: 17 };
+const DIAGNOSTICS_EVENT = "pi-diagnostics:provider:v1";
 
 test("standalone tool, lifecycle pairing, quality separation and content-free records", async () => {
   const home = await mkdtemp(join(tmpdir(), "context-telemetry-home-"));
@@ -36,11 +37,19 @@ test("standalone tool, lifecycle pairing, quality separation and content-free re
     telemetry(pi.api);
     assert.deepEqual([...pi.tools.keys()], ["telemetry_status"]);
     assert.deepEqual([...pi.commands.keys()], ["context-telemetry"]);
-    assert.equal(pi.listeners.size, 0, "factory does not start bus resources");
-    assert.equal((await pi.tools.get("telemetry_status").execute()).details.storage.state, "idle");
+    assert.deepEqual([...pi.listeners.keys()], [DIAGNOSTICS_EVENT], "factory registers only the passive status listener");
+    const idle = (await pi.tools.get("telemetry_status").execute()).details;
+    assert.equal(idle.storage.state, "idle");
+    let passive: any;
+    pi.api.events.emit(DIAGNOSTICS_EVENT, { protocolVersion: 1, provider: "telemetry",
+      signal: new AbortController().signal, deadline: Date.now() + 750, respond(reply: unknown) { passive = reply; } });
+    assert.equal(passive.protocolVersion, 1);
+    assert.equal(passive.provider, "telemetry");
+    assert.ok(Number.isFinite(Date.parse(passive.observedAt)));
+    assert.deepEqual(passive.status, idle, "passive diagnostics reuses status without starting collection");
     await assert.rejects(stat(join(home, ".local")), { code: "ENOENT" });
     assert.equal(pi.emit("session_start"), undefined, "startup does not await filesystem work");
-    assert.equal(pi.listeners.size, 1);
+    assert.deepEqual([...pi.listeners.keys()], [DIAGNOSTICS_EVENT, QUALITY_EVENT]);
     const secret = "SYNTHETIC_SECRET_MUST_NOT_APPEAR";
     const forbidden = { get args() { throw new Error(secret); }, get result() { throw new Error(secret); },
       get content() { throw new Error(secret); }, get toolName() { throw new Error(secret); },
@@ -100,7 +109,7 @@ test("standalone tool, lifecycle pairing, quality separation and content-free re
     await pi.commands.get("context-telemetry").handler("", { ui: { notify(text: string) { commandText = text; } } });
     assert.equal(JSON.parse(commandText).runtime.tool.succeeded, 1);
     await pi.emit("session_shutdown");
-    assert.equal(pi.listeners.size, 0);
+    assert.deepEqual([...pi.listeners.keys()], [DIAGNOSTICS_EVENT], "shutdown removes the active collector subscription");
     result = (await pi.tools.get("telemetry_status").execute()).details;
     assert.equal(result.active, false);
     assert.equal(result.storage.state, "closed");
