@@ -1,6 +1,6 @@
 ---
 name: pi-feedback
-description: Use when actual Pi work exposes tool friction, a missing capability, a reproducible or unverified bug, or when the user asks to review shared Pi feedback. Not for speculative wish lists or permission to fix reported problems.
+description: Use when actual Pi work exposes tool friction, a missing capability, or a reproducible or unverified bug. Also use for feedback review, explicitly approved report closure, or private-evidence cleanup. Not for speculative wish lists or permission to fix reported problems.
 ---
 
 # Pi feedback
@@ -28,7 +28,7 @@ gh pr list --repo github.com/JCFrags/my-shtty-pi --state all --search "$terms" -
 A failed or truncated search does not establish that no report exists. Read results with WebX or `gh issue view` / `gh pr view`, with the same explicit `--repo` and `--comments`.
 
 - If a report already covers the observation, add a comment only for useful new evidence, impact, reproduction details, or a materially different loaded version. Otherwise, return its link without another comment.
-- If a closed report appears to recur, read its resolution first. Add relevant new evidence without reopening it. Create a separate issue only for a distinct problem, and link the prior report.
+- If a closed report appears to recur, read its resolution first. Follow an explicit owner request to use a fresh report on recurrence: include current evidence and link the closed report. Otherwise, add relevant new evidence without reopening it. In that case, create a separate issue only for a distinct problem.
 - For a new issue, choose one existing label: `bug`, `enhancement`, or `question`. Also use `agent-feedback`. Do not create a new label taxonomy. If a required label is absent, keep the draft and report the setup gap.
 
 ## Prepare and publish
@@ -53,6 +53,12 @@ gh issue comment "$issue_number" --repo github.com/JCFrags/my-shtty-pi \
 7. Record the verified issue URL in the private note, if one exists. Tell the user whether feedback was published, remains a draft, or was not needed because an existing report covers it.
 
 Keep confirmed lessons in their owning skills or references. Follow `durable-learning` when installed, and include an issue link where useful. An issue does not replace durable guidance.
+
+## Approved closure
+
+Close reports only within explicit user approval. Refresh the exact issue states, use screened explanations with the explicit repository, and verify the saved result. Distinguish an owner triage decision or withdrawal from a verified fix. Do not reproduce old failures merely to justify an approved closure. Record an owner request for a fresh report on recurrence in the closure comment.
+
+Closure does not approve private-evidence deletion. Follow the separate [cleanup boundaries](references/private-evidence.md#approved-cleanup) when the user requests cleanup.
 
 ## Review
 

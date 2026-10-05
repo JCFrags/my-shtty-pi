@@ -56,3 +56,14 @@ Private evidence: PF-<id>. Authorized local agents can resolve this with the pi-
 For a public-only report, omit that line. The public summary must explain the problem without access to the private note. Keep a public draft separate from `note.md`, and never pass `note.md` to `gh --body-file`.
 
 For review, resolve only the exact referenced ID with `locate`. Do not use counters, encoded paths, hashes of sensitive data, or a latest-record fallback. If the record is absent or inaccessible, report that limit. Do not search for a substitute or upload private material. Add the verified issue URL to the note when publication succeeds.
+
+## Approved cleanup
+
+Issue closure and standing reporting approval do not authorize deletion. When the user explicitly requests private-evidence cleanup:
+
+1. Refresh the approved reports and their comments. Resolve only their exact PF IDs, recheck protection, and inspect each record's note and file inventory. Check whether an open report shares the record.
+2. Prefer removal of obsolete feedback notes and duplicate public drafts or receipts unless they have clear remaining value. Keep useful unresolved or shared diagnostic evidence. A closed issue can still have an unresolved limit.
+3. Separate feedback records from their referenced sources. Do not delete original sessions, native stores, external task evidence, rollback assets, or other owners' work merely because a note references them. Obtain separate approval for removal outside the approved record scope.
+4. Before removal, recheck the exact file set, regular-file identities, and inspected content hashes. Stop if they changed. Delete only the reviewed files and empty record directories. Verify that the retained and unrelated records stay unchanged.
+
+Do not copy obsolete notes into another archive when the user prefers deletion. A deleted PF ID may remain in GitHub history. Report the record as unavailable rather than creating a substitute or removing public history.
