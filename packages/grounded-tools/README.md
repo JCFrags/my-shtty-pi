@@ -1,6 +1,6 @@
 # Grounded Tools
 
-- Purpose: Provide evidence-first file, process, LSP, and dialog tools. The shared core also supplies native-state primitives to Context Kit.
+- Purpose: Provide evidence-first file, process, LSP, explicit project-check, and dialog tools. The shared core also supplies native-state primitives to Context Kit.
 - Status: active canonical
 - Pi entrypoint(s): `files/index.ts`, `process/index.ts`, `lsp/index.ts`, `dialog/index.ts`
 - Load form: source-loaded
@@ -36,8 +36,11 @@ bundled `core/src/pty_bridge.py` and `core/src/session_pty_bridge.py` resources.
 Keep those files beside their core modules. LSP starts servers lazily. Install only
 the servers needed for the project, or configure their exact executable paths.
 Defaults include `typescript-language-server --stdio`, `pyright-langserver
---stdio`, `gopls`, and `rust-analyzer`. A selected extension does not prove that a
-server executable exists.
+--stdio`, `gopls`, `rust-analyzer`, and `clangd`. A selected extension does not prove
+that a server executable exists. The LSP owner also registers the explicit `check`
+tool. Its bundled JSON/YAML/TOML and Markdown adapters use root-lock dependencies.
+Pyright CLI, Ruff 0.16 or newer, Vale, and ShellCheck are optional separate tools.
+Install only the tools needed for the selected project.
 
 Global LSP overrides use `grounded-tools/lsp.json` under Pi's agent directory.
 Trusted project settings use `.pi/grounded-lsp.json`. Automatic edit/write LSP
@@ -45,7 +48,36 @@ checks are off by default. Explicit LSP tools remain available. See
 [LSP policy and diagnostics](#lsp-policy-and-diagnostics) for the independent
 policy keys. A global custom server replaces the complete default server with the
 same ID, so preserve or supply its document-language mapping explicitly.
-See [LSP document languages](#lsp-document-languages).
+See [LSP document languages](#lsp-document-languages) and the opt-in
+[supported server catalog](lsp/SERVERS.md). Named presets configure existing
+executables, not SDK installations. Static server `settings`, `env`, and
+`resourceClass` values use the same complete server override.
+
+## Explicit project checks and previews
+
+Use [`check`](lsp/CHECKS.md) to discover existing project commands without running
+them, then explicitly run a command ID and its current declaration fingerprint.
+Native scripts can write files, execute hooks, and use the network. They support
+package/workspace scope, not invented exact-file arguments.
+
+Select independent `pyright`, `ruff`, `ruff-format`, syntax, Markdown, or Vale
+checks by ID. File and Git-changed selections differ from native project discovery.
+Exact Python selections split by native project configuration and environment.
+Results report per-check findings, scope, environment, exits, incomplete states,
+and exact retained logs. A file check is not a workspace pass. Syntax parsing is
+not schema validation. Vale is warning-first and optional. External-link network
+checks are explicitly unsupported, even with `allowNetwork: true`.
+
+Global analyzer configuration uses `grounded-tools/checks.json` under Pi's agent
+directory. Trusted caller settings use `.pi/grounded-checks.json`. Execution requires
+a trusted caller project and selected canonical paths inside it. Discovery does
+not grant trust or install dependencies.
+
+Ruff formatting/safe-fix previews and LSP rename/format/quick-fix/refactoring
+previews never write source. Review their patches, then use the existing `edit`
+tool with the returned digest and anchors. Multi-file application is not atomic.
+Plain text edits are supported. Server commands, resource operations, stale
+code-action tickets, and unverifiable versioned cross-file edits are refused.
 
 Compare complete loader definitions and dependency routes before replacing existing
 owners. Then exercise a harmless file read, finite command, and relevant LSP call
@@ -113,6 +145,9 @@ The global LSP file accepts policy defaults beside its `servers` array. Trusted
 | `automaticDiagnostics` | `false` | Opt in to expensive LSP checks after successful edit/write tools. |
 | `idleTimeoutMs` | `60000` | Non-Rust idle retention. Finite integers clamp to 1000–300000 ms. |
 | `diagnosticTimeoutMs` | `3000` | Diagnostic publication wait. Finite integers clamp to 100–30000 ms. |
+| `maxServers` | `4` | Local non-Rust client cap, clamped to 1–4. Only idle clients can be evicted. |
+| `nodeHeapMb` | unset | Optional managed Node heap hint, clamped to 128–4096 MiB. Not an RSS limit. |
+| `jvmHeapMb` | unset | Optional managed JVM heap hint, clamped to 128–4096 MiB. Not an RSS limit. |
 
 Invalid non-integer or non-finite budgets use the inherited/default value. There
 is no unlimited idle budget. Trusted-project `disabledServers` still disables
@@ -129,7 +164,12 @@ the idle budget expires. Startup, synchronization, requests, and diagnostic wait
 hold leases. Idle expiry never interrupts an active operation. A stopping client
 retains ownership until exact-child close is confirmed, so a second client cannot
 replace it early. Session shutdown still stops session-owned clients. This is an
-idle retention policy, not a fleet concurrency or memory cap.
+idle retention policy. Linux UID-scoped kernel locks also admit at most four
+participating non-Rust servers, with at most two marked expensive. Pyright uses
+the expensive class by default. Two explicit check subprocesses can run at once.
+Unsupported or unsafe admission refuses rather than starting unbounded work.
+These process-count and optional heap bounds are not RSS limits, disk quotas,
+or containment of daemonized/nonparticipating tools.
 
 Successful admitted edit/write hooks synchronize the current saved disk text.
 They send `textDocument/didSave` only if the initialized server requests save
@@ -166,7 +206,16 @@ acknowledgment. Results therefore report `analysisComplete: "unknown"`. Actual-s
 waits use the full configured budget to sample later compiler publications.
 Open/change-only waits can use a 200 ms quiet sampling interval, which is not a
 completion signal. `ready` status means initialized transport, not finished
-workspace indexing.
+workspace indexing. Normalized `findings` retain raw diagnostics and their
+freshness/completion qualification. Status distinguishes executable availability
+from actual session-local exercise.
+
+Within a trusted caller boundary, a new Pyright client uses the selected native
+project interpreter when no server `python.pythonPath` is configured. Existing
+native Pyright venv settings and project environments take precedence over PATH.
+No environment is installed or activated. Static server settings remain fixed
+for that client until retirement; native include/exclude and version settings
+remain authoritative.
 
 Caller cancellation stops owned startup waits, file reads, requests, and diagnostic
 waits. Canceling one shared initialization caller does not stop another owner.
@@ -220,7 +269,8 @@ changed source.
 For an LSP-only staged change, run `node scripts/verify-lsp.mjs` from the repository
 root. This standalone command uses the Git index, prepares committed-lock
 dependencies in a disposable snapshot, and checks only the LSP source routes,
-syntax, privacy, and tiny fake-server lifecycle. It does not run a real Rust
+syntax, strict TypeScript, privacy, helper/configuration closure, and tiny
+fake-server lifecycle. It does not run a real Rust
 workspace, other package tests, builds, or packaging checks. The general
 `--product grounded-tools` command above still includes shared repository checks.
 

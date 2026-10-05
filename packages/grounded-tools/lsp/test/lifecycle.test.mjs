@@ -3,7 +3,7 @@ import { after, test } from 'node:test';
 import { fork, spawn } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -30,10 +30,38 @@ async function until(condition, message, timeout = 2500) {
   }
 }
 const rows = log => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch (e) { if (e.code === 'ENOENT') return []; throw e; } };
-function live(pid) {
-  try { return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
+const live = pid => liveProcess(join('/proc', String(pid)));
+function liveProcess(root) {
+  const taskLive = path => {
+    try { return !/^\d+ \(.*\) Z /.test(readFileSync(path, 'utf8')); }
+    catch (e) { if (e.code === 'ENOENT') return false; throw e; }
+  };
+  if (taskLive(join(root, 'stat'))) return true;
+  // A zombie leader can still have exiting threads that retain the shared fd table.
+  try { return readdirSync(join(root, 'task')).some(tid => taskLive(join(root, 'task', tid, 'stat'))); }
   catch (e) { if (e.code === 'ENOENT') return false; throw e; }
 }
+
+test('zombie leader remains live until its last thread exits', () => {
+  const root = join(suite, 'thread-states');
+  const task = join(root, 'task');
+  mkdirSync(join(task, '7'), { recursive: true });
+  mkdirSync(join(task, '8'));
+  const leader = join(root, 'stat');
+  const worker = join(task, '8', 'stat');
+  writeFileSync(leader, '7 (MainThread) S 0');
+  assert.equal(liveProcess(root), true);
+  writeFileSync(leader, '7 (MainThread) Z 0');
+  writeFileSync(join(task, '7', 'stat'), '7 (MainThread) Z 0');
+  assert.equal(liveProcess(root), false, 'a vanished thread does not keep the process live');
+  writeFileSync(worker, '8 (V8Worker) R 0');
+  assert.equal(liveProcess(root), true, 'a zombie leader does not prove shared descriptors closed');
+  writeFileSync(worker, '8 (V8Worker) Z 0');
+  assert.equal(liveProcess(root), false, 'all threads have exited');
+  rmSync(root, { recursive: true });
+  assert.equal(liveProcess(root), false, 'a reaped process is not live');
+});
+
 function files(name, mode = 'normal') {
   const root = join(suite, name);
   mkdirSync(root, { mode: 0o700 });
@@ -231,7 +259,8 @@ test('independent processes contend and inherited lock survives parent death', a
   process.kill(inheritedPid, 'SIGTERM');
   await until(() => !live(inheritedPid), 'owned orphan closes');
   orphanPids.delete(inheritedPid);
-  assert.equal((await loser.call(params)).details.result.languageId, 'rust', 'close releases slot');
+  const released = await loser.call(params);
+  assert.equal(released.details.result?.languageId, 'rust', `close releases slot: ${JSON.stringify(released)}`);
   await loser.stop();
 });
 
@@ -302,7 +331,7 @@ test('fresh generation resets transport/documents; failed starts and uncertain c
 test('automatic diagnostics default off even for warm clients; policy bounds and trusted overrides', async t => {
   const fixture = nonRust(files('automatic-off'));
   const h = await host(fixture, {}, {}); t.after(h.stop);
-  assert.deepEqual((await h.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 60000, diagnosticTimeoutMs: 3000 });
+  assert.deepEqual((await h.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 60000, diagnosticTimeoutMs: 3000, maxServers: 4 });
   const event = { toolName: 'write', content: [{ type: 'text', text: 'saved' }], details: { preserved: true }, get input() { throw new Error('disabled hook must not inspect paths'); } };
   assert.equal(await h.result(event), undefined);
   assert.equal(starts(fixture).length, 0);
@@ -317,7 +346,7 @@ test('automatic diagnostics default off even for warm clients; policy bounds and
   mkdirSync(join(bounds.root, '.pi'));
   writeFileSync(join(bounds.root, '.pi', 'grounded-lsp.json'), JSON.stringify({ automaticDiagnostics: false, idleTimeoutMs: 0, diagnosticTimeoutMs: 999999, disabledServers: ['typescript'] }));
   const trusted = await host(bounds, { context: { isProjectTrusted: () => true } }, { automaticDiagnostics: true, idleTimeoutMs: 999999, diagnosticTimeoutMs: 0 }); t.after(trusted.stop);
-  assert.deepEqual((await trusted.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 1000, diagnosticTimeoutMs: 30000 });
+  assert.deepEqual((await trusted.status()).policy, { automaticDiagnostics: false, idleTimeoutMs: 1000, diagnosticTimeoutMs: 30000, maxServers: 4 });
   await assert.rejects(trusted.hover(), /No available language server/);
   assert.equal(starts(bounds).length, 0);
   await trusted.stop();
