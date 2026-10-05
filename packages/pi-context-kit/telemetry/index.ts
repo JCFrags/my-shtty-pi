@@ -43,6 +43,13 @@ export default function telemetry(pi: ExtensionAPI): void {
     }
   }
 
+  // Diagnostics reads the same bounded snapshot without starting collection or opening storage.
+  pi.events.on("pi-diagnostics:provider:v1", (request: any) => {
+    if (request?.protocolVersion !== 1 || request.provider !== "telemetry" || typeof request.respond !== "function"
+      || request.signal?.aborted || !Number.isFinite(request.deadline) || Date.now() > request.deadline) return;
+    request.respond({ protocolVersion: 1, provider: "telemetry", observedAt: new Date().toISOString(), status: status() });
+  });
+
   pi.registerTool({
     name: "telemetry_status",
     label: "Telemetry status",
