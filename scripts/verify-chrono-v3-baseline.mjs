@@ -21,14 +21,14 @@ export const CHRONO_PREDECESSOR_BASELINE = Object.freeze({
   "version": "4.0.6-local.20260927"
 });
 export const CHRONO_BASELINE = Object.freeze({
-  "commit": "d93b4e3c74c311015b90b42f29925031152ac57e",
-  "upstreamTree": "7d9016cb9136e9d4f692169da0b94db067476272",
-  "tree": "ae02ce208736e8612d21fbbe3e10bdabe642d272",
-  "files": 456,
-  "maps": 143,
+  "commit": "f8070bf3e1d331fc882b567d38ff3ff3332f9ba4",
+  "upstreamTree": "2d8bb69d00ea87917d0c156b7a38f6972871ea14",
+  "tree": "2d8bb69d00ea87917d0c156b7a38f6972871ea14",
+  "files": 458,
+  "maps": 144,
   "package": "packages/pi-chrono-compaction",
   "version": "4.0.9-local.20261003",
-  "integrationDifferences": ["test/context-compiler-hook.test.ts"]
+  "integrationDifferences": []
 });
 const fail = code => { throw new Error(code); };
 const objectHash = (kind, bytes) => createHash('sha1').update(`${kind} ${bytes.length}\0`).update(bytes).digest('hex');

@@ -36,17 +36,29 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const model = { provider: "fixture", id: "fixture", api: "openai-completions", contextWindow: 32000, maxTokens: 2000 };
   let compactionTask: Promise<void> | undefined, returned: any, committedId: string | undefined, referenceReady: SessionAgentSummaryReady | undefined;
   let checkPreview = true, aborts = 0, previewMode = false, compactCalls = 0, authCalls = 0, commands = 0, flags = 0;
+  let nativeReads = 0;
   const run = new AbortController();
   const remove = registerContextProvider(events, "todo", () => {
+    nativeReads++;
     if (mutateDuringCollect) { schemaDescription = "Changed active schema"; mutateDuringCollect = false; }
     return { readiness: "ready", coverage: { scanned: 1, matched: 1, excluded: 0, scanComplete: true }, cards: [
       { id: "T2", revision: "2", status: "blocked", category: "task", title: "Atomic replacement", text: "Verify T1 first.",
         omittedFields: [], recovery: { tool: "todo", args: { action: "read", id: "T2" } }, relations: [{ type: "blocked_by", providerId: "todo", id: "T1" }] },
     ] };
   });
+  const removePlan = registerContextProvider(events, "workplan", () => ({
+    readiness: "ready", coverage: { scanned: 3, matched: 3, excluded: 0, scanComplete: true }, cards: [
+      { id: "P-current", revision: "4", status: "active", category: "plan", title: "Lighthouse routing",
+        text: "currentFocus: src/lighthouse.ts", omittedFields: [], recovery: { tool: "workplan", args: { action: "recover", planId: "P-current" } } },
+      ...["completed", "archived"].map(status => ({ id: `P-${status}`, revision: "2", status, category: "plan" as const,
+        title: "Obsoletepipeline archive", text: "src/obsoletepipeline.ts", omittedFields: [],
+        recovery: { tool: "workplan" as const, args: { action: "recover" as const, planId: `P-${status}` } } })),
+    ],
+  }));
   const pi = {
-    events, getActiveTools: () => ["todo", "memory_get", ...(summaryToolActive ? ["request_compaction"] : [])],
+    events, getActiveTools: () => ["todo", "workplan", "memory_get", ...(summaryToolActive ? ["request_compaction"] : [])],
     getAllTools: () => [{ name: "todo", description: schemaDescription, parameters: { type: "object" } },
+      { name: "workplan", description: "Independent project state", parameters: { type: "object" } },
       { name: "memory_get", description: "Independent memory", parameters: { type: "object" } }, tools.get("request_compaction")],
     registerTool(tool: any) { tools.set(tool.name, tool); }, registerCommand() { commands++; }, registerFlag() { flags++; },
     on(name: string, handler: any) { assert.ok(!hooks.has(name)); hooks.set(name, handler); },
@@ -66,6 +78,12 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const assistant = (id: string, name: string, args: any) => ({ role: "assistant" as const,
     content: [{ type: "toolCall" as const, id, name, arguments: args }], api: "openai-completions" as const,
     provider: "fixture", model: "fixture", stopReason: "toolUse" as const, timestamp: Date.now(), usage });
+  const nativeSourceIds: string[] = [], obsoleteSourceIds: string[] = [];
+  for (const [name, ids] of [["lighthouse", nativeSourceIds], ["obsoletepipeline", obsoleteSourceIds]] as const) {
+    ids.push(sm.appendMessage(assistant(`read-${name}`, "read", { path: `src/${name}.ts` })));
+    ids.push(sm.appendMessage({ role: "toolResult", toolCallId: `read-${name}`, toolName: "read", isError: false,
+      content: [{ type: "text", text: `Source evidence for src/${name}.ts. Native-only routing detail.` }], timestamp: 0 }));
+  }
   for (let index = 0; index < 16; index++) sm.appendMessage({ role: "user", content: `History ${index}. ${"Preserve the original. ".repeat(90)}`, timestamp: index });
   sm.appendMessage(assistant("pair", "read", { path: "fixture" }));
   sm.appendMessage({ role: "toolResult", toolCallId: "pair", toolName: "read", content: [{ type: "text", text: "checksum fixture" }], isError: false, timestamp: 21 });
@@ -91,13 +109,20 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
         let preview: ReturnType<typeof previewContext> | undefined;
         if (checkPreview) {
           assert.ok(referenceReady);
+          const beforeCapture = nativeReads;
           const captured = await capturePreparedV4Context(pi as unknown as ExtensionAPI, ctx, inputEvent, {
             settings: () => resolveExtensionSettings(), memoryOwner: "context-kit", epoch: () => 0,
             boundary: { ready: referenceReady, entryId: sm.getLeafId()! },
           });
+          assert.equal(nativeReads, beforeCapture + 1, "one collection supplies both hints and the frozen native receipt");
+          assert.equal(captured.input.history.kind, "events");
+          if (captured.input.history.kind !== "events") throw new Error("Expected event replay");
+          assert.deepEqual(captured.input.history.selection.relevanceTerms.slice(0, 2), ["checksum", "isolated implementation"]);
           preview = previewContext(captured.input);
         }
+        const beforeActiveCapture = nativeReads;
         returned = await hooks.get("session_before_compact")!(inputEvent, ctx);
+        assert.equal(nativeReads, beforeActiveCapture + 1, "active capture must not rescan native state for its receipt");
         if (!returned.compaction) {
           await hooks.get("session_compact_failed")!({ reason: "manual", aborted: true, willRetry: false }, ctx);
           idle = true;
@@ -188,6 +213,15 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal(returned.compaction.summary.split(summaryText).length, 2, "the submission is not duplicated in replay");
     assert.ok(returned.compaction.summary.indexOf("# Continuation summary") < returned.compaction.summary.indexOf("## Compressed chronology"));
     assert.equal(returned.compaction.summary.includes("Atomic replacement"), false, "native state remains receipt-only");
+    assert.equal(receipt.budget.nativeRenderedTokens, 0);
+    const replayReceipt = receipt.history.receipt;
+    assert.ok(replayReceipt.relevanceTerms.includes("src/lighthouse.ts"));
+    assert.ok(!replayReceipt.relevanceTerms.some((term: string) => term.includes("obsoletepipeline")), "closed native cards cannot create implicit hints");
+    for (const id of nativeSourceIds) assert.ok(replayReceipt.selected.some((row: any) => row.id === id && row.reasons.includes("relevance-match")));
+    for (const id of obsoleteSourceIds) assert.ok(replayReceipt.omitted.some((row: any) => row.id === id && row.reason === "low-relevance"));
+    assert.deepEqual(replayReceipt.selected.map((row: any) => row.index), replayReceipt.selected.map((row: any) => row.index).sort((a: number, b: number) => a - b));
+    for (const id of nativeSourceIds) assert.ok(returned.compaction.summary.includes(`history_get entryId="${id}"`));
+    assert.equal(returned.compaction.summary.includes("currentFocus: src/lighthouse.ts"), false, "only source evidence, not a native card dump, enters chronology");
     for (const [id, bytes] of unchanged) assert.equal(JSON.stringify(sm.getEntry(id)), bytes);
     assert.equal((await status()).terminal.state, "committed");
     assert.equal((await status()).committedReceipt.compactionEntryId, committedId);
@@ -459,7 +493,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.deepEqual(previewErrors, []);
     assert.deepEqual(readdirSync(directory, { recursive: true }), privateFilesBefore, "candidate created no store, runtime or background files");
   } finally {
-    remove();
+    remove(); removePlan();
     await hooks.get("session_shutdown")?.({}, ctx);
     for (const [key, value] of old) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
