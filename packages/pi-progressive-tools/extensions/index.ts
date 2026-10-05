@@ -12,7 +12,7 @@ import {
 	LIST_TOOL_NAME,
 	toolIdentity,
 } from "./policy.ts";
-import type { InventoryItem, LoadedConfig } from "./types.ts";
+import type { InventoryItem, LoadedConfig, PolicyDecision } from "./types.ts";
 
 const AUDIT_ENTRY_TYPE = "pi-progressive-tools:audit";
 
@@ -20,6 +20,9 @@ interface BrokerState {
 	activatedManaged: Set<string>;
 	initialToolIdentities: Set<string>;
 	initialized: boolean;
+	lastPolicy?: Map<string, Pick<PolicyDecision, "state" | "forceActive">>;
+	lastConfigurationErrorCount?: number;
+	lastConfigObservedAt?: string;
 }
 
 interface PolicySnapshot {
@@ -46,6 +49,11 @@ function createInventory(pi: ExtensionAPI, ctx: ExtensionContext, state: BrokerS
 		initialToolIdentities: state.initialToolIdentities,
 		config: loadedConfig.config,
 	});
+	// Keep only bounded metadata from the normal owner read for passive diagnostics.
+	state.lastPolicy = inventory.length <= 500 ? new Map(inventory.map(item => [toolIdentity(item.tool),
+		{ state: item.decision.state, forceActive: item.decision.forceActive }])) : undefined;
+	state.lastConfigurationErrorCount = loadedConfig.errors.length;
+	state.lastConfigObservedAt = new Date().toISOString();
 	return { loadedConfig, inventory };
 }
 
@@ -75,6 +83,29 @@ export default function progressiveToolsExtension(pi: ExtensionAPI): void {
 		initialToolIdentities: new Set<string>(),
 		initialized: false,
 	};
+
+	// Read cached owner configuration and native registration without loading config or changing activation.
+	pi.events.on("pi-diagnostics:provider:v1", (request: any) => {
+		if (request?.protocolVersion !== 1 || request.provider !== "progressive-tools" || typeof request.respond !== "function"
+			|| request.signal?.aborted || !Number.isFinite(request.deadline) || Date.now() > request.deadline
+			|| !state.initialized || !state.lastPolicy) return;
+		const tools = pi.getAllTools();
+		if (tools.length > 500) return;
+		const active = new Set(pi.getActiveTools());
+		const entries = tools.map(tool => {
+			const decision = state.lastPolicy!.get(toolIdentity(tool));
+			const isActive = active.has(tool.name);
+			const violation = !!decision && ((decision.state === "blocked" && isActive)
+				|| (decision.state === "managed" && isActive && !state.activatedManaged.has(tool.name))
+				|| (decision.forceActive && !isActive));
+			return { name: tool.name, policy: decision?.state ?? "unavailable", active: isActive, violation };
+		});
+		request.respond({ protocolVersion: 1, provider: "progressive-tools", observedAt: new Date().toISOString(),
+			status: { violationCount: entries.filter(entry => entry.violation).length,
+				configurationErrorCount: state.lastConfigurationErrorCount, configurationObservedAt: state.lastConfigObservedAt,
+				unclassifiedCount: entries.filter(entry => entry.policy === "unavailable").length,
+				entries, configuration: "last normal owner read" } });
+	});
 
 	pi.registerTool({
 		name: HELP_TOOL_NAME,

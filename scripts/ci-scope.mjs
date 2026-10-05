@@ -11,19 +11,20 @@ import { imports } from './verify-supported.mjs';
 export const dependents = {
   'codex-usage-footer': [],
   'files-ui': [],
-  'grounded-tools': ['pi-context-kit', 'pi-project-glance', 'pi-self-reload', 'pi-chrono-compaction', 'pi-native-ssh', 'herdr-agent-state'],
+  'grounded-tools': ['pi-context-kit', 'pi-project-glance', 'pi-self-reload', 'pi-chrono-compaction', 'pi-native-ssh', 'herdr-agent-state', 'pi-diagnostics'],
   'herdr-agent-state': ['pi-herdr-orchestrator'],
   'herdr-status': [],
   'pi-agent-context': [],
   'pi-chrono-compaction': ['pi-context-kit'],
-  'pi-context-kit': ['grounded-tools', 'pi-chrono-compaction', 'pi-project-glance'],
+  'pi-context-kit': ['grounded-tools', 'pi-chrono-compaction', 'pi-project-glance', 'pi-diagnostics'],
+  'pi-diagnostics': [],
   'pi-herdr-orchestrator': [],
   'pi-notify': [],
   'pi-native-ssh': ['grounded-tools'],
   'pi-pixel-cua': [],
-  'pi-progressive-tools': ['pi-herdr-orchestrator'],
+  'pi-progressive-tools': ['pi-herdr-orchestrator', 'pi-diagnostics'],
   'pi-project-glance': [],
-  'pi-self-reload': [],
+  'pi-self-reload': ['pi-diagnostics'],
   'pi-review-ui': [],
   'pi-tool-controls': ['grounded-tools', 'pi-context-kit', 'pi-herdr-orchestrator'],
 };
@@ -72,7 +73,7 @@ export const lspFiles = [
   'packages/grounded-tools/lsp/test/fixtures/owner.mjs',
 ];
 const newLspFiles = lspFiles.filter((_, index) => index === 0 || index >= 4);
-const manifestEvidenceSha256 = '9cfdc8d43902781c8b4866e9cb5816780383d3fe5fc63910df3e64336e9b3db8';
+const manifestEvidenceSha256 = 'a053a68a2f37365bdaf313e9225e1d09723c4a6abb8069ee2012c9b637feb43e';
 const metadata = new Set(['name', 'version', 'description', 'author', 'contributors', 'keywords', 'license', 'repository', 'homepage', 'bugs', 'funding']);
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
