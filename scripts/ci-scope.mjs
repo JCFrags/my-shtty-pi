@@ -17,6 +17,7 @@ export const dependents = {
   'pi-agent-context': [],
   'pi-chrono-compaction': ['pi-context-kit'],
   'pi-context-kit': ['grounded-tools', 'pi-chrono-compaction', 'pi-project-glance', 'pi-diagnostics'],
+  'pi-date-reference': [],
   'pi-diagnostics': [],
   'pi-herdr-orchestrator': [],
   'pi-notify': [],
@@ -73,7 +74,7 @@ export const lspFiles = [
   'packages/grounded-tools/lsp/test/fixtures/owner.mjs',
 ];
 const newLspFiles = lspFiles.filter((_, index) => index === 0 || index >= 4);
-const manifestEvidenceSha256 = 'a053a68a2f37365bdaf313e9225e1d09723c4a6abb8069ee2012c9b637feb43e';
+const manifestEvidenceSha256 = '0d6c556d5febc08b748c86b3ef912fefb826b07bbca2bff42653c51c27bc3a44';
 const metadata = new Set(['name', 'version', 'description', 'author', 'contributors', 'keywords', 'license', 'repository', 'homepage', 'bugs', 'funding']);
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
