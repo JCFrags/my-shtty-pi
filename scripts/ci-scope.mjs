@@ -14,7 +14,6 @@ export const dependents = {
   'grounded-tools': ['pi-context-kit', 'pi-project-glance', 'pi-self-reload', 'pi-chrono-compaction', 'pi-native-ssh', 'herdr-agent-state', 'pi-diagnostics'],
   'herdr-agent-state': ['pi-herdr-orchestrator'],
   'herdr-status': [],
-  'pi-agent-context': [],
   'pi-chrono-compaction': ['pi-context-kit'],
   'pi-context-kit': ['grounded-tools', 'pi-chrono-compaction', 'pi-project-glance', 'pi-diagnostics'],
   'pi-date-reference': [],
@@ -74,7 +73,7 @@ export const lspFiles = [
   'packages/grounded-tools/lsp/test/fixtures/owner.mjs',
 ];
 const newLspFiles = lspFiles.filter((_, index) => index === 0 || index >= 4);
-const manifestEvidenceSha256 = '0d6c556d5febc08b748c86b3ef912fefb826b07bbca2bff42653c51c27bc3a44';
+const manifestEvidenceSha256 = '8c5b88026738489c1a82601beeb8134e51a8c734c7237214154814e613183306';
 const metadata = new Set(['name', 'version', 'description', 'author', 'contributors', 'keywords', 'license', 'repository', 'homepage', 'bugs', 'funding']);
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;

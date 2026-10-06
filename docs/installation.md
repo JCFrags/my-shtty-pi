@@ -133,7 +133,6 @@ selecting the corresponding products:
 
 ```sh
 pi install "$ROOT/packages/pi-progressive-tools"
-pi install "$ROOT/packages/pi-agent-context"
 pi install "$ROOT/packages/grounded-tools/files"
 pi install "$ROOT/packages/grounded-tools/process"
 pi install "$ROOT/packages/grounded-tools/lsp"

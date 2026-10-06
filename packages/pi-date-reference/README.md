@@ -17,7 +17,7 @@ Use Node.js 24.18.0 or later and Pi 0.99.1. The tested host range is `>=0.99.1 <
 pi install "$PWD/packages/pi-date-reference"
 ```
 
-Follow the repository's [scoped activation procedure](../../docs/activation.md). Preserve other registrations. Do not enable Pi Agent Context. Reload existing sessions only when their work, jobs, and editor drafts permit it.
+Follow the repository's [scoped activation procedure](../../docs/activation.md). Preserve other registrations. Pi Agent Context is retired. Remove any remaining registration for it. Reload existing sessions only when their work, jobs, and editor drafts permit it.
 
 `/date-reference` shows the saved reference without refreshing it. Before the first agent request, it reports that initialization is pending. The package registers no model tool.
 
