@@ -26,20 +26,7 @@ export default function nativeSsh(pi: ExtensionAPI) {
   const config = loadConfig(process.env.PI_NATIVE_SSH_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-native-ssh", "config.json"));
   const helper = readFileSync(fileURLToPath(new URL("./helper.py", import.meta.url)), "utf8");
   const sessionHelper = readFileSync(fileURLToPath(new URL("./session_helper.py", import.meta.url)), "utf8");
-  let sessionContext: ExtensionContext | undefined;
-  const sessionProvider = new NativeSshSessionProvider(sessionHelper, config, {
-    authorize: async (target: { name: string; displayName: string }, request: { cwd: string }) => {
-      const ctx = sessionContext;
-      if (!ctx?.hasUI) {
-        throw fail("SESSION_CONFIRMATION_REQUIRED", "The first persistent SSH session for this target requires a visible confirmation", { recommendedAction: "use_terminal" });
-      }
-      const confirmed = await ctx.ui.confirm(
-        "Open persistent SSH session",
-        `Target alias: ${target.name}\nDisplay name: ${target.displayName}\nOperation: persistent shell session\nStarting directory: ${request.cwd}\n\nOpen one non-interactive persistent SSH shell for this Pi runtime?`,
-      );
-      if (!confirmed) throw fail("SESSION_CONFIRMATION_REQUIRED", "Persistent SSH session was not confirmed");
-    },
-  });
+  const sessionProvider = new NativeSshSessionProvider(sessionHelper, config);
   registerNativeSshSessionProvider(pi, sessionProvider);
   const controller = new Controller(pi, config);
   const audit = new PrivateAudit(config.audit);
@@ -89,9 +76,9 @@ export default function nativeSsh(pi: ExtensionAPI) {
   }
 
   const registerForState = (ctx: ExtensionContext) => controller.status().mode === "remote" ? registerRemote(ctx) : registerLocal(ctx.cwd);
-  pi.on("session_start", async (_event, ctx) => { sessionContext = ctx; controller.sessionStart(ctx); controller.restore(ctx); registerForState(ctx); });
-  pi.on("session_tree", async (_event, ctx) => { sessionContext = ctx; controller.restore(ctx); registerForState(ctx); });
-  pi.on("session_shutdown", async () => { sessionContext = undefined; controller.sessionShutdown(); await sessionProvider.close(); await audit.flush(); });
+  pi.on("session_start", async (_event, ctx) => { controller.sessionStart(ctx); controller.restore(ctx); registerForState(ctx); });
+  pi.on("session_tree", async (_event, ctx) => { controller.restore(ctx); registerForState(ctx); });
+  pi.on("session_shutdown", async () => { controller.sessionShutdown(); await sessionProvider.close(); await audit.flush(); });
 
   pi.registerTool({ name: "ssh_transfer", label: "SSH Transfer", description: "Upload or download one bounded file through the active configured SSH host, or roll back the latest remote write for a path. In local mode, target selects and activates a configured route; the only configured target is selected automatically when unambiguous. Local paths stay inside Pi's current working directory. Upload keeps one remote rollback copy.", parameters: Type.Object({ action: Type.Union([Type.Literal("upload"), Type.Literal("download"), Type.Literal("rollback")]), target: Type.Optional(Type.String({ description: "Configured target name. Optional when a route is active or exactly one target is configured." })), localPath: Type.Optional(Type.String()), remotePath: Type.String(), overwrite: Type.Optional(Type.Boolean()) }), async execute(_id, p, signal, _update, ctx) {
     const state = controller.status();

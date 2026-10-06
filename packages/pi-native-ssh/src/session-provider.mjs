@@ -667,7 +667,6 @@ export class NativeSshSessionProvider {
     this.options = options;
     this.nextGeneration = 1;
     this.live = undefined;
-    this.authorizedTargets = new Set();
   }
   capabilities() {
     return {
@@ -687,10 +686,6 @@ export class NativeSshSessionProvider {
     }
     if (this.live && this.live.status().state !== "closed") throw sessionError("SESSION_LIMIT", "This Native SSH provider permits one live session in this stage");
     const target = this.config.targets[request.target];
-    if (this.options.authorize && !this.authorizedTargets.has(request.target)) {
-      await this.options.authorize(target, request);
-      this.authorizedTargets.add(request.target);
-    }
     const handle = await NativeSshSessionHandle.open(request, this.nextGeneration++, target, this.helper, this.options);
     this.live = handle;
     void handle.whenClosed().then(() => { if (this.live === handle) this.live = undefined; });

@@ -39,11 +39,11 @@ For repeated commands or file operations on a configured remote host, prefer a p
 
 1. Call `session({"action":"capabilities"})`. The SSH capability includes a sorted `targetAliases` array. This read-only call does not connect or change routing. It returns aliases only, not SSH destinations, account names, or private configuration.
 2. Select an exact alias from that array. An alias is not necessarily the SSH hostname. An empty array means that no target is configured. Do not guess another name or add a target without approval.
-3. Call `session({"action":"open","backend":"ssh","target":"ALIAS","cwd":"/"})`. Replace `ALIAS` with a discovered alias and choose the required absolute working directory. The existing visible first-session confirmation still applies. Native SSH sessions do not support PTY or terminal input.
+3. Call `session({"action":"open","backend":"ssh","target":"ALIAS","cwd":"/"})`. Replace `ALIAS` with a discovered alias and choose the required absolute working directory. Connections to configured targets do not require a Pi approval prompt or UI context. Non-interactive authentication and strict host-key verification still apply. Native SSH sessions do not support PTY or terminal input.
 4. Pass the returned `sessionId` to `bash` for commands, or to Grounded `read`, `edit`, `write`, and `local_search` for remote file operations. These calls use that explicit session. Opening a session does not activate `/remote` routing or change calls that omit `sessionId`.
 5. Close the session with `session({"action":"close","sessionId":"SESSION_ID"})` when the work is complete. Replace `SESSION_ID` with the returned ID.
 
-An invalid SSH session target fails before connection or confirmation. The error lists configured aliases, or states that none are configured. It does not select a replacement target automatically.
+An invalid SSH session target fails before connection. The error lists configured aliases, or states that none are configured. It does not select a replacement target automatically.
 
 `ssh_transfer` remains available for bounded upload, download, and remote-write rollback. Its target argument also uses configured aliases. The human `/remote list` command remains available. A `/remote` route change is separate from an explicit Grounded session.
 
