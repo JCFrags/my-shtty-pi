@@ -669,10 +669,17 @@ export class NativeSshSessionProvider {
     this.live = undefined;
     this.authorizedTargets = new Set();
   }
-  capabilities() { return { backend: "ssh", providerId: this.id, protocolVersion: 1, pty: false, input: false }; }
+  capabilities() {
+    return {
+      backend: "ssh", providerId: this.id, protocolVersion: 1, pty: false, input: false,
+      targetAliases: Object.keys(this.config.targets).sort(),
+    };
+  }
   async open(request) {
     if (!request.target || typeof request.target !== "string" || !Object.hasOwn(this.config.targets, request.target)) {
-      throw sessionError("SESSION_TARGET_INVALID", "Native SSH session target must exactly match a configured target");
+      const aliases = this.capabilities().targetAliases;
+      const available = aliases.length ? `Configured target aliases: ${aliases.join(", ")}.` : "No Native SSH targets are configured.";
+      throw sessionError("SESSION_TARGET_INVALID", `Native SSH session target must exactly match a configured target. ${available} Use session action=capabilities to discover aliases; do not guess a hostname.`);
     }
     if (request.pty) throw sessionError("SESSION_PTY_UNAVAILABLE", "Native SSH persistent sessions do not support a PTY");
     if (!isAbsolute(request.cwd) || Buffer.byteLength(request.cwd, "utf8") > 4096 || request.cwd.includes("\0")) {
