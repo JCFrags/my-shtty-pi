@@ -68,7 +68,7 @@ The writer validates the object and replaces it through an owner-only temporary 
 | `searchIndexEnabled` | `PI_CHRONO_SEARCH_INDEX` | The normal engine implies search unless explicitly disabled. |
 | `targetContextTokens` | `PI_CHRONO_TARGET_CONTEXT` | 32,000, range 8,000–250,000. Model headroom can lower the effective ceiling. |
 | `dynamicRawTailMinTokens` / `dynamicRawTailMaxTokens` | `PI_CHRONO_RAW_TAIL_MIN` / `PI_CHRONO_RAW_TAIL_MAX` | 3,000 / 6,000. Minimum cannot exceed maximum. V3 uses these dynamic limits. Current V4 retains only the minimal safe exact suffix, not this token floor. |
-| `triggerThresholdTokens` | `PI_CHRONO_TRIGGER_TOKENS` | No proactive threshold. Pi context pressure remains active independently. |
+| `triggerThresholdTokens` | `PI_CHRONO_TRIGGER_TOKENS` | Unset. V3 has no Chrono proactive threshold by default. V4 uses the threshold rule below. Pi context pressure remains active independently. |
 | `triggerMinimumGrowthTokens` | `PI_CHRONO_TRIGGER_MIN_GROWTH` | 4,000. Growth gate for another threshold attempt. It does not bypass the failure retry pause. |
 | `automaticRolloverEnabled` | `PI_CHRONO_AUTOMATIC_ROLLOVER` | `true`, subject to safe-idle and complete-transfer checks. |
 | `rolloverSourceBytes` | `PI_CHRONO_ROLLOVER_BYTES` | 8,388,608, range 1–64 MiB of growth beyond bootstrap. |
@@ -76,6 +76,8 @@ The writer validates the object and replaces it through an owner-only temporary 
 | `hostWorkerSlots` | `PI_CHRONO_HOST_WORKER_SLOTS` | 1, range 1–4 deterministic worker slots. |
 | `workerTimeoutSeconds` | `PI_CHRONO_WORKER_TIMEOUT_SECONDS` | 900, range 30–3,600 for applicable compatibility jobs. Indexed jobs have lower operation-specific deadlines. |
 | `workerNiceLevel` | `PI_CHRONO_WORKER_NICE` | 10, range 0–19. |
+
+V4 requests its same-session summary at the earliest of the configured threshold, when set, 75% of the model context window, or the summary-admission limit minus a 4,096-token lead. Admission reserves the maximum summary-request prompt, the planning allowance, the configured Chrono reserve, and the safety allowance. An unset `triggerThresholdTokens` does not disable this V4 rule. The growth gate, pending-request checks, and retry pause still apply. A large single turn can cross the admission limit and cause refusal. See [summary headroom](../context/session-agent-compaction.md#pi-0851-integration-limits).
 
 The menu does not expose every V4 ownership/selection field as a dedicated choice. Configure `contextCompiler` and `memoryOwner` through the coordinated activation procedure, not an improvised live handoff. Status shows the captured versus configured Memory owner and whether reload is required.
 
@@ -114,7 +116,8 @@ Enabling asks for confirmation because bounded assistant/tool excerpts can leave
 
 ## Retained compatibility controls
 
-- `hybridSummaryEnabled` / `PI_CHRONO_PI_SUMMARY`, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not use this summary input. This switch does not enable or disable V4's required same-session summary.
+- `hybridSummaryEnabled` / `PI_CHRONO_PI_SUMMARY`, default false, requests an optional independent regular Pi summary on supported paths. V4 does not use this optional summary input. This switch does not enable or disable V4's required same-session summary.
+- `hybridSummaryTargetTokens` / `PI_CHRONO_PI_SUMMARY_TOKENS` defaults to 2,500 for the optional summary. V4 also uses `min(2000, hybridSummaryTargetTokens)` as prompt guidance for its required same-session summary. A value below 2,000 lowers that guidance even when `hybridSummaryEnabled` is false. The target is not a provider output cap.
 - `rawTail`, default `dynamic`, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override V3's dynamic-tail policy or V4's minimal safe suffix.
 - `replayTargetTokens` controls compatibility replay, whose separate hard cap is 25,000 tokens. It does not control current V4's [adaptive replay allowance](../context/session-agent-compaction.md#adaptive-replay-selection). V4 keeps the configured total ceiling and has no separate replay setting.
 - `incrementalPrecomputeEnabled`, default false, selects the older candidate store. The normal memory engine cancels this work rather than maintaining both lifetime derivation paths.
