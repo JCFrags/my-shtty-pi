@@ -2054,7 +2054,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   };
   const driveCompactionResume = (ctx: ExtensionContext): void => {
     // This path belongs only to owned manual onComplete, after native cleanup.
-    if (!ctx.isIdle()) return;
+    if (!compactionResume || !ctx.isIdle()) return;
     const message = takeCompactionResume(ctx);
     if (message) pi.sendMessage(message, { triggerTurn: true });
   };

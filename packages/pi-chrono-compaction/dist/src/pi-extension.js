@@ -2047,7 +2047,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     };
     const driveCompactionResume = (ctx) => {
         // This path belongs only to owned manual onComplete, after native cleanup.
-        if (!ctx.isIdle())
+        if (!compactionResume || !ctx.isIdle())
             return;
         const message = takeCompactionResume(ctx);
         if (message)

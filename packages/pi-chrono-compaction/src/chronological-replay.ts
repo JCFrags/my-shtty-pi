@@ -264,7 +264,11 @@ export function captureChronologicalReplay(entries: readonly SessionEntryLike[],
       const perPart = Math.max(32, Math.floor(target / Math.max(1, extracted.parts.length)));
       const body = extracted.parts.map((part, i) => `${part.label ? `${part.label}\n` : ""}${partRepresentation(part, entry, i, perPart, terms.join(" "))}`).join("\n\n");
       const text = header + body + recovery;
-      if (!representations.some(value => value.text === text)) representations.push({ detail, text, tokens: estimateTokensFromText(text) });
+      const duplicate = representations.findIndex(value => value.text === text);
+      const representation = { detail, text, tokens: estimateTokensFromText(text) };
+      // Equal reducer text keeps the lower detail label, not a second body copy.
+      if (duplicate < 0) representations.push(representation);
+      else representations[duplicate] = representation;
     }
     representations.sort((a, b) => b.tokens - a.tokens);
     const row: ReplayEvent = { id: entry.id, index, role: extracted.role, priority,
