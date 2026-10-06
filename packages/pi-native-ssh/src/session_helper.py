@@ -28,6 +28,10 @@ class ProtocolFailure(Exception):
     pass
 
 
+class StartupFailure(Exception):
+    pass
+
+
 class ResourceFailure(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -480,11 +484,16 @@ RESOURCE_OPERATIONS = {
 
 class Supervisor:
     def __init__(self, generation, cwd):
+        path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        shell_path = shutil.which("bash", path=path)
+        if shell_path is None:
+            raise StartupFailure("Remote Bash executable is unavailable on PATH. Make Bash available in the remote non-interactive SSH environment.")
+        shell_path = os.path.abspath(shell_path)
         control_read, control_write = os.pipe()
         os.set_inheritable(control_write, True)
-        env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "PI_SESSION_CONTROL_FD": str(control_write)}
+        env = {"PATH": path, "PI_SESSION_CONTROL_FD": str(control_write)}
         self.shell = subprocess.Popen(
-            ["/bin/bash", "--noprofile", "--norc"],
+            [shell_path, "--noprofile", "--norc"],
             cwd=cwd,
             env=env,
             stdin=subprocess.PIPE,
@@ -753,6 +762,11 @@ def main():
     except ProtocolFailure as error:
         try:
             write_frame({"version": VERSION, "type": "error", "code": "SESSION_PROTOCOL_ERROR", "message": str(error)[:300]})
+        except Exception:
+            pass
+    except StartupFailure as error:
+        try:
+            write_frame({"version": VERSION, "type": "error", "code": "SESSION_REMOTE_FAILED", "message": str(error)[:300]})
         except Exception:
             pass
     except Exception:

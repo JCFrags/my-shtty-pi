@@ -19,6 +19,8 @@ The manifest declares Pi `>=0.84.1 <0.84.3` and Node `>=22.19.0`. Registration o
 
 Remote operations use `/usr/bin/ssh` on the local host and `python3` on the remote host. Targets need working non-interactive OpenSSH authentication and already trusted host keys. The transport enables strict host-key checking, disables password prompts and forwarding, and does not enroll a new host key. OpenSSH configuration, host trust, and remote account permissions remain the authority boundary, not a package sandbox.
 
+Persistent sessions also require `bash` on the remote non-interactive `PATH`. The helper resolves the executable from the same `PATH` passed to the persistent shell. It does not require `/bin/bash`, read shell profiles, or modify the remote host. If Bash is unavailable, startup returns an explicit missing-Bash error.
+
 ## Private configuration
 
 The factory requires a private version-2 configuration even when no SSH target is configured. The default path is `$XDG_CONFIG_HOME/pi-native-ssh/config.json`, or `$HOME/.config/pi-native-ssh/config.json` when `XDG_CONFIG_HOME` is unset. `PI_NATIVE_SSH_CONFIG` selects an explicit path. Use an absolute path, an owner-only parent directory, and an owned regular non-symlink file with mode `0600`.
