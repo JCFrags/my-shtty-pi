@@ -37,7 +37,7 @@ For an existing installation, preserve package order and replace only the intend
 
 ## Products
 
-The [registry](package.json) contains 19 owned products: 17 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
+The [registry](package.json) contains 18 owned products: 16 active and two inactive. These are source-maintenance groups, not a count of loaded extensions. The browser copy has its own workspace and is not another registered product.
 
 ### Active products
 
@@ -48,7 +48,6 @@ The [registry](package.json) contains 19 owned products: 17 active and two inact
 | [Grounded Tools](packages/grounded-tools/README.md) | Exact coding tools, questions, and shared native-state primitives. | [Four tool groups below](#grounded-tools) |
 | [Herdr Agent State](packages/herdr-agent-state/README.md) | Report Pi session identity and working, blocked, or idle state to Herdr. | Automatic lifecycle integration. No tool or command. |
 | [Herdr Sidebar](packages/herdr-status/README.md) | Configure additive model/context fields and terminal title activity. Preserve native lifecycle reporting. | `/herdr-sidebar-settings` |
-| [Pi Agent Context](packages/pi-agent-context/README.md) | Maintain stable date/environment snapshots and inspect prompt, context, and tool costs. | `/context-refresh`, `/context-audit` |
 | [ChronoCompact](packages/pi-chrono-compaction/README.md) | Select chronological memory and recover source-linked history. | [History, memory, and operator interfaces below](#chronocompact) |
 | [Context Kit](packages/pi-context-kit/README.md) | Independent Memory, Todo, Notes, Workplan, current-state recall, and local runtime/quality observations. | `memory_*`, `todo`, `notes`, `workplan`, `context_recall`, `telemetry_status`, native import commands, `/context-telemetry` |
 | [Pi Date Reference](packages/pi-date-reference/README.md) | Add a local date and time-zone prompt reference that stays fixed until a new context or committed compaction. Requires Pi 0.99.1. | `/date-reference`. No model tool. |
@@ -69,6 +68,8 @@ These packages retain source for compatibility work. Their presence does not imp
 | --- | --- |
 | [Pi Review UI](packages/pi-review-ui/README.md) | Pre-execution review of `edit` and `write`. No separate tool or command. |
 | [Pi Tool Controls](packages/pi-tool-controls/README.md) | Mouse-first bulk expansion controls for tool output, opened with `/tool-controls` when explicitly loaded. |
+
+Pi Agent Context is retired. Remove any remaining registration for that package. Use Pi Date Reference for a fixed-context date and time zone, and Pi Diagnostics for on-demand evidence. Preserve saved sessions and historical snapshots or audit entries.
 
 ## Grounded Tools
 
@@ -200,7 +201,7 @@ Static checks cover registry, locks, imports, package boundaries, retired interf
 
 Use the [CI and protected integration runbook](docs/ci.md) for scope prediction, failed checks, and coordinated final merges.
 
-[`scripts/ci-scope.mjs`](scripts/ci-scope.mjs) selects known changed projects and their mapped dependents. All 19 registered products, including inactive products, have explicit ownership and dependent entries. Selected CI products use `npm run verify -- --product <slug> --skip-shared-checks` in a matrix after the shared-invariant job passes. The default local command without that last flag still runs the complete shared checks. Multiple mapped changes select the union of their transitive dependents. Changes under `vendor/terminal-browser/` select the complete, unchanged `browser-copy` job, not individual browser packages. Other product execution is skipped unless the dependency map selects it.
+[`scripts/ci-scope.mjs`](scripts/ci-scope.mjs) selects known changed projects and their mapped dependents. All 18 registered products, including inactive products, have explicit ownership and dependent entries. Selected CI products use `npm run verify -- --product <slug> --skip-shared-checks` in a matrix after the shared-invariant job passes. The default local command without that last flag still runs the complete shared checks. Multiple mapped changes select the union of their transitive dependents. Changes under `vendor/terminal-browser/` select the complete, unchanged `browser-copy` job, not individual browser packages. Other product execution is skipped unless the dependency map selects it.
 
 Documentation-only changes use the indexed `verify:static` checks, including privacy, package boundaries, provenance, frozen Chrono identity, and root regression checks. They do not install dependencies or run product, native, historical, or browser builds. Human documentation includes root `README.md`, Markdown under `docs/` and `skills/`, and known product READMEs, API/contract documents, agent instructions, and `docs/` directories. Markdown fixtures, unknown roots, and generated browser skill templates remain product or uncertain inputs. Browser documentation hash refreshes can use this route only when provenance inventory, source attribution, modes, removed records, and all non-document records stay unchanged. Other provenance changes retain browser verification. A lightweight route does not relax the frozen Chrono tree or privacy checks.
 

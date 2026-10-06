@@ -54,13 +54,6 @@
         ]
       },
       {
-        "slug": "pi-agent-context",
-        "status": "active",
-        "entrypoints": [
-          "extensions/index.ts"
-        ]
-      },
-      {
         "slug": "pi-chrono-compaction",
         "status": "active",
         "entrypoints": [

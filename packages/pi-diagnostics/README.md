@@ -11,7 +11,7 @@ npm --prefix packages/pi-diagnostics ci --ignore-scripts --no-audit --no-fund
 pi install "$PWD/packages/pi-diagnostics"
 ```
 
-For an existing installation, use the repository's [scoped activation procedure](../../docs/activation.md). Preserve package order and unrelated selections. Agent Context is not a dependency and does not need to be enabled. An absent optional provider returns unavailable evidence, not a healthy result.
+For an existing installation, use the repository's [scoped activation procedure](../../docs/activation.md). Preserve package order and unrelated selections. Agent Context is retired and is not a dependency. An absent optional provider returns unavailable evidence, not a healthy result.
 
 ## User menu
 
