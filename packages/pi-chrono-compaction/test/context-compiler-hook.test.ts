@@ -136,9 +136,19 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
         const before = sm.getLeafId();
         committedId = sm.appendCompaction(returned.compaction.summary, returned.compaction.firstKeptEntryId, returned.compaction.tokensBefore, returned.compaction.details, true);
         assert.equal(sm.getEntry(committedId)!.parentId, before);
+        const resumesBeforeCommit = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
         await hooks.get("session_compact")!({ compactionEntry: sm.getEntry(committedId), fromExtension: true, reason: "manual", willRetry: false }, ctx);
+        // Match installed Pi: a later awaited session_compact handler can keep
+        // isCompacting true beyond Chrono's zero-delay callback. No settled
+        // event follows manual compaction. Only onComplete sees cleanup.
+        await new Promise(resolve => setTimeout(resolve, 25));
+        assert.equal(sent.filter(row => row.message.customType === "chrono-compact-resume").length, resumesBeforeCommit);
         idle = true;
         options.onComplete();
+        const resumesAfterComplete = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
+        options.onComplete();
+        assert.equal(sent.filter(row => row.message.customType === "chrono-compact-resume").length, resumesAfterComplete,
+          "duplicate owned completion must not resume twice");
       })();
     },
   } as unknown as ExtensionContext;
@@ -405,6 +415,41 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal(aborts, beforeOvershootAbort + 1);
     Object.assign(model, smallModel);
     contextTokens = 12000;
+
+    // An idle manual request after final output may summarize, but its own
+    // submission toolUse must not authorize an ordinary continuation.
+    await hooks.get("input")!({ text: "Check idle manual compaction", source: "interactive" }, ctx);
+    sm.appendMessage({ ...assistant("completed", "read", {}), content: [{ type: "text", text: "The authorized fixture work is complete." }], stopReason: "stop" });
+    idle = true;
+    const resumesBeforeIdleManual = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
+    const commitsBeforeIdleManual = sm.getBranch().filter(entry => entry.type === "compaction").length;
+    assert.deepEqual(await hooks.get("session_before_compact")!(event(), ctx), { cancel: true });
+    await hooks.get("session_compact_failed")!({ reason: "manual", aborted: true, willRetry: false }, ctx);
+    await tick();
+    assert.equal(sent.at(-1).message.customType, "chrono-session-agent-summary-request");
+    const idleManualRequestId = (await status()).sessionSummary.requestId;
+    idle = false;
+    await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
+    const idleManualArgs = { requestId: idleManualRequestId, summary: "The authorized fixture work is complete. Remain idle." };
+    const idleManualMessage = assistant("idle-manual-submit", "request_compaction", idleManualArgs);
+    sm.appendMessage(idleManualMessage);
+    const idleManualResult = await tools.get("request_compaction").execute("idle-manual-submit", idleManualArgs, run.signal, undefined, ctx);
+    assert.equal(idleManualResult.terminate, true);
+    sm.appendMessage({ role: "toolResult", toolCallId: "idle-manual-submit", toolName: "request_compaction", content: idleManualResult.content,
+      details: idleManualResult.details, isError: false, timestamp: Date.now() });
+    await hooks.get("turn_end")!({ message: idleManualMessage }, ctx);
+    idle = true;
+    compactionTask = undefined;
+    await hooks.get("agent_settled")!({}, ctx);
+    await tick();
+    assert.ok(compactionTask);
+    await compactionTask;
+    await tick();
+    assert.equal((await status()).terminal.state, "committed");
+    assert.equal((await status()).providerBarrier.state, "open");
+    assert.equal(sm.getBranch().filter(entry => entry.type === "compaction").length, commitsBeforeIdleManual + 1);
+    assert.equal(sent.filter(row => row.message.customType === "chrono-compact-resume").length, resumesBeforeIdleManual,
+      "completed idle manual compaction must not resume the original task");
 
     // Load the private preview option through the same registration. Synthetic
     // assistant entries exercise dispatch, not model-written summary evidence.
