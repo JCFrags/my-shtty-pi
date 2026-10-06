@@ -257,7 +257,10 @@ export function captureChronologicalReplay(entries: readonly SessionEntryLike[],
     const header = `### ${extracted.role} [${entry.id}]\n`;
     const recovery = `\n\nSource: history_get entryId="${entry.id}"`;
     const representations: ReplayRepresentation[] = [];
-    for (const [detail, target] of [["full", 4096], ["reduced", 768], ["brief", 160]] as const) {
+    // Reduce verbose evidence detail without narrowing the user-wording guide.
+    // These are estimated body-token targets, not capture or recovery limits.
+    const fullTarget = extracted.role === "User" ? 4096 : 2048;
+    for (const [detail, target] of [["full", fullTarget], ["reduced", 768], ["brief", 160]] as const) {
       const perPart = Math.max(32, Math.floor(target / Math.max(1, extracted.parts.length)));
       const body = extracted.parts.map((part, i) => `${part.label ? `${part.label}\n` : ""}${partRepresentation(part, entry, i, perPart, terms.join(" "))}`).join("\n\n");
       const text = header + body + recovery;

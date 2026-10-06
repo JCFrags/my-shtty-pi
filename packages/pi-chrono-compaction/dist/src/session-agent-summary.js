@@ -95,7 +95,7 @@ export function createSessionAgentSummaryRequest(input) {
     clock(input.now);
     if (!["manual", "threshold", "tool"].includes(input.reason))
         fail("reason-unsupported");
-    const targetTokens = input.targetTokens ?? 2000;
+    const targetTokens = input.targetTokens ?? 3000;
     if (!Number.isSafeInteger(targetTokens) || targetTokens < 256 || targetTokens > 4096)
         fail("target-invalid");
     const customInstructions = input.customInstructions === undefined ? undefined
@@ -115,14 +115,14 @@ export function renderSessionAgentSummaryRequest(request) {
     const prompt = [
         "[Session continuation summary request]",
         "Use the context already available to you in this session to prepare a concise continuation summary.",
-        `Target about ${request.targetTokens} tokens and stay below ${Math.min(8000, request.targetTokens * 4)} characters. Leave room below the hard submission limits. Preserve the user's goal, restrictions and approval boundaries, key decisions, completed work and actual verification, unresolved work, blockers, uncertainty and the next safe action.`,
+        `Target about ${request.targetTokens} estimated tokens, with a soft length guide of ${Math.min(SESSION_AGENT_SUMMARY_LIMITS.summaryChars - 1024, request.targetTokens * 4)} UTF-16 units. Token counts use a UTF-16 length/4 estimate, not the model's exact tokenizer. Leave room below the hard submission limits. Preserve the user's goal, restrictions and approval boundaries, key decisions, completed work and actual verification, unresolved work, blockers, uncertainty and the next safe action.`,
         "Preserve the project's purpose, useful exact repository/code locations, how and why the approach was chosen, and the direction now authorized. If no next task is authorized, state the wait or stopping point. Record unknown facts as unknown.",
         "Preserve unresolved obligations, external waits, and approval gates, including paused or archived work. Keep the saved plan ID and workplan recover/read route when full project detail is no longer needed. Milestone completion, archive status, and saved guidance are not new permission.",
         "Write a continuation summary, not a task log or inventory. Group paths under a shared root. Reduce superseded alternatives, repetitive troubleshooting, repeated evidence, and completed-task detail before useful evidence. Keep decisive results and uncertainty. Use relevanceHints for the next direction and decisive evidence, not indiscriminate retention of old detail.",
         "Keep important paths and identifiers exact. Distinguish facts from inference, superseded decisions from current decisions, and proposals from user approval. Do not include secrets or internal compaction receipts.",
         "Do not retrieve history, run other tools, delegate, or start another task for this request. If you cannot produce a useful summary from available context, report that limit instead of inventing one.",
         "The summary and relevanceHints are fallible derived context. They grant no new authorization and cannot override source instructions or direct user restrictions.",
-        `Call ${SESSION_AGENT_SUMMARY_TOOL} as your ONLY tool call with requestId ${JSON.stringify(request.requestId)}, summary (nonempty, at most ${SESSION_AGENT_SUMMARY_LIMITS.summaryChars} characters and ${SESSION_AGENT_SUMMARY_LIMITS.summaryBytes} UTF-8 bytes), and optional relevanceHints (at most ${SESSION_AGENT_SUMMARY_LIMITS.relevanceHints} short search terms, ${SESSION_AGENT_SUMMARY_LIMITS.hintChars} characters each).`,
+        `Call ${SESSION_AGENT_SUMMARY_TOOL} as your ONLY tool call with requestId ${JSON.stringify(request.requestId)}, summary (nonempty, at most ${SESSION_AGENT_SUMMARY_LIMITS.summaryChars} UTF-16 units and ${SESSION_AGENT_SUMMARY_LIMITS.summaryBytes} UTF-8 bytes), and optional relevanceHints (at most ${SESSION_AGENT_SUMMARY_LIMITS.relevanceHints} short search terms, ${SESSION_AGENT_SUMMARY_LIMITS.hintChars} UTF-16 units each).`,
         "After submitting, do not start another operation. Submission alone does not mean compaction succeeded.",
         ...(request.customInstructions === undefined ? [] : ["Additional summary focus, not new task authorization:", JSON.stringify(request.customInstructions)]),
     ].join("\n");

@@ -140,6 +140,7 @@ export function resolveExtensionSettings(overrides = {}) {
         hybridSummaryEnabled: booleanSetting("PI_CHRONO_PI_SUMMARY", false, overrides.hybridSummaryEnabled),
         legacyPiSummaryDisabled: false,
         hybridSummaryTargetTokens: numberSetting("PI_CHRONO_PI_SUMMARY_TOKENS", 2_500, 512, 16_000, overrides.hybridSummaryTargetTokens),
+        sessionSummaryTargetTokens: Math.floor(numberSetting("PI_CHRONO_SESSION_SUMMARY_TOKENS", 3_000, 256, 4_096, overrides.sessionSummaryTargetTokens)),
         legacyHistoryEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
         historyEditorEnabled: false,
         valueWorker: {
@@ -573,7 +574,8 @@ async function openChronoCompactSettings(ctx, initial, save) {
             `Dynamic tail bounds · ${settings.dynamicRawTailMinTokens.toLocaleString()}–${settings.dynamicRawTailMaxTokens.toLocaleString()} tokens`,
             `Combined context hard limit · ${settings.targetContextTokens.toLocaleString()} tokens (model headroom can lower it)`,
             `Chronological replay maximum · ${settings.replayTargetTokens === undefined ? "automatic" : `${settings.replayTargetTokens.toLocaleString()} tokens`}`,
-            `Regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}`,
+            `V4 session-agent summary target · ${settings.sessionSummaryTargetTokens.toLocaleString()} tokens${settings.contextCompiler === "v4" ? "" : " (inactive in V3)"}`,
+            `V3 regular Pi summary · ${settings.hybridSummaryEnabled ? `${settings.hybridSummaryTargetTokens.toLocaleString()} tokens` : "disabled"}${settings.contextCompiler === "v3" ? "" : " (inactive in V4)"}`,
             `Automatic physical-shard rollover · ${settings.automaticRolloverEnabled ? `${settings.rolloverSourceBytes.toLocaleString()} source bytes at safe idle` : "disabled"}`,
             `Background LLM · ${settings.valueWorker.mode}`,
             `Segmented incremental deterministic precompute · ${settings.incrementalPrecomputeEnabled ? "enabled" : "disabled"}`,
@@ -594,6 +596,7 @@ async function openChronoCompactSettings(ctx, initial, save) {
             `Background LLM · ${settings.valueWorker.mode === "off" ? "off" : `${draft.valueWorkerPreset ?? "custom"} · ${settings.valueWorker.model}`}`,
             `Compaction timing · ${timing}`,
             `Combined context hard limit · ${settings.targetContextTokens.toLocaleString()} tokens`,
+            ...(settings.contextCompiler === "v4" ? [`V4 session-agent summary target · ${settings.sessionSummaryTargetTokens.toLocaleString()} tokens`] : []),
             `Tool-result shortening at compaction · ${settings.toolResultProjectionMode}`,
             "Custom settings (all options)",
             "Back",
@@ -697,13 +700,17 @@ async function openChronoCompactSettings(ctx, initial, save) {
                     draft = await tokenInput(ctx, "Source bytes before safe-idle rollover", settings.rolloverSourceBytes, "rollover-bytes", draft);
                 continue;
             }
-            if (choice.startsWith("Regular Pi summary")) {
-                const selected = await ctx.ui.select("Regular Pi summary", ["Enabled", "Disabled"]);
+            if (choice.startsWith("V4 session-agent summary target")) {
+                draft = await tokenInput(ctx, "V4 session-agent summary target tokens (256–4,096; soft target)", settings.sessionSummaryTargetTokens, "session-summary-tokens", draft);
+                continue;
+            }
+            if (choice.startsWith("V3 regular Pi summary")) {
+                const selected = await ctx.ui.select("V3 regular Pi summary (not the V4 session-agent summary)", ["Enabled", "Disabled"]);
                 if (selected === "Disabled")
                     draft = applyConfigCommand(draft, "hybrid off").config;
                 if (selected === "Enabled") {
                     draft = applyConfigCommand(draft, "hybrid on").config;
-                    draft = await tokenInput(ctx, "Regular Pi summary target tokens", settings.hybridSummaryTargetTokens, "hybrid-tokens", draft);
+                    draft = await tokenInput(ctx, "V3 regular Pi summary target tokens", settings.hybridSummaryTargetTokens, "hybrid-tokens", draft);
                 }
                 continue;
             }
@@ -1522,8 +1529,29 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     let sessionSummary;
     let summaryTimer;
     let summaryDeferral;
-    let resumeTimer;
     let compactionResume;
+    // Only observed live work can supply V4 continuation eligibility. This state
+    // is not reconstructed from old assistant output or open native task records.
+    let originalRun;
+    let inputPending = false;
+    const originalRunBinding = (ctx) => stableStringify({
+        sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), epoch: summaryEpoch,
+        model: ctx.model && { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api, thinkingLevel: ctx.thinkingLevel ?? "off" },
+    });
+    const captureOriginalContinuation = (ctx, reason) => {
+        if (inputPending || ctx.hasPendingMessages() || ctx.signal?.aborted)
+            return false;
+        // The currently executing model-issued request interrupts its own turn.
+        if (reason === "tool")
+            return true;
+        return !ctx.isIdle() && originalRun?.binding === originalRunBinding(ctx)
+            && originalRun.hasInput && originalRun.unresolved;
+    };
+    const observeOriginalTurn = (ctx, message) => {
+        if (sessionSummary || summaryIntent || !originalRun || originalRun.binding !== originalRunBinding(ctx) || message.role !== "assistant")
+            return;
+        originalRun.unresolved = ["toolUse", "length", "error", "deferred"].includes(message.stopReason ?? "");
+    };
     let warningLevel = 0;
     let incrementalStore;
     let historyLedger;
@@ -1786,11 +1814,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             valueWorkerCompactionGate = false;
         if (summaryTimer)
             clearTimeout(summaryTimer);
-        if (resumeTimer)
-            clearTimeout(resumeTimer);
         summaryTimer = undefined;
-        resumeTimer = undefined;
         compactionResume = undefined;
+        originalRun = undefined;
     };
     const refuseSessionSummary = (ctx, error) => {
         const code = safeCompositionFailureCode(error);
@@ -1860,14 +1886,14 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             throw new Error("session-agent-summary-headroom-unavailable");
         }
     };
-    const beginSessionSummary = (ctx, reason, delivery, customInstructions, requestToolCallId, observedTokens, deliberateRecovery = false, resumeAfter = reason === "tool" || hasUnresolvedTurn(ctx.sessionManager.getBranch().slice(-256))) => {
+    const beginSessionSummary = (ctx, reason, delivery, customInstructions, requestToolCallId, observedTokens, deliberateRecovery = false, resumeAfter = captureOriginalContinuation(ctx, reason)) => {
         validatePreview(ctx);
         if (previewDelivered)
             throw new Error("session-agent-summary-preview-already-delivered");
         if (sessionSummary || summaryIntent || (compactionRetryPaused && !deliberateRecovery) || ctx.hasPendingMessages())
             throw new Error("session-agent-summary-session-busy");
         const request = createSessionAgentSummaryRequest({ requestId: randomUUID(), scope: sessionSummaryScope(ctx, summaryEpoch), reason,
-            now: Date.now(), targetTokens: Math.min(2000, searchSettings().hybridSummaryTargetTokens),
+            now: Date.now(), targetTokens: searchSettings().sessionSummaryTargetTokens,
             ...(customInstructions?.trim() ? { customInstructions } : {}), ...(requestToolCallId ? { requestToolCallId } : {}) });
         const tokens = currentRequestTokens(ctx, undefined, observedTokens);
         summaryHeadroom(ctx, renderSessionAgentSummaryRequest(request), tokens);
@@ -1899,7 +1925,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         const now = Date.now();
         summaryIntent = { scope: sessionSummaryScope(ctx, summaryEpoch), createdAt: now,
             expiresAt: now + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs, reason, customInstructions,
-            resumeAfter: hasUnresolvedTurn(ctx.sessionManager.getBranch().slice(-256)) };
+            resumeAfter: captureOriginalContinuation(ctx, reason) };
         summaryRecoveryRequested = false;
         valueWorkerCompactionGate = true;
         cancelValueWorker();
@@ -1910,7 +1936,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         scheduleSessionSummary(ctx);
     };
     const driveSessionSummary = async (ctx) => {
-        if (summaryIntent && !sessionSummary && ctx.isIdle() && !ctx.hasPendingMessages() && !triggerPending) {
+        if (summaryIntent && !sessionSummary && !inputPending && ctx.isIdle() && !ctx.hasPendingMessages() && !triggerPending) {
             try {
                 const intent = summaryIntent;
                 validateDeferredSessionSummaryIntent(intent, summaryObservation(ctx));
@@ -1923,7 +1949,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             }
         }
         const state = sessionSummary;
-        if (!state || state.previewCapturing || !ctx.isIdle() || ctx.hasPendingMessages() || triggerPending)
+        if (!state || state.previewCapturing || inputPending || !ctx.isIdle() || ctx.hasPendingMessages() || triggerPending)
             return;
         try {
             if (searchSettings().contextCompiler !== "v4" || state.signal?.aborted)
@@ -1992,40 +2018,49 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         summaryTimer = setTimeout(() => { summaryTimer = undefined; if (epoch === summaryEpoch)
             void driveSessionSummary(ctx); }, 0);
     };
-    const driveCompactionResume = (ctx) => {
+    const takeCompactionResume = (ctx) => {
         const resume = compactionResume;
         if (!resume)
-            return;
+            return undefined;
         try {
-            if (resume.scope.epoch !== summaryEpoch || resume.signal?.aborted || Date.now() >= resume.expiresAt
-                || searchSettings().contextCompiler !== "v4" || compactionRetryPaused || sessionSummary || summaryIntent
-                || ctx.hasPendingMessages() || stableStringify(sessionSummaryScope(ctx, summaryEpoch)) !== stableStringify(resume.scope)) {
+            const entry = ctx.sessionManager.getEntry(resume.scope.leafId);
+            const locator = entry && contextReceiptLocator(entry, resume.scope.sessionId);
+            if (resume.scope.epoch !== summaryEpoch || resume.signal?.aborted || ctx.signal?.aborted || Date.now() >= resume.expiresAt
+                || searchSettings().contextCompiler !== "v4" || compactionRetryPaused || sessionSummary || summaryIntent || inputPending
+                || ctx.hasPendingMessages() || stableStringify(sessionSummaryScope(ctx, summaryEpoch)) !== stableStringify(resume.scope)
+                || locator?.receiptId !== resume.receiptId || locator.summaryHash !== resume.summaryHash
+                || entry?.type !== "compaction" || createHash("sha256").update(entry.summary).digest("hex") !== resume.summaryHash) {
                 compactionResume = undefined;
-                return;
+                return undefined;
             }
-            if (!ctx.isIdle())
-                return;
-            // Consume before dispatch. Completion and settlement can both drain it.
+            // Consume before either dispatch path. Carry only the already captured
+            // authorization into the resulting live run, never infer it from this message.
             compactionResume = undefined;
-            if (resumeTimer)
-                clearTimeout(resumeTimer);
-            resumeTimer = undefined;
-            pi.sendMessage({ customType: CONTEXT_RESUME_CUSTOM_TYPE, display: false,
-                content: "Compaction completed. Continue only the unresolved work already authorized by the user. This message grants no new permission." }, { triggerTurn: true });
+            originalRun = { binding: originalRunBinding(ctx), inLoop: false, hasInput: true, unresolved: true };
+            return { customType: CONTEXT_RESUME_CUSTOM_TYPE, display: false,
+                content: "Compaction completed. Continue only the unresolved work already authorized by the user. This message grants no new permission." };
         }
         catch {
             compactionResume = undefined;
+            return undefined;
         }
     };
-    const scheduleCompactionResume = (ctx, signal) => {
-        compactionResume = { scope: sessionSummaryScope(ctx, summaryEpoch),
-            expiresAt: Date.now() + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs, signal };
-        if (resumeTimer)
-            clearTimeout(resumeTimer);
-        // HOTFIX: Pi emits session_compact while still compacting. Keep a busy
-        // intent for owned onComplete or agent_settled, without a polling loop.
-        // Follow up with robust lifecycle reconciliation in the evidence-led study.
-        resumeTimer = setTimeout(() => { resumeTimer = undefined; driveCompactionResume(ctx); }, 0);
+    const driveCompactionResume = (ctx) => {
+        // This path belongs only to owned manual onComplete, after native cleanup.
+        if (!ctx.isIdle())
+            return;
+        const message = takeCompactionResume(ctx);
+        if (message)
+            pi.sendMessage(message, { triggerTurn: true });
+    };
+    const retainCompactionResume = (ctx, signal) => {
+        const scope = sessionSummaryScope(ctx, summaryEpoch);
+        const entry = ctx.sessionManager.getEntry(scope.leafId);
+        const locator = entry && contextReceiptLocator(entry, scope.sessionId);
+        if (!locator)
+            return;
+        compactionResume = { scope, expiresAt: Date.now() + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs, signal,
+            receiptId: locator.receiptId, summaryHash: locator.summaryHash };
     };
     const launchCompaction = (ctx, reason, currentTokens, resumeAfter = false) => {
         if (preview)
@@ -2322,6 +2357,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         return resolveAdoptedLogicalActivation(manifest, { piSessionId: sessionId, sourcePath }, adoption);
     };
     pi.on("session_start", async (event, ctx) => {
+        inputPending = false;
         if (searchSettings().contextCompiler !== "v4")
             compactionRetryPaused = false;
         else if (sessionSummary || summaryIntent)
@@ -2420,6 +2456,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         scheduleIncrementalWork(ctx);
     });
     const invalidateSummaryScope = (ctx) => {
+        inputPending = false;
         if (sessionSummary || summaryIntent)
             refuseSessionSummary(ctx, new Error("session-agent-summary-session-changed"));
         else
@@ -2431,6 +2468,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("input", (event) => {
         const interrupted = !!sessionSummary || !!summaryIntent;
         clearSessionSummary();
+        // Pi may compact the old projection before it persists this new prompt.
+        // Fence both summary delivery and hidden continuation at input receipt.
+        inputPending = true;
         if (searchSettings().contextCompiler === "v4") {
             compactionRetryPaused ||= interrupted;
             // Input from extensions is not deliberate recovery. Pin the new native
@@ -2549,7 +2589,45 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     // Neither a new agent run nor an extension-generated turn proves recovery.
     pi.on("before_agent_start", () => { if (searchSettings().contextCompiler !== "v4")
         compactionRetryPaused = false; });
+    pi.on("agent_start", (_event, ctx) => {
+        if (sessionSummary || summaryIntent)
+            return;
+        const binding = originalRunBinding(ctx);
+        if (originalRun?.binding !== binding)
+            originalRun = { binding, inLoop: true, hasInput: false, unresolved: false };
+        else
+            originalRun.inLoop = true;
+    });
+    pi.on("message_start", (event, ctx) => {
+        const message = event.message;
+        if (message.role === "user")
+            inputPending = false;
+        if (message.role !== "user" && message.role !== "custom")
+            return;
+        if (message.role === "custom" && [SESSION_AGENT_SUMMARY_CUSTOM_TYPE, SESSION_AGENT_BOUNDARY_CUSTOM_TYPE,
+            CONTEXT_RESUME_CUSTOM_TYPE, CONTEXT_WARNING_CUSTOM_TYPE].includes(message.customType))
+            return;
+        if (sessionSummary || summaryIntent) {
+            refuseSessionSummary(ctx, new Error("session-agent-summary-request-interrupted"));
+            return;
+        }
+        compactionResume = undefined;
+        // Passive stored messages are not work. Only input actually delivered into
+        // an observed agent loop counts, including a live custom-message-origin run.
+        if (originalRun?.inLoop && originalRun.binding === originalRunBinding(ctx)) {
+            originalRun.hasInput = true;
+            originalRun.unresolved = true;
+        }
+    });
+    pi.on("agent_end", (_event, ctx) => {
+        if (!originalRun)
+            return;
+        originalRun.inLoop = false;
+        if (!sessionSummary && !summaryIntent && ctx.signal?.aborted)
+            originalRun.unresolved = false;
+    });
     pi.on("turn_end", (event, ctx) => {
+        observeOriginalTurn(ctx, event.message);
         if (preview && !sessionSummary)
             return;
         if (compactionRetryPaused && !sessionSummary) {
@@ -2613,7 +2691,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             blockers.push("session-busy");
         if (ctx.hasUI && ctx.ui.getEditorText().length > 0)
             blockers.push("editor-draft");
-        if (triggerPending || valueWorkerCompactionGate || logicalSwitchActive || forcedCompactionReason || sessionSummary || resumeTimer || compactionResume)
+        if (triggerPending || valueWorkerCompactionGate || logicalSwitchActive || forcedCompactionReason || sessionSummary || compactionResume)
             blockers.push("compaction-or-switch-active");
         if (compactionRetryPaused)
             blockers.push("compaction-retry-paused");
@@ -2684,7 +2762,24 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         };
         automaticRolloverTimer = setTimeout(() => { void check().catch(() => { automaticRolloverStatus = { state: "source-unavailable" }; }); }, 0);
     };
+    // Native retry and queued work run first. This boundary is actionable even
+    // though ctx.isIdle() is false for the surrounding AgentSession run.
+    pi.on("agent_before_settle", (event, ctx) => {
+        if (!compactionResume)
+            return undefined;
+        if (event.outcome !== "completed" || event.continue || event.entries.length || event.context.pendingMessages.length) {
+            compactionResume = undefined;
+            return undefined;
+        }
+        const message = takeCompactionResume(ctx);
+        return message ? { entries: [...event.entries, { type: "custom_message", ...message }], continue: true } : undefined;
+    });
     pi.on("agent_settled", (_event, ctx) => {
+        originalRun = undefined;
+        // Notification-only settlement cannot supply an automatic continuation.
+        // Owned manual compaction still drains its intent from onComplete.
+        if (!ownedCompaction)
+            compactionResume = undefined;
         if (preview) {
             if (sessionSummary || summaryIntent)
                 scheduleSessionSummary(ctx);
@@ -2701,11 +2796,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         try {
             const usage = ctx.getContextUsage();
             if (searchSettings().contextCompiler === "v4") {
-                if (compactionResume) {
-                    driveCompactionResume(ctx);
-                    return;
-                }
-                if (resumeTimer)
+                if (compactionResume)
                     return;
                 try {
                     if (!sessionSummary && !summaryIntent && !compactionRetryPaused && !ctx.hasPendingMessages()) {
@@ -2757,6 +2848,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             return;
         const deferred = summaryDeferral;
         summaryDeferral = undefined;
+        if (deferred?.awaitingInput && deferred.epoch === summaryEpoch && deferred.reason === event.reason
+            && event.aborted && !deferred.signal.aborted && inputPending) {
+            // The incoming prompt supersedes the old projection. Admission and any
+            // paused barrier are checked later against its actual persisted context.
+            return;
+        }
         if (deferred && sessionSummary && deferred.epoch === summaryEpoch && deferred.requestId === sessionSummary.request.requestId
             && deferred.reason === event.reason && event.aborted && !deferred.signal.aborted) {
             // Pi reports our intentional threshold/manual deferral as a failed
@@ -2832,7 +2929,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         if (shouldContinue && searchSettings().contextCompiler === "v4") {
             // This new post-commit message starts the idle agent. It is not part of
             // the pre-commit exact-tail receipt and does not claim earlier consumption.
-            scheduleCompactionResume(ctx, compactionSignal);
+            retainCompactionResume(ctx, compactionSignal);
         }
         else if (shouldContinue) {
             pi.sendMessage({
@@ -2845,6 +2942,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("session_before_compact", async (event, ctx) => {
         if (preview)
             return { cancel: true };
+        if (inputPending && searchSettings().contextCompiler === "v4" && !sessionSummary?.boundary && !event.signal.aborted) {
+            // Pre-prompt native compaction sees the previous leaf. Wait for the new
+            // input to reach context before capturing its source and authorized run.
+            summaryDeferral = { epoch: summaryEpoch, reason: event.reason, signal: event.signal, awaitingInput: true };
+            return { cancel: true };
+        }
         if (compactionRetryPaused && event.reason !== "manual" && !sessionSummary?.boundary)
             return { cancel: true };
         if (searchSettings().contextCompiler !== "v4")
