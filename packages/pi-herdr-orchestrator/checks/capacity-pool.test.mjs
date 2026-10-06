@@ -35,11 +35,16 @@ test("owned capacity spans tabs and preserves workers across settings changes", 
       await mkdir(dir, { recursive: true });
     const fakeHerdr = join(root, "herdr.mjs");
     await writeFile(fakeHerdr, `#!${process.execPath}
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 const path = process.env.ORCHESTRATOR_FIXTURE_STATE;
 const s = JSON.parse(readFileSync(path, 'utf8')), a = process.argv.slice(2);
 const arg = name => a[a.indexOf(name) + 1];
-const save = () => writeFileSync(path, JSON.stringify(s));
+// Identity and version reads can overlap. Publish only complete JSON snapshots.
+const save = () => {
+  const temporary = path + '.' + process.pid;
+  writeFileSync(temporary, JSON.stringify(s));
+  renameSync(temporary, path);
+};
 const fail = code => { save(); console.error(JSON.stringify({ code })); process.exit(1); };
 let value;
 s.commands.push(a);
