@@ -100,6 +100,16 @@ The final `before_provider_request` check retains the admitted floor and adds po
 
 Late cancellation is best effort. Throwing from that handler is not cancellation: installed Pi catches handler errors and continues. Chrono calls public `ctx.abort()` instead and leaves the normal payload unchanged. Installed Pi 0.99.1 cached Codex can invoke a send before checking the aborted signal. The offline native fixture with the actual early guard made zero extra sends for known paused and headroom states. An artificial late payload mutation reached the final guard, which aborted but still invoked one cached send. This is a provider dependency limit, not an all-provider or real-network guarantee. No host upgrade or private runtime patch is required by this implementation.
 
+## Post-commit continuation hotfix
+
+`4.0.10-local.20261006` preserves one scoped continuation intent after a correlated V4 commit. Installed Pi 0.99.1 awaits `session_compact` handlers while its compaction flag is still set. A later awaited handler can therefore outlast Chrono's zero-delay callback. Manual compaction emits no later `agent_settled` event. The former callback discarded a busy continuation permanently.
+
+The hotfix drains the retained intent from the owned `ctx.compact` completion callback, after native cleanup, or from `agent_settled` for an automatic path. It consumes the intent before dispatch and keeps exact session, source, leaf, model, thinking-level, epoch, expiry, cancellation, and paused-provider checks. It adds no polling loop and does not release a failure barrier without a correlated commit.
+
+Manual and automatic summary requests capture the unresolved-turn predicate before the summary exchange. The summary's own `toolUse` response is not evidence of unfinished original work. An explicit model-issued `request_compaction` remains eligible because it interrupts that agent's authorized turn. An idle manual request after final output can compact but cannot start an ordinary continuation.
+
+Focused synthetic checks hold the compaction hook open across the zero-delay callback, verify one owned completion resume, and keep completed idle manual work idle. These checks do not prove the cause of every observed idle session or verify live activation. Follow up with robust lifecycle reconciliation in the wider evidence-led study.
+
 ## Pi 0.85.1 integration limits
 
 Use the installed declarations and implementation to check public-hook behavior. The installed `docs/session-format.md` describes `retainedTail`, but `CompactionResult`, `AgentSession.compact()`, and `SessionManager.appendCompaction()` in Pi 0.85.1 do not pass that field. Returning `retainedTail: []` from an extension therefore does not remove the old tail. Use a verified `firstKeptEntryId` boundary instead.
