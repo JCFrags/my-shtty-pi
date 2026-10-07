@@ -140,7 +140,7 @@ export function resolveExtensionSettings(overrides = {}) {
         hybridSummaryEnabled: booleanSetting("PI_CHRONO_PI_SUMMARY", false, overrides.hybridSummaryEnabled),
         legacyPiSummaryDisabled: false,
         hybridSummaryTargetTokens: numberSetting("PI_CHRONO_PI_SUMMARY_TOKENS", 2_500, 512, 16_000, overrides.hybridSummaryTargetTokens),
-        sessionSummaryTargetTokens: Math.floor(numberSetting("PI_CHRONO_SESSION_SUMMARY_TOKENS", 3_000, 256, 4_096, overrides.sessionSummaryTargetTokens)),
+        sessionSummaryTargetTokens: Math.floor(numberSetting("PI_CHRONO_SESSION_SUMMARY_TOKENS", 3_000, 256, 8_000, overrides.sessionSummaryTargetTokens)),
         legacyHistoryEditorEnabled: booleanSetting("PI_CHRONO_HISTORY_EDITOR", false, overrides.historyEditorEnabled),
         historyEditorEnabled: false,
         valueWorker: {
@@ -701,7 +701,7 @@ async function openChronoCompactSettings(ctx, initial, save) {
                 continue;
             }
             if (choice.startsWith("V4 session-agent summary target")) {
-                draft = await tokenInput(ctx, "V4 session-agent summary target tokens (256–4,096; soft target)", settings.sessionSummaryTargetTokens, "session-summary-tokens", draft);
+                draft = await tokenInput(ctx, "V4 session-agent summary target tokens (256–8,000; soft target)", settings.sessionSummaryTargetTokens, "session-summary-tokens", draft);
                 continue;
             }
             if (choice.startsWith("V3 regular Pi summary")) {

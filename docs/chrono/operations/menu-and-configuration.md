@@ -67,7 +67,7 @@ The writer validates the object and replaces it through an owner-only temporary 
 | `memoryEngineEnabled` | `PI_CHRONO_MEMORY_ENGINE` | `true`. Normal adoption, indexed derivation, and V3 memory path. V4 compiler selection is a separate control. |
 | `searchIndexEnabled` | `PI_CHRONO_SEARCH_INDEX` | The normal engine implies search unless explicitly disabled. |
 | `targetContextTokens` | `PI_CHRONO_TARGET_CONTEXT` | 32,000 estimated retained tokens, range 8,000–250,000. Model headroom can lower the effective ceiling. |
-| `sessionSummaryTargetTokens` | `PI_CHRONO_SESSION_SUMMARY_TOKENS` | 3,000 estimated tokens, range 256–4,096. Soft guidance for V4's required same-session continuation summary, not a provider output cap. |
+| `sessionSummaryTargetTokens` | `PI_CHRONO_SESSION_SUMMARY_TOKENS` | 3,000 estimated tokens, range 256–8,000. Soft guidance for V4's required same-session continuation summary, not a provider output cap. |
 | `dynamicRawTailMinTokens` / `dynamicRawTailMaxTokens` | `PI_CHRONO_RAW_TAIL_MIN` / `PI_CHRONO_RAW_TAIL_MAX` | 3,000 / 6,000. Minimum cannot exceed maximum. V3 uses these dynamic limits. Current V4 retains only the minimal safe exact suffix, not this token floor. |
 | `triggerThresholdTokens` | `PI_CHRONO_TRIGGER_TOKENS` | Unset. V3 has no Chrono proactive threshold by default. V4 uses the threshold rule below. Pi context pressure remains active independently. |
 | `triggerMinimumGrowthTokens` | `PI_CHRONO_TRIGGER_MIN_GROWTH` | 4,000. Growth gate for another threshold attempt. It does not bypass the failure retry pause. |
@@ -80,7 +80,7 @@ The writer validates the object and replaces it through an owner-only temporary 
 
 V4 requests its same-session summary at the earliest of the configured threshold, when set, 75% of the model context window, or the summary-admission limit minus a 4,096-token lead. Admission reserves the maximum summary-request prompt, the planning allowance, the configured Chrono reserve, and the safety allowance. An unset `triggerThresholdTokens` does not disable this V4 rule. The growth gate, pending-request checks, and retry pause still apply. A large single turn can cross the admission limit and cause refusal. See [summary headroom](../context/session-agent-compaction.md#pi-0851-integration-limits).
 
-The V4 continuation-summary target is separate from the optional regular Pi summary and compatibility replay controls. Its default guidance is roughly 12,000 UTF-16 units. The hard submission bounds remain 16,384 UTF-16 units and 24,576 UTF-8 bytes. These token values are length estimates, not exact tokenizer measurements.
+The V4 continuation-summary target is separate from the optional regular Pi summary and compatibility replay controls. Its default guidance is roughly 12,000 UTF-16 units. The hard submission bounds are 32,768 UTF-16 units and 49,152 UTF-8 bytes. Multibyte text can reach the byte bound first. The 8,000-token option does not change an existing selected target automatically. These token values are length estimates, not exact tokenizer measurements.
 
 The menu does not expose every V4 ownership/selection field as a dedicated choice. Configure `contextCompiler` and `memoryOwner` through the coordinated activation procedure, not an improvised live handoff. Status shows the captured versus configured Memory owner and whether reload is required.
 

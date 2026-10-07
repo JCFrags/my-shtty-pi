@@ -47,7 +47,7 @@ Replay reduces optional detail before omitting useful events. It does not promis
 
 The default `targetContextTokens` is 32,000 estimated retained tokens. The configurable range is 8,000–250,000. This is a ceiling, not a size to fill. The effective ceiling is lower when model headroom requires it.
 
-V4 uses the separate `sessionSummaryTargetTokens` setting, default 3,000 estimated tokens, for its same-session continuation summary. The soft length guide is roughly 12,000 UTF-16 units at that default. At higher targets, the guide stays at least 1,024 units below the unchanged 16,384-unit hard submission bound. The independent 24,576-UTF-8-byte bound also remains unchanged. These are text-length estimates, not exact tokenizer measurements or provider output caps. V3's optional summary still uses `hybridSummaryTargetTokens`.
+V4 uses the separate `sessionSummaryTargetTokens` setting, default 3,000 estimated tokens and range 256–8,000, for its same-session continuation summary. The soft length guide is roughly 12,000 UTF-16 units at that default. At higher targets, the guide stays at least 1,024 units below the 32,768-unit hard submission bound. The independent UTF-8 byte bound is 49,152 bytes (48 KiB). A multibyte summary can reach the byte bound before the character bound. These are text-length estimates, not exact tokenizer measurements or provider output caps. V3's optional summary still uses `hybridSummaryTargetTokens`.
 
 The compiler charges the complete accepted summary before fitting replay. A larger soft summary target does not reserve a fixed summary/replay ratio or change admission, trigger timing, response/planning reserves, or safety allowances. Native cards remain receipt-only evidence.
 

@@ -37,8 +37,8 @@ export const SESSION_AGENT_SUMMARY_HEADROOM = Object.freeze({
   proactiveMarginTokens: 4096,
 });
 export const SESSION_AGENT_SUMMARY_LIMITS = Object.freeze({
-  summaryChars: 16_384,
-  summaryBytes: 24 * 1024,
+  summaryChars: 32_768,
+  summaryBytes: 48 * 1024,
   relevanceHints: 8,
   hintChars: 256,
   hintBytes: 1024,
@@ -161,7 +161,7 @@ export function createSessionAgentSummaryRequest(input: {
   clock(input.now);
   if (!["manual", "threshold", "tool"].includes(input.reason)) fail("reason-unsupported");
   const targetTokens = input.targetTokens ?? 3000;
-  if (!Number.isSafeInteger(targetTokens) || targetTokens < 256 || targetTokens > 4096) fail("target-invalid");
+  if (!Number.isSafeInteger(targetTokens) || targetTokens < 256 || targetTokens > 8000) fail("target-invalid");
   const customInstructions = input.customInstructions === undefined ? undefined
     : text(input.customInstructions, SESSION_AGENT_SUMMARY_LIMITS.instructionsChars, SESSION_AGENT_SUMMARY_LIMITS.instructionsBytes, "instructions").trim();
   const requestToolCallId = input.requestToolCallId === undefined ? undefined : text(input.requestToolCallId, 512, 2048, "tool-call-id");
@@ -178,9 +178,14 @@ export function createSessionAgentSummaryRequest(input: {
 export function renderSessionAgentSummaryRequest(request: SessionAgentSummaryRequest): string {
   const prompt = [
     "[Session continuation summary request]",
-    "Use the context already available to you in this session to prepare a concise continuation summary.",
+    "Use the context already available to you in this session to write a concise continuation handoff for your next turn after compaction.",
     `Target about ${request.targetTokens} estimated tokens, with a soft length guide of ${Math.min(SESSION_AGENT_SUMMARY_LIMITS.summaryChars - 1024, request.targetTokens * 4)} UTF-16 units. Token counts use a UTF-16 length/4 estimate, not the model's exact tokenizer. Leave room below the hard submission limits. Preserve the user's goal, restrictions and approval boundaries, key decisions, completed work and actual verification, unresolved work, blockers, uncertainty and the next safe action.`,
-    "Preserve the project's purpose, useful exact repository/code locations, how and why the approach was chosen, and the direction now authorized. If no next task is authorized, state the wait or stopping point. Record unknown facts as unknown.",
+    "Organize the handoff around these sections. Combine them when the task is small, but keep past actions, current work, and future steps distinct:",
+    "- What happened: summarize the task's progress, the user's latest corrections, key decisions, and why the current approach was chosen.",
+    "- What was done: state the actions you actually took and their results. Separate verified outcomes from attempts, failures, and unverified claims. Do not present saved or built work as integrated or active unless that was verified.",
+    "- Current work: identify the authorized task now in progress and the exact point where it stopped. Include useful code locations, unfinished work, blockers, and uncertainty. Distinguish active work from completed, paused, or superseded work.",
+    "- Next steps: state the intended result, where the work needs to go, and the next safe actions in order. Frame this as instructions for continuing only work already authorized by the user. If no next task is authorized, state the wait or stopping point.",
+    "Preserve the project's purpose, useful exact repository/code locations, how and why the approach was chosen, and the direction now authorized. Record unknown facts as unknown.",
     "Preserve unresolved obligations, external waits, and approval gates, including paused or archived work. Keep the saved plan ID and workplan recover/read route when full project detail is no longer needed. Milestone completion, archive status, and saved guidance are not new permission.",
     "Write a continuation summary, not a task log or inventory. Group paths under a shared root. Reduce superseded alternatives, repetitive troubleshooting, repeated evidence, and completed-task detail before useful evidence. Keep decisive results and uncertainty. Use relevanceHints for the next direction and decisive evidence, not indiscriminate retention of old detail.",
     "Keep important paths and identifiers exact. Distinguish facts from inference, superseded decisions from current decisions, and proposals from user approval. Do not include secrets or internal compaction receipts.",

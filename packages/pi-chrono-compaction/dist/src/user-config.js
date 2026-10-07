@@ -156,7 +156,7 @@ export function validateUserConfig(value) {
     if (input.dynamicRawTailMaxTokens !== undefined)
         config.dynamicRawTailMaxTokens = boundedInteger(input.dynamicRawTailMaxTokens, "dynamicRawTailMaxTokens", 1_000, 200_000);
     if (input.sessionSummaryTargetTokens !== undefined)
-        config.sessionSummaryTargetTokens = boundedInteger(input.sessionSummaryTargetTokens, "sessionSummaryTargetTokens", 256, 4096);
+        config.sessionSummaryTargetTokens = boundedInteger(input.sessionSummaryTargetTokens, "sessionSummaryTargetTokens", 256, 8000);
     if (input.hybridSummaryEnabled !== undefined)
         config.hybridSummaryEnabled = booleanValue(input.hybridSummaryEnabled, "hybridSummaryEnabled");
     if (input.hybridSummaryTargetTokens !== undefined)
@@ -354,7 +354,7 @@ export function applyConfigCommand(config, args) {
             value = boundedInteger(raw, command, 1_000, 200_000);
             break;
         case "sessionSummaryTargetTokens":
-            value = boundedInteger(raw, command, 256, 4096);
+            value = boundedInteger(raw, command, 256, 8000);
             break;
         case "hybridSummaryEnabled":
             value = booleanValue(raw, command);
