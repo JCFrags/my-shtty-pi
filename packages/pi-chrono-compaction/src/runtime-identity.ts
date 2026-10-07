@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 
-export const CHRONO_VERSION = "4.0.13-local.20261006";
+export const CHRONO_VERSION = "4.0.14-local.20261007";
 export const CHRONO_PI_API_TARGET = "0.85.1";
 
 function readBounded(url: URL, maximum: number): Buffer {

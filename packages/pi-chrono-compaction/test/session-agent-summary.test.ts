@@ -18,7 +18,10 @@ test("same-session summary requires observed request, sole assistant submission 
   assert.match(prompt, /grant no new authorization/);
   for (const section of ["What happened:", "What was done:", "Current work:", "Next steps:"]) assert.ok(prompt.includes(section));
   const largerRequest = createSessionAgentSummaryRequest({ requestId: request.requestId, scope, reason: "manual", now: 1000, targetTokens: 8000 });
-  assert.match(renderSessionAgentSummaryRequest(largerRequest), /Target about 8000 estimated tokens, with a soft length guide of 31744 UTF-16 units\./);
+  assert.equal(renderSessionAgentSummaryRequest(largerRequest), prompt, "the configured value must not become a size goal in the prompt");
+  assert.doesNotMatch(prompt, /Target about|soft length guide|estimated tokens/);
+  assert.match(prompt, /Include the information needed to continue safely, and no more\./);
+  assert.match(prompt, /Do not pad the summary or try to use all available space\./);
   assert.throws(() => createSessionAgentSummaryRequest({ requestId: request.requestId, scope, reason: "manual", now: 1000, targetTokens: 8001 }), /target-invalid/);
   assert.equal(prompt.includes(scope.sessionFile!), false, "internal source paths are not request content");
   const custom = { role: "custom", customType: SESSION_AGENT_SUMMARY_CUSTOM_TYPE, content: prompt };

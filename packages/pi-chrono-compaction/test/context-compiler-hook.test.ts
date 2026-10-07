@@ -343,7 +343,8 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const admitted = await tools.get("request_compaction").execute("bounded-request", {}, run.signal, undefined, ctx);
     assert.equal(admitted.details.status, "summary-requested");
     assert.equal(Math.ceil(admitted.content[0].text.length / 4), promptTokens);
-    assert.match(admitted.content[0].text, /Target about 3000 estimated tokens, with a soft length guide of 12000 UTF-16 units\./);
+    assert.match(admitted.content[0].text, /Include the information needed to continue safely, and no more\./);
+    assert.doesNotMatch(admitted.content[0].text, /Target about|soft length guide|estimated tokens/);
     assert.equal(JSON.stringify(model), modelBefore);
     await deliverInput("Check strict admission boundary");
     contextTokens = admissionLimit;

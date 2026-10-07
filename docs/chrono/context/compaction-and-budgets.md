@@ -47,9 +47,9 @@ Replay reduces optional detail before omitting useful events. It does not promis
 
 The default `targetContextTokens` is 32,000 estimated retained tokens. The configurable range is 8,000–250,000. This is a ceiling, not a size to fill. The effective ceiling is lower when model headroom requires it.
 
-V4 uses the separate `sessionSummaryTargetTokens` setting, default 3,000 estimated tokens and range 256–8,000, for its same-session continuation summary. The soft length guide is roughly 12,000 UTF-16 units at that default. At higher targets, the guide stays at least 1,024 units below the 32,768-unit hard submission bound. The independent UTF-8 byte bound is 49,152 bytes (48 KiB). A multibyte summary can reach the byte bound before the character bound. These are text-length estimates, not exact tokenizer measurements or provider output caps. V3's optional summary still uses `hybridSummaryTargetTokens`.
+V4 retains the separate `sessionSummaryTargetTokens` configuration field, default 3,000 and range 256–8,000, for compatibility. The agent-facing request does not turn this value into a desired summary length or give a numerical size goal. It asks for only the information needed to continue safely, without filler, repetition or padding, comfortably below the hard submission limits. Those limits remain 32,768 UTF-16 units and 49,152 UTF-8 bytes (48 KiB). A multibyte summary can reach the byte bound before the character bound. These are text-length bounds, not exact tokenizer measurements or provider output caps. V3's optional summary still uses `hybridSummaryTargetTokens`.
 
-The compiler charges the complete accepted summary before fitting replay. A larger soft summary target does not reserve a fixed summary/replay ratio or change admission, trigger timing, response/planning reserves, or safety allowances. Native cards remain receipt-only evidence.
+The compiler charges the complete accepted summary before fitting replay. The retained summary configuration does not reserve a fixed summary/replay ratio or change admission, trigger timing, response/planning reserves, or safety allowances. Native cards remain receipt-only evidence.
 
 For V4, the estimated request includes:
 

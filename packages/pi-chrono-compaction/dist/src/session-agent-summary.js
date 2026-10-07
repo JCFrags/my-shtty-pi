@@ -115,7 +115,7 @@ export function renderSessionAgentSummaryRequest(request) {
     const prompt = [
         "[Session continuation summary request]",
         "Use the context already available to you in this session to write a concise continuation handoff for your next turn after compaction.",
-        `Target about ${request.targetTokens} estimated tokens, with a soft length guide of ${Math.min(SESSION_AGENT_SUMMARY_LIMITS.summaryChars - 1024, request.targetTokens * 4)} UTF-16 units. Token counts use a UTF-16 length/4 estimate, not the model's exact tokenizer. Leave room below the hard submission limits. Preserve the user's goal, restrictions and approval boundaries, key decisions, completed work and actual verification, unresolved work, blockers, uncertainty and the next safe action.`,
+        "Include the information needed to continue safely, and no more. Omit filler and repetition. Do not pad the summary or try to use all available space. Keep it comfortably below the hard submission limits. Preserve the user's goal, restrictions and approval boundaries, key decisions, completed work and actual verification, unresolved work, blockers, uncertainty and the next safe action.",
         "Organize the handoff around these sections. Combine them when the task is small, but keep past actions, current work, and future steps distinct:",
         "- What happened: summarize the task's progress, the user's latest corrections, key decisions, and why the current approach was chosen.",
         "- What was done: state the actions you actually took and their results. Separate verified outcomes from attempts, failures, and unverified claims. Do not present saved or built work as integrated or active unless that was verified.",
