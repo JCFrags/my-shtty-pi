@@ -57,7 +57,7 @@ export const SessionParams = Type.Object({
   action: StringEnum(["capabilities", "open", "list", "status", "input", "interrupt", "close"] as const),
   sessionId: Type.Optional(Type.String({ description: "Opaque session id for status, input, interrupt, and close" })),
   backend: Type.Optional(StringEnum(["local", "ssh"] as const)),
-  target: Type.Optional(Type.String({ description: "Configured Native SSH target alias" })),
+  target: Type.Optional(Type.String({ description: "Exact configured Native SSH alias from session capabilities targetAliases, not a hostname" })),
   cwd: Type.Optional(Type.String({ description: "Initial working directory" })),
   pty: Type.Optional(Type.Boolean({ description: "Request a PTY when the selected backend supports it" })),
   data: Type.Optional(Type.String({ description: "Literal UTF-8 terminal input text" })),
@@ -405,11 +405,12 @@ export default function groundedProcess(pi: ExtensionAPI) {
   pi.registerTool({
     name: "session",
     label: "Session",
-    description: "Open and manage explicit persistent local or SSH shell sessions. Stateless bash remains the default. Capabilities report which backends and input modes are available.",
+    description: "Open and manage explicit persistent local or SSH shell sessions. Stateless bash remains the default. Capabilities report available backends, input modes, and configured Native SSH target aliases.",
     promptSnippet: "Manage explicit persistent local or SSH shell sessions",
     promptGuidelines: [
       "Use session only when work needs state across commands; use bash for normal one-shot commands.",
-      "Call session capabilities before requesting PTY input or an SSH backend.",
+      "Call session capabilities before requesting PTY input or an SSH backend. Select an exact SSH targetAliases entry; do not guess a hostname.",
+      "For repeated commands or file operations on a configured remote host, prefer an SSH session and pass its sessionId to bash, read, edit, write, or local_search. Close the session when finished.",
     ],
     parameters: SessionParams,
     ...sessionPresentation,
