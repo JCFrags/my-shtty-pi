@@ -36,7 +36,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const model = { provider: "fixture", id: "fixture", api: "openai-completions", contextWindow: 32000, maxTokens: 2000 };
   let compactionTask: Promise<void> | undefined, returned: any, committedId: string | undefined, referenceReady: SessionAgentSummaryReady | undefined;
   let checkPreview = true, aborts = 0, previewMode = false, compactCalls = 0, authCalls = 0, commands = 0, flags = 0;
-  let nativeReads = 0;
+  let nativeReads = 0, actionableResume = false, interruptResume = false;
   const run = new AbortController();
   const remove = registerContextProvider(events, "todo", () => {
     nativeReads++;
@@ -137,12 +137,31 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
         committedId = sm.appendCompaction(returned.compaction.summary, returned.compaction.firstKeptEntryId, returned.compaction.tokensBefore, returned.compaction.details, true);
         assert.equal(sm.getEntry(committedId)!.parentId, before);
         const resumesBeforeCommit = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
+        // Metadata writers can run on either side of Chrono's commit handler.
+        sm.appendCustomEntry("pi-date-reference:v1", { contextId: committedId });
         await hooks.get("session_compact")!({ compactionEntry: sm.getEntry(committedId), fromExtension: true, reason: "manual", willRetry: false }, ctx);
+        sm.appendCustomEntry("fixture-postcommit-metadata", {});
+        if (interruptResume) sm.appendCustomMessageEntry("fixture-context-change", "Changed context", false);
         // Match installed Pi: a later awaited session_compact handler can keep
         // isCompacting true beyond Chrono's zero-delay callback. No settled
         // event follows manual compaction. Only onComplete sees cleanup.
         await new Promise(resolve => setTimeout(resolve, 25));
         assert.equal(sent.filter(row => row.message.customType === "chrono-compact-resume").length, resumesBeforeCommit);
+        if (actionableResume) {
+          // Exercise the installed automatic dispatch contract, not an idle
+          // sendMessage workaround. Native retry and queued work are absent.
+          const boundary = { outcome: "completed", entries: [], continue: false, context: { pendingMessages: [] } };
+          assert.equal(idle, false);
+          const continuation = await hooks.get("agent_before_settle")!(boundary, ctx);
+          assert.equal(continuation.continue, true);
+          assert.equal(continuation.entries.length, 1);
+          const { type, ...message } = continuation.entries[0];
+          assert.equal(type, "custom_message");
+          assert.equal(message.customType, "chrono-compact-resume");
+          sm.appendCustomMessageEntry(message.customType, message.content, message.display);
+          sent.push({ message, options: { triggerTurn: true } });
+          assert.equal(await hooks.get("agent_before_settle")!(boundary, ctx), undefined, "the boundary consumes its intent once");
+        }
         idle = true;
         options.onComplete();
         const resumesAfterComplete = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
@@ -359,9 +378,10 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
 
     const recover = async (suffix: string) => {
       await deliverInput("Recover only through a fresh summary");
+      const retryPaused = (await status()).providerBarrier.retryPaused;
       contextTokens = 12000;
       await submit(suffix);
-      assert.equal((await status()).providerBarrier.retryPaused, true, "submission does not release the failure latch");
+      assert.equal((await status()).providerBarrier.retryPaused, retryPaused, "submission does not release the failure latch");
       idle = true;
       compactionTask = undefined;
       await hooks.get("agent_settled")!({}, ctx);
@@ -371,14 +391,25 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
       await tick();
       assert.equal((await status()).providerBarrier.state, "open");
     };
+    actionableResume = true;
+    await recover("actionable-metadata-resume");
+    actionableResume = false;
+    interruptResume = true;
+    const resumesBeforeContextChange = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
+    await recover("context-change-refuses-resume");
+    assert.equal(sent.filter(row => row.message.customType === "chrono-compact-resume").length, resumesBeforeContextChange,
+      "a context-producing child must invalidate the intent");
+    interruptResume = false;
     await recover("recovery-before-timing");
     const beforeTiming = sent.length;
-    contextTokens = 199999;
+    delete process.env.PI_CHRONO_TRIGGER_TOKENS;
+    assert.equal(resolveExtensionSettings().triggerThresholdTokens, undefined);
+    contextTokens = 244799;
     idle = true;
     await hooks.get("agent_settled")!({}, ctx);
     await tick();
-    assert.equal(sent.length, beforeTiming, "no proactive request below the configured threshold");
-    contextTokens = 200000;
+    assert.equal(sent.length, beforeTiming, "no proactive request below 90% when the token override is unset");
+    contextTokens = 244800;
     idle = false;
     const turn = { message: assistant("timing", "read", {}) };
     await hooks.get("turn_end")!(turn, ctx);
@@ -388,6 +419,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await tick();
     assert.equal(sent.length, beforeTiming + 1);
     assert.deepEqual(sent.at(-1).options, { triggerTurn: true });
+    assert.equal(contextTokens, Math.floor(model.contextWindow * 0.9));
     assert.ok(contextTokens < admissionLimit);
     idle = false;
     await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
@@ -395,7 +427,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal((await status()).lastFailure.code, "session-agent-summary-submission-unavailable");
     assert.equal(sent.length, beforeTiming + 1, "an unusable response cannot silently retry");
 
-    // A smaller window must trigger from headroom, not the later 75% warning or
+    // A smaller window must trigger from headroom, not the later 90% force or
     // configured threshold. The idle path uses the same admission calculation.
     await recover("recovery-before-headroom");
     Object.assign(model, { contextWindow: 64000, maxTokens: 64000 });

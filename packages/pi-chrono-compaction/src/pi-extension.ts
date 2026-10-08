@@ -152,7 +152,7 @@ const CONTEXT_WARNING_CUSTOM_TYPE = "chrono-compact-context-warning";
 const CONTEXT_RESUME_CUSTOM_TYPE = "chrono-compact-resume";
 const CONTEXT_WARNING_PERCENT = 75;
 const CONTEXT_URGENT_PERCENT = 85;
-const CONTEXT_CIRCUIT_BREAKER_PERCENT = 95;
+const CONTEXT_CIRCUIT_BREAKER_PERCENT = 90;
 
 /** Pi 0.99.1 public boundary. The development SDK remains pinned to 0.85.1. */
 interface ActionableSettlementEvent {
@@ -1945,7 +1945,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     // single turn can still cross that limit and must refuse, not weaken it.
     const headroomThreshold = Math.max(1, summaryAdmissionLimit(ctx) - SESSION_AGENT_SUMMARY_HEADROOM.proactiveMarginTokens);
     return decideCompactionTrigger({ currentTokens, thresholdTokens: Math.min(settings.triggerThresholdTokens ?? Infinity,
-      Math.floor(window * CONTEXT_WARNING_PERCENT / 100), headroomThreshold),
+      Math.floor(window * CONTEXT_CIRCUIT_BREAKER_PERCENT / 100), headroomThreshold),
       minimumGrowthTokens: settings.triggerMinimumGrowthTokens, lastAttemptTokens: lastTriggerAttemptTokens, pending: false }).trigger;
   };
   const deferSessionSummary = (ctx: ExtensionContext, reason: "manual" | "threshold", tokens: number, customInstructions?: string): void => {
@@ -2034,11 +2034,23 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     const resume = compactionResume;
     if (!resume) return undefined;
     try {
+      const scope = sessionSummaryScope(ctx, summaryEpoch);
+      // Bind to the exact commit, not the mutable native leaf. Only a bounded
+      // suffix of context-invisible metadata may follow it on this branch.
+      const seen = new Set<string>();
+      let id: string | null | undefined = scope.leafId;
+      while (id !== resume.scope.leafId) {
+        if (!id || seen.has(id) || seen.size >= SESSION_AGENT_SUMMARY_LIMITS.ancestryEntries) throw new Error("compaction-resume-source-changed");
+        seen.add(id);
+        const child = ctx.sessionManager.getEntry(id);
+        if (child?.id !== id || !["custom", "label", "session_info"].includes(child.type)) throw new Error("compaction-resume-source-changed");
+        id = child.parentId;
+      }
       const entry = ctx.sessionManager.getEntry(resume.scope.leafId);
       const locator = entry && contextReceiptLocator(entry, resume.scope.sessionId);
       if (resume.scope.epoch !== summaryEpoch || resume.signal?.aborted || ctx.signal?.aborted || Date.now() >= resume.expiresAt
         || searchSettings().contextCompiler !== "v4" || compactionRetryPaused || sessionSummary || summaryIntent || inputPending
-        || ctx.hasPendingMessages() || stableStringify(sessionSummaryScope(ctx, summaryEpoch)) !== stableStringify(resume.scope)
+        || ctx.hasPendingMessages() || stableStringify({ ...scope, leafId: resume.scope.leafId }) !== stableStringify(resume.scope)
         || locator?.receiptId !== resume.receiptId || locator.summaryHash !== resume.summaryHash
         || entry?.type !== "compaction" || createHash("sha256").update(entry.summary).digest("hex") !== resume.summaryHash) {
         compactionResume = undefined;
@@ -2058,10 +2070,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     const message = takeCompactionResume(ctx);
     if (message) pi.sendMessage(message, { triggerTurn: true });
   };
-  const retainCompactionResume = (ctx: ExtensionContext, signal?: AbortSignal): void => {
-    const scope = sessionSummaryScope(ctx, summaryEpoch);
-    const entry = ctx.sessionManager.getEntry(scope.leafId);
-    const locator = entry && contextReceiptLocator(entry, scope.sessionId);
+  const retainCompactionResume = (ctx: ExtensionContext, entry: Parameters<typeof contextReceiptLocator>[0], signal?: AbortSignal): void => {
+    if (entry.type !== "compaction" || typeof entry.id !== "string") return;
+    const scope = { ...sessionSummaryScope(ctx, summaryEpoch), leafId: entry.id };
+    const locator = contextReceiptLocator(entry, scope.sessionId);
     if (!locator) return;
     compactionResume = { scope, expiresAt: Date.now() + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs, signal,
       receiptId: locator.receiptId, summaryHash: locator.summaryHash };
@@ -2834,9 +2846,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     continueAfterSuccessfulCompaction = false;
     warningLevel = 0;
     if (shouldContinue && searchSettings().contextCompiler === "v4") {
-      // This new post-commit message starts the idle agent. It is not part of
-      // the pre-commit exact-tail receipt and does not claim earlier consumption.
-      retainCompactionResume(ctx, compactionSignal);
+      // Retain the exact event receipt. Other session_compact handlers can
+      // append metadata before or after this handler. Dispatch only from the
+      // actionable automatic boundary or the owned manual completion callback.
+      retainCompactionResume(ctx, event.compactionEntry, compactionSignal);
     } else if (shouldContinue) {
       pi.sendMessage(
         {
