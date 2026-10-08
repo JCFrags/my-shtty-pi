@@ -22,7 +22,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     PI_CHRONO_INCREMENTAL_PRECOMPUTE: "false", PI_CHRONO_CATALOG_SHADOW: "false", PI_CHRONO_ROLLUP_SHADOW: "false",
     PI_CHRONO_TOOL_RESULT_PROJECTION: "off", PI_CHRONO_RAW_TAIL_MIN: "1000", PI_CHRONO_RAW_TAIL_MAX: "2000",
     PI_CHRONO_TRIGGER_TOKENS: "200000", PI_CHRONO_TRIGGER_MIN_GROWTH: "4000", PI_CHRONO_CONTEXT_RESERVE: "1500",
-    PI_CHRONO_PI_SUMMARY_TOKENS: "10000" };
+    PI_CHRONO_PI_SUMMARY_TOKENS: "10000", PI_CHRONO_SESSION_SUMMARY_TOKENS: "3000" };
   const old = new Map(Object.keys(environment).map(key => [key, process.env[key]]));
   Object.assign(process.env, environment);
   writeFileSync(environment.PI_CHRONO_CONFIG_PATH, "{}", { mode: 0o600 });
@@ -36,7 +36,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const model = { provider: "fixture", id: "fixture", api: "openai-completions", contextWindow: 32000, maxTokens: 2000 };
   let compactionTask: Promise<void> | undefined, returned: any, committedId: string | undefined, referenceReady: SessionAgentSummaryReady | undefined;
   let checkPreview = true, aborts = 0, previewMode = false, compactCalls = 0, authCalls = 0, commands = 0, flags = 0;
-  let nativeReads = 0;
+  let nativeReads = 0, actionableResume = false, interruptResume = false;
   const run = new AbortController();
   const remove = registerContextProvider(events, "todo", () => {
     nativeReads++;
@@ -137,12 +137,31 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
         committedId = sm.appendCompaction(returned.compaction.summary, returned.compaction.firstKeptEntryId, returned.compaction.tokensBefore, returned.compaction.details, true);
         assert.equal(sm.getEntry(committedId)!.parentId, before);
         const resumesBeforeCommit = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
+        // Metadata writers can run on either side of Chrono's commit handler.
+        sm.appendCustomEntry("pi-date-reference:v1", { contextId: committedId });
         await hooks.get("session_compact")!({ compactionEntry: sm.getEntry(committedId), fromExtension: true, reason: "manual", willRetry: false }, ctx);
+        sm.appendCustomEntry("fixture-postcommit-metadata", {});
+        if (interruptResume) sm.appendCustomMessageEntry("fixture-context-change", "Changed context", false);
         // Match installed Pi: a later awaited session_compact handler can keep
         // isCompacting true beyond Chrono's zero-delay callback. No settled
         // event follows manual compaction. Only onComplete sees cleanup.
         await new Promise(resolve => setTimeout(resolve, 25));
         assert.equal(sent.filter(row => row.message.customType === "chrono-compact-resume").length, resumesBeforeCommit);
+        if (actionableResume) {
+          // Exercise the installed automatic dispatch contract, not an idle
+          // sendMessage workaround. Native retry and queued work are absent.
+          const boundary = { outcome: "completed", entries: [], continue: false, context: { pendingMessages: [] } };
+          assert.equal(idle, false);
+          const continuation = await hooks.get("agent_before_settle")!(boundary, ctx);
+          assert.equal(continuation.continue, true);
+          assert.equal(continuation.entries.length, 1);
+          const { type, ...message } = continuation.entries[0];
+          assert.equal(type, "custom_message");
+          assert.equal(message.customType, "chrono-compact-resume");
+          sm.appendCustomMessageEntry(message.customType, message.content, message.display);
+          sent.push({ message, options: { triggerTurn: true } });
+          assert.equal(await hooks.get("agent_before_settle")!(boundary, ctx), undefined, "the boundary consumes its intent once");
+        }
         idle = true;
         options.onComplete();
         const resumesAfterComplete = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
@@ -154,6 +173,14 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   } as unknown as ExtensionContext;
   const tick = () => new Promise(resolve => setTimeout(resolve, 10));
   const status = async () => (await tools.get("history_status").execute()).details.composition;
+  const deliverInput = async (text: string) => {
+    await hooks.get("input")!({ text, source: "interactive" }, ctx);
+    const message = { role: "user" as const, content: text, timestamp: Date.now() };
+    // Raw input alone is not a delivered run. Match the observed native events.
+    await hooks.get("agent_start")!({}, ctx);
+    await hooks.get("message_start")!({ message }, ctx);
+    sm.appendMessage(message);
+  };
   const summaryText = "Synthetic fixture summary: continue the isolated implementation. Publication and activation are not approved. The checksum read passed.";
   const submit = async (suffix: string, reference = false) => {
     idle = false;
@@ -162,7 +189,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const requestResult = await tools.get("request_compaction").execute(requestCallId, {}, run.signal, undefined, ctx);
     assert.equal(requestResult.terminate, undefined);
     const request = createSessionAgentSummaryRequest({ requestId: requestResult.details.requestId, reason: "tool", now: Date.now(),
-      targetTokens: Math.min(2000, resolveExtensionSettings().hybridSummaryTargetTokens), requestToolCallId: requestCallId, scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: requestLeafId, epoch: 0,
+      targetTokens: resolveExtensionSettings().sessionSummaryTargetTokens, requestToolCallId: requestCallId, scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: requestLeafId, epoch: 0,
         model: { provider: "fixture", id: "fixture", api: "openai-completions", thinkingLevel: "off" } } });
     sm.appendMessage({ role: "toolResult", toolCallId: requestCallId, toolName: "request_compaction", content: requestResult.content, details: requestResult.details, isError: false, timestamp: Date.now() });
     // Pi 0.87.1 refreshes the native prompt/tool loadout before the next request.
@@ -250,7 +277,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await tick();
     assert.equal(sent.length, 3, "the next cycle requests its summary at the same threshold as the last attempt");
     assert.equal(sent.at(-1).message.customType, "chrono-session-agent-summary-request");
-    await hooks.get("input")!({ text: "Cancel the next-cycle fixture", source: "interactive" }, ctx);
+    await deliverInput("Cancel the next-cycle fixture");
     process.env.PI_CHRONO_TRIGGER_TOKENS = "200000";
     process.env.PI_CHRONO_MEMORY_OWNER = "chrono";
     await tools.get("history_recall").execute("recall-fixture", { query: "checksum" }, undefined, undefined, ctx);
@@ -261,8 +288,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
 
     // Retry only after explicit new input. The real hook catches schema changes
     // during collection instead of substituting old fallback context.
-    await hooks.get("input")!({ text: "Continue the fixture", source: "interactive" }, ctx);
-    sm.appendMessage({ role: "user", content: "Continue the isolated fixture.", timestamp: Date.now() });
+    await deliverInput("Continue the isolated fixture.");
     checkPreview = false;
     await submit("stale");
     mutateDuringCollect = true;
@@ -291,7 +317,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await tick();
     assert.equal(sent.length, beforeUncorrelated);
 
-    await hooks.get("input")!({ text: "Check summary tool readiness", source: "interactive" }, ctx);
+    await deliverInput("Check summary tool readiness");
     summaryToolActive = false;
     const beforeUnavailable = sent.length;
     assert.deepEqual(await hooks.get("session_before_compact")!(event(), ctx), { cancel: true });
@@ -299,7 +325,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal(sent.length, beforeUnavailable, "do not send a summary request with no callable submission tool");
     summaryToolActive = true;
 
-    await hooks.get("input")!({ text: "Manual retry", source: "interactive" }, ctx);
+    await deliverInput("Manual retry");
     const beforeSend = sent.length;
     idle = false;
     assert.deepEqual(await hooks.get("session_before_compact")!(event(), ctx), { cancel: true });
@@ -311,7 +337,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await tick();
     assert.equal(sent.length, beforeSend + 1);
     assert.equal(sent.at(-1).message.customType, "chrono-session-agent-summary-request");
-    await hooks.get("input")!({ text: "Cancel the summary", source: "interactive" }, ctx);
+    await deliverInput("Cancel the summary");
     assert.equal((await status()).sessionSummary.state, "idle");
     const leaf = sm.getLeafId();
     assert.deepEqual(await hooks.get("session_before_compact")!(event("overflow"), ctx), { cancel: true });
@@ -321,14 +347,14 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
 
     // Exercise the approved planning allowance with Codex-sized metadata. No
     // provider request is made, and the model metadata and prompt stay unchanged.
-    await hooks.get("input")!({ text: "Check bounded summary headroom", source: "interactive" }, ctx);
+    await deliverInput("Check bounded summary headroom");
     const smallModel = { ...model };
     Object.assign(model, { contextWindow: 272000, maxTokens: 128000 });
     const modelBefore = JSON.stringify(model);
     assert.deepEqual(SESSION_AGENT_SUMMARY_HEADROOM, { planningTokens: 16384, safetyTokens: 1024, proactiveMarginTokens: 4096 });
     const prompt = renderSessionAgentSummaryRequest(createSessionAgentSummaryRequest({ requestId: "0".repeat(36), reason: "tool", now: Date.now(),
       scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: sm.getLeafId()!, epoch: 0,
-        model: { provider: model.provider, id: model.id, api: model.api, thinkingLevel: "off" } }, targetTokens: 2000 }));
+        model: { provider: model.provider, id: model.id, api: model.api, thinkingLevel: "off" } }, targetTokens: resolveExtensionSettings().sessionSummaryTargetTokens }));
     const promptTokens = Math.ceil(prompt.length / 4);
     const admissionLimit = model.contextWindow - promptTokens - 16384 - 1500 - 1024;
     contextTokens = admissionLimit - 1;
@@ -336,9 +362,10 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const admitted = await tools.get("request_compaction").execute("bounded-request", {}, run.signal, undefined, ctx);
     assert.equal(admitted.details.status, "summary-requested");
     assert.equal(Math.ceil(admitted.content[0].text.length / 4), promptTokens);
-    assert.match(admitted.content[0].text, /Target about 2000 tokens and stay below 8000 characters/);
+    assert.match(admitted.content[0].text, /Include the information needed to continue safely, and no more\./);
+    assert.doesNotMatch(admitted.content[0].text, /Target about|soft length guide|estimated tokens/);
     assert.equal(JSON.stringify(model), modelBefore);
-    await hooks.get("input")!({ text: "Check strict admission boundary", source: "interactive" }, ctx);
+    await deliverInput("Check strict admission boundary");
     contextTokens = admissionLimit;
     const beforeHeadroomRefusal = sent.length, beforeRefusalLeaf = sm.getLeafId();
     const refused = await tools.get("request_compaction").execute("refused-request", {}, run.signal, undefined, ctx);
@@ -350,10 +377,11 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal(sm.getLeafId(), beforeRefusalLeaf);
 
     const recover = async (suffix: string) => {
-      await hooks.get("input")!({ text: "Recover only through a fresh summary", source: "interactive" }, ctx);
+      await deliverInput("Recover only through a fresh summary");
+      const retryPaused = (await status()).providerBarrier.retryPaused;
       contextTokens = 12000;
       await submit(suffix);
-      assert.equal((await status()).providerBarrier.retryPaused, true, "submission does not release the failure latch");
+      assert.equal((await status()).providerBarrier.retryPaused, retryPaused, "submission does not release the failure latch");
       idle = true;
       compactionTask = undefined;
       await hooks.get("agent_settled")!({}, ctx);
@@ -363,14 +391,25 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
       await tick();
       assert.equal((await status()).providerBarrier.state, "open");
     };
+    actionableResume = true;
+    await recover("actionable-metadata-resume");
+    actionableResume = false;
+    interruptResume = true;
+    const resumesBeforeContextChange = sent.filter(row => row.message.customType === "chrono-compact-resume").length;
+    await recover("context-change-refuses-resume");
+    assert.equal(sent.filter(row => row.message.customType === "chrono-compact-resume").length, resumesBeforeContextChange,
+      "a context-producing child must invalidate the intent");
+    interruptResume = false;
     await recover("recovery-before-timing");
     const beforeTiming = sent.length;
-    contextTokens = 199999;
+    delete process.env.PI_CHRONO_TRIGGER_TOKENS;
+    assert.equal(resolveExtensionSettings().triggerThresholdTokens, undefined);
+    contextTokens = 244799;
     idle = true;
     await hooks.get("agent_settled")!({}, ctx);
     await tick();
-    assert.equal(sent.length, beforeTiming, "no proactive request below the configured threshold");
-    contextTokens = 200000;
+    assert.equal(sent.length, beforeTiming, "no proactive request below 90% when the token override is unset");
+    contextTokens = 244800;
     idle = false;
     const turn = { message: assistant("timing", "read", {}) };
     await hooks.get("turn_end")!(turn, ctx);
@@ -380,6 +419,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await tick();
     assert.equal(sent.length, beforeTiming + 1);
     assert.deepEqual(sent.at(-1).options, { triggerTurn: true });
+    assert.equal(contextTokens, Math.floor(model.contextWindow * 0.9));
     assert.ok(contextTokens < admissionLimit);
     idle = false;
     await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
@@ -387,7 +427,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal((await status()).lastFailure.code, "session-agent-summary-submission-unavailable");
     assert.equal(sent.length, beforeTiming + 1, "an unusable response cannot silently retry");
 
-    // A smaller window must trigger from headroom, not the later 75% warning or
+    // A smaller window must trigger from headroom, not the later 90% force or
     // configured threshold. The idle path uses the same admission calculation.
     await recover("recovery-before-headroom");
     Object.assign(model, { contextWindow: 64000, maxTokens: 64000 });
@@ -418,7 +458,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
 
     // An idle manual request after final output may summarize, but its own
     // submission toolUse must not authorize an ordinary continuation.
-    await hooks.get("input")!({ text: "Check idle manual compaction", source: "interactive" }, ctx);
+    await deliverInput("Check idle manual compaction");
     sm.appendMessage({ ...assistant("completed", "read", {}), content: [{ type: "text", text: "The authorized fixture work is complete." }], stopReason: "stop" });
     idle = true;
     const resumesBeforeIdleManual = sent.filter(row => row.message.customType === "chrono-compact-resume").length;

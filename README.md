@@ -134,7 +134,7 @@ Open `/Chrono` for Settings, Status and diagnostics, Maintenance, and About. Bac
 | Menu, settings, workers, caches, and Telemetry | [Operations](docs/chrono/operations/README.md) |
 | Architecture changes, implemented versus selected features, and measured limits | [Design and evidence](docs/chrono/design/README.md) |
 
-The [current status](docs/chrono/design/evidence-and-roadmap.md) identifies the `4.0.5-local.20260926` source and separates publication, code selection, and loaded activation. Package version, effective configuration, ready indexes, and actual use are separate facts. Historical [V3](docs/chrono-v3/README.md) and [V4](docs/chrono-v4/README.md) records remain available for their exact revisions.
+Use the checked-out [package manifest](packages/pi-chrono-compaction/package.json) for the source version. The [current status](docs/chrono/design/evidence-and-roadmap.md) separates publication, code selection, and loaded activation. Package version, effective configuration, ready indexes, and actual use are separate facts. Historical [V3](docs/chrono-v3/README.md) and [V4](docs/chrono-v4/README.md) records remain available for their exact revisions.
 
 ## Context Kit and V4
 

@@ -275,12 +275,20 @@ export function captureChronologicalReplay(entries, cutIndex, relevance = []) {
         const header = `### ${extracted.role} [${entry.id}]\n`;
         const recovery = `\n\nSource: history_get entryId="${entry.id}"`;
         const representations = [];
-        for (const [detail, target] of [["full", 4096], ["reduced", 768], ["brief", 160]]) {
+        // Reduce verbose evidence detail without narrowing the user-wording guide.
+        // These are estimated body-token targets, not capture or recovery limits.
+        const fullTarget = extracted.role === "User" ? 4096 : 2048;
+        for (const [detail, target] of [["full", fullTarget], ["reduced", 768], ["brief", 160]]) {
             const perPart = Math.max(32, Math.floor(target / Math.max(1, extracted.parts.length)));
             const body = extracted.parts.map((part, i) => `${part.label ? `${part.label}\n` : ""}${partRepresentation(part, entry, i, perPart, terms.join(" "))}`).join("\n\n");
             const text = header + body + recovery;
-            if (!representations.some(value => value.text === text))
-                representations.push({ detail, text, tokens: estimateTokensFromText(text) });
+            const duplicate = representations.findIndex(value => value.text === text);
+            const representation = { detail, text, tokens: estimateTokensFromText(text) };
+            // Equal reducer text keeps the lower detail label, not a second body copy.
+            if (duplicate < 0)
+                representations.push(representation);
+            else
+                representations[duplicate] = representation;
         }
         representations.sort((a, b) => b.tokens - a.tokens);
         const row = { id: entry.id, index, role: extracted.role, priority,

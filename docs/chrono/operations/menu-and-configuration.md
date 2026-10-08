@@ -66,9 +66,10 @@ The writer validates the object and replaces it through an owner-only temporary 
 | `memoryOwner` | `PI_CHRONO_MEMORY_OWNER` | `chrono`. Select `context-kit` before factory load for independent Memory. Requires a safe reload and explicit data migration. |
 | `memoryEngineEnabled` | `PI_CHRONO_MEMORY_ENGINE` | `true`. Normal adoption, indexed derivation, and V3 memory path. V4 compiler selection is a separate control. |
 | `searchIndexEnabled` | `PI_CHRONO_SEARCH_INDEX` | The normal engine implies search unless explicitly disabled. |
-| `targetContextTokens` | `PI_CHRONO_TARGET_CONTEXT` | 32,000, range 8,000–250,000. Model headroom can lower the effective ceiling. |
+| `targetContextTokens` | `PI_CHRONO_TARGET_CONTEXT` | 32,000 estimated retained tokens, range 8,000–250,000. Model headroom can lower the effective ceiling. |
+| `sessionSummaryTargetTokens` | `PI_CHRONO_SESSION_SUMMARY_TOKENS` | 3,000, range 256–8,000. Retained for compatibility. The V4 prompt gives no numerical summary length goal or provider output cap. |
 | `dynamicRawTailMinTokens` / `dynamicRawTailMaxTokens` | `PI_CHRONO_RAW_TAIL_MIN` / `PI_CHRONO_RAW_TAIL_MAX` | 3,000 / 6,000. Minimum cannot exceed maximum. V3 uses these dynamic limits. Current V4 retains only the minimal safe exact suffix, not this token floor. |
-| `triggerThresholdTokens` | `PI_CHRONO_TRIGGER_TOKENS` | No proactive threshold. Pi context pressure remains active independently. |
+| `triggerThresholdTokens` | `PI_CHRONO_TRIGGER_TOKENS` | Unset. V3 has no Chrono proactive threshold by default. V4 uses the threshold rule below. Pi context pressure remains active independently. |
 | `triggerMinimumGrowthTokens` | `PI_CHRONO_TRIGGER_MIN_GROWTH` | 4,000. Growth gate for another threshold attempt. It does not bypass the failure retry pause. |
 | `automaticRolloverEnabled` | `PI_CHRONO_AUTOMATIC_ROLLOVER` | `true`, subject to safe-idle and complete-transfer checks. |
 | `rolloverSourceBytes` | `PI_CHRONO_ROLLOVER_BYTES` | 8,388,608, range 1–64 MiB of growth beyond bootstrap. |
@@ -76,6 +77,10 @@ The writer validates the object and replaces it through an owner-only temporary 
 | `hostWorkerSlots` | `PI_CHRONO_HOST_WORKER_SLOTS` | 1, range 1–4 deterministic worker slots. |
 | `workerTimeoutSeconds` | `PI_CHRONO_WORKER_TIMEOUT_SECONDS` | 900, range 30–3,600 for applicable compatibility jobs. Indexed jobs have lower operation-specific deadlines. |
 | `workerNiceLevel` | `PI_CHRONO_WORKER_NICE` | 10, range 0–19. |
+
+V4 requests its same-session summary at the earliest of the configured threshold, when set, 90% of the model context window, or the summary-admission limit minus a 4,096-token lead. The V3 circuit breaker also uses 90%, separate from its 75% and 85% warnings. Admission reserves the maximum summary-request prompt, the planning allowance, the configured Chrono reserve, and the safety allowance. An unset `triggerThresholdTokens` does not disable this V4 rule. The growth gate, pending-request checks, and retry pause still apply. A large single turn can cross the admission limit and cause refusal. See [summary headroom](../context/session-agent-compaction.md#pi-0851-integration-limits).
+
+The retained V4 continuation-summary field is separate from the optional regular Pi summary and compatibility replay controls. The prompt asks for only the information needed to continue safely, without padding or a numerical size goal. The hard submission bounds are 32,768 UTF-16 units and 49,152 UTF-8 bytes. Multibyte text can reach the byte bound first. These are text-length bounds, not exact tokenizer measurements or provider output caps.
 
 The menu does not expose every V4 ownership/selection field as a dedicated choice. Configure `contextCompiler` and `memoryOwner` through the coordinated activation procedure, not an improvised live handoff. Status shows the captured versus configured Memory owner and whether reload is required.
 
@@ -114,7 +119,8 @@ Enabling asks for confirmation because bounded assistant/tool excerpts can leave
 
 ## Retained compatibility controls
 
-- `hybridSummaryEnabled` / `PI_CHRONO_PI_SUMMARY`, default false, requests an optional independent regular Pi summary on supported paths. Its target defaults to 2,500. V4 does not use this summary input. This switch does not enable or disable V4's required same-session summary.
+- `hybridSummaryEnabled` / `PI_CHRONO_PI_SUMMARY`, default false, requests an optional independent regular Pi summary on supported paths. V4 does not use this optional summary input. This switch does not enable or disable V4's required same-session summary.
+- `hybridSummaryTargetTokens` / `PI_CHRONO_PI_SUMMARY_TOKENS` keeps its 2,500-token default for the optional V3/compatibility summary. It does not control V4's required summary. Use `sessionSummaryTargetTokens` for V4. Neither target is a provider output cap.
 - `rawTail`, default `dynamic`, also accepts Pi/fixed/preset tail modes for compatibility replay. Those do not override V3's dynamic-tail policy or V4's minimal safe suffix.
 - `replayTargetTokens` controls compatibility replay, whose separate hard cap is 25,000 tokens. It does not control current V4's [adaptive replay allowance](../context/session-agent-compaction.md#adaptive-replay-selection). V4 keeps the configured total ceiling and has no separate replay setting.
 - `incrementalPrecomputeEnabled`, default false, selects the older candidate store. The normal memory engine cancels this work rather than maintaining both lifetime derivation paths.

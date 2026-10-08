@@ -39,11 +39,17 @@ V3 remains the compiled default. The local integration intends explicit V4 selec
 6. Charge the complete rendered result. Revalidate scope, settings, model, active schemas, cancellation, and source boundary before returning.
 7. Persist `details.contextReceipt` with the actual Pi compaction entry. Correlate `session_compact` or `session_compact_failed` with the pending attempt.
 
+Replay uses estimated event-body detail targets of 2,048 tokens for full verbose evidence, 768 for reduced detail, and 160 for brief detail, before headers and recovery references. Direct user wording keeps its prior 4,096-token full-detail guide. Reduction still uses the existing relevance-aware reducers. The 5,000-estimated-token replay preference, relevance-gated expansion, source order, and exact recovery routes remain unchanged.
+
 Replay reduces optional detail before omitting useful events. It does not promise whole-record retention or semantic completeness. Native rendered tokens remain zero. Saved state, summaries, and relevance hints are fallible context, not new permission. See the [adaptive replay policy](session-agent-compaction.md#adaptive-replay-selection) for selection and omission rules.
 
 ## Budgets
 
-The default `targetContextTokens` is 32,000. The configurable range is 8,000–250,000. The effective ceiling is lower when model headroom requires it.
+The default `targetContextTokens` is 32,000 estimated retained tokens. The configurable range is 8,000–250,000. This is a ceiling, not a size to fill. The effective ceiling is lower when model headroom requires it.
+
+V4 retains the separate `sessionSummaryTargetTokens` configuration field, default 3,000 and range 256–8,000, for compatibility. The agent-facing request does not turn this value into a desired summary length or give a numerical size goal. It asks for only the information needed to continue safely, without filler, repetition or padding, comfortably below the hard submission limits. Those limits remain 32,768 UTF-16 units and 49,152 UTF-8 bytes (48 KiB). A multibyte summary can reach the byte bound before the character bound. These are text-length bounds, not exact tokenizer measurements or provider output caps. V3's optional summary still uses `hybridSummaryTargetTokens`.
+
+The compiler charges the complete accepted summary before fitting replay. The retained summary configuration does not reserve a fixed summary/replay ratio or change admission, trigger timing, response/planning reserves, or safety allowances. Native cards remain receipt-only evidence.
 
 For V4, the estimated request includes:
 
@@ -53,7 +59,7 @@ For V4, the estimated request includes:
 - Complete raw-tail messages, including images and tool-result bodies as estimated by Pi.
 - The response reserve supplied by Pi's preparation.
 
-The estimator is named `pi-message-estimator-and-utf16-ceil-div4-v1`. It combines Pi message estimates with text-length estimates. It is not the selected model's exact tokenizer. Later payload extensions and provider serialization can change the final request.
+The estimator is named `pi-message-estimator-and-utf16-ceil-div4-v1`. It combines Pi message estimates with `ceil(UTF-16 units / 4)` text estimates. It is not the selected model's exact tokenizer. Later payload extensions and provider serialization can change the final request.
 
 V3 accounts for its combined summary/tail ceiling with system text, a Chrono reserve, and response reserve. V4 adds explicit active-schema and request-framing accounting. Do not apply the V4 receipt's accounting claim retroactively to older compositions.
 

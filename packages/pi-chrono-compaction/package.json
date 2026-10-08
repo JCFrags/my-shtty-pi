@@ -1,6 +1,6 @@
 {
   "name": "pi-chrono-compact",
-  "version": "4.0.10-local.20261006",
+  "version": "4.0.15-local.20261007",
   "description": "Progressive chronological event compaction for long-running Pi sessions.",
   "type": "module",
   "license": "MIT",

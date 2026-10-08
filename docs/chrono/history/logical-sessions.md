@@ -47,7 +47,7 @@ The readiness wait is finite. Deferred work can try again at a later natural bou
 
 Native transfer allows 8 MiB per provider and 16 MiB aggregate. It does not shorten complete state to fit. A provider can accept a native object that later exceeds transfer admission, especially a large Workplan. Such a session can continue normal operations but cannot safely roll over through this contract until complete transfer is possible.
 
-The finite bootstrap allows at most eight entries, with a 16 MiB state allowance plus 512 KiB bootstrap allowance. The separate model-visible continuation limit is 256 KiB. These limits do not expand because a larger context token target was selected.
+The finite bootstrap allows at most 12 entries, with a 16 MiB state allowance plus 512 KiB bootstrap allowance. The separate model-visible continuation limit is 256 KiB. These limits do not expand because a larger context token target was selected.
 
 ## Operator routes
 

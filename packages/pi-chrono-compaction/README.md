@@ -11,7 +11,7 @@ related:
 
 # ChronoCompact
 
-Chrono selects useful chronological context and provides source-linked historical recovery for long-running Pi tasks. The programmatic path needs no model call. Source history remains preserved when detail leaves active context.
+Chrono selects useful chronological context and provides source-linked historical recovery for long-running Pi tasks. The V3 and compatibility programmatic paths can run without model calls. V4 requires a continuation summary from the same session agent, followed by programmatic chronological replay. Source history remains preserved when detail leaves active context.
 
 - Pi entrypoint: `dist/src/pi-extension.js`, compiled-loaded.
 - Build: `npm run build`, after the required locked dependencies and native SQLite preparation.
@@ -77,6 +77,6 @@ The existing `dist/src/worker-runtime-startup-client.js` exports `startAuthorize
 
 A build, registration, effective setting, loaded identity, and practical use are separate checks. Follow [activation and migration](../../docs/chrono/operations/activation-and-migration.md). Preserve source shards, provider stores, and compatible rollback assets.
 
-The package-local `docs/` directory and the [V3](../../docs/chrono-v3/README.md)/[V4](../../docs/chrono-v4/README.md) directories retain detailed older contracts and revision-bound evidence. Their old defaults, command names, paths, and milestone status do not override the current subject guide. Runtime module boundaries remain unchanged.
+The package-local `docs/` directory and the [V3](../../docs/chrono-v3/README.md)/[V4](../../docs/chrono-v4/README.md) directories retain detailed older contracts and revision-bound evidence. Their old defaults, command names, paths, and milestone status do not override the current subject guide. V3 compaction, compatibility replay, stored previews, logical continuation, and persisted-history readers remain supported.
 
 [Repository](../../README.md) · [Context Kit](../pi-context-kit/README.md)

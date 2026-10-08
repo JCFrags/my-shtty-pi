@@ -20,6 +20,8 @@ export interface UserConfig {
   readonly rawTail?: ConfiguredRawTail;
   readonly dynamicRawTailMinTokens?: number;
   readonly dynamicRawTailMaxTokens?: number;
+  /** Soft V4 same-session continuation target, in estimated tokens. */
+  readonly sessionSummaryTargetTokens?: number;
   readonly hybridSummaryEnabled?: boolean;
   readonly hybridSummaryTargetTokens?: number;
   /** Retired. Kept only so old configuration files load safely. */
@@ -97,6 +99,7 @@ const CONFIG_KEYS = [
   "rawTail",
   "dynamicRawTailMinTokens",
   "dynamicRawTailMaxTokens",
+  "sessionSummaryTargetTokens",
   "hybridSummaryEnabled",
   "hybridSummaryTargetTokens",
   "historyEditorEnabled",
@@ -132,6 +135,7 @@ const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
   "raw-tail": "rawTail",
   "raw-tail-min": "dynamicRawTailMinTokens",
   "raw-tail-max": "dynamicRawTailMaxTokens",
+  "session-summary-tokens": "sessionSummaryTargetTokens",
   hybrid: "hybridSummaryEnabled",
   "hybrid-tokens": "hybridSummaryTargetTokens",
   "history-classifier": "historyEditorEnabled",
@@ -210,6 +214,7 @@ export function validateUserConfig(value: unknown): UserConfig {
   if (input.rawTail !== undefined) config.rawTail = rawTailValue(input.rawTail);
   if (input.dynamicRawTailMinTokens !== undefined) config.dynamicRawTailMinTokens = boundedInteger(input.dynamicRawTailMinTokens, "dynamicRawTailMinTokens", 1_000, 200_000);
   if (input.dynamicRawTailMaxTokens !== undefined) config.dynamicRawTailMaxTokens = boundedInteger(input.dynamicRawTailMaxTokens, "dynamicRawTailMaxTokens", 1_000, 200_000);
+  if (input.sessionSummaryTargetTokens !== undefined) config.sessionSummaryTargetTokens = boundedInteger(input.sessionSummaryTargetTokens, "sessionSummaryTargetTokens", 256, 8000);
   if (input.hybridSummaryEnabled !== undefined) config.hybridSummaryEnabled = booleanValue(input.hybridSummaryEnabled, "hybridSummaryEnabled");
   if (input.hybridSummaryTargetTokens !== undefined) config.hybridSummaryTargetTokens = boundedInteger(input.hybridSummaryTargetTokens, "hybridSummaryTargetTokens", 512, 16_000);
   if (input.historyEditorEnabled !== undefined) config.historyEditorEnabled = booleanValue(input.historyEditorEnabled, "historyEditorEnabled");
@@ -326,6 +331,7 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
     case "rawTail": value = rawTailValue(raw); break;
     case "dynamicRawTailMinTokens": value = boundedInteger(raw, command, 1_000, 200_000); break;
     case "dynamicRawTailMaxTokens": value = boundedInteger(raw, command, 1_000, 200_000); break;
+    case "sessionSummaryTargetTokens": value = boundedInteger(raw, command, 256, 8000); break;
     case "hybridSummaryEnabled": value = booleanValue(raw, command); break;
     case "hybridSummaryTargetTokens": value = boundedInteger(raw, command, 512, 16_000); break;
     case "historyEditorEnabled": value = booleanValue(raw, command); break;
