@@ -34,7 +34,8 @@ export const SESSION_AGENT_SUMMARY_TOOL = "request_compaction";
 export const SESSION_AGENT_SUMMARY_HEADROOM = Object.freeze({
   planningTokens: 16_384,
   safetyTokens: 1024,
-  proactiveMarginTokens: 4096,
+  proactiveMarginTokens: 16_384,
+  triggerPercent: 85,
 });
 export const SESSION_AGENT_SUMMARY_LIMITS = Object.freeze({
   summaryChars: 32_768,

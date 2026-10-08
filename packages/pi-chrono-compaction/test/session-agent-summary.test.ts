@@ -8,6 +8,77 @@ import {
   type SessionAgentSummaryScope,
 } from "../src/session-agent-summary.js";
 import type { SessionEntryLike } from "../src/types.js";
+import { estimateCurrentRequestBudget, estimateCurrentRequestTokens, estimateProviderRequestTokens } from "../src/context-budget.js";
+
+test("request accounting uses fresh provider usage, charges unseen growth and keeps system-hidden hooks consistent", () => {
+  const model = { provider: "fixture", id: "fixture", api: "openai-codex-responses" };
+  const tool = { name: "read", description: "Read exact text", parameters: { type: "object" } };
+  const prompt = "S".repeat(12000);
+  const system = { role: "system", content: prompt, toolsAdded: [tool], timestamp: 0 };
+  const user = { role: "user", content: "H".repeat(240000), timestamp: 1 };
+  const assistant = { role: "assistant", content: [{ type: "text", text: "Ready." }], timestamp: 2,
+    provider: model.provider, model: model.id, api: model.api, stopReason: "stop",
+    usage: { input: 49990, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 50000 } };
+  const nativeMessages: unknown[] = [system, user, assistant];
+  const entries: SessionEntryLike[] = nativeMessages.map((message, index) => ({ type: "message", id: `entry-${index}`, message }));
+  const inputs = { messages: nativeMessages, nativeMessages, branchEntries: entries, model,
+    nativeTokens: 50000 as number | null, systemPrompt: prompt, activeTools: [tool.name], allTools: [tool] };
+  const budget = estimateCurrentRequestBudget(inputs);
+  assert.equal(budget.tokens, 50000, "already consumed system, schemas and framing are not charged again");
+  assert.ok(budget.tokens < budget.projectionTokens - 10000, "provider usage replaces the inflated full-history estimate");
+  assert.deepEqual(estimateCurrentRequestBudget({ ...inputs, messages: nativeMessages.filter(value => (value as any).role !== "system") }), budget);
+  assert.equal(estimateCurrentRequestTokens(inputs), estimateCurrentRequestTokens({ ...inputs, messages: [user, assistant] }));
+  assert.deepEqual(estimateCurrentRequestBudget({ ...inputs, allTools: [{ ...tool, displayOnly: "X".repeat(80000) } as typeof tool] }), budget,
+    "unpublished tool fields do not affect schema accounting");
+
+  const growth = { role: "toolResult", toolCallId: "read", toolName: "read", content: [{ type: "text", text: "G".repeat(40000) }], timestamp: 3 };
+  const grownMessages = [...nativeMessages, growth], grownEntries = [...entries, { type: "message", id: "growth", message: growth }];
+  const withGrowth = estimateCurrentRequestBudget({ ...inputs, nativeTokens: 60000, nativeMessages: grownMessages,
+    messages: grownMessages, branchEntries: grownEntries });
+  assert.equal(withGrowth.tokens - budget.tokens, 10032, "native trailing estimates are not charged twice");
+  const hookGrowth = estimateCurrentRequestBudget({ ...inputs, messages: grownMessages });
+  assert.equal(hookGrowth.tokens, withGrowth.tokens, "content not yet in native usage is still charged");
+
+  const enlarged = { ...tool, description: `${tool.description}${"T".repeat(4000)}` };
+  const publicGrowth = estimateCurrentRequestBudget({ ...inputs, systemPrompt: `${prompt}${"P".repeat(4000)}`, allTools: [enlarged] });
+  assert.equal(publicGrowth.tokens - budget.tokens, 2000, "pending prompt and schema growth is charged");
+  const systemDelta = { role: "system", content: "", sections: { extra: "P".repeat(4000) }, toolsAdded: [enlarged], timestamp: 4 };
+  const deltaMessages = [...nativeMessages, systemDelta];
+  const deltaNative = 50000 + Math.ceil((4000 + JSON.stringify([enlarged]).length) / 4);
+  const deltaBudget = estimateCurrentRequestBudget({ ...inputs, nativeTokens: deltaNative, messages: [user, assistant],
+    nativeMessages: deltaMessages, branchEntries: [...entries, { type: "message", id: "system-delta", message: systemDelta }],
+    systemPrompt: `${prompt}\n\n${"P".repeat(4000)}`, allTools: [enlarged] });
+  assert.ok(deltaBudget.tokens - budget.tokens < 2200, "persisted native system/tool deltas are not charged again as effective overhead");
+  assert.deepEqual(deltaBudget, estimateCurrentRequestBudget({ ...inputs, nativeTokens: deltaNative, messages: deltaMessages,
+    nativeMessages: deltaMessages, branchEntries: [...entries, { type: "message", id: "system-delta", message: systemDelta }],
+    systemPrompt: `${prompt}\n\n${"P".repeat(4000)}`, allTools: [enlarged] }));
+
+  for (const type of ["context_edit", "compaction", "model_change", "thinking_level_change"]) {
+    const invalidated = estimateCurrentRequestBudget({ ...inputs, branchEntries: [...entries, { type, id: "invalidate" }] });
+    assert.equal(invalidated.tokens, budget.projectionTokens, type);
+    assert.equal(invalidated.nativeTokens, null, type);
+  }
+  assert.equal(estimateCurrentRequestBudget({ ...inputs, nativeTokens: null }).tokens, budget.projectionTokens);
+  assert.equal(estimateCurrentRequestBudget({ ...inputs, model: { ...model, id: "different-model" } }).nativeTokens, null);
+  assert.equal(estimateCurrentRequestBudget({ ...inputs, messages: [user, { ...assistant, content: [] }] }).nativeTokens, null);
+  assert.equal(estimateCurrentRequestBudget({ ...inputs, messages: [{ ...user, content: "Edited prefix" }, assistant] }).nativeTokens, null);
+  for (const stopReason of ["aborted", "error"]) {
+    const failed = { ...assistant, stopReason };
+    assert.equal(estimateCurrentRequestBudget({ ...inputs, messages: [system, user, failed], nativeMessages: [system, user, failed],
+      branchEntries: [{ type: "message", id: "failed", message: failed }] }).nativeTokens, null);
+  }
+  assert.throws(() => estimateCurrentRequestBudget({ ...inputs, nativeTokens: NaN }), /headroom-unavailable/);
+  assert.throws(() => estimateCurrentRequestBudget({ ...inputs, nativeTokens: -1 }), /headroom-unavailable/);
+
+  const payload = { instructions: prompt, input: [{ role: "user", content: user.content }], tools: [tool] };
+  const projectionTokens = Math.ceil(JSON.stringify(payload).length / 4) + 512;
+  const lateInputs = { api: model.api, payload, projectionTokens, admittedTokens: budget.tokens, nativeTokens: budget.nativeTokens };
+  assert.ok(lateInputs.admittedTokens < projectionTokens);
+  assert.equal(estimateProviderRequestTokens(lateInputs), budget.tokens);
+  assert.equal(estimateProviderRequestTokens({ ...lateInputs, payload: { ...payload, instructions: `${prompt}${"L".repeat(40000)}` } }), budget.tokens + 10000);
+  assert.ok(estimateProviderRequestTokens({ ...lateInputs, nativeTokens: null }) >= projectionTokens);
+  assert.ok(estimateProviderRequestTokens({ ...lateInputs, api: "unknown-api" }) >= projectionTokens);
+});
 
 test("same-session summary requires observed request, sole assistant submission and an unchanged persisted result boundary", () => {
   const scope: SessionAgentSummaryScope = { sessionId: "session", epoch: 1, leafId: "source",

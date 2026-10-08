@@ -93,7 +93,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
   const event = (reason = "manual") => ({ branchEntries: sm.getBranch() as unknown as SessionEntryLike[], preparation, reason, willRetry: reason === "overflow", signal: new AbortController().signal });
   const ctx = { sessionManager: { getSessionId: () => sm.getSessionId(), getSessionFile: () => source,
       getLeafId: () => sm.getLeafId(), getEntry: (id: string) => sm.getEntry(id), getBranch: () => sm.getBranch(),
-      buildContextEntries: () => sm.buildContextEntries() },
+      buildSessionProjection: () => ({ messages: sm.buildSessionContext().messages }) },
     hasUI: false, ui: { notify() {} }, isIdle: () => idle, hasPendingMessages: () => false,
     get signal() { return idle ? undefined : run.signal; }, abort() { aborts++; },
     model, thinkingLevel: "off",
@@ -180,6 +180,14 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await hooks.get("agent_start")!({}, ctx);
     await hooks.get("message_start")!({ message }, ctx);
     sm.appendMessage(message);
+  };
+  const observeUsage = (tokens: number) => {
+    contextTokens = tokens;
+    // A positive public count after compaction needs a successful assistant on
+    // that branch. Do not model old pre-compaction usage as a new observation.
+    sm.appendMessage({ role: "system", content: ctx.getSystemPrompt(), toolsAdded: pi.getAllTools(), timestamp: Date.now() } as any);
+    sm.appendMessage({ role: "assistant", content: [], timestamp: Date.now(), provider: model.provider, model: model.id,
+      api: model.api, stopReason: "stop", usage: { ...usage, input: tokens, totalTokens: tokens } } as any);
   };
   const summaryText = "Synthetic fixture summary: continue the isolated implementation. Publication and activation are not approved. The checksum read passed.";
   const submit = async (suffix: string, reference = false) => {
@@ -268,7 +276,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
     await hooks.get("before_provider_request")!({ payload: { messages: sm.buildSessionContext().messages } }, ctx);
     assert.equal(aborts, 0, "the first null-usage post-commit request uses the current projection");
-    contextTokens = 12000;
+    observeUsage(12000);
     idle = true;
 
     // A new context cycle must not wait for growth above the old pre-commit count.
@@ -351,13 +359,13 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const smallModel = { ...model };
     Object.assign(model, { contextWindow: 272000, maxTokens: 128000 });
     const modelBefore = JSON.stringify(model);
-    assert.deepEqual(SESSION_AGENT_SUMMARY_HEADROOM, { planningTokens: 16384, safetyTokens: 1024, proactiveMarginTokens: 4096 });
+    assert.deepEqual(SESSION_AGENT_SUMMARY_HEADROOM, { planningTokens: 16384, safetyTokens: 1024, proactiveMarginTokens: 16384, triggerPercent: 85 });
     const prompt = renderSessionAgentSummaryRequest(createSessionAgentSummaryRequest({ requestId: "0".repeat(36), reason: "tool", now: Date.now(),
       scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: sm.getLeafId()!, epoch: 0,
         model: { provider: model.provider, id: model.id, api: model.api, thinkingLevel: "off" } }, targetTokens: resolveExtensionSettings().sessionSummaryTargetTokens }));
     const promptTokens = Math.ceil(prompt.length / 4);
     const admissionLimit = model.contextWindow - promptTokens - 16384 - 1500 - 1024;
-    contextTokens = admissionLimit - 1;
+    observeUsage(admissionLimit - 1);
     idle = false;
     const admitted = await tools.get("request_compaction").execute("bounded-request", {}, run.signal, undefined, ctx);
     assert.equal(admitted.details.status, "summary-requested");
@@ -366,7 +374,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.doesNotMatch(admitted.content[0].text, /Target about|soft length guide|estimated tokens/);
     assert.equal(JSON.stringify(model), modelBefore);
     await deliverInput("Check strict admission boundary");
-    contextTokens = admissionLimit;
+    observeUsage(admissionLimit);
     const beforeHeadroomRefusal = sent.length, beforeRefusalLeaf = sm.getLeafId();
     const refused = await tools.get("request_compaction").execute("refused-request", {}, run.signal, undefined, ctx);
     assert.equal(refused.terminate, true);
@@ -379,7 +387,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const recover = async (suffix: string) => {
       await deliverInput("Recover only through a fresh summary");
       const retryPaused = (await status()).providerBarrier.retryPaused;
-      contextTokens = 12000;
+      observeUsage(12000);
       await submit(suffix);
       assert.equal((await status()).providerBarrier.retryPaused, retryPaused, "submission does not release the failure latch");
       idle = true;
@@ -404,12 +412,12 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     const beforeTiming = sent.length;
     delete process.env.PI_CHRONO_TRIGGER_TOKENS;
     assert.equal(resolveExtensionSettings().triggerThresholdTokens, undefined);
-    contextTokens = 244799;
+    observeUsage(231199);
     idle = true;
     await hooks.get("agent_settled")!({}, ctx);
     await tick();
-    assert.equal(sent.length, beforeTiming, "no proactive request below 90% when the token override is unset");
-    contextTokens = 244800;
+    assert.equal(sent.length, beforeTiming, "no proactive request below 85% when the token override is unset");
+    observeUsage(231200);
     idle = false;
     const turn = { message: assistant("timing", "read", {}) };
     await hooks.get("turn_end")!(turn, ctx);
@@ -419,7 +427,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     await tick();
     assert.equal(sent.length, beforeTiming + 1);
     assert.deepEqual(sent.at(-1).options, { triggerTurn: true });
-    assert.equal(contextTokens, Math.floor(model.contextWindow * 0.9));
+    assert.equal(contextTokens, Math.floor(model.contextWindow * 0.85));
     assert.ok(contextTokens < admissionLimit);
     idle = false;
     await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
@@ -427,19 +435,19 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal((await status()).lastFailure.code, "session-agent-summary-submission-unavailable");
     assert.equal(sent.length, beforeTiming + 1, "an unusable response cannot silently retry");
 
-    // A smaller window must trigger from headroom, not the later 90% force or
+    // A smaller window must trigger from headroom, not the later 85% threshold or
     // configured threshold. The idle path uses the same admission calculation.
     await recover("recovery-before-headroom");
     Object.assign(model, { contextWindow: 64000, maxTokens: 64000 });
-    const headroomThreshold = 64000 - Math.ceil(SESSION_AGENT_SUMMARY_LIMITS.promptBytes / 4) - 16384 - 1500 - 1024 - 4096;
-    assert.equal(headroomThreshold, 37924);
+    const headroomThreshold = 64000 - Math.ceil(SESSION_AGENT_SUMMARY_LIMITS.promptBytes / 4) - 16384 - 1500 - 1024 - 5120;
+    assert.equal(headroomThreshold, 36900);
     const beforeHeadroomTrigger = sent.length;
-    contextTokens = headroomThreshold - 1;
+    observeUsage(headroomThreshold - 1);
     idle = true;
     await hooks.get("agent_settled")!({}, ctx);
     await tick();
     assert.equal(sent.length, beforeHeadroomTrigger);
-    contextTokens = headroomThreshold;
+    observeUsage(headroomThreshold);
     await hooks.get("agent_settled")!({}, ctx);
     await tick();
     assert.equal(sent.length, beforeHeadroomTrigger + 1);
@@ -454,7 +462,7 @@ test("model-free V4 registered summary lifecycle preserves source, matches previ
     assert.equal(sent.length, beforeOvershoot, "an overshoot refuses without sending another request");
     assert.equal(aborts, beforeOvershootAbort + 1);
     Object.assign(model, smallModel);
-    contextTokens = 12000;
+    observeUsage(12000);
 
     // An idle manual request after final output may summarize, but its own
     // submission toolUse must not authorize an ordinary continuation.
@@ -609,21 +617,26 @@ test("late V4 admission keeps the native floor, charges visible growth and handl
     for (const fixture of cases) {
       const hooks = new Map<string, (event: any, ctx: any) => any>(), tools = new Map<string, any>();
       const sm = SessionManager.inMemory(directory);
+      const api = fixture.name === "unknown-api-fallback" ? "unknown-api" : "openai-codex-responses";
+      sm.appendMessage({ role: "system", content: "Offline bounded fixture.", timestamp: 0 } as any);
       sm.appendMessage({ role: "user", content: "The same small visible conversation.", timestamp: 1 });
+      sm.appendMessage({ role: "assistant", content: [], timestamp: 2, provider: "openai-codex", model: "fixture", api,
+        stopReason: "stop", usage: { input: fixture.native ?? 0, output: 0, cacheRead: 0, cacheWrite: 0,
+          totalTokens: fixture.native ?? 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } as any);
       let aborts = 0, nativeTokens: number | null = fixture.native;
       const pi = { events: createEventBus(), getActiveTools: () => ["request_compaction"], getAllTools: () => [...tools.values()],
         registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerFlag() {},
         on: (name: string, handler: any) => hooks.set(name, handler),
         appendEntry() { throw new Error("Unexpected source write"); }, sendMessage() { throw new Error("Unexpected message send"); } };
       const ctx = { sessionManager: sm,
-        model: { provider: "openai-codex", id: "fixture", api: fixture.name === "unknown-api-fallback" ? "unknown-api" : "openai-codex-responses",
+        model: { provider: "openai-codex", id: "fixture", api,
           contextWindow: 272000, maxTokens: 128000 }, thinkingLevel: "off", hasUI: false, ui: { notify() {} },
         isIdle: () => false, hasPendingMessages: () => false, abort: () => { aborts++; },
         getSystemPrompt: () => "Offline bounded fixture.", getContextUsage: () => ({ contextWindow: 272000, tokens: nativeTokens }) };
       extension(pi as unknown as ExtensionAPI, { schedulerDirectory: directory });
       try {
         const source = JSON.stringify(sm.getEntries());
-        await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
+        await hooks.get("context")!({ messages: sm.buildSessionContext().messages.filter(message => String(message.role) !== "system") }, ctx);
         assert.equal(aborts, 0, `${fixture.name}: early admission`);
         const payload = { model: "fixture", instructions: "Offline bounded fixture.",
           input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "The same small visible conversation." }] },

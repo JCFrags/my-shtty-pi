@@ -141,7 +141,7 @@ import {
 } from "./logical-session-integration.js";
 import { logicalSessionStatus } from "./logical-session-status.js";
 import { CHRONO_VERSION, captureRuntimeIdentity } from "./runtime-identity.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling, captureContextBudget, chargeRawTail, estimateCurrentRequestTokens, estimateProviderRequestTokens } from "./context-budget.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling, captureContextBudget, chargeRawTail, estimateCurrentRequestBudget, estimateProviderRequestTokens } from "./context-budget.js";
 
 const EXTENSION_VERSION = CHRONO_VERSION;
 const LOADED_RUNTIME_IDENTITY = captureRuntimeIdentity(import.meta.url);
@@ -1601,7 +1601,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   let summaryRecoveryRequested = false;
   let summaryIntent: { scope: SessionAgentSummaryScope; createdAt: number; expiresAt: number;
     reason: "manual" | "threshold"; customInstructions?: string; resumeAfter: boolean } | undefined;
-  let providerAdmission: { scope: SessionAgentSummaryScope; tokens: number; projectionTokens: number; requestId?: string } | undefined;
+  let providerAdmission: { scope: SessionAgentSummaryScope; tokens: number; projectionTokens: number; nativeTokens: number | null; requestId?: string } | undefined;
   let summaryEpoch = 0;
   type ActiveSessionSummary = { request: SessionAgentSummaryRequest; delivery: "deferred" | "sent"; deferrals: number; resumeAfter: boolean;
     consumed?: SessionAgentSummaryConsumedRequest; accepted?: SessionAgentSummaryAccepted;
@@ -1894,15 +1894,16 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   const currentRequestBudget = (ctx: ExtensionContext, messages?: readonly unknown[], observedTokens = 0) => {
     // Ask Pi for its current compaction-aware projection only. Do not read the
     // source file, lifetime bodies or native-state stores to estimate a request.
-    const projection = messages ?? ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
-    const estimated = estimateCurrentRequestTokens({ messages: projection, systemPrompt: ctx.getSystemPrompt(),
-      activeTools: pi.getActiveTools(), allTools: pi.getAllTools() });
-    const reported = ctx.getContextUsage()?.tokens;
-    if ((reported != null && (!Number.isFinite(reported) || reported < 0)) || !Number.isFinite(observedTokens) || observedTokens < 0) {
-      throw new Error("session-agent-summary-headroom-unavailable");
-    }
-    // Null is expected on the first post-commit request. It is not zero usage.
-    return { tokens: Math.max(estimated, reported ?? 0, observedTokens), projectionTokens: estimated };
+    const model = ctx.model;
+    if (!model || !Number.isFinite(observedTokens) || observedTokens < 0) throw new Error("session-agent-summary-headroom-unavailable");
+    // Pi 1.1 exposes the canonical edit-aware projection on the public read-only
+    // manager. The locked 0.85.1 SDK has only the compaction-aware entry view.
+    const manager = ctx.sessionManager as typeof ctx.sessionManager & { buildSessionProjection?: () => { messages: readonly unknown[] } };
+    const nativeMessages = manager.buildSessionProjection?.().messages ?? manager.buildContextEntries().flatMap(sessionEntryToContextMessages);
+    const budget = estimateCurrentRequestBudget({ messages: messages ?? nativeMessages, nativeMessages,
+      branchEntries: ctx.sessionManager.getBranch() as unknown as readonly SessionEntryLike[], model,
+      systemPrompt: ctx.getSystemPrompt(), activeTools: pi.getActiveTools(), allTools: pi.getAllTools(), nativeTokens: ctx.getContextUsage()?.tokens });
+    return { ...budget, tokens: Math.max(budget.tokens, observedTokens) };
   };
   const currentRequestTokens = (ctx: ExtensionContext, messages?: readonly unknown[], observedTokens = 0): number =>
     currentRequestBudget(ctx, messages, observedTokens).tokens;
@@ -1943,9 +1944,10 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     // Use the same planning allowance as admission. The maximum prompt bound
     // and an extra lead leave room before its strict admission limit. A large
     // single turn can still cross that limit and must refuse, not weaken it.
-    const headroomThreshold = Math.max(1, summaryAdmissionLimit(ctx) - SESSION_AGENT_SUMMARY_HEADROOM.proactiveMarginTokens);
+    const lead = Math.min(SESSION_AGENT_SUMMARY_HEADROOM.proactiveMarginTokens, Math.max(4096, Math.floor(window * 0.08)));
+    const headroomThreshold = Math.max(1, summaryAdmissionLimit(ctx) - lead);
     return decideCompactionTrigger({ currentTokens, thresholdTokens: Math.min(settings.triggerThresholdTokens ?? Infinity,
-      Math.floor(window * CONTEXT_CIRCUIT_BREAKER_PERCENT / 100), headroomThreshold),
+      Math.floor(window * SESSION_AGENT_SUMMARY_HEADROOM.triggerPercent / 100), headroomThreshold),
       minimumGrowthTokens: settings.triggerMinimumGrowthTokens, lastAttemptTokens: lastTriggerAttemptTokens, pending: false }).trigger;
   };
   const deferSessionSummary = (ctx: ExtensionContext, reason: "manual" | "threshold", tokens: number, customInstructions?: string): void => {
@@ -2243,7 +2245,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     if (searchSettings().contextCompiler === "v4") {
       try {
         const messages = projected?.messages ?? event.messages;
-        const { tokens, projectionTokens } = currentRequestBudget(ctx, messages);
+        const { tokens, projectionTokens, nativeTokens } = currentRequestBudget(ctx, messages);
         const state = sessionSummary;
         if (state) {
           if (state.delivery !== "sent" || state.consumed || state.accepted || triggerPending) throw new Error("session-agent-summary-provider-suspended");
@@ -2263,7 +2265,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         } else {
           summaryHeadroom(ctx, " ".repeat(SESSION_AGENT_SUMMARY_LIMITS.promptBytes), tokens);
         }
-        providerAdmission = { scope: sessionSummaryScope(ctx, summaryEpoch), tokens, projectionTokens,
+        providerAdmission = { scope: sessionSummaryScope(ctx, summaryEpoch), tokens, projectionTokens, nativeTokens,
           ...(state ? { requestId: state.request.requestId } : {}) };
       } catch (error) { refuseSessionSummary(ctx, error); }
     }
@@ -2281,9 +2283,12 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       }
       // Public late cancellation is best effort. Installed cached Codex can
       // invoke send before checking abort. The earlier context hook is primary.
+      const reported = ctx.getContextUsage()?.tokens;
+      if (reported != null && (!Number.isFinite(reported) || reported < 0)) throw new Error("session-agent-summary-headroom-unavailable");
       summaryHeadroom(ctx, state ? "" : " ".repeat(SESSION_AGENT_SUMMARY_LIMITS.promptBytes),
         estimateProviderRequestTokens({ api: ctx.model?.api ?? "", payload: event.payload,
-          projectionTokens: admission.projectionTokens, admittedTokens: admission.tokens, nativeTokens: ctx.getContextUsage()?.tokens }));
+          projectionTokens: admission.projectionTokens, admittedTokens: admission.tokens,
+          nativeTokens: reported == null || admission.nativeTokens == null ? null : Math.max(reported, admission.nativeTokens) }));
     } catch (error) { refuseSessionSummary(ctx, error); }
     // Do not throw, return a malformed payload or change the normal request.
   });
@@ -2605,17 +2610,22 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
 
     if (searchSettings().contextCompiler === "v4") {
       try {
+        const message = event.message;
+        const observed = message.role === "assistant" && message.provider === ctx.model?.provider
+          && message.model === ctx.model?.id && message.api === ctx.model?.api && !["aborted", "error"].includes(message.stopReason)
+          ? reportedTokens : 0;
+        const tokens = currentRequestTokens(ctx, undefined, observed);
         const state = sessionSummary;
         if (state) {
           const view = summaryObservation(ctx);
           consumeSessionAgentSummaryRequest(state.request, view, []);
           if (state.accepted) settleSessionAgentSummary(state.accepted, view);
           else if (state.consumed) throw new Error("session-agent-summary-submission-unavailable");
-          else summaryHeadroom(ctx, "", currentRequestTokens(ctx, undefined, currentTokens));
+          else summaryHeadroom(ctx, "", tokens);
           return; // A valid summary turn is the only admitted pre-commit work.
         }
-        if (!summaryIntent && summaryTrigger(ctx, currentTokens) && !ctx.hasPendingMessages()) {
-          deferSessionSummary(ctx, "threshold", currentRequestTokens(ctx, undefined, currentTokens));
+        if (!summaryIntent && summaryTrigger(ctx, tokens) && !ctx.hasPendingMessages()) {
+          deferSessionSummary(ctx, "threshold", tokens);
         }
       } catch (error) { refuseSessionSummary(ctx, error); }
       return;
