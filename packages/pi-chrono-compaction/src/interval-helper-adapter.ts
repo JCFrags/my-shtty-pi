@@ -4,9 +4,10 @@ import { HISTORY_HELPER_PROMPT_IDENTITY, historyHelperInputKey, makeHistoryOrigi
 import type { HistoryHelperRole } from "./history-helper-config.js";
 import { projectIntervalSource, type IntervalSourceSnapshot, type IntervalSourceView, type IntervalSourceEvent,
   type IntervalSourceAssociation } from "./interval-source.js";
+import { historySynopsisCompatibilityItems, validateHistorySynopsis } from "./history-synopsis.js";
 
-export const INTERVAL_HELPER_ADAPTER_IDENTITY = "chrono-original-field-adapter-v1";
-export const INTERVAL_HELPER_OUTPUT_POLICY = "chrono-original-field-alternatives-v1";
+export const INTERVAL_HELPER_ADAPTER_IDENTITY = "chrono-original-field-adapter-v2";
+export const INTERVAL_HELPER_OUTPUT_POLICY = "chrono-range-synopsis-and-event-alternatives-v2";
 export interface IntervalReadyProduct { readonly input: HistoryHelperInput; readonly artifact: HistoryHelperArtifact }
 export interface IntervalEventCandidate {
   readonly unitId: string;
@@ -78,7 +79,8 @@ function protectedField(event: IntervalSourceEvent, field: string): boolean {
 function credentialField(text: string): boolean {
   return /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:sk-|ghp_|github_pat_|AKIA)[A-Za-z0-9_-]{8,}|\b(?:api[_-]?key|access[_-]?token|password|authorization|cookie)["']?\s*[=:]\s*["']?[^\s,;]+/iu.test(text);
 }
-interface Field { field: string; text: string; role: HistoryOriginalPart["role"]; purpose: HistoryOriginalPart["purpose"] }
+interface Field { field: string; text: string; role: HistoryOriginalPart["role"]; purpose: HistoryOriginalPart["purpose"];
+  relationship?: HistoryOriginalPart["relationship"] }
 /** Text and JSON-value encodings are exact source-field serializations, not reduced renderings. */
 function fields(event: IntervalSourceEvent): Field[] {
   const entry = event.projectedEntry, message = object(entry.message), content = message?.content ?? entry.content;
@@ -91,8 +93,9 @@ function fields(event: IntervalSourceEvent): Field[] {
     const block = object(item);
     if (block?.type === "text" && typeof block.text === "string") result.push({ field: `${base}.${index}.text`, text: block.text, role, purpose });
     if (block?.type === "toolCall") {
-      if (typeof block.name === "string") result.push({ field: `${base}.${index}.name`, text: block.name, role: "assistant", purpose: "interpretation" });
-      if (object(block.arguments)) result.push({ field: `${base}.${index}.arguments#json`, text: JSON.stringify(block.arguments), role: "assistant", purpose: "interpretation" });
+      const relationship = typeof block.id === "string" && typeof block.name === "string" ? { callId: block.id, toolName: block.name } : undefined;
+      if (typeof block.name === "string") result.push({ field: `${base}.${index}.name`, text: block.name, role: "assistant", purpose: "interpretation", relationship });
+      if (object(block.arguments)) result.push({ field: `${base}.${index}.arguments#json`, text: JSON.stringify(block.arguments), role: "assistant", purpose: "interpretation", relationship });
     }
   });
   if (event.role === "bashExecution") {
@@ -163,6 +166,13 @@ export function adaptIntervalHelperInput(snapshot: IntervalSourceSnapshot, optio
     const original = snapshot.events[event.index]!;
     const unit = unitByEvent.get(event.index)!;
     const sourceFields = originalFields(original, event);
+    const result = original.toolResult;
+    const call = result && unit.eventIndexes.flatMap(index => snapshot.events[index]!.toolCalls).find(item => item.id === result.callId);
+    const toolName = result?.toolName ?? call?.name;
+    const stateSnapshot = ["workplan", "todo", "notes"].includes(toolName ?? "")
+      && ["list", "status", "read", "recover", "search"].includes(String(call?.arguments.action));
+    const resultRelationship = result ? { callId: result.callId, ...(toolName ? { toolName } : {}),
+      ...(stateSnapshot ? { observation: "state-snapshot" as const } : {}) } : undefined;
     if (!sourceFields.length && original.role === "custom") notice("unsupported-custom-origin", entryRef(event));
     for (const originalField of sourceFields) {
       const field = originalField.role === "user" && role !== "event" ? { ...originalField, purpose: "output" as const } : originalField;
@@ -184,7 +194,8 @@ export function adaptIntervalHelperInput(snapshot: IntervalSourceSnapshot, optio
           && (candidate.baseline !== "deterministic-selection" || candidate.reason !== "noisy-tool-output")) fail("event-selection-invalid");
         const made = makeHistoryOriginalParts({ eventId: entryRef(original), unitId: unit.id, entryRef: entryRef(original),
           field: `${field.field}#sha256:${textHash(field.text)}`, start: range.start,
-          text: field.text.slice(range.start, range.endExclusive), role: field.role, outcome: outcome(original), purpose: field.purpose },
+          text: field.text.slice(range.start, range.endExclusive), role: field.role, outcome: outcome(original), purpose: field.purpose,
+          relationship: field.relationship ?? resultRelationship },
         { sourceBytes, partBytes, parts: maxParts - parts.length });
         parts.push(...made);
         if (parts.length > maxParts || notices.length > maxParts) fail("source-bound-exceeded");
@@ -228,15 +239,19 @@ function validProduct(product: IntervalReadyProduct): boolean {
   try {
     validateHistoryHelperInput(product.input, { sourceBytes: 16 * 1024 * 1024, parts: 4096 });
     const { input, artifact } = product, outputs = input.parts.filter(part => part.purpose === "output");
-    return artifact.schemaVersion === 1 && artifact.key === historyHelperInputKey(input) && artifact.role === input.role
-      && same(artifact.source, input.source) && same(artifact.derivation, input.derivation) && same(artifact.notices, input.notices)
-      && artifact.coverage === (input.notices.length ? "partial" : "full") && artifact.quality === "structural-only"
-      && Array.isArray(artifact.items) && artifact.items.length === outputs.length && artifact.items.every((item, index) => {
-        const part = outputs[index]!;
-        return item.partId === part.id && item.eventId === part.eventId && item.unitId === part.unitId
-          && same(item.entryRefs, part.entryRefs) && same(item.spans, part.spans) && item.outcome === part.outcome
-          && typeof item.text === "string" && item.text.trim().length > 0;
-      });
+    if (artifact.schemaVersion !== 1 || artifact.key !== historyHelperInputKey(input) || artifact.role !== input.role
+      || !same(artifact.source, input.source) || !same(artifact.derivation, input.derivation) || !same(artifact.notices, input.notices)
+      || artifact.coverage !== (input.notices.length ? "partial" : "full") || artifact.quality !== "structural-only"
+      || !Array.isArray(artifact.items)) return false;
+    if (input.role !== "event") return !!artifact.synopsis && validateHistorySynopsis(artifact.synopsis, input.parts)
+      && same(artifact.items, artifact.synopsis.parts.flatMap(historySynopsisCompatibilityItems));
+    return artifact.synopsis === undefined && artifact.items.length === outputs.length && artifact.items.every((item, index) => {
+      const part = outputs[index]!;
+      return item.partId === part.id && item.eventId === part.eventId && item.unitId === part.unitId
+        && same(item.entryRefs, part.entryRefs) && same(item.spans, part.spans) && item.outcome === part.outcome
+        && typeof item.text === "string" && item.text.trim().length > 0
+        && (part.protectedSpans ?? []).every(span => item.text.includes(part.text.slice(span.start, span.endExclusive)));
+    });
   } catch { return false; }
 }
 /** The compiler can independently recreate the current original range and derivation. */

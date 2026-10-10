@@ -7,7 +7,12 @@ export const LOGICAL_CHECKPOINT_TYPE = "grounded-state-checkpoint-v1";
 export const LOGICAL_CHECKPOINT_LIMITS = { providerBytes: 8 * 1024 * 1024, aggregateBytes: 16 * 1024 * 1024 } as const;
 const providers = new Set(["notes", "todo", "workplan"]);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
-const fail = (): never => { throw new Error("logical-session-state-checkpoint-invalid"); };
+const fail = (cause?: unknown): never => {
+  const code = cause instanceof Error ? cause.message : undefined;
+  // Preserve only content-free transport causes. Never expose provider payloads.
+  const match = code?.match(/^(?:logical-session-)?state-checkpoint-(pending|scope|budget|corrupt)$/u);
+  throw new Error(`logical-session-state-checkpoint-${match?.[1] ?? "invalid"}`);
+};
 export type LogicalStateCheckpoint = StateTransferEntry;
 export const isLogicalCheckpointType = (value: unknown): boolean => value === LOGICAL_CHECKPOINT_TYPE || value === OWNER_BINDING_ENTRY;
 
@@ -25,7 +30,7 @@ export function validateLogicalStateCheckpoints(values: readonly unknown[], sour
         || entry.customType === LOGICAL_CHECKPOINT_TYPE && !object(entry.data.state)) return fail();
     }
     return entries;
-  } catch { return fail(); }
+  } catch (error) { return fail(error); }
 }
 
 /** Bounded async export includes the complete state of each installed native
@@ -47,7 +52,7 @@ export async function captureLogicalStateCheckpointsAsync(
       sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId(),
     }), { providers: selected, signal: options.signal });
     return validateLogicalStateCheckpoints(entries, { sourceSessionId: scope.sessionId, sourceLeafId: scope.leafId });
-  } catch { return fail(); }
+  } catch (error) { return fail(error); }
 }
 
 /** Legacy synchronous export. An async owner cannot be silently omitted. */

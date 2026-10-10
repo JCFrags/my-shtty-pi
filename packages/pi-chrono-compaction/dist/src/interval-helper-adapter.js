@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { HISTORY_HELPER_PROMPT_IDENTITY, historyHelperInputKey, makeHistoryOriginalParts, validateHistoryHelperInput } from "./history-helper.js";
 import { projectIntervalSource } from "./interval-source.js";
-export const INTERVAL_HELPER_ADAPTER_IDENTITY = "chrono-original-field-adapter-v1";
-export const INTERVAL_HELPER_OUTPUT_POLICY = "chrono-original-field-alternatives-v1";
+import { historySynopsisCompatibilityItems, validateHistorySynopsis } from "./history-synopsis.js";
+export const INTERVAL_HELPER_ADAPTER_IDENTITY = "chrono-original-field-adapter-v2";
+export const INTERVAL_HELPER_OUTPUT_POLICY = "chrono-range-synopsis-and-event-alternatives-v2";
 export const DEFAULT_INTERVAL_HELPER_DISCLOSURE = Object.freeze({
     identity: "chrono-history-disclosure-consented-originals-v1", allowUserInterpretation: true, allowToolArguments: true,
 });
@@ -56,10 +57,11 @@ function fields(event) {
             if (block?.type === "text" && typeof block.text === "string")
                 result.push({ field: `${base}.${index}.text`, text: block.text, role, purpose });
             if (block?.type === "toolCall") {
+                const relationship = typeof block.id === "string" && typeof block.name === "string" ? { callId: block.id, toolName: block.name } : undefined;
                 if (typeof block.name === "string")
-                    result.push({ field: `${base}.${index}.name`, text: block.name, role: "assistant", purpose: "interpretation" });
+                    result.push({ field: `${base}.${index}.name`, text: block.name, role: "assistant", purpose: "interpretation", relationship });
                 if (object(block.arguments))
-                    result.push({ field: `${base}.${index}.arguments#json`, text: JSON.stringify(block.arguments), role: "assistant", purpose: "interpretation" });
+                    result.push({ field: `${base}.${index}.arguments#json`, text: JSON.stringify(block.arguments), role: "assistant", purpose: "interpretation", relationship });
             }
         });
     if (event.role === "bashExecution") {
@@ -140,6 +142,13 @@ export function adaptIntervalHelperInput(snapshot, options) {
         const original = snapshot.events[event.index];
         const unit = unitByEvent.get(event.index);
         const sourceFields = originalFields(original, event);
+        const result = original.toolResult;
+        const call = result && unit.eventIndexes.flatMap(index => snapshot.events[index].toolCalls).find(item => item.id === result.callId);
+        const toolName = result?.toolName ?? call?.name;
+        const stateSnapshot = ["workplan", "todo", "notes"].includes(toolName ?? "")
+            && ["list", "status", "read", "recover", "search"].includes(String(call?.arguments.action));
+        const resultRelationship = result ? { callId: result.callId, ...(toolName ? { toolName } : {}),
+            ...(stateSnapshot ? { observation: "state-snapshot" } : {}) } : undefined;
         if (!sourceFields.length && original.role === "custom")
             notice("unsupported-custom-origin", entryRef(event));
         for (const originalField of sourceFields) {
@@ -170,7 +179,8 @@ export function adaptIntervalHelperInput(snapshot, options) {
                     fail("event-selection-invalid");
                 const made = makeHistoryOriginalParts({ eventId: entryRef(original), unitId: unit.id, entryRef: entryRef(original),
                     field: `${field.field}#sha256:${textHash(field.text)}`, start: range.start,
-                    text: field.text.slice(range.start, range.endExclusive), role: field.role, outcome: outcome(original), purpose: field.purpose }, { sourceBytes, partBytes, parts: maxParts - parts.length });
+                    text: field.text.slice(range.start, range.endExclusive), role: field.role, outcome: outcome(original), purpose: field.purpose,
+                    relationship: field.relationship ?? resultRelationship }, { sourceBytes, partBytes, parts: maxParts - parts.length });
                 parts.push(...made);
                 if (parts.length > maxParts || notices.length > maxParts)
                     fail("source-bound-exceeded");
@@ -220,14 +230,20 @@ function validProduct(product) {
     try {
         validateHistoryHelperInput(product.input, { sourceBytes: 16 * 1024 * 1024, parts: 4096 });
         const { input, artifact } = product, outputs = input.parts.filter(part => part.purpose === "output");
-        return artifact.schemaVersion === 1 && artifact.key === historyHelperInputKey(input) && artifact.role === input.role
-            && same(artifact.source, input.source) && same(artifact.derivation, input.derivation) && same(artifact.notices, input.notices)
-            && artifact.coverage === (input.notices.length ? "partial" : "full") && artifact.quality === "structural-only"
-            && Array.isArray(artifact.items) && artifact.items.length === outputs.length && artifact.items.every((item, index) => {
+        if (artifact.schemaVersion !== 1 || artifact.key !== historyHelperInputKey(input) || artifact.role !== input.role
+            || !same(artifact.source, input.source) || !same(artifact.derivation, input.derivation) || !same(artifact.notices, input.notices)
+            || artifact.coverage !== (input.notices.length ? "partial" : "full") || artifact.quality !== "structural-only"
+            || !Array.isArray(artifact.items))
+            return false;
+        if (input.role !== "event")
+            return !!artifact.synopsis && validateHistorySynopsis(artifact.synopsis, input.parts)
+                && same(artifact.items, artifact.synopsis.parts.flatMap(historySynopsisCompatibilityItems));
+        return artifact.synopsis === undefined && artifact.items.length === outputs.length && artifact.items.every((item, index) => {
             const part = outputs[index];
             return item.partId === part.id && item.eventId === part.eventId && item.unitId === part.unitId
                 && same(item.entryRefs, part.entryRefs) && same(item.spans, part.spans) && item.outcome === part.outcome
-                && typeof item.text === "string" && item.text.trim().length > 0;
+                && typeof item.text === "string" && item.text.trim().length > 0
+                && (part.protectedSpans ?? []).every(span => item.text.includes(part.text.slice(span.start, span.endExclusive)));
         });
     }
     catch {

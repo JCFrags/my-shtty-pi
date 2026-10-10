@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
 import { historyHelperDerivationIdentity, resolveHistoryHelperRole } from "./history-helper-config.js";
 import { resolveHistoryHelperModel } from "./history-helper-model.js";
-import { HistoryHelperService, historyHelperInputKey } from "./history-helper.js";
+import { HistoryHelperService, historyHelperInputKey, HISTORY_HELPER_OUTPUT_TOKEN_RESERVATIONS } from "./history-helper.js";
 import { IntervalPrefixPrecompute } from "./interval-precompute.js";
 import { IntervalArchiveService, createPrivateIntervalArchiveStore } from "./interval-archive.js";
 import { adaptIntervalHelperInput, selectIntervalEventCandidates } from "./interval-helper-adapter.js";
+import { INTERVAL_READY_PREFIX_CANDIDATE_LIMIT } from "./interval-partition.js";
 export const INTERVAL_HELPER_RUNTIME_POLICY = "chrono-finite-interval-helper-runtime-v1";
 /** Internal finite admission, not persistent settings or an advertised quality level. */
 export const INTERVAL_RESTART_HELPER_LIMITS = Object.freeze({
     concurrency: 2, queuedJobs: 8, cacheEntries: 16, cacheBytes: 8 * 1024 * 1024,
     sourceBytes: 4 * 1024 * 1024, parts: 512, callsPerJob: 64, callsTotal: 256,
     reservedInputTokensTotal: 2 * 1024 * 1024, reservedOutputTokensTotal: 131072,
-    inputTokensPerCall: 48 * 1024, outputTokensPerCall: 512, outputBytesPerCall: 64 * 1024,
+    inputTokensPerCall: 48 * 1024, outputTokensPerCall: 512,
+    outputTokensByRole: HISTORY_HELPER_OUTPUT_TOKEN_RESERVATIONS, outputBytesPerCall: 64 * 1024,
     artifactBytes: 2 * 1024 * 1024, requestBytesPerCall: 256 * 1024, framingTokens: 1024, timeoutMs: 60000,
 });
 export const INTERVAL_ARCHIVE_HELPER_LIMITS = Object.freeze({
@@ -39,7 +41,7 @@ export class IntervalHelperRuntime {
     archive;
     states = { activePrefix: "absent", event: "absent", archive: "absent" };
     scope;
-    admittedKeys = new Set();
+    admittedEventKeys = new Set();
     generation = 0;
     closed = false;
     constructor(options) {
@@ -71,9 +73,9 @@ export class IntervalHelperRuntime {
         }
         return model;
     }
-    prefixInput(input, model) {
+    prefixInput(input, model, compressedStart = input.partition.compressedStart) {
         return adaptIntervalHelperInput(input.snapshot, { role: "activePrefix", start: input.partition.start,
-            endExclusive: input.partition.compressedStart, modelIdentity: model.identity, disclosure: this.options.disclosure,
+            endExclusive: compressedStart, modelIdentity: model.identity, disclosure: this.options.disclosure,
             sourceBytes: this.restart.limits.sourceBytes, parts: this.restart.limits.parts });
     }
     eventInputs(input, model) {
@@ -123,21 +125,19 @@ export class IntervalHelperRuntime {
         if (this.scope !== undefined && this.scope !== scope)
             this.invalidate();
         this.scope = scope;
-        this.admittedKeys.clear();
         const generation = ++this.generation;
         try {
             const model = this.model(input.ctx, "activePrefix");
             if (!model)
-                this.prefix.invalidate();
+                this.prefix.pause();
             else {
                 const adapted = this.prefixInput(input, model);
                 if (!adapted) {
-                    this.prefix.invalidate();
+                    this.prefix.pause();
                     this.states.activePrefix = "empty";
                 }
                 else {
                     this.states.activePrefix = "pending";
-                    this.admittedKeys.add(historyHelperInputKey(adapted));
                     const ticket = this.prefix.prepare(adapted, model, input.signal);
                     void ticket.settled.then(result => { if (!this.closed && this.generation === generation && this.prefix.status().key === ticket.key)
                         this.states.activePrefix = result.status; });
@@ -145,7 +145,7 @@ export class IntervalHelperRuntime {
             }
         }
         catch (error) {
-            this.prefix.invalidate();
+            this.prefix.pause();
             this.states.activePrefix = errorCode(error);
         }
         try {
@@ -156,7 +156,11 @@ export class IntervalHelperRuntime {
                     this.states.event = "no-eligible-noisy-output";
                 for (const item of adapted) {
                     this.states.event = "pending";
-                    this.admittedKeys.add(historyHelperInputKey(item));
+                    const key = historyHelperInputKey(item);
+                    this.admittedEventKeys.delete(key);
+                    this.admittedEventKeys.add(key);
+                    while (this.admittedEventKeys.size > this.restart.limits.cacheEntries)
+                        this.admittedEventKeys.delete(this.admittedEventKeys.values().next().value);
                     const ticket = this.restart.enqueue(item, model, { coalesceKey: hash([item.source.logicalSession, item.source.branch,
                             item.source.previousCommit, item.source.start, "event"]), signal: input.signal });
                     void ticket.settled.then(result => { if (!this.closed && this.generation === generation && this.scope === scope)
@@ -170,15 +174,43 @@ export class IntervalHelperRuntime {
     }
     /** Reproject current originals and current explicit routes synchronously. Never wait at assembly. */
     ready(input) {
-        const events = [];
+        const events = [], activePrefixCandidates = [];
         let activePrefix;
         if (!this.closed && !input.signal?.aborted) {
             try {
                 validPartition(input);
-                const model = this.model(input.ctx, "activePrefix"), adapted = model && this.prefixInput(input, model);
-                const artifact = adapted && this.admittedKeys.has(historyHelperInputKey(adapted)) && this.prefix.ready(adapted);
-                if (adapted && artifact)
-                    activePrefix = Object.freeze({ input: adapted, artifact });
+                const model = this.model(input.ctx, "activePrefix");
+                if (model) {
+                    for (const product of this.prefix.candidates().slice(-INTERVAL_READY_PREFIX_CANDIDATE_LIMIT))
+                        try {
+                            // H is anchored after the last original source, not to the old E or
+                            // an old prompt index. Recreate bytes under today's permitted route.
+                            let end;
+                            try {
+                                end = JSON.parse(product.input.source.endExclusive);
+                            }
+                            catch {
+                                continue;
+                            }
+                            if (!Array.isArray(end) || end.length !== 3 || end[0] !== "after")
+                                continue;
+                            const last = input.snapshot.events.find(event => event.entryId === end[2]
+                                && JSON.stringify(event.source) === JSON.stringify(end[1]));
+                            if (!last || !input.snapshot.legalCuts.includes(last.index + 1))
+                                continue;
+                            const compressedStart = last.index + 1;
+                            const adapted = this.prefixInput(input, model, compressedStart);
+                            if (!adapted || historyHelperInputKey(adapted) !== product.artifact.key)
+                                continue;
+                            const candidate = Object.freeze({ compressedStart, input: adapted, artifact: product.artifact });
+                            activePrefixCandidates.push(candidate);
+                            if (compressedStart === input.partition.compressedStart)
+                                activePrefix = Object.freeze({ input: adapted, artifact: product.artifact });
+                        }
+                        catch (error) {
+                            this.states.activePrefix = errorCode(error);
+                        }
+                }
             }
             catch (error) {
                 this.states.activePrefix = errorCode(error);
@@ -188,7 +220,7 @@ export class IntervalHelperRuntime {
                 const model = this.model(input.ctx, "event");
                 if (model)
                     for (const adapted of this.eventInputs(input, model)) {
-                        const artifact = this.admittedKeys.has(historyHelperInputKey(adapted)) && this.restart.ready(adapted);
+                        const artifact = this.admittedEventKeys.has(historyHelperInputKey(adapted)) && this.restart.ready(adapted);
                         if (artifact)
                             events.push(Object.freeze({ input: adapted, artifact }));
                     }
@@ -197,7 +229,8 @@ export class IntervalHelperRuntime {
                 this.states.event = errorCode(error);
             }
         }
-        return Object.freeze({ ...(activePrefix ? { activePrefix } : {}), eventAlternatives: Object.freeze(events) });
+        return Object.freeze({ ...(activePrefix ? { activePrefix } : {}),
+            activePrefixCandidates: Object.freeze(activePrefixCandidates), eventAlternatives: Object.freeze(events) });
     }
     /** Caller must supply proof of the correlated observed native commit, not a proposed replacement. */
     archiveVerified(input) {
@@ -255,7 +288,7 @@ export class IntervalHelperRuntime {
             return;
         this.generation++;
         this.scope = undefined;
-        this.admittedKeys.clear();
+        this.admittedEventKeys.clear();
         this.prefix.invalidate();
         this.restart.cancelAll();
         this.states.activePrefix = "invalidated";

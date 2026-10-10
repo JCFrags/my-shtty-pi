@@ -2,7 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { historyHelperInputKey, historySourceBindingIdentity } from "./history-helper.js";
+import { HISTORY_HELPER_PROMPT_IDENTITY, historyHelperInputKey, historySourceBindingIdentity } from "./history-helper.js";
+import { historySynopsisCompatibilityItems, validateStoredHistorySynopsis } from "./history-synopsis.js";
 const digest = (text) => createHash("sha256").update(text, "utf8").digest("hex");
 const sameSource = (a, b) => !!a && !!b && historySourceBindingIdentity(a) === historySourceBindingIdentity(b);
 function recordFor(commit, artifact) {
@@ -93,6 +94,16 @@ function checkedRecord(value, commit) {
         || record.artifact.schemaVersion !== 1 || record.artifact.quality !== "structural-only"
         || !sameSource(record.artifact.source, commit.source) || !["full", "partial"].includes(record.artifact.coverage)
         || !Array.isArray(record.artifact.items) || !Array.isArray(record.artifact.notices) || !Array.isArray(record.artifact.usage))
+        return undefined;
+    // Legacy per-field archives stay readable. New derivations must carry the
+    // coherent range account and its exact labeled compatibility projection.
+    const synopsis = record.artifact.synopsis;
+    if (synopsis !== undefined) {
+        if (!validateStoredHistorySynopsis(synopsis)
+            || JSON.stringify(record.artifact.items) !== JSON.stringify(synopsis.parts.flatMap(historySynopsisCompatibilityItems)))
+            return undefined;
+    }
+    else if (record.artifact.derivation?.promptIdentity === HISTORY_HELPER_PROMPT_IDENTITY)
         return undefined;
     const body = { schemaVersion: record.schemaVersion, kind: record.kind, commitId: record.commitId, source: record.source, artifact: record.artifact };
     if (digest(JSON.stringify(body)) !== record.integrityHash)

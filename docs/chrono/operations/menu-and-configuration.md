@@ -15,7 +15,7 @@ related:
 
 Open `/Chrono`. The unified interface has **Settings**, **Status and diagnostics**, **Maintenance**, **About**, and **Close**. It replaces the old separate `/chrono-*` operator commands. Native model-facing history tools retain their names.
 
-Settings exposes common controls first and **Custom settings (all options)** for advanced controls. Valid changes save immediately. Failed writes remain visible and can be corrected or discarded. Reports remain in the interface, not the conversation or model context.
+V4 Settings exposes automatic policy status and explicit history-role provider/model selection. It does not expose token targets, tail presets, trigger thresholds, or legacy value-worker tuners. Older paths retain their common controls and **Custom settings (all options)** for rollback. Valid changes save immediately. Failed writes remain visible and can be corrected or discarded. Reports remain in the interface, not the conversation or model context.
 
 Use Up/Down or Page Up/Page Down to scroll a report. Home/End select its ends. Enter or Esc returns. The local focused-overlay correction keeps page keys in the report when Pi runs fullscreen. Implementation of that correction is not proof that an older running process loaded it.
 
@@ -24,29 +24,31 @@ Use Up/Down or Page Up/Page Down to scroll a report. Home/End select its ends. E
 | Menu entry | Direct action |
 | --- | --- |
 | Overview and search readiness | `/Chrono search-status` |
-| Background LLM usage | `/Chrono value-worker-status` |
+| History helper roles and activity (V4) | `/Chrono history-helper-status` |
+| Legacy value-worker usage (older paths only) | `/Chrono value-worker-status` |
 | Local workers | `/Chrono worker-status` |
 | Read-only health check | `/Chrono doctor` |
-| Source catalog shadow | `/Chrono catalog-status` |
-| Capsule shadow | `/Chrono capsules-status` |
-| Rollup shadow | `/Chrono rollup-shadow-status` |
+| Source catalog shadow (older diagnostic menu) | `/Chrono catalog-status` |
+| Capsule shadow (older diagnostic menu) | `/Chrono capsules-status` |
+| Rollup shadow (older diagnostic menu) | `/Chrono rollup-shadow-status` |
 
-The shadow reports describe retained diagnostic paths, not certificates of active composition eligibility. Search status and `history_status` read cached lifecycle observations. Worker/doctor diagnostics do not clear reservations, resume owners, repair admission, or change worker limits.
+The V4 helper report separates the current-agent writer from active-prefix, event, and archive roles. It reports process-local calls, readiness, finite lanes, and token reservations. Reservations are not actual usage or billed cost. The report makes no model call. V4 hides legacy usage/reset and shadow entries from the ordinary menu. The shadow reports describe retained diagnostic paths, not certificates of active composition eligibility. Search status and `history_status` read cached lifecycle observations. Worker/doctor diagnostics do not clear reservations, resume owners, repair admission, or change worker limits.
 
 ### Maintenance
 
-Maintenance contains session search on/off, a stored-compaction preview, logical-session actions, explicit rollup repair, and background failure-circuit reset. Advanced direct forms include:
+Maintenance contains session search on/off, a stored-compaction preview, exact interval-archive reads, logical-session actions, and explicit rollup repair. Older paths also expose the legacy value-worker circuit reset. V4 refuses that reset without changing stored advice or helpers. Advanced direct forms include:
 
 ```text
 /Chrono search on
 /Chrono search off
 /Chrono composition-preview [compaction-entry-id]
+/Chrono archive <compaction-entry-id> [item-offset]
 /Chrono logical-session status <logical-session-id> [branch-id]
 /Chrono rollup-repair status <repair-id>
 /Chrono value-worker-reset
 ```
 
-Preview saves a bounded private comparison and does not replace context. Repair changes derived state. Reset cancels this process's pending value work and clears its persisted failure pause. If eligible and enabled, model work can resume afterward. Do not use those mutating actions as status checks.
+Preview saves a bounded private comparison and does not replace context. Archive reads recover a source-bound derived account without calling a model or changing Memory. Repair changes derived state. On older paths only, reset cancels this process's pending value work and clears its persisted failure pause. If eligible and enabled, model work can resume afterward. Do not use those mutating actions as status checks.
 
 `/Chrono settings` opens the interface. Do not assume the old `/chrono-compact-settings key value` syntax remains a setter. The internal `_auto-rollover` action uses a one-use guard and is not a manual maintenance route.
 
@@ -58,7 +60,15 @@ For supported settings, the environment wins over JSON, which wins over compiled
 
 The writer validates the object and replaces it through an owner-only temporary file and rename. This is not a transaction with Pi package settings or provider migration. An external file edit alone does not prove that a process uses the new effective value.
 
-## Core controls
+## Current V4 interval controls
+
+`contextCompiler: "v4"` selects the interval policy, subject to its Pi 1.1 public-hook boundary. `historyHelpers` selects the active-prefix, optional event, and optional archive roles separately. Each exact provider/model route needs explicit history disclosure and cost confirmation. Omitted roles stay unselected. The current-agent writer remains the current conversation model. There is no implicit helper fallback.
+
+The product owns adaptive A/B/C budgets, preparation notice, bounded freeze, and ready-prefix selection. Legacy token, trigger, tail, summary, projection, precompute, and value-worker settings do not tune this policy. Context ownership, source indexing, rollover, and worker admission still apply independently. See the [interval implementation](../context/interval-compaction.md) for actual request accounting, output bounds, source exclusions, and continuation guards.
+
+## Retained controls and older runtime behavior
+
+The table and historical V4 descriptions below document the pre-interval paths. They are not controls for the current `interval-v1` policy. Preserve these keys for compatible rollback instead of deleting configuration.
 
 | JSON field | Environment override | Default and applicability |
 | --- | --- | --- |
@@ -97,9 +107,9 @@ Effective indexed search resolves in this order:
 
 `/Chrono search on|off` changes one exact session/source record, not every session. A persisted false value blocks automatic adoption. Unsafe rollout storage fails closed. Status is read-only and does not retry startup admission.
 
-## Optional background LLM
+## Legacy background value worker
 
-Background LLM is off by default. Modes are `off`, `shadow`, and `advisory`. Shadow stores advice without applying it. Advisory can adjust eligible deterministic value scores, not final text or authority.
+This worker does not govern the current V4 history helpers. Its controls remain on older paths only. The legacy background LLM is off by default. Modes are `off`, `shadow`, and `advisory`. Shadow stores advice without applying it. Advisory can adjust eligible deterministic value scores, not final text or authority.
 
 The menu's **Usage** choices write ordinary settings:
 

@@ -479,9 +479,9 @@ export class HistorySearchAdapter {
             if (indexed === null) {
                 if (this.expectedLogicalCut)
                     return fail("logical-session-route-unavailable");
-                // A new branch can share a long prefix with a newer committed ancestor
-                // head. Reuse that covered prefix instead of deriving cut 16 against a
-                // head that cannot rewind. Inspect only the bounded catalog ancestry.
+                // Reuse a committed ancestor head even when it covers only part of
+                // the common prefix. Starting from the first 16-event page can rewind
+                // a newer capsule head. Inspect only the bounded catalog ancestry.
                 for (let length = requested.view.segments.length - 1; length > 0; length--) {
                     const segments = requested.view.segments.slice(0, length);
                     const view = { ...requested.view, eventCut: segments.at(-1).cut, segments };
@@ -493,11 +493,11 @@ export class HistorySearchAdapter {
                     if (saved.result.error === "search-v3-indexed-view-incompatible")
                         return fail("search-v3-resume-invalid");
                     const readiness = saved.result.readiness;
-                    if (readiness?.cue !== "ready" || readiness.raw !== "ready")
-                        continue;
                     const head = saved.result.indexedView;
+                    if ((readiness?.cue !== "ready" || readiness.raw !== "ready") && head?.complete !== true)
+                        continue;
                     const expected = saved.result.requestedView;
-                    if (!head || head.branchKey !== view.branchKey || !Number.isSafeInteger(head.eventCut) || Number(head.eventCut) < view.eventCut
+                    if (!head || head.branchKey !== view.branchKey || !Number.isSafeInteger(head.eventCut) || Number(head.eventCut) < 1
                         || head.complete !== true || typeof head.hash !== "string" || !/^[a-f0-9]{64}$/.test(head.hash)
                         || expected?.branchKey !== view.branchKey || expected.eventCut !== view.eventCut || expected.hash !== hash(canonicalJson(view)))
                         return fail("search-v3-resume-invalid");
@@ -511,7 +511,10 @@ export class HistorySearchAdapter {
                     valid();
                     if (!authorized.ok)
                         return fail(authorized.code);
-                    this.lastReady = ancestor;
+                    const servingView = storedView.eventCut < view.eventCut ? storedView : view;
+                    if (!this.within(servingView, requested.view))
+                        return fail("search-v3-resume-invalid");
+                    this.lastReady = this.makeTarget(t, servingView);
                     this.readyValidated = true;
                     break;
                 }

@@ -14,7 +14,7 @@ export const REDUCER_VERSIONS = Object.freeze({
   "test-output": "1.0.0",
   "file-read": "1.0.0",
   "git-diff": "1.0.0",
-  "search-results": "1.0.0",
+  "search-results": "1.1.0",
   "structured-json": "2.0.0",
   "assistant-extractive": "1.0.0",
   "assistant-cleanup": "1.0.0",

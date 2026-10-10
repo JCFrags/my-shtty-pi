@@ -4,12 +4,13 @@ import { CONTEXT_COMPILER_LIMITS, INTERVAL_CONTEXT_COMPILER_RULESET, type Compil
   type FrozenContextInput, type NativeSelectionRef } from "./context-compiler.js";
 import { chargeCompactionSummary, chargeRawTail, type ContextBudget } from "./context-budget.js";
 import { deriveIntervalBudget, type IntervalLayerBudget } from "./interval-policy.js";
-import { selectIntervalPartition, type IntervalCutHint, type IntervalPartition, type IntervalPartitionUnit } from "./interval-partition.js";
+import { selectIntervalPartition, readyIntervalPartitions, INTERVAL_READY_PREFIX_CANDIDATE_LIMIT,
+  type IntervalCutHint, type IntervalPartition, type IntervalPartitionUnit } from "./interval-partition.js";
 import { renderIntervalHistory, type IntervalHistoryRendering, type IntervalRenderUnit } from "./interval-render.js";
 import { partitionIntervalSource, projectIntervalSource, type IntervalSourceSnapshot, type IntervalSourceView,
   type IntervalSourcePartition } from "./interval-source.js";
 import { intervalContinuationMessage } from "./interval-runtime.js";
-import type { HistoryHelperInput, HistoryHelperArtifact } from "./history-helper.js";
+import { renderHistorySynopsisPart, type HistoryHelperInput, type HistoryHelperArtifact } from "./history-helper.js";
 import { validateIntervalReadyProduct, validateIntervalEventProduct, applyIntervalEventAlternatives } from "./interval-helper-adapter.js";
 import { stableStringify } from "./utils.js";
 
@@ -17,9 +18,14 @@ export interface IntervalReadyAlternative {
   readonly input: HistoryHelperInput;
   readonly artifact: HistoryHelperArtifact;
 }
+export interface IntervalReadyPrefixCandidate extends IntervalReadyAlternative {
+  /** H in the current original-source snapshot, recreated from pinned anchors. */
+  readonly compressedStart: number;
+}
 /** Ready products are source-bound candidates, never a dependency to await. */
 export interface IntervalReadyHistory {
   readonly activePrefix?: IntervalReadyAlternative;
+  readonly activePrefixCandidates?: readonly IntervalReadyPrefixCandidate[];
   readonly eventAlternatives: readonly IntervalReadyAlternative[];
 }
 type RenderingReceipt = Omit<IntervalHistoryRendering, "text">;
@@ -32,7 +38,7 @@ export interface IntervalHistoryReceipt {
   readonly coverage: IntervalSourceSnapshot["coverage"];
   readonly exclusions: IntervalSourceSnapshot["exclusions"];
   readonly policy: IntervalLayerBudget;
-  readonly activePrefix: RenderingReceipt & { readonly method: "empty" | "deterministic-fallback" | "independent-original-parts";
+  readonly activePrefix: RenderingReceipt & { readonly method: "empty" | "deterministic-fallback" | "range-synopsis" | "independent-original-parts";
     readonly artifactKey?: string; readonly modelIdentity?: string; readonly helperCoverage?: "full" | "partial" };
   readonly compressedHistory: RenderingReceipt & { readonly eventArtifactKeys: readonly string[] };
   readonly continuationTokens: number;
@@ -94,22 +100,26 @@ function label(name: string, view: IntervalSourceView): string {
 function renderingReceipt(value: IntervalHistoryRendering): RenderingReceipt {
   const { text: _text, ...receipt } = value; return receipt;
 }
-/** Fit independent model parts whole. This is not a second model summary and
- * cannot relabel the artifact's eligible input coverage as lossless output. */
+/** Fit whole coherent original-source accounts. Never trim their statements,
+ * recursively summarize them, or assemble range accounts from legacy items. */
 function renderPrefix(candidate: IntervalReadyAlternative, view: IntervalSourceView,
-  units: readonly IntervalRenderUnit[], maximum: number): IntervalHistoryRendering {
-  const prefix = `# Active interval synopsis\n\n[Independent original-source parts. History helper output, not current task state. Structural checks do not prove semantic fidelity. Helper input coverage: ${candidate.artifact.coverage}.]\n\n${label("A", view)}`;
+  units: readonly IntervalRenderUnit[], maximum: number): IntervalHistoryRendering | undefined {
+  const synopsis = candidate.artifact.synopsis;
+  if (!synopsis?.parts.length) return undefined;
+  const description = synopsis.mode === "whole-range" ? "Whole-range original A synopsis" : "Composite of disjoint original-source accounts";
+  const notices = candidate.artifact.notices.map(notice => `[Coverage notice ${notice.code}; sources ${notice.entryRefs.map(ref => JSON.stringify(ref)).join(", ")}]`);
+  const prefix = [`# Active interval synopsis\n\n[${description}. History helper output, not current task state. Structural checks do not prove semantic fidelity. Helper input coverage: ${candidate.artifact.coverage}.]`,
+    label("A", view), ...notices].join("\n\n");
   const output: string[] = [], represented = new Set<string>();
   let omittedParts = 0, used = tokens(prefix) + 96;
-  for (const item of candidate.artifact.items) {
-    const body = `### Historical part ${item.partId}\nOutcome in source: ${item.outcome}\n${item.text}\nSource entries: ${item.entryRefs.map(id => JSON.stringify(id)).join(", ")}`;
+  for (const part of synopsis.parts) {
+    const body = `${synopsis.mode === "disjoint-original-parts" ? `### Independent original-source account ${part.id}\n\n` : ""}${renderHistorySynopsisPart(part)}`;
     const cost = tokens(body) + 2;
     if (used + cost > maximum) { omittedParts++; continue; }
-    used += cost; output.push(body); represented.add(item.unitId);
+    used += cost; output.push(body); part.unitIds.forEach(id => represented.add(id));
   }
-  const text = [prefix, ...output, `[${omittedParts} helper parts omitted from this bounded rendering. Original source recovery remains available.]`].join("\n\n");
-  if (tokens(text) > maximum || !output.length) return renderIntervalHistory({ kind: "active-prefix-fallback", units,
-    maxTokens: maximum, coverageLabel: label("A", view) });
+  const text = [prefix, ...output, ...(omittedParts ? [`[${omittedParts} whole synopsis accounts omitted from this bounded rendering. Original source recovery remains available.]`] : [])].join("\n\n");
+  if (tokens(text) > maximum || !output.length) return undefined;
   return { ruleset: "chrono-interval-render-v1", text, tokens: tokens(text),
     representedUnitIds: units.filter(unit => represented.has(unit.id)).map(unit => unit.id),
     omittedUnitIds: units.filter(unit => !represented.has(unit.id)).map(unit => unit.id),
@@ -121,10 +131,8 @@ function renderPrefix(candidate: IntervalReadyAlternative, view: IntervalSourceV
 export function compileIntervalContext(input: FrozenContextInput): CompiledContext {
   const snapshot = input.interval, submitted = input.sessionSummary;
   if (!snapshot || !submitted?.handoff || !submitted.continuation || !submitted.authorship || input.history.kind !== "interval") fail("handoff-required");
-  const { partition, layers } = planIntervalContext(snapshot, input.budget);
-  const ranges = partitionIntervalSource(snapshot, partition.compressedStart, partition.rawStart);
-  const a = projectIntervalSource(snapshot, "synopsis", partition.start, partition.compressedStart);
-  const b = projectIntervalSource(snapshot, "event", partition.compressedStart, partition.rawStart);
+  const plan = planIntervalContext(snapshot, input.budget), { layers } = plan;
+  let partition = plan.partition;
   const c = projectIntervalSource(snapshot, "exact", partition.rawStart, partition.endExclusive);
   const exact = chargeRawTail(c.events.map(event => event.projectedEntry));
   if (exact.tokens !== partition.exactTokens || exact.messages !== partition.exactMessages) fail("exact-charge-changed");
@@ -138,32 +146,74 @@ export function compileIntervalContext(input: FrozenContextInput): CompiledConte
   if (remaining < 512) fail("required-content-oversized");
   const aMaximum = Math.max(256, Math.min(layers.activePrefixTokens, Math.floor(remaining / 3)));
   const bMaximum = Math.max(256, Math.min(layers.compressedHistoryTokens, remaining - aMaximum));
-  const candidates = (input.history.ready?.eventAlternatives ?? []).slice(0, 32).filter(product =>
-    validateIntervalEventProduct(snapshot, product, partition.compressedStart, partition.rawStart));
-  const alternatives = applyIntervalEventAlternatives(b, candidates);
-  const helperEntryIds = new Set(alternatives.events.filter((event, index) => event.projectedEntry !== b.events[index]?.projectedEntry)
-    .map(event => event.entryId));
-  const aUnits = unitsFromView(snapshot, a), bUnits = unitsFromView(snapshot, { ...b, events: alternatives.events });
-  const prefixCandidate = input.history.ready?.activePrefix;
-  const compatible = a.events.length > 0 && !!prefixCandidate && validateIntervalReadyProduct(snapshot, prefixCandidate,
-    { role: "activePrefix", start: partition.start, endExclusive: partition.compressedStart,
-      modelIdentity: prefixCandidate.input.derivation.modelIdentity });
-  const prefix = compatible ? renderPrefix(prefixCandidate!, a, aUnits, aMaximum)
-    : renderIntervalHistory({ kind: "active-prefix-fallback", units: aUnits, maxTokens: aMaximum,
-      coverageLabel: label("A", a), relevance: input.history.relevance });
-  const usedPrefix = compatible && !prefix.text.includes("[Deterministic fallback.");
-  const compressed = renderIntervalHistory({ kind: "compressed-history", units: bUnits, maxTokens: bMaximum,
-    coverageLabel: label("B", b), relevance: input.history.relevance, helperEntryIds });
-  const eventArtifactKeys = alternatives.acceptedArtifactKeys.filter(key => candidates.some(product =>
-    product.artifact.key === key && product.input.eventUnit && compressed.representedUnitIds.includes(product.input.eventUnit.id)));
-  const summary = [handoff, prefix.text, compressed.text].join("\n\n");
+  const relevance = input.history.relevance, ready = input.history.ready;
+  const renderHistory = (selected: IntervalPartition, prefixCandidate?: IntervalReadyAlternative) => {
+    const a = projectIntervalSource(snapshot, "synopsis", selected.start, selected.compressedStart);
+    const b = projectIntervalSource(snapshot, "event", selected.compressedStart, selected.rawStart);
+    const candidates = (ready?.eventAlternatives ?? []).slice(0, 32).filter(product =>
+      validateIntervalEventProduct(snapshot, product, selected.compressedStart, selected.rawStart));
+    const alternatives = applyIntervalEventAlternatives(b, candidates);
+    const helperEntryIds = new Set(alternatives.events.filter((event, index) => event.projectedEntry !== b.events[index]?.projectedEntry)
+      .map(event => event.entryId));
+    const aUnits = unitsFromView(snapshot, a), bUnits = unitsFromView(snapshot, { ...b, events: alternatives.events });
+    const compatible = a.events.length > 0 && !!prefixCandidate && validateIntervalReadyProduct(snapshot, prefixCandidate,
+      { role: "activePrefix", start: selected.start, endExclusive: selected.compressedStart,
+        modelIdentity: prefixCandidate.input.derivation.modelIdentity });
+    const helperPrefix = compatible ? renderPrefix(prefixCandidate!, a, aUnits, aMaximum) : undefined;
+    if (prefixCandidate && !helperPrefix) return undefined;
+    const prefix = helperPrefix ?? renderIntervalHistory({ kind: "active-prefix-fallback", units: aUnits, maxTokens: aMaximum,
+      coverageLabel: label("A", a), relevance });
+    const usedPrefix = !!helperPrefix;
+    const compressed = renderIntervalHistory({ kind: "compressed-history", units: bUnits, maxTokens: bMaximum,
+      coverageLabel: label("B", b), relevance, helperEntryIds });
+    const eventArtifactKeys = alternatives.acceptedArtifactKeys.filter(key => candidates.some(product =>
+      product.artifact.key === key && product.input.eventUnit && compressed.representedUnitIds.includes(product.input.eventUnit.id)));
+    return { a, prefix, compressed, usedPrefix, prefixCandidate, eventArtifactKeys,
+      summary: [handoff, prefix.text, compressed.text].join("\n\n") };
+  };
+  const requestFits = (summary: string): boolean => {
+    const context = chargeCompactionSummary(summary) + exact.tokens + continuationTokens + technicalBoundaryTokens;
+    return context <= layers.effectiveAvailableTokens && context + input.budget.systemTokens + input.budget.toolSchemaTokens
+      + input.budget.framingTokens + Math.max(input.budget.responseReserveTokens, layers.reserveTokens) + layers.safetyTokens <= input.budget.model.contextWindow;
+  };
+  // Enumerate exact-compatible ready ranges before committing to a newly planned
+  // H. Later appended work belongs to B/C, never to the pinned A derivation.
+  const prefixCandidates = [...(ready?.activePrefixCandidates ?? []).slice(0, INTERVAL_READY_PREFIX_CANDIDATE_LIMIT)];
+  if (ready?.activePrefix && !prefixCandidates.some(candidate => candidate.artifact.key === ready.activePrefix!.artifact.key)
+    && prefixCandidates.length < INTERVAL_READY_PREFIX_CANDIDATE_LIMIT) prefixCandidates.push({ ...ready.activePrefix, compressedStart: partition.compressedStart });
+  const readyPartitions = readyIntervalPartitions({ partition, units: plan.units, hints: cutHints(snapshot),
+    compressedHistoryTokens: layers.compressedHistoryTokens, compressedStarts: prefixCandidates.map(candidate => candidate.compressedStart) });
+  let selectedHistory: ReturnType<typeof renderHistory> | undefined;
+  for (const candidatePartition of readyPartitions) {
+    for (const candidate of prefixCandidates.filter(product => product.compressedStart === candidatePartition.compressedStart)) {
+      try {
+        const rendered = renderHistory(candidatePartition, candidate);
+        if (!rendered) continue;
+        const newestB = plan.units[candidatePartition.prefixUnitCount + candidatePartition.compressedUnitCount - 1];
+        const usefulB = candidatePartition.compressedUnitCount === 0
+          ? plan.partition.compressedUnitCount === 0 : !!newestB && rendered.compressed.representedUnitIds.includes(newestB.id);
+        if (!rendered.usedPrefix || !usefulB || !requestFits(rendered.summary)) continue;
+        partition = candidatePartition; selectedHistory = rendered; break;
+      } catch { /* Optional invalid or oversized products do not block deterministic history. */ }
+    }
+    if (selectedHistory) break;
+  }
+  // A/B may be empty. Reuse at the planned cut can still be valid when B is
+  // absent, but it must not discard a nonempty recent window for a cache hit.
+  const rendered = selectedHistory
+    ?? (partition.compressedUnitCount === 0 && ready?.activePrefix ? renderHistory(partition, ready.activePrefix) : undefined)
+    ?? renderHistory(partition)!;
+  const { a, prefix, compressed, usedPrefix, prefixCandidate, eventArtifactKeys, summary } = rendered;
+  const ranges = partitionIntervalSource(snapshot, partition.compressedStart, partition.rawStart);
   const summaryTextTokens = tokens(summary), summaryMessageTokens = chargeCompactionSummary(summary);
   const contextTokens = summaryMessageTokens + exact.tokens + continuationTokens + technicalBoundaryTokens;
   const estimatedRequestTokens = contextTokens + input.budget.systemTokens + input.budget.toolSchemaTokens + input.budget.framingTokens;
   const estimatedRequestWithReserveTokens = estimatedRequestTokens + Math.max(input.budget.responseReserveTokens, layers.reserveTokens) + layers.safetyTokens;
   if (contextTokens > layers.effectiveAvailableTokens || estimatedRequestWithReserveTokens > input.budget.model.contextWindow) fail("final-budget-exceeded");
   const activePrefix: IntervalHistoryReceipt["activePrefix"] = { ...renderingReceipt(prefix),
-    method: a.events.length === 0 ? "empty" : usedPrefix ? "independent-original-parts" : "deterministic-fallback",
+    method: a.events.length === 0 ? "empty" : usedPrefix
+      ? prefixCandidate!.artifact.synopsis!.mode === "whole-range" ? "range-synopsis" : "independent-original-parts"
+      : "deterministic-fallback",
     ...(usedPrefix ? { artifactKey: prefixCandidate!.artifact.key, modelIdentity: prefixCandidate!.artifact.derivation.modelIdentity,
       helperCoverage: prefixCandidate!.artifact.coverage } : {}) };
   const history: ContextSelectionReceipt["history"] = { kind: "interval", receipt: {
