@@ -1572,6 +1572,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     archiveDirectory: join(dirname(userConfigPath), "chrono-interval-archives") });
   let helperPreparationKey: string | undefined;
   let intervalBudgetStatus: unknown;
+  // Content-free, source-bound observation. A prepared plan is not a committed packet.
+  let intervalLastPlan: { snapshotId: string; partition: ReturnType<typeof planIntervalContext>["partition"] } | undefined;
   let intervalHelperFailure: string | undefined;
   let logicalGrant: LogicalActivationGrant | undefined;
   let logicalSwitchActive = false;
@@ -1635,7 +1637,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
       ...(searchSettings().contextCompiler === "v4" ? {
         interval: { policyIdentity: INTERVAL_POLICY.identity,
           host: { loadedVersion: PI_HOST_VERSION, minimumVersion: "1.1.0", versionSupported: intervalHostVersionSupported },
-          budget: intervalBudgetStatus ?? null,
+          budget: intervalBudgetStatus ?? null, lastPreparedPlan: intervalLastPlan ?? null,
           snapshotId: sessionSummary?.interval.identity ?? pendingRecovery?.interval.identity ?? null,
           preparation: intervalPreparation ? { startedAt: intervalPreparation.startedAt, turns: intervalPreparation.turns } : null,
           recovery: pendingRecovery ? { state: "proposed", operationId: pendingRecovery.operationId,
@@ -2197,6 +2199,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
     try {
       const { partition, layers } = planIntervalContext(snapshot, budget);
       intervalBudgetStatus = layers;
+      intervalLastPlan = { snapshotId: snapshot.identity, partition };
       const key = stableStringify({ source: snapshot.origin, a: snapshot.events.slice(0, partition.compressedStart)
         .map(event => [event.source, event.entryId, event.projectionHash]), b: snapshot.units.filter(unit => unit.start >= partition.compressedStart
           && unit.end <= partition.rawStart).map(unit => unit.id), route: userConfig.historyHelpers ?? null });

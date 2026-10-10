@@ -47,7 +47,7 @@ export function readyIntervalPartitions(input) {
  * has no user timing knobs and cannot convert a timeout into a complete unit. */
 export function selectIntervalPartition(input) {
     const { units } = input;
-    for (const value of [input.exactTailTokens, input.exactTailMaximumTokens, input.compressedHistoryTokens]) {
+    for (const value of [input.exactTailTokens, input.exactTailMaximumTokens, input.exactTailMinimumTurns, input.compressedHistoryTokens]) {
         if (!Number.isSafeInteger(value) || value < 0)
             throw new Error("context-v4-interval-partition-budget-invalid");
     }
@@ -57,32 +57,53 @@ export function selectIntervalPartition(input) {
     for (const unit of units) {
         if (!unit.complete)
             throw new Error("context-v4-interval-incomplete-interaction");
-        if (!unit.events.length || unit.start !== end || !Number.isSafeInteger(unit.endExclusive) || unit.endExclusive <= unit.start) {
+        if (!unit.events.length || unit.start !== end || !Number.isSafeInteger(unit.endExclusive) || unit.endExclusive <= unit.start
+            || !Number.isSafeInteger(unit.assistantTurns) || unit.assistantTurns < 0 || unit.assistantTurns > unit.events.length) {
             throw new Error("context-v4-interval-unit-range-invalid");
         }
         end = unit.endExclusive;
     }
+    const availableTurns = units.reduce((sum, unit) => sum + unit.assistantTurns, 0);
+    const turnGoal = Math.min(input.exactTailMinimumTurns, availableTurns);
+    const coverage = (retained, limit) => ({
+        metric: "assistant-responses", target: input.exactTailMinimumTurns, available: availableTurns, retained,
+        shortfall: Math.max(0, input.exactTailMinimumTurns - retained),
+        shortfallReason: retained >= input.exactTailMinimumTurns ? "none" : retained >= turnGoal ? "source-exhausted" : limit,
+        tokenTarget: input.exactTailTokens, tokenMaximum: input.exactTailMaximumTokens,
+    });
     if (!units.length)
         return { start: 0, compressedStart: 0, rawStart: 0, endExclusive: 0,
             prefixUnitCount: 0, compressedUnitCount: 0, exactUnitCount: 0, exactTokens: 0, exactMessages: 0,
-            compressedReason: "empty", exactReason: "empty" };
+            compressedReason: "empty", exactReason: "empty", exactTurns: coverage(0, "source-exhausted") };
     let rawUnitIndex = units.length - 1;
     const charge = (from) => chargeRawTail(units.slice(from).flatMap(unit => unit.events.map(event => event.projectedEntry)));
-    let exact = charge(rawUnitIndex);
+    let exact = charge(rawUnitIndex), retainedTurns = units[rawUnitIndex].assistantTurns;
+    let exactEntries = units[rawUnitIndex].events.length;
+    let turnLimit = "source-exhausted";
     if (exact.tokens > input.exactTailMaximumTokens)
         throw new Error("context-v4-interval-required-unit-oversized");
-    const expanded = exact.tokens > input.exactTailTokens;
-    while (rawUnitIndex > 0 && !expanded) {
-        // Do not grow through the existing native conversion bound. The newest
-        // required unit itself must pass; no exception turns a partial tail exact.
-        const candidateEntries = units.slice(rawUnitIndex - 1).reduce((sum, unit) => sum + unit.events.length, 0);
-        if (candidateEntries > 256)
+    while (rawUnitIndex > 0) {
+        if (exact.tokens >= input.exactTailTokens && retainedTurns >= turnGoal)
             break;
+        // Retain a contiguous suffix of complete units. The soft token target may
+        // yield to recent turns, but neither hard capacity nor native bounds may.
+        const older = units[rawUnitIndex - 1];
+        const candidateEntries = exactEntries + older.events.length;
+        if (candidateEntries > 256) {
+            turnLimit = "entry-capacity";
+            break;
+        }
         const candidate = charge(rawUnitIndex - 1);
-        if (candidate.tokens > input.exactTailTokens)
+        if (candidate.tokens > input.exactTailMaximumTokens) {
+            turnLimit = "token-capacity";
+            break;
+        }
+        if (candidate.tokens > input.exactTailTokens && retainedTurns >= turnGoal)
             break;
         rawUnitIndex--;
         exact = candidate;
+        exactEntries = candidateEntries;
+        retainedTurns += older.assistantTurns;
     }
     const rawStart = units[rawUnitIndex].start;
     // Recent compressed history is bounded by original content, not elapsed time
@@ -106,6 +127,8 @@ export function selectIntervalPartition(input) {
     return { start: 0, compressedStart, rawStart, endExclusive: end,
         prefixUnitCount: compressedUnitIndex, compressedUnitCount: rawUnitIndex - compressedUnitIndex,
         exactUnitCount: units.length - rawUnitIndex, exactTokens: exact.tokens, exactMessages: exact.messages,
-        compressedReason, exactReason: expanded ? "required-unit-expanded" : "newest-complete-units" };
+        compressedReason, exactReason: exact.tokens > input.exactTailTokens
+            ? rawUnitIndex === units.length - 1 ? "required-unit-expanded" : "recent-turns-expanded" : "newest-complete-units",
+        exactTurns: coverage(retainedTurns, turnLimit) };
 }
 //# sourceMappingURL=interval-partition.js.map

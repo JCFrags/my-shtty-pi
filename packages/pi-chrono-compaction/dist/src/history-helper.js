@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { historySynopsisSystem, parseHistorySynopsisResponse, historySynopsisCompatibilityItems, renderHistorySynopsisPart } from "./history-synopsis.js";
 export { renderHistorySynopsisPart, validateHistorySynopsis } from "./history-synopsis.js";
 export const HISTORY_HELPER_SCHEMA_VERSION = 1;
-export const HISTORY_HELPER_PROMPT_IDENTITY = "chrono-role-specific-original-history-v2";
-export const HISTORY_HELPER_OUTPUT_TOKEN_RESERVATIONS = Object.freeze({ activePrefix: 4096, event: 512, archive: 4096 });
+export const HISTORY_HELPER_PROMPT_IDENTITY = "chrono-role-specific-original-history-v3";
+export const HISTORY_HELPER_OUTPUT_TOKEN_RESERVATIONS = Object.freeze({ activePrefix: 1024, event: 512, archive: 4096 });
 const hash = (text) => createHash("sha256").update(text, "utf8").digest("hex");
 function fail(code) { throw Object.assign(new Error(code), { code }); }
 function identifier(value) {

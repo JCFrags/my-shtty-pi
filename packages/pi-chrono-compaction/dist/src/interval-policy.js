@@ -2,8 +2,9 @@ import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-coding-agent";
 /** Product policy, not a user tuning surface. Token bounds do not enforce an
  * API output cap. The runtime must use caps accepted by its selected adapter. */
 export const INTERVAL_POLICY = Object.freeze({
-    identity: "chrono-interval-policy-v1",
-    version: 1,
+    identity: "chrono-interval-policy-v2",
+    version: 2,
+    exactTailMinimumTurns: 3,
     maxPreparationTurns: 1,
     maxPreparationMs: 60_000,
     completionOutputCapTokens: 16_384,
@@ -15,6 +16,7 @@ export function intervalResponseReserveTokens(model) {
 const integer = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum;
 const emptyBudget = (reasons) => Object.freeze({
     available: false, reasons: Object.freeze([...reasons]), policyIdentity: INTERVAL_POLICY.identity,
+    exactTailMinimumTurns: INTERVAL_POLICY.exactTailMinimumTurns,
     effectiveAvailableTokens: 0, exactTailTokens: 0, activePrefixTokens: 0, compressedHistoryTokens: 0,
     handoffTokens: 0, continuationTokens: 0, reserveTokens: 0, safetyTokens: 0, growthTokens: 0,
     preparationTokens: 0, handoffOutputTokens: 0, requestBoundTokens: 0, noticeBoundTokens: 0, freezeBoundTokens: 0,
@@ -55,12 +57,13 @@ export function deriveIntervalBudget(input) {
     const noticeBoundTokens = Math.max(0, freezeBoundTokens - preparationResponseTokens - growthTokens);
     const usable = requestBoundTokens - system - schemas - Math.max(512, framing) - preparationTokens - growthTokens;
     const effectiveAvailableTokens = Math.max(0, Math.min(usable, input.effectiveAvailableTokens ?? usable));
-    const base = { policyIdentity: INTERVAL_POLICY.identity, effectiveAvailableTokens, reserveTokens, safetyTokens,
+    const base = { policyIdentity: INTERVAL_POLICY.identity, exactTailMinimumTurns: INTERVAL_POLICY.exactTailMinimumTurns,
+        effectiveAvailableTokens, reserveTokens, safetyTokens,
         growthTokens, preparationTokens, requestBoundTokens, noticeBoundTokens, freezeBoundTokens };
     // 256 output tokens cover headings/structure in addition to both text fields.
     const outputRoom = reserveTokens - 256;
-    const continuationCap = Math.min(1_024, Math.floor(outputRoom / 8));
-    const handoffCap = Math.min(4_096, outputRoom - continuationCap);
+    const continuationCap = Math.min(256, Math.floor(outputRoom / 8));
+    const handoffCap = Math.min(1_792, outputRoom - continuationCap);
     if (handoffCap < 512 || continuationCap < 128) {
         return Object.freeze({ ...emptyBudget(["interval-handoff-output-capacity-insufficient"]), ...base });
     }
@@ -69,7 +72,7 @@ export function deriveIntervalBudget(input) {
     }
     const layers = { exactTailTokens: 512, activePrefixTokens: 256, compressedHistoryTokens: 512,
         handoffTokens: 512, continuationTokens: 128 };
-    const caps = { exactTailTokens: 8_192, activePrefixTokens: 4_096, compressedHistoryTokens: 16_384,
+    const caps = { exactTailTokens: 4_096, activePrefixTokens: 1_024, compressedHistoryTokens: 4_096,
         handoffTokens: handoffCap, continuationTokens: continuationCap };
     const order = ["compressedHistoryTokens", "exactTailTokens", "handoffTokens", "compressedHistoryTokens",
         "activePrefixTokens", "continuationTokens"];

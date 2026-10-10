@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { convertToLlm, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { CONTEXT_COMPILER_LIMITS, INTERVAL_CONTEXT_COMPILER_RULESET } from "./context-compiler.js";
 import { chargeCompactionSummary, chargeRawTail } from "./context-budget.js";
-import { deriveIntervalBudget } from "./interval-policy.js";
+import { deriveIntervalBudget, INTERVAL_POLICY } from "./interval-policy.js";
 import { selectIntervalPartition, readyIntervalPartitions, INTERVAL_READY_PREFIX_CANDIDATE_LIMIT } from "./interval-partition.js";
 import { renderIntervalHistory } from "./interval-render.js";
 import { partitionIntervalSource, projectIntervalSource } from "./interval-source.js";
@@ -54,11 +54,13 @@ export function planIntervalContext(snapshot, budget) {
     if (!layers.available)
         fail(layers.reasons[0] ?? "policy-unavailable");
     const units = snapshot.units.map(unit => ({ id: unit.id, start: unit.start,
-        endExclusive: unit.end, complete: unit.status === "complete", events: unit.eventIndexes.map(index => snapshot.events[index]) }));
+        endExclusive: unit.end, complete: unit.status === "complete",
+        assistantTurns: unit.eventIndexes.filter(index => snapshot.events[index].role === "assistant").length,
+        events: unit.eventIndexes.map(index => snapshot.events[index]) }));
     const maximum = Math.max(0, layers.effectiveAvailableTokens - layers.handoffTokens - layers.continuationTokens - 1536);
     const partition = selectIntervalPartition({ units, hints: cutHints(snapshot),
         exactTailTokens: Math.min(layers.exactTailTokens, maximum), exactTailMaximumTokens: maximum,
-        compressedHistoryTokens: layers.compressedHistoryTokens });
+        exactTailMinimumTurns: INTERVAL_POLICY.exactTailMinimumTurns, compressedHistoryTokens: layers.compressedHistoryTokens });
     partitionIntervalSource(snapshot, partition.compressedStart, partition.rawStart);
     return freeze({ partition, layers, units });
 }
