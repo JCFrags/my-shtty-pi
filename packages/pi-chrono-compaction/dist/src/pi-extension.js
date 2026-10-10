@@ -38,7 +38,7 @@ import { DEFAULT_VALUE_WORKER_SETTINGS } from "./value-worker-types.js";
 import { selectHistoryHelperRole, clearHistoryHelperRole, validateHistoryModelSelection } from "./history-helper-config.js";
 import { historyHelperModelCompatibility } from "./history-helper-model.js";
 import { createIntervalHelperRuntime } from "./interval-helper-runtime.js";
-import { INTERVAL_CONTINUATION_RECORD, continuationRecord, hasContinuationDispatch, projectCommittedIntervalRestart, correlatedBoundaryCompaction, intervalRestartContentMessages, committedIntervalRestartReceipt, } from "./interval-runtime.js";
+import { INTERVAL_CONTINUATION_RECORD, continuationRecord, hasContinuationDispatch, projectCommittedIntervalRestart, correlatedBoundaryCompaction, intervalRestartContentMessages, committedIntervalRestartReceipt, samePersistedIntervalValue, } from "./interval-runtime.js";
 import { buildDeterministicRecoveryHandoff, IntervalRecoveryRefusal } from "./interval-recovery.js";
 import { planIntervalContext } from "./interval-compiler.js";
 import { deriveIntervalBudget, classifyPressure, intervalResponseReserveTokens, INTERVAL_POLICY } from "./interval-policy.js";
@@ -2615,8 +2615,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 if (captured.identity !== restart.snapshotId || captured.sourceHash !== manifest.sourceHash
                     || captured.projectionHash !== manifest.projectionHash || stableStringify(captured.origin) !== stableStringify(manifest.origin)
                     || stableStringify(captured.segments) !== stableStringify(manifest.segments)
-                    || stableStringify(captured.events.slice(restart.partition.rawStart, restart.partition.endExclusive))
-                        !== stableStringify(restart.exactTail))
+                    || !samePersistedIntervalValue(captured.events.slice(restart.partition.rawStart, restart.partition.endExclusive), restart.exactTail))
                     throw new Error("context-v4-restart-source-changed");
             } });
     };

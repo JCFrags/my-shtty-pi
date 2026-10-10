@@ -1,6 +1,6 @@
 # Interval compaction implementation
 
-Source: `pi-chrono-compact` `4.1.4-local.20261010`, October 10, 2026. Chrono development dependencies use Pi/AI/TUI `1.1.0`, with peer ranges `>=1.1.0 <1.2.0`. Root tooling and other product pins remain `0.85.1`. See the [Chrono manifest](../../../packages/pi-chrono-compaction/package.json) and [release compatibility](../../chrono-release-compatibility.md).
+Source: `pi-chrono-compact` `4.1.5-local.20261010`, October 10, 2026. Chrono development dependencies use Pi/AI/TUI `1.1.0`, with peer ranges `>=1.1.0 <1.2.0`. Root tooling and other product pins remain `0.85.1`. See the [Chrono manifest](../../../packages/pi-chrono-compaction/package.json) and [release compatibility](../../chrono-release-compatibility.md).
 
 The [approved Markdown reference](../compaction-reference/reference.md) and [styled HTML](../compaction-reference/reference.html) remain the implementation baseline. Status: Approved implementation baseline; implementation in progress. This page describes candidate source, not remote acceptance, selected configuration, or loaded code. The candidate package typecheck and build passed with Pi 1.1.0 on October 9, 2026. One bounded offline public-Pi 1.1 lifecycle check passed: normal and direct current-agent commits, deterministic recovery, commit-before-continuation ordering, exact C, and cancellation without automatic continuation. Three actual saved commits each preceded one continuation. The check made no real model or network calls. This earlier evidence does not verify later repairs. Updates also require [exact-root authorization before selection](../operations/startup-authorization.md), without automatic trust of changed code. The older [session-agent contract](session-agent-compaction.md), [budget reference](compaction-and-budgets.md), and [operations](../operations/README.md) retain their revision-bound behavior and evidence.
 
@@ -125,6 +125,8 @@ The current `before_provider_request` check preserves request scope, summary lif
 Source: [automatic policy](../../../packages/pi-chrono-compaction/src/interval-policy.ts), [request/media accounting](../../../packages/pi-chrono-compaction/src/context-budget.ts), [public boundary contracts](../../../packages/pi-chrono-compaction/src/interval-runtime.ts), and [live hook consumers](../../../packages/pi-chrono-compaction/src/pi-extension.ts).
 
 ## Refusal, recovery, and compatible rollback
+
+Version 4.1.5 compares exact C and commit receipts as persisted JSON values. Shared in-memory references do not survive JSONL reload, so they must not cause a false `context-v4-restart-source-changed` refusal. Existing source hashes and source/projection guards remain unchanged. The bounded lifecycle fixture now passes a JSON-roundtripped receipt through commit correlation and restart projection. This offline check does not establish every saved session's integrity or loaded activation.
 
 Source changes, stale operations, unsafe tool boundaries, oversized protected content, and unavailable capabilities refuse rather than weaken guards. A failed exchange preserves source and pauses ordinary provider work. Direct user input or `/compact` can request fresh summary-only admission. Do not repeatedly retry an unchanged refusal or silently select the older compiler as fallback.
 

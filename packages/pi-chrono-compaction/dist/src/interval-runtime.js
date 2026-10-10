@@ -16,6 +16,12 @@ export function intervalRestartContentMessages(restart, timestamp = 0, details) 
 }
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 function fail(code) { throw new Error(`context-v4-${code}`); }
+/** JSONL preserves values, not shared object references. Compare the persisted
+ * representation without changing the serializer used by existing hashes. */
+export function samePersistedIntervalValue(left, right) {
+    const persisted = (value) => stableStringify(JSON.parse(JSON.stringify(value)));
+    return persisted(left) === persisted(right);
+}
 export function continuationRecord(input) {
     const { continuation, ...fields } = input;
     if (!continuation.trim() || !fields.operationId || !fields.sessionId || !fields.compactionEntryId
@@ -140,7 +146,7 @@ export function correlatedBoundaryCompaction(input) {
             && details.contextReceipt.restart?.technicalBoundaryEntryId === undefined
             && details.contextReceipt.receiptId === input.receiptId && details.contextReceipt.summaryHash === input.summaryHash
             && sha(entry.summary) === input.summaryHash && entry.firstKeptEntryId === entry.id
-            && (!input.expectedReceipt || stableStringify(details.contextReceipt) === stableStringify(input.expectedReceipt));
+            && (!input.expectedReceipt || samePersistedIntervalValue(details.contextReceipt, input.expectedReceipt));
     });
     if (matches.length > 1)
         fail("recovery-commit-ambiguous");
