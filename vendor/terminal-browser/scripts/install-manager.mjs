@@ -304,6 +304,63 @@ export function activate(root, artifactId) {
     return { selected: artifactId, previous: selected?.artifactId ?? null, loadedRuntime: "unchanged" };
   });
 }
+export function reconcilePiPosition(root, expectedOldIndex, expectedNewIndex) {
+  const position = (value) => {
+    if (typeof value === "string") { assert.match(value, /^(0|[1-9][0-9]*)$/); value = Number(value); }
+    assert(Number.isSafeInteger(value) && value >= 0, "expected a zero-based Pi package index");
+    return value;
+  };
+  const fromIndex = position(expectedOldIndex), toIndex = position(expectedNewIndex);
+  assert.notEqual(fromIndex, toIndex, "Pi package position must differ");
+  return withLock(root, () => {
+    const receiptFile = path.join(root, "installation.json"), receiptBefore = snapshot(receiptFile);
+    const installation = config(root);
+    const selectionFile = path.join(root, "selection.json"), before = snapshot(selectionFile);
+    const selected = before ? JSON.parse(before) : null;
+    assert(selected?.pi && installation.selection.piSettings, "no managed Pi selection to reconcile");
+    const bundle = path.join(root, "releases", id(selected.artifactId), "terminal-browser");
+    assert.equal(selected.source, path.join(bundle, "pi-extension"), "Pi source is not owned by this installation");
+    assert.equal(selected.pi.file, installation.selection.piSettings, "Pi settings receipt differs");
+    assert.equal(selected.pi.to, selected.source, "Pi journal source differs");
+    assert.equal(selected.pi.index, fromIndex, "recorded Pi package index differs");
+    const recorded = JSON.parse(selected.pi.after).packages;
+    assert(Array.isArray(recorded), "Pi journal packages must be an array");
+    // The historic snapshot keeps its original order, including after another reconciliation.
+    const entries = recorded.filter(entry => packageSource(entry) === selected.source);
+    assert.equal(entries.length, 1, "expected exactly one recorded Pi package source");
+    const settingsBefore = snapshot(selected.pi.file), settings = JSON.parse(settingsBefore ?? "{}");
+    assert(Array.isArray(settings.packages), "Pi packages must be an array");
+    assert.deepEqual(settings.packages.flatMap((entry, index) => packageSource(entry) === selected.source ? [index] : []), [toIndex], "current Pi package source or index differs");
+    assert.deepEqual(settings.packages[toIndex], entries[0], "Pi package entry changed");
+    // Pin legacy add/remove entries before changing the index used by their snapshots.
+    const pi = { ...selected.pi, index: toIndex, entryDelta: packageEntryDelta(selected.pi) };
+    checkPackage(pi, "after");
+    const links = selectedLinks(installation, bundle);
+    assert.deepEqual(selected.links.map(link => link.file), links.map(link => link.file), "link receipt differs");
+    const checkLinks = () => {
+      for (const link of links) {
+        assert.equal(selected.links.find(entry => entry.file === link.file).after, link.after, "link receipt target differs");
+        assert.deepEqual(linkSnapshot(link.file), link.after, "selected link was changed outside this manager");
+      }
+    };
+    checkLinks();
+    assert.equal(selected.herdr?.file ?? null, installation.selection.herdrRegistry, "Herdr receipt differs");
+    const herdrBefore = selected.herdr ? snapshot(selected.herdr.file) : null;
+    if (selected.herdr) changeHerdr(selected.herdr.file, selected.herdr.to, selected.herdr.to);
+    const after = json({ ...selected, pi });
+    const backups = path.join(root, "backups");
+    privateDirectory(backups, true);
+    const backup = path.join(backups, `${randomUUID()}.json`);
+    fs.writeFileSync(backup, json({ operation: "reconcile-pi-position", fromIndex, toIndex, selection: { file: selectionFile, before, after } }), { flag: "wx", mode: 0o600 });
+    assert.equal(snapshot(receiptFile), receiptBefore, "installation receipt changed");
+    assert.equal(snapshot(pi.file), settingsBefore, "Pi settings changed during reconciliation");
+    if (selected.herdr) assert.equal(snapshot(selected.herdr.file), herdrBefore, "Herdr registry changed during reconciliation");
+    checkLinks();
+    // One atomic metadata replacement needs no multi-file pending transaction.
+    atomic(selectionFile, after, before);
+    return { reconciled: true, selected: selected.artifactId, fromIndex, toIndex, backup, loadedRuntime: "unchanged" };
+  });
+}
 export function rollback(root) {
   return withLock(root, () => {
     config(root);
@@ -461,9 +518,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   try {
     const [command, ...args] = process.argv.slice(2);
     if (command === "help" || command === "--help" || !command) {
-      process.stdout.write("Usage: install.sh init ROOT [--cli PATH] [--pi-settings PATH] [--herdr-registry PATH --herdr-link PATH] [--skill PATH]\n       install.sh stage ARCHIVE MANIFEST ROOT\n       install.sh configure ROOT RECEIPT\n       install.sh activate ROOT ARTIFACT_ID\n       install.sh rollback ROOT | recover ROOT | status ROOT\nPaths must be absolute. Fresh init selects only the CLI unless an integration is explicitly requested.\nExisting installations require a reviewed receipt. No command restarts a runtime.\n");
+      process.stdout.write("Usage: install.sh init ROOT [--cli PATH] [--pi-settings PATH] [--herdr-registry PATH --herdr-link PATH] [--skill PATH]\n       install.sh stage ARCHIVE MANIFEST ROOT\n       install.sh configure ROOT RECEIPT\n       install.sh activate ROOT ARTIFACT_ID\n       install.sh reconcile-pi-position ROOT EXPECTED_OLD_INDEX EXPECTED_NEW_INDEX\n       install.sh rollback ROOT | recover ROOT | status ROOT\nIndices are zero-based. Reconciliation changes only owned metadata for an unchanged Pi entry.\nPaths must be absolute. Fresh init selects only the CLI unless an integration is explicitly requested.\nExisting installations require a reviewed receipt. No command restarts a runtime.\n");
     } else {
-      const result = command === "init" ? initialize(...args) : command === "stage" ? stage(...args) : command === "configure" ? configure(...args) : command === "activate" ? activate(...args) : command === "rollback" ? rollback(...args) : command === "status" ? status(...args) : command === "recover" ? recover(...args) : null;
+      if (command === "reconcile-pi-position") assert.equal(args.length, 3, "reconciliation requires root and both expected indices");
+      const result = command === "reconcile-pi-position" ? reconcilePiPosition(...args) : command === "init" ? initialize(...args) : command === "stage" ? stage(...args) : command === "configure" ? configure(...args) : command === "activate" ? activate(...args) : command === "rollback" ? rollback(...args) : command === "status" ? status(...args) : command === "recover" ? recover(...args) : null;
       assert(result, "unknown install command; use --help");
       process.stdout.write(json(result));
     }

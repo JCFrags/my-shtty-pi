@@ -233,6 +233,44 @@ uncommitted operation or confirms a completed selection while preserving unrelat
 later settings. Repeating recovery is safe. It starts/resumes no browser.
 SIGKILL recovery tests do not establish power-loss durability.
 
+### Reconcile a moved Pi package
+
+Activation and rollback still refuse a changed package index. If the unique owned
+browser entry moved but its complete value is unchanged, inspect both positions
+and use a reviewed manager that supports this explicit command:
+
+```sh
+"$MANAGER" reconcile-pi-position "$INSTALL" EXPECTED_OLD_INDEX EXPECTED_NEW_INDEX
+```
+
+Indices are zero-based. For a recorded index of `17` and a confirmed current index
+of `18`, supply `17 18`. The command requires an existing managed Pi selection,
+the expected recorded index, and exactly one current entry at the expected new
+index. It compares the complete entry with the recorded activation snapshot.
+Changed source, filter, other entry fields, duplicates, stale positions, changed
+links or Herdr selection, unsafe paths, a manager lock, or a pending transaction
+refuse. Do not use this command to approve a changed package or repair other state.
+
+The command does not write Pi settings, reorder packages, change the installation
+receipt, select another artifact, or change CLI, skill, or Herdr selections. It
+retains an owner-only before/after record under `backups/`, then atomically updates
+only the current selection's Pi index. Legacy fresh-install journals also receive
+the exact owned entry delta before their index changes. Historic snapshots, backup
+files, and the previous-selection chain remain unchanged. No runtime restarts.
+
+Keep using the reviewed reconciliation manager even after a runtime rollback.
+The next activation records this reconciled selection as its previous selection.
+One rollback of that activation returns the valid reconciled receipt and preserves
+later unrelated settings. Reconciliation is not a new activation or rollback step.
+Rollback still reverses the selected activation, not the reconciliation. Older
+history retains its original positions and can refuse after another rollback.
+Stop at that refusal. Do not rewrite history or restore a backup over live settings.
+
+This command uses one atomic metadata replacement, not a multi-file pending
+transaction. If interrupted, the selection retains either its old or new receipt.
+Inspect it and the retained before/after record. Use explicit `recover` only for a
+verified dead manager lock. Recovery does not undo a completed reconciliation.
+
 ## Verify and replace loaded processes safely
 
 A daemon and Pi extension retain their startup artifact, protocol, and process

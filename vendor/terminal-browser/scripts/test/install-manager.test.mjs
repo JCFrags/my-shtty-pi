@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { activate, rollback, stage, status } from "../install-manager.mjs";
+import { activate, reconcilePiPosition, rollback, stage, status } from "../install-manager.mjs";
 import { fileHash, inventory, objectHash, writeJson } from "../dist-manifest.mjs";
 import { fixture, root as repository } from "./dist-fixture.mjs";
 
@@ -185,6 +185,100 @@ test("schema 1/2 to 3 activation migrates only the exact legacy filter and rollb
     rollback(box.root);
     assert.equal(fs.readFileSync(box.selection.cli, "utf8"), "#!/bin/sh\necho prior\n");
     assert.equal(JSON.parse(fs.readFileSync(box.selection.herdrRegistry))[1].plugin_root, box.selection.herdrSource);
+  }
+});
+
+test("explicit Pi position reconciliation preserves settings and history through activation and one-step rollback", (t) => {
+  const a = archive(t), b = archive(t, (dir, manifest) => {
+    fs.appendFileSync(path.join(dir, "browser/dist/main.js"), " B");
+    manifest.identity.source.commit = "b".repeat(40);
+  });
+  for (const mode of ["adopted", "fresh", "legacy-fresh"]) {
+    const box = sandbox(t, mode !== "adopted");
+    const initial = mode === "adopted" ? JSON.parse(fs.readFileSync(box.settings)) : {};
+    const owned = initial.packages?.[1];
+    if (owned) owned.extensions = ["dist/menu.js"];
+    initial.packages = [...Array.from({ length: 17 }, (_, index) => `unrelated-${index}`), ...(owned ? [owned, "last"] : [])];
+    writeJson(box.settings, initial);
+    for (const candidate of [a, b]) stage(candidate.tarball, candidate.outerFile, box.root);
+    activate(box.root, a.manifest.artifactId);
+    if (mode === "adopted") activate(box.root, b.manifest.artifactId);
+    const selectedFile = path.join(box.root, "selection.json");
+    if (mode === "legacy-fresh") {
+      const legacy = JSON.parse(fs.readFileSync(selectedFile));
+      delete legacy.pi.entryDelta;
+      writeJson(selectedFile, legacy);
+    }
+    const before = fs.readFileSync(selectedFile, "utf8"), selected = JSON.parse(before);
+    const backups = path.join(box.root, "backups");
+    const historical = fs.readdirSync(backups).map(name => [name, fs.readFileSync(path.join(backups, name), "utf8")]);
+    const moved = JSON.parse(fs.readFileSync(box.settings));
+    moved.packages.unshift("inserted-before-browser");
+    writeJson(box.settings, moved);
+    const settingsBefore = fs.readFileSync(box.settings, "utf8");
+    const receiptBefore = fs.readFileSync(path.join(box.root, "installation.json"), "utf8");
+    const herdrBefore = fs.readFileSync(box.selection.herdrRegistry, "utf8");
+    const linksBefore = [box.selection.cli, box.selection.herdr].map(file => fs.readlinkSync(file));
+    const next = mode === "adopted" ? a : b;
+    assert.throws(() => activate(box.root, next.manifest.artifactId), /Pi package order changed/);
+    assert.throws(() => rollback(box.root), /Pi package source or order changed/);
+    if (mode === "adopted") {
+      for (const edit of [entry => { entry.source = "changed-source"; }, entry => { entry.extensions = []; }, entry => { entry.skills = ["changed"]; }]) {
+        const changed = structuredClone(moved);
+        edit(changed.packages[18]);
+        writeJson(box.settings, changed);
+        assert.throws(() => reconcilePiPosition(box.root, 17, 18));
+        assert.equal(fs.readFileSync(selectedFile, "utf8"), before);
+      }
+      const duplicate = structuredClone(moved);
+      duplicate.packages.push(duplicate.packages[18]);
+      writeJson(box.settings, duplicate);
+      assert.throws(() => reconcilePiPosition(box.root, 17, 18), /current Pi package source or index differs/);
+      fs.writeFileSync(box.settings, settingsBefore);
+      for (const positions of [[16, 18], [17, 19], [17, 17], [17, -1]]) assert.throws(() => reconcilePiPosition(box.root, ...positions));
+      const pending = path.join(box.root, "pending.json");
+      fs.writeFileSync(pending, "{}");
+      assert.throws(() => reconcilePiPosition(box.root, 17, 18), /explicit recover/);
+      fs.unlinkSync(pending);
+      fs.chmodSync(box.root, 0o755);
+      assert.throws(() => reconcilePiPosition(box.root, 17, 18), /mode 0700/);
+      fs.chmodSync(box.root, 0o700);
+      assert.equal(fs.readFileSync(selectedFile, "utf8"), before);
+      assert.equal(fs.readdirSync(backups).length, historical.length);
+    }
+    const result = box.run("reconcile-pi-position", box.root, "17", "18");
+    assert.equal(result.reconciled, true);
+    assert.equal(result.selected, selected.artifactId);
+    assert.equal(result.loadedRuntime, "unchanged");
+    const reconciled = JSON.parse(fs.readFileSync(selectedFile));
+    assert.deepEqual(reconciled, { ...selected, pi: { ...selected.pi, index: 18, entryDelta: selected.pi.entryDelta ?? (mode === "legacy-fresh" ? { before: null, after: JSON.parse(selected.pi.after).packages[17] } : null) } });
+    const evidence = JSON.parse(fs.readFileSync(result.backup));
+    assert.equal(evidence.operation, "reconcile-pi-position");
+    assert.equal(evidence.selection.before, before);
+    assert.equal(evidence.selection.after, fs.readFileSync(selectedFile, "utf8"));
+    assert.equal(fs.statSync(result.backup).mode & 0o777, 0o600);
+    for (const [name, bytes] of historical) assert.equal(fs.readFileSync(path.join(backups, name), "utf8"), bytes);
+    assert.equal(fs.readFileSync(box.settings, "utf8"), settingsBefore);
+    assert.equal(fs.readFileSync(path.join(box.root, "installation.json"), "utf8"), receiptBefore);
+    assert.equal(fs.readFileSync(box.selection.herdrRegistry, "utf8"), herdrBefore);
+    assert.deepEqual([box.selection.cli, box.selection.herdr].map(file => fs.readlinkSync(file)), linksBefore);
+    assert.throws(() => reconcilePiPosition(box.root, 17, 18), /recorded Pi package index differs/);
+    activate(box.root, next.manifest.artifactId);
+    const later = JSON.parse(fs.readFileSync(box.settings));
+    later.unrelated = { retained: true };
+    later.packages[0] = "later-unrelated-package";
+    later.packages.push("later-appended-package");
+    writeJson(box.settings, later);
+    const plugins = JSON.parse(fs.readFileSync(box.selection.herdrRegistry));
+    plugins[0].retained = true;
+    plugins.at(-1).enabled = false;
+    writeJson(box.selection.herdrRegistry, plugins);
+    rollback(box.root);
+    assert.deepEqual(JSON.parse(fs.readFileSync(selectedFile)), reconciled);
+    assert.deepEqual(JSON.parse(fs.readFileSync(box.settings)), { ...later, packages: later.packages.map((entry, index) => index === 18 ? moved.packages[18] : entry) });
+    assert.equal(JSON.parse(fs.readFileSync(box.selection.herdrRegistry))[0].retained, true);
+    assert.equal(JSON.parse(fs.readFileSync(box.selection.herdrRegistry)).at(-1).enabled, false);
+    assert(activate(box.root, selected.artifactId).repeated);
   }
 });
 
