@@ -1125,7 +1125,7 @@
       "path": "docs/installation.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "69c3efdec758f0bd5750294ab51d4f3e4a88080d7f2c2c33ddb8c6f2b3724d17",
+      "sha256": "6476831102eeb53807534c2566d11be3200a5f30c6263db843583ceddbcb9466",
       "modified": true
     },
     {
@@ -2196,7 +2196,7 @@
       "path": "scripts/install-manager.mjs",
       "sourceSha256": "5e045fbb6a8a7e83e8d091f68e6f74ec86020f79d21ab2a2063a833202ad96b5",
       "mode": 420,
-      "sha256": "d7ffcf70e3f13d04ddcd00030bad02623f7feb576b1064a2824ecfeeaad0a77e",
+      "sha256": "26afb32965a7da4309aedf7908020e83f60b6f45c3406242659e5047b65417d8",
       "modified": true
     },
     {
@@ -2273,7 +2273,7 @@
       "path": "scripts/test/install-manager.test.mjs",
       "sourceSha256": "76738c31eee563b74b5385b395b5519b8b78a89611b15c0201e763a55e1753c7",
       "mode": 420,
-      "sha256": "8006e13be7f92f6cac91870609563e821ea885d3f0d28082eb2415188c12f188",
+      "sha256": "28791ee4283724b24d29f95bcb1980d76d18425dfaa31d97e8c1325c15de5015",
       "modified": true
     },
     {
