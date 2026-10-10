@@ -313,7 +313,8 @@ export function chronoScriptEnvironment(root) {
   const home = join(root, '.verify-chrono-home');
   const temporary = join(home, 'tmp');
   mkdirSync(temporary, { recursive: true, mode: 0o700 });
-  return { PATH: process.env.PATH, HOME: home, TMPDIR: temporary, PI_CODING_AGENT_DIR: join(home, 'agent'), LANG: 'C.UTF-8' };
+  return { PATH: process.env.PATH, HOME: home, TMPDIR: temporary, PI_CODING_AGENT_DIR: join(home, 'agent'), LANG: 'C.UTF-8',
+    ...(process.env.CHRONO_TEST_CGROUP_OOM === '1' ? { CHRONO_TEST_CGROUP_OOM: '1' } : {}) };
 }
 
 // Protocol JavaScript and declarations are tracked nested workspace output.

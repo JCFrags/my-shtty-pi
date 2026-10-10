@@ -40,8 +40,18 @@ test("same-session summary requires observed request, sole assistant submission 
   assert.equal(consumed.request.scope.leafId, "source");
   assert.equal(consumed.consumedBoundaryLeafId, "request");
   const submission = parseSessionAgentSummarySubmission({ requestId: request.requestId,
-    summary: "Continue the approved task. The last focused check passed. Publication is not approved.", relevanceHints: ["current task"] });
+    handoff: "Continue the approved task. The last focused check passed. Publication is not approved.",
+    continuation: "Continue the approved task from the verified source. Do not publish.", relevanceHints: ["current task"] });
   assert.ok(submission);
+  assert.equal(submission.summary, submission.handoff, "the compatibility alias is the handoff, not the continuation");
+  assert.notEqual(submission.handoff, submission.continuation);
+  assert.match(prompt, /separate immediate continuation/);
+  assert.match(prompt, /Do not submit the legacy summary field/);
+  const adaptiveRequest = createSessionAgentSummaryRequest({ requestId: request.requestId, scope, reason: "manual", now: 1000,
+    handoffTokens: 512, continuationTokens: 128 });
+  assert.match(renderSessionAgentSummaryRequest(adaptiveRequest), /handoff.*approximately 512 tokens.*continuation.*approximately 128 tokens/);
+  assert.throws(() => createSessionAgentSummaryRequest({ requestId: request.requestId, scope, reason: "manual", now: 1000,
+    continuationTokens: 0 }), /layer-budget-invalid/);
   const call = { type: "toolCall", id: "submit-call", name: "request_compaction", arguments: submission };
   const assistant = { role: "assistant", provider: scope.model.provider, model: scope.model.id, api: scope.model.api,
     stopReason: "toolUse", content: [call] };
@@ -50,6 +60,14 @@ test("same-session summary requires observed request, sole assistant submission 
   const accepted = acceptSessionAgentSummary(consumed, submission, { ...view("assistant"), toolCallId: call.id });
   assert.equal(accepted.submissionAssistantLeafId, "assistant");
   assert.equal(accepted.authority, "derived");
+  const legacy = parseSessionAgentSummarySubmission({ requestId: request.requestId, summary: submission.handoff });
+  assert.ok(legacy);
+  assert.equal(legacy.continuation, undefined, "legacy parsing does not invent a current-agent continuation");
+  assert.throws(() => acceptSessionAgentSummary(consumed, legacy, { ...view("assistant"), toolCallId: call.id }), /fresh-continuation-required/);
+  assert.throws(() => acceptSessionAgentSummary({ ...consumed, request: { ...request, handoffTokens: 1 } }, submission,
+    { ...view("assistant"), toolCallId: call.id }), /handoff-budget-exceeded/);
+  assert.throws(() => acceptSessionAgentSummary({ ...consumed, request: { ...request, continuationTokens: 1 } }, submission,
+    { ...view("assistant"), toolCallId: call.id }), /continuation-budget-exceeded/);
   entries.set("late-system", { type: "message", id: "late-system", parentId: "request", message: {
     role: "system", content: "Changed after the request was consumed.",
   } });
@@ -59,7 +77,7 @@ test("same-session summary requires observed request, sole assistant submission 
   entries.delete("late-system"); entries.delete("late-assistant");
   assert.throws(() => settleSessionAgentSummary(accepted, view("assistant")), /result-unavailable/);
   assert.equal(JSON.stringify([...entries.values()]), beforeAccept, "request and submission guards do not rewrite source entries");
-  assert.throws(() => acceptSessionAgentSummary(consumed, { ...submission, summary: "Different" },
+  assert.throws(() => acceptSessionAgentSummary(consumed, { ...submission, summary: "Different", handoff: "Different" },
     { ...view("assistant"), toolCallId: call.id }), /arguments-mismatch/);
   assistant.content.push({ ...call, id: "sibling-call" });
   assert.throws(() => acceptSessionAgentSummary(consumed, submission, { ...view("assistant"), toolCallId: call.id }), /sole-tool-call/);
@@ -116,11 +134,22 @@ test("same-session summary requires observed request, sole assistant submission 
   } });
   assert.equal(consumeSessionAgentSummaryRequest(toolRequest, view("sibling-result"), [toolMessage])?.consumedBoundaryLeafId, "sibling-result");
   assert.equal(parseSessionAgentSummarySubmission({}), undefined);
-  assert.throws(() => parseSessionAgentSummarySubmission({ requestId: request.requestId, summary: " " }), /summary-invalid/);
-  assert.equal(parseSessionAgentSummarySubmission({ requestId: request.requestId, summary: "s".repeat(32000) })?.summary.length, 32000);
-  assert.throws(() => parseSessionAgentSummarySubmission({ requestId: request.requestId, summary: "s".repeat(SESSION_AGENT_SUMMARY_LIMITS.summaryChars + 1) }), /summary-invalid/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ requestId: request.requestId, handoff: " " }), /handoff-invalid/);
+  assert.equal(parseSessionAgentSummarySubmission({ requestId: request.requestId, summary: "s".repeat(32000) })?.handoff.length, 32000);
   assert.throws(() => parseSessionAgentSummarySubmission({ requestId: request.requestId,
-    summary: "界".repeat(Math.floor(SESSION_AGENT_SUMMARY_LIMITS.summaryBytes / 3) + 1) }), /summary-invalid/);
+    handoff: "s".repeat(SESSION_AGENT_SUMMARY_LIMITS.summaryChars + 1) }), /handoff-invalid/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ requestId: request.requestId,
+    handoff: "界".repeat(Math.floor(SESSION_AGENT_SUMMARY_LIMITS.summaryBytes / 3) + 1) }), /handoff-invalid/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ ...submission, summary: "Different" }), /handoff-conflict/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ ...submission, continuation: " " }), /continuation-invalid/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ ...submission,
+    continuation: "c".repeat(SESSION_AGENT_SUMMARY_LIMITS.continuationChars + 1) }), /continuation-invalid/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ ...submission,
+    continuation: "界".repeat(Math.floor(SESSION_AGENT_SUMMARY_LIMITS.continuationBytes / 3) + 1) }), /continuation-invalid/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ requestId: request.requestId,
+    handoff: "h".repeat(SESSION_AGENT_SUMMARY_LIMITS.summaryChars - 1), continuation: "cc" }), /submission-bound-exceeded/);
+  assert.throws(() => parseSessionAgentSummarySubmission({ requestId: request.requestId,
+    handoff: "界".repeat(Math.floor(SESSION_AGENT_SUMMARY_LIMITS.summaryBytes / 3)), continuation: "c" }), /submission-bound-exceeded/);
   assert.throws(() => parseSessionAgentSummarySubmission({ ...submission, relevanceHints: Array(9).fill("hint") }), /hints-invalid/);
   assert.throws(() => parseSessionAgentSummarySubmission({ ...submission, relevanceHints: null }), /hints-invalid/);
   assert.throws(() => parseSessionAgentSummarySubmission({ ...submission, authorization: true }), /fields-invalid/);

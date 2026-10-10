@@ -19,7 +19,9 @@ Do not copy another computer's `node_modules`, absolute settings paths, worker
 authorizations, credentials, session files, or private route configuration.
 Build native dependencies on the destination computer. For an existing
 installation, use [scoped activation](activation.md) instead of appending
-another registration for the same tool.
+another registration for the same tool. Chrono updates use the guarded
+[authorization-before-selection command](chrono/operations/startup-authorization.md),
+not a settings-only path replacement.
 
 ## Prerequisites
 

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="694" viewBox="0 0 1040 694" role="img" aria-labelledby="intervals-title intervals-desc">
+<title id="intervals-title">Current-interval source boundaries</title>
+<desc id="intervals-desc">Approved implementation baseline; implementation in progress. Session 1 originals lead to compaction, then Session 2 originals S through E. Session 2 helpers receive no Session 1 originals or old restart packet. Session 2 is partitioned into A=[S,H), active synopsis; B=[H,R), compressed history; C=[R,E), exact tail. An independent optional archive takes the original A+B+C, raw [S,E), not the derived synopsis, history, and tail renderings.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="intervals-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="694" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Current-interval source boundaries</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="104" width="248" height="90" rx="3" class="d-box"/><text x="46" y="135" class="d-label"><tspan x="46" dy="0">Session 1</tspan></text><text x="46" y="165" class="d-copy"><tspan x="46" dy="0">Originals</tspan></text>
+<path d="M276 149 H328" class="d-line" marker-end="url(#intervals-arrow)"/>
+<rect x="328" y="104" width="176" height="90" rx="3" class="d-box"/><text x="346" y="135" class="d-label"><tspan x="346" dy="0">Compaction</tspan></text>
+<path d="M504 149 H558" class="d-line" marker-end="url(#intervals-arrow)"/>
+<rect x="558" y="104" width="454" height="90" rx="3" class="d-box"/><text x="576" y="135" class="d-label"><tspan x="576" dy="0">Session 2 originals</tspan></text><text x="576" y="165" class="d-copy"><tspan x="576" dy="0">Current raw interval: [S,E)</tspan></text>
+<rect x="28" y="222" width="984" height="62" rx="3" class="d-box"/><text x="46" y="253" class="d-label"><tspan x="46" dy="0">No Session 1 / old packet input to Session 2 helpers</tspan></text>
+<text x="56" y="325" class="d-small"><tspan x="56" dy="0">Session 2 restart renderings: one partition, no gap or overlap</tspan></text>
+<text x="56" y="361" class="d-cut"><tspan x="56" dy="0">S</tspan></text>
+<text x="348" y="361" class="d-cut"><tspan x="348" dy="0">H</tspan></text>
+<text x="744" y="361" class="d-cut"><tspan x="744" dy="0">R</tspan></text>
+<text x="972" y="361" class="d-cut"><tspan x="972" dy="0">E</tspan></text>
+<rect x="56" y="380" width="292" height="106" rx="3" class="d-a"/><text x="74" y="411" class="d-label"><tspan x="74" dy="0">A: active synopsis</tspan></text><text x="74" y="441" class="d-copy"><tspan x="74" dy="0">[S,H)</tspan></text>
+<rect x="348" y="380" width="396" height="106" rx="3" class="d-b"/><text x="366" y="411" class="d-label"><tspan x="366" dy="0">B: compressed history</tspan></text><text x="366" y="441" class="d-copy"><tspan x="366" dy="0">[H,R)</tspan></text>
+<rect x="744" y="380" width="244" height="106" rx="3" class="d-c"/><text x="762" y="411" class="d-label"><tspan x="762" dy="0">C: exact tail</tspan></text><text x="762" y="441" class="d-copy"><tspan x="762" dy="0">[R,E)</tspan></text>
+<rect x="56" y="536" width="310" height="90" rx="3" class="d-box"/><text x="74" y="567" class="d-label"><tspan x="74" dy="0">ORIGINAL A + B + C</tspan></text><text x="74" y="597" class="d-copy"><tspan x="74" dy="0">Raw [S,E)</tspan></text>
+<path d="M366 581 H430" class="d-line d-dash" marker-end="url(#intervals-arrow)"/>
+<rect x="430" y="536" width="558" height="90" rx="3" class="d-box"/><text x="448" y="567" class="d-label"><tspan x="448" dy="0">Independent optional archive</tspan></text><text x="448" y="597" class="d-copy"><tspan x="448" dy="0">Not the three derived restart renderings</tspan></text>
+<text x="56" y="664" class="d-small"><tspan x="56" dy="0">Archive work does not block compaction.</tspan></text>
+</svg>

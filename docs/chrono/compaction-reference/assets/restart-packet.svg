@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="914" viewBox="0 0 1040 914" role="img" aria-labelledby="restart-packet-title restart-packet-desc">
+<title id="restart-packet-title">Restart packet and continuation order</title>
+<desc id="restart-packet-desc">Approved implementation baseline; implementation in progress. The proposed request order is normal system, tools, and applicable instructions; current-agent task handoff; A synopsis; B compressed history; C small exact tail; current-agent continuation message; then new authorized work. The main conversational agent writes handoff and continuation in one current response. Derived context does not grant new authority.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="restart-packet-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="914" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Restart packet and continuation order</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="94" width="984" height="676" rx="3" class="d-outline"/>
+<rect x="60" y="116" width="920" height="84" rx="3" class="d-box"/><text x="78" y="147" class="d-label"><tspan x="78" dy="0">01  Normal request context</tspan></text><text x="78" y="177" class="d-copy"><tspan x="78" dy="0">System, tools, and applicable instructions</tspan></text>
+<path d="M520 200 V224" class="d-line" marker-end="url(#restart-packet-arrow)"/>
+<rect x="60" y="224" width="920" height="84" rx="3" class="d-box"/><text x="78" y="255" class="d-label"><tspan x="78" dy="0">02  Current-agent task handoff</tspan></text><text x="78" y="285" class="d-copy"><tspan x="78" dy="0">Written by the current conversational agent</tspan></text>
+<path d="M520 308 V332" class="d-line" marker-end="url(#restart-packet-arrow)"/>
+<rect x="60" y="332" width="920" height="84" rx="3" class="d-a"/><text x="78" y="363" class="d-label"><tspan x="78" dy="0">03  A: active synopsis</tspan></text><text x="78" y="393" class="d-copy"><tspan x="78" dy="0">[S,H)</tspan></text>
+<path d="M520 416 V440" class="d-line" marker-end="url(#restart-packet-arrow)"/>
+<rect x="60" y="440" width="920" height="84" rx="3" class="d-b"/><text x="78" y="471" class="d-label"><tspan x="78" dy="0">04  B: compressed history</tspan></text><text x="78" y="501" class="d-copy"><tspan x="78" dy="0">[H,R)</tspan></text>
+<path d="M520 524 V548" class="d-line" marker-end="url(#restart-packet-arrow)"/>
+<rect x="60" y="548" width="920" height="84" rx="3" class="d-c"/><text x="78" y="579" class="d-label"><tspan x="78" dy="0">05  C: small exact tail</tspan></text><text x="78" y="609" class="d-copy"><tspan x="78" dy="0">[R,E)</tspan></text>
+<path d="M520 632 V656" class="d-line" marker-end="url(#restart-packet-arrow)"/>
+<rect x="60" y="656" width="920" height="84" rx="3" class="d-box"/><text x="78" y="687" class="d-label"><tspan x="78" dy="0">06  Current-agent continuation message</tspan></text><text x="78" y="717" class="d-copy"><tspan x="78" dy="0">Same current response as the handoff</tspan></text>
+<path d="M520 740 V802" class="d-line" marker-end="url(#restart-packet-arrow)"/>
+<rect x="60" y="802" width="920" height="84" rx="3" class="d-box"/><text x="78" y="833" class="d-label"><tspan x="78" dy="0">07  New authorized work</tspan></text><text x="78" y="863" class="d-copy"><tspan x="78" dy="0">The packet does not create permission to continue</tspan></text>
+</svg>

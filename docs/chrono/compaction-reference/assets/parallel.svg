@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="844" viewBox="0 0 1040 844" role="img" aria-labelledby="parallel-title parallel-desc">
+<title id="parallel-title">Parallel work lanes and the required final join</title>
+<desc id="parallel-desc">Approved implementation baseline; implementation in progress. Main work, optional event reduction, and closed-prefix synopsis precompute can overlap before final E. At E freeze, main-agent handoff plus continuation and history/tail assembly can overlap. Final validation and commit join the required products, using an accepted or replacement synopsis. Optional archive work is queued from original raw [S,E), outside the compaction critical path, and is not a commit input.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="parallel-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="844" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Parallel work lanes and the required final join</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<text x="196" y="113" class="d-label"><tspan x="196" dy="0">Before final E</tspan></text>
+<text x="570" y="113" class="d-label"><tspan x="570" dy="0">After E freeze</tspan></text>
+<path d="M548 126 V590" class="d-line d-dash"/>
+<text x="511" y="625" class="d-small"><tspan x="511" dy="0">E freeze</tspan></text>
+<text x="28" y="180" class="d-label"><tspan x="28" dy="0">Main</tspan><tspan x="28" dy="26">work</tspan></text>
+<rect x="196" y="146" width="318" height="100" rx="3" class="d-box"/><text x="214" y="177" class="d-label"><tspan x="214" dy="0">Append originals</tspan></text><text x="214" y="207" class="d-copy"><tspan x="214" dy="0">Authorized main work</tspan></text>
+<path d="M514 196 H578" class="d-line" marker-end="url(#parallel-arrow)"/>
+<rect x="578" y="146" width="264" height="100" rx="3" class="d-box"/><text x="596" y="177" class="d-label"><tspan x="596" dy="0">Main-agent handoff</tspan></text><text x="596" y="207" class="d-copy"><tspan x="596" dy="0">+ continuation</tspan></text>
+<text x="28" y="310" class="d-label"><tspan x="28" dy="0">Optional</tspan><tspan x="28" dy="26">event lane</tspan></text>
+<rect x="196" y="276" width="318" height="100" rx="3" class="d-box"/><text x="214" y="307" class="d-label"><tspan x="214" dy="0">Event reduction</tspan></text><text x="214" y="337" class="d-copy"><tspan x="214" dy="0">Can overlap main work</tspan></text>
+<path d="M514 326 H578" class="d-line d-dash" marker-end="url(#parallel-arrow)"/>
+<rect x="578" y="276" width="264" height="100" rx="3" class="d-box"/><text x="596" y="307" class="d-label"><tspan x="596" dy="0">History/tail</tspan></text><text x="596" y="337" class="d-copy"><tspan x="596" dy="0">Assembly</tspan></text>
+<text x="28" y="440" class="d-label"><tspan x="28" dy="0">Closed-prefix</tspan><tspan x="28" dy="26">synopsis</tspan></text>
+<rect x="196" y="406" width="318" height="100" rx="3" class="d-box"/><text x="214" y="437" class="d-label"><tspan x="214" dy="0">Original [S,H)</tspan></text><text x="214" y="467" class="d-copy"><tspan x="214" dy="0">Synopsis precompute</tspan></text>
+<path d="M514 456 H578" class="d-line" marker-end="url(#parallel-arrow)"/>
+<rect x="578" y="406" width="264" height="100" rx="3" class="d-box"/><text x="596" y="437" class="d-label"><tspan x="596" dy="0">Accept or replace</tspan></text><text x="596" y="467" class="d-copy"><tspan x="596" dy="0">Validated synopsis</tspan></text>
+<path d="M842 196 H878 V326 H896" class="d-line" marker-end="url(#parallel-arrow)"/>
+<path d="M842 326 H896" class="d-line" marker-end="url(#parallel-arrow)"/>
+<path d="M842 456 H878 V326 H896" class="d-line" marker-end="url(#parallel-arrow)"/>
+<rect x="896" y="266" width="116" height="122" rx="3" class="d-box"/><text x="914" y="297" class="d-label"><tspan x="914" dy="0">Validate</tspan><tspan x="914" dy="26">+ commit</tspan></text>
+<text x="196" y="555" class="d-small"><tspan x="196" dy="0">Handoff/continuation and history/tail assembly can overlap.</tspan></text>
+<text x="196" y="582" class="d-small"><tspan x="196" dy="0">Final validation joins the required products.</tspan></text>
+<path d="M28 657 H1012" class="d-line d-dash"/>
+<text x="196" y="684" class="d-small"><tspan x="196" dy="0">After final E; independent source flow</tspan></text>
+<text x="28" y="742" class="d-label"><tspan x="28" dy="0">Optional</tspan><tspan x="28" dy="26">archive</tspan></text>
+<rect x="196" y="704" width="318" height="104" rx="3" class="d-box"/><text x="214" y="735" class="d-label"><tspan x="214" dy="0">ORIGINAL raw [S,E)</tspan></text><text x="214" y="765" class="d-copy"><tspan x="214" dy="0">Queued after the final E cut</tspan></text>
+<path d="M514 756 H578" class="d-line d-dash" marker-end="url(#parallel-arrow)"/>
+<rect x="578" y="704" width="434" height="104" rx="3" class="d-box"/><text x="596" y="735" class="d-label"><tspan x="596" dy="0">Independent archive summary</tspan></text><text x="596" y="765" class="d-copy"><tspan x="596" dy="0">Outside the compaction critical path</tspan></text>
+</svg>

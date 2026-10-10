@@ -1,0 +1,1400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; script-src 'none'; connect-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'">
+<meta name="description" content="Approved Chrono compaction implementation baseline. Implementation is in progress. Maintained repository reference, not official upstream Pi documentation.">
+<title>Chrono compaction reference · Approved implementation baseline</title>
+<style>/* Original offline presentation, informed by pi.dev's documentation stylesheet.
+   System fonts replace the site's font downloads. No official branding is used. */
+:root {
+  color-scheme: light dark;
+  --canvas: #ebe7e4;
+  --panel: #f5f3f0;
+  --soft: #eef0f2;
+  --ink: #252f3d;
+  --muted: #565c64;
+  --line: #b9b4ae;
+  --accent: #365c7b;
+  --notice: #7b442f;
+  --diagram-bg: #f5f3f0;
+  --diagram-box: #e9edf0;
+  --diagram-line: #7c8791;
+  --diagram-text: #252f3d;
+  --diagram-muted: #555f69;
+  --diagram-a: #dbe8ef;
+  --diagram-b: #e7e7d8;
+  --diagram-c: #edddd5;
+  --serif: Georgia, "Times New Roman", serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #161d27;
+    --panel: #212730;
+    --soft: #252f3d;
+    --ink: #ebe7e4;
+    --muted: #b2b7be;
+    --line: #49545f;
+    --accent: #9cc6e5;
+    --notice: #edb995;
+    --diagram-bg: #212730;
+    --diagram-box: #2b3642;
+    --diagram-line: #9daab6;
+    --diagram-text: #ebe7e4;
+    --diagram-muted: #b2bbc4;
+    --diagram-a: #294553;
+    --diagram-b: #414536;
+    --diagram-c: #513b34;
+  }
+}
+* { box-sizing: border-box; }
+html { font-size: 18px; scroll-padding-top: 5rem; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--serif);
+  line-height: 1.65;
+}
+a { color: var(--accent); text-underline-offset: .16em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+::selection { background: var(--diagram-a); color: var(--ink); }
+.skip-link {
+  position: fixed;
+  top: .5rem;
+  left: .5rem;
+  z-index: 30;
+  padding: .5rem .9rem;
+  background: var(--panel);
+  border: 2px solid var(--accent);
+  transform: translateY(-200%);
+}
+.skip-link:focus { transform: translateY(0); }
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--line);
+}
+.header-inner {
+  max-width: 71rem;
+  margin: auto;
+  padding: .8rem 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem 1.5rem;
+}
+.document-label, .draft-chip, .eyebrow {
+  font-family: var(--mono);
+  font-size: .7rem;
+  line-height: 1.45;
+  letter-spacing: .06em;
+}
+.document-label { color: var(--ink); text-decoration: none; }
+.draft-chip {
+  display: inline-block;
+  border: 1px solid var(--line);
+  padding: .24rem .5rem;
+  color: var(--notice);
+  background: var(--panel);
+}
+.layout {
+  max-width: 71rem;
+  margin: auto;
+  padding: 2rem 1.5rem 5rem;
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 46rem);
+  gap: 2.5rem;
+  align-items: start;
+  justify-content: center;
+}
+.section-nav {
+  position: sticky;
+  top: 5rem;
+  max-height: calc(100vh - 6rem);
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: .69rem;
+  line-height: 1.5;
+  scrollbar-width: thin;
+}
+.section-nav summary {
+  cursor: pointer;
+  padding: .8rem .9rem;
+  color: var(--ink);
+  letter-spacing: .06em;
+}
+.section-nav ol {
+  list-style: none;
+  margin: 0;
+  padding: .3rem .5rem .8rem;
+  border-top: 1px solid var(--line);
+}
+.section-nav li { margin: .12rem 0; }
+.section-nav a {
+  display: block;
+  padding: .28rem .45rem .28rem calc(.45rem + var(--level, 0) * .65rem);
+  color: var(--muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  overflow-wrap: anywhere;
+}
+.section-nav a:hover, .section-nav a:focus-visible {
+  color: var(--ink);
+  background: var(--soft);
+  border-left-color: var(--accent);
+}
+.reading-column { min-width: 0; }
+.review-notice {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--notice);
+  background: var(--panel);
+  padding: .8rem 1rem;
+  margin: 0 0 1.6rem;
+  font-family: var(--mono);
+  font-size: .73rem;
+  line-height: 1.65;
+}
+.review-notice strong { color: var(--notice); }
+.prose { overflow-wrap: anywhere; }
+.prose > :first-child { margin-top: 0; }
+h1, h2, h3, h4, h5, h6 { scroll-margin-top: 5rem; line-height: 1.25; }
+.prose h1, .prose h2 {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -.025em;
+}
+.prose h1 { font-size: clamp(2.1rem, 4.5vw, 3.25rem); margin: 0 0 1.4rem; }
+.prose h2 {
+  margin: 2.8rem 0 .8rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+  font-size: 1.8rem;
+}
+.prose h3 { margin: 1.9rem 0 .65rem; font-size: 1.25rem; }
+.prose h4, .prose h5, .prose h6 {
+  font-family: var(--mono);
+  font-size: .86rem;
+  margin: 1.5rem 0 .6rem;
+}
+p { margin: .85rem 0; }
+ul, ol { margin: .8rem 0; padding-left: 1.4rem; }
+li { margin: .28rem 0; }
+li > p { margin: .35rem 0; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
+blockquote {
+  margin: 1.3rem 0;
+  border-left: 3px solid var(--accent);
+  padding: .4rem 1.1rem;
+  background: var(--panel);
+  color: var(--muted);
+}
+blockquote > :first-child { margin-top: .35rem; }
+blockquote > :last-child { margin-bottom: .35rem; }
+code, pre { font-family: var(--mono); }
+:not(pre) > code {
+  font-size: .82em;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  padding: .08em .28em;
+}
+pre {
+  margin: 1.2rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: .76rem;
+  line-height: 1.6;
+  overflow: auto;
+  overflow-wrap: normal;
+  tab-size: 2;
+}
+pre code { font-size: inherit; }
+.table-scroll {
+  margin: 1.2rem 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+table { width: 100%; border-collapse: collapse; font-size: .83rem; line-height: 1.5; }
+th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+th { background: var(--soft); font-family: var(--mono); font-size: .72rem; font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+table code { font-size: .85em; }
+.figure { margin: 1.65rem 0; }
+.figure-canvas {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  overflow: auto;
+}
+.figure-canvas svg { display: block; width: 100%; min-width: 40rem; height: auto; }
+.diagram-inline { display: inline-block; max-width: 100%; }
+.diagram-inline svg { display: block; max-width: 100%; height: auto; }
+figcaption {
+  margin: .55rem .15rem 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: .68rem;
+  line-height: 1.6;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.document-footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: .68rem;
+  line-height: 1.6;
+}
+@media (max-width: 1050px) {
+  .layout { display: block; max-width: 49rem; padding: 1.2rem 1.2rem 3rem; }
+  .section-nav { position: static; max-height: none; margin: 0 0 1.5rem; }
+  .section-nav ol { max-height: 18rem; overflow: auto; }
+}
+@media (max-width: 520px) {
+  html { font-size: 16px; }
+  .header-inner { padding: .65rem 1rem; }
+  .layout { padding: 1rem .85rem 2.5rem; }
+  .prose h2 { font-size: 1.6rem; }
+  th, td { min-width: 7rem; }
+}
+@media print {
+  :root {
+    color-scheme: light;
+    --canvas: #fff;
+    --panel: #fff;
+    --soft: #f2f2f2;
+    --ink: #111;
+    --muted: #444;
+    --line: #aaa;
+    --accent: #163c57;
+    --notice: #57311f;
+    --diagram-bg: #fff;
+    --diagram-box: #f2f2f2;
+    --diagram-line: #667;
+    --diagram-text: #111;
+    --diagram-muted: #444;
+    --diagram-a: #e7edf2;
+    --diagram-b: #ededdf;
+    --diagram-c: #eee4de;
+  }
+  @page { margin: 16mm; }
+  html { font-size: 10pt; }
+  .site-header, .section-nav, .skip-link { display: none; }
+  .layout { display: block; max-width: none; padding: 0; }
+  h1, h2, h3, h4 { break-after: avoid; }
+  .review-notice, .figure, pre { break-inside: avoid; }
+  .figure-canvas svg { min-width: 0; }
+  .table-scroll, .figure-canvas, pre { overflow: visible; }
+  th, td { min-width: 0; padding: .35rem .45rem; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  a { color: var(--ink); }
+}
+</style>
+</head>
+<body id="top">
+<a class="skip-link" href="#main-content">Skip to reference</a>
+<header class="site-header"><div class="header-inner"><a class="document-label" href="#top">Chrono / Compaction reference</a><span class="draft-chip">Approved baseline / Implementation in progress</span></div></header>
+<div class="layout">
+<nav class="section-nav" aria-label="Reference sections"><details open><summary>On this page</summary><ol><li><a href="#overview" style="--level:0">Overview</a></li>
+<li><a href="#confirmed-design-requirements" style="--level:1">Confirmed design requirements</a></li>
+<li><a href="#terms-and-source-boundaries" style="--level:0">Terms and source boundaries</a></li>
+<li><a href="#no-recursive-previous-summary-input" style="--level:1">No recursive previous-summary input</a></li>
+<li><a href="#eligible-input-and-exclusions" style="--level:1">Eligible input and exclusions</a></li>
+<li><a href="#restart-packet" style="--level:0">Restart packet</a></li>
+<li><a href="#current-agent-handoff-and-continuation" style="--level:0">Current-agent handoff and continuation</a></li>
+<li><a href="#choosing-cuts" style="--level:0">Choosing cuts</a></li>
+<li><a href="#complete-interaction-units" style="--level:1">Complete interaction units</a></li>
+<li><a href="#selection-policy" style="--level:1">Selection policy</a></li>
+<li><a href="#context-kit-as-a-boundary-signal" style="--level:1">Context Kit as a boundary signal</a></li>
+<li><a href="#early-interval-summarization" style="--level:0">Early interval summarization</a></li>
+<li><a href="#preparation-and-reuse" style="--level:1">Preparation and reuse</a></li>
+<li><a href="#avoiding-speculative-work" style="--level:1">Avoiding speculative work</a></li>
+<li><a href="#parallel-execution-and-dependencies" style="--level:0">Parallel execution and dependencies</a></li>
+<li><a href="#when-compaction-starts" style="--level:0">When compaction starts</a></li>
+<li><a href="#request-budgets-and-media" style="--level:0">Request budgets and media</a></li>
+<li><a href="#separate-tokens-from-transport-bytes" style="--level:1">Separate tokens from transport bytes</a></li>
+<li><a href="#adaptive-internal-policy" style="--level:1">Adaptive internal policy</a></li>
+<li><a href="#active-interval-synopsis" style="--level:0">Active interval synopsis</a></li>
+<li><a href="#compressed-history-and-event-helpers" style="--level:0">Compressed history and event helpers</a></li>
+<li><a href="#optional-selective-rewriting" style="--level:1">Optional selective rewriting</a></li>
+<li><a href="#exact-raw-tail" style="--level:0">Exact raw tail</a></li>
+<li><a href="#optional-full-interval-archive-summary" style="--level:0">Optional full-interval archive summary</a></li>
+<li><a href="#models-and-connection-choices" style="--level:0">Models and connection choices</a></li>
+<li><a href="#candidate-families-not-selected-models" style="--level:1">Candidate families, not selected models</a></li>
+<li><a href="#commit-cancellation-and-continuation" style="--level:0">Commit, cancellation, and continuation</a></li>
+<li><a href="#failure-and-emergency-recovery" style="--level:0">Failure and emergency recovery</a></li>
+<li><a href="#proposed-emergency-contract" style="--level:1">Proposed emergency contract</a></li>
+<li><a href="#persistence-and-source-identity" style="--level:0">Persistence and source identity</a></li>
+<li><a href="#branches-restoration-and-native-state" style="--level:0">Branches, restoration, and native state</a></li>
+<li><a href="#user-interface-and-diagnostics" style="--level:0">User interface and diagnostics</a></li>
+<li><a href="#relationship-to-pi-and-current-chrono" style="--level:0">Relationship to Pi and current Chrono</a></li>
+<li><a href="#acceptance-and-practical-verification" style="--level:0">Acceptance and practical verification</a></li>
+<li><a href="#open-decisions" style="--level:0">Open decisions</a></li>
+<li><a href="#evidence-and-references" style="--level:0">Evidence and references</a></li>
+<li><a href="#pi-reference-and-repository-baseline" style="--level:1">Pi reference and repository baseline</a></li>
+<li><a href="#official-model-documentation" style="--level:1">Official model documentation</a></li></ol></details></nav>
+<main class="reading-column" id="main-content" tabindex="-1">
+<div class="review-notice"><strong>Approved implementation baseline; implementation in progress.</strong><br>This maintained Chrono reference defines intended behavior. It does not attest a completed or activated runtime and is not official upstream Pi documentation.</div>
+<article class="prose" id="reference-prose"><h1 id="chrono-compaction-reference">Chrono compaction reference</h1>
+<p>Approved implementation baseline; implementation in progress · October 8, 2026</p>
+<p>This reference specifies the proposed next Chrono compaction design. It explains the restart packet, source ranges, model calls, advance preparation, early summarization, parallel work, recovery, and integration with Context Kit. It is written for users, agents, and maintainers.</p>
+<p><strong>Status:</strong> The user approved this design for implementation and retained this reference as the official Chrono starting document. Implementation is in progress. Requirements describe the intended behavior, not a completed or activated runtime. Proposed mechanisms and open implementation choices remain labeled. No model-quality or latency experiment supports a performance claim here.</p>
+<p><a href="reference.md">Markdown</a> is canonical. The matching <a href="reference.html">standalone HTML</a> presents the same reference with section navigation and six diagrams. Both are maintained Chrono documentation in this repository. They are not official upstream Pi documentation. See the <a href="README.md">maintenance instructions</a> for offline rendering.</p>
+<h2 id="overview">Overview</h2>
+<p>Chrono should reduce the context needed to continue work without replacing current intent with a historical reconstruction. The current conversational agent writes the task handoff and immediate continuation. Separate helpers describe bounded original history. Deterministic code owns source selection, order, budgets, and commit validation.</p>
+<p>The design separates three concerns:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-1-caption"><table>
+<caption id="table-1-caption" class="sr-only">Table 1: Overview</caption>
+<thead>
+<tr>
+<th scope="col">Concern</th>
+<th scope="col">Owner</th>
+<th scope="col">Result</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>What the agent is doing and what it should do next</td>
+<td>Current conversational agent, supported by current Context Kit records</td>
+<td>Fresh task handoff and continuation message</td>
+</tr>
+<tr>
+<td>What happened in the current work interval</td>
+<td>Original source events, deterministic reducers, and selected history helpers</td>
+<td>Older-prefix synopsis, recent compressed history, and small exact tail</td>
+</tr>
+<tr>
+<td>How to recover older evidence</td>
+<td>Preserved source history and its recovery tools</td>
+<td>Source-linked retrieval, optionally aided by independent full-interval archive summaries</td>
+</tr>
+</tbody></table>
+</div>
+<p>Compaction is a context replacement, not a new task, a task-completion signal, or permission to act. A successful replacement should lead to the next already-authorized useful action, not another round of avoidable project discovery.</p>
+<h3 id="confirmed-design-requirements">Confirmed design requirements</h3>
+<ol>
+<li>The main agent writes its own task handoff and continuation message.</li>
+<li>History helpers receive only original work from the current compaction-to-compaction interval. They do not receive previous compaction packets or previous intervals as historical input.</li>
+<li>The active interval synopsis covers only the older prefix before compressed history. The historical ranges do not overlap.</li>
+<li>An optional full-interval archive summary uses the entire original A+B+C interval independently. It never blocks compaction.</li>
+<li>Deterministic history reduction remains the baseline. A selected LLM may improve eligible individual event text, without deciding authorization or task completion.</li>
+<li>One product-owned automatic policy replaces operational tuning menus. It adapts to actual model capabilities. User model/provider selection remains explicit.</li>
+<li>Context Kit state changes may suggest coherent cuts. Early summarization and parallel execution should remove avoidable waiting.</li>
+<li>Source history, unresolved work, resource identities, and user restrictions survive. Compaction does not authorize deletion or automatic rewind.</li>
+</ol>
+<p>The exact budget constants, helper-failure policy, and emergency-recovery implementation remain open implementation choices within this baseline. See <a href="#open-decisions">Open decisions</a>.</p>
+<h2 id="terms-and-source-boundaries">Terms and source boundaries</h2>
+<p>A <strong>work interval</strong> is the original work performed after one committed compaction and before the next. The initial interval begins with the first original work in the session. The user&#39;s session 1 and session 2 are work intervals in this reference. A physical Pi session file can contain several such intervals.</p>
+<p>A <strong>restart packet</strong> is the derived context installed by compaction. A <strong>cut</strong> is a position in an ordered, identified source range. A <strong>projection</strong> is the effective view after applicable context omissions or replacements. A <strong>closed prefix</strong> is an already-written range with a pinned end, not a completed task.</p>
+<p>For the current interval, define four positions:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-2-caption"><table>
+<caption id="table-2-caption" class="sr-only">Table 2: Terms and source boundaries</caption>
+<thead>
+<tr>
+<th scope="col">Position</th>
+<th scope="col">Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>S</code></td>
+<td>Start of eligible original work after the preceding committed compaction, or initial session origin</td>
+</tr>
+<tr>
+<td><code>H</code></td>
+<td>Start of recent compressed history</td>
+</tr>
+<tr>
+<td><code>R</code></td>
+<td>Start of the small exact raw tail</td>
+</tr>
+<tr>
+<td><code>E</code></td>
+<td>End position immediately after the last original event admitted to this compaction</td>
+</tr>
+</tbody></table>
+</div>
+<p>Use half-open ranges: <code>[S,H)</code> includes <code>S</code> and excludes <code>H</code>. On the selected source projection:</p>
+<pre><code class="language-text">A = [S,H)   older original work for the active interval synopsis
+B = [H,R)   recent original work for compressed history
+C = [R,E)   newest original work retained exactly
+
+S &lt;= H &lt;= R &lt;= E
+A + B + C = the eligible original work in this interval
+</code></pre>
+<p>These are coverage ranges, not a promise that every event receives a sentence in a lossy synopsis or compressed rendering. Omission and unsupported-content notices remain explicit.</p>
+<figure class="figure" id="figure-1">
+<div class="figure-canvas" tabindex="0" role="group" aria-label="Diagram 1: Two work intervals, with earlier history excluded from the new interval helpers. The current interval is partitioned into A, B, and C. Its archive job independently reads original A+B+C."><svg data-diagram="intervals" xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="694" viewBox="0 0 1040 694" role="img" aria-labelledby="diagram-1-intervals-intervals-title diagram-1-intervals-intervals-desc">
+<title id="diagram-1-intervals-intervals-title">Current-interval source boundaries</title>
+<desc id="diagram-1-intervals-intervals-desc">Approved implementation baseline; implementation in progress. Session 1 originals lead to compaction, then Session 2 originals S through E. Session 2 helpers receive no Session 1 originals or old restart packet. Session 2 is partitioned into A=[S,H), active synopsis; B=[H,R), compressed history; C=[R,E), exact tail. An independent optional archive takes the original A+B+C, raw [S,E), not the derived synopsis, history, and tail renderings.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="diagram-1-intervals-intervals-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="694" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Current-interval source boundaries</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="104" width="248" height="90" rx="3" class="d-box"/><text x="46" y="135" class="d-label"><tspan x="46" dy="0">Session 1</tspan></text><text x="46" y="165" class="d-copy"><tspan x="46" dy="0">Originals</tspan></text>
+<path d="M276 149 H328" class="d-line" marker-end="url(#diagram-1-intervals-intervals-arrow)"/>
+<rect x="328" y="104" width="176" height="90" rx="3" class="d-box"/><text x="346" y="135" class="d-label"><tspan x="346" dy="0">Compaction</tspan></text>
+<path d="M504 149 H558" class="d-line" marker-end="url(#diagram-1-intervals-intervals-arrow)"/>
+<rect x="558" y="104" width="454" height="90" rx="3" class="d-box"/><text x="576" y="135" class="d-label"><tspan x="576" dy="0">Session 2 originals</tspan></text><text x="576" y="165" class="d-copy"><tspan x="576" dy="0">Current raw interval: [S,E)</tspan></text>
+<rect x="28" y="222" width="984" height="62" rx="3" class="d-box"/><text x="46" y="253" class="d-label"><tspan x="46" dy="0">No Session 1 / old packet input to Session 2 helpers</tspan></text>
+<text x="56" y="325" class="d-small"><tspan x="56" dy="0">Session 2 restart renderings: one partition, no gap or overlap</tspan></text>
+<text x="56" y="361" class="d-cut"><tspan x="56" dy="0">S</tspan></text>
+<text x="348" y="361" class="d-cut"><tspan x="348" dy="0">H</tspan></text>
+<text x="744" y="361" class="d-cut"><tspan x="744" dy="0">R</tspan></text>
+<text x="972" y="361" class="d-cut"><tspan x="972" dy="0">E</tspan></text>
+<rect x="56" y="380" width="292" height="106" rx="3" class="d-a"/><text x="74" y="411" class="d-label"><tspan x="74" dy="0">A: active synopsis</tspan></text><text x="74" y="441" class="d-copy"><tspan x="74" dy="0">[S,H)</tspan></text>
+<rect x="348" y="380" width="396" height="106" rx="3" class="d-b"/><text x="366" y="411" class="d-label"><tspan x="366" dy="0">B: compressed history</tspan></text><text x="366" y="441" class="d-copy"><tspan x="366" dy="0">[H,R)</tspan></text>
+<rect x="744" y="380" width="244" height="106" rx="3" class="d-c"/><text x="762" y="411" class="d-label"><tspan x="762" dy="0">C: exact tail</tspan></text><text x="762" y="441" class="d-copy"><tspan x="762" dy="0">[R,E)</tspan></text>
+<rect x="56" y="536" width="310" height="90" rx="3" class="d-box"/><text x="74" y="567" class="d-label"><tspan x="74" dy="0">ORIGINAL A + B + C</tspan></text><text x="74" y="597" class="d-copy"><tspan x="74" dy="0">Raw [S,E)</tspan></text>
+<path d="M366 581 H430" class="d-line d-dash" marker-end="url(#diagram-1-intervals-intervals-arrow)"/>
+<rect x="430" y="536" width="558" height="90" rx="3" class="d-box"/><text x="448" y="567" class="d-label"><tspan x="448" dy="0">Independent optional archive</tspan></text><text x="448" y="597" class="d-copy"><tspan x="448" dy="0">Not the three derived restart renderings</tspan></text>
+<text x="56" y="664" class="d-small"><tspan x="56" dy="0">Archive work does not block compaction.</tspan></text>
+</svg></div>
+<figcaption>Two work intervals, with earlier history excluded from the new interval helpers. The current interval is partitioned into A, B, and C. Its archive job independently reads original A+B+C.</figcaption>
+</figure>
+<h3 id="no-recursive-previous-summary-input">No recursive previous-summary input</h3>
+<p>At the second compaction, an interval helper summarizes only the relevant original part of interval 2. It does not receive interval 1, the interval-1 synopsis, its compressed replay, its retained tail, or the previous task handoff as historical context.</p>
+<p>The optional archive helper receives all original work in interval 2, including the original events whose other renderings appear in A, B, and C. It does not receive <code>synopsis(A) + compressed(B) + C</code> as a substitute.</p>
+<p>The main agent is different. Its current context includes the previous restart packet, so it can preserve a still-valid task goal, restriction, decision, or unresolved obligation in its new handoff. That is current-state continuity, not recursive historical summarization.</p>
+<p>This is a source-origin rule, not a ban on a new user message referring to earlier work. A new instruction is still a new instruction. Importing an older transcript or generated summary through a retrieval tool does not make that imported body new original work.</p>
+<h3 id="eligible-input-and-exclusions">Eligible input and exclusions</h3>
+<p>Input selection operates on source records and provenance, not on the position of text in an assembled prompt.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-3-caption"><table>
+<caption id="table-3-caption" class="sr-only">Table 3: Eligible input and exclusions</caption>
+<thead>
+<tr>
+<th scope="col">Source material</th>
+<th scope="col">Treatment</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Current-interval user messages, assistant work, tool calls, and tool results</td>
+<td>Eligible original evidence, subject to projection, privacy, modality, and complete-interaction rules</td>
+</tr>
+<tr>
+<td>Normal system prompt, tool definitions, and applicable project instructions</td>
+<td>Rebuilt as normal instructions, not summarized as interval history</td>
+</tr>
+<tr>
+<td>Previous compaction packets and generated historical summaries</td>
+<td>Excluded from helper history inputs</td>
+</tr>
+<tr>
+<td>Compaction request, preparation instruction, summary submission, and commit bookkeeping</td>
+<td>Retained for operation recovery, excluded from the original work interval</td>
+</tr>
+<tr>
+<td>Retrieved prior transcript or prior generated-summary bodies</td>
+<td>Preserve the retrieval action and source reference where useful. Do not import the older body into the interval helper</td>
+</tr>
+<tr>
+<td>Context Kit full-state readbacks</td>
+<td>Use typed identity, revision, and current-interval transitions for cut selection and A. The independent archive uses the eligible original readback as a snapshot observed in this interval, not as proof that every described action occurred in it</td>
+</tr>
+<tr>
+<td>Failed or canceled ordinary work</td>
+<td>Remains evidence of an attempt, with its outcome. Failure does not close the interval</td>
+</tr>
+<tr>
+<td>Hidden or provider-internal reasoning, credentials, and unsupported private payloads</td>
+<td>Not ordinary helper input. Keep disclosure and provider-specific replay rules separate</td>
+</tr>
+</tbody></table>
+</div>
+<p>&quot;Original&quot; means source content before Chrono&#39;s lossy compression. It does not mean ignoring a user&#39;s context edit, disclosure boundary, or applicable privacy restriction. An unavailable or excluded source part must be recorded, not silently replaced with an old summary.</p>
+<h2 id="restart-packet">Restart packet</h2>
+<p>The proposed model-facing order is:</p>
+<ol>
+<li>Normal system instructions, tool definitions, and applicable project instructions.</li>
+<li>Current task handoff, written by the current agent.</li>
+<li>Active interval synopsis of A.</li>
+<li>Recent compressed history from B.</li>
+<li>Small exact raw tail C.</li>
+<li>Immediate continuation message, written by the current agent.</li>
+<li>New work, including admitted new user or resource events.</li>
+</ol>
+<figure class="figure" id="figure-2">
+<div class="figure-canvas" tabindex="0" role="group" aria-label="Diagram 2: The restart packet presents normal instructions, current-agent handoff, A synopsis, B compressed history, exact C tail, and current-agent continuation before new authorized work."><svg data-diagram="restart-packet" xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="914" viewBox="0 0 1040 914" role="img" aria-labelledby="diagram-2-restart-packet-restart-packet-title diagram-2-restart-packet-restart-packet-desc">
+<title id="diagram-2-restart-packet-restart-packet-title">Restart packet and continuation order</title>
+<desc id="diagram-2-restart-packet-restart-packet-desc">Approved implementation baseline; implementation in progress. The proposed request order is normal system, tools, and applicable instructions; current-agent task handoff; A synopsis; B compressed history; C small exact tail; current-agent continuation message; then new authorized work. The main conversational agent writes handoff and continuation in one current response. Derived context does not grant new authority.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="diagram-2-restart-packet-restart-packet-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="914" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Restart packet and continuation order</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="94" width="984" height="676" rx="3" class="d-outline"/>
+<rect x="60" y="116" width="920" height="84" rx="3" class="d-box"/><text x="78" y="147" class="d-label"><tspan x="78" dy="0">01  Normal request context</tspan></text><text x="78" y="177" class="d-copy"><tspan x="78" dy="0">System, tools, and applicable instructions</tspan></text>
+<path d="M520 200 V224" class="d-line" marker-end="url(#diagram-2-restart-packet-restart-packet-arrow)"/>
+<rect x="60" y="224" width="920" height="84" rx="3" class="d-box"/><text x="78" y="255" class="d-label"><tspan x="78" dy="0">02  Current-agent task handoff</tspan></text><text x="78" y="285" class="d-copy"><tspan x="78" dy="0">Written by the current conversational agent</tspan></text>
+<path d="M520 308 V332" class="d-line" marker-end="url(#diagram-2-restart-packet-restart-packet-arrow)"/>
+<rect x="60" y="332" width="920" height="84" rx="3" class="d-a"/><text x="78" y="363" class="d-label"><tspan x="78" dy="0">03  A: active synopsis</tspan></text><text x="78" y="393" class="d-copy"><tspan x="78" dy="0">[S,H)</tspan></text>
+<path d="M520 416 V440" class="d-line" marker-end="url(#diagram-2-restart-packet-restart-packet-arrow)"/>
+<rect x="60" y="440" width="920" height="84" rx="3" class="d-b"/><text x="78" y="471" class="d-label"><tspan x="78" dy="0">04  B: compressed history</tspan></text><text x="78" y="501" class="d-copy"><tspan x="78" dy="0">[H,R)</tspan></text>
+<path d="M520 524 V548" class="d-line" marker-end="url(#diagram-2-restart-packet-restart-packet-arrow)"/>
+<rect x="60" y="548" width="920" height="84" rx="3" class="d-c"/><text x="78" y="579" class="d-label"><tspan x="78" dy="0">05  C: small exact tail</tspan></text><text x="78" y="609" class="d-copy"><tspan x="78" dy="0">[R,E)</tspan></text>
+<path d="M520 632 V656" class="d-line" marker-end="url(#diagram-2-restart-packet-restart-packet-arrow)"/>
+<rect x="60" y="656" width="920" height="84" rx="3" class="d-box"/><text x="78" y="687" class="d-label"><tspan x="78" dy="0">06  Current-agent continuation message</tspan></text><text x="78" y="717" class="d-copy"><tspan x="78" dy="0">Same current response as the handoff</tspan></text>
+<path d="M520 740 V802" class="d-line" marker-end="url(#diagram-2-restart-packet-restart-packet-arrow)"/>
+<rect x="60" y="802" width="920" height="84" rx="3" class="d-box"/><text x="78" y="833" class="d-label"><tspan x="78" dy="0">07  New authorized work</tspan></text><text x="78" y="863" class="d-copy"><tspan x="78" dy="0">The packet does not create permission to continue</tspan></text>
+</svg></div>
+<figcaption>The restart packet presents normal instructions, current-agent handoff, A synopsis, B compressed history, exact C tail, and current-agent continuation before new authorized work.</figcaption>
+</figure>
+<p>The handoff and continuation have different jobs. The handoff supplies durable working context. The continuation identifies the immediate next action and why it is next. They can be produced in one preparation response without two independent summaries.</p>
+<p>The history layers carry source labels and coverage. They are evidence, not system instructions. The handoff is also fallible derived state. It does not override a newer user instruction, current native state, or the actual instruction hierarchy.</p>
+<p>The ranges A, B, and C are disjoint. The handoff may mention a decisive event that also appears in history because the fact is necessary to continue. Avoiding historical range overlap does not require removing that useful explanation from current task state.</p>
+<h2 id="current-agent-handoff-and-continuation">Current-agent handoff and continuation</h2>
+<p>The normal writer is the current conversational agent with its currently available working context. A helper that receives older history must not reconstruct or invent the main agent&#39;s present intent.</p>
+<p>Before the summary-only exchange, the agent should make necessary state updates and collect any essential fresh evidence. Preparation should stay short. It should not turn into a new research task, a broad cleanup, or a requirement to finish every outstanding job.</p>
+<p>A handoff should contain only what the next useful action needs:</p>
+<pre><code class="language-markdown">## Task and purpose
+Current goal, requested outcome, and why the selected approach fits.
+
+## Constraints and authority
+User restrictions, approval gates, and work that is not authorized.
+
+## Current position
+What is verified, what is in progress, and what is still uncertain.
+
+## Decisions and useful locations
+Relevant decisions, exact files, revisions, and source references.
+
+## Outstanding work and resources
+Task IDs, worker/run IDs, process/session identities, blockers, and waits.
+
+## Next actions
+The short sequence that continues the authorized task.
+</code></pre>
+<p>The separate continuation message is more immediate:</p>
+<pre><code class="language-text">Continue the existing task by collecting run &lt;run-id&gt;, then compare its
+result with &lt;artifact&gt;. Do not restart the job. If the result is not ready,
+continue &lt;independent approved action&gt;. Publication remains blocked.
+</code></pre>
+<p>Examples are descriptive templates, not live commands or approval. Do not include secrets in either field.</p>
+<p>After the summary exchange starts, the current agent submits the handoff and continuation through the supported sole-submission protocol. It does not make unrelated tool calls, perform retrieval, or delegate more work between request and submission. Runtime-owned helper jobs can proceed independently without requiring the agent to violate that protocol.</p>
+<h2 id="choosing-cuts">Choosing cuts</h2>
+<p>Legal source boundaries and token fit are separate questions. Code first identifies complete interaction units. It then selects a partition that fits the real request and preserves a useful recent window.</p>
+<h3 id="complete-interaction-units">Complete interaction units</h3>
+<p>The minimum tool unit is an assistant message containing tool calls plus all matching results. A parallel tool-call batch stays together. A result must not be selected without its call, and an exact-tail boundary must not split the batch.</p>
+<p>A subsequent assistant interpretation can be associated with the unit when that improves coherence. The entire lifetime of a task or process is not one indivisible unit. A yielded process ID completes that invocation, not the process. Later polls are separate units linked to the same resource.</p>
+<p>An incomplete batch cannot be labeled complete because a timeout elapsed. Its identity and incomplete state remain explicit. A required exact unit that does not fit needs the overflow contract, not silent truncation.</p>
+<h3 id="selection-policy">Selection policy</h3>
+<p>The proposed selection order is:</p>
+<ol>
+<li>Pin the current branch, interval origin, effective source projection, and admitted end <code>E</code>.</li>
+<li>Determine legal complete-interaction cuts.</li>
+<li>Select the newest required complete units for C within its exact-tail allowance.</li>
+<li>Evaluate H candidates before or at R. Prefer coherent phase boundaries that preserve a useful B and fit the compressed rendering allowance.</li>
+<li>Assign all remaining eligible older work to A.</li>
+<li>Check the complete rebuilt request, not only the three history bodies.</li>
+</ol>
+<p>When no useful phase signal exists, choose a legal token-fitting boundary. Turn counts and elapsed time can bound bookkeeping, but they are not the primary measure of content size. A context percentage indicates pressure. It does not identify a source cut.</p>
+<p>A and B can be empty. An empty A needs no synopsis-model call. The exact-tail requirement is a product policy constrained by safe pairing and the full request budget, not a user-selected preset.</p>
+<figure class="figure" id="figure-3">
+<div class="figure-canvas" tabindex="0" role="group" aria-label="Diagram 3: Token fit and complete interaction units determine legal cuts. A successful Context Kit milestone transition can suggest H, but H must remain before or at the exact-tail start R."><svg data-diagram="cuts" xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="646" viewBox="0 0 1040 646" role="img" aria-labelledby="diagram-3-cuts-cuts-title diagram-3-cuts-cuts-desc">
+<title id="diagram-3-cuts-cuts-title">Deterministic cuts with an optional milestone hint</title>
+<desc id="diagram-3-cuts-cuts-desc">Approved implementation baseline; implementation in progress. Code owns token fit and complete tool-call/result units. A successful current-interval Context Kit milestone-completed/next-milestone-started transition can suggest H. Other typed transitions or weaker position hints can also suggest candidates. A checkpoint is saved position, a weak boundary hint, not completion. Code validates S ≤ H ≤ R ≤ E, with no gap or overlap. The hint never overrides token fit or complete call/result units.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="diagram-3-cuts-cuts-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="646" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Deterministic cuts with an optional milestone hint</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="110" width="470" height="180" rx="3" class="d-box"/><text x="46" y="141" class="d-label"><tspan x="46" dy="0">Code chooses cuts</tspan></text><text x="46" y="171" class="d-copy"><tspan x="46" dy="0">Token fit for the full packet</tspan><tspan x="46" dy="26">Complete tool-call/result units</tspan><tspan x="46" dy="26">Never split a call from its result</tspan></text>
+<rect x="548" y="110" width="464" height="180" rx="3" class="d-box"/><text x="566" y="141" class="d-label"><tspan x="566" dy="0">Context Kit hint, current interval</tspan></text><text x="566" y="171" class="d-copy"><tspan x="566" dy="0">Successful milestone completed</tspan><tspan x="566" dy="26">then next milestone started</tspan><tspan x="566" dy="26">may suggest H</tspan></text>
+<path d="M548 200 H498" class="d-line" marker-end="url(#diagram-3-cuts-cuts-arrow)"/>
+<rect x="548" y="318" width="464" height="106" rx="3" class="d-box"/><text x="566" y="349" class="d-label"><tspan x="566" dy="0">Checkpoint: saved position only</tspan></text><text x="566" y="379" class="d-copy"><tspan x="566" dy="0">Weak boundary hint, not completion</tspan></text>
+<text x="28" y="351" class="d-small"><tspan x="28" dy="0">Code validates any hint</tspan></text>
+<text x="56" y="461" class="d-cut"><tspan x="56" dy="0">S</tspan></text>
+<text x="348" y="461" class="d-cut"><tspan x="348" dy="0">H</tspan></text>
+<text x="744" y="461" class="d-cut"><tspan x="744" dy="0">R</tspan></text>
+<text x="972" y="461" class="d-cut"><tspan x="972" dy="0">E</tspan></text>
+<rect x="56" y="480" width="292" height="88" rx="3" class="d-a"/><text x="74" y="511" class="d-label"><tspan x="74" dy="0">A: [S,H)</tspan></text>
+<rect x="348" y="480" width="396" height="88" rx="3" class="d-b"/><text x="366" y="511" class="d-label"><tspan x="366" dy="0">B: [H,R)</tspan></text>
+<rect x="744" y="480" width="244" height="88" rx="3" class="d-c"/><text x="762" y="511" class="d-label"><tspan x="762" dy="0">C: [R,E)</tspan></text>
+<text x="56" y="612" class="d-cut"><tspan x="56" dy="0">S ≤ H ≤ R ≤ E. H must be ≤ R. No gap. No overlap.</tspan></text>
+</svg></div>
+<figcaption>Token fit and complete interaction units determine legal cuts. A successful Context Kit milestone transition can suggest H, but H must remain before or at the exact-tail start R.</figcaption>
+</figure>
+<h3 id="context-kit-as-a-boundary-signal">Context Kit as a boundary signal</h3>
+<p>Context Kit helps the agent maintain explicit current state. It also supplies useful candidates for coherent cuts:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-4-caption"><table>
+<caption id="table-4-caption" class="sr-only">Table 4: Context Kit as a boundary signal</caption>
+<thead>
+<tr>
+<th scope="col">Signal</th>
+<th scope="col">How Chrono can use it</th>
+<th scope="col">What it does not prove</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Workplan milestone completed, followed by another milestone starting</td>
+<td>Prefer a cut after the successful transition when it is inside this interval and fits</td>
+<td>That every external action or test succeeded independently of the recorded evidence</td>
+</tr>
+<tr>
+<td>Todo completed, followed by a distinct next task</td>
+<td>Suggest an action boundary</td>
+<td>That the whole project is complete</td>
+</tr>
+<tr>
+<td>Workplan checkpoint</td>
+<td>Suggest a saved-position boundary</td>
+<td>That a milestone or task completed</td>
+</tr>
+<tr>
+<td>Notes update</td>
+<td>Supply a weak contextual hint</td>
+<td>Completion, permission, or a durable project decision</td>
+</tr>
+<tr>
+<td>Workplan pause, blocker, or external wait</td>
+<td>Suggest a coherent stopping point and preserve the wait</td>
+<td>Permission to abandon or restart the work</td>
+</tr>
+</tbody></table>
+</div>
+<p>A Workplan checkpoint is a saved position. It does not have a completed-to-started lifecycle. Milestones and Todo tasks have status transitions. The cut selector should use successful typed transitions with their record IDs and revisions, not search arbitrary prose for the word &quot;complete.&quot;</p>
+<p>The successful tool result must exist before the transition becomes a candidate. A failed state mutation is not a cut signal. The candidate should normally sit after the complete mutation interaction and before the first action of the next phase.</p>
+<p>A candidate inside the required exact tail cannot automatically become H. The partition must still satisfy <code>H &lt;= R</code>. The selector can wait for more complete work to follow, choose another candidate, or choose a different permitted tail partition. It must not discard a required exact unit merely to honor a milestone marker.</p>
+<p>State snapshots can contain facts from earlier intervals. Do not append those snapshots to A. Keep current state available to the main agent and use source-bound current-interval transitions as history metadata. This A-specific projection must not replace the eligible original readback in the independent full-interval archive input. In all helper inputs, exclude identifiable imported prior-compaction bodies and report the exclusion. Context Kit availability is helpful, not a mandatory dependency for basic compaction.</p>
+<p>A typed, source-bound boundary adapter is proposed integration work. This reference does not claim that the current tools already expose every required event binding to Chrono.</p>
+<h2 id="early-interval-summarization">Early interval summarization</h2>
+<p><strong>The cut can be selected before compaction begins.</strong> The future end E is not needed to summarize an already-closed prefix <code>[S,H)</code>.</p>
+<p>The proposed normal path keeps one useful candidate prefix ready while the main agent continues work after H. This is a finite helper job over a pinned range, not a continuously running summary that rewrites itself after every event.</p>
+<h3 id="preparation-and-reuse">Preparation and reuse</h3>
+<ol>
+<li>Observe a useful safe boundary, such as a successful milestone transition.</li>
+<li>Pin H, the ordered original sources in <code>[S,H)</code>, their effective projection, and the helper derivation identity.</li>
+<li>Start the active-prefix synopsis request using only those original sources.</li>
+<li>Let the main agent append ordinary work after H. Event reducers may work on eligible recent units independently.</li>
+<li>At compaction, choose E and R and revalidate H against source identity, branch ancestry, projection, model/prompt policy, and final fit.</li>
+<li>Reuse the prepared synopsis only when its exact coverage and derivation remain compatible.</li>
+</ol>
+<figure class="figure" id="figure-4">
+<div class="figure-canvas" tabindex="0" role="group" aria-label="Diagram 4: A closed prefix S to H is summarized before compaction while the main agent works after H. Final validation accepts the same-range result or chooses an explicit replacement or degraded path."><svg data-diagram="precompute" xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="748" viewBox="0 0 1040 748" role="img" aria-labelledby="diagram-4-precompute-precompute-title diagram-4-precompute-precompute-desc">
+<title id="diagram-4-precompute-precompute-title">Closed-prefix precompute without summary accumulation</title>
+<desc id="diagram-4-precompute-precompute-desc">Approved implementation baseline; implementation in progress. Pin a closed original prefix [S,H) early. Summarize original A while main work appends after H. At final assembly, validate source, branch, projection, model, policy, and cut. Accept the same-range summary if it still matches, or replace/degrade. Never merge an old summary and a new delta to advance H.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="diagram-4-precompute-precompute-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="748" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Closed-prefix precompute without summary accumulation</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="110" width="324" height="110" rx="3" class="d-box"/><text x="46" y="141" class="d-label"><tspan x="46" dy="0">Pin closed prefix early</tspan></text><text x="46" y="171" class="d-copy"><tspan x="46" dy="0">Exact range [S,H)</tspan></text>
+<path d="M352 165 H414" class="d-line" marker-end="url(#diagram-4-precompute-precompute-arrow)"/>
+<rect x="414" y="110" width="598" height="110" rx="3" class="d-box"/><text x="432" y="141" class="d-label"><tspan x="432" dy="0">Summarize ORIGINAL A=[S,H)</tspan></text><text x="432" y="171" class="d-copy"><tspan x="432" dy="0">The pinned source range does not grow</tspan></text>
+<path d="M190 220 V258" class="d-line" marker-end="url(#diagram-4-precompute-precompute-arrow)"/>
+<rect x="28" y="258" width="984" height="88" rx="3" class="d-box"/><text x="46" y="289" class="d-label"><tspan x="46" dy="0">Meanwhile: main work appends after H</tspan></text><text x="46" y="319" class="d-copy"><tspan x="46" dy="0">New original work stays outside the pinned prefix</tspan></text>
+<path d="M1012 165 H1024 V360 H713 V372" class="d-line" marker-end="url(#diagram-4-precompute-precompute-arrow)"/>
+<rect x="28" y="372" width="984" height="118" rx="3" class="d-box"/><text x="46" y="403" class="d-label"><tspan x="46" dy="0">Final validation</tspan></text><text x="46" y="433" class="d-copy"><tspan x="46" dy="0">Source, branch, projection, model, policy, and cut</tspan><tspan x="46" dy="26">The candidate must still cover the same original [S,H)</tspan></text>
+<path d="M300 490 V534" class="d-line" marker-end="url(#diagram-4-precompute-precompute-arrow)"/>
+<path d="M747 490 V534" class="d-line" marker-end="url(#diagram-4-precompute-precompute-arrow)"/>
+<rect x="28" y="534" width="464" height="88" rx="3" class="d-box"/><text x="46" y="565" class="d-label"><tspan x="46" dy="0">Accept same-range summary</tspan></text><text x="46" y="595" class="d-copy"><tspan x="46" dy="0">Only if the final identity matches</tspan></text>
+<rect x="548" y="534" width="464" height="88" rx="3" class="d-box"/><text x="566" y="565" class="d-label"><tspan x="566" dy="0">Otherwise replace or degrade</tspan></text><text x="566" y="595" class="d-copy"><tspan x="566" dy="0">Use finite recovery</tspan></text>
+<rect x="28" y="656" width="984" height="62" rx="3" class="d-box"/><text x="46" y="687" class="d-label"><tspan x="46" dy="0">Never merge old summary + new delta to advance H</tspan></text>
+</svg></div>
+<figcaption>A closed prefix S to H is summarized before compaction while the main agent works after H. Final validation accepts the same-range result or chooses an explicit replacement or degraded path.</figcaption>
+</figure>
+<p>Appending after H does not change the source bytes of A. That alone does not invalidate its historical synopsis. A later correction in B or C remains later evidence. Label A as an account through H, preserve the correction in recent history, and have the handoff state the current conclusion. Do not silently rewrite A with later events or present its old conclusion as current truth.</p>
+<p>A context edit inside A, changed ancestry, a removed source, or a changed permitted input projection invalidates the prepared derivation. A helper-model or prompt-policy change creates a new derivation identity. A main-model change requires new request fitting even if the history helper&#39;s source-local output remains compatible.</p>
+<p>If H must advance to H2, generate the new synopsis from original <code>[S,H2)</code>. Do not feed <code>old synopsis + new delta</code> to the helper. The previous result may remain a valid candidate for its old range, but it cannot be relabeled as covering the larger range.</p>
+<h3 id="avoiding-speculative-work">Avoiding speculative work</h3>
+<p>Use bounded concurrency, coalesce superseded requests, and start a job only when a useful boundary has become stable enough to justify it. Do not launch a new full-prefix summary after every tool result. Schedule background work within explicit account, disclosure, and compute budgets.</p>
+<p>During final preparation, prefer an already-ready candidate that fits and remains useful. If no ready candidate fits, choose a new legal cut and use the bounded foreground or degraded path. Do not keep an obsolete H merely to claim a cache hit.</p>
+<p>Precomputation reduces possible waiting. It does not guarantee a ready result: the helper can be slow, unavailable, canceled, or invalidated by a source change. Exact scheduling constants and admission limits remain implementation decisions to verify later.</p>
+<h2 id="parallel-execution-and-dependencies">Parallel execution and dependencies</h2>
+<p>Independent work should overlap. Dependent steps must still join before commit.</p>
+<figure class="figure" id="figure-5">
+<div class="figure-canvas" tabindex="0" role="group" aria-label="Diagram 5: Parallel lanes show main work, closed-prefix summarization, and optional event reduction before final preparation. At the frozen end E, handoff writing and history assembly overlap. Validation joins required products. The raw full-interval archive job is outside the commit path."><svg data-diagram="parallel" xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="844" viewBox="0 0 1040 844" role="img" aria-labelledby="diagram-5-parallel-parallel-title diagram-5-parallel-parallel-desc">
+<title id="diagram-5-parallel-parallel-title">Parallel work lanes and the required final join</title>
+<desc id="diagram-5-parallel-parallel-desc">Approved implementation baseline; implementation in progress. Main work, optional event reduction, and closed-prefix synopsis precompute can overlap before final E. At E freeze, main-agent handoff plus continuation and history/tail assembly can overlap. Final validation and commit join the required products, using an accepted or replacement synopsis. Optional archive work is queued from original raw [S,E), outside the compaction critical path, and is not a commit input.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="diagram-5-parallel-parallel-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="844" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Parallel work lanes and the required final join</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<text x="196" y="113" class="d-label"><tspan x="196" dy="0">Before final E</tspan></text>
+<text x="570" y="113" class="d-label"><tspan x="570" dy="0">After E freeze</tspan></text>
+<path d="M548 126 V590" class="d-line d-dash"/>
+<text x="511" y="625" class="d-small"><tspan x="511" dy="0">E freeze</tspan></text>
+<text x="28" y="180" class="d-label"><tspan x="28" dy="0">Main</tspan><tspan x="28" dy="26">work</tspan></text>
+<rect x="196" y="146" width="318" height="100" rx="3" class="d-box"/><text x="214" y="177" class="d-label"><tspan x="214" dy="0">Append originals</tspan></text><text x="214" y="207" class="d-copy"><tspan x="214" dy="0">Authorized main work</tspan></text>
+<path d="M514 196 H578" class="d-line" marker-end="url(#diagram-5-parallel-parallel-arrow)"/>
+<rect x="578" y="146" width="264" height="100" rx="3" class="d-box"/><text x="596" y="177" class="d-label"><tspan x="596" dy="0">Main-agent handoff</tspan></text><text x="596" y="207" class="d-copy"><tspan x="596" dy="0">+ continuation</tspan></text>
+<text x="28" y="310" class="d-label"><tspan x="28" dy="0">Optional</tspan><tspan x="28" dy="26">event lane</tspan></text>
+<rect x="196" y="276" width="318" height="100" rx="3" class="d-box"/><text x="214" y="307" class="d-label"><tspan x="214" dy="0">Event reduction</tspan></text><text x="214" y="337" class="d-copy"><tspan x="214" dy="0">Can overlap main work</tspan></text>
+<path d="M514 326 H578" class="d-line d-dash" marker-end="url(#diagram-5-parallel-parallel-arrow)"/>
+<rect x="578" y="276" width="264" height="100" rx="3" class="d-box"/><text x="596" y="307" class="d-label"><tspan x="596" dy="0">History/tail</tspan></text><text x="596" y="337" class="d-copy"><tspan x="596" dy="0">Assembly</tspan></text>
+<text x="28" y="440" class="d-label"><tspan x="28" dy="0">Closed-prefix</tspan><tspan x="28" dy="26">synopsis</tspan></text>
+<rect x="196" y="406" width="318" height="100" rx="3" class="d-box"/><text x="214" y="437" class="d-label"><tspan x="214" dy="0">Original [S,H)</tspan></text><text x="214" y="467" class="d-copy"><tspan x="214" dy="0">Synopsis precompute</tspan></text>
+<path d="M514 456 H578" class="d-line" marker-end="url(#diagram-5-parallel-parallel-arrow)"/>
+<rect x="578" y="406" width="264" height="100" rx="3" class="d-box"/><text x="596" y="437" class="d-label"><tspan x="596" dy="0">Accept or replace</tspan></text><text x="596" y="467" class="d-copy"><tspan x="596" dy="0">Validated synopsis</tspan></text>
+<path d="M842 196 H878 V326 H896" class="d-line" marker-end="url(#diagram-5-parallel-parallel-arrow)"/>
+<path d="M842 326 H896" class="d-line" marker-end="url(#diagram-5-parallel-parallel-arrow)"/>
+<path d="M842 456 H878 V326 H896" class="d-line" marker-end="url(#diagram-5-parallel-parallel-arrow)"/>
+<rect x="896" y="266" width="116" height="122" rx="3" class="d-box"/><text x="914" y="297" class="d-label"><tspan x="914" dy="0">Validate</tspan><tspan x="914" dy="26">+ commit</tspan></text>
+<text x="196" y="555" class="d-small"><tspan x="196" dy="0">Handoff/continuation and history/tail assembly can overlap.</tspan></text>
+<text x="196" y="582" class="d-small"><tspan x="196" dy="0">Final validation joins the required products.</tspan></text>
+<path d="M28 657 H1012" class="d-line d-dash"/>
+<text x="196" y="684" class="d-small"><tspan x="196" dy="0">After final E; independent source flow</tspan></text>
+<text x="28" y="742" class="d-label"><tspan x="28" dy="0">Optional</tspan><tspan x="28" dy="26">archive</tspan></text>
+<rect x="196" y="704" width="318" height="104" rx="3" class="d-box"/><text x="214" y="735" class="d-label"><tspan x="214" dy="0">ORIGINAL raw [S,E)</tspan></text><text x="214" y="765" class="d-copy"><tspan x="214" dy="0">Queued after the final E cut</tspan></text>
+<path d="M514 756 H578" class="d-line d-dash" marker-end="url(#diagram-5-parallel-parallel-arrow)"/>
+<rect x="578" y="704" width="434" height="104" rx="3" class="d-box"/><text x="596" y="735" class="d-label"><tspan x="596" dy="0">Independent archive summary</tspan></text><text x="596" y="765" class="d-copy"><tspan x="596" dy="0">Outside the compaction critical path</tspan></text>
+</svg></div>
+<figcaption>Parallel lanes show main work, closed-prefix summarization, and optional event reduction before final preparation. At the frozen end E, handoff writing and history assembly overlap. Validation joins required products. The raw full-interval archive job is outside the commit path.</figcaption>
+</figure>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-5-caption"><table>
+<caption id="table-5-caption" class="sr-only">Table 5: Parallel execution and dependencies</caption>
+<thead>
+<tr>
+<th scope="col">Work</th>
+<th scope="col">Earliest valid start</th>
+<th scope="col">Must wait for</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Closed-prefix A synopsis</td>
+<td>H and its original source snapshot are pinned</td>
+<td>Exact A inputs and helper admission, not the final E</td>
+</tr>
+<tr>
+<td>Optional event rewrites</td>
+<td>A selected original interaction is complete and eligible</td>
+<td>Its source and minimum interpretation context</td>
+</tr>
+<tr>
+<td>Main-agent handoff and continuation</td>
+<td>Final preparation has admitted the current agent&#39;s request</td>
+<td>Necessary state preparation and the correlated source cut</td>
+</tr>
+<tr>
+<td>B rendering and C selection</td>
+<td>Final E is pinned</td>
+<td>Source projection, complete interactions, and policy budgets</td>
+</tr>
+<tr>
+<td>Packet assembly and validation</td>
+<td>Required products are available, or approved degraded substitutes are selected</td>
+<td>Handoff, coverage, source bindings, and whole-request fit</td>
+</tr>
+<tr>
+<td>Commit</td>
+<td>Validation succeeds and the operation is still current</td>
+<td>No stale branch/model/request boundary or canceled operation</td>
+</tr>
+<tr>
+<td>Optional archive summary</td>
+<td>The full interval source range is pinned</td>
+<td>Original A+B+C and separate helper admission, never commit waiting on it</td>
+</tr>
+</tbody></table>
+</div>
+<p>For the simplest first implementation, queue the optional archive after the interval has a confirmed commit identity. It can also prepare from an immutable final snapshot if its result remains tied to a successful correlated commit. Either way, it must not consume a required compaction slot or delay the main agent&#39;s continuation.</p>
+<p>The final pause is determined by unfinished dependent work, not the sum of every job&#39;s duration. A ready A synopsis and ready event alternatives should not be regenerated in sequence after the handoff. Conversely, parallel calls do not remove shared provider rate limits or local resource contention.</p>
+<p>Helper concurrency is finite. Cancellation means requested cancellation until the provider or worker settles. Do not free a resource slot or start replacement work merely because cancellation was signaled.</p>
+<h2 id="when-compaction-starts">When compaction starts</h2>
+<p>The product owns one automatic policy. It should consider actual request headroom, recent growth, preparation needs, and a useful agent-selected boundary. It should not expose a menu of token targets, trigger percentages, tail presets, and worker-timing knobs as the normal user interface.</p>
+<p>There are three entry conditions:</p>
+<ul>
+<li><strong>Agent request:</strong> The current agent selects a safe point during already-authorized work.</li>
+<li><strong>Automatic pressure:</strong> The system gives advance notice while enough room remains for short preparation and the handoff exchange.</li>
+<li><strong>Recovery:</strong> An admitted request cannot proceed safely or the provider reports a relevant size failure. Use the bounded recovery contract, not another arbitrary percentage increase.</li>
+</ul>
+<p>A phase boundary can prepare H without starting compaction. A completed milestone is not itself an instruction to compact. The policy can reuse its prepared prefix later.</p>
+<p>Advance notice should state that compaction is approaching, what short preparation is needed, and whether jobs can remain outstanding. Do not ask the agent to finish the entire task. Long-running jobs can remain when exact resource identities, state, and next actions survive the handoff.</p>
+<p>Preparation cannot continue indefinitely. A final freeze sets E and protects the summary exchange. New user messages and resource events follow the normal queue and freshness rules. They must not be silently inserted into a frozen helper range or lost between preparation and continuation.</p>
+<h2 id="request-budgets-and-media">Request budgets and media</h2>
+<p>Every model call has its own real input and output constraints. A large main-model window does not make a smaller helper capable of reading the same interval. Advertised provider capacity, local registry declarations, and the effective selected connection can differ.</p>
+<p>The complete restart request includes:</p>
+<pre><code class="language-text">normal system and applicable instructions
++ active tool schemas and provider framing
++ task handoff and continuation
++ A synopsis, B rendering, and exact C
++ output and reasoning allowance where applicable
++ safety allowance
+</code></pre>
+<p>The preparation request also needs room for its control text and summary response. The early-warning policy needs an allowance for plausible intervening growth. A single global &quot;context percentage&quot; cannot replace these checks.</p>
+<p>Use output caps accepted by the selected provider API. An output reserve is an accounting allowance, not proof that a provider enforces the same limit. Invalid or missing capability data needs a specific diagnostic, not a misleading &quot;almost full&quot; claim.</p>
+<h3 id="separate-tokens-from-transport-bytes">Separate tokens from transport bytes</h3>
+<p>JSON bytes, base64 characters, text tokens, and image-token charges are different measurements. A screenshot can have a large encoded body without consuming the same number of model tokens as that many text characters.</p>
+<p>Use known provider/media accounting for validated supported fields. Charge each new image or other modality conservatively. Do not treat it as free because an earlier text request had a usage receipt. Keep transport-size limits separate from context-token limits. Preserve charges for text, tools, framing, unknown fields, and late request transformations.</p>
+<p>Do not change or remove an outgoing image merely to make an estimate fit. Unsupported media or unknown capabilities can require an explicit refusal. A fixed native image estimate is not independent proof of the remote backend&#39;s actual cost.</p>
+<p>A read-only investigation of a reported low-percentage refusal found a source-supported mismatch between a native image estimate and raw serialized base64 accounting. The exact live refusal phase and loaded closure were not measured. This motivates the accounting requirement; it is not a repaired or universally diagnosed failure. See <a href="#evidence-and-references">Evidence and references</a>.</p>
+<h3 id="adaptive-internal-policy">Adaptive internal policy</h3>
+<p>Allocate layer budgets from the usable request capacity after required overhead and reserves. Prefer a small useful exact suffix and a recent coherent compressed window. Fit the handoff and historical synopsis within the remaining allowance without silently dropping current restrictions.</p>
+<p>Do not establish numerical defaults by copying existing settings or the examples in Pi&#39;s documentation. Select and verify internal constants against the required behavior. Expose the resulting budget breakdown as read-only diagnostics.</p>
+<h2 id="active-interval-synopsis">Active interval synopsis</h2>
+<p>The active synopsis answers: <strong>What happened in the older part of this work interval?</strong> It does not answer: <strong>What is the main agent&#39;s entire current task?</strong></p>
+<p>Its only historical input is original A. Supply speaker roles, source references, tool relationships, observed outcomes, and coverage limits. Present history as quoted data, not as instructions for the helper to execute. The helper has no action-taking tools.</p>
+<p>The output should be concise and source-bound:</p>
+<pre><code class="language-markdown">## Interval coverage
+Original current-interval work from &lt;S&gt; up to, but not including, &lt;H&gt;.
+Excluded or unavailable material: &lt;explicit coverage notice&gt;.
+
+## Changes and results
+Actions, observations, artifacts, and results supported within this range.
+
+## Decisions and corrections in this range
+Source-bound decisions, reversals, and remaining disagreements.
+
+## Unresolved at the end of this range
+Open items as of H, not a claim about their status after H.
+
+## Source references
+Useful exact recovery anchors.
+</code></pre>
+<p>Code validates the coverage and references. The model must distinguish an assistant&#39;s report from an observed tool result and distinguish an attempted action from a confirmed outcome. Structural validity does not prove semantic fidelity.</p>
+<p>The synopsis is restart-only. Do not index it as a complete-interval memory entry. Retaining it in the native compaction record for operation recovery is different from publishing it into a historical-summary retrieval collection.</p>
+<p>If A is too large for the selected helper, do not silently head-truncate it or substitute prior summaries. Options include another user-selected capable route or bounded disjoint original-source parts with explicit coverage. A parts-based implementation must label the composite output and avoid a hidden recursive summary chain. Its exact format remains an open implementation choice.</p>
+<h2 id="compressed-history-and-event-helpers">Compressed history and event helpers</h2>
+<p>B preserves recent chronology at lower cost than exact messages. Keep speaker identity, action/result relationships, exact useful identifiers, errors and qualifications, omission notices, and source recovery links. Code owns ordering and source selection.</p>
+<p>Apply deterministic reducers first. Tool-specific reduction often preserves useful structure better than a generic rewrite. Do not ask an LLM to rewrite every event merely because a helper model is available.</p>
+<h3 id="optional-selective-rewriting">Optional selective rewriting</h3>
+<p>A helper can produce an alternative text for an eligible noisy or unstructured event. Its input is that original event plus the minimum related call/outcome context needed to interpret it. Context supplied only for interpretation is not permission to summarize a different source range in the event&#39;s output.</p>
+<p>Several events may be batched into one request. Each result remains individually mapped to its original event. The helper is a text reducer, not a judge of whether evidence can be deleted, whether a task is complete, or whether permission exists.</p>
+<p>Keep user directives, protected exact evidence, and the raw tail outside optional rewriting. Code supplies IDs, ordering, outcome metadata, and recovery routes. Protected spans and output-size checks can reject malformed candidates. They cannot prove that every meaning was retained.</p>
+<p>Cache compatible accepted alternatives by source, projection, model, prompt, and reducer identity. Do not rewrite a model rewrite. At final assembly, use a ready compatible alternative or the deterministic version. Slow, failed, stale, or unavailable optional work must not block compaction or trigger a silent paid-provider substitution.</p>
+<p>Once committed, the packet&#39;s rendered bytes stay fixed. A late event result can become available for a later eligible use. It must not rewrite the already-installed context prefix.</p>
+<h2 id="exact-raw-tail">Exact raw tail</h2>
+<p>C preserves a small newest suffix without semantic rewriting. Its purpose is to retain recent wording and complete interactions that the agent is about to use.</p>
+<p>&quot;Exact&quot; refers to the effective source content and supported message conversion, not an assertion that provider JSON serialization equals the stored source bytes. Source recovery remains available for the original record.</p>
+<p>Do not truncate a tool result and still call that result exact. Do not split a tool batch to fit a nominal tail size. A required unit that exceeds the available request capacity must enter the explicit oversized-unit or recovery path.</p>
+<p>The original source interval ends before generated compaction/control exchanges. Native Pi may still need a technical retained boundary to correlate the summary submission and commit. That adapter detail must remain outside the original A/B/C history model and must not reintroduce an old packet as new work.</p>
+<h2 id="optional-full-interval-archive-summary">Optional full-interval archive summary</h2>
+<p>The archive feature is separate from the active synopsis. If included, it provides a source-linked account of one complete work interval for later retrieval.</p>
+<p>Its input is original <code>[S,E)</code>: all original A, all original B, and all original C. Do not feed it the active A synopsis, compressed B alternatives, previous handoffs, or previous interval summaries. Do not include system/tool definitions or generated compaction packets and control exchanges.</p>
+<p>The job is independent and non-blocking. It may be queued, running, ready, incomplete, failed, or unavailable while the main agent continues normally. None of those states changes whether the compaction commit succeeded.</p>
+<p>&quot;Full interval&quot; means full eligible input coverage. It does not mean lossless output or completed work. If a model or extraction limit prevents coverage, label the result partial. Do not advertise an ordinary head-truncated input as a full-interval summary.</p>
+<p>For large intervals, stream source selection and use bounded original-source parts if needed. Do not solve size pressure by substituting previously generated summaries. Unsupported multimodal content needs explicit source references and coverage notices or a separately approved capable model route. Base64 text is not an image interpretation.</p>
+<p>Preserve source links and interval identity. Keep retrieval summaries distinct from accepted Memory knowledge. They do not acquire current authority by being indexed. The existing source archive remains the recovery basis when a summary is missing, incomplete, or wrong.</p>
+<p>This document does not introduce source deletion, a new global archive-retention policy, or mandatory model calls for every interval. Those decisions remain separate.</p>
+<h2 id="models-and-connection-choices">Models and connection choices</h2>
+<p>The design is connection-neutral. A user may select a local model, a hosted API model, or a cheaper model available through an existing supported subscription.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-6-caption"><table>
+<caption id="table-6-caption" class="sr-only">Table 6: Models and connection choices</caption>
+<thead>
+<tr>
+<th scope="col">Logical role</th>
+<th scope="col">Default responsibility</th>
+<th scope="col">Call pattern</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Current-agent writer</td>
+<td>Current conversational model</td>
+<td>One preparation response containing handoff and continuation</td>
+</tr>
+<tr>
+<td>Active-prefix writer</td>
+<td>Selected capable history helper</td>
+<td>One request per chosen prefix when it fits, with bounded retry or explicit parts if required</td>
+</tr>
+<tr>
+<td>Optional event writer</td>
+<td>Selected economical helper, possibly the same one</td>
+<td>Finite selected-event batches, not one mandatory call for every event</td>
+</tr>
+<tr>
+<td>Optional archive writer</td>
+<td>Selected capable helper, possibly the same one</td>
+<td>Independent job over the entire original interval</td>
+</tr>
+</tbody></table>
+</div>
+<p>Four roles do not require four models or services. There is no mandatory frontier-model final verifier. Code performs source, schema, pairing, and budget checks. A stronger model cannot certify completeness, recover unseen evidence, or create authorization.</p>
+<h3 id="candidate-families-not-selected-models">Candidate families, not selected models</h3>
+<p>Official provider documentation inspected on October 8, 2026 describes the following text-generation candidates:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-7-caption"><table>
+<caption id="table-7-caption" class="sr-only">Table 7: Candidate families, not selected models</caption>
+<thead>
+<tr>
+<th scope="col">Candidate</th>
+<th scope="col">Documented API capacity</th>
+<th scope="col">Proposed use and limit</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>gemini-3.5-flash-lite</code></td>
+<td>1,048,576 input tokens and 65,536 output tokens</td>
+<td>Low-cost event/interval candidate. Actual Pi route and task quality unverified</td>
+</tr>
+<tr>
+<td><code>claude-haiku-5-5</code></td>
+<td>1M context and 128K synchronous output tokens</td>
+<td>High-volume helper candidate. Usable input capacity and account route need verification</td>
+</tr>
+<tr>
+<td><code>gpt-6-luna</code></td>
+<td>1,050,000 context, 922,000 maximum input, 128,000 maximum output</td>
+<td>Economical generative API candidate. Do not confuse it with Pi&#39;s classifier-only Decisions route</td>
+</tr>
+</tbody></table>
+</div>
+<p>These are documented provider limits, not benchmark results, local availability, or recommended request sizes. A more capable selected helper can be used when fidelity requires it. No named local model or hardware fit was evaluated in this study.</p>
+<p>Keep these checks separate:</p>
+<ol>
+<li>The model can generate the needed text and accept the actual input type.</li>
+<li>The installed Pi provider adapter exposes the required API and output controls.</li>
+<li>The selected account is authenticated and entitled to use that model on that route.</li>
+<li>The user permits that source material to reach the selected inference destination.</li>
+<li>A later bounded evaluation establishes acceptable fidelity, latency, and failure behavior.</li>
+</ol>
+<p>Subscription login does not automatically grant API entitlement. A helper process running locally can still send data to a remote provider. A local model avoids some provider billing but still uses memory, compute, and time.</p>
+<p>Do not silently change provider or model after failure. Structured outputs help constrain shape, not truth. Privacy, retention terms, quotas, and actual effective capacity must be checked before a new route is used.</p>
+<h2 id="commit-cancellation-and-continuation">Commit, cancellation, and continuation</h2>
+<p>Treat preparation, validation, source replacement, and resumed work as distinct states. A returned summary is not proof that compaction committed.</p>
+<figure class="figure" id="figure-6">
+<div class="figure-canvas" tabindex="0" role="group" aria-label="Diagram 6: The lifecycle moves from prepared products through validation to a correlated commit and authorized continuation. Stale, failed, or canceled work preserves the old context and enters bounded recovery rather than automatic rewind or an unbounded retry loop."><svg data-diagram="commit" xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="636" viewBox="0 0 1040 636" role="img" aria-labelledby="diagram-6-commit-commit-title diagram-6-commit-commit-desc">
+<title id="diagram-6-commit-commit-title">Validated commit with bounded failure recovery</title>
+<desc id="diagram-6-commit-commit-desc">Approved implementation baseline; implementation in progress. The proposed states are prepared, validated, committed, and authorized continuation. Stale, canceled, or failed work before commit preserves old context. Degraded recovery is finite, with no automatic rewind and no unbounded retry. The optional archive does not gate any arrow.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="diagram-6-commit-commit-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="636" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Validated commit with bounded failure recovery</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="132" width="190" height="108" rx="3" class="d-box"/><text x="46" y="163" class="d-label"><tspan x="46" dy="0">Prepared</tspan></text><text x="46" y="193" class="d-copy"><tspan x="46" dy="0">Old context kept</tspan></text>
+<path d="M218 186 H282" class="d-line" marker-end="url(#diagram-6-commit-commit-arrow)"/>
+<rect x="282" y="132" width="190" height="108" rx="3" class="d-box"/><text x="300" y="163" class="d-label"><tspan x="300" dy="0">Validated</tspan></text><text x="300" y="193" class="d-copy"><tspan x="300" dy="0">Identity + fit</tspan></text>
+<path d="M472 186 H536" class="d-line" marker-end="url(#diagram-6-commit-commit-arrow)"/>
+<rect x="536" y="132" width="190" height="108" rx="3" class="d-box"/><text x="554" y="163" class="d-label"><tspan x="554" dy="0">Committed</tspan></text><text x="554" y="193" class="d-copy"><tspan x="554" dy="0">Correlated commit</tspan></text>
+<path d="M726 186 H790" class="d-line" marker-end="url(#diagram-6-commit-commit-arrow)"/>
+<rect x="790" y="132" width="222" height="108" rx="3" class="d-box"/><text x="808" y="163" class="d-label"><tspan x="808" dy="0">Authorized</tspan><tspan x="808" dy="26">continuation</tspan></text>
+<path d="M123 240 V352" class="d-line" marker-end="url(#diagram-6-commit-commit-arrow)"/>
+<path d="M377 240 V352" class="d-line" marker-end="url(#diagram-6-commit-commit-arrow)"/>
+<rect x="28" y="352" width="464" height="112" rx="3" class="d-box"/><text x="46" y="383" class="d-label"><tspan x="46" dy="0">Stale / canceled / failed</tspan></text><text x="46" y="413" class="d-copy"><tspan x="46" dy="0">Before commit: preserve old context</tspan></text>
+<path d="M492 408 H548" class="d-line" marker-end="url(#diagram-6-commit-commit-arrow)"/>
+<rect x="548" y="352" width="464" height="112" rx="3" class="d-box"/><text x="566" y="383" class="d-label"><tspan x="566" dy="0">Finite degraded recovery</tspan></text><text x="566" y="413" class="d-copy"><tspan x="566" dy="0">No automatic rewind</tspan><tspan x="566" dy="26">No unbounded retry</tspan></text>
+<rect x="28" y="516" width="984" height="90" rx="3" class="d-box"/><text x="46" y="547" class="d-label"><tspan x="46" dy="0">Independent optional archive</tspan></text><text x="46" y="577" class="d-copy"><tspan x="46" dy="0">Does not gate any state transition or continuation</tspan></text>
+</svg></div>
+<figcaption>The lifecycle moves from prepared products through validation to a correlated commit and authorized continuation. Stale, failed, or canceled work preserves the old context and enters bounded recovery rather than automatic rewind or an unbounded retry loop.</figcaption>
+</figure>
+<p>The proposed normal sequence is:</p>
+<ol>
+<li>Save necessary current state and retain exact outstanding resource identities.</li>
+<li>Freeze the operation&#39;s branch, source end, model, relevant policy, and preparation ticket.</li>
+<li>Obtain the main-agent handoff and continuation while independent history work finishes or uses ready results.</li>
+<li>Assemble the packet with its coverage and provenance manifest.</li>
+<li>Validate source identity, projection, non-overlap, tool pairing, required content, output bounds, and the whole request.</li>
+<li>Recheck cancellation, branch/model changes, relevant new input, and operation freshness.</li>
+<li>Commit one correlated replacement and record the resulting source identity.</li>
+<li>Schedule only the continuation of work that is still authorized and unfinished.</li>
+<li>Admit subsequent user/resource events under the normal queue order. Start optional archive work separately.</li>
+</ol>
+<p>A stale result is not repaired by attaching it to the current branch. A failed or canceled attempt preserves the last valid context and source. Do not automatically rewind or repeat side-effecting operations.</p>
+<p>The continuation record should identify the commit and intended next action. It should suppress duplicate local scheduling. Across a crash or uncertain delivery, reconcile the saved commit and current resource state before retrying. Do not claim that a written record proves exactly-once execution.</p>
+<p>A user cancellation, completed task, changed branch, or new blocking instruction can prevent automatic continuation. Waiting on a real external condition is also valid. Merely saving a continuation sentence and then going idle while authorized work is ready is not successful recovery.</p>
+<h2 id="failure-and-emergency-recovery">Failure and emergency recovery</h2>
+<p>Ordinary context growth should not remove every path to a smaller working context. Early warning helps, but it cannot guarantee fit after an arbitrarily large result or a provider failure.</p>
+<p>The following are proposed failure behaviors, not implemented promises:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-8-caption"><table>
+<caption id="table-8-caption" class="sr-only">Table 8: Failure and emergency recovery</caption>
+<thead>
+<tr>
+<th scope="col">Condition</th>
+<th scope="col">Proposed behavior</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Optional event helper is missing, slow, or invalid</td>
+<td>Use deterministic B text</td>
+</tr>
+<tr>
+<td>Optional archive job fails</td>
+<td>Keep source recovery available and report archive unavailability. Do not delay the main agent</td>
+</tr>
+<tr>
+<td>Prepared A synopsis has the wrong range or derivation</td>
+<td>Reject reuse. Select a valid candidate or use a bounded replacement/degraded path</td>
+</tr>
+<tr>
+<td>Active synopsis helper is unavailable</td>
+<td>Use an explicit, labeled deterministic A fallback under a finite policy, rather than wait indefinitely</td>
+</tr>
+<tr>
+<td>Source, branch, model, or relevant projection changes before commit</td>
+<td>Revalidate or abandon the stale attempt. Preserve the last valid context</td>
+</tr>
+<tr>
+<td>Normal current-agent handoff cannot be admitted</td>
+<td>Enter the separately bounded emergency path. Do not merely lower guards</td>
+</tr>
+<tr>
+<td>Required exact unit or required state cannot fit</td>
+<td>Report the specific bound and use the explicit oversized-input recovery contract</td>
+</tr>
+<tr>
+<td>Provider, storage, or capability information is unavailable</td>
+<td>Stop the dependent unsafe action with a precise reason. Do not infer permission to change providers or delete data</td>
+</tr>
+</tbody></table>
+</div>
+<h3 id="proposed-emergency-contract">Proposed emergency contract</h3>
+<p>The normal path remains same-agent authorship. Emergency recovery needs a separately admitted, bounded input that does not depend on sending the already-unadmittable full ordinary context again.</p>
+<p>A candidate design uses the latest valid current-state checkpoint, identified unresolved tasks/resources, protected recent user constraints, and exact source recovery routes. If a fresh main-agent handoff is unavailable, the result must say so. A deterministic recovery header or a separately generated recovery account must not pretend that the main agent just wrote its intended continuation.</p>
+<p>Recovered state has an as-of boundary. The resumed main agent verifies necessary freshness before consequential work. A stale checkpoint cannot erase a newer restriction or authorize a task that is no longer active.</p>
+<p>The recovery input format, handling of oversized protected material, and exact permitted model role remain open decisions. Their acceptance must preserve source correlation, cancellation, expiry, one operation&#39;s commit, and authorized-only continuation. This document does not approve weaker guards, automatic rewind, unbounded retries, or a silent frontier-model fallback.</p>
+<p>No software design can guarantee successful provider calls, storage writes, or safe continuation during every outage. The requirement is to avoid preventable dead ends from ordinary context growth and to give a precise recoverable state when a dependency is genuinely unavailable.</p>
+<h2 id="persistence-and-source-identity">Persistence and source identity</h2>
+<p>Reuse must be based on exact inputs, not a title such as &quot;session summary.&quot; Bind every prepared or committed artifact to its sources and derivation.</p>
+<p>The following is a conceptual record shape, not an implemented TypeScript API:</p>
+<pre><code class="language-typescript">interface CompactionDraft {
+  operationId: string;
+  source: {
+    logicalSession: string;
+    branch: string;
+    previousCommit: string | null;
+    start: SourcePosition;             // S
+    compressedStart: SourcePosition;   // H
+    rawStart: SourcePosition;          // R
+    endExclusive: SourcePosition;      // E
+    orderedInputHash: string;
+    projectionHash: string;
+  };
+  handoff: ArtifactRef;
+  continuation: ArtifactRef;
+  activeSynopsis: ArtifactRef | null;
+  compressedHistory: ArtifactRef;
+  exactTail: SourceRange;
+  policyIdentity: string;
+  modelIdentities: ModelBinding[];
+  nativeStateReferences: StateReference[];
+  coverage: CoverageNotice[];
+  requestBudget: BudgetBreakdown;
+  state: &quot;prepared&quot; | &quot;validated&quot; | &quot;committed&quot; | &quot;abandoned&quot;;
+}
+</code></pre>
+<p><code>SourcePosition</code>, <code>ArtifactRef</code>, and other names stand for source-bound records to be defined during implementation. They are not new tools or settings. A source position needs session/shard/branch association and stable entry or span identity. A timestamp or prompt-array index alone is insufficient.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-9-caption"><table>
+<caption id="table-9-caption" class="sr-only">Table 9: Persistence and source identity</caption>
+<thead>
+<tr>
+<th scope="col">Artifact</th>
+<th scope="col">Reuse conditions</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Deterministic event reduction</td>
+<td>Original source and projection, reducer version, schema, and output policy match</td>
+</tr>
+<tr>
+<td>Model-written event alternative</td>
+<td>Event reduction bindings plus helper model, prompt, generation settings, and disclosure projection match</td>
+</tr>
+<tr>
+<td>Early A synopsis</td>
+<td>Exact S/H range, ancestry, ordered input hash, projection, helper derivation, and coverage match</td>
+</tr>
+<tr>
+<td>Current-agent handoff</td>
+<td>Bound to its own preparation operation and state cut. Do not use it as an arbitrary generic history cache</td>
+</tr>
+<tr>
+<td>Committed restart packet</td>
+<td>Source cut, compiler policy, handoff identity, and whole-request validation are recorded. Rendered bytes remain fixed</td>
+</tr>
+<tr>
+<td>Optional archive summary</td>
+<td>Exact full interval, complete/partial coverage, original-source bindings, helper derivation, and committed interval association match</td>
+</tr>
+</tbody></table>
+</div>
+<p>Source edits invalidate affected derivations. Appending unrelated later work need not invalidate an immutable source-local result. Native state changes can alter relevance or current task state without rewriting historical source facts.</p>
+<p>Keep the original archive and required source maps. Compaction does not shrink or delete the transcript. Context size, per-job memory, total archive storage, and model-server memory are separate limits.</p>
+<h2 id="branches-restoration-and-native-state">Branches, restoration, and native state</h2>
+<p>A branch change requires a new source-selection validation. Do not take the most recent compaction from a different branch or physical file merely because its timestamp is newer. Reuse only artifacts whose ancestry and source association match.</p>
+<p>A restored branch can recover its own interval origin and committed packet. A branch summary, if present, remains a distinct generated artifact. It must not silently become original current-interval evidence. Physical rollover needs explicit links to retained source shards, not a reset that loses the logical interval.</p>
+<p>Workplan, Todo, and Notes remain their own current-state owners. Chrono does not mirror all their bodies into a second store or infer authority from them. It records useful IDs and revisions and lets the current agent recover the necessary records.</p>
+<p>A fresh handoff should usually avoid forcing the agent to rediscover everything through those tools. Native recovery remains available when the handoff is incomplete, the task changed, or a freshness check is necessary. Required verification is not a compaction failure.</p>
+<h2 id="user-interface-and-diagnostics">User interface and diagnostics</h2>
+<p>The ordinary interface should expose behavior and status, not require budget tuning.</p>
+<p>Proposed user-facing controls are the supported compaction action, automatic status, and explicit model-role selection where needed. Optional feature inclusion and privacy/cost consent must be settled before implementation. They should not become a hidden permission to make new provider calls.</p>
+<p>Useful read-only status includes:</p>
+<ul>
+<li>Active source interval and the reasons for candidate H and R.</li>
+<li>Whether A is absent, queued, running, ready, stale, or using a degraded substitute.</li>
+<li>Which original source range a synopsis actually covers.</li>
+<li>Readiness of optional event alternatives and archive work.</li>
+<li>Main-model and helper-model identities, with unavailable capability data marked unknown.</li>
+<li>System, schemas, history layers, media, framing, preparation, and output budget charges.</li>
+<li>The refusal phase and specific reason, not only &quot;no headroom.&quot;</li>
+<li>Whether a summary was submitted, validated, committed, and followed by authorized continuation.</li>
+</ul>
+<p>Diagnostics should be content-free by default. Do not log raw prompts, image bodies, credentials, or private task prose merely to explain token accounting.</p>
+<p>Existing legacy settings need an explicit migration map. Inactive V3/compatibility controls must not appear to govern the proposed path. Preserve unrelated settings and rollback assets. Do not use a broad reset to install the new policy or silently enable an old compactor as a fallback.</p>
+<h2 id="relationship-to-pi-and-current-chrono">Relationship to Pi and current Chrono</h2>
+<p>This is a new design, not a description of every currently installed path.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-10-caption"><table>
+<caption id="table-10-caption" class="sr-only">Table 10: Relationship to Pi and current Chrono</caption>
+<thead>
+<tr>
+<th scope="col">Subject</th>
+<th scope="col">Documented or inspected baseline</th>
+<th scope="col">Proposed design</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Native Pi summary input</td>
+<td>Native Pi can pass the previous summary as iterative context and summarize from its prior kept boundary</td>
+<td>History helpers receive only current-interval originals. The main agent alone carries current task state forward</td>
+</tr>
+<tr>
+<td>Native Pi split span</td>
+<td>Pi can summarize a split user-message prefix separately and merge summaries</td>
+<td>Explicit A/B/C coverage and complete interaction units. No implicit old-summary merge</td>
+</tr>
+<tr>
+<td>Normal Chrono V4 writer</td>
+<td>Inspected V4 asks the same session agent for a continuation summary</td>
+<td>Preserve same-agent authorship, separate task handoff from immediate continuation, add explicit history roles</td>
+</tr>
+<tr>
+<td>Chrono recent replay</td>
+<td>Inspected V4 has bounded deterministic source excerpts and a minimal native exact boundary</td>
+<td>Coherent compressed B plus a deliberately selected small exact C</td>
+</tr>
+<tr>
+<td>Active A synopsis</td>
+<td>No separate active A-only synopsis contract found in the inspected V4 path</td>
+<td>New original-prefix helper, eligible for early preparation</td>
+</tr>
+<tr>
+<td>Existing optional value advice</td>
+<td>Compatibility-oriented typed advice, not V4 event prose</td>
+<td>Optional source-linked event text alternatives with a separate contract</td>
+</tr>
+<tr>
+<td>Full-interval archive summary</td>
+<td>Not established by merely saving the current compaction record</td>
+<td>Separate optional original A+B+C job, never a compaction dependency</td>
+</tr>
+<tr>
+<td>Native Context Kit state</td>
+<td>Independent current-state providers</td>
+<td>Preserve ownership and use typed current-interval transitions as cut hints</td>
+</tr>
+</tbody></table>
+</div>
+<p>Pi&#39;s extension compaction hooks and persisted entries are integration points, not permission to assume that every required behavior can be added through one hook. The implementation must verify the actual installed SDK, provider adapter, context projection, submission protocol, and commit lifecycle together.</p>
+<p>In particular, do not reuse a convenience serialization function that silently head-truncates tool results while claiming the archive helper received full raw input. The inspected Pi reference documents a 2,000-character tool-result serialization limit. This design needs explicit coverage instead.</p>
+<p>The source studies inspected Chrono revision <code>07f36c7d</code> and scoped selected 4.0.16 files. The installed Pi documentation was version 1.1.0. Selected files, a loaded process, and exercised behavior are separate evidence. No current source observation proves that this proposal is active.</p>
+<h2 id="acceptance-and-practical-verification">Acceptance and practical verification</h2>
+<p>The goal is correct useful continuation, not the shortest or most fluent summary.</p>
+<p>A later approved evaluation should measure time, actions, and tokens from commit to the first correct task-advancing action. Measure compaction waiting separately. Distinguish necessary resource/freshness checks from avoidable project rediscovery. Check whether the intended next action continued or changed for a valid new reason.</p>
+<p>Focused acceptance scenarios should cover:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="table-11-caption"><table>
+<caption id="table-11-caption" class="sr-only">Table 11: Acceptance and practical verification</caption>
+<thead>
+<tr>
+<th scope="col">Scenario</th>
+<th scope="col">Required result</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Two successive work intervals</td>
+<td>Interval-2 helper inputs contain no interval-1 source or prior packet</td>
+</tr>
+<tr>
+<td>Main task spans both intervals</td>
+<td>Fresh handoff preserves valid older restrictions and unresolved work</td>
+</tr>
+<tr>
+<td>Complete milestone transition</td>
+<td>It can suggest H without splitting the mutation&#39;s call/result interaction</td>
+</tr>
+<tr>
+<td>Checkpoint without completed work</td>
+<td>It is treated as a position hint, not completion</td>
+</tr>
+<tr>
+<td>Ready early synopsis, later appended work</td>
+<td>Same-range A can be reused. B/C contain later work without overlap</td>
+</tr>
+<tr>
+<td>Source edit or branch change</td>
+<td>Incompatible prepared results are rejected, not relabeled</td>
+</tr>
+<tr>
+<td>Failed optional event or archive helper</td>
+<td>Main compaction continues through its defined fallback and original recovery remains available</td>
+</tr>
+<tr>
+<td>Large image or other supported media</td>
+<td>Transport bytes and model-context charges are separate, nonzero, and provider-aware</td>
+</tr>
+<tr>
+<td>Oversized required interaction</td>
+<td>No fake exactness or split pair. Enter the defined recovery path</td>
+</tr>
+<tr>
+<td>Outstanding process or subagent</td>
+<td>Exact identity and next action survive. The resource is not restarted because of compaction</td>
+</tr>
+<tr>
+<td>Commit succeeds with ready authorized work</td>
+<td>The agent actually continues. A saved continuation sentence alone is insufficient</td>
+</tr>
+<tr>
+<td>New cancellation or restriction</td>
+<td>It prevents conflicting continuation even if preparation was already complete</td>
+</tr>
+</tbody></table>
+</div>
+<p>These are acceptance requirements, not a test suite already written or run. Use a small representative practical exercise first. Additional model evaluation or extensive coded testing requires its own bounded approval. Do not claim semantic fidelity from schema checks alone.</p>
+<h2 id="open-decisions">Open decisions</h2>
+<p>The following choices remain visible for review rather than being hidden behind a supposedly final specification:</p>
+<ol>
+<li><strong>Emergency recovery:</strong> Select the bounded recovery input, authorship label, freshness rules, and oversized protected-content behavior. The normal same-agent writer is already settled.</li>
+<li><strong>Active synopsis failure:</strong> Confirm the proposed labeled deterministic A fallback, its minimum useful evidence, and the finite waiting policy.</li>
+<li><strong>Large helper inputs:</strong> Define the disjoint-original-part output format, if needed. Do not introduce recursive prior-summary merging to make inputs fit.</li>
+<li><strong>Optional features:</strong> Decide whether selective event rewriting and full-interval archival summarization ship initially or remain later additions. Their input and non-blocking contracts are already defined.</li>
+<li><strong>Concrete model selection:</strong> Choose available authorized provider/model routes and a small later fidelity check. The candidate table is not an account entitlement check.</li>
+<li><strong>Internal budgets and scheduling:</strong> Verify layer allocation, advance-notice lead, coalescing, call limits, and resource admission against real capabilities. Do not expose provisional constants as permanent user tuning controls.</li>
+<li><strong>Native integration:</strong> Define typed Context Kit boundary bindings, branch/rollover association, immutable source snapshots, adapter behavior, and a correlated continuation record against the supported SDK.</li>
+</ol>
+<p>Implementation proceeds from this approved baseline. Resolve the open choices without changing its source, authority, and recovery requirements. Additional model evaluation or extensive coded testing still needs its own bounded approval. Design approval and documentation promotion do not establish publication, loaded activation, or practical verification.</p>
+<h2 id="evidence-and-references">Evidence and references</h2>
+<p>The design requirements come from the approved user discussion. Proposed mechanisms and open implementation choices are labeled throughout. The sources below support baseline behavior and model facts, not the fidelity, latency, or activation of the new design.</p>
+<h3 id="pi-reference-and-repository-baseline">Pi reference and repository baseline</h3>
+<ul>
+<li><a href="https://pi.dev/docs/latest/compaction">Pi compaction reference</a>: reference structure, native summary reuse, cuts, hooks, persisted entries, and serialization behavior. The baseline study read the Pi 1.1.0 documentation. The latest public page can change.</li>
+<li><a href="../context/session-agent-compaction.md">Existing session-agent compaction contract</a>: revision-bound same-agent summary, replay, recovery, and continuation behavior. This is the retained runtime baseline, not the new A/B/C design.</li>
+<li><a href="../context/compaction-and-budgets.md">Existing compaction and budget reference</a>: compiler limits and estimated request accounting.</li>
+<li><a href="../history/indexing-and-exact-recovery.md">History indexing and exact recovery</a>: preserved source and retrieval boundaries, not a full-interval archive-summary implementation.</li>
+<li><a href="../operations/menu-and-configuration.md">Existing menu and configuration</a>: retained settings and mode-specific controls. These controls do not all govern V4 or the approved new path.</li>
+<li><a href="../design/evidence-and-roadmap.md">Implementation and evidence boundary</a>: revision-bound checks, selection, activation, and quality limits.</li>
+<li><a href="../../../packages/pi-chrono-compaction/src/context-budget.ts">Chrono request accounting source</a> and <a href="../../../packages/pi-chrono-compaction/src/pi-extension.ts">extension integration source</a>: inspect the checked-out revision before making a current behavior claim.</li>
+</ul>
+<p>The private source studies and incident evidence are not bundled. These repository routes identify baseline contracts and source, not replacements for private incident receipts. The media-accounting investigation did not measure the final live request or target-loaded closure and established no repair. Earlier cross-compaction-window alternatives are superseded by this baseline&#39;s current-interval rule. Earlier helper-role alternatives are not additional requirements.</p>
+<p>Other source locations include <code>packages/pi-chrono-compaction/src/{session-agent-summary,context-compiler,chronological-replay,tail-selection}.ts</code>. Context Kit owns its native tool contracts separately. Consult the actual selected source and nearest project instructions before implementation.</p>
+<h3 id="official-model-documentation">Official model documentation</h3>
+<ul>
+<li><a href="https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</a>.</li>
+<li><a href="https://platform.claude.com/docs/en/models/haiku-5-5/overview">Claude Haiku 5.5</a>.</li>
+<li><a href="https://developers.openai.com/api/docs/models/gpt-6-luna">GPT-6 Luna</a>.</li>
+</ul>
+<p>Provider documentation was inspected on October 8, 2026, America/Los_Angeles. No model calls, benchmarks, credential reads, or account selection were performed for that study. Private candidate notes are not bundled. The table preserves that dated documentation evidence and its Pi-route, subscription, and quality limits. It does not attest current availability or account entitlement.</p>
+</article>
+<footer class="document-footer">Canonical content source: <a href="reference.md"><code>reference.md</code></a>.<br>Markdown SHA256: <code>ed52347f3de5a021a41f0d4bd804f6705b38b4d3037174e117de969449237027</code>.<br>Offline presentation. All diagrams and styles are embedded. Reference links open only when selected.</footer>
+</main>
+</div>
+</body>
+</html>

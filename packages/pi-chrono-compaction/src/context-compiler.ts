@@ -5,15 +5,27 @@ import type { ShadowComposerInput, ShadowCompositionArtifact, ShadowCompositionE
 import type { renderBoundedMemory, BoundedMemorySelection } from "./bounded-memory.js";
 import { renderChronologicalReplay, type ChronologicalReplaySelection } from "./chronological-replay.js";
 import { chargeCompactionSummary, CONTEXT_ESTIMATOR, resolveContextCeiling, type ContextBudget } from "./context-budget.js";
+import type { IntervalSourceSnapshot, IntervalSourceEvent } from "./interval-source.js";
+import type { IntervalPartition } from "./interval-partition.js";
+import type { LogicalIntervalSourceManifest } from "./interval-logical-source.js";
+import { compileIntervalContext, type IntervalHistoryReceipt, type IntervalReadyHistory } from "./interval-compiler.js";
+import { SESSION_AGENT_SUMMARY_LIMITS } from "./session-agent-summary.js";
 
 export const CONTEXT_COMPILER_RULESET = "chrono-context-compiler-session-v1" as const;
-export const CONTEXT_COMPILER_LIMITS = Object.freeze({ inputBytes: 1024 * 1024, receiptBytes: 768 * 1024, nativeBytes: 32768, locatorEntries: 256 });
+export const INTERVAL_CONTEXT_COMPILER_RULESET = "chrono-context-compiler-interval-v1" as const;
+export const CONTEXT_COMPILER_LIMITS = Object.freeze({ inputBytes: 1024 * 1024, receiptBytes: 768 * 1024,
+  intervalReceiptBytes: 16 * 1024 * 1024, nativeBytes: 32768, locatorEntries: 256 });
 export type CompilerHistory =
   | { readonly kind: "stored"; readonly input: ShadowComposerInput }
   | { readonly kind: "fallback"; readonly selection: BoundedMemorySelection }
-  | { readonly kind: "events"; readonly selection: ChronologicalReplaySelection };
+  | { readonly kind: "events"; readonly selection: ChronologicalReplaySelection }
+  | { readonly kind: "interval"; readonly relevance: readonly string[]; readonly ready?: IntervalReadyHistory };
 export interface SessionSummaryInput {
+  /** Retained for old receipt readers. Fresh interval inputs also bind handoff. */
   readonly text: string;
+  readonly handoff?: string;
+  readonly continuation?: string;
+  readonly authorship?: "current-agent" | "deterministic-recovery";
   readonly requestId: string;
   readonly requestLeafId: string;
   readonly consumedBoundaryLeafId: string;
@@ -26,11 +38,17 @@ export interface FrozenContextInput {
   readonly scope: ContextScope;
   readonly sourceCutEntryId: string;
   readonly firstKeptEntryId: string;
+  /** Pre-commit intent only. Native Pi later records self-retention for none. */
+  readonly nativeRetention?: { readonly kind: "none"; readonly operationId: string };
   readonly memoryOwner: "chrono" | "context-kit";
   readonly native: ContextCollection;
   readonly history: CompilerHistory;
   /** Submitted by the current session agent and validated by the public-hook caller. */
   readonly sessionSummary?: SessionSummaryInput;
+  /** Original work pinned before the generated handoff exchange. */
+  readonly interval?: IntervalSourceSnapshot;
+  /** Verified original-shard bindings for recapture after a physical rollover. */
+  readonly logicalSource?: LogicalIntervalSourceManifest;
   readonly budget: ContextBudget;
   readonly rawTail: { readonly tokens: number; readonly messages: number; readonly toolPairSafe: boolean };
 }
@@ -38,7 +56,7 @@ export interface NativeSelectionRef { readonly providerId: string; readonly card
 type FallbackReceipt = ReturnType<typeof renderBoundedMemory>["receipt"];
 export interface ContextSelectionReceipt {
   readonly schemaVersion: 4;
-  readonly ruleset: typeof CONTEXT_COMPILER_RULESET;
+  readonly ruleset: typeof CONTEXT_COMPILER_RULESET | typeof INTERVAL_CONTEXT_COMPILER_RULESET;
   readonly receiptId: string;
   readonly inputHash: string;
   readonly selectionHash: string;
@@ -46,6 +64,7 @@ export interface ContextSelectionReceipt {
   readonly scope: ContextScope;
   readonly sourceCutEntryId: string;
   readonly firstKeptEntryId: string;
+  readonly nativeRetention?: { readonly kind: "none"; readonly operationId: string };
   readonly memoryOwner: "chrono" | "context-kit";
   /** Full admitted pages, each card stored once. Transport ID is diagnostic only. */
   readonly native: ContextCollection;
@@ -54,8 +73,11 @@ export interface ContextSelectionReceipt {
   readonly unresolvedRelations: readonly { readonly from: NativeSelectionRef; readonly providerId: string; readonly id: string; readonly type: string }[];
   readonly history: { readonly kind: "stored"; readonly envelope: ShadowCompositionEnvelope; readonly artifact: ShadowCompositionArtifact }
     | { readonly kind: "fallback"; readonly receipt: FallbackReceipt }
-    | { readonly kind: "events"; readonly receipt: ReturnType<typeof renderChronologicalReplay>["receipt"] };
+    | { readonly kind: "events"; readonly receipt: ReturnType<typeof renderChronologicalReplay>["receipt"] }
+    | { readonly kind: "interval"; readonly receipt: IntervalHistoryReceipt };
   readonly sessionSummary?: SessionSummaryInput;
+  /** Exact native tail and continuation are expanded by a source-bound context hook. */
+  readonly restart?: IntervalRestartReceipt;
   readonly budget: ContextBudget & {
     readonly rawTailTokens: number; readonly rawTailMessages: number; readonly nativeRenderedTokens: number;
     readonly summaryTextTokens: number; readonly summaryMessageTokens: number; readonly summaryFramingTokens: number;
@@ -64,6 +86,16 @@ export interface ContextSelectionReceipt {
   };
   readonly validation: { readonly wholeAdmittedRecords: boolean; readonly toolPairSafe: true; readonly estimatedRequestFits: true;
     readonly nativeComplete: boolean; readonly distributedSnapshot: false; readonly exactModelTokenCount: false };
+}
+export interface IntervalRestartReceipt {
+  readonly schemaVersion: 1;
+  readonly snapshotId: string;
+  readonly logicalSource?: LogicalIntervalSourceManifest;
+  readonly source: Pick<IntervalSourceSnapshot, "source" | "origin" | "endEntryId" | "sourceHash" | "projectionHash" | "bounds" | "controlIdentities" | "segments">;
+  readonly partition: IntervalPartition;
+  readonly exactTail: readonly IntervalSourceEvent[];
+  readonly continuation: { readonly text: string; readonly authorship: "current-agent" | "deterministic-recovery" };
+  readonly technicalBoundaryEntryId?: string;
 }
 export interface CompiledContext { readonly summary: string; readonly firstKeptEntryId: string; readonly receipt: ContextSelectionReceipt }
 
@@ -76,7 +108,7 @@ function canonical(value: unknown): string {
 const hash = (value: unknown): string => createHash("sha256").update(canonical(value)).digest("hex");
 const tokens = (text: string): number => Math.ceil(text.length / 4);
 function freeze<T>(value: T): T {
-  if (value && typeof value === "object") {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) freeze(child);
     Object.freeze(value);
   }
@@ -89,24 +121,50 @@ export function freezeContextInput(input: FrozenContextInput): FrozenContextInpu
   const scope = validateScope(input.scope);
   const native = copyPlainData(input.native, CONTEXT_COMPILER_LIMITS.nativeBytes * 2) as ContextCollection;
   if (Buffer.byteLength(JSON.stringify(native)) > CONTEXT_COMPILER_LIMITS.nativeBytes || !sameScope(scope, native.scope)) throw new Error("context-v4-native-scope-invalid");
-  const serialized = JSON.stringify({ ...input, scope, native });
+  // Source capture already detached and froze originals under its own bounds.
+  // Do not duplicate the entire A/B payload into the small compiler envelope.
+  const { interval, ...envelope } = input;
+  const ready = input.history.kind === "interval" ? input.history.ready : undefined;
+  if (interval && (!Object.isFrozen(interval) || !/^chrono-interval:[a-f0-9]{64}$/.test(interval.identity)
+    || interval.endEntryId !== input.sourceCutEntryId || input.history.kind !== "interval")) throw new Error("context-v4-interval-input-invalid");
+  if (!interval && input.history.kind === "interval") throw new Error("context-v4-interval-source-required");
+  const serialized = JSON.stringify({ ...envelope, scope, native,
+    ...(interval && input.history.kind === "interval" ? { history: { kind: "interval", relevance: input.history.relevance } } : {}) });
   if (Buffer.byteLength(serialized) > CONTEXT_COMPILER_LIMITS.inputBytes) throw new Error("context-v4-input-budget");
-  const detached = JSON.parse(serialized) as FrozenContextInput;
+  const parsed = JSON.parse(serialized);
+  const detached = { ...parsed, ...(interval ? { interval, history: { ...parsed.history, ...(ready ? { ready } : {}) } } : {}) } as FrozenContextInput;
   const budget = detached.budget;
+  if (detached.logicalSource && (!interval || detached.logicalSource.ruleset !== "chrono-logical-original-source-v1"
+    || !/^chrono-logical-original:[a-f0-9]{64}$/.test(detached.logicalSource.identity)
+    || detached.logicalSource.endEntryId !== interval.endEntryId
+    || canonical(detached.logicalSource.source) !== canonical(interval.source))) throw new Error("context-v4-logical-source-binding-invalid");
   if (budget.estimator !== CONTEXT_ESTIMATOR || budget.effectiveCeilingTokens !== resolveContextCeiling(budget.configuredTokens,
     budget.model.contextWindow, budget.systemTokens + budget.toolSchemaTokens + budget.framingTokens, budget.responseReserveTokens)
     || !Number.isSafeInteger(detached.rawTail.tokens) || detached.rawTail.tokens < 0
     || !Number.isSafeInteger(detached.rawTail.messages) || detached.rawTail.messages < 0 || !detached.rawTail.toolPairSafe
     || !detached.sourceCutEntryId || !detached.firstKeptEntryId || !scope.leafId) throw new Error("context-v4-input-invalid");
-  const cut = detached.history.kind === "stored" ? detached.history.input.cut : detached.history.selection;
-  if (cut.firstKeptEntryId !== detached.firstKeptEntryId || cut.sourceCutEntryId !== detached.sourceCutEntryId) throw new Error("context-v4-history-cut-invalid");
+  if (detached.nativeRetention && (!interval || detached.nativeRetention.kind !== "none"
+    || !detached.nativeRetention.operationId || detached.firstKeptEntryId !== `retain-none:${detached.nativeRetention.operationId}`
+    || detached.rawTail.tokens !== 0 || detached.rawTail.messages !== 0)) throw new Error("context-v4-retention-intent-invalid");
+  if (!detached.nativeRetention && detached.firstKeptEntryId.startsWith("retain-none:")) throw new Error("context-v4-retention-intent-required");
+  if (detached.history.kind !== "interval") {
+    const cut = detached.history.kind === "stored" ? detached.history.input.cut : detached.history.selection;
+    if (cut.firstKeptEntryId !== detached.firstKeptEntryId || cut.sourceCutEntryId !== detached.sourceCutEntryId) throw new Error("context-v4-history-cut-invalid");
+  }
   // Old stored inputs remain readable, but cannot substitute for a session-agent summary.
   const summary = detached.sessionSummary;
-  if (summary && (typeof summary.text !== "string" || !summary.text.trim() || summary.text.length > 16_384
-    || Buffer.byteLength(summary.text) > 24 * 1024 || !summary.requestId || !summary.requestLeafId
+  if (summary && (typeof summary.text !== "string" || !summary.text.trim()
+    || summary.text.length > (interval ? SESSION_AGENT_SUMMARY_LIMITS.summaryChars : 16_384)
+    || Buffer.byteLength(summary.text) > (interval ? SESSION_AGENT_SUMMARY_LIMITS.summaryBytes : 24 * 1024) || !summary.requestId || !summary.requestLeafId
     || !summary.consumedBoundaryLeafId || !summary.submissionEntryId || !summary.submissionToolCallId
     || !Array.isArray(summary.relevanceHints) || summary.relevanceHints.length > 8
     || summary.relevanceHints.some(term => typeof term !== "string" || term.length > 256))) throw new Error("context-v4-session-summary-invalid");
+  if (interval && (!summary || summary.handoff !== summary.text || !summary.continuation?.trim()
+    || summary.continuation.length > SESSION_AGENT_SUMMARY_LIMITS.continuationChars
+    || Buffer.byteLength(summary.continuation) > SESSION_AGENT_SUMMARY_LIMITS.continuationBytes
+    || summary.text.length + summary.continuation.length > SESSION_AGENT_SUMMARY_LIMITS.summaryChars
+    || Buffer.byteLength(summary.text) + Buffer.byteLength(summary.continuation) > SESSION_AGENT_SUMMARY_LIMITS.summaryBytes
+    || !["current-agent", "deterministic-recovery"].includes(summary.authorship ?? ""))) throw new Error("context-v4-interval-handoff-required");
   return freeze(detached);
 }
 
@@ -114,6 +172,9 @@ export function freezeContextInput(input: FrozenContextInput): FrozenContextInpu
  * Input pages are frozen record captures, not a transaction across state owners. */
 export function compileContext(raw: FrozenContextInput): CompiledContext {
   const input = freezeContextInput(raw);
+  if (input.interval) return compileIntervalContext(input);
+  // Compatibility for saved preview inputs only. Fresh runtime capture requires
+  // an original interval and cannot fall back to this historical replay path.
   if (!input.sessionSummary || input.history.kind !== "events") throw new Error("context-v4-session-summary-required");
   const { requestId: _transportId, ...stableNative } = input.native;
   const inputHash = hash({ ...input, native: stableNative });
@@ -163,7 +224,7 @@ export interface ContextReceiptLocator {
 export function contextReceiptLocator(entry: { id?: string; type?: string; fromHook?: boolean; details?: unknown }, sessionId: string): ContextReceiptLocator | undefined {
   const receipt = (entry.details as { contextReceipt?: Partial<ContextSelectionReceipt> } | undefined)?.contextReceipt;
   if (entry.type !== "compaction" || entry.fromHook !== true || !entry.id || !receipt
-    || ![CONTEXT_COMPILER_RULESET, "chrono-context-compiler-v4"].includes(receipt?.ruleset ?? "")
+    || ![CONTEXT_COMPILER_RULESET, INTERVAL_CONTEXT_COMPILER_RULESET, "chrono-context-compiler-v4"].includes(receipt?.ruleset ?? "")
     || typeof receipt.receiptId !== "string" || !/^chrono-v4:[a-f0-9]{64}$/.test(receipt.receiptId)
     || typeof receipt.summaryHash !== "string" || !/^[a-f0-9]{64}$/.test(receipt.summaryHash)
     || receipt.scope?.sessionId !== sessionId) return undefined;

@@ -2,8 +2,12 @@ import { createHash } from "node:crypto";
 import { copyPlainData, sameScope, validateScope } from "@context-kit/protocol";
 import { renderChronologicalReplay } from "./chronological-replay.js";
 import { chargeCompactionSummary, CONTEXT_ESTIMATOR, resolveContextCeiling } from "./context-budget.js";
+import { compileIntervalContext } from "./interval-compiler.js";
+import { SESSION_AGENT_SUMMARY_LIMITS } from "./session-agent-summary.js";
 export const CONTEXT_COMPILER_RULESET = "chrono-context-compiler-session-v1";
-export const CONTEXT_COMPILER_LIMITS = Object.freeze({ inputBytes: 1024 * 1024, receiptBytes: 768 * 1024, nativeBytes: 32768, locatorEntries: 256 });
+export const INTERVAL_CONTEXT_COMPILER_RULESET = "chrono-context-compiler-interval-v1";
+export const CONTEXT_COMPILER_LIMITS = Object.freeze({ inputBytes: 1024 * 1024, receiptBytes: 768 * 1024,
+    intervalReceiptBytes: 16 * 1024 * 1024, nativeBytes: 32768, locatorEntries: 256 });
 function canonical(value) {
     const sort = (item) => Array.isArray(item) ? item.map(sort)
         : item && typeof item === "object" ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
@@ -13,7 +17,7 @@ function canonical(value) {
 const hash = (value) => createHash("sha256").update(canonical(value)).digest("hex");
 const tokens = (text) => Math.ceil(text.length / 4);
 function freeze(value) {
-    if (value && typeof value === "object") {
+    if (value && typeof value === "object" && !Object.isFrozen(value)) {
         for (const child of Object.values(value))
             freeze(child);
         Object.freeze(value);
@@ -27,33 +31,69 @@ export function freezeContextInput(input) {
     const native = copyPlainData(input.native, CONTEXT_COMPILER_LIMITS.nativeBytes * 2);
     if (Buffer.byteLength(JSON.stringify(native)) > CONTEXT_COMPILER_LIMITS.nativeBytes || !sameScope(scope, native.scope))
         throw new Error("context-v4-native-scope-invalid");
-    const serialized = JSON.stringify({ ...input, scope, native });
+    // Source capture already detached and froze originals under its own bounds.
+    // Do not duplicate the entire A/B payload into the small compiler envelope.
+    const { interval, ...envelope } = input;
+    const ready = input.history.kind === "interval" ? input.history.ready : undefined;
+    if (interval && (!Object.isFrozen(interval) || !/^chrono-interval:[a-f0-9]{64}$/.test(interval.identity)
+        || interval.endEntryId !== input.sourceCutEntryId || input.history.kind !== "interval"))
+        throw new Error("context-v4-interval-input-invalid");
+    if (!interval && input.history.kind === "interval")
+        throw new Error("context-v4-interval-source-required");
+    const serialized = JSON.stringify({ ...envelope, scope, native,
+        ...(interval && input.history.kind === "interval" ? { history: { kind: "interval", relevance: input.history.relevance } } : {}) });
     if (Buffer.byteLength(serialized) > CONTEXT_COMPILER_LIMITS.inputBytes)
         throw new Error("context-v4-input-budget");
-    const detached = JSON.parse(serialized);
+    const parsed = JSON.parse(serialized);
+    const detached = { ...parsed, ...(interval ? { interval, history: { ...parsed.history, ...(ready ? { ready } : {}) } } : {}) };
     const budget = detached.budget;
+    if (detached.logicalSource && (!interval || detached.logicalSource.ruleset !== "chrono-logical-original-source-v1"
+        || !/^chrono-logical-original:[a-f0-9]{64}$/.test(detached.logicalSource.identity)
+        || detached.logicalSource.endEntryId !== interval.endEntryId
+        || canonical(detached.logicalSource.source) !== canonical(interval.source)))
+        throw new Error("context-v4-logical-source-binding-invalid");
     if (budget.estimator !== CONTEXT_ESTIMATOR || budget.effectiveCeilingTokens !== resolveContextCeiling(budget.configuredTokens, budget.model.contextWindow, budget.systemTokens + budget.toolSchemaTokens + budget.framingTokens, budget.responseReserveTokens)
         || !Number.isSafeInteger(detached.rawTail.tokens) || detached.rawTail.tokens < 0
         || !Number.isSafeInteger(detached.rawTail.messages) || detached.rawTail.messages < 0 || !detached.rawTail.toolPairSafe
         || !detached.sourceCutEntryId || !detached.firstKeptEntryId || !scope.leafId)
         throw new Error("context-v4-input-invalid");
-    const cut = detached.history.kind === "stored" ? detached.history.input.cut : detached.history.selection;
-    if (cut.firstKeptEntryId !== detached.firstKeptEntryId || cut.sourceCutEntryId !== detached.sourceCutEntryId)
-        throw new Error("context-v4-history-cut-invalid");
+    if (detached.nativeRetention && (!interval || detached.nativeRetention.kind !== "none"
+        || !detached.nativeRetention.operationId || detached.firstKeptEntryId !== `retain-none:${detached.nativeRetention.operationId}`
+        || detached.rawTail.tokens !== 0 || detached.rawTail.messages !== 0))
+        throw new Error("context-v4-retention-intent-invalid");
+    if (!detached.nativeRetention && detached.firstKeptEntryId.startsWith("retain-none:"))
+        throw new Error("context-v4-retention-intent-required");
+    if (detached.history.kind !== "interval") {
+        const cut = detached.history.kind === "stored" ? detached.history.input.cut : detached.history.selection;
+        if (cut.firstKeptEntryId !== detached.firstKeptEntryId || cut.sourceCutEntryId !== detached.sourceCutEntryId)
+            throw new Error("context-v4-history-cut-invalid");
+    }
     // Old stored inputs remain readable, but cannot substitute for a session-agent summary.
     const summary = detached.sessionSummary;
-    if (summary && (typeof summary.text !== "string" || !summary.text.trim() || summary.text.length > 16_384
-        || Buffer.byteLength(summary.text) > 24 * 1024 || !summary.requestId || !summary.requestLeafId
+    if (summary && (typeof summary.text !== "string" || !summary.text.trim()
+        || summary.text.length > (interval ? SESSION_AGENT_SUMMARY_LIMITS.summaryChars : 16_384)
+        || Buffer.byteLength(summary.text) > (interval ? SESSION_AGENT_SUMMARY_LIMITS.summaryBytes : 24 * 1024) || !summary.requestId || !summary.requestLeafId
         || !summary.consumedBoundaryLeafId || !summary.submissionEntryId || !summary.submissionToolCallId
         || !Array.isArray(summary.relevanceHints) || summary.relevanceHints.length > 8
         || summary.relevanceHints.some(term => typeof term !== "string" || term.length > 256)))
         throw new Error("context-v4-session-summary-invalid");
+    if (interval && (!summary || summary.handoff !== summary.text || !summary.continuation?.trim()
+        || summary.continuation.length > SESSION_AGENT_SUMMARY_LIMITS.continuationChars
+        || Buffer.byteLength(summary.continuation) > SESSION_AGENT_SUMMARY_LIMITS.continuationBytes
+        || summary.text.length + summary.continuation.length > SESSION_AGENT_SUMMARY_LIMITS.summaryChars
+        || Buffer.byteLength(summary.text) + Buffer.byteLength(summary.continuation) > SESSION_AGENT_SUMMARY_LIMITS.summaryBytes
+        || !["current-agent", "deterministic-recovery"].includes(summary.authorship ?? "")))
+        throw new Error("context-v4-interval-handoff-required");
     return freeze(detached);
 }
 /** Pure deterministic compiler. Preview and active return call this exact path.
  * Input pages are frozen record captures, not a transaction across state owners. */
 export function compileContext(raw) {
     const input = freezeContextInput(raw);
+    if (input.interval)
+        return compileIntervalContext(input);
+    // Compatibility for saved preview inputs only. Fresh runtime capture requires
+    // an original interval and cannot fall back to this historical replay path.
     if (!input.sessionSummary || input.history.kind !== "events")
         throw new Error("context-v4-session-summary-required");
     const { requestId: _transportId, ...stableNative } = input.native;
@@ -99,7 +139,7 @@ export function compileContext(raw) {
 export function contextReceiptLocator(entry, sessionId) {
     const receipt = entry.details?.contextReceipt;
     if (entry.type !== "compaction" || entry.fromHook !== true || !entry.id || !receipt
-        || ![CONTEXT_COMPILER_RULESET, "chrono-context-compiler-v4"].includes(receipt?.ruleset ?? "")
+        || ![CONTEXT_COMPILER_RULESET, INTERVAL_CONTEXT_COMPILER_RULESET, "chrono-context-compiler-v4"].includes(receipt?.ruleset ?? "")
         || typeof receipt.receiptId !== "string" || !/^chrono-v4:[a-f0-9]{64}$/.test(receipt.receiptId)
         || typeof receipt.summaryHash !== "string" || !/^[a-f0-9]{64}$/.test(receipt.summaryHash)
         || receipt.scope?.sessionId !== sessionId)

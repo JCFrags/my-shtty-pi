@@ -11,6 +11,8 @@ related:
 
 # Session-agent compaction
 
+For the current Pi 1.1 interval candidate, use the [interval request policy](interval-compaction.md#request-bounds-media-and-pi-hooks). Its estimated input thresholds force a summary-only attempt instead of refusing it for low headroom. Provider rejection and restart-output bounds remain separate. The version-bound admission and payload-accounting descriptions below retain earlier behavior and evidence, not the current interval policy.
+
 ## Required result
 
 The session agent helps compact its own context. Ask that agent for the continuation summary at the end of the context it already uses. Do not create another agent or serialize the conversation into a different summarizer prompt. Selecting the same model for a separate summarizer does not satisfy this requirement.

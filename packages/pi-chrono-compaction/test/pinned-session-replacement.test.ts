@@ -13,8 +13,8 @@ import {
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
-test("installed Pi 0.85.1 reloads committed replacement and switch state without a provider call", async () => {
-  assert.equal(VERSION, "0.85.1");
+test("pinned Pi 1.1.0 reloads committed replacement and switch state without a provider call", async () => {
+  assert.equal(VERSION, "1.1.0");
   const root = await mkdtemp(join(tmpdir(), "chrono-pinned-session-"));
   const cwd = join(root, "project"), agentDir = join(root, "agent"), sessions = join(root, "sessions");
   await mkdir(cwd);
@@ -89,7 +89,7 @@ test("installed Pi 0.85.1 reloads committed replacement and switch state without
     assert.equal(newCancelled, false);
     assert.notEqual(replacementPath, originalPath);
     assert.deepEqual(preSetupBranch, { count: 1, types: ["thinking_level_change"] },
-      "Pi 0.85.1 adds only its thinking bootstrap metadata before replacement setup");
+      "Pi 1.1.0 adds only its thinking bootstrap metadata before replacement setup");
     assert.deepEqual(lifecycle, [
       "session_start:startup:0",
       "session_shutdown:new",

@@ -299,13 +299,29 @@ test('Chrono build gate rejects changed compiled bytes and never cleans a checko
 
 
 test('Chrono scripts isolate HOME, agent configuration, and tmpdir legacy namespace', () => fixture(root => {
-  const env = chronoScriptEnvironment(root);
-  assert.equal(env.HOME, join(root, '.verify-chrono-home'));
-  assert.equal(env.PI_CODING_AGENT_DIR, join(env.HOME, 'agent'));
-  assert.equal(env.TMPDIR, join(env.HOME, 'tmp'));
-  assert.deepEqual(Object.keys(env).sort(), ['HOME', 'LANG', 'PATH', 'PI_CODING_AGENT_DIR', 'TMPDIR']);
-  const childTemp = execFileSync(process.execPath, ['--input-type=module', '-e', "import{tmpdir}from'node:os';process.stdout.write(tmpdir())"], { env, encoding: 'utf8' });
-  assert.equal(childTemp, env.TMPDIR);
+  const original = { oom: process.env.CHRONO_TEST_CGROUP_OOM, ci: process.env.CI };
+  try {
+    process.env.CI = 'true';
+    for (const value of [undefined, '', '0', 'true', '01', '1 ']) {
+      if (value === undefined) delete process.env.CHRONO_TEST_CGROUP_OOM;
+      else process.env.CHRONO_TEST_CGROUP_OOM = value;
+      const env = chronoScriptEnvironment(root);
+      assert.equal(env.HOME, join(root, '.verify-chrono-home'));
+      assert.equal(env.PI_CODING_AGENT_DIR, join(env.HOME, 'agent'));
+      assert.equal(env.TMPDIR, join(env.HOME, 'tmp'));
+      assert.deepEqual(Object.keys(env).sort(), ['HOME', 'LANG', 'PATH', 'PI_CODING_AGENT_DIR', 'TMPDIR']);
+    }
+    process.env.CHRONO_TEST_CGROUP_OOM = '1';
+    const env = chronoScriptEnvironment(root);
+    assert.deepEqual(Object.keys(env).sort(), ['CHRONO_TEST_CGROUP_OOM', 'HOME', 'LANG', 'PATH', 'PI_CODING_AGENT_DIR', 'TMPDIR']);
+    const child = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', "import{tmpdir}from'node:os';process.stdout.write(JSON.stringify({tmp:tmpdir(),oom:process.env.CHRONO_TEST_CGROUP_OOM}))"], { env, encoding: 'utf8' }));
+    assert.deepEqual(child, { tmp: env.TMPDIR, oom: '1' });
+  } finally {
+    if (original.oom === undefined) delete process.env.CHRONO_TEST_CGROUP_OOM;
+    else process.env.CHRONO_TEST_CGROUP_OOM = original.oom;
+    if (original.ci === undefined) delete process.env.CI;
+    else process.env.CI = original.ci;
+  }
 }));
 
 

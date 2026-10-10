@@ -16,7 +16,23 @@ export async function captureContextCompilation(host, input, view) {
         records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150,
     }, view);
     view.revalidate();
-    const replay = input.replay(nativeReplayRelevance(native, input.sessionSummary.relevanceHints));
+    const relevance = nativeReplayRelevance(native, input.sessionSummary.relevanceHints);
+    if (input.interval) {
+        // Read ready exact-range candidates once. Optional jobs never join this
+        // dependency, and a late result cannot mutate the captured packet.
+        const ready = input.readyHistory?.(input.interval, input.budget);
+        view.revalidate();
+        return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
+            memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native, interval: input.interval,
+            ...(input.nativeRetention ? { nativeRetention: input.nativeRetention } : {}),
+            ...(input.logicalSource ? { logicalSource: input.logicalSource } : {}),
+            sessionSummary: input.sessionSummary, history: { kind: "interval", relevance, ...(ready ? { ready } : {}) } });
+    }
+    // Old explicit previews retain their original deterministic capture contract.
+    // Runtime callers must supply interval and do not select this compatibility path.
+    if (!input.replay)
+        throw new Error("context-v4-interval-source-required");
+    const replay = input.replay(relevance);
     view.revalidate();
     return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
         memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native,

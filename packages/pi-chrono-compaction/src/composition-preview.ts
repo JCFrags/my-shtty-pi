@@ -9,7 +9,9 @@ import type { EpisodeStateSelection } from "./episode-state-contract.js";
 import { isSafeCompactionCut } from "./tail-selection.js";
 import type { SessionEntryLike } from "./types.js";
 import { byteCount, estimateTokensFromText, getRecord, getString, stableStringify } from "./utils.js";
-import { validateContextCeiling } from "./context-budget.js";
+import { validateContextCeiling, type ContextBudget } from "./context-budget.js";
+import type { IntervalSourceSnapshot } from "./interval-source.js";
+import type { IntervalReadyHistory } from "./interval-compiler.js";
 
 /** Explicit preview only. These callbacks must use the already-loaded session
  * and the read-only contained adapter. This module never loads session files,
@@ -30,7 +32,8 @@ export async function captureContextCompilation(
   host: { events: ContextEventBus; getActiveTools(): string[] },
   input: Omit<FrozenContextInput, "native" | "history"> & {
     readonly sessionSummary: SessionSummaryInput;
-    readonly replay: (relevance: readonly string[]) => ChronologicalReplaySelection;
+    readonly replay?: (relevance: readonly string[]) => ChronologicalReplaySelection;
+    readonly readyHistory?: (snapshot: IntervalSourceSnapshot, budget: ContextBudget) => IntervalReadyHistory;
     readonly query?: ContextQuery;
   },
   view: { getScope(): ContextScope; epoch(): number; signal?: AbortSignal; revalidate(): void },
@@ -40,7 +43,22 @@ export async function captureContextCompilation(
     records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150,
   }, view);
   view.revalidate();
-  const replay = input.replay(nativeReplayRelevance(native, input.sessionSummary.relevanceHints));
+  const relevance = nativeReplayRelevance(native, input.sessionSummary.relevanceHints);
+  if (input.interval) {
+    // Read ready exact-range candidates once. Optional jobs never join this
+    // dependency, and a late result cannot mutate the captured packet.
+    const ready = input.readyHistory?.(input.interval, input.budget);
+    view.revalidate();
+    return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
+      memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native, interval: input.interval,
+      ...(input.nativeRetention ? { nativeRetention: input.nativeRetention } : {}),
+      ...(input.logicalSource ? { logicalSource: input.logicalSource } : {}),
+      sessionSummary: input.sessionSummary, history: { kind: "interval", relevance, ...(ready ? { ready } : {}) } });
+  }
+  // Old explicit previews retain their original deterministic capture contract.
+  // Runtime callers must supply interval and do not select this compatibility path.
+  if (!input.replay) throw new Error("context-v4-interval-source-required");
+  const replay = input.replay(relevance);
   view.revalidate();
   return freezeContextInput({ scope: input.scope, sourceCutEntryId: input.sourceCutEntryId, firstKeptEntryId: input.firstKeptEntryId,
     memoryOwner: input.memoryOwner, budget: input.budget, rawTail: input.rawTail, native,
