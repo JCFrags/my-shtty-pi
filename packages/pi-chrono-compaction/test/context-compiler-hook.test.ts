@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createEventBus, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createEventBus, DEFAULT_COMPACTION_SETTINGS, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider } from "@context-kit/protocol";
 import extension, { captureIntervalRuntimeBudget, capturePreparedV4Context, SESSION_AGENT_BOUNDARY_CUSTOM_TYPE,
   type SessionAgentPreviewCapture } from "../src/pi-extension.js";
@@ -324,7 +324,10 @@ test("model-free interval lifecycle verifies public proposals, preserves source,
     assert.ok(projected.messages.some((message: any) => message.customType === INTERVAL_CONTINUATION_MESSAGE && message.content.includes(continuationText)));
     assert.ok(!projected.messages.some((message: any) => message.customType === SESSION_AGENT_BOUNDARY_CUSTOM_TYPE));
     for (const row of receipt.restart.exactTail) assert.ok(projected.messages.some((message: any) => JSON.stringify(message) === JSON.stringify(row.projectedEntry.message)));
-    await hooks.get("before_provider_request")!({ payload: { messages: projected.messages } }, ctx);
+    const providerPayload = { messages: projected.messages, max_tokens: model.maxTokens };
+    const boundedPayload = await hooks.get("before_provider_request")!({ payload: providerPayload }, ctx);
+    assert.equal(boundedPayload.max_tokens, model.maxTokens);
+    assert.equal(boundedPayload.messages, projected.messages);
     assert.equal(aborts, 0, "the first null-usage post-commit request uses the current projection");
     contextTokens = 12000;
     idle = true;
@@ -404,13 +407,13 @@ test("model-free interval lifecycle verifies public proposals, preserves source,
     assert.equal(sm.getLeafId(), leaf);
     assert.equal(sent.length, beforeSend + 1, "overflow did not start another model request");
 
-    // Adaptive admission reserves the model's full advertised output capacity.
-    // This is accounting, not an enforced provider output cap.
+    // Planning uses Pi's standard reserve, not the full registry output ceiling.
+    // A planning threshold cannot refuse the summary-only response.
     await deliverInput("Check bounded summary headroom");
     const smallModel = { ...model };
     Object.assign(model, { contextWindow: 272000, maxTokens: 128000 });
     const modelBefore = JSON.stringify(model), layers = requestLayers();
-    assert.equal(layers.reserveTokens, model.maxTokens);
+    assert.equal(layers.reserveTokens, Math.min(model.maxTokens, DEFAULT_COMPACTION_SETTINGS.reserveTokens));
     assert.ok(layers.safetyTokens >= 1024);
     const prompt = renderSessionAgentSummaryRequest(createSessionAgentSummaryRequest({ requestId: "0".repeat(36), reason: "tool", now: Date.now(),
       scope: { sessionId: sm.getSessionId(), sessionFile: source, leafId: sm.getLeafId()!, epoch: 0,
@@ -429,18 +432,18 @@ test("model-free interval lifecycle verifies public proposals, preserves source,
     assert.match(admitted.content[0].text, /handoff.*continuation/);
     assert.doesNotMatch(admitted.content[0].text, /Target about|soft length guide|estimated tokens/);
     assert.equal(JSON.stringify(model), modelBefore);
-    await deliverInput("Check strict admission boundary");
-    contextTokens = admissionLimit;
+    await deliverInput("Check summary admission above the planning boundary");
+    contextTokens = model.contextWindow + 1;
     recordRequestInputs();
-    sm.appendMessage(assistant("refused-request", "request_compaction", {}, contextTokens));
-    const beforeHeadroomRefusal = sent.length, beforeRefusalLeaf = sm.getLeafId();
-    const refused = await tools.get("request_compaction").execute("refused-request", {}, run.signal, undefined, ctx);
-    assert.equal(refused.terminate, true);
-    assert.equal(refused.isError, true);
-    assert.equal(refused.details.code, "session-agent-summary-headroom-unavailable");
-    assert.equal((await status()).providerBarrier.state, "paused");
-    assert.equal(sent.length, beforeHeadroomRefusal);
-    assert.equal(sm.getLeafId(), beforeRefusalLeaf);
+    sm.appendMessage(assistant("pressure-request", "request_compaction", {}, contextTokens));
+    const beforePressureRequest = sent.length, beforePressureLeaf = sm.getLeafId();
+    const pressureRequest = await tools.get("request_compaction").execute("pressure-request", {}, run.signal, undefined, ctx);
+    assert.equal(pressureRequest.terminate, undefined);
+    assert.equal(pressureRequest.isError, undefined);
+    assert.equal(pressureRequest.details.status, "summary-requested");
+    assert.equal((await status()).providerBarrier.state, "summary-only");
+    assert.equal(sent.length, beforePressureRequest);
+    assert.equal(sm.getLeafId(), beforePressureLeaf);
 
     const recover = async (suffix: string) => {
       await deliverInput("Recover only through a fresh summary");
@@ -519,25 +522,27 @@ test("model-free interval lifecycle verifies public proposals, preserves source,
     assert.equal(sent.length, beforeHeadroomTrigger + 1);
     assert.deepEqual(sent.at(-1).options, { triggerTurn: true });
     await recover("recovery-before-output-exhaustion");
-    Object.assign(model, { maxTokens: model.contextWindow });
-    assert.equal(deriveIntervalBudget({ model }).available, false, "the full output reserve can exhaust input capacity");
+    Object.assign(model, { contextWindow: 2000, maxTokens: 2000 });
+    assert.equal(deriveIntervalBudget({ model }).available, false, "a small context still refuses an exhausted planning reserve");
     const beforeOutputRefusal = sent.length, beforeOutputSource = JSON.stringify(sm.getEntries());
     await hooks.get("agent_settled")!({}, ctx);
     assert.equal((await status()).providerBarrier.state, "paused");
     assert.equal(sent.length, beforeOutputRefusal);
     assert.equal(JSON.stringify(sm.getEntries()), beforeOutputSource);
-    Object.assign(model, { maxTokens: 2000 });
+    Object.assign(model, { contextWindow: 64000, maxTokens: 2000 });
     await recover("recovery-before-overshoot");
     const beforeOvershoot = sent.length;
     idle = false;
     contextTokens = 100; // The newer same-model observation must still win.
     const overshoot = ordinaryTurn("overshoot", smaller.freezeBoundTokens + 1);
     const beforeOvershootSource = JSON.stringify(sm.getEntries());
-    const recoveryProposal = await hooks.get("turn_end")!(overshoot, ctx);
-    assert.ok(recoveryProposal.entries.some((entry: any) => entry.type === "compaction"));
-    assert.equal((await status()).providerBarrier.state, "recovery-only");
-    assert.equal(sent.length, beforeOvershoot, "an overshoot cannot start another ordinary or summary request");
-    assert.equal(JSON.stringify(sm.getEntries()), beforeOvershootSource, "a returned recovery proposal is not a native commit");
+    const summaryProposal = await hooks.get("turn_end")!(overshoot, ctx);
+    assert.equal(summaryProposal.continue, true);
+    assert.equal(summaryProposal.entries.length, 1);
+    assert.equal(summaryProposal.entries[0].customType, "chrono-session-agent-summary-request");
+    assert.equal((await status()).providerBarrier.state, "summary-only");
+    assert.equal(sent.length, beforeOvershoot, "a pressure boundary proposes the summary without a nested send");
+    assert.equal(JSON.stringify(sm.getEntries()), beforeOvershootSource, "a returned summary proposal does not mutate source");
     Object.assign(model, smallModel);
     contextTokens = 12000;
 
@@ -666,7 +671,7 @@ test("model-free interval lifecycle verifies public proposals, preserves source,
   }
 });
 
-test("interval admission keeps the native floor, charges visible growth and handles Codex opaque replay explicitly", async () => {
+test("interval admission uses native Pi context accounting without reinterpreting provider JSON", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-v4-admission-"));
   const environment = { PI_CHRONO_CONFIG_PATH: join(directory, "config.json"), PI_CHRONO_CONTEXT_COMPILER: "v4",
     PI_CHRONO_MEMORY_OWNER: "context-kit", PI_CHRONO_SEARCH_INDEX: "false", PI_CHRONO_MEMORY_ENGINE: "false",
@@ -677,15 +682,15 @@ test("interval admission keeps the native floor, charges visible growth and hand
   Object.assign(process.env, environment);
   writeFileSync(environment.PI_CHRONO_CONFIG_PATH, "{}", { mode: 0o600 });
   const cases = [
-    { name: "opaque-only", native: 100000, opaque: 1020000, refused: false },
-    { name: "conversation", native: 100000, opaque: 1020000, refused: true },
-    { name: "instructions", native: 100000, opaque: 1020000, refused: true },
-    { name: "schemas", native: 100000, opaque: 1020000, refused: true },
-    { name: "post-commit-null", native: null, opaque: 0, refused: false },
-    { name: "null-opaque-fallback", native: null, opaque: 1020000, refused: true },
-    { name: "unknown-api-fallback", native: 100000, opaque: 1020000, refused: true },
-    { name: "invalid-native", native: 100000, opaque: 0, refused: true },
-    { name: "malformed-opaque", native: 100000, opaque: 0, refused: true },
+    { name: "opaque-only", native: 100000, opaque: 1020000 },
+    { name: "conversation", native: 100000, opaque: 1020000 },
+    { name: "instructions", native: 100000, opaque: 1020000 },
+    { name: "schemas", native: 100000, opaque: 1020000 },
+    { name: "post-commit-null", native: null, opaque: 0 },
+    { name: "null-opaque-fallback", native: null, opaque: 1020000 },
+    { name: "unknown-api-fallback", native: 100000, opaque: 1020000 },
+    { name: "invalid-native", native: 100000, opaque: 0 },
+    { name: "malformed-opaque", native: 100000, opaque: 0 },
   ];
   try {
     for (const fixture of cases) {
@@ -697,7 +702,8 @@ test("interval admission keeps the native floor, charges visible growth and hand
         content: [{ type: "text", text: "Bounded source usage observation." }],
         usage: { input: fixture.native, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: fixture.native,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
-      let aborts = 0, nativeTokens: number | null = fixture.native;
+      let aborts = 0;
+      const nativeTokens = fixture.name === "invalid-native" ? NaN : fixture.native;
       const pi = { events: createEventBus(), getActiveTools: () => ["request_compaction"], getAllTools: () => [...tools.values()],
         registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerFlag() {},
         on: (name: string, handler: any) => hooks.set(name, handler),
@@ -712,8 +718,7 @@ test("interval admission keeps the native floor, charges visible growth and hand
       try {
         const source = JSON.stringify(sm.getEntries());
         await hooks.get("context")!({ messages: sm.buildSessionContext().messages }, ctx);
-        const unsupported = fixture.name === "unknown-api-fallback";
-        assert.equal(aborts, unsupported ? 1 : 0, `${fixture.name}: early admission`);
+        assert.equal(aborts, 0, `${fixture.name}: Pi-owned context admission`);
         const payload = { model: "fixture", instructions: "Offline bounded fixture.",
           input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "The same small visible conversation." }] },
             { type: "reasoning", summary: [], encrypted_content: "A".repeat(fixture.opaque) }], tools: [] } as any;
@@ -722,26 +727,15 @@ test("interval admission keeps the native floor, charges visible growth and hand
         if (fixture.name === "conversation") payload.input[0].content[0].text += "V".repeat(320000);
         if (fixture.name === "instructions") payload.instructions += "V".repeat(320000);
         if (fixture.name === "schemas") payload.tools.push({ type: "function", name: "read", description: "V".repeat(320000), parameters: { type: "object" } });
-        if (fixture.name === "invalid-native") nativeTokens = NaN;
         if (fixture.name === "malformed-opaque") payload.input[1].encrypted_content = { unknown: "transport" };
         const serialized = JSON.stringify(payload), event = { payload };
-        if (!unsupported) assert.equal(await hooks.get("before_provider_request")!(event, ctx), undefined);
+        assert.equal(await hooks.get("before_provider_request")!(event, ctx), undefined);
         assert.equal(event.payload, payload, "the accounting view never replaces the request");
         assert.equal(JSON.stringify(payload), serialized, "the original opaque replay and visible fields remain unchanged");
         assert.equal(JSON.stringify(sm.getEntries()), source, "admission does not rewrite source");
         const composition = (await tools.get("history_status").execute()).details.composition;
-        assert.equal(aborts, fixture.refused ? 1 : 0, fixture.name);
-        if (!fixture.refused) assert.equal(composition.providerBarrier.state, "open", fixture.name);
-        else if (unsupported) {
-          assert.notEqual(composition.providerBarrier.state, "open");
-          assert.equal(composition.lastFailure.code, "context-projection-model-binding-unavailable");
-        } else if (fixture.name === "malformed-opaque") {
-          assert.equal(composition.providerBarrier.state, "paused");
-          assert.equal(composition.lastFailure.code, "context-provider-reasoning-shape-invalid");
-        } else {
-          assert.equal(composition.providerBarrier.state, "recovery-only", fixture.name);
-          assert.equal(composition.interval.recovery.reason, "context-v4-recovery-provider-admission-unavailable", fixture.name);
-        }
+        assert.equal(aborts, 0, `${fixture.name}: the payload hook does not estimate provider JSON`);
+        assert.equal(composition.providerBarrier.state, "open", fixture.name);
       } finally { await hooks.get("session_shutdown")!({}, ctx); }
     }
   } finally {
