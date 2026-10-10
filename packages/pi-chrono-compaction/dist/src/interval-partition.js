@@ -1,4 +1,47 @@
 import { chargeRawTail } from "./context-budget.js";
+const hintWeight = { "phase-transition": 4, wait: 3, "saved-position": 2, context: 1 };
+export const INTERVAL_READY_PREFIX_CANDIDATE_LIMIT = 16;
+function recentWindowStart(units, rawUnitIndex, allowance) {
+    let index = rawUnitIndex, recentSourceTokens = 0;
+    while (index > 0) {
+        const unit = units[index - 1];
+        if (unit.events.length > 256)
+            break;
+        const tokens = chargeRawTail(unit.events.map(event => event.projectedEntry)).tokens;
+        if (recentSourceTokens + tokens > allowance && index < rawUnitIndex)
+            break;
+        if (tokens > allowance)
+            break;
+        recentSourceTokens += tokens;
+        index--;
+    }
+    return index;
+}
+/** Rank only useful legal ready H cuts inside the same bounded recent window.
+ * Source and derivation checks, rendered B usefulness and whole-request fitting
+ * remain the compiler's responsibility. C is unchanged for every candidate. */
+export function readyIntervalPartitions(input) {
+    const { partition, units } = input;
+    if (!Number.isSafeInteger(input.compressedHistoryTokens) || input.compressedHistoryTokens < 0
+        || input.compressedStarts.length > INTERVAL_READY_PREFIX_CANDIDATE_LIMIT)
+        throw new Error("context-v4-interval-partition-budget-invalid");
+    const rawUnitIndex = units.findIndex(unit => unit.start === partition.rawStart);
+    if (rawUnitIndex < 1)
+        return [];
+    const earliest = units[recentWindowStart(units, rawUnitIndex, input.compressedHistoryTokens * 4)]?.start ?? partition.rawStart;
+    const legal = new Map(units.map((unit, index) => [unit.start, index]));
+    const weights = new Map();
+    for (const hint of input.hints ?? [])
+        if (legal.has(hint.gap) && units.some(unit => unit.endExclusive === hint.gap
+            && unit.events.some(event => event.entryId === hint.sourceEntryId)))
+            weights.set(hint.gap, Math.max(weights.get(hint.gap) ?? 0, hintWeight[hint.kind]));
+    return [...new Set(input.compressedStarts)].filter(gap => Number.isSafeInteger(gap) && gap > partition.start
+        && gap >= earliest && gap <= partition.rawStart && (gap < partition.rawStart || partition.compressedUnitCount === 0) && legal.has(gap))
+        .sort((a, b) => (weights.get(b) ?? 0) - (weights.get(a) ?? 0)
+        || Math.abs(a - partition.compressedStart) - Math.abs(b - partition.compressedStart) || a - b)
+        .map(gap => ({ ...partition, compressedStart: gap, prefixUnitCount: legal.get(gap),
+        compressedUnitCount: rawUnitIndex - legal.get(gap), compressedReason: "ready-prefix" }));
+}
 /** Select complete original interactions before rendering any lossy text. The
  * caller supplies source-bound gaps and model-derived allowances. This function
  * has no user timing knobs and cannot convert a timeout into a complete unit. */
@@ -46,26 +89,13 @@ export function selectIntervalPartition(input) {
     // or a fixed number of turns. The factor is a versioned selection heuristic,
     // not a claimed compression ratio or permission to exceed the output budget.
     const sourceAllowance = input.compressedHistoryTokens * 4;
-    let compressedUnitIndex = rawUnitIndex, recentSourceTokens = 0;
-    while (compressedUnitIndex > 0) {
-        const unit = units[compressedUnitIndex - 1];
-        if (unit.events.length > 256)
-            break;
-        const tokens = chargeRawTail(unit.events.map(event => event.projectedEntry)).tokens;
-        if (recentSourceTokens + tokens > sourceAllowance && compressedUnitIndex < rawUnitIndex)
-            break;
-        if (tokens > sourceAllowance)
-            break;
-        recentSourceTokens += tokens;
-        compressedUnitIndex--;
-    }
+    let compressedUnitIndex = recentWindowStart(units, rawUnitIndex, sourceAllowance);
     let compressedReason = rawUnitIndex === 0 ? "empty" : "token-fit";
     const earliest = units[compressedUnitIndex]?.start ?? rawStart;
     const legal = new Map(units.map((unit, index) => [unit.start, index]));
-    const weight = { "phase-transition": 4, wait: 3, "saved-position": 2, context: 1 };
     const eligible = (input.hints ?? []).filter(hint => hint.gap >= earliest && hint.gap < rawStart
         && legal.has(hint.gap) && units.some(unit => unit.endExclusive === hint.gap && unit.events.some(event => event.entryId === hint.sourceEntryId)));
-    eligible.sort((a, b) => weight[b.kind] - weight[a.kind] || a.gap - b.gap);
+    eligible.sort((a, b) => hintWeight[b.kind] - hintWeight[a.kind] || a.gap - b.gap);
     if (eligible[0]) {
         compressedUnitIndex = legal.get(eligible[0].gap);
         compressedReason = eligible[0].kind;

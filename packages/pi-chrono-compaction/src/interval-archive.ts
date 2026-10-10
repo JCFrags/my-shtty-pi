@@ -2,8 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { HistoryHelperService, historyHelperInputKey, historySourceBindingIdentity, type HistoryHelperArtifact, type HistoryHelperInput,
+import { HISTORY_HELPER_PROMPT_IDENTITY, HistoryHelperService, historyHelperInputKey, historySourceBindingIdentity, type HistoryHelperArtifact, type HistoryHelperInput,
   type HistoryHelperModel, type HistoryHelperResult, type HistoryHelperTicket, type HistorySourceBinding } from "./history-helper.js";
+import { historySynopsisCompatibilityItems, validateStoredHistorySynopsis } from "./history-synopsis.js";
 
 export interface VerifiedIntervalArchiveCommit {
   /** The runtime sets this only after observing the correlated native commit. */
@@ -97,6 +98,13 @@ function checkedRecord(value: unknown, commit: VerifiedIntervalArchiveCommit): I
     || record.artifact.schemaVersion !== 1 || record.artifact.quality !== "structural-only"
     || !sameSource(record.artifact.source, commit.source) || !["full", "partial"].includes(record.artifact.coverage)
     || !Array.isArray(record.artifact.items) || !Array.isArray(record.artifact.notices) || !Array.isArray(record.artifact.usage)) return undefined;
+  // Legacy per-field archives stay readable. New derivations must carry the
+  // coherent range account and its exact labeled compatibility projection.
+  const synopsis = record.artifact.synopsis;
+  if (synopsis !== undefined) {
+    if (!validateStoredHistorySynopsis(synopsis)
+      || JSON.stringify(record.artifact.items) !== JSON.stringify(synopsis.parts.flatMap(historySynopsisCompatibilityItems))) return undefined;
+  } else if (record.artifact.derivation?.promptIdentity === HISTORY_HELPER_PROMPT_IDENTITY) return undefined;
   const body = { schemaVersion: record.schemaVersion, kind: record.kind, commitId: record.commitId, source: record.source, artifact: record.artifact };
   if (digest(JSON.stringify(body)) !== record.integrityHash) return undefined;
   return record;

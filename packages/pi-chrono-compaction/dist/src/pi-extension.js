@@ -1708,7 +1708,13 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     const observeOriginalTurn = (ctx, message) => {
         if (sessionSummary || !originalRun || originalRun.binding !== originalRunBinding(ctx) || message.role !== "assistant")
             return;
-        originalRun.unresolved = ["toolUse", "length", "error", "deferred"].includes(message.stopReason ?? "");
+        // A stop in the one runtime-requested preparation response is not a task
+        // completion signal. Preserve only the previously observed unfinished run.
+        // Aborts, new input, and scope changes still invalidate continuation.
+        const preparationStop = message.stopReason === "stop" && intervalPreparation?.binding === originalRun.binding
+            && intervalPreparation.turns < INTERVAL_POLICY.maxPreparationTurns;
+        if (!preparationStop)
+            originalRun.unresolved = ["toolUse", "length", "error", "deferred"].includes(message.stopReason ?? "");
     };
     let warningLevel = 0;
     let incrementalStore;
@@ -4918,12 +4924,38 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             ].join("\n"), "info");
         },
     });
+    registerChronoAction("history-helper-status", {
+        description: "Show V4 history roles, finite helper work, and reservation counters without model calls",
+        handler: async (_args, ctx) => {
+            if (!ctx.hasUI)
+                return;
+            const status = intervalHelpers.status();
+            const roles = ["activePrefix", "event", "archive"];
+            ctx.ui.notify([
+                `Compiler: ${searchSettings().contextCompiler}. History helpers belong to the V4 interval policy.`,
+                `Current-agent writer: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unavailable"}; separate from history helpers.`,
+                ...roles.map(role => {
+                    const route = userConfig.historyHelpers?.[role];
+                    return `${role}: ${route ? `${route.provider}/${route.model}; ${status.roles[role]}` : "unselected"}`;
+                }),
+                "Unselected, unavailable, or unready A uses labeled deterministic history. Optional B work never blocks compaction. C stays exact.",
+                "Counters cover this process only. Reserved tokens are admission ceilings, not measured usage or billed cost.",
+                JSON.stringify({ policy: status.policyIdentity, prefix: status.prefix, restart: status.restart,
+                    archiveLane: status.archiveLane, archive: status.archive, archivePersistence: status.archivePersistence }, null, 2),
+                "No provider call or store reset occurs here. Select or clear roles in Settings. Legacy value-worker controls do not govern V4.",
+            ].join("\n"), "info");
+        },
+    });
     registerChronoAction("value-worker-status", {
-        description: "Show aggregate background value-worker status",
+        description: "Show legacy V3 value-worker status; not the V4 history helpers",
         handler: async (_args, ctx) => {
             if (!ctx.hasUI)
                 return;
             const settings = resolveExtensionSettings(userConfig);
+            if (settings.contextCompiler === "v4") {
+                ctx.ui.notify("The legacy value worker does not govern V4. Use /Chrono history-helper-status for current history roles and finite helper work.", "info");
+                return;
+            }
             const sessionPath = ctx.sessionManager.getSessionFile();
             const manifest = sessionPath ? await readValueAdviceManifest(valueAdviceStorePath(sessionPath)) : undefined;
             const adviceStoreState = manifest ? "ready" : sessionPath ? await stat(join(valueAdviceStorePath(sessionPath), "manifest.json")).then(() => "corrupt").catch(() => "none") : "none";
@@ -4940,8 +4972,18 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         },
     });
     registerChronoAction("value-worker-reset", {
-        description: "Cancel pending value work and reset its persisted circuit",
-        handler: async (_args, ctx) => { cancelValueWorker(); const sessionPath = ctx.sessionManager.getSessionFile(); const reset = sessionPath ? await resetAdviceCircuit(valueAdviceStorePath(sessionPath)).catch(() => false) : false; valueWorkerStatus = { status: "off" }; ctx.ui.notify(`${reset ? "Reset the persisted circuit. " : "No compatible persisted circuit was found. "}Pending value work was cancelled. Stored advice and source files were preserved.`, "info"); },
+        description: "Reset the legacy V3 value-worker circuit; unavailable in V4",
+        handler: async (_args, ctx) => {
+            if (searchSettings().contextCompiler === "v4") {
+                ctx.ui.notify("No V4 helper circuit was reset. Legacy value-worker controls do not govern V4. Select or clear history roles in Settings.", "info");
+                return;
+            }
+            cancelValueWorker();
+            const sessionPath = ctx.sessionManager.getSessionFile();
+            const reset = sessionPath ? await resetAdviceCircuit(valueAdviceStorePath(sessionPath)).catch(() => false) : false;
+            valueWorkerStatus = { status: "off" };
+            ctx.ui.notify(`${reset ? "Reset the persisted circuit. " : "No compatible persisted circuit was found. "}Pending legacy value work was cancelled. Stored advice and source files were preserved.`, "info");
+        },
     });
     registerChronoAction("settings", {
         description: "Automatic compaction status and explicit history-role provider/model selection",
@@ -5007,14 +5049,17 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         return true;
     };
     const statusMenu = async (ctx) => {
+        const v4 = searchSettings().contextCompiler === "v4";
         const entries = [
             ["Overview and search readiness", "search-status"],
-            ["Background LLM usage", "value-worker-status"],
+            v4 ? ["History helper roles and activity", "history-helper-status"] : ["Legacy value-worker usage", "value-worker-status"],
             ["Local workers", "worker-status"],
             ["Read-only health check", "doctor"],
-            ["Source catalog shadow", "catalog-status"],
-            ["Capsule shadow", "capsules-status"],
-            ["Rollup shadow", "rollup-shadow-status"],
+            ...(!v4 ? [
+                ["Source catalog shadow", "catalog-status"],
+                ["Capsule shadow", "capsules-status"],
+                ["Rollup shadow", "rollup-shadow-status"],
+            ] : []),
         ];
         while (true) {
             const choice = await ctx.ui.select("Chrono: Status and diagnostics", [...entries.map(([label]) => label), "Back"]);
@@ -5027,7 +5072,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     const maintenanceMenu = async (ctx) => {
         while (true) {
             const choice = await ctx.ui.select("Chrono: Maintenance", [
-                "Search for this session", "Preview a compaction", "Read an interval archive", "Logical session", "Repair a rollup", "Reset background LLM circuit", "Back",
+                "Search for this session", "Preview a compaction", "Read an interval archive", "Logical session", "Repair a rollup",
+                ...(searchSettings().contextCompiler === "v4" ? [] : ["Reset legacy value-worker circuit"]), "Back",
             ]);
             if (!choice || choice === "Back")
                 return true;
@@ -5046,8 +5092,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 if (args !== undefined)
                     await invokeChronoAction("archive", args.trim(), ctx);
             }
-            else if (choice === "Reset background LLM circuit") {
-                if (await ctx.ui.confirm("Reset background LLM circuit?", "This cancels pending work and clears the failure pause. If enabled, background model calls can resume. Stored advice and history are preserved.")) {
+            else if (choice === "Reset legacy value-worker circuit") {
+                if (await ctx.ui.confirm("Reset legacy value-worker circuit?", "This cancels pending legacy work and clears its failure pause. If enabled, legacy model calls can resume. Stored advice and history are preserved. This is not a V4 history-helper control.")) {
                     await invokeChronoAction("value-worker-reset", "", ctx);
                 }
             }
@@ -5064,7 +5110,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.registerCommand("Chrono", {
         description: "Chrono automatic compaction, history roles, status, and maintenance",
         getArgumentCompletions: prefix => {
-            const values = [...chronoActions.keys()].filter(name => !name.startsWith("_") && name.startsWith(prefix));
+            const legacyOnly = new Set(["value-worker-status", "value-worker-reset", "catalog-status", "capsules-status", "rollup-shadow-status"]);
+            const values = [...chronoActions.keys()].filter(name => !name.startsWith("_") && name.startsWith(prefix)
+                && (searchSettings().contextCompiler !== "v4" || !legacyOnly.has(name)));
             return values.length ? values.map(value => ({ value, label: value })) : null;
         },
         handler: async (args, ctx) => {
