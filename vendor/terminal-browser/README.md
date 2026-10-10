@@ -126,7 +126,7 @@ trust store or shared-profile policy. A changed certificate or origin needs a ne
 decision. The warning denies after 60 seconds and never auto-approves.
 
 Use `agent certificate status` to inspect exceptions and `agent certificate revoke`
-to remove one. The native Settings, tools menu can remove all exceptions for the
+to remove one. The native full options, Tools menu can remove all exceptions for the
 current context. See [certificate commands](docs/agent-control.md#https-certificate-decisions)
 for exact approval and removal flags.
 

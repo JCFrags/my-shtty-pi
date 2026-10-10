@@ -141,7 +141,7 @@ unapproved. There is no global HTTPS bypass or trust-store edit.
 Use `agent certificate status` with the same owner and tab to list exceptions.
 After dismissing pending decisions, use `agent certificate revoke --tab CONTEXT_ID
 --origin EXACT_HTTPS_ORIGIN --fingerprint SHA256_FINGERPRINT --control-epoch EPOCH`
-with the same owner to remove one. The native Settings, tools menu removes all
+with the same owner to remove one. The native full options, Tools menu removes all
 exceptions in the visible context. Removal cannot undo received data or close
 established connections. Context closure or daemon restart forgets every exception.
 

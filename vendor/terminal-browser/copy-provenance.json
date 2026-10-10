@@ -40,7 +40,7 @@
       "path": "README.md",
       "sourceSha256": "cc6be274fb1d624e367c8d6f1924cef4fa63499d0d4141a72192d8442aecdda1",
       "mode": 420,
-      "sha256": "528a35ce5a93433f6c4d787b72ede6bad6a6e257242eb57d62e0a81e1e118aaa",
+      "sha256": "e08f4325d648fa692e3deeb5db5ebbfc0fb3100965889aba27118573dd062db3",
       "modified": true
     },
     {
@@ -2371,7 +2371,7 @@
       "path": "skill/terminal-browser/SKILL.template.md",
       "sourceSha256": "fd3b2ae04ad254dbef1699b06c6dabb3642d0696d87bac146f01e529daf1d5e5",
       "mode": 420,
-      "sha256": "683099015eae656fe05a2f8bb67e08423f075f90dcc6450d877f99d25734b26a",
+      "sha256": "e7572f5d8b1990235e2d1310e806935cdd527445736a00b24840bad00caa94cf",
       "modified": true
     },
     {
