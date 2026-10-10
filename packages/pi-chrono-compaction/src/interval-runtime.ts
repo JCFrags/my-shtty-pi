@@ -22,6 +22,13 @@ export function intervalRestartContentMessages(restart: NonNullable<ContextSelec
 const sha = (value: string): string => createHash("sha256").update(value).digest("hex");
 function fail(code: string): never { throw new Error(`context-v4-${code}`); }
 
+/** JSONL preserves values, not shared object references. Compare the persisted
+ * representation without changing the serializer used by existing hashes. */
+export function samePersistedIntervalValue(left: unknown, right: unknown): boolean {
+  const persisted = (value: unknown): string => stableStringify(JSON.parse(JSON.stringify(value)));
+  return persisted(left) === persisted(right);
+}
+
 /** Public Pi 1.1 boundary contracts. These declarations do not patch the pinned SDK. */
 export interface IntervalBoundaryEvent {
   readonly outcome: "completed" | "aborted" | "error";
@@ -176,7 +183,7 @@ export function correlatedBoundaryCompaction(input: {
       && details.contextReceipt.restart?.technicalBoundaryEntryId === undefined
       && details.contextReceipt.receiptId === input.receiptId && details.contextReceipt.summaryHash === input.summaryHash
       && sha(entry.summary) === input.summaryHash && entry.firstKeptEntryId === entry.id
-      && (!input.expectedReceipt || stableStringify(details.contextReceipt) === stableStringify(input.expectedReceipt));
+      && (!input.expectedReceipt || samePersistedIntervalValue(details.contextReceipt, input.expectedReceipt));
   });
   if (matches.length > 1) fail("recovery-commit-ambiguous");
   return matches[0];

@@ -83,6 +83,7 @@ import { createIntervalHelperRuntime } from "./interval-helper-runtime.js";
 import {
   INTERVAL_CONTINUATION_RECORD, continuationRecord, hasContinuationDispatch,
   projectCommittedIntervalRestart, correlatedBoundaryCompaction, intervalRestartContentMessages, committedIntervalRestartReceipt,
+  samePersistedIntervalValue,
   type IntervalBoundaryEvent, type IntervalTurnBoundaryEvent, type IntervalBoundaryResult, type IntervalContinuationRecord,
 } from "./interval-runtime.js";
 import { buildDeterministicRecoveryHandoff, IntervalRecoveryRefusal } from "./interval-recovery.js";
@@ -2579,8 +2580,8 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
         if (captured.identity !== restart.snapshotId || captured.sourceHash !== manifest.sourceHash
           || captured.projectionHash !== manifest.projectionHash || stableStringify(captured.origin) !== stableStringify(manifest.origin)
           || stableStringify(captured.segments) !== stableStringify(manifest.segments)
-          || stableStringify(captured.events.slice(restart.partition.rawStart, restart.partition.endExclusive))
-            !== stableStringify(restart.exactTail)) throw new Error("context-v4-restart-source-changed");
+          || !samePersistedIntervalValue(captured.events.slice(restart.partition.rawStart, restart.partition.endExclusive),
+            restart.exactTail)) throw new Error("context-v4-restart-source-changed");
       } });
   };
   const refreshCommittedRestart = async (ctx: ExtensionContext): Promise<void> => {

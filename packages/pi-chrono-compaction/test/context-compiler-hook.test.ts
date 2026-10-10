@@ -164,7 +164,10 @@ test("model-free interval lifecycle verifies public proposals, preserves source,
     const parentId = sm.getLeafId(), beforeDispatch = dispatched();
     // Pi's public boundary persists null retention as the new entry's own ID.
     // It does not emit session_compact or call a native compaction hook.
-    committedId = sm.appendCompaction(compaction.summary, null, contextTokens ?? 0, compaction.details, true);
+    // A saved receipt loses shared references. Exercise the reloaded value form
+    // at both the commit-correlation and exact-tail projection guards.
+    const persistedDetails = JSON.parse(JSON.stringify(compaction.details));
+    committedId = sm.appendCompaction(compaction.summary, null, contextTokens ?? 0, persistedDetails, true);
     const committed = sm.getEntry(committedId) as any;
     assert.equal(committed.parentId, parentId);
     assert.equal(committed.firstKeptEntryId, committedId);
