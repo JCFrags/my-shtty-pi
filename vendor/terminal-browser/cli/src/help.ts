@@ -153,7 +153,7 @@ confirm its exact revision instead. Do not retry an uncertain shutdown.
   },
   agent: {
     summary: "Observe, control, and act through native AgentCursor",
-    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|blocking|status|control|pause|resume> [options]",
+    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|certificate|blocking|status|control|pause|resume> [options]",
     body: `
 Reads a fresh observation and performs native actions on the selected tab.
 Success responses are JSON on stdout. Failures exit nonzero and write
@@ -178,6 +178,9 @@ Commands:
   terminal-browser agent navigate <url> --control-epoch <n> [options]
   terminal-browser agent get-url --control-epoch <n> [options]
   terminal-browser agent wait-for (--ref <ref> | --locator-json <steps> | --text <text>) [--condition exists|visible|text|actionable] [--timeout-ms <n>] --observation <id> --control-epoch <n> [options]
+  terminal-browser agent certificate status [options]
+  terminal-browser agent certificate <approve|reject> --tab <id> --dialog-id <id> --origin <https-origin> --fingerprint <SHA-256> --control-epoch <n> [options]
+  terminal-browser agent certificate revoke --tab <id> --origin <https-origin> --fingerprint <SHA-256> --control-epoch <n> [options]
   terminal-browser agent blocking status [options]
   terminal-browser agent blocking <enable|disable|clear-diagnostics|reload> --control-epoch <n> [options]
   terminal-browser agent blocking <allow-site|block-site> --site <site> --control-epoch <n> [options]
@@ -185,6 +188,15 @@ Commands:
   terminal-browser agent control --mode agent|human|shared --control-epoch <n> [--browser <key>] [--runtime-instance <id>]
   terminal-browser agent pause --control-epoch <n> [--browser <key>]
   terminal-browser agent resume --control-epoch <n> [--browser <key>]
+
+Certificate failures return a pending certificate dialog with the exact HTTPS
+origin, SHA-256 fingerprint, validation error, subject, issuer, and validity dates.
+Only explicit approve with that exact identity grants a context-lifetime exception.
+Approval requires user authorization, not merely an error or a self-signed certificate.
+Other origins, ports, certificates, and contexts remain unapproved. No decision
+is persisted. Timeout denies after 60 seconds. Generic dialog --accept cannot
+approve a certificate. Status lists exceptions and revoke removes one. Removal
+cannot undo received data. Observe again before page input.
 
 Blocking status is read-only and remains available while paused. Every blocking
 mutation requires the current control epoch. No command enables blocking or

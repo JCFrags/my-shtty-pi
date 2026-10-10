@@ -3,6 +3,7 @@ import { BrowserUploads } from "../agent/uploads";
 import { registerDownloadSource, waitForDownloadStart, type BrowserDownloads } from "../agent/downloads";
 import { BrowserWindow, screen } from "electron";
 import { BrowserDialogs } from "../agent/dialogs";
+import { BrowserCertificates } from "../agent/certificates";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -48,6 +49,7 @@ export interface ControllerOptions {
 export class BrowserController {
   readonly surface: Surface;
   readonly dialogs: BrowserDialogs;
+  readonly certificates: BrowserCertificates;
   readonly uploads: BrowserUploads;
   readonly frames: BrowserFrames;
   onPopupCreated: ((popup: PopupWindow, openerContentsId: number) => void) | null = null;
@@ -175,6 +177,7 @@ export class BrowserController {
     this.frames = new BrowserFrames(this.window.webContents, (method, params, session) => this.cdp(method, params, session), session => this.dialogs.initializeSession(session));
     this.frames.subscribe(() => this.noteGeometryChange());
     this.dialogs = new BrowserDialogs(this.window.webContents, (method, params, session) => this.cdp(method, params, session));
+    this.certificates = new BrowserCertificates(this.window.webContents, this.dialogs);
     this.uploads = new BrowserUploads(this.window.webContents, (method, params, session) => this.cdp(method, params, session), this.frames);
     if (this.clipboardRead) allowClipboardRead(this.window.webContents);
     this.input = new PageInput({
@@ -735,6 +738,7 @@ export class BrowserController {
   }
 
   private teardown() {
+    this.certificates.dispose();
     this.dialogs.dispose();
     for (const popup of [...this.popups]) popup.destroy();
     this.devtools?.close();

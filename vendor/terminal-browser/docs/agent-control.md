@@ -157,6 +157,59 @@ response text to 32768. Beforeunload first cancels. It replays only a known
 navigation, reload, history, or close request after explicit acceptance. Unknown
 requests can only be dismissed.
 
+## HTTPS certificate decisions
+
+Certificate validation remains enabled. A failed HTTPS request returns a pending
+`dialog` of type `certificate`, rather than an empty error-page observation.
+The native warning card shows the same details: validation error, exact HTTPS
+origin, SHA-256 fingerprint of the presented certificate, subject, issuer, and
+validity dates. These fields are untrusted server data, not proof of identity.
+Only main-frame failures with a readable certificate can be approved. Unapproved
+subresource failures can be dismissed, but cannot grant an exception.
+
+Do not approve from the error alone. Obtain explicit user approval for the exact
+origin and fingerprint, preferably after checking the device through a trusted
+source. Use the pending dialog's context ID, dialog ID, and current epoch:
+
+```sh
+terminal-browser agent certificate approve --session task-a --project /absolute/project \
+  --tab 7 --dialog-id DIALOG_ID --control-epoch EPOCH \
+  --origin https://device.example:8443 --fingerprint SHA256_FINGERPRINT
+```
+
+Replace every sample value with the current returned value. The fingerprint is
+32 uppercase hexadecimal byte pairs separated by colons. The origin has no path,
+query, userinfo, or trailing slash. Scheme, hostname, and effective port must match
+exactly. A stale dialog, mismatched identity, stale epoch, takeover, or cancellation
+refuses approval. Generic `agent dialog --accept` cannot approve a certificate.
+Use `certificate reject` with the same identity, or `agent dialog --dismiss`, to
+deny the request. It also denies after 60 seconds, on superseding navigation, or
+on context closure. There is no automatic retry or automatic approval.
+
+Approval lets this pending request continue. It retains at most 16 in-memory
+exceptions in that context, including same-origin resources with that exact
+certificate. Other tabs, owners, origins, ports, and certificates remain
+unapproved. Normal valid HTTPS needs no exception. No decision survives context
+closure or daemon restart, changes a trust store, or changes profile settings.
+This narrow exception still bypasses certificate validation errors for its exact
+identity. It does not make an expired or self-signed certificate valid.
+
+```sh
+terminal-browser agent certificate status --session task-a --project /absolute/project --tab 7
+terminal-browser agent certificate revoke --session task-a --project /absolute/project \
+  --tab 7 --control-epoch EPOCH --origin https://device.example:8443 \
+  --fingerprint SHA256_FINGERPRINT
+```
+
+Status is read-only and available in Human or Paused. It reports the last failure,
+pending certificate decision, and exact exceptions. Revoke requires current Agent
+or Shared control, a current epoch, and no busy input or pending decision. The
+native Settings, tools menu can remove all exceptions in the visible context
+without returning control to Agent. Removal cannot undo received data or close
+already established connections. Subsequent certificate checks use normal
+validation. Re-observe before further page input. Pi's optional generic dialog
+tool can dismiss the warning. Use this native CLI for certificate approval.
+
 ## Human control and cancellation
 
 `agent status`, `control`, `pause`, and `resume` are browser-wide, not per-tab.

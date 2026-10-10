@@ -153,6 +153,22 @@ workflow before treating it as a CI requirement. The repository's browser-copy
 job also builds, typechecks, and tests integration packages. Terminal-adapter
 baseline checks are not a substitute for packaged runtime acceptance.
 
+## Certificate decision boundary
+
+`browser/src/agent/certificates.ts` uses Electron 43.3.0's documented
+[WebContents certificate-error event](https://www.electronjs.org/docs/latest/api/web-contents#event-certificate-error).
+Its full URL provides the origin and port. SHA-256 is computed from the presented
+DER certificate through Node's `X509Certificate`. Exceptions remain in memory per
+WebContents, not in a shared Session or trust store. Native certificate decisions
+reuse the dialog pending gate, context identity, input reservation, and control epoch.
+
+Do not use `setCertificateVerifyProc` for these exceptions. Its request has only
+a hostname, and its results are cached by the network service. Do not add a global
+certificate switch or a fallback that approves unrelated errors. The small
+`browser/test/certificates.test.js` regression checks exact origin/fingerprint,
+stale decisions, takeover, cancellation, timeout, and revocation. Practical TLS
+checks still need a fresh isolated native process, not source inspection alone.
+
 ## Native and visible checks
 
 `pnpm --filter terminal-browser test:electron` runs pinned Electron fixtures.

@@ -793,6 +793,7 @@ class Session {
       agentContext: (action, id, url, epoch) => this.tabs.agentContext(action, id, url, epoch),
       agentDialog: (id, request) => this.answerApprovedDialog(request.dialogId, request.accept,
         () => this.tabs.respondDialog(id, request)),
+      certificate: (id, request, epoch, signal) => this.tabs.certificate(id, request, epoch, signal),
       waitContexts: (after, timeout, epoch) => this.tabs.waitContexts(after, timeout, epoch),
       agentObserve: (id, request, signal) => this.tabs.agentObserve(id, { ...request, signal }),
       agentUpload: (id, request, signal) => this.tabs.agentUpload(id, { ...request, signal }),
@@ -1430,7 +1431,7 @@ class Session {
   private handleReservedKey(event: EngineKeyEvent) {
     const dialog = this.tabs.pendingDialog;
     if (dialog) {
-      if (event.kind !== "release" && (event.key === "escape" || (event.key === "enter" && dialog.type !== "prompt"))) {
+      if (event.kind !== "release" && (event.key === "escape" || (event.key === "enter" && dialog.type !== "prompt" && dialog.type !== "certificate"))) {
         void this.answerNativeDialog(dialog.id, event.key === "enter" && dialog.canAccept).catch(() => {});
       }
       return;
@@ -1842,6 +1843,17 @@ class Session {
     this.closePageMenu();
     const browser = this.tabs.activeController;
     if (!menu || !browser) return;
+    if (id === "certificates:revoke") {
+      const context = this.tabs.currentVisiblePage();
+      if (!context) return;
+      this.humanChange("pointer");
+      try {
+        this.tabs.revokeHumanCertificates(context.contextId);
+        this.showToast("Certificate exceptions removed for this context. Already received data is not undone.", "done");
+      } catch (error) { this.showToast(error instanceof Error ? error.message : "Certificate removal failed", "failed"); }
+      this.render();
+      return;
+    }
     if (id.startsWith("blocking:")) { this.runBlockingAction(id); return; }
     switch (id) {
       case "grab":
@@ -1969,6 +1981,8 @@ class Session {
   private toolMenuItems(): PageMenuItem[] {
     return [
       ...this.blockingMenuItems(),
+      { id: "certificates:revoke", label: `remove certificate exceptions for this context (${(this.tabs.activeController?.popup ?? this.tabs.activeController)?.certificates.status().exceptions.length ?? 0})`,
+        enabled: !this.tabs.pendingDialog && !!(this.tabs.activeController?.popup ?? this.tabs.activeController)?.certificates.status().exceptions.length, shortcut: "" },
       this.grabMenuItem(),
       {
         id: "record",

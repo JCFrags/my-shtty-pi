@@ -109,6 +109,21 @@ Use `terminal-browser agent blocking status` with the same owner flags. Mutation
 require current agent control and its epoch. See [blocking commands and limits](docs/agent-control.md#built-in-network-blocking)
 before changing shared-profile policy.
 
+## HTTPS certificate decisions
+
+Invalid HTTPS certificates stay blocked. A native warning card and CLI observation
+show the validation error, exact HTTPS origin, SHA-256 certificate fingerprint,
+subject, issuer, and validity dates. An agent must obtain explicit user approval
+before `agent certificate approve`. Approval binds to that origin (including port)
+and that certificate, only in the current context until it closes. It changes no
+trust store or shared-profile policy. A changed certificate or origin needs a new
+decision. The warning denies after 60 seconds and never auto-approves.
+
+Use `agent certificate status` to inspect exceptions and `agent certificate revoke`
+to remove one. The native Settings, tools menu can remove all exceptions for the
+current context. See [certificate commands](docs/agent-control.md#https-certificate-decisions)
+for exact approval and removal flags.
+
 ## Optional integrations
 
 The [Pi adapter](pi-extension/README.md) provides a command-only `/browser` menu

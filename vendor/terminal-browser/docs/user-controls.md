@@ -131,6 +131,29 @@ Use the revision from the exact preview. Unsaved page work can be lost.
 Ad-blocking settings are profile-wide, not owner-local. The human settings path
 can change them without resuming Agent. Read the displayed scope before a change.
 
+## HTTPS certificate warnings
+
+An invalid certificate opens a native warning card. It displays the exact HTTPS
+origin, validation error, SHA-256 certificate fingerprint, subject, issuer, and
+validity dates. Check the intended device through a trusted source before approval.
+The certificate fields do not prove the server's identity.
+
+Click "Approve this origin and certificate" only for that explicit decision.
+Enter does not approve a certificate. Escape or Dismiss denies it. The request
+also denies after 60 seconds. Only main-frame warnings with a readable certificate
+can offer approval. No warning auto-accepts or disables HTTPS checks elsewhere.
+
+An exception applies only to that scheme, hostname, effective port, and exact
+certificate in this context until it closes. It also covers same-origin resources
+with the same certificate. It is not saved or shared with other tabs or owners.
+A changed certificate or origin needs a new decision.
+
+Open Settings, tools, then select "remove certificate exceptions for this context"
+to revoke all of its exceptions. The row shows the retained count. Removal does
+not return control to Agent, undo received data, or close established connections.
+The [native CLI](agent-control.md#https-certificate-decisions) can inspect exceptions
+and revoke one exact exception. Dismiss any pending warning before revocation.
+
 ## Recover root-tab routes
 
 An explicit launch URL wins. An ordinary URL-less owned launch loads only its

@@ -1,6 +1,7 @@
 import { parseElementTarget } from "./agent/protocol";
 import type { CompanionService, CompanionRequest } from "./session/companion-service";
 import { parseBlockingRequest, type BlockingRequest, type BlockingStatus } from "./blocking/types";
+import { parseCertificateRequest, type CertificateRequest } from "./agent/certificates";
 import { parseLocator } from "./agent/locator";
 import type { DialogResponse } from "./agent/dialogs";
 import fs from "node:fs";
@@ -103,6 +104,7 @@ export interface ControlHost {
   agentWaitFor(id: number, request: AgentWaitForRequest, signal?: AbortSignal): Promise<AgentActionOutcome<AgentWaitForResult>>;
   agentContext(action: "open" | "activate" | "close", id: number | undefined, url: string | undefined, epoch: number): Promise<unknown>;
   agentDialog(id: number, request: DialogResponse): Promise<unknown>;
+  certificate(id: number, request: CertificateRequest, epoch?: number, signal?: AbortSignal): Promise<unknown>;
   waitContexts(afterId: number, timeoutMs: number, expectedEpoch: number): Promise<unknown>;
   closeTab(id: number): boolean;
   agentTouch(id: number): boolean;
@@ -153,6 +155,8 @@ interface ControlRequest extends CompanionRequest {
   timeoutMs?: unknown;
   afterId?: unknown;
   dialogId?: unknown;
+  origin?: unknown;
+  fingerprint?: unknown;
   files?: unknown;
   downloadId?: unknown;
   accept?: unknown;
@@ -345,6 +349,11 @@ export class Registry {
         if (request.url !== undefined && (typeof request.url !== "string" || request.url.length > 8192)) throw new Error("invalid context URL");
         const tab = request.action === "open" ? undefined : requiredTab(request, "agent.context");
         return this.host.agentContext(request.action, tab, request.url, requiredEpoch(request.expectedControlEpoch, "agent.context"));
+      }
+      case "certificate": {
+        const parsed = parseCertificateRequest(request.action, request.dialogId, request.origin, request.fingerprint);
+        const epoch = parsed.action === "status" ? undefined : requiredEpoch(request.expectedControlEpoch, "certificate");
+        return this.host.certificate(requiredTab(request, "certificate"), parsed, epoch, signal);
       }
       case "agent.dialog": {
         const tab = requiredTab(request, "agent.dialog");

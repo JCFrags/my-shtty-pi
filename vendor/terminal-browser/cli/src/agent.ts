@@ -28,6 +28,7 @@ export async function agentCommand(terminal: Terminal | null, args: string[]): P
   const subcommand = args.shift();
   const explicitOwner = takeSessionOwner(args);
   const route: AgentRoute = { terminal: explicitOwner ? null : terminal, owner: explicitOwner };
+  if (subcommand === "certificate") return certificateCommand(route, args);
   if (subcommand === "blocking") return blockingCommand(route, args);
   if (subcommand === "dialog") return dialogCommand(route, args);
   if (subcommand === "observe") return observeCommand(route, args);
@@ -45,7 +46,32 @@ export async function agentCommand(terminal: Terminal | null, args: string[]): P
   if (subcommand === "control") return transitionCommand(route, args, "agent.control");
   if (subcommand === "pause") return transitionCommand(route, args, "agent.pause");
   if (subcommand === "resume") return transitionCommand(route, args, "agent.resume");
-  throw new Error("agent needs observe, upload, click, hover, drag, type, press-key, scroll, navigate, get-url, wait-for, dialog, blocking, status, control, pause, or resume (terminal-browser agent --help)");
+  throw new Error("agent needs observe, upload, click, hover, drag, type, press-key, scroll, navigate, get-url, wait-for, dialog, certificate, blocking, status, control, pause, or resume (terminal-browser agent --help)");
+}
+
+async function certificateCommand(route: AgentRoute, args: string[]): Promise<number> {
+  const action = args.shift();
+  const browserKey = takeValue(args, "--browser");
+  const tab = parseTab(takeValue(args, "--tab"));
+  const dialogId = takeValue(args, "--dialog-id");
+  const origin = takeValue(args, "--origin");
+  const fingerprint = takeValue(args, "--fingerprint");
+  const epochValue = takeValue(args, "--control-epoch");
+  if (!action || !["status", "approve", "reject", "revoke"].includes(action)) throw new Error("agent certificate needs status, approve, reject, or revoke");
+  if (args.length) throw new Error(`unexpected ${args[0]}`);
+  if (action === "status") {
+    if (dialogId !== undefined || origin !== undefined || fingerprint !== undefined || epochValue !== undefined) throw new Error("certificate status needs no decision, identity, or epoch");
+  } else {
+    if (!tab || !origin || !fingerprint) throw new Error("certificate mutation requires --tab, --origin, --fingerprint, and --control-epoch");
+    if (action === "revoke" ? dialogId !== undefined : !dialogId) throw new Error("approve/reject require --dialog-id; revoke takes no dialog id");
+  }
+  const expectedControlEpoch = action === "status" ? undefined : parseEpoch(epochValue, "certificate mutation");
+  const browser = await selectBrowser(route, browserKey);
+  const selected = await selectTab(browser, tab);
+  print(await control(browser.socket, { cmd: "certificate", action, tab: selected,
+    ...(dialogId === undefined ? {} : { dialogId }), ...(origin === undefined ? {} : { origin }),
+    ...(fingerprint === undefined ? {} : { fingerprint }), ...(expectedControlEpoch === undefined ? {} : { expectedControlEpoch }) }));
+  return 0;
 }
 
 async function blockingCommand(route: AgentRoute, args: string[]): Promise<number> {

@@ -4,6 +4,7 @@ import { BrowserUploads } from "../agent/uploads";
 import { registerDownloadSource, waitForDownloadStart, type BrowserDownloads } from "../agent/downloads";
 import { nativeImage } from "electron";
 import { BrowserDialogs } from "../agent/dialogs";
+import { BrowserCertificates } from "../agent/certificates";
 import type { AgentBrowserTarget } from "../agent/types";
 import type { AgentKey } from "../agent/key";
 import type { ProgrammaticPointerEvent } from "./input";
@@ -27,6 +28,7 @@ export interface PopupState {
 
 export class PopupWindow implements AgentBrowserTarget {
   readonly dialogs: BrowserDialogs;
+  readonly certificates: BrowserCertificates;
   readonly uploads: BrowserUploads;
   readonly frames: BrowserFrames;
   onMainFrameNavigationStart: (() => void) | null = null;
@@ -75,6 +77,7 @@ export class PopupWindow implements AgentBrowserTarget {
     this.frames = new BrowserFrames(this.window.webContents, (method, params, session) => this.cdp(method, params, session), session => this.dialogs.initializeSession(session));
     this.frames.subscribe(() => this.noteGeometryChange());
     this.dialogs = new BrowserDialogs(window.webContents, (method, params, session) => this.cdp(method, params, session));
+    this.certificates = new BrowserCertificates(this.window.webContents, this.dialogs);
     this.uploads = new BrowserUploads(this.window.webContents, (method, params, session) => this.cdp(method, params, session), this.frames);
     this.surface = surface;
     this.onChange = onChange;
@@ -125,6 +128,7 @@ export class PopupWindow implements AgentBrowserTarget {
         }),
     );
     window.on("closed", () => {
+      this.certificates.dispose();
       this.dialogs.dispose();
       this.destroyed = true;
       this.surface.clear();
@@ -152,6 +156,7 @@ export class PopupWindow implements AgentBrowserTarget {
   destroy() {
     if (this.destroyed) return;
     this.input.releaseAllInput();
+    this.certificates.dispose();
     this.dialogs.dispose();
     this.window.destroy();
   }
