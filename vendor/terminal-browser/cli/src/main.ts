@@ -16,6 +16,8 @@ import {
   ensureDataDir,
   browserOwnerEnvironment,
   parseBrowserOwner,
+  piOriginEnvironment,
+  piOriginFromEnvironment,
   instanceKey,
   listApps,
   registerApp,
@@ -32,7 +34,8 @@ import {
 } from "pixel-terminals";
 import type { Direction, Terminal, TerminalCheck } from "pixel-terminals";
 import { ACTION_MIGRATION, commandError, errorResponse } from "./errors";
-import { requireSessionOwner, takeSessionOwner } from "./session";
+import { ordinaryLaunchOwner, requireSessionOwner, takeSessionOwner } from "./session";
+import { reuseOriginBrowser } from "./origin-open";
 import { agentCommand } from "./agent";
 import { companionTabs, currentBrowserOwner, openCompanion } from "./companion";
 import { companionSessionCommand } from "./companion-session";
@@ -52,6 +55,7 @@ import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 import { daemonRequest } from "./daemon-status";
 import { doctor, safeDaemonStatus } from "./doctor";
+import { connectionInventory } from "./connections";
 import {
   bindStartupPane,
   createStartupAttempt,
@@ -478,7 +482,7 @@ async function launchInSplit(
       const opened = await terminal.split!({
         from,
         direction,
-        command: clientLaunchCommand(argv, { ...browserOwnerEnvironmentIfPresent(), ...startupEnvironment(startup) }),
+        command: clientLaunchCommand(argv, { ...browserOwnerEnvironmentIfPresent(), ...piOriginEnvironment(process.env), ...startupEnvironment(startup) }),
         size: size ?? null,
         tty: ownTtyPath() ?? callerTty().path,
         onPaneCreated: (created) => {
@@ -702,7 +706,7 @@ async function openCommand(args: string[]) {
   if (owner) Object.assign(process.env, browserOwnerEnvironment(owner));
   const split = takeSplitFlag(args);
   const size = takeSizeFlag(args);
-  const noMerge = takeBoolFlag(args, "--no-merge") || mergeDisabled() || parseBrowserOwner(process.env) !== null;
+  const requestedNoMerge = takeBoolFlag(args, "--no-merge") || mergeDisabled();
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
   takeSshFlags(args);
   rejectUnknownFlags(args);
@@ -710,6 +714,20 @@ async function openCommand(args: string[]) {
   if (positionals.length > 1) {
     fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
   }
+  const ordinaryOwner = ordinaryLaunchOwner(args, process.env, process.cwd());
+  const origin = piOriginFromEnvironment(process.env);
+  if (ordinaryOwner) Object.assign(process.env, browserOwnerEnvironment(ordinaryOwner));
+  if (ordinaryOwner && origin) {
+    const url = positionals[0];
+    const reused = await reuseOriginBrowser(ordinaryOwner, origin, url && fs.existsSync(url) ? path.resolve(url) : url);
+    if (reused) {
+      const terminal = (await currentTerminal()).terminal;
+      if (terminal && reused.pane && reused.terminal === terminal.name) await terminal.focusPane?.(reused.pane);
+      print(reused);
+      return;
+    }
+  }
+  const noMerge = requestedNoMerge || parseBrowserOwner(process.env) !== null;
   const targeted = Boolean(process.env.TERMINAL_BROWSER_INTEROP_TARGET);
   const wouldSplit = split !== null || !interactiveTty();
   if (!noMerge && (wouldSplit || targeted) && !args.some((arg) => arg.startsWith("--ssh="))) {
@@ -821,7 +839,12 @@ async function main(): Promise<number> {
   }
   if (command === "supervise-startup") return superviseStartup(args);
   if (command === "doctor") { print(await doctor()); return 0; }
-  if (command === "daemon-status") { print(safeDaemonStatus(await daemonRequest({ cmd: "status" }))); return 0; }
+  if (command === "daemon-status") {
+    const connections = takeBoolFlag(args, "--connections");
+    if (args.length) throw new Error(`unexpected ${args[0]}`);
+    print(connections ? await connectionInventory() : safeDaemonStatus(await daemonRequest({ cmd: "status" })));
+    return 0;
+  }
   if (command === "shutdown") return shutdownDaemon(args);
   if (command === "upgrade") return upgradeCommand();
   if (command === "action") throw commandError("LEGACY_ACTION_RETIRED", ACTION_MIGRATION);

@@ -1,6 +1,7 @@
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { nativeBrowserOwner, parseBrowserOwner, requireHerdrBrowserOwner } from "pixel-store";
+import { nativeBrowserOwner, parseBrowserOwner, piOriginFromEnvironment, requireHerdrBrowserOwner } from "pixel-store";
 import type { BrowserOwner } from "pixel-store";
 import { commandError } from "./errors";
 
@@ -11,6 +12,16 @@ export function takeSessionOwner(args: string[]): BrowserOwner | null {
   if (session === undefined && project === undefined) return null;
   if (!session || !project) throw new Error("native ownership requires both --session <id> and --project <directory>");
   return nativeBrowserOwner(session, path.resolve(project));
+}
+
+/** Ordinary browsers get an internal owner. App, embedding, and explicit interop routes keep their defaults. */
+export function ordinaryLaunchOwner(args: string[], environment: NodeJS.ProcessEnv, projectDir: string): BrowserOwner | null {
+  if (parseBrowserOwner(environment) || environment.TERMINAL_BROWSER_INTEROP_TARGET || args.some(arg =>
+    ["--app-mode", "--no-toolbar", "--no-shortcuts", "--no-context-menu", "--no-overlays", "--no-frame"].includes(arg) ||
+    ["--ssh=", "--ssh-bundle=", "--partition=", "--preload=", "--main-script=", "--app-name=", "--app-id="].some(flag => arg.startsWith(flag)))) return null;
+  const origin = piOriginFromEnvironment(environment);
+  const sessionId = origin ? `pi:${createHash("sha256").update(JSON.stringify(origin)).digest("hex")}` : `user:${randomUUID()}`;
+  return nativeBrowserOwner(sessionId, projectDir);
 }
 
 export function environmentOwner(environment: NodeJS.ProcessEnv, projectDir: string): BrowserOwner | null {

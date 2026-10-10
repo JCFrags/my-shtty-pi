@@ -13,6 +13,8 @@ test("control keeps visual bytes in the binary socket payload", async () => {
   const socketPath = path.join(directory, "control.sock");
   const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
   let headerText = "";
+  let mismatch = false;
+  let actions = 0;
   const server = net.createServer((connection) => {
     let request = "";
     connection.setEncoding("utf8");
@@ -22,9 +24,10 @@ test("control keeps visual bytes in the binary socket payload", async () => {
       if (newline < 0) return;
       const parsed = JSON.parse(request.slice(0, newline));
       if (parsed.cmd === "hello") {
-        connection.end(JSON.stringify({ id: parsed.id, ok: true, data: { identity: RUNTIME_IDENTITY } }) + "\n");
+        connection.end(JSON.stringify({ id: parsed.id, ok: true, data: { identity: mismatch ? { ...RUNTIME_IDENTITY, build: "0".repeat(64) } : RUNTIME_IDENTITY } }) + "\n");
         return;
       }
+      actions++;
       assert.equal(parsed.expectedInstance, RUNTIME_IDENTITY.instanceId);
       const header = {
         id: parsed.id,
@@ -49,6 +52,9 @@ test("control keeps visual bytes in the binary socket payload", async () => {
     assert.deepEqual(result.visual.data, image);
     assert.equal(headerText.includes(image.toString("base64")), false);
     assert.equal(headerText.includes('"data":{"type":"Buffer"'), false);
+    mismatch = true;
+    await assert.rejects(control(socketPath, { cmd: "agent.observe" }), error => error.code === "RUNTIME_MISMATCH" && /stale loaded adapter/.test(error.message));
+    assert.equal(actions, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });

@@ -13,6 +13,16 @@ Both full menus provide Open/focus, Return control to agent, control modes, Send
 settings, and Close owned browser. Opening or canceling a menu does not select
 Human. A menu holds focus while it is open.
 
+In an owned native browser, settings and tools require at most two navigation steps:
+
+1. Open full options with the three-dot button.
+2. Select Tools, Ad blocking (shared profile), or Settings to see that group's controls.
+
+Tools includes recording and inspection. Settings includes receiver information,
+Shared page updates, and receiver disconnection. Back from Tools or Ad blocking
+returns to full options. The Control and Ads quick menus and the Pi menu stay
+separate. Send, Close, and Disconnect still require their safety confirmations.
+
 | Mode | Behavior |
 | --- | --- |
 | Agent | Agent input is permitted. Active human input selects Human. |
@@ -54,7 +64,14 @@ A conflict refuses unless the user confirms replacement of the exact old binding
 A missing owner never falls back to a neighboring or latest browser. Owner IDs
 route same-user processes. They are not authentication credentials.
 
-The Pi menu stores an explicit association in the active Pi branch. A native CLI
+An agent-opened browser connects to its opening Pi conversation when exact
+current launch origin is available. For a user-opened or older browser, run
+`/browser` in the intended conversation and choose Connect existing browser.
+Select the terminal, owner, and launch project. This connects the existing
+browser without typed IDs or a duplicate launch. Connection does not capture or
+send page data.
+
+The Pi menu stores the exact association in the active Pi branch. A native CLI
 owner can override pane-based Herdr ownership. Branch or session changes invalidate
 the live receiver before cleanup. An inherited association is inert when the Pi
 session does not match. Loading the package factory does not start a browser,
@@ -70,8 +87,10 @@ a PNG file. Image output creates a new private file and refuses overwrite.
 ## Page updates and Send
 
 Shared page updates are on by default but remain dormant outside Shared or
-without an associated receiver. The settings menu shows the preference and its
-active state. Human and Paused purge pending automatic pixels. Disconnect stops
+without an associated receiver. A new Pi binding suspends automatic capture
+without changing this preference or control mode. An explicit Shared or updates
+choice can permit capture for the binding. The settings menu shows the preference
+and its active state. Human and Paused purge pending automatic pixels. Disconnect stops
 the wait and discards pending data. Previously delivered pixels cannot be recalled.
 
 Automatic updates are informational page captures, not observations or action
@@ -148,8 +167,8 @@ certificate in this context until it closes. It also covers same-origin resource
 with the same certificate. It is not saved or shared with other tabs or owners.
 A changed certificate or origin needs a new decision.
 
-Open Settings, tools, then select "remove certificate exceptions for this context"
-to revoke all of its exceptions. The row shows the retained count. Removal does
+Open full options with the three-dot button, select Tools, then select
+"remove certificate exceptions for this context" to revoke all of its exceptions. The row shows the retained count. Removal does
 not return control to Agent, undo received data, or close established connections.
 The [native CLI](agent-control.md#https-certificate-decisions) can inspect exceptions
 and revoke one exact exception. Dismiss any pending warning before revocation.

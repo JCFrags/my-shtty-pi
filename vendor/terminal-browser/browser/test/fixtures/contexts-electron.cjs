@@ -37,7 +37,7 @@ const server = http.createServer((req, res) => {
   await app.whenReady();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const root = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: false } });
+  const root = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: true } });
   await root.loadURL('about:blank');
   root.webContents.debugger.attach('1.3');
   const send = (method, params) => root.webContents.debugger.sendCommand(method, params);
@@ -73,7 +73,7 @@ const server = http.createServer((req, res) => {
   }
   let popup;
   let popupCount = 0;
-  root.webContents.setWindowOpenHandler(() => ({ action: 'allow', overrideBrowserWindowOptions: { show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: false } }, createWindow: options => {
+  root.webContents.setWindowOpenHandler(() => ({ action: 'allow', overrideBrowserWindowOptions: { show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: true } }, createWindow: options => {
     log({ creatingPopup: true });
     const child = new BrowserWindow(options);
     popup = new PopupWindow(child, { clear() {}, present() {} }, { width: 400, height: 300 }, 1, () => 1, () => {}, () => {});

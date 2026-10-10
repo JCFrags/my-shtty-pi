@@ -242,6 +242,13 @@ the database, prepare graphics, repair sockets, or run setup. Graphics remains
 unknown without a visible terminal check. Internal Chromium pixels are not such
 a check.
 
+A loaded Pi adapter invokes its own artifact's CLI, not the globally selected
+launcher. If the adapter and shared daemon retain different artifacts,
+`RUNTIME_MISMATCH` refuses the connection. This is not permission to open another
+browser, switch the adapter's backend, or remove a companion record. Match the
+caller receipt and daemon identity in `doctor --json`, then use the approved
+loaded-process procedure. A new selection alone does not fix an old adapter.
+
 Pi receipt diagnostics use bounded reads of the retained receipt directory.
 `pi.receipts.complete` separates complete inspection from unreadable records,
 uncertain identity, or ambiguous reload order. Only boot/start-matched processes

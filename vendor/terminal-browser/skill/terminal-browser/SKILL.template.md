@@ -28,6 +28,15 @@ ownership, observations, human control, or file restrictions.
 4. Read `terminal-browser agent --help` and `terminal-browser session --help` for
    the installed command contract. Launch does not run setup or install skills.
 
+Ordinary user launches can omit the owner flags and receive an internal owner.
+With the Pi menu loaded, a current conversation launch connects through exact
+session/file and fresh launch-generation metadata. Task IDs remain separate from
+Pi conversation IDs. Use Pi's reported connected CLI route for later commands.
+For a user-opened or older browser, run `/browser` in the intended conversation
+and choose Connect existing browser. Select the exact terminal, owner, and project.
+Do not launch a duplicate or guess the newest browser. Persistent shells can have
+stale launch metadata and need an explicit selection.
+
 ## Observe, act, and inspect the result
 
 ```sh
@@ -165,6 +174,8 @@ browser model tools. A bare package source or
 `+dist/menu.js` alone also loads the tools resource. Do not change package settings
 unless the user requests that change.
 
+Connection preserves control mode and the Shared updates preference. A new Pi
+binding suspends automatic capture until an explicit Shared or updates choice.
 Opening or canceling a menu does not select Human. Send previews the current page
 and receiver and asks for confirmation. It can request a reply. Do not use terminal paste or
 another agent's draft to deliver a page.
