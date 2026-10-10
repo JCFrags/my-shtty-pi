@@ -312,7 +312,12 @@ test("model-free interval lifecycle verifies public proposals, preserves source,
       ...receipt.restart.exactTail.map((row: any) => row.entryId)];
     assert.deepEqual(rangeIds, referenceInterval!.events.map(row => row.entryId), "A, B and C cover the original interval once in source order");
     for (const id of [...nativeSourceIds, ...obsoleteSourceIds]) assert.ok(rangeIds.includes(id), "native hints do not erase original source coverage");
-    for (const id of nativeSourceIds) assert.ok(compaction.summary.includes(`history_get entryId="${id}"`));
+    for (const id of nativeSourceIds) {
+      const exact = receipt.restart.exactTail.find((row: any) => row.entryId === id);
+      if (exact) assert.equal(JSON.stringify(exact.projectedEntry),
+        JSON.stringify(referenceInterval!.events.find(row => row.entryId === id)!.projectedEntry), "C preserves the complete source entry");
+      else assert.ok(compaction.summary.includes(`history_get entryId="${id}"`), "A/B retain source recovery citations");
+    }
     assert.equal(compaction.summary.includes("currentFocus: src/lighthouse.ts"), false, "only source evidence, not a native card dump, enters chronology");
     for (const [id, bytes] of unchanged) assert.equal(JSON.stringify(sm.getEntry(id)), bytes);
     assert.equal((await status()).terminal.state, "committed");

@@ -11,7 +11,7 @@ related:
 
 # ChronoCompact release compatibility
 
-Use the checked-out [package manifest](../packages/pi-chrono-compaction/package.json) for the source identity. The interval source version is `4.1.3-local.20261010`. The retained pre-interval baseline includes the 4.0.6 system-update continuation correction, unified `/Chrono` menu, stable projections, and earlier same-session summary path. A source version does not establish remote acceptance, local selection, or loaded-session adoption. The 4.0.0 and older sections below retain revision-bound compatibility records. Their pins, counts, commands, and passes do not verify this candidate.
+Use the checked-out [package manifest](../packages/pi-chrono-compaction/package.json) for the source identity. The interval source version is `4.1.4-local.20261010`. The retained pre-interval baseline includes the 4.0.6 system-update continuation correction, unified `/Chrono` menu, stable projections, and earlier same-session summary path. A source version does not establish remote acceptance, local selection, or loaded-session adoption. The 4.0.0 and older sections below retain revision-bound compatibility records. Their pins, counts, commands, and passes do not verify this candidate.
 
 ## Interval candidate compatibility boundary
 
@@ -25,7 +25,7 @@ The [interval implementation guide](chrono/context/interval-compaction.md) descr
 | Root tooling and other product pins | Remain `0.85.1`. This is not a monorepo-wide host upgrade. |
 | Normal writer and helper defaults | Same-agent `handoff` plus separate `continuation`. All history helper roles start unselected, with deterministic history fallback. |
 | Request controls | Main writer planning reserves `min(model.maxTokens, DEFAULT_COMPACTION_SETTINGS.reserveTokens)`, at most 16,384 tokens with Pi 1.1 defaults. Summary-only attempts remain available above planning thresholds. Restart packets remain bounded. Pi owns message/media estimates. Helpers require effective accepted request-local output caps. |
-| Configuration compatibility | Legacy interval-tuning keys remain readable for older paths and rollback but do not control `interval-v1`. Ownership, indexing, rollover, and worker admission remain separate. |
+| Configuration compatibility | Legacy interval-tuning keys remain readable for older paths and rollback but do not control the automatic interval policy. Ownership, indexing, rollover, and worker admission remain separate. |
 
 The interval path uses the existing `contextCompiler: "v4"` selection. The inspected default remains `v3`. Helper selection requires explicit history-specific provider/model consent. No dependency pin, settings edit, or handler registration proves a correlated native commit or useful continuation.
 

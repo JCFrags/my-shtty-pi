@@ -170,12 +170,12 @@ The proposed selection order is:
 
 1. Pin the current branch, interval origin, effective source projection, and admitted end `E`.
 2. Determine legal complete-interaction cuts.
-3. Select the newest required complete units for C within its exact-tail allowance.
+3. Select C using both a recent assistant-turn target and a soft token target. Preserve complete units and obey the hard request and native conversion bounds.
 4. Evaluate H candidates before or at R. Prefer coherent phase boundaries that preserve a useful B and fit the compressed rendering allowance.
 5. Assign all remaining eligible older work to A.
 6. Check the complete rebuilt request, not only the three history bodies.
 
-When no useful phase signal exists, choose a legal token-fitting boundary. Turn counts and elapsed time can bound bookkeeping, but they are not the primary measure of content size. A context percentage indicates pressure. It does not identify a source cut.
+When no useful phase signal exists, choose a legal boundary using tokens and recent-turn coverage together. A turn is one assistant response with all its tool results, not each result in a parallel batch. A large result may exceed the soft token target so C can retain recent turns. If hard capacity or native conversion limits prevent the turn target, report the retained count and shortfall reason. A context percentage indicates pressure. It does not identify a source cut.
 
 A and B can be empty. An empty A needs no synopsis-model call. The exact-tail requirement is a product policy constrained by safe pairing and the full request budget, not a user-selected preset.
 
@@ -305,6 +305,8 @@ A read-only investigation of a reported low-percentage refusal found a source-su
 
 Allocate layer budgets from the usable request capacity after required overhead and reserves. Prefer a small useful exact suffix and a recent coherent compressed window. Fit the handoff and historical synopsis within the remaining allowance without silently dropping current restrictions.
 
+The October 10 sizing revision starts with ceilings of 1,024 tokens for A, 4,096 for B, 1,792 for the handoff, and 256 for the continuation. C has a soft 4,096-token target and a target of three recent assistant turns. Smaller model capacity can reduce these allowances. These are starting policy values, not quotas or measured optima. See the [implementation guide](../context/interval-compaction.md) for source behavior and verification limits.
+
 Do not establish numerical defaults by copying existing settings or the examples in Pi's documentation. Select and verify internal constants against the required behavior. Expose the resulting budget breakdown as read-only diagnostics.
 
 ## Active interval synopsis
@@ -359,7 +361,7 @@ Once committed, the packet's rendered bytes stay fixed. A late event result can 
 
 ## Exact raw tail
 
-C preserves a small newest suffix without semantic rewriting. Its purpose is to retain recent wording and complete interactions that the agent is about to use.
+C preserves a small newest suffix without semantic rewriting. Its purpose is to retain recent wording and complete interactions that the agent is about to use. Measure both retained assistant turns and estimated tokens. User and custom messages between turns stay in the contiguous suffix but do not inflate its assistant-turn count.
 
 "Exact" refers to the effective source content and supported message conversion, not an assertion that provider JSON serialization equals the stored source bytes. Source recovery remains available for the original record.
 

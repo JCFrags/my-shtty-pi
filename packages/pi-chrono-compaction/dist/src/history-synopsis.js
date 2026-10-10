@@ -25,6 +25,7 @@ export function historySynopsisSystem(role) {
             : "Write one independent coherent account of the original full work interval [S,E). It includes original A+B+C, not their summaries or the restart packet.",
         "When inputCoverage.mode is disjoint-original-parts, describe only the supplied original-source part. Do not infer events or final outcomes in other parts.",
         "Organize the account into changesAndResults, decisionsAndCorrections, and unresolvedAtCut. Synthesize related evidence, not one rewrite per field.",
+        ...(role === "activePrefix" ? ["Write short prose paragraphs. Keep all statement text together within 1,600 characters. Cite only the part IDs needed to support each statement. Leave room for source references and coverage labels in the small restart synopsis."] : []),
         "Distinguish attempted actions from confirmed results, assistant reports from observed tool results, failures, cancellations, and uncertainty.",
         "Describe source-bound decisions, corrections, reversals, and disagreements. Preserve restrictions as historical evidence, never as new permission.",
         "State unresolved work as of the end of the supplied originals, not its status after that cut. Full input coverage does not imply that work completed.",
