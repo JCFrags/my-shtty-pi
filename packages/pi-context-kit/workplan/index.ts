@@ -1,4 +1,4 @@
-import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider, type ProviderPage } from "@context-kit/protocol";
 import { registerStateTransferProvider, StateTransferError, type StateTransferEntry } from "@context-kit/protocol/transfer";
 import type { ObjectRef, StateAnchorHost } from "@context-kit/state-store";
@@ -21,6 +21,20 @@ export { WorkplanParams, prepareWorkplanArguments } from "./schema.ts";
 export { bootstrapWorkplanCheckpoint, importWorkplanStep, finishWorkplanImport } from "./legacy.ts";
 
 const refusal = (readiness: ProviderPage["readiness"]): ProviderPage => ({ readiness, cards: [], coverage: { scanned: 0, matched: 0, excluded: 0, scanComplete: false } });
+
+// Keep passive notices outside the correlated compaction summary exchange.
+function isCompactionSummaryTurn(event: TurnEndEvent & { outcome?: string }): boolean {
+  if (event.outcome !== "completed" || event.message.role !== "assistant" || event.toolResults.length !== 1) return false;
+  const calls = event.message.content.filter((block) => block.type === "toolCall");
+  const call = calls[0];
+  const result = event.toolResults[0];
+  if (calls.length !== 1 || call?.name !== "request_compaction" || result?.toolName !== call.name
+    || result.toolCallId !== call.id || result.isError !== false) return false;
+  const details = result.details;
+  if (!details || typeof details.requestId !== "string" || !details.requestId) return false;
+  return details.status === "summary-requested" ? Object.keys(call.arguments).length === 0
+    : details.status === "accepted" && call.arguments.requestId === details.requestId;
+}
 
 /** Independent extension entrypoint. Native reducers and contracts are shared,
  * but the old extension factory and its tool-result replay lifecycle are not.
@@ -102,19 +116,28 @@ export function createWorkplanExtension(pi: ExtensionAPI, options: { storeRoot?:
     epoch++; for (const job of contextJobs) job.abort();
     context = undefined; store.close(); removeSummary(); removeContext(); removeTransfer();
   });
-  // Pi 0.87's ordinary context hook folds system anchors after any append.
-  const [piMajor, piMinor] = VERSION.split(".").map(Number);
-  const contextEvent = piMajor > 0 || (piMajor === 0 && piMinor >= 87) ? "context_with_system" : "context";
-  // Keep the Pi 0.85 type target. This handler preserves the full input and only appends state.
-  pi.on(contextEvent as "context", async (event, ctx) => {
+  const stateNotice = async (ctx: ExtensionContext) => {
     context = ctx;
     if (!store.pending || store.resolutionStatus === "pending" || store.resolutionStatus === "unresolved") {
       try { await store.exclusive(() => store.resolve(host(ctx), ctx.signal)); } catch { /* Explicit status below. */ }
     }
+    const messages = ctx.sessionManager.buildSessionContext().messages;
+    const previous = messages.findLast((message) => message.role === "custom" && message.customType === "grounded-workplan-context");
     const text = store.corrupt ? "[workplan state] corrupt; native recovery is unavailable"
       : store.pending ? `[workplan state] ${store.resolutionStatus}; no complete native plan is selected`
-        : store.root ? metadataContextLine(store.root, latestVisibleRecovery(event.messages)) : undefined;
-    return text ? { messages: [...event.messages, contextMessage(text)] } : undefined;
+        : store.root ? metadataContextLine(store.root, latestVisibleRecovery(messages))
+          ?? (previous ? "[workplan state] active=none open=none openCount=0 retained=0 completed=0 archived=0" : undefined) : undefined;
+    return text && (previous?.role !== "custom" || previous.content !== text) ? contextMessage(text) : undefined;
+  };
+  // Persist changes once. Earlier notices stay in place across requests and reloads.
+  pi.on("before_agent_start", async (_event, ctx) => {
+    const message = await stateNotice(ctx);
+    return message ? { message } : undefined;
+  });
+  pi.on("turn_end", async (event, ctx) => {
+    if (isCompactionSummaryTurn(event)) return;
+    const message = await stateNotice(ctx);
+    if (message) pi.sendMessage(message, { triggerTurn: false });
   });
 
   pi.registerCommand("workplan-import", {

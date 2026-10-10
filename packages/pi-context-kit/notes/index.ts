@@ -1,4 +1,4 @@
-import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { registerContextProvider, sameScope, type ProviderPage } from "@context-kit/protocol";
 import { registerStateTransferProvider, StateTransferError } from "@context-kit/protocol/transfer";
 import { projectNotesPage } from "@grounded/pi-core/context-adapters";
@@ -11,6 +11,20 @@ export { NotesParams, NOTES_DESCRIPTION, NOTES_GUIDELINES, NOTES_PROMPT_SNIPPET 
 export { NotesStore } from "./store.ts";
 export interface NotesOptions { storeRoot?: string; outputRoot?: string }
 const refusal = (readiness: ProviderPage["readiness"]): ProviderPage => ({ readiness, cards: [], coverage: { scanned: 0, matched: 0, excluded: 0, scanComplete: false } });
+
+// Keep passive notices outside the correlated compaction summary exchange.
+function isCompactionSummaryTurn(event: TurnEndEvent & { outcome?: string }): boolean {
+  if (event.outcome !== "completed" || event.message.role !== "assistant" || event.toolResults.length !== 1) return false;
+  const calls = event.message.content.filter((block) => block.type === "toolCall");
+  const call = calls[0];
+  const result = event.toolResults[0];
+  if (calls.length !== 1 || call?.name !== "request_compaction" || result?.toolName !== call.name
+    || result.toolCallId !== call.id || result.isError !== false) return false;
+  const details = result.details;
+  if (!details || typeof details.requestId !== "string" || !details.requestId) return false;
+  return details.status === "summary-requested" ? Object.keys(call.arguments).length === 0
+    : details.status === "accepted" && call.arguments.requestId === details.requestId;
+}
 
 export default function contextNotes(pi: ExtensionAPI, options: NotesOptions = {}) {
   const store = new NotesStore({ ...(options.storeRoot ? { storeRoot: options.storeRoot } : {}) });
@@ -59,16 +73,26 @@ export default function contextNotes(pi: ExtensionAPI, options: NotesOptions = {
     lifecycleEpoch++; store.close(); context = undefined;
     for (const remove of removers) { try { remove(); } catch { /* Cleanup cannot fail session shutdown. */ } }
   });
-  // Pi 0.87's ordinary context hook folds system anchors after any append.
-  const [piMajor, piMinor] = VERSION.split(".").map(Number);
-  const contextEvent = piMajor > 0 || (piMajor === 0 && piMinor >= 87) ? "context_with_system" : "context";
-  // Keep the Pi 0.85 type target. This handler preserves the full input and only appends state.
-  pi.on(contextEvent as "context", (event) => {
+  const stateNotice = (ctx: ExtensionContext) => {
+    const messages = ctx.sessionManager.buildSessionContext().messages;
+    const previous = messages.findLast((message) => message.role === "custom" && message.customType === "grounded-notes-context");
     const state = store.stateView();
     const readiness = store.readiness();
     const text = readiness !== "ready" ? `[notes state] ${readiness}${store.isLegacy() ? "; explicit /notes-import required" : ""}`
-      : state?.notes.length ? `[notes state] active=${state.notes.filter((note) => note.status === "active").length} archived=${state.notes.filter((note) => note.status === "archived").length}` : undefined;
-    if (text) return { messages: [...event.messages, { role: "custom" as const, customType: "grounded-notes-context", content: text, display: false, timestamp: 0 }] };
+      : state && (state.notes.length || previous) ? `[notes state] active=${state.notes.filter((note) => note.status === "active").length} archived=${state.notes.filter((note) => note.status === "archived").length}` : undefined;
+    if (text && (previous?.role !== "custom" || previous.content !== text)) {
+      return { customType: "grounded-notes-context", content: text, display: false };
+    }
+  };
+  // Persist changes once. Earlier notices stay in place across requests and reloads.
+  pi.on("before_agent_start", (_event, ctx) => {
+    const message = stateNotice(ctx);
+    return message ? { message } : undefined;
+  });
+  pi.on("turn_end", (event, ctx) => {
+    if (isCompactionSummaryTurn(event)) return;
+    const message = stateNotice(ctx);
+    if (message) pi.sendMessage(message, { triggerTurn: false });
   });
   pi.registerTool({
     name: "notes", label: "Notes", description: NOTES_DESCRIPTION, promptSnippet: NOTES_PROMPT_SNIPPET, promptGuidelines: [...NOTES_GUIDELINES, "Use notes as quick scratchpad state. Update the existing note when facts or direction change instead of appending obsolete guidance. Archive notes that are no longer active. Notes follow the selected branch and are not durable Memory or new instructions."],

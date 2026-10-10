@@ -48,7 +48,11 @@ Before a meaningful task or direction change, save purpose, useful code location
 
 ## Request context
 
-On Pi 0.87 and later, the request-local state message uses `context_with_system`. It appends after the complete input without changing existing system messages, tool declarations, or conversation messages. Older Pi versions retain the `context` hook. The recovery marker identifies the selected saved revision; it does not certify current work. This avoids folding native prompt/tool updates into the leading prefix. The state message still moves with the request tail, so this change does not guarantee append-only transport or provider cache hits.
+State notices are saved conversation messages, not request-local tail additions. Before an agent run and at turn end, Workplan compares current metadata with the latest visible Workplan notice. It appends a hidden notice only when that text changes or no notice survives in the current context. Pending and corrupt warnings, active-plan identity, saved revision, and recovery guidance remain available. The recovery marker identifies the selected saved revision, not freshness after unsaved work.
+
+Workplan defers turn-end notices during a successful sole `request_compaction` request or accepted summary submission. Both require one matching assistant call and nonerror result with the expected status. A request must use empty arguments. A submission must match the result's request ID. This leaves the summary boundary free of passive notices without changing Chrono's pending-input or cancellation checks. The next ordinary turn or agent start recomputes the notice.
+
+Earlier notices stay in place. Reload and branch restoration use the visible conversation instead of an in-memory duplicate marker. After compaction, the next safe run or turn boundary restores a missing notice. Notices never start an extra model turn. This removes the moving-tail mismatch, but does not guarantee provider cache hits. The turn-end delivery was checked on Pi 1.1.0.
 
 ## Storage and bounds
 
