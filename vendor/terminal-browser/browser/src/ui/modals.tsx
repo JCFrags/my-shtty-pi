@@ -299,11 +299,19 @@ export function BrowserDialogCard({ dialog, answer, layout, theme }: {
         <Text style={{ color: theme.accent, fontSize: layout.rem }}>{dialog.type} · context {dialog.contextId}</Text>
         <Text style={{ color: theme.muted, fontSize: layout.rem * 0.8 }}>{safe(dialog.url).slice(0, 160)}</Text>
         <Text style={{ color: theme.fg, fontSize: layout.rem }}>{safe(dialog.message).slice(0, 512)}</Text>
+        {dialog.certificate && <Box style={{ flexDirection: "column", gap: layout.rem * 0.3 }}>
+          <Text style={{ color: theme.fg, fontSize: layout.rem * 0.8 }}>Origin: {safe(dialog.certificate.origin ?? "unknown")}</Text>
+          <Text style={{ color: theme.fg, fontSize: layout.rem * 0.8 }}>{safe(dialog.certificate.error)}</Text>
+          <Text style={{ color: theme.fg, fontSize: layout.rem * 0.8 }}>Subject: {safe(dialog.certificate.subject)}. Issuer: {safe(dialog.certificate.issuer)}</Text>
+          <Text style={{ color: theme.fg, fontSize: layout.rem * 0.8 }}>Valid: {dialog.certificate.validFrom} to {dialog.certificate.validUntil}</Text>
+          <Text style={{ color: theme.fg, fontSize: layout.rem * 0.8 }}>SHA-256: {dialog.certificate.fingerprint ?? "unavailable"}</Text>
+          <Text style={{ color: theme.muted, fontSize: layout.rem * 0.8 }}>Only this exact origin and certificate, in this context until it closes. Remove under Settings, tools. This request is denied after 60 seconds.</Text>
+        </Box>}
         {dialog.intent && <Text style={{ color: theme.muted, fontSize: layout.rem * 0.8 }}>{dialog.intent.type} {safe(dialog.intent.url ?? "").slice(0, 160)}</Text>}
         {dialog.type === "prompt" && <Input autoFocus value={text} onChange={setText} onSubmit={value => answer(dialog.id, true, value)} style={{ fontSize: layout.rem, background: theme.field }} />}
         <Box style={{ flexDirection: "row", gap: layout.rem }}>
           <Box onClick={() => answer(dialog.id, false)}><Text style={{ color: theme.fg, fontSize: layout.rem }}>Dismiss (Esc)</Text></Box>
-          {dialog.canAccept && <Box onClick={() => answer(dialog.id, true, dialog.type === "prompt" ? text : undefined)}><Text style={{ color: theme.accent, fontSize: layout.rem }}>Accept (Enter)</Text></Box>}
+          {dialog.canAccept && <Box onClick={() => answer(dialog.id, true, dialog.type === "prompt" ? text : undefined)}><Text style={{ color: theme.accent, fontSize: layout.rem }}>{dialog.type === "certificate" ? "Approve this origin and certificate" : "Accept (Enter)"}</Text></Box>}
         </Box>
       </Box>
     </ModalCard>

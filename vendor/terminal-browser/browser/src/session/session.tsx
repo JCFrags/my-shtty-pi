@@ -28,8 +28,10 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
-import { RUNTIME_IDENTITY, TAB_RECOVERY_DIR, appId, lastUrl, listApps, parseBrowserOwner, setLastUrl, settings, store } from "pixel-store";
+import { RUNTIME_IDENTITY, TAB_RECOVERY_DIR, appId, lastUrl, listApps, parseBrowserOwner, piOriginFromEnvironment, setLastUrl, settings, store } from "pixel-store";
 import type {
+  BrowserOwner,
+  PiOrigin,
   DevtoolsDock,
   InstanceRow,
   OpenResult,
@@ -81,7 +83,8 @@ export interface SessionContext {
 
 export interface SessionMetadata {
   key: string;
-  owner: { workspaceId: string; tabId: string; paneId: string } | null;
+  owner: BrowserOwner | null;
+  origin: PiOrigin | null;
   terminal: string | null;
   tab: string | null;
   pane: string | null;
@@ -200,6 +203,7 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
 class Session {
   private readonly ctx: SessionContext;
   private readonly owner: ReturnType<typeof parseBrowserOwner>;
+  private readonly origin: PiOrigin | null;
   private readonly terminal: Terminal | null;
   private readonly marker: string;
   private ownPane: Pane | null = null;
@@ -316,6 +320,7 @@ class Session {
     this.ctx = ctx;
     const owner = parseBrowserOwner(ctx.env);
     this.owner = owner ? { ...owner, projectDir: fs.realpathSync(owner.projectDir) } : null;
+    this.origin = piOriginFromEnvironment(ctx.env);
     this.terminal = detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
     this.argv = ctx.argv;
@@ -480,7 +485,9 @@ class Session {
   private selectControlMode(mode: "agent" | "human" | "shared", epoch: number) {
     this.assertRecoveryChosen();
     if (mode !== "human" && this.tabs.sessionClosePending) throw new Error("Resolve the pending owned close before changing control.");
-    return this.control.selectMode(mode, epoch);
+    const state = this.control.selectMode(mode, epoch);
+    if (mode === "shared") this.companion?.explicitSharedChoice();
+    return state;
   }
 
   private installCompanion(): void {
@@ -760,6 +767,7 @@ class Session {
       key: this.ctx.key,
       tty: this.ctx.tty ?? null,
       owner: this.owner,
+      origin: this.origin,
       startupAttempt: /^[a-f0-9-]{36}$/.test(this.ctx.env.TERMINAL_BROWSER_STARTUP_ATTEMPT ?? "")
         ? this.ctx.env.TERMINAL_BROWSER_STARTUP_ATTEMPT!
         : null,
@@ -793,6 +801,7 @@ class Session {
       agentContext: (action, id, url, epoch) => this.tabs.agentContext(action, id, url, epoch),
       agentDialog: (id, request) => this.answerApprovedDialog(request.dialogId, request.accept,
         () => this.tabs.respondDialog(id, request)),
+      certificate: (id, request, epoch, signal) => this.tabs.certificate(id, request, epoch, signal),
       waitContexts: (after, timeout, epoch) => this.tabs.waitContexts(after, timeout, epoch),
       agentObserve: (id, request, signal) => this.tabs.agentObserve(id, { ...request, signal }),
       agentUpload: (id, request, signal) => this.tabs.agentUpload(id, { ...request, signal }),
@@ -831,7 +840,8 @@ class Session {
   metadata(): SessionMetadata {
     return {
       key: this.ctx.key,
-      owner: this.owner ? { workspaceId: this.owner.workspaceId, tabId: this.owner.tabId, paneId: this.owner.paneId } : null,
+      owner: this.owner ? { ...this.owner } : null,
+      origin: this.origin,
       terminal: this.terminal?.name ?? null,
       tab: this.ownPane?.tab ?? null,
       pane: this.ownPane?.id ?? null,
@@ -1430,7 +1440,7 @@ class Session {
   private handleReservedKey(event: EngineKeyEvent) {
     const dialog = this.tabs.pendingDialog;
     if (dialog) {
-      if (event.kind !== "release" && (event.key === "escape" || (event.key === "enter" && dialog.type !== "prompt"))) {
+      if (event.kind !== "release" && (event.key === "escape" || (event.key === "enter" && dialog.type !== "prompt" && dialog.type !== "certificate"))) {
         void this.answerNativeDialog(dialog.id, event.key === "enter" && dialog.canAccept).catch(() => {});
       }
       return;
@@ -1842,6 +1852,17 @@ class Session {
     this.closePageMenu();
     const browser = this.tabs.activeController;
     if (!menu || !browser) return;
+    if (id === "certificates:revoke") {
+      const context = this.tabs.currentVisiblePage();
+      if (!context) return;
+      this.humanChange("pointer");
+      try {
+        this.tabs.revokeHumanCertificates(context.contextId);
+        this.showToast("Certificate exceptions removed for this context. Already received data is not undone.", "done");
+      } catch (error) { this.showToast(error instanceof Error ? error.message : "Certificate removal failed", "failed"); }
+      this.render();
+      return;
+    }
     if (id.startsWith("blocking:")) { this.runBlockingAction(id); return; }
     switch (id) {
       case "grab":
@@ -1969,6 +1990,8 @@ class Session {
   private toolMenuItems(): PageMenuItem[] {
     return [
       ...this.blockingMenuItems(),
+      { id: "certificates:revoke", label: `remove certificate exceptions for this context (${(this.tabs.activeController?.popup ?? this.tabs.activeController)?.certificates.status().exceptions.length ?? 0})`,
+        enabled: !this.tabs.pendingDialog && !!(this.tabs.activeController?.popup ?? this.tabs.activeController)?.certificates.status().exceptions.length, shortcut: "" },
       this.grabMenuItem(),
       {
         id: "record",

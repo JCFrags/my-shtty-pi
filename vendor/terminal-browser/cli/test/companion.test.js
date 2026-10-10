@@ -7,6 +7,10 @@ const {
   parseOpenedPane,
 } = require("../dist/companion");
 const { ownerMatches } = require("../dist/instances");
+const { ordinaryLaunchOwner } = require("../dist/session");
+const { parseCompanionSessionArgs } = require("../dist/companion-session");
+const { PI_ORIGIN_ENV, parsePiOrigin, piOriginEnvironment, piOriginFromEnvironment } = require("pixel-store");
+const origin = { schemaVersion: 1, generation: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", piSessionId: "pi-a", piSessionFile: null };
 
 const ownerA = {
   workspaceId: "w1",
@@ -47,7 +51,8 @@ test("exact owner selection prevents cross-agent routing", () => {
 
 test("pane launch passes complete owner metadata, startup correlation and exact placement", () => {
   const startup = { attempt: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", file: "/tmp/not-used" };
-  const args = paneOpenArgs(ownerA, { url: "file:///tmp/a.html", focus: false }, startup);
+  const rawOrigin = JSON.stringify(origin, null, 1);
+  const args = paneOpenArgs(ownerA, { url: "file:///tmp/a.html", focus: false }, startup, { [PI_ORIGIN_ENV]: rawOrigin });
   assert.deepEqual(args.slice(0, 12), [
     "plugin", "pane", "open", "--plugin", "zenbu-labs.terminal-browser",
     "--entrypoint", "companion", "--placement", "split",
@@ -60,6 +65,31 @@ test("pane launch passes complete owner metadata, startup correlation and exact 
   assert.equal(args.includes("TERMINAL_BROWSER_COMPANION_URL=file:///tmp/a.html"), true);
   assert.equal(args.includes(`TERMINAL_BROWSER_STARTUP_ATTEMPT=${startup.attempt}`), true);
   assert.equal(args.at(-1), "--no-focus");
+  assert.equal(args.includes(`${PI_ORIGIN_ENV}=${rawOrigin}`), true);
+  assert.equal(paneOpenArgs(ownerA, {}, startup, { [PI_ORIGIN_ENV]: "invalid" }).some(arg => arg.startsWith(`${PI_ORIGIN_ENV}=`)), false);
+  const bind = parseCompanionSessionArgs(["receiver", "bind", "--receiver-kind", "pi", "--receiver-session", "pi-a", "--receiver-generation", origin.generation, "--suspend-automatic"]);
+  assert.equal(bind.request.suspendAutomatic, true);
+});
+
+test("ordinary launch ownership is exact to origin and project without changing app or explicit defaults", () => {
+  const environment = { [PI_ORIGIN_ENV]: JSON.stringify(origin) };
+  const owner = ordinaryLaunchOwner([], environment, process.cwd());
+  assert.deepEqual(ordinaryLaunchOwner([], environment, process.cwd()), owner);
+  assert.notEqual(ordinaryLaunchOwner([], { [PI_ORIGIN_ENV]: JSON.stringify({ ...origin, generation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }) }, process.cwd()).paneId, owner.paneId);
+  assert.notEqual(ordinaryLaunchOwner([], {}, process.cwd()).paneId, ordinaryLaunchOwner([], {}, process.cwd()).paneId);
+  for (const args of [["--app-mode"], ["--preload=/tmp/app.cjs"], ["--main-script=/tmp/main.cjs"], ["--no-frame"], ["--ssh=user@host"]]) assert.equal(ordinaryLaunchOwner(args, environment, process.cwd()), null);
+  assert.equal(ordinaryLaunchOwner([], { ...environment, TERMINAL_BROWSER_INTEROP_TARGET: "/tmp/host.sock" }, process.cwd()), null);
+  assert.equal(ordinaryLaunchOwner([], { TERMINAL_BROWSER_OWNER_WORKSPACE_ID: "w1", TERMINAL_BROWSER_OWNER_TAB_ID: "w1:t1", TERMINAL_BROWSER_OWNER_PANE_ID: "w1:p1", TERMINAL_BROWSER_OWNER_PROJECT_DIR: "/tmp/a" }, process.cwd()), null);
+  assert.deepEqual(piOriginEnvironment(environment), environment);
+  const current = { ...environment, PI_SESSION_ID: origin.piSessionId };
+  assert.deepEqual(piOriginFromEnvironment(current), origin);
+  assert.deepEqual(piOriginEnvironment(current), environment);
+  assert.deepEqual(ordinaryLaunchOwner([], current, process.cwd()), owner);
+  const inherited = { ...environment, PI_SESSION_ID: "pi-other" };
+  const before = JSON.stringify(inherited);
+  for (const read of [() => piOriginFromEnvironment(inherited), () => piOriginEnvironment(inherited), () => ordinaryLaunchOwner([], inherited, process.cwd())]) assert.throws(read, error => error.code === "PI_ORIGIN_MISMATCH");
+  assert.equal(JSON.stringify(inherited), before);
+  for (const invalid of [{ ...origin, extra: true }, { ...origin, piSessionFile: "relative" }, { ...origin, piSessionId: "" }, { ...origin, generation: "not-a-uuid" }]) assert.equal(parsePiOrigin(invalid), null);
 });
 
 test("pane response accepts only the expected plugin entrypoint", () => {

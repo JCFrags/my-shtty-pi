@@ -1,6 +1,7 @@
 import { parseElementTarget } from "./agent/protocol";
 import type { CompanionService, CompanionRequest } from "./session/companion-service";
 import { parseBlockingRequest, type BlockingRequest, type BlockingStatus } from "./blocking/types";
+import { parseCertificateRequest, type CertificateRequest } from "./agent/certificates";
 import { parseLocator } from "./agent/locator";
 import type { DialogResponse } from "./agent/dialogs";
 import fs from "node:fs";
@@ -19,7 +20,7 @@ import {
   upsertInstance,
   withdrawInstance,
 } from "pixel-store";
-import type { BrowserOwner, InstanceRow, OpenResult, OpenSpec } from "pixel-store";
+import type { BrowserOwner, PiOrigin, InstanceRow, OpenResult, OpenSpec } from "pixel-store";
 
 import type { AgentControlSnapshot } from "./agent/control";
 import {
@@ -73,6 +74,7 @@ export interface ControlHost {
   key: string;
   tty: string | null;
   owner: BrowserOwner | null;
+  origin?: PiOrigin | null;
   startupAttempt: string | null;
   where(): Promise<Where>;
   splitDir: InstanceRow["splitDir"];
@@ -103,6 +105,7 @@ export interface ControlHost {
   agentWaitFor(id: number, request: AgentWaitForRequest, signal?: AbortSignal): Promise<AgentActionOutcome<AgentWaitForResult>>;
   agentContext(action: "open" | "activate" | "close", id: number | undefined, url: string | undefined, epoch: number): Promise<unknown>;
   agentDialog(id: number, request: DialogResponse): Promise<unknown>;
+  certificate(id: number, request: CertificateRequest, epoch?: number, signal?: AbortSignal): Promise<unknown>;
   waitContexts(afterId: number, timeoutMs: number, expectedEpoch: number): Promise<unknown>;
   closeTab(id: number): boolean;
   agentTouch(id: number): boolean;
@@ -153,6 +156,8 @@ interface ControlRequest extends CompanionRequest {
   timeoutMs?: unknown;
   afterId?: unknown;
   dialogId?: unknown;
+  origin?: unknown;
+  fingerprint?: unknown;
   files?: unknown;
   downloadId?: unknown;
   accept?: unknown;
@@ -233,6 +238,8 @@ export class Registry {
       socket: this.socketPath,
       startedAt: this.startedAt,
       owner: this.host.owner,
+      origin: this.host.origin ?? null,
+      runtime: RUNTIME_IDENTITY,
     });
   }
 
@@ -319,7 +326,7 @@ export class Registry {
     signal.throwIfAborted();
     switch (request.cmd) {
       case "hello":
-        return { identity: RUNTIME_IDENTITY, key: this.host.key, owner: this.host.owner ? { workspaceId: this.host.owner.workspaceId, tabId: this.host.owner.tabId, paneId: this.host.owner.paneId } : null, where: await this.host.where() };
+        return { identity: RUNTIME_IDENTITY, key: this.host.key, owner: this.host.owner, origin: this.host.origin ?? null, where: await this.host.where() };
       case "state":
         return this.record();
       case "where":
@@ -345,6 +352,11 @@ export class Registry {
         if (request.url !== undefined && (typeof request.url !== "string" || request.url.length > 8192)) throw new Error("invalid context URL");
         const tab = request.action === "open" ? undefined : requiredTab(request, "agent.context");
         return this.host.agentContext(request.action, tab, request.url, requiredEpoch(request.expectedControlEpoch, "agent.context"));
+      }
+      case "certificate": {
+        const parsed = parseCertificateRequest(request.action, request.dialogId, request.origin, request.fingerprint);
+        const epoch = parsed.action === "status" ? undefined : requiredEpoch(request.expectedControlEpoch, "certificate");
+        return this.host.certificate(requiredTab(request, "certificate"), parsed, epoch, signal);
       }
       case "agent.dialog": {
         const tab = requiredTab(request, "agent.dialog");

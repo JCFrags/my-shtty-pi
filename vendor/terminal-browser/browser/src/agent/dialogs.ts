@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
 import type { BrowserControl } from "./control";
+import type { CertificateFailure, CertificateIdentity } from "./certificates";
 
 export interface BrowserIntent {
   type: "navigate" | "reload" | "history" | "close";
@@ -11,7 +12,8 @@ export interface BrowserDialog {
   id: string;
   contextId: number;
   controlEpoch: number;
-  type: "alert" | "confirm" | "prompt" | "beforeunload";
+  type: "alert" | "confirm" | "prompt" | "beforeunload" | "certificate";
+  certificate?: CertificateFailure;
   message: string;
   defaultValue: string;
   url: string;
@@ -24,16 +26,20 @@ export interface DialogResponse {
   expectedControlEpoch: number;
   accept: boolean;
   text?: string;
+  certificate?: CertificateIdentity;
+  signal?: AbortSignal;
 }
 
 export const PROMPT_SOURCE = `(() => { const stringify = String; const slice = Function.prototype.call.bind(String.prototype.slice);
-const prompt = function terminalBrowserPrompt(message = '', defaultValue = '') {
+const makeDialog = type => function terminalBrowserPrompt(message = '', defaultValue = '') {
   const promptMessage = slice(stringify(message), 0, 4096);
-  const promptDefault = slice(stringify(defaultValue), 0, 4096);
-  let promptResult = null;
+  const promptDefault = type === 'prompt' ? slice(stringify(defaultValue), 0, 4096) : '';
+  let promptResult = type === 'prompt' ? null : type === 'confirm' ? false : undefined;
   debugger;
   return promptResult;
-}; Object.defineProperty(window, "prompt", { configurable: true, get: () => prompt, set: () => {} });
+};
+for (const type of ['alert', 'confirm', 'prompt']) { const dialog = makeDialog(type);
+  Object.defineProperty(window, type, { configurable: true, get: () => dialog, set: () => {} }); }
 })();
 //# sourceURL=terminal-browser-prompt.js`;
 const PROMPT_HASH = createHash("sha256").update(PROMPT_SOURCE).digest("hex");
@@ -123,20 +129,31 @@ export class BrowserDialogs {
   }
 
   async respond(request: DialogResponse): Promise<void> {
+    request.signal?.throwIfAborted();
     this.control?.assertAgent(request.expectedControlEpoch);
-    await this.control?.input.permit(["keyboard", "focus"], () => this.control?.assertAgent(request.expectedControlEpoch));
+    await this.control?.input.permit(["keyboard", "focus"], () => this.control?.assertAgent(request.expectedControlEpoch), request.signal);
+    request.signal?.throwIfAborted();
     if (this.pending?.controlEpoch !== request.expectedControlEpoch) throw new Error("stale control epoch");
-    await this.answer(request.dialogId, request.accept, request.text, () => this.control?.assertAgent(request.expectedControlEpoch));
+    await this.answer(request.dialogId, request.accept, request.text, () => {
+      request.signal?.throwIfAborted();
+      this.control?.assertAgent(request.expectedControlEpoch);
+    }, request.certificate);
   }
 
-  async answer(id: string, accept: boolean, text?: string, guard?: () => void): Promise<void> {
+  async answer(id: string, accept: boolean, text?: string, guard?: () => void, certificate?: CertificateIdentity): Promise<void> {
     const pending = this.value;
     if (!pending || pending.value.id !== id || this.responding) throw new Error("stale or unknown dialog");
     if (typeof accept !== "boolean" || (text !== undefined && (typeof text !== "string" || text.length > 32768))) {
       throw new Error("invalid dialog response");
     }
     if (text !== undefined && pending.value.type !== "prompt") throw new Error("text requires a prompt dialog");
-    if (accept && !pending.value.canAccept) throw new Error("unknown beforeunload intent; dismiss and retry an explicit navigation");
+    if (accept && pending.value.type === "certificate" && (!certificate ||
+        certificate.origin !== pending.value.certificate?.origin || certificate.fingerprint !== pending.value.certificate.fingerprint)) {
+      throw new Error("certificate approval requires the exact origin and SHA-256 fingerprint; use agent certificate approve");
+    }
+    if (accept && !pending.value.canAccept) throw new Error(pending.value.type === "certificate"
+      ? "this certificate decision cannot be accepted; dismiss it"
+      : "unknown beforeunload intent; dismiss and retry an explicit navigation");
     this.responding = true;
     clearTimeout(pending.timer);
     try {
@@ -240,20 +257,9 @@ export class BrowserDialogs {
     if (method === "Runtime.executionContextDestroyed") this.scripts.delete(session+":"+Number(params.executionContextId));
     if (method === "Debugger.scriptParsed") {
       const context = session+":"+Number(params.executionContextId);
-      if (!this.scripts.has(context) && params.url === "terminal-browser-prompt.js" && params.hash === PROMPT_HASH && params.startLine === 0 && params.endLine === 9) {
+      if (!this.scripts.has(context) && params.url === "terminal-browser-prompt.js" && params.hash === PROMPT_HASH && params.startLine === 0 && params.endLine === 11) {
         this.scripts.set(context, session+":"+String(params.scriptId));
       }
-    }
-    if (method === "Page.javascriptDialogOpening" && (params.type === "alert" || params.type === "confirm")) {
-      if (!this.value) this.pendingSession = session;
-      this.open(params.type, String(params.message ?? ""), "", true, async (accept) => {
-        await this.send("Page.handleJavaScriptDialog", { accept }, session);
-      });
-    }
-    if (method === "Page.javascriptDialogClosed" && session === this.pendingSession && this.value?.value.type !== "prompt" && this.value?.value.type !== "beforeunload") {
-      if (this.value) clearTimeout(this.value.timer);
-      this.value = null;
-      this.changed();
     }
     if (method === "Debugger.paused") void this.paused(params, session).catch(async () => {
       await this.send("Debugger.resume", {}, session).catch(() => {});
@@ -268,34 +274,42 @@ export class BrowserDialogs {
     }
     const result = await this.send("Debugger.evaluateOnCallFrame", {
       callFrameId: frame.callFrameId,
-      expression: "({message:promptMessage,defaultValue:promptDefault})",
+      expression: "({type,message:promptMessage,defaultValue:promptDefault})",
       returnByValue: true,
-    }, session) as { result?: { value?: { message: string; defaultValue: string } }; exceptionDetails?: unknown };
-    if (result.exceptionDetails || !result.result?.value) throw new Error("cannot read prompt");
-    const { message, defaultValue } = result.result.value;
+    }, session) as { result?: { value?: { type: "alert" | "confirm" | "prompt"; message: string; defaultValue: string } }; exceptionDetails?: unknown };
+    if (result.exceptionDetails || !result.result?.value) throw new Error("cannot read dialog");
+    const { type, message, defaultValue } = result.result.value;
+    if (type !== "alert" && type !== "confirm" && type !== "prompt") throw new Error("unknown dialog type");
     if (!this.value) this.pendingSession = session;
-    this.open("prompt", message, defaultValue, true, async (accept, text) => {
+    this.open(type, message, defaultValue, true, async (accept, text, guard) => {
       try {
+        guard?.();
+        const response = type === "alert" ? "undefined" : JSON.stringify(type === "confirm" ? accept : accept ? text ?? defaultValue : null);
         const written = await this.send("Debugger.evaluateOnCallFrame", {
           callFrameId: frame.callFrameId,
-          expression: `promptResult = ${JSON.stringify(accept ? text ?? defaultValue : null)}`,
+          expression: `promptResult = ${response}`,
           returnByValue: true,
         }, session) as { exceptionDetails?: unknown };
-        if (written.exceptionDetails) throw new Error("cannot set prompt response");
+        if (written.exceptionDetails) throw new Error("cannot set dialog response");
       } finally {
         await this.send("Debugger.resume", {}, session);
       }
     });
   }
 
-  private open(type: BrowserDialog["type"], message: string, defaultValue: string, canAccept: boolean, reply: Pending["reply"], intent?: BrowserIntent) {
+  openCertificate(certificate: CertificateFailure, reply: Pending["reply"]) {
+    this.open("certificate", "HTTPS certificate verification failed. The server identity is not verified. Approve only after checking this device through a trusted source.", "",
+      !!certificate.origin && !!certificate.fingerprint && certificate.mainFrame, reply, undefined, certificate);
+  }
+
+  private open(type: BrowserDialog["type"], message: string, defaultValue: string, canAccept: boolean, reply: Pending["reply"], intent?: BrowserIntent, certificate?: CertificateFailure) {
     if (this.value || this.disposed) {
       void reply(false).catch(() => {});
       return;
     }
     const id = randomUUID();
     this.value = {
-      value: { id, type, message: message.slice(0, 4096), defaultValue: defaultValue.slice(0, 4096), url: this.contents.getURL().slice(0, 8192), canAccept, ...(intent ? { intent: { ...intent, ...(intent.url ? { url: intent.url.slice(0, 8192) } : {}) } } : {}) },
+      value: { id, type, message: message.slice(0, 4096), defaultValue: defaultValue.slice(0, 4096), url: certificate ? certificate.origin ?? "unknown HTTPS origin" : this.contents.getURL().slice(0, 8192), canAccept, ...(certificate ? { certificate } : {}), ...(intent ? { intent: { ...intent, ...(intent.url ? { url: intent.url.slice(0, 8192) } : {}) } } : {}) },
       reply,
       timer: setTimeout(() => { void this.cancel(); }, this.timeoutMs),
     };

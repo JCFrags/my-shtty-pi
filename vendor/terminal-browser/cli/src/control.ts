@@ -9,7 +9,7 @@ const MAX_CONTROL_BINARY_BYTES = 2 * 1024 * 1024;
 export async function control(socketPath: string, request: Record<string, unknown>, timeoutMs = 10_000, signal?: AbortSignal): Promise<unknown> {
   signal?.throwIfAborted();
   const hello = await requestControl(socketPath, { cmd: "hello" }, Math.min(timeoutMs, 2000), signal) as { key?: string; identity?: { instanceId?: string } };
-  if (!runtimeMatches(hello?.identity) || typeof hello.identity?.instanceId !== "string") throw new Error("companion runtime mismatch; inspect doctor before explicit replacement");
+  if (!runtimeMatches(hello?.identity) || typeof hello.identity?.instanceId !== "string") throw commandError("RUNTIME_MISMATCH", "browser runtime mismatch; the caller may still use a stale loaded adapter or CLI. Inspect doctor, then reload only an idle caller with the accepted adapter before reconnecting. Do not prune records or replay a launch.");
   if (request.expectedRuntimeInstanceId !== undefined && request.expectedRuntimeInstanceId !== hello.identity.instanceId) throw new Error("browser runtime instance changed; reconnect explicitly");
   if (request.expectedBrowserSessionKey !== undefined && request.expectedBrowserSessionKey !== hello.key) throw new Error("browser session key changed; reconnect explicitly");
   return requestControl(socketPath, { ...request, expectedInstance: hello.identity.instanceId }, timeoutMs, signal);

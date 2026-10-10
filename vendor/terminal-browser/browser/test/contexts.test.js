@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { EventEmitter } = require('node:events');
-const { BrowserDialogs } = require('../dist/agent/dialogs.js');
+const { createHash } = require('node:crypto');
+const { BrowserDialogs, PROMPT_SOURCE } = require('../dist/agent/dialogs.js');
 const { BrowserControl } = require('../dist/agent/control.js');
 const { TabManager } = require('../dist/session/tabs.js');
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -16,7 +17,8 @@ function fixture() {
     return {
       contents, contentsId: sequence++,
       trackDownloads() {},
-      dialogs: new BrowserDialogs(contents, async () => ({})),
+      dialogs: new BrowserDialogs(contents, async (method, params) => method === 'Debugger.evaluateOnCallFrame' && !params.expression.startsWith('promptResult')
+        ? { result: { value: { type: 'confirm', message: 'Continue?', defaultValue: '' } } } : {}),
       state: { url: 'https://fixture.test/', title: 'Fixture' },
       releases: 0, popup: null, devtoolsFocused: false,
       selectPopup(popup) { this.popup = popup; },
@@ -78,7 +80,8 @@ test('dialog-interrupted action returns promptly and only exact response bypasse
   const root = manager.create('https://fixture.test/');
   let complete;
   root.agentRuntime.click = async () => {
-    root.controller.contents.debugger.emit('message', {}, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Continue?' });
+    root.controller.contents.debugger.emit('message', {}, 'Debugger.scriptParsed', { url: 'terminal-browser-prompt.js', executionContextId: 3, hash: createHash('sha256').update(PROMPT_SOURCE).digest('hex'), startLine: 0, endLine: 11, scriptId: 'trusted' });
+    root.controller.contents.debugger.emit('message', {}, 'Debugger.paused', { callFrames: [{ callFrameId: 'frame', functionName: 'terminalBrowserPrompt', location: { scriptId: 'trusted', lineNumber: 5, columnNumber: 2 } }] });
     return new Promise(resolve => { complete = resolve; });
   };
   const outcome = await manager.agentClick(root.id, { ref: 'e1', observationId: 'o1', expectedControlEpoch: 1 });
