@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { constants, lstatSync, openSync, readdirSync, realpathSync, closeSync, writeFileSync, fsyncSync, fstatSync, readSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const keys = ["hostWorkerSlots", "workerTimeoutSeconds", "workerNiceLevel", "isolatedWorkerEnabled"];
 const workers = ["catalog-worker-entry.js", "capsule-worker-entry.js", "search-v3-worker-entry.js",
@@ -26,12 +27,13 @@ function ancestors(path, privateLeaf = false) {
     need(st.uid === uid && (st.mode & 0o777) === 0o700, "unsafe-output-directory");
   }
 }
-function bytes(path, maximum) {
+function bytes(path, maximum, privateMode = false) {
   ancestors(dirname(path));
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const st = fstatSync(fd);
     need(st.isFile() && st.uid === uid && st.nlink === 1 && !(st.mode & 0o022) && st.size <= maximum, "unsafe-file");
+    if (privateMode) need((st.mode & 0o777) === 0o600, "unsafe-file");
     const value = Buffer.alloc(st.size + 1);
     let offset = 0;
     while (offset < value.length) {
@@ -62,20 +64,14 @@ function runtimeFiles(root) {
   }
   return ["package.json", ...files].sort();
 }
-try {
+export { ancestors as verifyPreparationDirectory, bytes as readPreparationBytes };
+
+/** Verify reviewed accepted bytes. This function does not install authorization or select code. */
+export function prepareStartupAuthorization({ checkout, commit, configPath }) {
   need(process.platform === "linux" && Number.isInteger(uid) && uid !== 0, "linux-user-required");
-  const args = process.argv.slice(2), options = {};
-  need(args.length === 8, "usage: --checkout <root> --commit <sha> --config <file> --output <new-private-file>");
-  for (let index = 0; index < args.length; index += 2) {
-    const key = args[index];
-    need(["--checkout", "--commit", "--config", "--output"].includes(key) && options[key] === undefined, "invalid-options");
-    options[key] = args[index + 1];
-  }
-  const checkout = options["--checkout"], commit = options["--commit"], configPath = options["--config"], output = options["--output"];
-  ancestors(checkout); ancestors(dirname(configPath)); ancestors(dirname(output), true);
-  need(isAbsolute(configPath) && resolve(configPath) === configPath && isAbsolute(output) && resolve(output) === output, "noncanonical-path");
+  ancestors(checkout); ancestors(dirname(configPath));
+  need(isAbsolute(configPath) && resolve(configPath) === configPath, "noncanonical-path");
   need(/^[a-f0-9]{40}$/.test(commit), "invalid-commit");
-  need(!output.startsWith(checkout + "/"), "output-inside-checkout");
   const git = args => execFileSync("git", ["-C", checkout, ...args], { maxBuffer: 4 * 1024 * 1024, timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
   need(git(["rev-parse", "--show-toplevel"]).toString().trim() === checkout, "checkout-root-mismatch");
   need(git(["rev-parse", "HEAD"]).toString().trim() === commit, "checkout-commit-mismatch");
@@ -107,13 +103,32 @@ try {
     policy: { schemaVersion: 2 }, workerProcessBasenames: workers,
   };
   need(bytes(configPath, 65536).equals(configBytes), "configuration-changed");
-  const fd = openSync(output, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-  try { writeFileSync(fd, JSON.stringify(authorization, null, 2) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
-  const directory = openSync(dirname(output), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  try { fsyncSync(directory); } finally { closeSync(directory); }
-  console.log(JSON.stringify({ prepared: true, installed: false, startupInvoked: false, runtimePins: expected.length,
-    expectedAuthorizationPath: join(dirname(configPath), "chrono-deployments", sha(packagePath), "startup-authorization.json") }));
-} catch (error) {
-  console.error(error?.code === "EEXIST" ? "output-exists" : error instanceof Error && /^(?:[a-z][a-z0-9-]+|usage:.*)$/.test(error.message) ? error.message : "authorization-preparation-refused");
-  process.exitCode = 1;
+  return { authorization, configurationBytes: configBytes, runtimePins: expected.length,
+    expectedAuthorizationPath: join(dirname(configPath), "chrono-deployments", sha(packagePath), "startup-authorization.json") };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    const args = process.argv.slice(2), options = {};
+    need(args.length === 8, "usage: --checkout <root> --commit <sha> --config <file> --output <new-private-file>");
+    for (let index = 0; index < args.length; index += 2) {
+      const key = args[index];
+      need(["--checkout", "--commit", "--config", "--output"].includes(key) && options[key] === undefined, "invalid-options");
+      options[key] = args[index + 1];
+    }
+    const checkout = options["--checkout"], output = options["--output"];
+    ancestors(dirname(output), true);
+    need(isAbsolute(output) && resolve(output) === output, "noncanonical-path");
+    need(!output.startsWith(checkout + "/"), "output-inside-checkout");
+    const prepared = prepareStartupAuthorization({ checkout, commit: options["--commit"], configPath: options["--config"] });
+    const fd = openSync(output, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    try { writeFileSync(fd, JSON.stringify(prepared.authorization, null, 2) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+    const directory = openSync(dirname(output), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { fsyncSync(directory); } finally { closeSync(directory); }
+    console.log(JSON.stringify({ prepared: true, installed: false, startupInvoked: false,
+      runtimePins: prepared.runtimePins, expectedAuthorizationPath: prepared.expectedAuthorizationPath }));
+  } catch (error) {
+    console.error(error?.code === "EEXIST" ? "output-exists" : error instanceof Error && /^(?:[a-z][a-z0-9-]+|usage:.*)$/.test(error.message) ? error.message : "authorization-preparation-refused");
+    process.exitCode = 1;
+  }
 }

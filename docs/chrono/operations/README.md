@@ -14,6 +14,7 @@ related:
 | Use the menu or understand settings | [Menu and configuration](menu-and-configuration.md) |
 | Understand CPU, memory, scheduling, or caches | [Workers and caches](workers-and-caches.md) |
 | Read runtime counters or quality observations | [Telemetry](telemetry.md) |
+| Authorize an accepted Chrono update before selecting it | [Startup authorization](startup-authorization.md) |
 | Select code and move existing state safely | [Activation and migration](activation-and-migration.md) |
 | Investigate a refusal or return to compatible code/state | [Troubleshooting and rollback](troubleshooting-and-rollback.md) |
 

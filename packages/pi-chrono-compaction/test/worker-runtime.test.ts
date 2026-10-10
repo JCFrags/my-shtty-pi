@@ -120,15 +120,25 @@ test("success and deadline stop detached descendants before returning capacity",
   } finally { await f.cleanup(); }
 });
 
-test("controller confirms memory pressure, unexplained SIGKILL remains a crash, reads are pre-admitted", { timeout: 30_000 }, async () => {
+test("controller confirms cgroup OOM and recovers", {
+  timeout: 30_000,
+  skip: process.env.CHRONO_TEST_CGROUP_OOM === "1" ? false : "Set CHRONO_TEST_CGROUP_OOM=1 for deliberate kernel OOM; a desktop memory warning can appear.",
+}, async () => {
   const f = await fixture();
   try {
     const pressure = f.options("pressure", "pressure");
     await assert.rejects(runBoundedWorker({ ...pressure, caps: { ...pressure.caps, memoryBytes: 128 * 1024 * 1024 } }), /worker-resource-limit/);
+    assert.equal((await runBoundedWorker(f.options("after-pressure"))).value.id, "after-pressure");
+  } finally { await f.cleanup(); }
+});
+
+test("unexplained SIGKILL remains a crash and reads are pre-admitted", { timeout: 30_000 }, async () => {
+  const f = await fixture();
+  try {
     await assert.rejects(runBoundedWorker(f.options("kill", "kill")), /worker-crashed/);
     await writeFile(join(f.directory, "read.marker.large"), Buffer.alloc(2 * 1024 * 1024));
     const read = await runBoundedWorker(f.options("read", "read")); assert.equal(read.value.code, "worker-source-limit");
-    assert.equal((await runBoundedWorker(f.options("after-pressure"))).value.id, "after-pressure");
+    assert.equal((await runBoundedWorker(f.options("after-read"))).value.id, "after-read");
   } finally { await f.cleanup(); }
 });
 

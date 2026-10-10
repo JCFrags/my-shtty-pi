@@ -36,7 +36,7 @@ Do not rebuild a package under a running worker or point Pi at a disposable veri
 ## Coordinate code selection
 
 1. Inspect the complete Pi loader, selected roots, compiled entrypoints, active tool/command owners, and any auto-discovery aliases.
-2. Prepare the intended retained source in an isolated loader check, preserving unrelated extensions and Ask User ownership.
+2. Prepare the intended retained source in an isolated loader check, preserving unrelated extensions and Ask User ownership. For a Chrono update, use [authorization before selection](startup-authorization.md). The guarded selector checks accepted runtime bytes and exact-root authorization before it replaces the named registration. Do not edit a live retained package or bypass a mismatch with a settings-only swap.
 3. Replace only the selected legacy Todo, Notes, and Workplan sources. Add independent Memory only with the Chrono ownership handoff.
 4. Set `contextCompiler: "v4"` and `memoryOwner: "context-kit"` when those features are intended. Preserve unrelated settings, including the explicit choices for background value work and projections.
 5. Keep Telemetry before Chrono. Keep Recall and each state provider independently registered.

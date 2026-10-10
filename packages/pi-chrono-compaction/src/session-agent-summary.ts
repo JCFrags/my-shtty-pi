@@ -2,17 +2,22 @@ import type { SessionEntryLike } from "./types.js";
 
 /** Pure state for a summary produced by this session's normal agent turn.
  *
- * Pi 0.85.1 integration:
+ * Public integration requires Pi 1.1 runtime boundary proposals. The caller
+ * checks the loaded host before admission and never retries an aborted ticket.
  * - Keep request_compaction registered with one stable optional-fields schema.
  *   {} returns renderSessionAgentSummaryRequest() as its normal tool result.
- *   Manual/proactive requests use sendMessage(), not sendUserMessage() or a
- *   separate completion. Never replace the system, model, tools or transcript.
+ *   Idle manual requests use sendMessage(). A direct-input recovery can append
+ *   one transient CustomMessage in context, bound to the actual persisted user
+ *   leaf. Pi 1.1 automatic freeze can propose a custom message at turn_end.
+ *   Never replace the system, model, tools or transcript.
  * - Observe the request in the normal context hook, then accept only the next
  *   assistant's sole submission call. Return terminate:true from that tool.
- * - At agent_settled, require idle/no pending input, settle the accepted result,
- *   and defer ctx.compact(). Validate again in session_before_compact.
+ * - At turn_end, settle the persisted accepted result and propose a retain-none
+ *   compaction with truthful current-agent authorship. Verify the actual native
+ *   commit before continuation. Private preview keeps its idle technical cut.
  * - Cancel native compaction while waiting. That hook cannot await another turn.
- *   Overflow without a ready summary must refuse and preserve source history.
+ *   Runtime overflow recovery is a separate labeled deterministic path, not
+ *   fresh summary acceptance or another full ordinary provider request.
  * - Own one in-memory request. Clear it on new input, abort, switch, tree move,
  *   reload, failure or completion. Never restore/retry a ticket from history.
  *
@@ -20,7 +25,7 @@ import type { SessionEntryLike } from "./types.js";
  * terminate:true is effective only if the whole tool batch terminates, hence the
  * sole-call check. Native /compact aborts before its hook. An idle sendMessage
  * starts this agent without before_agent_start, not a rebuilt summarizer.
- * The installed 0.85.1 CompactionResult cannot return retainedTail, despite the
+ * The ordinary CompactionResult cannot return retainedTail, despite the
  * session-format documentation. To avoid retaining duplicate summary arguments,
  * the caller can append and verify a small custom-message cut at idle using
  * sendMessage({ ... }, { triggerTurn:false }). nextTurn only queues a message.
@@ -39,6 +44,8 @@ export const SESSION_AGENT_SUMMARY_HEADROOM = Object.freeze({
 export const SESSION_AGENT_SUMMARY_LIMITS = Object.freeze({
   summaryChars: 32_768,
   summaryBytes: 48 * 1024,
+  continuationChars: 8192,
+  continuationBytes: 12 * 1024,
   relevanceHints: 8,
   hintChars: 256,
   hintBytes: 1024,
@@ -74,6 +81,9 @@ export interface SessionAgentSummaryRequest {
   readonly expiresAt: number;
   /** Retained configuration value, not an agent-facing size goal or output cap. */
   readonly targetTokens: number;
+  /** Adaptive accounting allowances. These do not enforce provider output caps. */
+  readonly handoffTokens?: number;
+  readonly continuationTokens?: number;
   readonly customInstructions?: string;
   /** Present only when {} delivers the request in its own normal tool result. */
   readonly requestToolCallId?: string;
@@ -88,7 +98,11 @@ export interface SessionAgentSummaryConsumedRequest {
 
 export interface SessionAgentSummarySubmission {
   readonly requestId: string;
+  /** Compatibility alias for the task handoff, never the immediate continuation. */
   readonly summary: string;
+  readonly handoff: string;
+  /** Absent only while reading a legacy summary. Fresh acceptance requires it. */
+  readonly continuation?: string;
   /** Fallible search/relevance terms, never instructions or permission. */
   readonly relevanceHints: readonly string[];
 }
@@ -155,6 +169,8 @@ export function createSessionAgentSummaryRequest(input: {
   readonly reason: SessionAgentSummaryRequest["reason"];
   readonly now: number;
   readonly targetTokens?: number;
+  readonly handoffTokens?: number;
+  readonly continuationTokens?: number;
   readonly customInstructions?: string;
   readonly requestToolCallId?: string;
 }): SessionAgentSummaryRequest {
@@ -162,6 +178,8 @@ export function createSessionAgentSummaryRequest(input: {
   if (!["manual", "threshold", "tool"].includes(input.reason)) fail("reason-unsupported");
   const targetTokens = input.targetTokens ?? 3000;
   if (!Number.isSafeInteger(targetTokens) || targetTokens < 256 || targetTokens > 8000) fail("target-invalid");
+  for (const value of [input.handoffTokens, input.continuationTokens]) if (value !== undefined
+    && (!Number.isSafeInteger(value) || value < 1 || value > 8192)) fail("layer-budget-invalid");
   const customInstructions = input.customInstructions === undefined ? undefined
     : text(input.customInstructions, SESSION_AGENT_SUMMARY_LIMITS.instructionsChars, SESSION_AGENT_SUMMARY_LIMITS.instructionsBytes, "instructions").trim();
   const requestToolCallId = input.requestToolCallId === undefined ? undefined : text(input.requestToolCallId, 512, 2048, "tool-call-id");
@@ -169,6 +187,8 @@ export function createSessionAgentSummaryRequest(input: {
   if (!Number.isSafeInteger(expiresAt)) fail("clock-invalid");
   return Object.freeze({ requestId: requestId(input.requestId), scope: freezeScope(input.scope), reason: input.reason,
     createdAt: input.now, expiresAt, targetTokens,
+    ...(input.handoffTokens === undefined ? {} : { handoffTokens: input.handoffTokens }),
+    ...(input.continuationTokens === undefined ? {} : { continuationTokens: input.continuationTokens }),
     ...(customInstructions === undefined ? {} : { customInstructions }),
     ...(requestToolCallId === undefined ? {} : { requestToolCallId }) });
 }
@@ -177,21 +197,23 @@ export function createSessionAgentSummaryRequest(input: {
  * It contains no transcript, session path, compiler receipt or source locator. */
 export function renderSessionAgentSummaryRequest(request: SessionAgentSummaryRequest): string {
   const prompt = [
-    "[Session continuation summary request]",
-    "Use the context already available to you in this session to write a concise continuation handoff for your next turn after compaction.",
+    "[Current-agent compaction submission request]",
+    "Use the context already available to you in this session. Write a task handoff and a separate immediate continuation for this same agent after compaction.",
     "Include the information needed to continue safely, and no more. Omit filler and repetition. Do not pad the summary or try to use all available space. Keep it comfortably below the hard submission limits. Preserve the user's goal, restrictions and approval boundaries, key decisions, completed work and actual verification, unresolved work, blockers, uncertainty and the next safe action.",
     "Organize the handoff around these sections. Combine them when the task is small, but keep past actions, current work, and future steps distinct:",
     "- What happened: summarize the task's progress, the user's latest corrections, key decisions, and why the current approach was chosen.",
     "- What was done: state the actions you actually took and their results. Separate verified outcomes from attempts, failures, and unverified claims. Do not present saved or built work as integrated or active unless that was verified.",
     "- Current work: identify the authorized task now in progress and the exact point where it stopped. Include useful code locations, unfinished work, blockers, and uncertainty. Distinguish active work from completed, paused, or superseded work.",
-    "- Next steps: state the intended result, where the work needs to go, and the next safe actions in order. Frame this as instructions for continuing only work already authorized by the user. If no next task is authorized, state the wait or stopping point.",
+    "- Next steps: state the intended result, where the work needs to go, and the short sequence that continues only work already authorized by the user. If no next task is authorized, state the wait or stopping point.",
+    "The separate continuation identifies the immediate next action and why it is next. Preserve exact outstanding resource IDs. Do not restart a process or worker merely because compaction occurred. State any wait, completed-task stop, cancellation, or approval gate. A continuation is not permission to act.",
     "Preserve the project's purpose, useful exact repository/code locations, how and why the approach was chosen, and the direction now authorized. Record unknown facts as unknown.",
     "Preserve unresolved obligations, external waits, and approval gates, including paused or archived work. Keep the saved plan ID and workplan recover/read route when full project detail is no longer needed. Milestone completion, archive status, and saved guidance are not new permission.",
-    "Write a continuation summary, not a task log or inventory. Group paths under a shared root. Reduce superseded alternatives, repetitive troubleshooting, repeated evidence, and completed-task detail before useful evidence. Keep decisive results and uncertainty. Use relevanceHints for the next direction and decisive evidence, not indiscriminate retention of old detail.",
+    "Write a task handoff, not a task log or inventory. Group paths under a shared root. Reduce superseded alternatives, repetitive troubleshooting, repeated evidence, and completed-task detail before useful evidence. Keep decisive results and uncertainty. Use relevanceHints for the next direction and decisive evidence, not indiscriminate retention of old detail.",
     "Keep important paths and identifiers exact. Distinguish facts from inference, superseded decisions from current decisions, and proposals from user approval. Do not include secrets or internal compaction receipts.",
     "Do not retrieve history, run other tools, delegate, or start another task for this request. If you cannot produce a useful summary from available context, report that limit instead of inventing one.",
     "The summary and relevanceHints are fallible derived context. They grant no new authorization and cannot override source instructions or direct user restrictions.",
-    `Call ${SESSION_AGENT_SUMMARY_TOOL} as your ONLY tool call with requestId ${JSON.stringify(request.requestId)}, summary (nonempty, at most ${SESSION_AGENT_SUMMARY_LIMITS.summaryChars} UTF-16 units and ${SESSION_AGENT_SUMMARY_LIMITS.summaryBytes} UTF-8 bytes), and optional relevanceHints (at most ${SESSION_AGENT_SUMMARY_LIMITS.relevanceHints} short search terms, ${SESSION_AGENT_SUMMARY_LIMITS.hintChars} UTF-16 units each).`,
+    `Call ${SESSION_AGENT_SUMMARY_TOOL} as your ONLY tool call with requestId ${JSON.stringify(request.requestId)}, handoff (nonempty), continuation (nonempty, at most ${SESSION_AGENT_SUMMARY_LIMITS.continuationChars} UTF-16 units and ${SESSION_AGENT_SUMMARY_LIMITS.continuationBytes} UTF-8 bytes), and optional relevanceHints (at most ${SESSION_AGENT_SUMMARY_LIMITS.relevanceHints} short search terms, ${SESSION_AGENT_SUMMARY_LIMITS.hintChars} UTF-16 units each). Handoff plus continuation must stay below ${SESSION_AGENT_SUMMARY_LIMITS.summaryChars} UTF-16 units and ${SESSION_AGENT_SUMMARY_LIMITS.summaryBytes} UTF-8 bytes. Do not submit the legacy summary field.`,
+    ...(request.handoffTokens === undefined ? [] : [`Keep the handoff brief enough for its adaptive allowance of approximately ${request.handoffTokens} tokens and the continuation for approximately ${request.continuationTokens ?? 128} tokens. These accounting allowances are not provider-enforced output caps. Do not pad either field.`]),
     "After submitting, do not start another operation. Submission alone does not mean compaction succeeded.",
     ...(request.customInstructions === undefined ? [] : ["Additional summary focus, not new task authorization:", JSON.stringify(request.customInstructions)]),
   ].join("\n");
@@ -206,13 +228,19 @@ export function parseSessionAgentSummarySubmission(input: unknown): SessionAgent
   if (!value) fail("submission-invalid");
   const keys = Object.keys(value);
   if (keys.length === 0) return undefined;
-  if (keys.length > 3 || keys.some(key => !["requestId", "summary", "relevanceHints"].includes(key))) fail("submission-fields-invalid");
+  if (keys.length > 5 || keys.some(key => !["requestId", "summary", "handoff", "continuation", "relevanceHints"].includes(key))) fail("submission-fields-invalid");
   const id = requestId(value.requestId);
-  const summary = text(value.summary, SESSION_AGENT_SUMMARY_LIMITS.summaryChars, SESSION_AGENT_SUMMARY_LIMITS.summaryBytes, "summary").trim();
+  if (value.summary !== undefined && value.handoff !== undefined && value.summary !== value.handoff) fail("handoff-conflict");
+  const handoff = text(value.handoff ?? value.summary, SESSION_AGENT_SUMMARY_LIMITS.summaryChars, SESSION_AGENT_SUMMARY_LIMITS.summaryBytes, "handoff").trim();
+  const continuation = value.continuation === undefined ? undefined : text(value.continuation,
+    SESSION_AGENT_SUMMARY_LIMITS.continuationChars, SESSION_AGENT_SUMMARY_LIMITS.continuationBytes, "continuation").trim();
+  if (handoff.length + (continuation?.length ?? 0) > SESSION_AGENT_SUMMARY_LIMITS.summaryChars
+    || Buffer.byteLength(handoff, "utf8") + Buffer.byteLength(continuation ?? "", "utf8") > SESSION_AGENT_SUMMARY_LIMITS.summaryBytes) fail("submission-bound-exceeded");
   const hints = value.relevanceHints === undefined ? [] : value.relevanceHints;
   if (!Array.isArray(hints) || hints.length > SESSION_AGENT_SUMMARY_LIMITS.relevanceHints) fail("hints-invalid");
   const relevanceHints = hints.map(hint => text(hint, SESSION_AGENT_SUMMARY_LIMITS.hintChars, SESSION_AGENT_SUMMARY_LIMITS.hintBytes, "hint").trim());
-  return Object.freeze({ requestId: id, summary, relevanceHints: Object.freeze(relevanceHints) });
+  return Object.freeze({ requestId: id, summary: handoff, handoff,
+    ...(continuation === undefined ? {} : { continuation }), relevanceHints: Object.freeze(relevanceHints) });
 }
 
 function exactText(content: unknown, expected: string): boolean {
@@ -247,9 +275,35 @@ function suffix(view: SessionAgentSummaryObservation, anchorId: string): readonl
   return entries.reverse();
 }
 
-/** A code-owned abort intent is not a summary ticket. Admit its replacement
- * only after the run settles, on the same native ancestry. No ordinary tool,
- * user message, branch rewind or partial assistant output may intervene. */
+/** Bind one deliberate direct input to its actual persisted user entry. The
+ * input hook runs before persistence, so its old leaf cannot be a summary source.
+ * Prompt/tool deltas and invisible metadata may surround the new user entry.
+ * Other messages or context edits refuse rather than inventing user authority. */
+export function bindSessionAgentSummaryInput(intent: Pick<SessionAgentSummaryRequest, "scope" | "createdAt" | "expiresAt">,
+  view: SessionAgentSummaryObservation, messages: readonly unknown[]): SessionAgentSummaryScope {
+  validateRequest(intent, view.scope, view.now);
+  let user: SessionEntryLike | undefined;
+  for (const entry of suffix(view, intent.scope.leafId)) {
+    if (metadata(entry)) continue;
+    const message = entry.type === "message" ? record(entry.message) : undefined;
+    if (message?.role === "system") continue;
+    if (message?.role === "user" && !user) { user = entry; continue; }
+    fail("direct-input-boundary-invalid");
+  }
+  const message = record(user?.message);
+  if (!user?.id || !message || !Number.isSafeInteger(message.timestamp)) fail("direct-input-unavailable");
+  const matches = messages.slice(-SESSION_AGENT_SUMMARY_LIMITS.contextMessages).filter(value => {
+    const candidate = record(value);
+    return candidate?.role === "user" && candidate.timestamp === message.timestamp
+      && JSON.stringify(candidate.content) === JSON.stringify(message.content);
+  });
+  if (matches.length !== 1) fail("direct-input-projection-changed");
+  return freezeScope({ ...view.scope, leafId: user.id });
+}
+
+/** Validate the original ancestry of a deterministic recovery intent after a
+ * stopped attempt. This never admits an automatic replacement provider call.
+ * No ordinary tool, user message, branch rewind or partial output may intervene. */
 export function validateDeferredSessionSummaryIntent(intent: Pick<SessionAgentSummaryRequest, "scope" | "createdAt" | "expiresAt">,
   view: SessionAgentSummaryObservation): void {
   validateRequest(intent, view.scope, view.now);
@@ -295,12 +349,42 @@ export function consumeSessionAgentSummaryRequest(request: SessionAgentSummaryRe
   return Object.freeze({ request, consumedBoundaryLeafId: view.scope.leafId, consumedAt: view.now });
 }
 
+/** Identify only the observed failed assistant for this already consumed summary
+ * request. Exact suffix identity is not permission to hide new original work. */
+export function identifyFailedSessionAgentSummary(consumed: SessionAgentSummaryConsumedRequest,
+  view: SessionAgentSummaryObservation, assistantEntryId: string): string {
+  validateRequest(consumed.request, view.scope, view.now);
+  let failed: SessionEntryLike | undefined;
+  for (const entry of suffix(view, consumed.consumedBoundaryLeafId)) {
+    if (metadata(entry)) continue;
+    const message = entry.type === "message" ? record(entry.message) : undefined;
+    if (message?.role === "system" && !failed) continue;
+    if (failed || entry.id !== assistantEntryId || message?.role !== "assistant") fail("failed-summary-boundary-invalid");
+    failed = entry;
+  }
+  const message = record(failed?.message), model = consumed.request.scope.model;
+  if (!failed?.id || !message || !["aborted", "error", "length"].includes(String(message.stopReason))
+    || message.provider !== model.provider || message.model !== model.id || message.api !== model.api
+    || !Array.isArray(message.content) || message.content.length > SESSION_AGENT_SUMMARY_LIMITS.assistantBlocks) fail("failed-summary-unavailable");
+  let calls = 0;
+  for (const value of message.content) {
+    const block = record(value);
+    if (block?.type === "toolCall" && (++calls > 1 || block.name !== SESSION_AGENT_SUMMARY_TOOL
+      || typeof block.id !== "string" || !block.id || record(block.arguments)?.requestId !== consumed.request.requestId)) fail("failed-summary-has-original-tool-call");
+  }
+  return failed.id;
+}
+
 export function acceptSessionAgentSummary(consumed: SessionAgentSummaryConsumedRequest, input: SessionAgentSummarySubmission,
   view: SessionAgentSummaryObservation & { readonly toolCallId: string }): SessionAgentSummaryAccepted {
   const { request } = consumed;
   validateRequest(request, view.scope, view.now);
   const submission = parseSessionAgentSummarySubmission(input);
   if (!submission || submission.requestId !== request.requestId) fail("request-mismatch");
+  // Legacy parsing is read compatibility, not current-agent continuation authorship.
+  if (!submission.continuation) fail("fresh-continuation-required");
+  if (request.handoffTokens !== undefined && Math.ceil(submission.handoff.length / 4) > request.handoffTokens) fail("handoff-budget-exceeded");
+  if (request.continuationTokens !== undefined && Math.ceil(submission.continuation.length / 4) > request.continuationTokens) fail("continuation-budget-exceeded");
   let assistant: SessionEntryLike | undefined;
   for (const entry of suffix(view, consumed.consumedBoundaryLeafId)) {
     if (metadata(entry)) continue;
@@ -319,8 +403,8 @@ export function acceptSessionAgentSummary(consumed: SessionAgentSummaryConsumedR
     submittedAt: view.now, authority: "derived" });
 }
 
-/** Call after the result is persisted, normally at agent_settled. The caller must
- * also check ctx.isIdle() and pending input, then consume the ready ticket once. */
+/** Call after the result is persisted at a public actionable boundary or safe
+ * idle. The caller checks cancellation and pending input, then consumes once. */
 export function settleSessionAgentSummary(accepted: SessionAgentSummaryAccepted, view: SessionAgentSummaryObservation): SessionAgentSummaryReady {
   validateRequest(accepted.request, view.scope, view.now);
   let resultLeafId: string | undefined;

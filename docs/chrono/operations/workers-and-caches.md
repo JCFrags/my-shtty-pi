@@ -38,6 +38,16 @@ Independent Memory uses Node's built-in SQLite with its own page/cache limits. I
 
 A status read never raises a limit, installs a worker gate, resumes an owner, or removes another session's reservation. The replacement-session startup correction can recheck a specific earlier unavailable gate during normal scheduling. It does not initialize or repair admission.
 
+## Deliberate OOM verification
+
+Normal local package tests and root verification skip only `controller confirms cgroup OOM and recovers`. Unexplained SIGKILL, read admission, heap limits, deadlines, cancellation, and descendant cleanup remain enabled. The skipped case reports its reason. Generic `CI=true` does not enable it.
+
+Set `CHRONO_TEST_CGROUP_OOM=1` only when deliberate kernel out-of-memory (OOM) injection is intended. The test uses a synthetic namespace with the unchanged 128 MiB cgroup cap and zero swap. It requires `worker-resource-limit` and successful subsequent work. The [GNOME 50.1 user-unit notification handler](https://gitlab.gnome.org/GNOME/gnome-settings-daemon/-/raw/50.1/plugins/housekeeping/gsd-systemd-notify.c) can show an "Application Stopped" memory warning for this deliberate service kill. Prefer a disposable headless Linux runner, not an active desktop.
+
+The [required CI workflow](../../../.github/workflows/verify.yml) explicitly enables the case in full verification and selected Chrono product verification. Those routes prepare the executing UID's real systemd user manager, check its bus and cgroup v2 memory/swap controls, and fail if prerequisites are missing. The runtime still verifies effective per-unit controls. A private `dbus-run-session` does not replace that manager. Require the named OOM case to execute, not merely a file-level test pass or skip. Local default checks do not prove real OOM coverage.
+
+The root verifier forwards only the exact value `1` through its isolated test environment. This test policy does not change production limits, cleanup, error classification, unit names, desktop settings, or loaded Pi packages.
+
 ## Optional model work
 
 The retained value worker is retrospective compatibility advice, not required indexing. It starts only after compatible segmented candidate preprocessing. With the normal memory engine enabled, that preprocessing and value worker remain paused.

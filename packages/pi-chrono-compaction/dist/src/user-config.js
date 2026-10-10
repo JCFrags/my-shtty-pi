@@ -1,4 +1,5 @@
 import { WORKER_LIMITS } from "./worker-runtime-limits.js";
+import { validateHistoryHelperConfig } from "./history-helper-config.js";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -24,7 +25,7 @@ export const VALUE_WORKER_PRESETS = {
     },
 };
 const CONFIG_KEYS = [
-    "memoryOwner", "contextCompiler",
+    "memoryOwner", "contextCompiler", "historyHelpers",
     "targetContextTokens",
     "replayTargetTokens",
     "triggerThresholdTokens",
@@ -54,6 +55,19 @@ const CONFIG_KEYS = [
     "summaryRebaseInterval",
     "hotSourceTokens",
     "warmSourceTokens",
+];
+const CONFIG_KEY_SET = new Set(CONFIG_KEYS);
+/** Retained for older paths and rollback. Interval-v1 owns these decisions internally. */
+export const INTERVAL_V1_LEGACY_TUNING_KEYS = [
+    "targetContextTokens", "replayTargetTokens", "triggerThresholdTokens", "triggerMinimumGrowthTokens",
+    "rawTail", "dynamicRawTailMinTokens", "dynamicRawTailMaxTokens", "sessionSummaryTargetTokens",
+    "hybridSummaryEnabled", "hybridSummaryTargetTokens", "historyEditorEnabled",
+    "valueWorkerPreset", "valueWorkerMode", "valueWorkerModel", "valueWorkerThinking",
+    "valueWorkerMaxInputTokensPerJob", "valueWorkerMaxOutputTokensPerJob", "valueWorkerMaxItemsPerJob",
+    "valueWorkerTimeoutSeconds", "valueWorkerRetries", "valueWorkerHostSlots", "valueWorkerMaxCallsPerSession",
+    "valueWorkerMaxInputTokensPerSession", "valueWorkerMaxOutputTokensPerSession", "valueWorkerMaxEstimatedCostUsd",
+    "valueWorkerCircuitFailureLimit", "valueWorkerCircuitCooldownSeconds", "incrementalPrecomputeEnabled",
+    "isolatedWorkerEnabled", "toolResultProjectionMode", "summaryRebaseInterval", "hotSourceTokens", "warmSourceTokens",
 ];
 const COMMAND_TO_KEY = {
     "memory-owner": "memoryOwner",
@@ -136,11 +150,14 @@ export function validateUserConfig(value) {
     if (value === null || typeof value !== "object" || Array.isArray(value))
         throw new Error("The configuration must be a JSON object.");
     const input = value;
-    const config = {};
+    // Copy only unrelated own keys. Object.fromEntries keeps __proto__ as data, not a setter.
+    const config = Object.fromEntries(Object.entries(input).filter(([key]) => !CONFIG_KEY_SET.has(key)));
     if (input.memoryOwner !== undefined)
         config.memoryOwner = validateMemoryOwner(input.memoryOwner);
     if (input.contextCompiler !== undefined)
         config.contextCompiler = validateContextCompiler(input.contextCompiler);
+    if (input.historyHelpers !== undefined)
+        config.historyHelpers = validateHistoryHelperConfig(input.historyHelpers);
     if (input.targetContextTokens !== undefined)
         config.targetContextTokens = boundedInteger(input.targetContextTokens, "targetContextTokens", 8_000, 250_000);
     if (input.replayTargetTokens !== undefined)
@@ -258,6 +275,34 @@ export function validateUserConfig(value) {
     }
     return checked;
 }
+/** Pure, versioned migration report. It does not write settings or enable helper roles. */
+export function migrateIntervalCompactionConfig(value) {
+    const config = validateUserConfig(value);
+    return {
+        config,
+        report: {
+            schemaVersion: 1,
+            policy: "interval-v1",
+            legacyTuning: INTERVAL_V1_LEGACY_TUNING_KEYS.filter(key => Object.hasOwn(config, key)).map(key => ({
+                key, disposition: "retained-for-rollback", governsIntervalV1: false,
+            })),
+            preservedUnknownRootKeys: Object.keys(config).filter(key => !CONFIG_KEY_SET.has(key)).sort(),
+        },
+    };
+}
+/** Reset only interval-v1 selections. Preserve ownership, storage, legacy, and unrelated settings. */
+export function resetIntervalCompactionConfig(config) {
+    const next = { ...config };
+    delete next.historyHelpers;
+    return validateUserConfig(next);
+}
+/** Legacy explicit reset-all command. It must not delete another owner's root settings. */
+export function resetUserConfigOverrides(config) {
+    const next = { ...config };
+    for (const key of CONFIG_KEYS)
+        delete next[key];
+    return validateUserConfig(next);
+}
 export function loadUserConfig(path = defaultUserConfigPath()) {
     try {
         return { config: validateUserConfig(JSON.parse(readFileSync(path, "utf8"))) };
@@ -305,8 +350,10 @@ export function applyConfigCommand(config, args) {
         const setting = words[1]?.toLowerCase();
         if (!setting)
             throw new Error("reset requires all or a setting name.");
-        if (setting === "all")
-            return { config: {}, changed: Object.keys(config).length > 0, message: "Reset all persistent overrides." };
+        if (setting === "all") {
+            const next = resetUserConfigOverrides(config);
+            return { config: next, changed: JSON.stringify(next) !== JSON.stringify(config), message: "Reset all persistent Chrono overrides. Unrelated root settings are preserved." };
+        }
         if (setting === "raw-tail-bounds") {
             const next = { ...config };
             delete next.dynamicRawTailMinTokens;

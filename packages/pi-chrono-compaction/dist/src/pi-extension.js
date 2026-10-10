@@ -1,5 +1,7 @@
-import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
+import { sessionEntryToContextMessages, VERSION as PI_HOST_VERSION } from "@earendil-works/pi-coding-agent";
+import { collectContext } from "@context-kit/protocol/collect";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { isContextOverflow, isRecoverableLength } from "@earendil-works/pi-ai/utils/overflow";
 import { showChronoReport } from "./chrono-ui.js";
 import { Type } from "typebox";
 import { env } from "node:process";
@@ -10,10 +12,9 @@ import { HistorySearchAdapter, isSearchReference, encodeCompositionRecovery } fr
 import { logicalBootstrapBytes, persistNewShardBootstrap } from "./logical-session-persistence.js";
 import { captureLogicalStateCheckpointsAsync } from "./logical-session-checkpoints.js";
 import { previewStoredCompaction, composeStoredCompactionForNormalReturn, captureContextCompilation } from "./composition-preview.js";
-import { compileContext, contextReceiptLocator, CONTEXT_COMPILER_LIMITS } from "./context-compiler.js";
+import { compileContext, freezeContextInput, contextReceiptLocator, CONTEXT_COMPILER_LIMITS } from "./context-compiler.js";
 import { composeBoundedMemory } from "./bounded-memory.js";
-import { captureChronologicalReplay } from "./chronological-replay.js";
-import { SESSION_AGENT_SUMMARY_CUSTOM_TYPE, SESSION_AGENT_SUMMARY_HEADROOM, SESSION_AGENT_SUMMARY_LIMITS, SESSION_AGENT_SUMMARY_TOOL, createSessionAgentSummaryRequest, renderSessionAgentSummaryRequest, parseSessionAgentSummarySubmission, consumeSessionAgentSummaryRequest, acceptSessionAgentSummary, settleSessionAgentSummary, validateSessionAgentSummary, validateDeferredSessionSummaryIntent, } from "./session-agent-summary.js";
+import { SESSION_AGENT_SUMMARY_CUSTOM_TYPE, SESSION_AGENT_SUMMARY_LIMITS, SESSION_AGENT_SUMMARY_TOOL, createSessionAgentSummaryRequest, renderSessionAgentSummaryRequest, parseSessionAgentSummarySubmission, consumeSessionAgentSummaryRequest, acceptSessionAgentSummary, settleSessionAgentSummary, validateSessionAgentSummary, validateDeferredSessionSummaryIntent, bindSessionAgentSummaryInput, identifyFailedSessionAgentSummary, } from "./session-agent-summary.js";
 import { SessionCanary } from "./session-canary.js";
 import { sessionMigrationStatus } from "./session-migration.js";
 import { readSessionRollout, writeSessionRollout } from "./session-rollout.js";
@@ -34,6 +35,14 @@ import { getSourceEntriesBefore } from "./jsonl.js";
 import { loadSourceLedger, sourceLedgerIsBusy, sourceLedgerMatchesSource, sourceLedgerPath } from "./source-ledger.js";
 import { createPiRegularSummary, prepareAdaptiveChronoTail, previousRegularPiSummary, regularSummaryMessagesForCut, renderHybridCompaction, } from "./pi-hybrid.js";
 import { DEFAULT_VALUE_WORKER_SETTINGS } from "./value-worker-types.js";
+import { selectHistoryHelperRole, clearHistoryHelperRole } from "./history-helper-config.js";
+import { createIntervalHelperRuntime } from "./interval-helper-runtime.js";
+import { INTERVAL_CONTINUATION_RECORD, continuationRecord, hasContinuationDispatch, projectCommittedIntervalRestart, correlatedBoundaryCompaction, intervalRestartContentMessages, committedIntervalRestartReceipt, } from "./interval-runtime.js";
+import { buildDeterministicRecoveryHandoff, IntervalRecoveryRefusal } from "./interval-recovery.js";
+import { planIntervalContext } from "./interval-compiler.js";
+import { deriveIntervalBudget, classifyPressure, intervalResponseReserveTokens, INTERVAL_POLICY } from "./interval-policy.js";
+import { captureIntervalSource, revalidateIntervalSource } from "./interval-source.js";
+import { repinLogicalIntervalSource } from "./interval-logical-source.js";
 import { runValueWorker, loadCompatibleAdvice, valueWorkerConfigurationHash } from "./value-worker.js";
 import { readValueAdviceManifest, resetAdviceCircuit, valueAdviceStorePath } from "./value-advice-store.js";
 import { historyGetFromLedger, historyRangeFromLedger, } from "./retrieval.js";
@@ -58,7 +67,7 @@ import { resolveLogicalActivation, resolveAdoptedLogicalActivation } from "./log
 import { buildManualContinuationCandidate, buildBoundedContinuationCandidate, consumeProvisionalLogicalReplacement, markProvisionalLogicalReplacement, recordedLogicalBinding, recordedLogicalAdoptionBinding, logicalAdoptionBinding, replacementContainsOnlyContinuation, replacementContainsOnlyBootstrap, } from "./logical-session-integration.js";
 import { logicalSessionStatus } from "./logical-session-status.js";
 import { CHRONO_VERSION, captureRuntimeIdentity } from "./runtime-identity.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling, captureContextBudget, chargeRawTail, estimateCurrentRequestTokens, estimateProviderRequestTokens } from "./context-budget.js";
+import { MAX_CONTEXT_TOKENS, DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_RESERVE_TOKENS, resolveContextCeiling, captureContextBudget, chargeRawTail, estimateCurrentRequestBudget, estimateCurrentRequestTokens, CONTEXT_ESTIMATOR } from "./context-budget.js";
 const EXTENSION_VERSION = CHRONO_VERSION;
 const LOADED_RUNTIME_IDENTITY = captureRuntimeIdentity(import.meta.url);
 /** Default only. Each operation uses the configured, model-validated ceiling. */
@@ -69,6 +78,25 @@ const CONTEXT_RESUME_CUSTOM_TYPE = "chrono-compact-resume";
 const CONTEXT_WARNING_PERCENT = 75;
 const CONTEXT_URGENT_PERCENT = 85;
 const CONTEXT_CIRCUIT_BREAKER_PERCENT = 90;
+/** Use the loaded public package identity, not the development SDK pin. Unknown
+ * hosts refuse. Registering a handler does not prove proposal support. */
+const intervalHostVersion = /^(\d+)\.(\d+)\.(\d+)$/.exec(PI_HOST_VERSION);
+const intervalHostVersionSupported = !!intervalHostVersion
+    && (Number(intervalHostVersion[1]) > 1 || Number(intervalHostVersion[1]) === 1 && Number(intervalHostVersion[2]) >= 1);
+function requireIntervalHost(ctx) {
+    const manager = ctx.sessionManager;
+    if (!intervalHostVersionSupported || typeof manager.buildSessionProjection !== "function") {
+        throw new Error("context-v4-interval-host-api-unavailable");
+    }
+}
+function requireIntervalBoundary(ctx, event) {
+    requireIntervalHost(ctx);
+    if (!Array.isArray(event.entries) || typeof event.continue !== "boolean"
+        || !["completed", "aborted", "error"].includes(event.outcome)
+        || !Array.isArray(event.context?.pendingMessages) || typeof event.context?.canContinue !== "boolean") {
+        throw new Error("context-v4-interval-host-boundary-unavailable");
+    }
+}
 function configuredValue(name, override) {
     return env[name] === undefined ? override : env[name];
 }
@@ -224,6 +252,39 @@ export function effectiveContextCeiling(ctx, settings, responseReserveTokens = D
     const systemTokens = estimateTokensFromText(ctx.getSystemPrompt?.() ?? "");
     return resolveContextCeiling(settings.targetContextTokens, window ?? 0, systemTokens + settings.contextReserveTokens, responseReserveTokens);
 }
+/** Cap the field already selected by Pi. Codex and other APIs are unchanged. */
+function capIntervalProviderPayload(model, payload) {
+    if (model?.api !== "openai-completions")
+        return payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new Error("context-v4-interval-output-cap-unavailable");
+    }
+    const body = payload;
+    const fields = ["max_tokens", "max_completion_tokens"].filter(field => body[field] !== undefined);
+    const field = fields[0], tokens = field ? body[field] : undefined;
+    if (fields.length !== 1 || typeof tokens !== "number" || !Number.isSafeInteger(tokens) || tokens < 1) {
+        throw new Error("context-v4-interval-output-cap-unavailable");
+    }
+    return { ...body, [field]: Math.min(tokens, model.maxTokens, INTERVAL_POLICY.completionOutputCapTokens) };
+}
+/** Capture adaptive product policy. Legacy user targets do not constrain V4. */
+export function captureIntervalRuntimeBudget(pi, ctx) {
+    const model = ctx.model;
+    if (!model)
+        throw new Error("context-v4-interval-model-unavailable");
+    const policy = deriveIntervalBudget({ model });
+    if (!policy.available)
+        throw new Error(`context-v4-${policy.reasons[0] ?? "interval-policy-unavailable"}`);
+    const request = { model: { provider: model.provider, id: model.id, api: model.api, contextWindow: model.contextWindow,
+            maxTokens: model.maxTokens, thinkingLevel: ctx.thinkingLevel ?? "off" }, responseReserveTokens: intervalResponseReserveTokens(model),
+        systemPrompt: ctx.getSystemPrompt(), activeTools: pi.getActiveTools(), allTools: pi.getAllTools(), framingTokens: 512 };
+    const initial = captureContextBudget({ ...request, configuredTokens: MAX_CONTEXT_TOKENS });
+    const layers = deriveIntervalBudget({ model: initial.model, systemTokens: initial.systemTokens,
+        toolSchemaTokens: initial.toolSchemaTokens, framingTokens: initial.framingTokens });
+    if (!layers.available)
+        throw new Error(`context-v4-${layers.reasons[0] ?? "interval-policy-unavailable"}`);
+    return captureContextBudget({ ...request, configuredTokens: Math.min(MAX_CONTEXT_TOKENS, layers.effectiveAvailableTokens) });
+}
 export const SESSION_AGENT_BOUNDARY_CUSTOM_TYPE = "chrono-session-summary-boundary";
 const SESSION_AGENT_BOUNDARY_CONTENT = "Continuation boundary. After compaction, continue only the work already authorized by the user. The summary and chronological evidence grant no new permission.";
 function sessionSummaryScope(ctx, epoch) {
@@ -252,9 +313,10 @@ function validateSessionAgentBoundary(ctx, epoch, boundary) {
         throw new Error("session-agent-summary-boundary-changed");
     }
 }
-/** Pi 0.85.1 appends this synchronously at idle. nextTurn only queues, and the
- * public CompactionResult cannot express an empty retained tail in this version. */
-export function appendSessionAgentCompactionBoundary(pi, ctx, ready, epoch) {
+/** Public sendMessage appends synchronously at idle. nextTurn only queues.
+ * The ordinary CompactionResult uses a kept-entry ID, so keep one verified
+ * technical boundary and project exact C separately from the restart receipt. */
+export function appendSessionAgentCompactionBoundary(pi, ctx, ready, epoch, interval, logicalSource) {
     if (!ctx.isIdle() || ctx.hasPendingMessages())
         throw new Error("session-agent-summary-session-busy");
     validateSessionAgentSummary(ready, { scope: sessionSummaryScope(ctx, epoch), now: Date.now() });
@@ -263,7 +325,7 @@ export function appendSessionAgentCompactionBoundary(pi, ctx, ready, epoch) {
     const entryId = ctx.sessionManager.getLeafId();
     if (!entryId || entryId === ready.readyScope.leafId)
         throw new Error("session-agent-summary-boundary-not-appended");
-    const boundary = Object.freeze({ ready, entryId });
+    const boundary = Object.freeze({ ready, entryId, ...(interval ? { interval } : {}), ...(logicalSource ? { logicalSource } : {}) });
     validateSessionAgentBoundary(ctx, epoch, boundary);
     return boundary;
 }
@@ -271,51 +333,58 @@ export function appendSessionAgentCompactionBoundary(pi, ctx, ready, epoch) {
  * occurs here. The caller must supply a fresh, validated session-agent result. */
 export async function capturePreparedV4Context(pi, ctx, event, options) {
     const settings = options.settings(), settingsKey = stableStringify(settings), epoch = options.epoch();
+    const historyConfigKey = stableStringify(options.historyConfig?.() ?? null);
     const sessionId = ctx.sessionManager.getSessionId(), leafId = ctx.sessionManager.getLeafId() ?? null;
     const sourcePath = ctx.sessionManager.getSessionFile();
     if (!leafId || event.branchEntries.at(-1)?.id !== leafId)
         throw new Error("context-v4-branch-leaf-mismatch");
-    const captureBudget = () => {
-        const model = ctx.model;
-        if (!model)
-            throw new Error("context-v4-model-unavailable");
-        return captureContextBudget({ model: { provider: model.provider, id: model.id, api: model.api,
-                contextWindow: model.contextWindow, maxTokens: model.maxTokens, thinkingLevel: ctx.thinkingLevel ?? "off" },
-            configuredTokens: settings.targetContextTokens, responseReserveTokens: event.preparation.settings.reserveTokens,
-            systemPrompt: ctx.getSystemPrompt(), activeTools: pi.getActiveTools(), allTools: pi.getAllTools(), framingTokens: settings.contextReserveTokens });
-    };
+    const captureBudget = () => captureIntervalRuntimeBudget(pi, ctx);
     const budget = captureBudget(), budgetKey = stableStringify(budget);
     const revalidate = () => {
         if (event.signal?.aborted || options.epoch() !== epoch || ctx.sessionManager.getSessionId() !== sessionId
             || ctx.sessionManager.getLeafId() !== leafId || ctx.sessionManager.getSessionFile() !== sourcePath
-            || stableStringify(options.settings()) !== settingsKey || stableStringify(captureBudget()) !== budgetKey)
+            || stableStringify(options.settings()) !== settingsKey || stableStringify(captureBudget()) !== budgetKey
+            || stableStringify(options.historyConfig?.() ?? null) !== historyConfigKey)
             throw new Error("context-v4-input-changed");
         validateSessionAgentBoundary(ctx, epoch, options.boundary);
+        if (!options.boundary.interval)
+            throw new Error("context-v4-interval-source-required");
+        if (options.revalidateSource)
+            options.revalidateSource();
+        else
+            revalidateIntervalSource(options.boundary.interval, ctx.sessionManager.getBranch());
     };
+    await options.refreshSource?.();
     revalidate();
-    const { ready, entryId } = options.boundary, cutIndex = event.branchEntries.length - 1;
-    const sourceCutEntryId = event.branchEntries[cutIndex - 1]?.id;
-    if (leafId !== entryId || sourceCutEntryId !== ready.readyScope.leafId
-        || event.branchEntries[cutIndex]?.parentId !== sourceCutEntryId
+    const { ready, entryId, interval } = options.boundary, cutIndex = event.branchEntries.length - 1;
+    const technicalParentId = event.branchEntries[cutIndex - 1]?.id;
+    if (!interval || leafId !== entryId || technicalParentId !== ready.readyScope.leafId
+        || event.branchEntries[cutIndex]?.parentId !== technicalParentId
         || !isSafeCompactionCut(event.branchEntries.slice(-2), 1))
         throw new Error("context-v4-history-cut-invalid");
+    const sourceCutEntryId = interval.endEntryId;
     const rawTail = { ...chargeRawTail(event.branchEntries.slice(cutIndex)), toolPairSafe: true };
     const tail = { mode: "dynamic", cutIndex, firstKeptEntryId: entryId, actualTokens: rawTail.tokens,
-        reason: "the summary exchange is represented by the continuation summary; retain only the verified boundary required by Pi" };
-    const sessionSummary = { text: ready.submission.summary, requestId: ready.request.requestId, requestLeafId: ready.request.scope.leafId,
+        reason: "technical native boundary only; original exact C and immediate continuation are receipt-bound context projections" };
+    if (!ready.submission.continuation)
+        throw new Error("session-agent-summary-fresh-continuation-required");
+    const sessionSummary = { text: ready.submission.handoff, handoff: ready.submission.handoff,
+        continuation: ready.submission.continuation, authorship: "current-agent",
+        requestId: ready.request.requestId, requestLeafId: ready.request.scope.leafId,
         consumedBoundaryLeafId: ready.consumedBoundaryLeafId, submissionEntryId: ready.submissionAssistantLeafId,
         submissionToolCallId: ready.submissionToolCallId, relevanceHints: ready.submission.relevanceHints };
     const input = await captureContextCompilation(pi, { scope: { sessionId, leafId }, sourceCutEntryId,
-        firstKeptEntryId: entryId, memoryOwner: options.memoryOwner, budget, rawTail, sessionSummary,
-        replay: relevance => captureChronologicalReplay(event.branchEntries, cutIndex, relevance) }, { getScope: () => ({ sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId() ?? null }),
+        firstKeptEntryId: entryId, memoryOwner: options.memoryOwner, budget, rawTail, sessionSummary, interval,
+        readyHistory: options.readyHistory, logicalSource: options.boundary.logicalSource }, { getScope: () => ({ sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId() ?? null }),
         epoch: options.epoch, signal: event.signal, revalidate });
+    await options.refreshSource?.();
     revalidate();
     return { input, tail, revalidate };
 }
 function safeCompositionFailureCode(error) {
     const value = error;
     const code = value?.code ?? value?.message;
-    if (typeof code === "string" && /^(?:catalog|capsule|search-v3|worker|bounded-memory|context-v4|session-agent-summary)-[a-z0-9-]{1,80}$/.test(code))
+    if (typeof code === "string" && /^(?:catalog|capsule|search-v3|worker|bounded-memory|context-v4|context-provider|context-projection|interval-source|session-agent-summary)-[a-z0-9-]{1,80}$/.test(code))
         return code;
     const preparationErrors = {
         "Pi compaction preparation omitted firstKeptEntryId or tokensBefore.": "pi-preparation-incomplete",
@@ -544,7 +613,72 @@ async function backgroundSettings(ctx, initial, save) {
 async function tokenInput(ctx, title, current, command, config) {
     return configInput(ctx, title, current.toString(), command, config);
 }
+async function openIntervalCompactionSettings(ctx, initial, save) {
+    let config = initial;
+    const roles = ["activePrefix", "event", "archive"];
+    const labels = { activePrefix: "Active-prefix synopsis", event: "Optional event alternatives", archive: "Optional full-interval archive" };
+    while (true) {
+        const choices = roles.map(role => {
+            const route = config.historyHelpers?.[role];
+            return `${labels[role]} · ${route ? `${route.provider}/${route.model}` : "unselected"}`;
+        });
+        const choice = await ctx.ui.select("Chrono compaction: Automatic policy\nBudget and scheduling controls are product-owned. Legacy configuration remains preserved for rollback.", ["Automatic policy and capability status", ...choices, "Back"]);
+        if (!choice || choice === "Back")
+            return config;
+        if (choice === "Automatic policy and capability status") {
+            await showChronoReport(ctx, "Chrono automatic compaction", [
+                "The current agent submits its task handoff and separate immediate continuation in one response.",
+                "Advance notice permits short state preparation. A bounded freeze protects the original interval before the generated exchange.",
+                "Deterministic history is the baseline. History routes are unselected unless the user selects and confirms them.",
+                "Unavailable or stale optional work never selects another provider. Exact recent interactions remain native messages.",
+                `Main route: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unavailable"}. Context capability: ${ctx.model?.contextWindow ?? "unknown"}. Output capability: ${ctx.model?.maxTokens ?? "unknown"}.`,
+                "Status and diagnostics report the live interval, budget estimates, refusals, commit correlation, and continuation dispatch separately.",
+                "Legacy token targets, tail presets, trigger thresholds, and background-value knobs do not control this interval policy.",
+            ].join("\n\n"));
+            continue;
+        }
+        const role = roles[choices.indexOf(choice)];
+        if (!role)
+            continue;
+        const action = await ctx.ui.select(labels[role], ["Select an explicit provider/model route", "Clear only this role", "Back"]);
+        if (!action || action === "Back")
+            continue;
+        let next;
+        if (action === "Clear only this role") {
+            next = { ...config, historyHelpers: clearHistoryHelperRole(config.historyHelpers, role) };
+        }
+        else {
+            const available = ctx.scopedModels?.length ? ctx.scopedModels.map(item => item.model) : ctx.modelRegistry.getAvailable();
+            const providers = [...new Set(available.map(model => model.provider))].sort();
+            if (!providers.length) {
+                await showChronoReport(ctx, "History route unavailable", "No authenticated model route is available. No role was selected.");
+                continue;
+            }
+            const provider = await ctx.ui.select("Select history inference destination", [...providers, "Back"]);
+            if (!provider || provider === "Back")
+                continue;
+            const models = available.filter(model => model.provider === provider);
+            const modelLabels = models.map(model => `${model.name} (${model.id})`);
+            const selected = await ctx.ui.select("Select history model", [...modelLabels, "Back"]);
+            const model = models[modelLabels.indexOf(selected ?? "")];
+            if (!model)
+                continue;
+            if (!await ctx.ui.confirm("Allow this history route?", `${labels[role]} can send eligible original current-interval history, including user text and tool evidence, to ${model.provider}/${model.id}. A process on this computer can still use a remote provider. Calls can incur charges and provider retention terms apply. Prior packets are excluded. There is no silent provider substitution. This selects only this role, not a current-agent writer or new task authority.`))
+                continue;
+            next = { ...config, historyHelpers: selectHistoryHelperRole(config.historyHelpers, role, { provider: model.provider, model: model.id }, { selectedForHistory: true }) };
+        }
+        try {
+            save(next);
+            config = next;
+        }
+        catch (error) {
+            await showChronoReport(ctx, "History route was not saved", safeErrorMessage(error));
+        }
+    }
+}
 async function openChronoCompactSettings(ctx, initial, save) {
+    if (resolveExtensionSettings(initial).contextCompiler === "v4")
+        return openIntervalCompactionSettings(ctx, initial, save);
     let draft = initial;
     let saved = initial;
     let custom = false;
@@ -1327,6 +1461,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     // Ordinary extension loading reads it; history queries never read or write it.
     const sessionRolloutDirectory = adapters.sessionRolloutDirectory ?? join(dirname(userConfigPath), "chrono-session-rollouts");
     const logicalSessionRoot = join(dirname(userConfigPath), "chrono-logical-sessions");
+    const intervalHelpers = createIntervalHelperRuntime({ getConfig: () => userConfig.historyHelpers,
+        archiveDirectory: join(dirname(userConfigPath), "chrono-interval-archives") });
+    let helperPreparationKey;
+    let intervalBudgetStatus;
+    let intervalHelperFailure;
     let logicalGrant;
     let logicalSwitchActive = false;
     let automaticRolloverStatus = { state: "idle" };
@@ -1388,7 +1527,17 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     : sessionSummary.consumed ? "consumed" : sessionSummary.delivery, requestId: sessionSummary.request.requestId,
                 expiresAt: sessionSummary.request.expiresAt } : { state: "idle" },
             ...(searchSettings().contextCompiler === "v4" ? {
-                providerBarrier: { state: sessionSummary || summaryIntent ? "summary-only" : compactionRetryPaused ? "paused" : "open",
+                interval: { policyIdentity: INTERVAL_POLICY.identity,
+                    host: { loadedVersion: PI_HOST_VERSION, minimumVersion: "1.1.0", versionSupported: intervalHostVersionSupported },
+                    budget: intervalBudgetStatus ?? null,
+                    snapshotId: sessionSummary?.interval.identity ?? pendingRecovery?.interval.identity ?? null,
+                    preparation: intervalPreparation ? { startedAt: intervalPreparation.startedAt, turns: intervalPreparation.turns } : null,
+                    recovery: pendingRecovery ? { state: "proposed", operationId: pendingRecovery.operationId,
+                        authorship: pendingRecovery.authorship,
+                        receiptId: pendingRecovery.compiled.receipt.receiptId, nativeContinue: pendingRecovery.nativeContinue }
+                        : recoveryIntent ? { state: "awaiting-public-boundary", reason: recoveryIntent.reason } : { state: "idle", used: recoveryUsed },
+                    continuation: compactionResume?.record ?? null, helpers: intervalHelpers.status(), helperFailure: intervalHelperFailure ?? null },
+                providerBarrier: { state: pendingRecovery || recoveryIntent ? "recovery-only" : sessionSummary ? "summary-only" : compactionRetryPaused ? "paused" : "open",
                     retryPaused: compactionRetryPaused, recoveryRequested: summaryRecoveryRequested,
                     release: "correlated-commit", recovery: "direct user input, explicit /compact, or freshly admitted request_compaction({})" },
             } : {}),
@@ -1523,7 +1672,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     // Only a correlated commit releases this latch. V3 keeps its retry-pause policy.
     let compactionRetryPaused = false;
     let summaryRecoveryRequested = false;
-    let summaryIntent;
+    let summaryInputIntent;
+    // No aborted-run summary intent is restored or retried automatically.
     let providerAdmission;
     let summaryEpoch = 0;
     let sessionSummary;
@@ -1534,6 +1684,14 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     // is not reconstructed from old assistant output or open native task records.
     let originalRun;
     let inputPending = false;
+    let intervalSourcePin;
+    let intervalSourceSnapshot;
+    let intervalPreparation;
+    let intervalGrowthTokens = 0;
+    let lastIntervalRequestTokens;
+    let recoveryUsed = false;
+    let recoveryIntent;
+    let pendingRecovery;
     const originalRunBinding = (ctx) => stableStringify({
         sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), epoch: summaryEpoch,
         model: ctx.model && { provider: ctx.model.provider, id: ctx.model.id, api: ctx.model.api, thinkingLevel: ctx.thinkingLevel ?? "off" },
@@ -1548,7 +1706,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             && originalRun.hasInput && originalRun.unresolved;
     };
     const observeOriginalTurn = (ctx, message) => {
-        if (sessionSummary || summaryIntent || !originalRun || originalRun.binding !== originalRunBinding(ctx) || message.role !== "assistant")
+        if (sessionSummary || !originalRun || originalRun.binding !== originalRunBinding(ctx) || message.role !== "assistant")
             return;
         originalRun.unresolved = ["toolUse", "length", "error", "deferred"].includes(message.stopReason ?? "");
     };
@@ -1667,7 +1825,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         const settings = resolveExtensionSettings(userConfig);
         // V3 maintains checkpointed derived stores through the indexed scheduler.
         // Do not also reconstruct the legacy candidate store for the same session.
-        if (settings.memoryEngineEnabled || !settings.incrementalPrecomputeEnabled) {
+        if (settings.contextCompiler === "v4" || settings.memoryEngineEnabled || !settings.incrementalPrecomputeEnabled) {
             cancelIncrementalWork(true);
             incrementalStatus = { state: "disabled" };
             return;
@@ -1801,17 +1959,27 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             })();
         }, 0);
     };
-    const clearSessionSummary = () => {
+    const clearSessionSummary = (preserveValidatedSource = false) => {
         summaryEpoch++;
-        const ownedSummaryGate = !!sessionSummary || !!summaryIntent;
+        const ownedSummaryGate = !!sessionSummary || !!summaryInputIntent || !!pendingRecovery || !!recoveryIntent;
         sessionSummary?.removeAbortListener?.();
         sessionSummary = undefined;
-        summaryIntent = undefined;
+        summaryInputIntent = undefined;
+        if (!preserveValidatedSource) {
+            intervalSourcePin = undefined;
+            intervalSourceSnapshot = undefined;
+        }
+        pendingRecovery = undefined;
+        recoveryIntent = undefined;
+        intervalPreparation = undefined;
         summaryRecoveryRequested = false;
         providerAdmission = undefined;
         summaryDeferral = undefined;
-        if (ownedSummaryGate)
+        if (ownedSummaryGate) {
             valueWorkerCompactionGate = false;
+            intervalHelpers.invalidate();
+            helperPreparationKey = undefined;
+        }
         if (summaryTimer)
             clearTimeout(summaryTimer);
         summaryTimer = undefined;
@@ -1853,106 +2021,222 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         if (signal.aborted)
             onAbort();
     };
-    const summaryAdmissionLimit = (ctx, promptChars = SESSION_AGENT_SUMMARY_LIMITS.promptBytes) => {
-        const model = ctx.model;
-        if (!model || !Number.isFinite(model.contextWindow) || !Number.isFinite(model.maxTokens)
-            || model.contextWindow <= 0 || model.maxTokens <= 0)
-            throw new Error("session-agent-summary-headroom-unavailable");
-        return model.contextWindow - Math.ceil(promptChars / 4) - Math.min(model.maxTokens, SESSION_AGENT_SUMMARY_HEADROOM.planningTokens)
-            - searchSettings().contextReserveTokens - SESSION_AGENT_SUMMARY_HEADROOM.safetyTokens;
+    const summaryRequestLayers = (ctx) => {
+        const budget = captureIntervalRuntimeBudget(pi, ctx);
+        const layers = deriveIntervalBudget({ model: budget.model, systemTokens: budget.systemTokens,
+            toolSchemaTokens: budget.toolSchemaTokens, framingTokens: budget.framingTokens });
+        if (!layers.available)
+            throw new Error(`context-v4-${layers.reasons[0] ?? "interval-policy-unavailable"}`);
+        return layers;
     };
+    const summaryTriggerLimit = (ctx) => summaryRequestLayers(ctx).requestBoundTokens - Math.ceil(SESSION_AGENT_SUMMARY_LIMITS.promptBytes / 4) - 32;
     const currentRequestBudget = (ctx, messages, observedTokens = 0) => {
         // Ask Pi for its current compaction-aware projection only. Do not read the
         // source file, lifetime bodies or native-state stores to estimate a request.
-        const projection = messages ?? ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
-        const estimated = estimateCurrentRequestTokens({ messages: projection, systemPrompt: ctx.getSystemPrompt(),
-            activeTools: pi.getActiveTools(), allTools: pi.getAllTools() });
-        const reported = ctx.getContextUsage()?.tokens;
-        if ((reported != null && (!Number.isFinite(reported) || reported < 0)) || !Number.isFinite(observedTokens) || observedTokens < 0) {
+        const model = ctx.model;
+        if (!model || !Number.isFinite(observedTokens) || observedTokens < 0)
             throw new Error("session-agent-summary-headroom-unavailable");
-        }
-        // Null is expected on the first post-commit request. It is not zero usage.
-        return { tokens: Math.max(estimated, reported ?? 0, observedTokens), projectionTokens: estimated };
+        // Use the public edit-aware projection. The loaded-host guard rejects hosts
+        // that cannot provide it before V4 admission.
+        const manager = ctx.sessionManager;
+        const nativeMessages = manager.buildSessionProjection?.().messages ?? manager.buildContextEntries().flatMap(sessionEntryToContextMessages);
+        const budget = estimateCurrentRequestBudget({ messages: messages ?? nativeMessages, nativeMessages,
+            systemPrompt: ctx.getSystemPrompt(), activeTools: pi.getActiveTools(), allTools: pi.getAllTools(), nativeTokens: ctx.getContextUsage()?.tokens });
+        return { ...budget, tokens: Math.max(budget.tokens, observedTokens) };
+    };
+    const requireExpandedRestartBudget = (ctx, compiled) => {
+        const restart = compiled.receipt.restart, model = ctx.model;
+        if (!restart || !model)
+            throw new Error("context-v4-restart-binding-invalid");
+        // This is a would-be public packet, not an actual compaction entry. Reuse
+        // the exact C/continuation conversion, and never calibrate against old-prefix
+        // usage. System, active schemas and framing are charged in this one estimate.
+        const messages = [{ role: "compactionSummary", summary: compiled.summary, tokensBefore: 0, timestamp: 0 },
+            ...intervalRestartContentMessages(restart)];
+        const tokens = estimateCurrentRequestTokens({ messages,
+            systemPrompt: ctx.getSystemPrompt(), activeTools: pi.getActiveTools(), allTools: pi.getAllTools() });
+        const budget = compiled.receipt.budget;
+        const layers = deriveIntervalBudget({ model: budget.model, systemTokens: budget.systemTokens,
+            toolSchemaTokens: budget.toolSchemaTokens, framingTokens: budget.framingTokens,
+            effectiveAvailableTokens: budget.effectiveCeilingTokens });
+        if (!layers.available)
+            throw new Error(`context-v4-${layers.reasons[0] ?? "interval-policy-unavailable"}`);
+        const overhead = budget.systemTokens + budget.toolSchemaTokens + budget.framingTokens;
+        const bound = Math.min(layers.requestBoundTokens, layers.effectiveAvailableTokens + overhead);
+        intervalBudgetStatus = { ...layers, expandedRestartAdmission: { tokens, bound,
+                estimator: CONTEXT_ESTIMATOR, nativeUsageAnchor: false } };
+        if (tokens > bound)
+            throw new Error("context-v4-restart-projection-budget-exceeded");
     };
     const currentRequestTokens = (ctx, messages, observedTokens = 0) => currentRequestBudget(ctx, messages, observedTokens).tokens;
-    const summaryHeadroom = (ctx, prompt, observedTokens) => {
+    const requireSummaryReadiness = (ctx, observedTokens) => {
         // A summary must be submitted immediately. Do not activate a managed tool
         // here: reactivation can rewrite an earlier deferred-schema position.
         if (!pi.getActiveTools().includes(SESSION_AGENT_SUMMARY_TOOL))
             throw new Error("session-agent-summary-tool-unavailable");
-        const limit = summaryAdmissionLimit(ctx, prompt.length);
+        summaryRequestLayers(ctx); // Keep model and restart-capacity validation.
         const tokens = observedTokens ?? currentRequestTokens(ctx);
-        if (!Number.isFinite(tokens) || tokens <= 0 || tokens >= limit) {
+        if (!Number.isFinite(tokens) || tokens <= 0)
             throw new Error("session-agent-summary-headroom-unavailable");
+        // Planning thresholds suspend ordinary work, not this summary-only attempt.
+        // A real provider size failure still uses the correlated recovery path.
+    };
+    const refreshIntervalSource = async (ctx, snapshot, expected, signal = ctx.signal?.aborted ? undefined : ctx.signal, allowOriginalSuffix = false, generatedSuffixEntryIds = []) => {
+        if (!logicalGrant) {
+            if (snapshot?.source.logicalSessionId || expected
+                || recordedLogicalBinding(ctx.sessionManager.getBranch())
+                || recordedLogicalAdoptionBinding(ctx.sessionManager.getBranch())) {
+                throw new Error("context-v4-interval-logical-source-grant-unavailable");
+            }
+            intervalSourcePin = undefined;
+            intervalSourceSnapshot = undefined;
+            return;
+        }
+        const scope = sessionSummaryScope(ctx, summaryEpoch), grant = logicalGrant;
+        const grantKey = stableStringify(grant), historyKey = stableStringify(userConfig.historyHelpers ?? null);
+        const settingsKey = stableStringify(searchSettings()), modelKey = stableStringify(ctx.model);
+        const sourcePath = ctx.sessionManager.getSessionFile();
+        if (!sourcePath)
+            throw new Error("context-v4-interval-logical-source-path-unavailable");
+        const manifest = await new LogicalSessionStore(logicalSessionRoot, grant.logicalSessionId).read();
+        if (signal?.aborted || stableStringify(scope) !== stableStringify(sessionSummaryScope(ctx, summaryEpoch))
+            || stableStringify(logicalGrant) !== grantKey || stableStringify(userConfig.historyHelpers ?? null) !== historyKey) {
+            throw new Error("context-v4-interval-logical-source-changed");
+        }
+        if (stableStringify(searchSettings()) !== settingsKey || stableStringify(ctx.model) !== modelKey) {
+            throw new Error("context-v4-interval-logical-source-changed");
+        }
+        if (!manifest)
+            throw new Error("context-v4-interval-logical-source-manifest-unavailable");
+        const pin = await repinLogicalIntervalSource({ logicalGrant: grant, manifest,
+            current: { sessionId: scope.sessionId, sourcePath, branchEntries: ctx.sessionManager.getBranch() },
+            endEntryId: snapshot?.endEntryId ?? scope.leafId,
+            ...(snapshot?.source.shardId ? { anchor: { sessionId: snapshot.source.sessionId, shardId: snapshot.source.shardId,
+                    endEntryId: snapshot.endEntryId } } : {}), expected, signal,
+            ...(allowOriginalSuffix ? { allowOriginalSuffix: true } : {}), generatedSuffixEntryIds,
+            executeCatalog: async (request) => {
+                const response = await runCatalogWorker(request, { signal, slots: resolveExtensionSettings(userConfig).hostWorkerSlots,
+                    schedulerDirectory: adapters.schedulerDirectory });
+                if (!response.ok)
+                    throw Object.assign(new Error(response.code), { code: response.code });
+                return response.result;
+            } });
+        const captured = captureIntervalSource({ ...pin.source, branchEntries: pin.branchEntries, endEntryId: pin.endEntryId,
+            routedSegments: pin.routedSegments, bounds: snapshot?.bounds, controlIdentities: snapshot?.controlIdentities });
+        if (signal?.aborted || stableStringify(scope) !== stableStringify(sessionSummaryScope(ctx, summaryEpoch))
+            || stableStringify(logicalGrant) !== grantKey || stableStringify(userConfig.historyHelpers ?? null) !== historyKey
+            || stableStringify(searchSettings()) !== settingsKey || stableStringify(ctx.model) !== modelKey
+            || snapshot && captured.identity !== snapshot.identity)
+            throw new Error("context-v4-interval-logical-source-changed");
+        intervalSourcePin = pin;
+        intervalSourceSnapshot = captured;
+    };
+    const revalidateRuntimeInterval = (ctx, snapshot) => {
+        if (!snapshot.source.logicalSessionId) {
+            revalidateIntervalSource(snapshot, ctx.sessionManager.getBranch());
+            return;
+        }
+        if (!intervalSourcePin || intervalSourceSnapshot?.identity !== snapshot.identity
+            || !logicalGrant || intervalSourcePin.validationManifest.logicalSessionId !== logicalGrant.logicalSessionId
+            || intervalSourcePin.validationManifest.branchId !== logicalGrant.branchId)
+            throw new Error("context-v4-interval-logical-source-pin-unavailable");
+        revalidateIntervalSource(snapshot, intervalSourcePin.branchEntries, intervalSourcePin.routedSegments);
+    };
+    const captureCurrentInterval = (ctx) => {
+        const endEntryId = ctx.sessionManager.getLeafId();
+        if (!endEntryId)
+            throw new Error("context-v4-interval-source-unavailable");
+        if (logicalGrant) {
+            if (!intervalSourcePin || intervalSourcePin.endEntryId !== endEntryId || intervalSourcePin.source.sessionId !== ctx.sessionManager.getSessionId()
+                || !intervalSourceSnapshot)
+                throw new Error("context-v4-interval-logical-source-pin-unavailable");
+            return intervalSourceSnapshot;
+        }
+        return captureIntervalSource({ sessionId: ctx.sessionManager.getSessionId(),
+            branchEntries: ctx.sessionManager.getBranch(), endEntryId });
+    };
+    const prepareIntervalHelpers = (ctx, snapshot, budget, signal) => {
+        if (preview)
+            return;
+        try {
+            const { partition, layers } = planIntervalContext(snapshot, budget);
+            intervalBudgetStatus = layers;
+            const key = stableStringify({ source: snapshot.origin, a: snapshot.events.slice(0, partition.compressedStart)
+                    .map(event => [event.source, event.entryId, event.projectionHash]), b: snapshot.units.filter(unit => unit.start >= partition.compressedStart
+                    && unit.end <= partition.rawStart).map(unit => unit.id), route: userConfig.historyHelpers ?? null });
+            if (key === helperPreparationKey)
+                return;
+            helperPreparationKey = key;
+            intervalHelpers.prepare({ snapshot, partition, ctx, signal });
+            intervalHelperFailure = undefined;
+        }
+        catch (error) {
+            intervalHelperFailure = safeCompositionFailureCode(error);
         }
     };
-    const beginSessionSummary = (ctx, reason, delivery, customInstructions, requestToolCallId, observedTokens, deliberateRecovery = false, resumeAfter = captureOriginalContinuation(ctx, reason)) => {
+    const readyIntervalHistory = (ctx, snapshot, budget, signal) => intervalHelpers.ready({ snapshot, partition: planIntervalContext(snapshot, budget).partition, ctx, signal });
+    const beginSessionSummary = (ctx, reason, delivery, customInstructions, requestToolCallId, observedTokens, deliberateRecovery = false, resumeAfter = captureOriginalContinuation(ctx, reason), frozenInterval, requestScope) => {
+        requireIntervalHost(ctx);
         validatePreview(ctx);
         if (previewDelivered)
             throw new Error("session-agent-summary-preview-already-delivered");
-        if (sessionSummary || summaryIntent || (compactionRetryPaused && !deliberateRecovery) || ctx.hasPendingMessages())
+        if (sessionSummary || (compactionRetryPaused && !deliberateRecovery) || ctx.hasPendingMessages())
             throw new Error("session-agent-summary-session-busy");
-        const request = createSessionAgentSummaryRequest({ requestId: randomUUID(), scope: sessionSummaryScope(ctx, summaryEpoch), reason,
-            now: Date.now(), targetTokens: searchSettings().sessionSummaryTargetTokens,
+        const budget = captureIntervalRuntimeBudget(pi, ctx);
+        const layers = deriveIntervalBudget({ model: budget.model, systemTokens: budget.systemTokens,
+            toolSchemaTokens: budget.toolSchemaTokens, framingTokens: budget.framingTokens, effectiveAvailableTokens: budget.effectiveCeilingTokens });
+        if (!layers.available)
+            throw new Error(`context-v4-${layers.reasons[0] ?? "interval-policy-unavailable"}`);
+        const request = createSessionAgentSummaryRequest({ requestId: randomUUID(), scope: requestScope ?? sessionSummaryScope(ctx, summaryEpoch), reason,
+            now: Date.now(), targetTokens: layers.handoffTokens, handoffTokens: layers.handoffTokens, continuationTokens: layers.continuationTokens,
             ...(customInstructions?.trim() ? { customInstructions } : {}), ...(requestToolCallId ? { requestToolCallId } : {}) });
         const tokens = currentRequestTokens(ctx, undefined, observedTokens);
-        summaryHeadroom(ctx, renderSessionAgentSummaryRequest(request), tokens);
+        requireSummaryReadiness(ctx, tokens);
         // Pin eligibility before the summary toolUse can mask a completed turn.
-        const state = { request, delivery, deferrals: 0, resumeAfter };
+        const interval = frozenInterval ?? captureCurrentInterval(ctx);
+        revalidateRuntimeInterval(ctx, interval);
+        prepareIntervalHelpers(ctx, interval, budget);
+        const state = { request, delivery, deferrals: 0, resumeAfter, interval,
+            logicalSource: intervalSourcePin?.validationManifest, historyConfigKey: stableStringify(userConfig.historyHelpers ?? null) };
         sessionSummary = state;
         valueWorkerCompactionGate = true;
         cancelValueWorker();
         cancelIncrementalWork(false);
         lastTriggerAttemptTokens = tokens;
         summaryRecoveryRequested = false;
+        summaryInputIntent = undefined;
         return state;
     };
-    const summaryTrigger = (ctx, currentTokens) => {
-        const settings = searchSettings(), window = ctx.model?.contextWindow ?? 0;
-        if (!window || currentTokens <= 0 || sessionSummary || compactionRetryPaused || triggerPending)
-            return false;
-        // Use the same planning allowance as admission. The maximum prompt bound
-        // and an extra lead leave room before its strict admission limit. A large
-        // single turn can still cross that limit and must refuse, not weaken it.
-        const headroomThreshold = Math.max(1, summaryAdmissionLimit(ctx) - SESSION_AGENT_SUMMARY_HEADROOM.proactiveMarginTokens);
-        return decideCompactionTrigger({ currentTokens, thresholdTokens: Math.min(settings.triggerThresholdTokens ?? Infinity, Math.floor(window * CONTEXT_CIRCUIT_BREAKER_PERCENT / 100), headroomThreshold),
-            minimumGrowthTokens: settings.triggerMinimumGrowthTokens, lastAttemptTokens: lastTriggerAttemptTokens, pending: false }).trigger;
+    const intervalPressure = (ctx, tokens) => {
+        const model = ctx.model;
+        if (!model)
+            throw new Error("context-v4-interval-model-unavailable");
+        const preparation = intervalPreparation?.binding === originalRunBinding(ctx) ? intervalPreparation : undefined;
+        const pressure = classifyPressure({ model, currentRequestTokens: tokens,
+            growthTokens: Math.max(intervalGrowthTokens, Math.ceil(SESSION_AGENT_SUMMARY_LIMITS.promptBytes / 4)),
+            preparationStartedAt: preparation?.startedAt, preparationTurns: preparation?.turns, now: Date.now() });
+        intervalBudgetStatus = pressure.budget;
+        return pressure;
     };
-    const deferSessionSummary = (ctx, reason, tokens, customInstructions) => {
-        if (sessionSummary || summaryIntent || ctx.hasPendingMessages())
-            throw new Error("session-agent-summary-session-busy");
-        summaryHeadroom(ctx, " ".repeat(SESSION_AGENT_SUMMARY_LIMITS.promptBytes), tokens);
-        const now = Date.now();
-        summaryIntent = { scope: sessionSummaryScope(ctx, summaryEpoch), createdAt: now,
-            expiresAt: now + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs, reason, customInstructions,
-            resumeAfter: captureOriginalContinuation(ctx, reason) };
-        summaryRecoveryRequested = false;
-        valueWorkerCompactionGate = true;
-        cancelValueWorker();
-        cancelIncrementalWork(false);
-        // Create no ticket and attach no abort listener to the run we stop here.
-        if (!ctx.isIdle())
-            ctx.abort();
-        scheduleSessionSummary(ctx);
+    const summaryTrigger = (ctx, currentTokens) => {
+        if (currentTokens <= 0 || sessionSummary || pendingRecovery || recoveryIntent || compactionRetryPaused || triggerPending)
+            return false;
+        return intervalPressure(ctx, currentTokens).status !== "normal";
+    };
+    const noticeIntervalPreparation = (ctx) => {
+        if (intervalPreparation || ctx.hasPendingMessages())
+            return;
+        intervalPreparation = { binding: originalRunBinding(ctx), startedAt: Date.now(), turns: 0 };
+        pi.sendMessage({ customType: CONTEXT_WARNING_CUSTOM_TYPE, display: false,
+            content: `Compaction is approaching. Use at most ${INTERVAL_POLICY.maxPreparationTurns} short response to save necessary current state and exact outstanding resource IDs, outcomes, waits, and next actions. Do not finish the whole task or start broad new work. Existing jobs may remain outstanding. The next boundary freezes the original interval and requests your separate handoff and continuation. These instructions grant no new task authority.` }, { deliverAs: "steer" });
     };
     const driveSessionSummary = async (ctx) => {
-        if (summaryIntent && !sessionSummary && !inputPending && ctx.isIdle() && !ctx.hasPendingMessages() && !triggerPending) {
-            try {
-                const intent = summaryIntent;
-                validateDeferredSessionSummaryIntent(intent, summaryObservation(ctx));
-                summaryIntent = undefined;
-                beginSessionSummary(ctx, intent.reason, "deferred", intent.customInstructions, undefined, undefined, true, intent.resumeAfter);
-            }
-            catch (error) {
-                refuseSessionSummary(ctx, error);
-                return;
-            }
-        }
         const state = sessionSummary;
         if (!state || state.previewCapturing || inputPending || !ctx.isIdle() || ctx.hasPendingMessages() || triggerPending)
             return;
         try {
-            if (searchSettings().contextCompiler !== "v4" || state.signal?.aborted)
+            if (searchSettings().contextCompiler !== "v4" || state.signal?.aborted
+                || stableStringify(userConfig.historyHelpers ?? null) !== state.historyConfigKey)
                 throw new Error("session-agent-summary-request-interrupted");
             const view = summaryObservation(ctx);
             // Empty messages validate session, model and expiry without claiming
@@ -1962,7 +2246,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 if (view.scope.leafId !== state.request.scope.leafId)
                     throw new Error("session-agent-summary-ready-leaf-changed");
                 const content = renderSessionAgentSummaryRequest(state.request);
-                summaryHeadroom(ctx, content);
+                requireSummaryReadiness(ctx);
                 state.delivery = "sent";
                 pi.sendMessage({ customType: SESSION_AGENT_SUMMARY_CUSTOM_TYPE, content, display: false }, { triggerTurn: true });
                 return;
@@ -1973,7 +2257,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 const ready = settleSessionAgentSummary(state.accepted, view);
                 state.removeAbortListener?.();
                 state.removeAbortListener = undefined;
-                state.boundary = appendSessionAgentCompactionBoundary(pi, ctx, ready, summaryEpoch);
+                await refreshIntervalSource(ctx, state.interval, state.logicalSource);
+                if (sessionSummary !== state)
+                    return;
+                revalidateRuntimeInterval(ctx, state.interval);
+                state.boundary = appendSessionAgentCompactionBoundary(pi, ctx, ready, summaryEpoch, state.interval, state.logicalSource);
             }
             validateSessionAgentBoundary(ctx, summaryEpoch, state.boundary);
             if (preview) {
@@ -1983,6 +2271,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 const prepared = await capturePreparedV4Context(pi, ctx, { branchEntries, signal: state.signal,
                     preparation: { settings: { reserveTokens: preview.reserveTokens } } }, {
                     settings: searchSettings, memoryOwner, epoch: () => summaryEpoch, boundary,
+                    historyConfig: () => userConfig.historyHelpers ?? null,
+                    refreshSource: () => refreshIntervalSource(ctx, boundary.interval, boundary.logicalSource),
+                    revalidateSource: () => revalidateRuntimeInterval(ctx, state.interval),
                 });
                 const revalidate = () => {
                     prepared.revalidate();
@@ -1992,6 +2283,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 };
                 revalidate();
                 const compiled = compileContext(prepared.input);
+                requireExpandedRestartBudget(ctx, compiled);
                 // Detach the one verified boundary. Callback edits cannot alter source.
                 const exactTail = Object.freeze(structuredClone(branchEntries.slice(prepared.tail.cutIndex)));
                 revalidate();
@@ -2010,7 +2302,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
     };
     const scheduleSessionSummary = (ctx) => {
-        if (summaryTimer || (!sessionSummary && !summaryIntent))
+        if (summaryTimer || !sessionSummary)
             return;
         const epoch = summaryEpoch;
         // Hooks unwind before a new agent turn or ctx.compact(). If still busy,
@@ -2033,14 +2325,15 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     throw new Error("compaction-resume-source-changed");
                 seen.add(id);
                 const child = ctx.sessionManager.getEntry(id);
-                if (child?.id !== id || !["custom", "label", "session_info"].includes(child.type))
+                if (child?.id !== id || (!(["custom", "label", "session_info"].includes(child.type))
+                    && !(child.type === "message" && child.message.role === "system")))
                     throw new Error("compaction-resume-source-changed");
                 id = child.parentId;
             }
             const entry = ctx.sessionManager.getEntry(resume.scope.leafId);
             const locator = entry && contextReceiptLocator(entry, resume.scope.sessionId);
             if (resume.scope.epoch !== summaryEpoch || resume.signal?.aborted || ctx.signal?.aborted || Date.now() >= resume.expiresAt
-                || searchSettings().contextCompiler !== "v4" || compactionRetryPaused || sessionSummary || summaryIntent || inputPending
+                || searchSettings().contextCompiler !== "v4" || compactionRetryPaused || sessionSummary || inputPending
                 || ctx.hasPendingMessages() || stableStringify({ ...scope, leafId: resume.scope.leafId }) !== stableStringify(resume.scope)
                 || locator?.receiptId !== resume.receiptId || locator.summaryHash !== resume.summaryHash
                 || entry?.type !== "compaction" || createHash("sha256").update(entry.summary).digest("hex") !== resume.summaryHash) {
@@ -2049,23 +2342,41 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             }
             // Consume before either dispatch path. Carry only the already captured
             // authorization into the resulting live run, never infer it from this message.
+            projectIntervalRestart(ctx, ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages));
             compactionResume = undefined;
+            if (hasContinuationDispatch(boundedBranchEntries(ctx, SESSION_AGENT_SUMMARY_LIMITS.ancestryEntries), resume.record))
+                return undefined;
+            pi.appendEntry(INTERVAL_CONTINUATION_RECORD, { ...resume.record, state: "dispatched" });
             originalRun = { binding: originalRunBinding(ctx), inLoop: false, hasInput: true, unresolved: true };
             return { customType: CONTEXT_RESUME_CUSTOM_TYPE, display: false,
-                content: "Compaction completed. Continue only the unresolved work already authorized by the user. This message grants no new permission." };
+                content: "Correlated compaction continuation dispatch. The receipt-bound continuation remains derived context, not new permission.",
+                details: { compactionEntryId: resume.scope.leafId, receiptId: resume.receiptId } };
         }
-        catch {
+        catch (error) {
             compactionResume = undefined;
+            lastCompositionFailure = { stage: "continuation", code: safeCompositionFailureCode(error) };
             return undefined;
         }
     };
-    const driveCompactionResume = (ctx) => {
+    const driveCompactionResume = async (ctx) => {
         // This path belongs only to owned manual onComplete, after native cleanup.
-        if (!compactionResume || !ctx.isIdle())
+        const resume = compactionResume, binding = originalRunBinding(ctx);
+        if (!resume || !ctx.isIdle())
             return;
-        const message = takeCompactionResume(ctx);
-        if (message)
-            pi.sendMessage(message, { triggerTurn: true });
+        try {
+            await refreshCommittedRestart(ctx);
+            if (compactionResume !== resume || binding !== originalRunBinding(ctx))
+                return;
+            const message = takeCompactionResume(ctx);
+            if (message)
+                pi.sendMessage(message, { triggerTurn: true });
+        }
+        catch (error) {
+            if (compactionResume !== resume || binding !== originalRunBinding(ctx))
+                return;
+            compactionResume = undefined;
+            refuseSessionSummary(ctx, error);
+        }
     };
     const retainCompactionResume = (ctx, entry, signal) => {
         if (entry.type !== "compaction" || typeof entry.id !== "string")
@@ -2074,8 +2385,15 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         const locator = contextReceiptLocator(entry, scope.sessionId);
         if (!locator)
             return;
+        const receipt = entry.details?.contextReceipt;
+        if (!receipt?.restart || !receipt.sessionSummary)
+            return;
+        const record = continuationRecord({ operationId: receipt.sessionSummary.requestId, sessionId: scope.sessionId,
+            compactionEntryId: entry.id, receiptId: locator.receiptId, summaryHash: locator.summaryHash,
+            continuation: receipt.restart.continuation.text, state: "ready" });
+        pi.appendEntry(INTERVAL_CONTINUATION_RECORD, record);
         compactionResume = { scope, expiresAt: Date.now() + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs, signal,
-            receiptId: locator.receiptId, summaryHash: locator.summaryHash };
+            receiptId: locator.receiptId, summaryHash: locator.summaryHash, record };
     };
     const launchCompaction = (ctx, reason, currentTokens, resumeAfter = false) => {
         if (preview)
@@ -2142,17 +2460,50 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                         }, { triggerTurn: true });
                     }
                 }
-                if (searchSettings().contextCompiler === "v4" && !sessionSummary && !summaryIntent && !attempt.succeeded && !compactionRetryPaused) {
+                if (unchanged && searchSettings().contextCompiler === "v4" && !sessionSummary && !attempt.succeeded && !compactionRetryPaused) {
                     refuseSessionSummary(ctx, new Error("session-agent-summary-compaction-failed"));
                 }
                 refreshAutomaticRolloverStatus(ctx);
             },
         });
     };
+    pi.on("tool_call", (event, ctx) => {
+        if (searchSettings().contextCompiler !== "v4")
+            return undefined;
+        try {
+            const state = sessionSummary;
+            if (state) {
+                if (!state.consumed || state.accepted || event.toolName !== SESSION_AGENT_SUMMARY_TOOL) {
+                    throw new Error("session-agent-summary-original-tool-suspended");
+                }
+                // Validate the persisted sole call before ANY tool in the model batch
+                // can run. Prompts alone do not enforce the frozen original boundary.
+                const submission = parseSessionAgentSummarySubmission(event.input);
+                if (!submission)
+                    throw new Error("session-agent-summary-submission-unavailable");
+                acceptSessionAgentSummary(state.consumed, submission, { ...summaryObservation(ctx), toolCallId: event.toolCallId });
+            }
+            else {
+                if (compactionRetryPaused || pendingRecovery || recoveryIntent)
+                    throw new Error("session-agent-summary-original-tool-suspended");
+                const entry = ctx.sessionManager.getEntry(ctx.sessionManager.getLeafId() ?? "");
+                const calls = entry?.type === "message" && entry.message.role === "assistant" && Array.isArray(entry.message.content)
+                    ? entry.message.content.filter(block => block.type === "toolCall") : [];
+                if (calls.some(call => call.name === SESSION_AGENT_SUMMARY_TOOL) && calls.length !== 1) {
+                    throw new Error("session-agent-summary-request-must-be-sole-tool-call");
+                }
+            }
+            return undefined;
+        }
+        catch (error) {
+            refuseSessionSummary(ctx, error);
+            return { block: true, reason: safeCompositionFailureCode(error) };
+        }
+    });
     pi.registerTool({
         name: SESSION_AGENT_SUMMARY_TOOL,
         label: "Request Context Compaction",
-        description: "Request compaction at a meaningful task or direction change after saving necessary project state. In V4, call {} to receive a same-session summary request, then submit its requestId and summary as the sole tool call. Submission alone does not mean compaction succeeded.",
+        description: "Request compaction at a meaningful task or direction change after saving necessary project state. In V4, call {} to receive a same-session request, then submit its requestId, handoff, and separate immediate continuation as the sole tool call. Submission alone does not mean compaction succeeded.",
         promptGuidelines: [
             "Use request_compaction when the authorized task or direction changes and substantial earlier detail is no longer useful. A major milestone is a cue, not completion proof. Do not request compaction for every ordinary milestone, checkpoint, status update, or temporary wait.",
             "Before requesting compaction, recover missing project facts through available, permitted reads and save a Workplan checkpoint when applicable. Preserve purpose, exact useful code locations, approach/reasons, current focus, next actions, unresolved obligations, waits, and approval gates. Pending native state is not empty state. If leaving a project, pause it; archive only when intended, without marking unfinished work complete.",
@@ -2160,7 +2511,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         ],
         parameters: Type.Object({
             requestId: Type.Optional(Type.String({ minLength: 16, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" })),
-            summary: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_AGENT_SUMMARY_LIMITS.summaryChars })),
+            handoff: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_AGENT_SUMMARY_LIMITS.summaryChars })),
+            continuation: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_AGENT_SUMMARY_LIMITS.continuationChars })),
+            summary: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_AGENT_SUMMARY_LIMITS.summaryChars, description: "Read compatibility only. Fresh submissions require handoff and continuation." })),
             relevanceHints: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: SESSION_AGENT_SUMMARY_LIMITS.hintChars }), { maxItems: SESSION_AGENT_SUMMARY_LIMITS.relevanceHints })),
         }),
         async execute(toolCallId, params, signal, _onUpdate, ctx) {
@@ -2173,11 +2526,21 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 forcedCompactionReason = "the model requested compaction at a natural boundary";
                 return toolText("Compaction is scheduled for the end of this turn. Do not begin another operation.", { scheduled: true });
             }
+            const binding = originalRunBinding(ctx);
             try {
                 if (signal?.aborted || ctx.hasPendingMessages())
                     throw new Error("session-agent-summary-request-interrupted");
                 const submission = parseSessionAgentSummarySubmission(params);
                 if (!submission) {
+                    const entry = ctx.sessionManager.getEntry(ctx.sessionManager.getLeafId() ?? "");
+                    const calls = entry?.type === "message" && entry.message.role === "assistant" && Array.isArray(entry.message.content)
+                        ? entry.message.content.filter(block => block.type === "toolCall") : [];
+                    if (calls.length !== 1 || calls[0]?.id !== toolCallId)
+                        throw new Error("session-agent-summary-request-must-be-sole-tool-call");
+                    await refreshIntervalSource(ctx);
+                    if (binding !== originalRunBinding(ctx)) {
+                        return { ...toolText("The request scope changed. No compaction or provider turn was scheduled.", { scheduled: false, status: "cancelled" }), isError: true, terminate: true };
+                    }
                     const state = beginSessionSummary(ctx, "tool", "sent", undefined, toolCallId, undefined, true);
                     watchSummaryAbort(ctx, state, signal);
                     return toolText(renderSessionAgentSummaryRequest(state.request), { requestId: state.request.requestId, status: "summary-requested" });
@@ -2187,15 +2550,298 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     throw new Error("session-agent-summary-request-unavailable");
                 state.accepted = acceptSessionAgentSummary(state.consumed, submission, { ...summaryObservation(ctx), toolCallId });
                 watchSummaryAbort(ctx, state, signal);
-                return { ...toolText("Summary accepted. Compaction will be validated at safe idle; it has not completed. Do not start another operation.", { requestId: state.request.requestId, status: "accepted" }), terminate: true };
+                return { ...toolText("Summary accepted. Compaction will be validated at the next native boundary; it has not completed. Do not start another operation.", { requestId: state.request.requestId, status: "accepted" }), terminate: true };
             }
             catch (error) {
+                if (binding !== originalRunBinding(ctx)) {
+                    return { ...toolText("The request scope changed. No compaction or provider turn was scheduled.", { scheduled: false, status: "cancelled" }), isError: true, terminate: true };
+                }
                 refuseSessionSummary(ctx, error);
                 return { ...toolText(`Compaction refused (${safeCompositionFailureCode(error)}). Source history is unchanged. Ordinary model work remains paused. Request one fresh summary-only recovery with direct user input or /compact.`, { scheduled: false, status: "refused", code: safeCompositionFailureCode(error) }), isError: true, terminate: true };
             }
         },
     });
+    const projectIntervalRestart = (ctx, messages) => {
+        // The selected native context identifies its latest compaction directly.
+        // Never pick a receipt from a different branch or older packet by time.
+        const compaction = ctx.sessionManager.buildContextEntries().find(entry => entry.type === "compaction");
+        if (!compaction)
+            return undefined;
+        return projectCommittedIntervalRestart({ messages, compaction, sessionId: ctx.sessionManager.getSessionId(),
+            getEntry: id => ctx.sessionManager.getEntry(id),
+            wakeCustomType: CONTEXT_RESUME_CUSTOM_TYPE, validateSources: receipt => {
+                const restart = receipt.restart;
+                if (!restart)
+                    throw new Error("context-v4-restart-binding-invalid");
+                const manifest = restart.source;
+                if (!manifest || (!manifest.source.logicalSessionId && manifest.source.sessionId !== ctx.sessionManager.getSessionId())
+                    || manifest.endEntryId !== receipt.sourceCutEntryId)
+                    throw new Error("context-v4-restart-source-binding-invalid");
+                if (manifest.segments.length !== 1 && !manifest.source.logicalSessionId)
+                    throw new Error("context-v4-interval-routed-source-unavailable");
+                const captured = manifest.source.logicalSessionId ? intervalSourceSnapshot : captureIntervalSource({ ...manifest.source,
+                    branchEntries: ctx.sessionManager.getBranch(), endEntryId: manifest.endEntryId,
+                    controlIdentities: manifest.controlIdentities, bounds: manifest.bounds });
+                if (!captured || manifest.source.logicalSessionId && (!intervalSourcePin || !restart.logicalSource
+                    || intervalSourcePin.validationManifest.identity !== restart.logicalSource.identity)) {
+                    throw new Error("context-v4-interval-logical-source-pin-unavailable");
+                }
+                if (captured.identity !== restart.snapshotId || captured.sourceHash !== manifest.sourceHash
+                    || captured.projectionHash !== manifest.projectionHash || stableStringify(captured.origin) !== stableStringify(manifest.origin)
+                    || stableStringify(captured.segments) !== stableStringify(manifest.segments)
+                    || stableStringify(captured.events.slice(restart.partition.rawStart, restart.partition.endExclusive))
+                        !== stableStringify(restart.exactTail))
+                    throw new Error("context-v4-restart-source-changed");
+            } });
+    };
+    const refreshCommittedRestart = async (ctx) => {
+        const compaction = ctx.sessionManager.buildContextEntries().find(entry => entry.type === "compaction");
+        const receipt = compaction ? committedIntervalRestartReceipt(compaction, ctx.sessionManager.getSessionId()) : undefined;
+        const restart = receipt?.restart;
+        if (!restart?.source.source.logicalSessionId)
+            return;
+        if (!restart.logicalSource)
+            throw new Error("context-v4-interval-logical-source-manifest-unavailable");
+        await refreshIntervalSource(ctx, { ...restart.source, identity: restart.snapshotId }, restart.logicalSource, ctx.signal?.aborted ? undefined : ctx.signal, true);
+    };
+    const queueIntervalRecovery = (ctx, reason) => {
+        if (preview || recoveryUsed || recoveryIntent || pendingRecovery || ctx.hasPendingMessages()) {
+            refuseSessionSummary(ctx, new Error(recoveryUsed ? "context-v4-recovery-attempt-exhausted" : reason));
+            return;
+        }
+        clearSessionSummary();
+        const now = Date.now();
+        recoveryIntent = { scope: sessionSummaryScope(ctx, summaryEpoch), createdAt: now,
+            expiresAt: now + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs, reason };
+        compactionRetryPaused = true;
+        valueWorkerCompactionGate = true;
+        providerAdmission = undefined;
+        cancelValueWorker();
+        cancelIncrementalWork(false);
+        // Public Pi emits turn_end for the aborted attempt. The abort cause is not
+        // distinguishable from user cancellation, so this repair never auto-resumes.
+        if (!ctx.isIdle())
+            ctx.abort();
+    };
+    const reportRecoveryRefusal = (ctx, error) => {
+        const detail = error instanceof IntervalRecoveryRefusal ? { sourceEntryId: error.sourceEntryId,
+            requiredTokens: error.requiredTokens, availableTokens: error.availableTokens } : undefined;
+        refuseSessionSummary(ctx, error);
+        if (detail && ctx.hasUI)
+            ctx.ui.notify(`Recovery bound: ${JSON.stringify(detail)}. Protected source is unchanged.`, "warning");
+    };
+    // Native manual compaction can refuse before its hook when the retained
+    // projection is short. Commit the accepted writer result at this public
+    // boundary instead. The same persisted-commit gate owns continuation.
+    const prepareAcceptedSummaryProposal = async (ctx, event, state) => {
+        requireIntervalBoundary(ctx, event);
+        if (preview || sessionSummary !== state || !state.accepted || pendingRecovery || event.outcome !== "completed"
+            || event.continue || event.entries.length || event.context.pendingMessages.length || inputPending || ctx.hasPendingMessages()
+            || state.signal?.aborted || ctx.signal?.aborted)
+            throw new Error("session-agent-summary-boundary-unavailable");
+        const ready = settleSessionAgentSummary(state.accepted, summaryObservation(ctx));
+        if (event.messageEntryId !== ready.submissionAssistantLeafId || event.toolResultEntryIds.length !== 1
+            || event.toolResultEntryIds[0] !== ready.submissionResultLeafId)
+            throw new Error("session-agent-summary-boundary-changed");
+        const scope = sessionSummaryScope(ctx, summaryEpoch), operationId = ready.request.requestId;
+        const budget = captureIntervalRuntimeBudget(pi, ctx), budgetKey = stableStringify(budget);
+        const settingsKey = stableStringify(searchSettings());
+        const revalidate = () => {
+            if (sessionSummary !== state || state.signal?.aborted || ctx.signal?.aborted || inputPending || ctx.hasPendingMessages()
+                || stableStringify(scope) !== stableStringify(sessionSummaryScope(ctx, summaryEpoch))
+                || stableStringify(searchSettings()) !== settingsKey || stableStringify(captureIntervalRuntimeBudget(pi, ctx)) !== budgetKey
+                || stableStringify(userConfig.historyHelpers ?? null) !== state.historyConfigKey)
+                throw new Error("context-v4-input-changed");
+            validateSessionAgentSummary(ready, summaryObservation(ctx));
+            if (settleSessionAgentSummary(ready, summaryObservation(ctx)).submissionResultLeafId !== ready.submissionResultLeafId) {
+                throw new Error("session-agent-summary-boundary-changed");
+            }
+            revalidateRuntimeInterval(ctx, state.interval);
+        };
+        await refreshIntervalSource(ctx, state.interval, state.logicalSource, state.signal);
+        revalidate();
+        if (!ready.submission.continuation)
+            throw new Error("session-agent-summary-fresh-continuation-required");
+        const retainNoneIntent = `retain-none:${operationId}`;
+        const input = await captureContextCompilation(pi, {
+            scope: { sessionId: scope.sessionId, leafId: scope.leafId }, sourceCutEntryId: state.interval.endEntryId,
+            firstKeptEntryId: retainNoneIntent, nativeRetention: { kind: "none", operationId },
+            memoryOwner, budget, rawTail: { tokens: 0, messages: 0, toolPairSafe: true }, interval: state.interval,
+            logicalSource: state.logicalSource,
+            sessionSummary: { text: ready.submission.handoff, handoff: ready.submission.handoff, continuation: ready.submission.continuation,
+                authorship: "current-agent", requestId: operationId, requestLeafId: ready.request.scope.leafId,
+                consumedBoundaryLeafId: ready.consumedBoundaryLeafId, submissionEntryId: ready.submissionAssistantLeafId,
+                submissionToolCallId: ready.submissionToolCallId, relevanceHints: ready.submission.relevanceHints },
+            readyHistory: (snapshot, currentBudget) => readyIntervalHistory(ctx, snapshot, currentBudget, state.signal),
+        }, { getScope: () => ({ sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId() ?? null }),
+            epoch: () => summaryEpoch, signal: state.signal, revalidate });
+        const compiled = compileContext(input);
+        await refreshIntervalSource(ctx, state.interval, state.logicalSource, state.signal);
+        revalidate();
+        requireExpandedRestartBudget(ctx, compiled);
+        revalidate();
+        state.removeAbortListener?.();
+        sessionSummary = undefined;
+        summaryInputIntent = undefined;
+        summaryRecoveryRequested = false;
+        intervalPreparation = undefined;
+        providerAdmission = undefined;
+        compactionRetryPaused = true;
+        valueWorkerCompactionGate = true;
+        pendingRecovery = { scope, parentId: scope.leafId, operationId, expiresAt: ready.request.expiresAt,
+            interval: state.interval, compiled, historyConfigKey: state.historyConfigKey, authorship: "current-agent",
+            resumeAfter: state.resumeAfter, nativeContinue: state.resumeAfter, allowArchive: true, signal: state.signal };
+        compilerTerminal = { state: "returned", receiptId: compiled.receipt.receiptId };
+        return { entries: [{ type: "compaction", summary: compiled.summary, firstKeptEntryId: null,
+                    details: { kind: "chrono-v4-current-agent", contextReceipt: compiled.receipt,
+                        summaryOperation: { schemaVersion: 1, operationId, retention: "none", retainNoneIntent,
+                            sourceSnapshotId: state.interval.identity, submissionResultEntryId: ready.submissionResultLeafId, authority: "derived" } } }],
+            continue: pendingRecovery.nativeContinue };
+    };
+    const prepareRecoveryProposal = async (ctx, event, reason, resumeAfter, failedSummaryEntryId) => {
+        requireIntervalBoundary(ctx, event);
+        if (preview || pendingRecovery || recoveryUsed || event.entries.length || event.context.pendingMessages.length
+            || inputPending || ctx.hasPendingMessages())
+            throw new Error("context-v4-recovery-boundary-unavailable");
+        const intent = recoveryIntent;
+        if (intent)
+            validateDeferredSessionSummaryIntent(intent, summaryObservation(ctx));
+        const scope = sessionSummaryScope(ctx, summaryEpoch), operationId = randomUUID(), now = Date.now();
+        const priorInterval = sessionSummary?.interval;
+        const logicalSource = sessionSummary?.logicalSource;
+        if (priorInterval && !failedSummaryEntryId)
+            throw new Error("context-v4-recovery-summary-correlation-unavailable");
+        const generatedSuffixEntryIds = failedSummaryEntryId ? [failedSummaryEntryId] : [];
+        const recoveryControls = priorInterval ? { ...priorInterval.controlIdentities,
+            entryIds: [...priorInterval.controlIdentities.entryIds ?? [], ...generatedSuffixEntryIds] } : undefined;
+        await refreshIntervalSource(ctx, priorInterval && { ...priorInterval, controlIdentities: recoveryControls }, logicalSource, event.outcome === "aborted" ? undefined : ctx.signal, false, generatedSuffixEntryIds);
+        const interval = priorInterval ? captureIntervalSource({ ...priorInterval.source,
+            branchEntries: intervalSourcePin?.branchEntries ?? ctx.sessionManager.getBranch(),
+            routedSegments: intervalSourcePin?.routedSegments, endEntryId: priorInterval.endEntryId,
+            bounds: priorInterval.bounds, controlIdentities: recoveryControls }) : captureCurrentInterval(ctx);
+        if (priorInterval && interval.identity !== priorInterval.identity)
+            throw new Error("context-v4-recovery-source-changed");
+        intervalSourceSnapshot = interval;
+        const budget = captureIntervalRuntimeBudget(pi, ctx);
+        const budgetKey = stableStringify(budget), historyConfigKey = stableStringify(userConfig.historyHelpers ?? null);
+        let plan;
+        try {
+            plan = planIntervalContext(interval, budget);
+        }
+        catch (error) {
+            if (safeCompositionFailureCode(error) === "context-v4-interval-required-unit-oversized") {
+                const layers = deriveIntervalBudget({ model: budget.model, systemTokens: budget.systemTokens,
+                    toolSchemaTokens: budget.toolSchemaTokens, framingTokens: budget.framingTokens,
+                    effectiveAvailableTokens: budget.effectiveCeilingTokens });
+                const unit = interval.units.at(-1);
+                const required = chargeRawTail(unit.eventIndexes.map(index => interval.events[index].projectedEntry)).tokens;
+                throw new IntervalRecoveryRefusal("context-v4-interval-required-unit-oversized", interval.events[unit.start].entryId, required, Math.max(0, layers.effectiveAvailableTokens - layers.handoffTokens - layers.continuationTokens - 1536));
+            }
+            throw error;
+        }
+        const { partition, layers } = plan;
+        const signal = event.outcome === "aborted" ? undefined : ctx.signal;
+        const revalidate = () => {
+            if (Date.now() >= now + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs || signal?.aborted || inputPending || ctx.hasPendingMessages()
+                || stableStringify(scope) !== stableStringify(sessionSummaryScope(ctx, summaryEpoch))
+                || stableStringify(captureIntervalRuntimeBudget(pi, ctx)) !== budgetKey
+                || stableStringify(userConfig.historyHelpers ?? null) !== historyConfigKey)
+                throw new Error("context-v4-recovery-input-changed");
+            revalidateRuntimeInterval(ctx, interval);
+        };
+        revalidate();
+        const native = await collectContext(pi, { records: 16, scan: 128, providerBytes: 16384, maxBytes: 32768, waitMs: 150 }, {
+            getScope: () => ({ sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId() ?? null }),
+            epoch: () => summaryEpoch, signal
+        });
+        revalidate();
+        const earlier = interval.origin.entryId ? ctx.sessionManager.getEntry(interval.origin.entryId) : undefined;
+        const earlierReceipt = (earlier?.type === "compaction" ? earlier.details : undefined)?.contextReceipt;
+        const checkpointText = earlierReceipt?.sessionSummary?.handoff ?? earlierReceipt?.sessionSummary?.text
+            ?? (earlier?.type === "compaction" ? earlier.summary : undefined);
+        const recovery = buildDeterministicRecoveryHandoff({ intervalEndEntryId: interval.endEntryId,
+            projectedOriginalEntries: interval.events.map(item => item.projectedEntry),
+            exactTailEntryIds: new Set(interval.events.slice(partition.rawStart, partition.endExclusive).map(item => item.entryId)),
+            ...(earlier?.id && checkpointText ? { checkpoint: { entryId: earlier.id, text: checkpointText } } : {}),
+            stateReferences: native.providers.flatMap(provider => (provider.page?.cards ?? []).map(card => ({
+                providerId: provider.providerId, id: card.id, revision: card.revision, status: card.status, recovery: card.recovery
+            }))),
+            stateCoverage: native.providers.map(provider => `${provider.providerId}: ${provider.status}, ${provider.page?.readiness ?? "unavailable"}`),
+            handoffBudgetTokens: layers.handoffTokens });
+        // Native null retention gets its own ID only at commit. This intent marker
+        // is explicitly not a fabricated source ID and cannot retain a source tail.
+        const retainNoneIntent = `retain-none:${operationId}`;
+        const input = freezeContextInput({ scope: { sessionId: scope.sessionId, leafId: scope.leafId }, sourceCutEntryId: interval.endEntryId,
+            firstKeptEntryId: retainNoneIntent, nativeRetention: { kind: "none", operationId },
+            memoryOwner, budget, rawTail: { tokens: 0, messages: 0, toolPairSafe: true }, native, interval,
+            logicalSource: intervalSourcePin?.validationManifest,
+            sessionSummary: { text: recovery.handoff, handoff: recovery.handoff, continuation: recovery.continuation,
+                authorship: recovery.authorship, requestId: operationId, requestLeafId: scope.leafId, consumedBoundaryLeafId: scope.leafId,
+                submissionEntryId: scope.leafId, submissionToolCallId: `runtime:${operationId}`, relevanceHints: [] },
+            history: { kind: "interval", relevance: [] } });
+        const compiled = compileContext(input);
+        await refreshIntervalSource(ctx, interval, input.logicalSource, signal, false, generatedSuffixEntryIds);
+        revalidate();
+        requireExpandedRestartBudget(ctx, compiled);
+        revalidate();
+        recoveryUsed = true;
+        recoveryIntent = undefined;
+        sessionSummary?.removeAbortListener?.();
+        sessionSummary = undefined;
+        summaryInputIntent = undefined;
+        summaryRecoveryRequested = false;
+        intervalPreparation = undefined;
+        providerAdmission = undefined;
+        compactionRetryPaused = true;
+        valueWorkerCompactionGate = true;
+        pendingRecovery = { scope, parentId: scope.leafId, operationId, expiresAt: now + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs,
+            interval, compiled, historyConfigKey, authorship: "deterministic-recovery",
+            resumeAfter: resumeAfter && event.outcome !== "aborted" && !signal?.aborted,
+            nativeContinue: resumeAfter && event.outcome === "completed", allowArchive: event.outcome !== "aborted", signal };
+        compilerTerminal = { state: "returned", receiptId: compiled.receipt.receiptId };
+        return { entries: [{ type: "compaction", summary: compiled.summary, firstKeptEntryId: null,
+                    details: { kind: "chrono-v4-deterministic-recovery", contextReceipt: compiled.receipt,
+                        recoveryOperation: { schemaVersion: 1, operationId, reason, retention: "none", retainNoneIntent,
+                            sourceSnapshotId: interval.identity, protectedEntryIds: recovery.protectedEntryIds, authority: "derived" } } }],
+            continue: pendingRecovery.nativeContinue };
+    };
+    const verifyRecoveryCommit = (ctx) => {
+        const pending = pendingRecovery;
+        if (!pending)
+            return false;
+        const scope = sessionSummaryScope(ctx, summaryEpoch);
+        if (pending.scope.epoch !== summaryEpoch || pending.scope.sessionId !== scope.sessionId
+            || pending.scope.sessionFile !== scope.sessionFile || stableStringify(pending.scope.model) !== stableStringify(scope.model)
+            || inputPending || ctx.hasPendingMessages() || Date.now() >= pending.expiresAt
+            || stableStringify(userConfig.historyHelpers ?? null) !== pending.historyConfigKey)
+            throw new Error("context-v4-recovery-commit-stale");
+        const entry = correlatedBoundaryCompaction({ entries: ctx.sessionManager.getBranch(),
+            sessionId: scope.sessionId, parentId: pending.parentId, operationId: pending.operationId,
+            receiptId: pending.compiled.receipt.receiptId, summaryHash: pending.compiled.receipt.summaryHash,
+            expectedReceipt: pending.compiled.receipt });
+        if (!entry)
+            throw new Error("context-v4-recovery-commit-unobserved");
+        projectIntervalRestart(ctx, ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages));
+        const eligible = pending.resumeAfter && !pending.signal?.aborted && !ctx.signal?.aborted;
+        clearSessionSummary(true);
+        compactionRetryPaused = pending.authorship === "current-agent"
+            ? !!pending.signal?.aborted || !!ctx.signal?.aborted : !eligible;
+        compilerTerminal = { state: "committed", receiptId: pending.compiled.receipt.receiptId };
+        committedReceipt = contextReceiptLocator(entry, scope.sessionId);
+        receiptLookupEntries = 1;
+        receiptLookupComplete = true;
+        valueWorkerCompactionGate = false;
+        triggerPending = false;
+        lastTriggerAttemptTokens = undefined;
+        if (eligible)
+            retainCompactionResume(ctx, entry, pending.signal);
+        if (pending.allowArchive && !pending.signal?.aborted) {
+            intervalHelpers.archiveVerified({ snapshot: pending.interval, commitId: entry.id, verified: true, ctx });
+        }
+        return pending.nativeContinue && eligible;
+    };
     pi.on("context", async (event, ctx) => {
+        let contextBinding = originalRunBinding(ctx);
         const project = async () => {
             const seenToolCallIds = projectionSeenToolCallIds;
             projectionSeenToolCallIds = new Set();
@@ -2251,13 +2897,39 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 return undefined;
             }
         };
-        const projected = preview ? undefined : await project();
+        let projected;
+        if (!preview && searchSettings().contextCompiler === "v4") {
+            try {
+                requireIntervalHost(ctx);
+                await refreshCommittedRestart(ctx);
+                if (contextBinding !== originalRunBinding(ctx))
+                    return undefined;
+                if (pendingRecovery) {
+                    if (verifyRecoveryCommit(ctx))
+                        takeCompactionResume(ctx);
+                    contextBinding = originalRunBinding(ctx);
+                }
+                const expanded = projectIntervalRestart(ctx, event.messages);
+                if (expanded)
+                    projected = { messages: expanded };
+            }
+            catch (error) {
+                if (contextBinding === originalRunBinding(ctx))
+                    refuseSessionSummary(ctx, error);
+                return undefined;
+            }
+        }
+        else if (!preview)
+            projected = await project();
+        if (contextBinding !== originalRunBinding(ctx))
+            return undefined;
         providerAdmission = undefined;
         if (searchSettings().contextCompiler === "v4") {
             try {
-                const messages = projected?.messages ?? event.messages;
-                const { tokens, projectionTokens } = currentRequestBudget(ctx, messages);
-                const state = sessionSummary;
+                requireIntervalHost(ctx);
+                let messages = projected?.messages ?? event.messages;
+                let { tokens } = currentRequestBudget(ctx, messages);
+                let state = sessionSummary;
                 if (state) {
                     if (state.delivery !== "sent" || state.consumed || state.accepted || triggerPending)
                         throw new Error("session-agent-summary-provider-suspended");
@@ -2267,27 +2939,72 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     const consumed = consumeSessionAgentSummaryRequest(state.request, summaryObservation(ctx), messages);
                     if (!consumed)
                         throw new Error("session-agent-summary-request-unavailable");
-                    // The prompt is already in this projection. Do not charge it twice.
-                    summaryHeadroom(ctx, "", tokens);
+                    requireSummaryReadiness(ctx, tokens);
                     state.consumed = consumed;
                 }
-                else if (summaryIntent || (compactionRetryPaused && !summaryRecoveryRequested)) {
+                else if (pendingRecovery || recoveryIntent || (compactionRetryPaused && !summaryRecoveryRequested)) {
                     if (!ctx.isIdle())
                         ctx.abort();
                     return projected;
                 }
-                else if (summaryRecoveryRequested || summaryTrigger(ctx, tokens)) {
-                    deferSessionSummary(ctx, summaryRecoveryRequested ? "manual" : "threshold", tokens);
-                    return projected;
-                }
                 else {
-                    summaryHeadroom(ctx, " ".repeat(SESSION_AGENT_SUMMARY_LIMITS.promptBytes), tokens);
+                    const directRecovery = summaryRecoveryRequested;
+                    const pressure = directRecovery ? undefined : intervalPressure(ctx, tokens);
+                    if (pressure && !pressure.budget.available)
+                        throw new Error(`context-v4-${pressure.reasons[0] ?? "interval-policy-unavailable"}`);
+                    if (pressure?.status === "recovery") {
+                        queueIntervalRecovery(ctx, pressure.reasons[0] ?? "context-v4-recovery-admission-unavailable");
+                        return projected;
+                    }
+                    if (directRecovery || pressure?.status === "freeze" || tokens >= summaryTriggerLimit(ctx)) {
+                        const intent = summaryInputIntent;
+                        if (inputPending || ctx.signal?.aborted || (directRecovery && !intent))
+                            throw new Error("session-agent-summary-direct-input-unavailable");
+                        const requestScope = directRecovery ? bindSessionAgentSummaryInput(intent, summaryObservation(ctx), messages)
+                            : sessionSummaryScope(ctx, summaryEpoch);
+                        await refreshIntervalSource(ctx);
+                        if (contextBinding !== originalRunBinding(ctx) || (directRecovery && summaryInputIntent !== intent))
+                            return undefined;
+                        // Use this same request for the handoff when direct input recovers
+                        // a paused session or estimated pressure freezes ordinary work.
+                        const reason = directRecovery ? "manual" : "threshold";
+                        state = beginSessionSummary(ctx, reason, "sent", undefined, undefined, tokens, directRecovery, captureOriginalContinuation(ctx, reason), undefined, requestScope);
+                        const content = renderSessionAgentSummaryRequest(state.request);
+                        const requestMessage = { role: "custom", customType: SESSION_AGENT_SUMMARY_CUSTOM_TYPE,
+                            content, display: false, timestamp: state.request.createdAt,
+                            details: { requestId: state.request.requestId, authority: "derived",
+                                ...(directRecovery ? { userEntryId: requestScope.leafId } : { sourceEntryId: requestScope.leafId }) } };
+                        messages = [...messages, requestMessage];
+                        ({ tokens } = currentRequestBudget(ctx, messages));
+                        requireSummaryReadiness(ctx, tokens);
+                        if (directRecovery)
+                            pi.appendEntry("chrono-summary-input-operation", { schemaVersion: 1, requestId: state.request.requestId,
+                                userEntryId: requestScope.leafId, sourceSnapshotId: state.interval.identity, authority: "derived" });
+                        watchSummaryAbort(ctx, state, ctx.signal);
+                        if (sessionSummary !== state)
+                            return undefined;
+                        state.consumed = consumeSessionAgentSummaryRequest(state.request, summaryObservation(ctx), messages);
+                        if (!state.consumed)
+                            throw new Error("session-agent-summary-request-unavailable");
+                        projected = { messages };
+                    }
+                    else {
+                        if (lastIntervalRequestTokens !== undefined)
+                            intervalGrowthTokens = Math.max(0, tokens - lastIntervalRequestTokens);
+                        lastIntervalRequestTokens = tokens;
+                    }
                 }
-                providerAdmission = { scope: sessionSummaryScope(ctx, summaryEpoch), tokens, projectionTokens,
+                providerAdmission = { scope: sessionSummaryScope(ctx, summaryEpoch),
                     ...(state ? { requestId: state.request.requestId } : {}) };
             }
             catch (error) {
-                refuseSessionSummary(ctx, error);
+                if (contextBinding !== originalRunBinding(ctx))
+                    return undefined;
+                if (!sessionSummary && !summaryRecoveryRequested && safeCompositionFailureCode(error) === "session-agent-summary-headroom-unavailable") {
+                    queueIntervalRecovery(ctx, "context-v4-recovery-admission-unavailable");
+                }
+                else
+                    refuseSessionSummary(ctx, error);
             }
         }
         return projected;
@@ -2295,22 +3012,24 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("before_provider_request", (event, ctx) => {
         if (searchSettings().contextCompiler !== "v4")
             return;
+        let payload = event.payload;
         try {
+            requireIntervalHost(ctx);
+            payload = capIntervalProviderPayload(ctx.model, payload);
             const admission = providerAdmission, state = sessionSummary;
             if (!admission || stableStringify(admission.scope) !== stableStringify(sessionSummaryScope(ctx, summaryEpoch))
-                || summaryIntent || state?.accepted || (compactionRetryPaused && !state)
+                || pendingRecovery || recoveryIntent || state?.accepted || (compactionRetryPaused && !state)
                 || admission.requestId !== state?.request.requestId || (state && !state.consumed)) {
                 throw new Error("session-agent-summary-provider-suspended");
             }
-            // Public late cancellation is best effort. Installed cached Codex can
-            // invoke send before checking abort. The earlier context hook is primary.
-            summaryHeadroom(ctx, state ? "" : " ".repeat(SESSION_AGENT_SUMMARY_LIMITS.promptBytes), estimateProviderRequestTokens({ api: ctx.model?.api ?? "", payload: event.payload,
-                projectionTokens: admission.projectionTokens, admittedTokens: admission.tokens, nativeTokens: ctx.getContextUsage()?.tokens }));
+            // The context hook owns the token estimate. This hook only preserves
+            // request lifecycle guards and the supported completion output cap.
         }
         catch (error) {
             refuseSessionSummary(ctx, error);
         }
-        // Do not throw, return a malformed payload or change the normal request.
+        // Preserve the request apart from its supported, budget-bound output cap.
+        return payload === event.payload ? undefined : payload;
     });
     const resolveStartedLogicalSession = async (ctx) => {
         const entries = asEntries(ctx.sessionManager.getBranch());
@@ -2373,9 +3092,14 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     };
     pi.on("session_start", async (event, ctx) => {
         inputPending = false;
+        recoveryUsed = false;
+        intervalGrowthTokens = 0;
+        lastIntervalRequestTokens = undefined;
+        intervalHelpers.invalidate();
+        helperPreparationKey = undefined;
         if (searchSettings().contextCompiler !== "v4")
             compactionRetryPaused = false;
-        else if (sessionSummary || summaryIntent)
+        else if (sessionSummary || pendingRecovery || recoveryIntent)
             compactionRetryPaused = true;
         clearSessionSummary();
         if (preview)
@@ -2472,7 +3196,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     });
     const invalidateSummaryScope = (ctx) => {
         inputPending = false;
-        if (sessionSummary || summaryIntent)
+        intervalHelpers.invalidate();
+        helperPreparationKey = undefined;
+        intervalGrowthTokens = 0;
+        lastIntervalRequestTokens = undefined;
+        if (sessionSummary || pendingRecovery || recoveryIntent)
             refuseSessionSummary(ctx, new Error("session-agent-summary-session-changed"));
         else
             clearSessionSummary();
@@ -2480,8 +3208,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("session_before_tree", (_event, ctx) => { invalidateSummaryScope(ctx); });
     pi.on("model_select", (_event, ctx) => { invalidateSummaryScope(ctx); });
     pi.on("thinking_level_select", (_event, ctx) => { invalidateSummaryScope(ctx); });
-    pi.on("input", (event) => {
-        const interrupted = !!sessionSummary || !!summaryIntent;
+    pi.on("input", (event, ctx) => {
+        const interrupted = !!sessionSummary || !!pendingRecovery || !!recoveryIntent;
+        intervalHelpers.invalidate();
+        helperPreparationKey = undefined;
+        if (event.source === "interactive" || event.source === "rpc")
+            recoveryUsed = false;
         clearSessionSummary();
         // Pi may compact the old projection before it persists this new prompt.
         // Fence both summary delivery and hidden continuation at input receipt.
@@ -2491,6 +3223,17 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             // Input from extensions is not deliberate recovery. Pin the new native
             // user leaf later in context, after Pi has persisted the direct input.
             summaryRecoveryRequested = compactionRetryPaused && (event.source === "interactive" || event.source === "rpc");
+            if (summaryRecoveryRequested) {
+                try {
+                    requireIntervalHost(ctx);
+                    const now = Date.now();
+                    summaryInputIntent = { scope: sessionSummaryScope(ctx, summaryEpoch), createdAt: now,
+                        expiresAt: now + SESSION_AGENT_SUMMARY_LIMITS.lifetimeMs };
+                }
+                catch (error) {
+                    refuseSessionSummary(ctx, error);
+                }
+            }
         }
         else
             compactionRetryPaused = false;
@@ -2499,7 +3242,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         return { action: "continue" };
     });
     pi.on("session_tree", (_event, ctx) => {
-        if (sessionSummary || summaryIntent)
+        if (sessionSummary || pendingRecovery || recoveryIntent)
             compactionRetryPaused = true;
         clearSessionSummary();
         if (preview)
@@ -2578,6 +3321,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     });
     pi.on("session_shutdown", () => {
         clearSessionSummary();
+        intervalHelpers.close();
         if (preview)
             return;
         ownedCompaction = undefined;
@@ -2605,7 +3349,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     pi.on("before_agent_start", () => { if (searchSettings().contextCompiler !== "v4")
         compactionRetryPaused = false; });
     pi.on("agent_start", (_event, ctx) => {
-        if (sessionSummary || summaryIntent)
+        if (sessionSummary)
             return;
         const binding = originalRunBinding(ctx);
         if (originalRun?.binding !== binding)
@@ -2622,7 +3366,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         if (message.role === "custom" && [SESSION_AGENT_SUMMARY_CUSTOM_TYPE, SESSION_AGENT_BOUNDARY_CUSTOM_TYPE,
             CONTEXT_RESUME_CUSTOM_TYPE, CONTEXT_WARNING_CUSTOM_TYPE].includes(message.customType))
             return;
-        if (sessionSummary || summaryIntent) {
+        if (sessionSummary || pendingRecovery || recoveryIntent) {
             refuseSessionSummary(ctx, new Error("session-agent-summary-request-interrupted"));
             return;
         }
@@ -2638,46 +3382,97 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         if (!originalRun)
             return;
         originalRun.inLoop = false;
-        if (!sessionSummary && !summaryIntent && ctx.signal?.aborted)
+        if (!sessionSummary && ctx.signal?.aborted)
             originalRun.unresolved = false;
     });
-    pi.on("turn_end", (event, ctx) => {
-        observeOriginalTurn(ctx, event.message);
+    pi.on("turn_end", async (event, ctx) => {
         if (preview && !sessionSummary)
-            return;
-        if (compactionRetryPaused && !sessionSummary) {
-            if (searchSettings().contextCompiler === "v4" && !ctx.isIdle())
-                ctx.abort();
-            return;
-        }
-        const usage = ctx.getContextUsage();
-        const reportedTokens = event.message.role === "assistant" ? (event.message.usage?.totalTokens ?? 0) : 0;
+            return undefined;
+        const binding = originalRunBinding(ctx);
+        observeOriginalTurn(ctx, event.message);
+        const usage = ctx.getContextUsage(), message = event.message;
+        // Only a successful same-model observation may anchor current admission.
+        const validObservation = message.role === "assistant" && !["error", "aborted", "pending"].includes(message.stopReason ?? "")
+            && message.provider === ctx.model?.provider && message.model === ctx.model?.id && message.api === ctx.model?.api;
+        const reportedTokens = validObservation && Number.isFinite(message.usage?.totalTokens)
+            && (message.usage?.totalTokens ?? 0) > 0 ? message.usage.totalTokens : 0;
         const currentTokens = Math.max(usage?.tokens ?? 0, reportedTokens);
         const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
         const percent = contextWindow > 0 ? (currentTokens / contextWindow) * 100 : 0;
         if (searchSettings().contextCompiler === "v4") {
             try {
+                requireIntervalBoundary(ctx, event);
+                const sameModel = message.role === "assistant" && message.provider === ctx.model?.provider
+                    && message.model === ctx.model?.id && message.api === ctx.model?.api;
+                const assistant = message;
+                const sizeFailure = sameModel && (isContextOverflow(assistant, ctx.model?.contextWindow)
+                    || isRecoverableLength(assistant, ctx.model?.maxTokens ?? 0));
+                if (recoveryIntent || sizeFailure) {
+                    const state = sessionSummary;
+                    const failedSummaryEntryId = state?.consumed
+                        ? identifyFailedSessionAgentSummary(state.consumed, summaryObservation(ctx), event.messageEntryId) : undefined;
+                    const resumeAfter = !recoveryIntent && (state ? state.resumeAfter : captureOriginalContinuation(ctx, "threshold"));
+                    return await prepareRecoveryProposal(ctx, event, recoveryIntent?.reason ?? "context-v4-provider-size-failure", resumeAfter, failedSummaryEntryId);
+                }
+                if (pendingRecovery)
+                    throw new Error("context-v4-recovery-commit-unobserved");
+                if (compactionRetryPaused && !sessionSummary)
+                    return undefined;
                 const state = sessionSummary;
                 if (state) {
+                    if (stableStringify(userConfig.historyHelpers ?? null) !== state.historyConfigKey)
+                        throw new Error("session-agent-summary-request-interrupted");
                     const view = summaryObservation(ctx);
                     consumeSessionAgentSummaryRequest(state.request, view, []);
-                    if (state.accepted)
+                    if (state.accepted) {
+                        if (!preview)
+                            return await prepareAcceptedSummaryProposal(ctx, event, state);
                         settleSessionAgentSummary(state.accepted, view);
+                    }
                     else if (state.consumed)
                         throw new Error("session-agent-summary-submission-unavailable");
                     else
-                        summaryHeadroom(ctx, "", currentRequestTokens(ctx, undefined, currentTokens));
-                    return; // A valid summary turn is the only admitted pre-commit work.
+                        requireSummaryReadiness(ctx, currentRequestTokens(ctx, undefined, currentTokens));
+                    return undefined;
                 }
-                if (!summaryIntent && summaryTrigger(ctx, currentTokens) && !ctx.hasPendingMessages()) {
-                    deferSessionSummary(ctx, "threshold", currentRequestTokens(ctx, undefined, currentTokens));
+                if (event.outcome !== "completed" || event.entries.length || event.context.pendingMessages.length
+                    || inputPending || ctx.hasPendingMessages())
+                    return undefined;
+                if (intervalPreparation?.binding === originalRunBinding(ctx))
+                    intervalPreparation.turns++;
+                const tokens = currentRequestTokens(ctx, undefined, reportedTokens);
+                const pressure = intervalPressure(ctx, tokens);
+                if (!pressure.budget.available)
+                    throw new Error(`context-v4-${pressure.reasons[0] ?? "interval-policy-unavailable"}`);
+                if ((userConfig.historyHelpers?.activePrefix || userConfig.historyHelpers?.event)
+                    && (pressure.status === "notice" || event.toolResults.some(result => !result.isError && ["workplan", "todo"].includes(result.toolName ?? "")))) {
+                    await refreshIntervalSource(ctx);
+                    if (binding !== originalRunBinding(ctx))
+                        return undefined;
+                    prepareIntervalHelpers(ctx, captureCurrentInterval(ctx), captureIntervalRuntimeBudget(pi, ctx));
                 }
+                if (pressure.status === "recovery") {
+                    return await prepareRecoveryProposal(ctx, event, pressure.reasons[0] ?? "context-v4-recovery-admission-unavailable", captureOriginalContinuation(ctx, "threshold"));
+                }
+                if (pressure.status === "freeze" || tokens >= summaryTriggerLimit(ctx)) {
+                    await refreshIntervalSource(ctx);
+                    if (binding !== originalRunBinding(ctx))
+                        return undefined;
+                    const request = beginSessionSummary(ctx, "threshold", "sent", undefined, undefined, tokens);
+                    return { entries: [{ type: "custom_message", customType: SESSION_AGENT_SUMMARY_CUSTOM_TYPE,
+                                content: renderSessionAgentSummaryRequest(request.request), display: false }], continue: true };
+                }
+                if (pressure.status === "notice")
+                    noticeIntervalPreparation(ctx);
             }
             catch (error) {
-                refuseSessionSummary(ctx, error);
+                if (binding === originalRunBinding(ctx))
+                    reportRecoveryRefusal(ctx, error);
             }
-            return;
+            return undefined;
         }
+        if (compactionRetryPaused)
+            return undefined;
         if (forcedCompactionReason) {
             if (!ctx.isIdle())
                 ctx.abort();
@@ -2706,7 +3501,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             blockers.push("session-busy");
         if (ctx.hasUI && ctx.ui.getEditorText().length > 0)
             blockers.push("editor-draft");
-        if (triggerPending || valueWorkerCompactionGate || logicalSwitchActive || forcedCompactionReason || sessionSummary || compactionResume)
+        if (triggerPending || valueWorkerCompactionGate || logicalSwitchActive || forcedCompactionReason || sessionSummary || compactionResume
+            || pendingRecovery || recoveryIntent || intervalPreparation)
             blockers.push("compaction-or-switch-active");
         if (compactionRetryPaused)
             blockers.push("compaction-retry-paused");
@@ -2779,27 +3575,71 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     };
     // Native retry and queued work run first. This boundary is actionable even
     // though ctx.isIdle() is false for the surrounding AgentSession run.
-    pi.on("agent_before_settle", (event, ctx) => {
+    pi.on("agent_before_settle", async (event, ctx) => {
+        if (preview)
+            return undefined;
+        const binding = originalRunBinding(ctx);
+        if (pendingRecovery || compactionResume) {
+            try {
+                requireIntervalBoundary(ctx, event);
+                await refreshCommittedRestart(ctx);
+                if (binding !== originalRunBinding(ctx))
+                    return undefined;
+            }
+            catch (error) {
+                if (binding === originalRunBinding(ctx))
+                    reportRecoveryRefusal(ctx, error);
+                return undefined;
+            }
+        }
+        const recovery = pendingRecovery?.authorship === "deterministic-recovery";
+        if (pendingRecovery) {
+            try {
+                verifyRecoveryCommit(ctx);
+            }
+            catch (error) {
+                reportRecoveryRefusal(ctx, error);
+                return undefined;
+            }
+        }
         if (!compactionResume)
             return undefined;
-        if (event.outcome !== "completed" || event.continue || event.entries.length || event.context.pendingMessages.length) {
+        if ((event.outcome !== "completed" && !(recovery && event.outcome === "error"))
+            || event.continue || event.entries.length || event.context.pendingMessages.length) {
             compactionResume = undefined;
             return undefined;
         }
         const message = takeCompactionResume(ctx);
         return message ? { entries: [...event.entries, { type: "custom_message", ...message }], continue: true } : undefined;
     });
-    pi.on("agent_settled", (_event, ctx) => {
+    pi.on("agent_settled", async (_event, ctx) => {
+        if (preview) {
+            originalRun = undefined;
+            if (sessionSummary)
+                scheduleSessionSummary(ctx);
+            return;
+        }
+        let binding = originalRunBinding(ctx);
+        if (pendingRecovery) {
+            try {
+                await refreshCommittedRestart(ctx);
+                if (binding !== originalRunBinding(ctx))
+                    return;
+                verifyRecoveryCommit(ctx);
+                binding = originalRunBinding(ctx);
+            }
+            catch (error) {
+                if (binding !== originalRunBinding(ctx))
+                    return;
+                reportRecoveryRefusal(ctx, error);
+                binding = originalRunBinding(ctx);
+            }
+        }
         originalRun = undefined;
         // Notification-only settlement cannot supply an automatic continuation.
         // Owned manual compaction still drains its intent from onComplete.
         if (!ownedCompaction)
             compactionResume = undefined;
-        if (preview) {
-            if (sessionSummary || summaryIntent)
-                scheduleSessionSummary(ctx);
-            return;
-        }
         scheduleCapsuleShadow(ctx);
         scheduleCatalogShadow(ctx);
         const storedComposition = usesStoredComposition(ctx);
@@ -2814,15 +3654,20 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 if (compactionResume)
                     return;
                 try {
-                    if (!sessionSummary && !summaryIntent && !compactionRetryPaused && !ctx.hasPendingMessages()) {
+                    if (!_event.aborted && !sessionSummary && !compactionRetryPaused && !ctx.hasPendingMessages()) {
                         const tokens = currentRequestTokens(ctx);
-                        if (summaryTrigger(ctx, tokens))
+                        if (summaryTrigger(ctx, tokens)) {
+                            await refreshIntervalSource(ctx);
+                            if (binding !== originalRunBinding(ctx))
+                                return;
                             beginSessionSummary(ctx, "threshold", "deferred", undefined, undefined, tokens);
+                        }
                     }
                     scheduleSessionSummary(ctx);
                 }
                 catch (error) {
-                    refuseSessionSummary(ctx, error);
+                    if (binding === originalRunBinding(ctx))
+                        refuseSessionSummary(ctx, error);
                 }
                 return;
             }
@@ -2850,10 +3695,12 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
         finally {
             // A pending V3 request defers this retarget until onComplete or onError.
-            if (storedComposition)
-                scheduleSearch(ctx);
-            if (storedComposition)
-                scheduleAutomaticRollover(ctx);
+            if (binding === originalRunBinding(ctx)) {
+                if (storedComposition)
+                    scheduleSearch(ctx);
+                if (storedComposition)
+                    scheduleAutomaticRollover(ctx);
+            }
         }
     });
     pi.on("session_compact_failed", (event, ctx) => {
@@ -2876,12 +3723,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             scheduleSessionSummary(ctx);
             return;
         }
-        if (deferred && summaryIntent && deferred.epoch === summaryEpoch && !deferred.requestId
-            && deferred.reason === event.reason && event.aborted && !deferred.signal.aborted) {
-            scheduleSessionSummary(ctx);
-            return;
-        }
-        if (sessionSummary || summaryIntent || searchSettings().contextCompiler === "v4") {
+        if (sessionSummary || searchSettings().contextCompiler === "v4") {
             const failure = lastCompositionFailure;
             refuseSessionSummary(ctx, new Error(failure?.code ?? "session-agent-summary-compaction-failed"));
             if (failure)
@@ -2897,20 +3739,31 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         forcedContinuationPending = false;
         continueAfterSuccessfulCompaction = false;
     });
-    pi.on("session_compact", (event, ctx) => {
+    pi.on("session_compact", async (event, ctx) => {
         if (preview) {
             refuseSessionSummary(ctx, new Error("session-agent-summary-preview-native-compaction-observed"));
             return;
         }
-        const v4 = searchSettings().contextCompiler === "v4";
+        const v4 = searchSettings().contextCompiler === "v4", binding = originalRunBinding(ctx);
         const compactionSignal = pendingCompiler?.signal;
+        const archiveSource = pendingCompiler?.interval;
         let correlated = !v4;
         if (pendingCompiler) {
             const locator = contextReceiptLocator(event.compactionEntry, ctx.sessionManager.getSessionId());
-            correlated = pendingCompiler.epoch === rolloutEpoch && pendingCompiler.sessionId === ctx.sessionManager.getSessionId()
+            let policyCurrent = !v4;
+            try {
+                policyCurrent = !v4 || (!pendingCompiler.signal?.aborted && pendingCompiler.summaryEpoch === summaryEpoch
+                    && pendingCompiler.budgetKey === stableStringify(captureIntervalRuntimeBudget(pi, ctx))
+                    && pendingCompiler.historyConfigKey === stableStringify(userConfig.historyHelpers ?? null));
+            }
+            catch (error) {
+                lastCompositionFailure = { stage: "commit-policy", code: safeCompositionFailureCode(error) };
+            }
+            correlated = policyCurrent && pendingCompiler.epoch === rolloutEpoch && pendingCompiler.sessionId === ctx.sessionManager.getSessionId()
                 && pendingCompiler.sourcePath === ctx.sessionManager.getSessionFile() && event.compactionEntry.parentId === pendingCompiler.leafId
                 && locator?.receiptId === pendingCompiler.receiptId && locator.summaryHash === pendingCompiler.summaryHash
-                && createHash("sha256").update(event.compactionEntry.summary).digest("hex") === pendingCompiler.summaryHash && event.fromExtension;
+                && createHash("sha256").update(event.compactionEntry.summary).digest("hex") === pendingCompiler.summaryHash && event.fromExtension
+                && (!v4 || !!pendingCompiler.expectedReceipt && stableStringify(event.compactionEntry.details?.contextReceipt) === stableStringify(pendingCompiler.expectedReceipt));
             compilerTerminal = { state: correlated ? "committed" : "uncorrelated", receiptId: pendingCompiler.receiptId };
             if (correlated) {
                 committedReceipt = locator;
@@ -2918,6 +3771,20 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 receiptLookupComplete = true;
             }
             pendingCompiler = undefined;
+        }
+        if (correlated && v4) {
+            try {
+                await refreshCommittedRestart(ctx);
+                if (binding !== originalRunBinding(ctx))
+                    return;
+                projectIntervalRestart(ctx, ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages));
+            }
+            catch (error) {
+                if (binding !== originalRunBinding(ctx))
+                    return;
+                correlated = false;
+                lastCompositionFailure = { stage: "commit-source", code: safeCompositionFailureCode(error) };
+            }
         }
         if (ownedCompaction)
             ownedCompaction.succeeded = correlated;
@@ -2941,6 +3808,9 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         forcedContinuationPending = false;
         continueAfterSuccessfulCompaction = false;
         warningLevel = 0;
+        if (correlated && v4 && archiveSource)
+            intervalHelpers.archiveVerified({ snapshot: archiveSource,
+                commitId: event.compactionEntry.id, verified: true, ctx });
         if (shouldContinue && searchSettings().contextCompiler === "v4") {
             // Retain the exact event receipt. Other session_compact handlers can
             // append metadata before or after this handler. Dispatch only from the
@@ -2968,7 +3838,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             return { cancel: true };
         if (searchSettings().contextCompiler !== "v4")
             compactionRetryPaused = false;
-        const compositionEpoch = rolloutEpoch;
+        const compositionEpoch = rolloutEpoch, captureEpoch = summaryEpoch;
         const attempt = event.reason === "manual" ? ownedCompaction : undefined;
         if (attempt)
             attempt.signal = event.signal;
@@ -3002,17 +3872,16 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 failureStage = "session-summary";
                 if (event.reason === "overflow")
                     throw new Error("session-agent-summary-overflow-unavailable");
-                if (!sessionSummary && !summaryIntent) {
-                    const streaming = !!ctx.signal && !ctx.signal.aborted;
-                    if (streaming)
-                        deferSessionSummary(ctx, event.reason, currentRequestTokens(ctx), event.customInstructions);
-                    else
-                        beginSessionSummary(ctx, event.reason, "deferred", event.customInstructions, undefined, undefined, event.reason === "manual");
-                }
-                if (summaryIntent) {
-                    summaryDeferral = { epoch: summaryEpoch, reason: event.reason, signal: event.signal };
-                    scheduleSessionSummary(ctx);
-                    return { cancel: true };
+                requireIntervalHost(ctx);
+                if (!sessionSummary) {
+                    // A live provider run cannot be aborted and silently retried as a
+                    // summary. Native /compact must reach its settled public boundary.
+                    if (ctx.signal && !ctx.signal.aborted)
+                        throw new Error("session-agent-summary-active-run-unsupported");
+                    await refreshIntervalSource(ctx, undefined, undefined, event.signal);
+                    if (captureEpoch !== summaryEpoch || compositionEpoch !== rolloutEpoch)
+                        return { cancel: true };
+                    beginSessionSummary(ctx, event.reason, "deferred", event.customInstructions, undefined, undefined, event.reason === "manual", false);
                 }
                 const state = sessionSummary;
                 if (!state)
@@ -3041,18 +3910,27 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 failureStage = "v4-capture";
                 pendingCompiler = undefined;
                 const boundary = sessionSummary?.boundary;
-                if (!boundary)
+                if (!boundary || stableStringify(userConfig.historyHelpers ?? null) !== sessionSummary?.historyConfigKey) {
                     throw new Error("session-agent-summary-request-unavailable");
+                }
                 const prepared = await capturePreparedV4Context(pi, ctx, { branchEntries, preparation: event.preparation, signal: event.signal }, {
                     settings: searchSettings, memoryOwner, epoch: () => summaryEpoch, boundary,
+                    historyConfig: () => userConfig.historyHelpers ?? null,
+                    refreshSource: () => refreshIntervalSource(ctx, boundary.interval, boundary.logicalSource, event.signal),
+                    revalidateSource: () => revalidateRuntimeInterval(ctx, boundary.interval),
+                    readyHistory: (snapshot, budget) => readyIntervalHistory(ctx, snapshot, budget, event.signal),
                 });
                 failureStage = "v4-compile";
                 prepared.revalidate();
                 const compiled = compileContext(prepared.input);
                 prepared.revalidate();
+                requireExpandedRestartBudget(ctx, compiled);
+                prepared.revalidate();
                 pendingCompiler = { epoch: rolloutEpoch, sessionId: prepared.input.scope.sessionId,
                     sourcePath: ctx.sessionManager.getSessionFile(), leafId: prepared.input.scope.leafId,
-                    receiptId: compiled.receipt.receiptId, summaryHash: compiled.receipt.summaryHash, signal: event.signal };
+                    receiptId: compiled.receipt.receiptId, summaryHash: compiled.receipt.summaryHash, signal: event.signal,
+                    interval: prepared.input.interval, historyConfigKey: stableStringify(userConfig.historyHelpers ?? null),
+                    summaryEpoch, budgetKey: stableStringify(prepared.input.budget), expectedReceipt: compiled.receipt };
                 compilerTerminal = { state: "returned", receiptId: compiled.receipt.receiptId };
                 lastCompositionFailure = undefined;
                 return { compaction: { summary: compiled.summary, firstKeptEntryId: compiled.firstKeptEntryId, tokensBefore,
@@ -3515,7 +4393,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
             });
         }
         catch (error) {
-            if (event.signal?.aborted || compositionEpoch !== rolloutEpoch)
+            if (event.signal?.aborted || compositionEpoch !== rolloutEpoch || captureEpoch !== summaryEpoch)
                 return { cancel: true };
             if (settings.contextCompiler === "v4" || settings.memoryEngineEnabled || canary.requested(ctx.sessionManager.getSessionId())) {
                 const failure = recordFailure(error);
@@ -3708,6 +4586,101 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     registerChronoAction("logical-session", {
         description: "Adopt, inspect, roll over, fork, recover, or roll back one owner-only logical session",
         handler: (args, ctx) => runLogicalSessionCommand(args, ctx),
+    });
+    registerChronoAction("archive", {
+        description: "Read one source-bound derived interval archive: <commit-id> [item-offset]. No model call or Memory change.",
+        handler: async (args, ctx) => {
+            const binding = originalRunBinding(ctx), leafId = ctx.sessionManager.getLeafId();
+            try {
+                const parts = args.trim().split(/\s+/), commitId = parts[0], offsetText = parts[1] ?? "0";
+                if (parts.length > 2 || !commitId || !/^[A-Za-z0-9_-]{1,128}$/.test(commitId)
+                    || !/^(0|[1-9][0-9]{0,6})$/.test(offsetText))
+                    throw new Error("Usage: /Chrono archive <commit-id> [item-offset]");
+                if (!ctx.isIdle() || sessionSummary || pendingRecovery || recoveryIntent || triggerPending) {
+                    throw new Error("context-v4-archive-read-session-busy");
+                }
+                // Only an exact commit on the loaded selected ancestry is eligible.
+                // Bound metadata lookup. Do not scan stores, siblings, or archive files.
+                let id = leafId;
+                const seen = new Set();
+                while (id !== commitId) {
+                    if (!id || seen.has(id) || seen.size >= 8192)
+                        throw new Error("context-v4-archive-commit-outside-bounded-ancestry");
+                    seen.add(id);
+                    const entry = ctx.sessionManager.getEntry(id);
+                    if (!entry || entry.id !== id)
+                        throw new Error("context-v4-archive-commit-unavailable");
+                    id = entry.parentId;
+                }
+                const entry = ctx.sessionManager.getEntry(commitId);
+                const receipt = entry ? committedIntervalRestartReceipt(entry, ctx.sessionManager.getSessionId()) : undefined;
+                const restart = receipt?.restart;
+                if (!entry || entry.type !== "compaction" || !receipt || !restart
+                    || !contextReceiptLocator(entry, ctx.sessionManager.getSessionId()) || typeof entry.summary !== "string"
+                    || createHash("sha256").update(entry.summary).digest("hex") !== receipt.summaryHash
+                    || receipt.sourceCutEntryId !== restart.source.endEntryId
+                    || (receipt.nativeRetention?.kind === "none" ? entry.firstKeptEntryId !== entry.id
+                        : entry.firstKeptEntryId !== receipt.firstKeptEntryId))
+                    throw new Error("context-v4-archive-commit-unverified");
+                const revalidate = () => {
+                    if (binding !== originalRunBinding(ctx) || leafId !== ctx.sessionManager.getLeafId()
+                        || ctx.sessionManager.getEntry(commitId) !== entry || !ctx.isIdle())
+                        throw new Error("context-v4-archive-read-source-changed");
+                };
+                let snapshot;
+                if (restart.source.source.logicalSessionId) {
+                    if (!restart.logicalSource)
+                        throw new Error("context-v4-interval-logical-source-manifest-unavailable");
+                    await refreshIntervalSource(ctx, { ...restart.source, identity: restart.snapshotId }, restart.logicalSource, undefined, true);
+                    if (!intervalSourceSnapshot)
+                        throw new Error("context-v4-interval-logical-source-pin-unavailable");
+                    snapshot = intervalSourceSnapshot;
+                }
+                else {
+                    snapshot = captureIntervalSource({ ...restart.source.source,
+                        branchEntries: ctx.sessionManager.getBranch(), endEntryId: restart.source.endEntryId,
+                        controlIdentities: restart.source.controlIdentities, bounds: restart.source.bounds });
+                }
+                revalidate();
+                if (snapshot.identity !== restart.snapshotId || snapshot.sourceHash !== restart.source.sourceHash
+                    || snapshot.projectionHash !== restart.source.projectionHash || stableStringify(snapshot.origin) !== stableStringify(restart.source.origin)
+                    || stableStringify(snapshot.segments) !== stableStringify(restart.source.segments))
+                    throw new Error("context-v4-archive-read-source-changed");
+                const archive = await intervalHelpers.recoverArchive({ snapshot, commitId });
+                revalidate();
+                if (!archive) {
+                    ctx.ui.notify("No source-compatible archive is available. This read did not select or call a model.", "info");
+                    return;
+                }
+                const offset = Number(offsetText), artifact = archive.artifact;
+                if (offset > artifact.items.length)
+                    throw new Error("context-v4-archive-read-offset-invalid");
+                const header = { kind: archive.kind, commitId, integrityHash: archive.integrityHash, source: archive.source,
+                    authority: "derived", acceptedMemory: false, quality: artifact.quality, coverage: artifact.coverage,
+                    derivation: artifact.derivation, notices: artifact.notices.slice(0, 32), totalNotices: artifact.notices.length,
+                    itemOffset: offset, totalItems: artifact.items.length };
+                const items = [];
+                const renderPage = (pageItems, next) => JSON.stringify({ ...header,
+                    items: pageItems, nextItemOffset: next < artifact.items.length ? next : null,
+                    ...(next < artifact.items.length ? { continuation: `/Chrono archive ${commitId} ${next}` } : {}) });
+                let next = offset;
+                for (; next < artifact.items.length && items.length < 16; next++) {
+                    const candidate = artifact.items[next];
+                    if (Buffer.byteLength(renderPage([...items, candidate], next + 1)) > 30 * 1024)
+                        break;
+                    items.push(candidate);
+                }
+                const text = renderPage(items, next);
+                if (Buffer.byteLength(text) > 30 * 1024 || next === offset && next < artifact.items.length) {
+                    throw new Error("context-v4-archive-read-item-bound-exceeded");
+                }
+                ctx.ui.notify(text, "info");
+            }
+            catch (error) {
+                if (binding === originalRunBinding(ctx))
+                    ctx.ui.notify(`Archive read refused (${safeErrorMessage(error)}). Source history and Memory are unchanged. No model was called.`, "warning");
+            }
+        },
     });
     registerChronoAction("_auto-rollover", {
         description: "Internal one-shot safe-idle logical rollover dispatch",
@@ -3971,7 +4944,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         handler: async (_args, ctx) => { cancelValueWorker(); const sessionPath = ctx.sessionManager.getSessionFile(); const reset = sessionPath ? await resetAdviceCircuit(valueAdviceStorePath(sessionPath)).catch(() => false) : false; valueWorkerStatus = { status: "off" }; ctx.ui.notify(`${reset ? "Reset the persisted circuit. " : "No compatible persisted circuit was found. "}Pending value work was cancelled. Stored advice and source files were preserved.`, "info"); },
     });
     registerChronoAction("settings", {
-        description: "Background LLM presets, model selection, and Custom settings",
+        description: "Automatic compaction status and explicit history-role provider/model selection",
         handler: async (_args, ctx) => {
             if (!ctx.hasUI)
                 return;
@@ -3982,6 +4955,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     return;
                 saveUserConfig(selected, userConfigPath);
                 userConfig = selected;
+                intervalHelpers.invalidate();
+                helperPreparationKey = undefined;
+                if (sessionSummary || summaryInputIntent || pendingRecovery || recoveryIntent) {
+                    refuseSessionSummary(ctx, new Error("context-v4-history-route-changed"));
+                }
                 userConfigWarning = undefined;
                 lastTriggerAttemptTokens = undefined;
                 cancelIncrementalWork(true);
@@ -4049,7 +5027,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
     const maintenanceMenu = async (ctx) => {
         while (true) {
             const choice = await ctx.ui.select("Chrono: Maintenance", [
-                "Search for this session", "Preview a compaction", "Logical session", "Repair a rollup", "Reset background LLM circuit", "Back",
+                "Search for this session", "Preview a compaction", "Read an interval archive", "Logical session", "Repair a rollup", "Reset background LLM circuit", "Back",
             ]);
             if (!choice || choice === "Back")
                 return true;
@@ -4062,6 +5040,11 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                 const id = await ctx.ui.input("Compaction entry ID (leave blank for nearest). Saves a private preview without changing context.");
                 if (id !== undefined)
                     await invokeChronoAction("composition-preview", id.trim(), ctx);
+            }
+            else if (choice === "Read an interval archive") {
+                const args = await ctx.ui.input("Exact committed compaction entry ID and optional item offset. Read-only derived archive, not accepted Memory. No model call.");
+                if (args !== undefined)
+                    await invokeChronoAction("archive", args.trim(), ctx);
             }
             else if (choice === "Reset background LLM circuit") {
                 if (await ctx.ui.confirm("Reset background LLM circuit?", "This cancels pending work and clears the failure pause. If enabled, background model calls can resume. Stored advice and history are preserved.")) {
@@ -4079,7 +5062,7 @@ export default function chronoCompactExtension(pi, adapters = {}) {
         }
     };
     pi.registerCommand("Chrono", {
-        description: "Chrono settings, background LLM presets, status, and maintenance",
+        description: "Chrono automatic compaction, history roles, status, and maintenance",
         getArgumentCompletions: prefix => {
             const values = [...chronoActions.keys()].filter(name => !name.startsWith("_") && name.startsWith(prefix));
             return values.length ? values.map(value => ({ value, label: value })) : null;
@@ -4110,8 +5093,8 @@ export default function chronoCompactExtension(pi, adapters = {}) {
                     else if (choice === "About")
                         await showChronoReport(ctx, "Chrono", [
                             `Version ${EXTENSION_VERSION}`,
-                            "Settings: background LLM off by default. Lite is the recommended starting preset when enabled.",
-                            "Tool-result shortening runs only at compaction boundaries. Later turns reuse the same shortened text.",
+                            "V4 uses one automatic interval policy. History-model roles start unselected and require explicit disclosure confirmation.",
+                            "Legacy configuration remains readable for rollback. Its timing, target, and tail knobs do not tune the V4 interval policy.",
                             "Reports stay here. Enter or Esc returns to the menu. Settings save after each valid change.",
                             "Source history is preserved. Background model work is optional and can incur charges.",
                         ].join("\n\n"));

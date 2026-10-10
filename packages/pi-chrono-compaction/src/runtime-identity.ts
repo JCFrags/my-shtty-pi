@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 
-export const CHRONO_VERSION = "4.0.15-local.20261007";
-export const CHRONO_PI_API_TARGET = "0.85.1";
+export const CHRONO_VERSION = "4.1.1-local.20261010";
+export const CHRONO_PI_API_TARGET = "1.1.0";
 
 function readBounded(url: URL, maximum: number): Buffer {
   const fd = openSync(url, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -28,10 +28,15 @@ export function captureRuntimeIdentity(entrypoint: string) {
   const common = { version: CHRONO_VERSION, piApiTarget: CHRONO_PI_API_TARGET, nodeVersion: process.versions.node, pid: process.pid };
   try {
     const url = new URL(entrypoint);
-    if (!url.pathname.endsWith("/dist/src/pi-extension.js")) throw new Error("identity-not-built");
+    if (url.protocol !== "file:" || url.search || url.hash
+      || !/\/dist\/(?:src|live-hotfix-[A-Za-z0-9-]+)\/pi-extension\.js$/.test(url.pathname)) throw new Error("identity-not-built");
     const root = new URL("../../", url);
     const metadata = JSON.parse(readBounded(new URL("package.json", root), 32_768).toString("utf8"));
     if (metadata.name !== "pi-chrono-compact" || metadata.version !== CHRONO_VERSION) throw new Error("identity-version-mismatch");
+    if (!Array.isArray(metadata.pi?.extensions)
+      || !metadata.pi.extensions.some((path: unknown) => typeof path === "string" && new URL(path, root).href === url.href)) {
+      throw new Error("identity-entrypoint-not-selected");
+    }
     const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
     const stat = readBounded(new URL("file:///proc/self/stat"), 8_192).toString("utf8");
     const ticks = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/)[19];

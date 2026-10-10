@@ -1,4 +1,5 @@
 import { WORKER_LIMITS } from "./worker-runtime-limits.js";
+import { validateHistoryHelperConfig, type HistoryHelperConfig } from "./history-helper-config.js";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,6 +10,10 @@ export type ValueWorkerPreset = "lite" | "medium" | "max" | "custom";
 export type MemoryOwner = "chrono" | "context-kit";
 export type ContextCompiler = "v3" | "v4";
 export interface UserConfig {
+  /** Preserve unrelated root settings during validation and scoped updates. */
+  readonly [key: string]: unknown;
+  /** No roles are selected by default. Each selected route requires history-specific consent. */
+  readonly historyHelpers?: HistoryHelperConfig;
   /** Startup-only. Reload after changing the single Memory writer/read owner. */
   readonly memoryOwner?: MemoryOwner;
   /** V4 is opt-in until preview and installed public-hook acceptance. */
@@ -91,7 +96,7 @@ export interface ConfigCommandResult {
 }
 
 const CONFIG_KEYS = [
-  "memoryOwner", "contextCompiler",
+  "memoryOwner", "contextCompiler", "historyHelpers",
   "targetContextTokens",
   "replayTargetTokens",
   "triggerThresholdTokens",
@@ -124,6 +129,31 @@ const CONFIG_KEYS = [
 ] as const;
 
 type ConfigKey = (typeof CONFIG_KEYS)[number];
+const CONFIG_KEY_SET: ReadonlySet<string> = new Set(CONFIG_KEYS);
+
+/** Retained for older paths and rollback. Interval-v1 owns these decisions internally. */
+export const INTERVAL_V1_LEGACY_TUNING_KEYS = [
+  "targetContextTokens", "replayTargetTokens", "triggerThresholdTokens", "triggerMinimumGrowthTokens",
+  "rawTail", "dynamicRawTailMinTokens", "dynamicRawTailMaxTokens", "sessionSummaryTargetTokens",
+  "hybridSummaryEnabled", "hybridSummaryTargetTokens", "historyEditorEnabled",
+  "valueWorkerPreset", "valueWorkerMode", "valueWorkerModel", "valueWorkerThinking",
+  "valueWorkerMaxInputTokensPerJob", "valueWorkerMaxOutputTokensPerJob", "valueWorkerMaxItemsPerJob",
+  "valueWorkerTimeoutSeconds", "valueWorkerRetries", "valueWorkerHostSlots", "valueWorkerMaxCallsPerSession",
+  "valueWorkerMaxInputTokensPerSession", "valueWorkerMaxOutputTokensPerSession", "valueWorkerMaxEstimatedCostUsd",
+  "valueWorkerCircuitFailureLimit", "valueWorkerCircuitCooldownSeconds", "incrementalPrecomputeEnabled",
+  "isolatedWorkerEnabled", "toolResultProjectionMode", "summaryRebaseInterval", "hotSourceTokens", "warmSourceTokens",
+] as const satisfies readonly ConfigKey[];
+
+export interface IntervalCompactionMigrationReport {
+  readonly schemaVersion: 1;
+  readonly policy: "interval-v1";
+  readonly legacyTuning: readonly {
+    readonly key: (typeof INTERVAL_V1_LEGACY_TUNING_KEYS)[number];
+    readonly disposition: "retained-for-rollback";
+    readonly governsIntervalV1: false;
+  }[];
+  readonly preservedUnknownRootKeys: readonly string[];
+}
 
 const COMMAND_TO_KEY: Readonly<Record<string, ConfigKey>> = {
   "memory-owner": "memoryOwner",
@@ -204,9 +234,11 @@ export function validateContextCompiler(value: unknown): ContextCompiler {
 export function validateUserConfig(value: unknown): UserConfig {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("The configuration must be a JSON object.");
   const input = value as Record<string, unknown>;
-  const config: Record<string, unknown> = {};
+  // Copy only unrelated own keys. Object.fromEntries keeps __proto__ as data, not a setter.
+  const config: Record<string, unknown> = Object.fromEntries(Object.entries(input).filter(([key]) => !CONFIG_KEY_SET.has(key)));
   if (input.memoryOwner !== undefined) config.memoryOwner = validateMemoryOwner(input.memoryOwner);
   if (input.contextCompiler !== undefined) config.contextCompiler = validateContextCompiler(input.contextCompiler);
+  if (input.historyHelpers !== undefined) config.historyHelpers = validateHistoryHelperConfig(input.historyHelpers);
   if (input.targetContextTokens !== undefined) config.targetContextTokens = boundedInteger(input.targetContextTokens, "targetContextTokens", 8_000, 250_000);
   if (input.replayTargetTokens !== undefined) config.replayTargetTokens = input.replayTargetTokens === null ? null : boundedInteger(input.replayTargetTokens, "replayTargetTokens", 256, 25_000);
   if (input.triggerThresholdTokens !== undefined) config.triggerThresholdTokens = input.triggerThresholdTokens === null ? null : boundedInteger(input.triggerThresholdTokens, "triggerThresholdTokens", 8_000, 250_000);
@@ -261,6 +293,36 @@ export function validateUserConfig(value: unknown): UserConfig {
   return checked;
 }
 
+/** Pure, versioned migration report. It does not write settings or enable helper roles. */
+export function migrateIntervalCompactionConfig(value: unknown): { config: UserConfig; report: IntervalCompactionMigrationReport } {
+  const config = validateUserConfig(value);
+  return {
+    config,
+    report: {
+      schemaVersion: 1,
+      policy: "interval-v1",
+      legacyTuning: INTERVAL_V1_LEGACY_TUNING_KEYS.filter(key => Object.hasOwn(config, key)).map(key => ({
+        key, disposition: "retained-for-rollback", governsIntervalV1: false,
+      })),
+      preservedUnknownRootKeys: Object.keys(config).filter(key => !CONFIG_KEY_SET.has(key)).sort(),
+    },
+  };
+}
+
+/** Reset only interval-v1 selections. Preserve ownership, storage, legacy, and unrelated settings. */
+export function resetIntervalCompactionConfig(config: UserConfig): UserConfig {
+  const next = { ...config };
+  delete next.historyHelpers;
+  return validateUserConfig(next);
+}
+
+/** Legacy explicit reset-all command. It must not delete another owner's root settings. */
+export function resetUserConfigOverrides(config: UserConfig): UserConfig {
+  const next = { ...config };
+  for (const key of CONFIG_KEYS) delete next[key];
+  return validateUserConfig(next);
+}
+
 export function loadUserConfig(path = defaultUserConfigPath()): { config: UserConfig; warning?: string } {
   try {
     return { config: validateUserConfig(JSON.parse(readFileSync(path, "utf8"))) };
@@ -305,7 +367,10 @@ export function applyConfigCommand(config: UserConfig, args: string): ConfigComm
   if (command === "reset") {
     const setting = words[1]?.toLowerCase();
     if (!setting) throw new Error("reset requires all or a setting name.");
-    if (setting === "all") return { config: {}, changed: Object.keys(config).length > 0, message: "Reset all persistent overrides." };
+    if (setting === "all") {
+      const next = resetUserConfigOverrides(config);
+      return { config: next, changed: JSON.stringify(next) !== JSON.stringify(config), message: "Reset all persistent Chrono overrides. Unrelated root settings are preserved." };
+    }
     if (setting === "raw-tail-bounds") {
       const next = { ...config } as Record<string, unknown>;
       delete next.dynamicRawTailMinTokens;

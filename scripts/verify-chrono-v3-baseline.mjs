@@ -20,14 +20,29 @@ export const CHRONO_PREDECESSOR_BASELINE = Object.freeze({
   "maps": 143,
   "version": "4.0.6-local.20260927"
 });
-export const CHRONO_BASELINE = Object.freeze({
+export const CHRONO_PRE_INTERVAL_BASELINE = Object.freeze({
   "commit": "f338a7c9f8af8d025fe88964128a6767d5f4af60",
   "upstreamTree": "2babe477d7235f2c2af6332a8a1804e12a187b97",
-  "tree": "2babe477d7235f2c2af6332a8a1804e12a187b97",
+  "tree": "e87babac5c817f6461cb02f6dddec66dc1b1afda",
   "files": 455,
   "maps": 143,
   "package": "packages/pi-chrono-compaction",
   "version": "4.0.15-local.20261007",
+  "integrationDifferences": [{
+    "path": "test/worker-runtime.test.ts",
+    "upstreamSha256": "32e3c408dfe2350dc3559b39fddd763677e490104a72cdf66cf7fa386d0e0b9c",
+    "integratedSha256": "8b102864bf63e45cf256eb732aae2ee36d3fea087040c43134ed9acf1d7c33cb",
+    "reason": "Make deliberate cgroup OOM and recovery explicit opt-in; keep normal SIGKILL and read admission checks."
+  }]
+});
+export const CHRONO_BASELINE = Object.freeze({
+  "commit": "e9cf1b3bd9980b749acce72ec1c113000272f693",
+  "upstreamTree": "cd36462b913d485569d0c6ae7a43029de2b519dc",
+  "tree": "cd36462b913d485569d0c6ae7a43029de2b519dc",
+  "files": 488,
+  "maps": 159,
+  "package": "packages/pi-chrono-compaction",
+  "version": "4.1.1-local.20261010",
   "integrationDifferences": []
 });
 const fail = code => { throw new Error(code); };

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="636" viewBox="0 0 1040 636" role="img" aria-labelledby="commit-title commit-desc">
+<title id="commit-title">Validated commit with bounded failure recovery</title>
+<desc id="commit-desc">Approved implementation baseline; implementation in progress. The proposed states are prepared, validated, committed, and authorized continuation. Stale, canceled, or failed work before commit preserves old context. Degraded recovery is finite, with no automatic rewind and no unbounded retry. The optional archive does not gate any arrow.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="commit-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="636" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Validated commit with bounded failure recovery</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="132" width="190" height="108" rx="3" class="d-box"/><text x="46" y="163" class="d-label"><tspan x="46" dy="0">Prepared</tspan></text><text x="46" y="193" class="d-copy"><tspan x="46" dy="0">Old context kept</tspan></text>
+<path d="M218 186 H282" class="d-line" marker-end="url(#commit-arrow)"/>
+<rect x="282" y="132" width="190" height="108" rx="3" class="d-box"/><text x="300" y="163" class="d-label"><tspan x="300" dy="0">Validated</tspan></text><text x="300" y="193" class="d-copy"><tspan x="300" dy="0">Identity + fit</tspan></text>
+<path d="M472 186 H536" class="d-line" marker-end="url(#commit-arrow)"/>
+<rect x="536" y="132" width="190" height="108" rx="3" class="d-box"/><text x="554" y="163" class="d-label"><tspan x="554" dy="0">Committed</tspan></text><text x="554" y="193" class="d-copy"><tspan x="554" dy="0">Correlated commit</tspan></text>
+<path d="M726 186 H790" class="d-line" marker-end="url(#commit-arrow)"/>
+<rect x="790" y="132" width="222" height="108" rx="3" class="d-box"/><text x="808" y="163" class="d-label"><tspan x="808" dy="0">Authorized</tspan><tspan x="808" dy="26">continuation</tspan></text>
+<path d="M123 240 V352" class="d-line" marker-end="url(#commit-arrow)"/>
+<path d="M377 240 V352" class="d-line" marker-end="url(#commit-arrow)"/>
+<rect x="28" y="352" width="464" height="112" rx="3" class="d-box"/><text x="46" y="383" class="d-label"><tspan x="46" dy="0">Stale / canceled / failed</tspan></text><text x="46" y="413" class="d-copy"><tspan x="46" dy="0">Before commit: preserve old context</tspan></text>
+<path d="M492 408 H548" class="d-line" marker-end="url(#commit-arrow)"/>
+<rect x="548" y="352" width="464" height="112" rx="3" class="d-box"/><text x="566" y="383" class="d-label"><tspan x="566" dy="0">Finite degraded recovery</tspan></text><text x="566" y="413" class="d-copy"><tspan x="566" dy="0">No automatic rewind</tspan><tspan x="566" dy="26">No unbounded retry</tspan></text>
+<rect x="28" y="516" width="984" height="90" rx="3" class="d-box"/><text x="46" y="547" class="d-label"><tspan x="46" dy="0">Independent optional archive</tspan></text><text x="46" y="577" class="d-copy"><tspan x="46" dy="0">Does not gate any state transition or continuation</tspan></text>
+</svg>

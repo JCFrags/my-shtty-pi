@@ -66,7 +66,28 @@ jobs:
           npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
           node packages/pi-chrono-compaction/node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
           echo "CHRONO_CATALOG_NODE_HEADERS=$RUNNER_TEMP/chrono-node-headers/24.18.0" >> "$GITHUB_ENV"
-      - if: needs.scope.outputs.mode == 'full'
+      - name: Prepare Chrono user-manager and cgroup prerequisites
+        if: needs.scope.outputs.mode == 'full'
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::Chrono requires a real per-UID user manager and cgroup v2 memory/swap controls."' ERR
+          uid=$(id -u)
+          grep -qw memory /sys/fs/cgroup/cgroup.controllers
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@${uid}.service"
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          test -S "$XDG_RUNTIME_DIR/bus"
+          systemctl --user is-active --quiet basic.target
+          group=$(systemctl show "user@${uid}.service" --property=ControlGroup --value)
+          [[ "$group" == /user.slice/* ]]
+          grep -qw memory "/sys/fs/cgroup$group/cgroup.controllers"
+          test -f "/sys/fs/cgroup$group/memory.max"
+          test -f "/sys/fs/cgroup$group/memory.swap.max"
+      - name: Verify full repository, including deliberate cgroup OOM
+        if: needs.scope.outputs.mode == 'full'
+        env:
+          CHRONO_TEST_CGROUP_OOM: '1'
         run: npm run verify
       - name: Verify shared repository invariants once, without installs or builds
         if: needs.scope.outputs.mode == 'affected' || needs.scope.outputs.mode == 'docs'
@@ -98,9 +119,28 @@ jobs:
           npm --prefix packages/pi-chrono-compaction ci --ignore-scripts --no-audit --no-fund
           node packages/pi-chrono-compaction/node_modules/node-gyp/bin/node-gyp.js install --target=24.18.0 --devdir="$RUNNER_TEMP/chrono-node-headers" --ensure
           echo "CHRONO_CATALOG_NODE_HEADERS=$RUNNER_TEMP/chrono-node-headers/24.18.0" >> "$GITHUB_ENV"
+      - name: Prepare Chrono user-manager and cgroup prerequisites
+        if: matrix.product == 'pi-chrono-compaction'
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::Chrono requires a real per-UID user manager and cgroup v2 memory/swap controls."' ERR
+          uid=$(id -u)
+          grep -qw memory /sys/fs/cgroup/cgroup.controllers
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@${uid}.service"
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          test -S "$XDG_RUNTIME_DIR/bus"
+          systemctl --user is-active --quiet basic.target
+          group=$(systemctl show "user@${uid}.service" --property=ControlGroup --value)
+          [[ "$group" == /user.slice/* ]]
+          grep -qw memory "/sys/fs/cgroup$group/cgroup.controllers"
+          test -f "/sys/fs/cgroup$group/memory.max"
+          test -f "/sys/fs/cgroup$group/memory.swap.max"
       - name: Verify selected product and its existing invariants
         env:
           PRODUCT: ${{ matrix.product }}
+          CHRONO_TEST_CGROUP_OOM: ${{ matrix.product == 'pi-chrono-compaction' && '1' || '' }}
         run: npm run verify -- --product "$PRODUCT" --skip-shared-checks
 
   verify-lsp:

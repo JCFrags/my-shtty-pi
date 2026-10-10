@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="chrono-diagram" width="1040" height="748" viewBox="0 0 1040 748" role="img" aria-labelledby="precompute-title precompute-desc">
+<title id="precompute-title">Closed-prefix precompute without summary accumulation</title>
+<desc id="precompute-desc">Approved implementation baseline; implementation in progress. Pin a closed original prefix [S,H) early. Summarize original A while main work appends after H. At final assembly, validate source, branch, projection, model, policy, and cut. Accept the same-range summary if it still matches, or replace/degrade. Never merge an old summary and a new delta to advance H.</desc>
+<style>
+.chrono-diagram { --d-bg: var(--diagram-bg, #f5f3f0); --d-box: var(--diagram-box, #e9edf0); --d-line: var(--diagram-line, #7c8791); --d-ink: var(--diagram-text, #252f3d); --d-muted: var(--diagram-muted, #555f69); --d-a: var(--diagram-a, #dbe8ef); --d-b: var(--diagram-b, #e7e7d8); --d-c: var(--diagram-c, #edddd5); }
+@media (prefers-color-scheme: dark) { .chrono-diagram { --d-bg: var(--diagram-bg, #212730); --d-box: var(--diagram-box, #2b3642); --d-line: var(--diagram-line, #9daab6); --d-ink: var(--diagram-text, #ebe7e4); --d-muted: var(--diagram-muted, #b2bbc4); --d-a: var(--diagram-a, #294553); --d-b: var(--diagram-b, #414536); --d-c: var(--diagram-c, #513b34); } }
+.d-bg { fill: var(--d-bg); }
+.d-box, .d-a, .d-b, .d-c { fill: var(--d-box); stroke: var(--d-line); stroke-width: 1.5; }
+.d-a { fill: var(--d-a); } .d-b { fill: var(--d-b); } .d-c { fill: var(--d-c); }
+.d-outline { fill: none; stroke: var(--d-line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--d-line); stroke-width: 2; }
+.d-dash { stroke-dasharray: 6 5; }
+.d-arrow { fill: var(--d-line); }
+.d-title, .d-label, .d-copy, .d-small, .d-cut { fill: var(--d-ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.d-title { font-size: 25px; font-weight: 600; }
+.d-label { font-size: 20px; font-weight: 600; }
+.d-copy { font-size: 19px; }
+.d-small { font-size: 18px; fill: var(--d-muted); }
+.d-cut { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<defs><marker id="precompute-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" class="d-arrow"/></marker></defs>
+<rect x="0" y="0" width="1040" height="748" rx="3" class="d-bg"/>
+<text x="28" y="40" class="d-title"><tspan x="28" dy="0">Closed-prefix precompute without summary accumulation</tspan></text>
+<text x="28" y="70" class="d-small"><tspan x="28" dy="0">Approved baseline. Implementation in progress.</tspan></text>
+<rect x="28" y="110" width="324" height="110" rx="3" class="d-box"/><text x="46" y="141" class="d-label"><tspan x="46" dy="0">Pin closed prefix early</tspan></text><text x="46" y="171" class="d-copy"><tspan x="46" dy="0">Exact range [S,H)</tspan></text>
+<path d="M352 165 H414" class="d-line" marker-end="url(#precompute-arrow)"/>
+<rect x="414" y="110" width="598" height="110" rx="3" class="d-box"/><text x="432" y="141" class="d-label"><tspan x="432" dy="0">Summarize ORIGINAL A=[S,H)</tspan></text><text x="432" y="171" class="d-copy"><tspan x="432" dy="0">The pinned source range does not grow</tspan></text>
+<path d="M190 220 V258" class="d-line" marker-end="url(#precompute-arrow)"/>
+<rect x="28" y="258" width="984" height="88" rx="3" class="d-box"/><text x="46" y="289" class="d-label"><tspan x="46" dy="0">Meanwhile: main work appends after H</tspan></text><text x="46" y="319" class="d-copy"><tspan x="46" dy="0">New original work stays outside the pinned prefix</tspan></text>
+<path d="M1012 165 H1024 V360 H713 V372" class="d-line" marker-end="url(#precompute-arrow)"/>
+<rect x="28" y="372" width="984" height="118" rx="3" class="d-box"/><text x="46" y="403" class="d-label"><tspan x="46" dy="0">Final validation</tspan></text><text x="46" y="433" class="d-copy"><tspan x="46" dy="0">Source, branch, projection, model, policy, and cut</tspan><tspan x="46" dy="26">The candidate must still cover the same original [S,H)</tspan></text>
+<path d="M300 490 V534" class="d-line" marker-end="url(#precompute-arrow)"/>
+<path d="M747 490 V534" class="d-line" marker-end="url(#precompute-arrow)"/>
+<rect x="28" y="534" width="464" height="88" rx="3" class="d-box"/><text x="46" y="565" class="d-label"><tspan x="46" dy="0">Accept same-range summary</tspan></text><text x="46" y="595" class="d-copy"><tspan x="46" dy="0">Only if the final identity matches</tspan></text>
+<rect x="548" y="534" width="464" height="88" rx="3" class="d-box"/><text x="566" y="565" class="d-label"><tspan x="566" dy="0">Otherwise replace or degrade</tspan></text><text x="566" y="595" class="d-copy"><tspan x="566" dy="0">Use finite recovery</tspan></text>
+<rect x="28" y="656" width="984" height="62" rx="3" class="d-box"/><text x="46" y="687" class="d-label"><tspan x="46" dy="0">Never merge old summary + new delta to advance H</tspan></text>
+</svg>

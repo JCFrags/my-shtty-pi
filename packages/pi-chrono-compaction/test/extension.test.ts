@@ -466,7 +466,10 @@ test("request-local projection freezes at successful compaction boundaries and f
       });
     };
     for (let index = 0; index < 5; index += 1) appendResult(index);
-    const context = { sessionManager: { getBranch: () => messages.map((message, index) => ({
+    const context = { sessionManager: {
+      getSessionId: () => "projection-test-session",
+      getSessionFile: () => undefined,
+      getBranch: () => messages.map((message, index) => ({
       type: "message",
       id: `projection-entry-${index}`,
       parentId: index === 0 ? null : `projection-entry-${index - 1}`,

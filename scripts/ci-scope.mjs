@@ -73,7 +73,7 @@ export const lspFiles = [
   'packages/grounded-tools/lsp/test/fixtures/owner.mjs',
 ];
 const newLspFiles = lspFiles.filter((_, index) => index === 0 || index >= 4);
-const manifestEvidenceSha256 = '8c5b88026738489c1a82601beeb8134e51a8c734c7237214154814e613183306';
+const manifestEvidenceSha256 = 'a4bb77733cd4e0d0d7712d4ebeac83d4c8b543c6e62fb0ea221bda6639ff2dba';
 const metadata = new Set(['name', 'version', 'description', 'author', 'contributors', 'keywords', 'license', 'repository', 'homepage', 'bugs', 'funding']);
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;

@@ -4,13 +4,32 @@ audience: [operators, agents, maintainers]
 status: compatibility reference with historical release records
 purpose: Preserve build and compatibility requirements while separating source versions from local activation.
 related:
+  - chrono/context/interval-compaction.md
   - chrono/design/evidence-and-roadmap.md
   - chrono/operations/activation-and-migration.md
 ---
 
 # ChronoCompact release compatibility
 
-Use the checked-out package manifest and [current status page](chrono/design/evidence-and-roadmap.md) for the source version. Current accepted source includes the 4.0.6 system-update continuation correction, the unified `/Chrono` menu, stable projections, and the same-session summary path. Source acceptance does not establish local selection or loaded-session adoption. The V4 4.0.0 and older sections below are revision-bound compatibility records, not a fresh installation recipe. Use [portable installation](installation.md) and [current configuration](chrono/operations/menu-and-configuration.md).
+Use the checked-out [package manifest](../packages/pi-chrono-compaction/package.json) for the source identity. The interval source version is `4.1.1-local.20261010`. The retained pre-interval baseline includes the 4.0.6 system-update continuation correction, unified `/Chrono` menu, stable projections, and earlier same-session summary path. A source version does not establish remote acceptance, local selection, or loaded-session adoption. The 4.0.0 and older sections below retain revision-bound compatibility records. Their pins, counts, commands, and passes do not verify this candidate.
+
+## Interval candidate compatibility boundary
+
+The [interval implementation guide](chrono/context/interval-compaction.md) describes inspected source, not a release or activation result. The package typecheck, build, and one bounded offline Pi 1.1 lifecycle check passed. The check observed three saved compactions, one continuation per commit, preserved originals, and no continuation after cancellation. It made no real model or network calls. Loaded activation remains a separate check. The [approved Markdown reference](chrono/compaction-reference/reference.md) and [styled HTML](chrono/compaction-reference/reference.html) keep the status "Approved implementation baseline; implementation in progress."
+
+| Boundary | Candidate source requirement |
+| --- | --- |
+| Chrono development dependencies | Pi/AI/TUI `1.1.0`. |
+| Chrono declared peers | Pi/AI/TUI `>=1.1.0 <1.2.0`. |
+| Loaded interval runtime | Pi 1.1 public edit-aware projection and actionable boundary hooks. Unknown or unavailable public contracts refuse. A declaration alone is not runtime acceptance. |
+| Root tooling and other product pins | Remain `0.85.1`. This is not a monorepo-wide host upgrade. |
+| Normal writer and helper defaults | Same-agent `handoff` plus separate `continuation`. All history helper roles start unselected, with deterministic history fallback. |
+| Request controls | Main writer planning reserves `min(model.maxTokens, DEFAULT_COMPACTION_SETTINGS.reserveTokens)`, at most 16,384 tokens with Pi 1.1 defaults. Summary-only attempts remain available above planning thresholds. Restart packets remain bounded. Pi owns message/media estimates. Helpers require effective accepted request-local output caps. |
+| Configuration compatibility | Legacy interval-tuning keys remain readable for older paths and rollback but do not control `interval-v1`. Ownership, indexing, rollover, and worker admission remain separate. |
+
+The interval path uses the existing `contextCompiler: "v4"` selection. The inspected default remains `v3`. Helper selection requires explicit history-specific provider/model consent. No dependency pin, settings edit, or handler registration proves a correlated native commit or useful continuation.
+
+Use [portable installation](installation.md), [authorization before selection](chrono/operations/startup-authorization.md), and [activation and migration](chrono/operations/activation-and-migration.md) only for an approved accepted checkout, with this candidate's Pi 1.1 boundary in place of the older Chrono host pin. Version 4.1.1 adds a guarded selection route and preserves structured startup refusal reasons. It does not automatically authorize changed package bytes. Keep exact source and compiled/dependency identity, preserved sessions and stores, and a compatible rollback root. Older activation reports do not establish candidate acceptance. See [rollback](chrono/operations/troubleshooting-and-rollback.md) before new native writes.
 
 ## Historical 4.0.0 compatibility boundary
 
@@ -95,9 +114,9 @@ Use the root [verification workflow](../README.md#verification) and installed-Pi
 loader checks for a changed release. The explicit native build and matching
 Node 24.18.0 header prerequisites below still apply. Do not repeat the historical
 normal, fixed-heap, and independent-client campaigns as extra release gates.
-Earlier focused checks exercised the 3.0.1 source on installed Pi 0.85.1. The
-package declares Pi peers `>=0.85.1 <0.86.0` and locks development Pi dependencies
-to 0.85.1. Changed-release loader checks remain separate.
+Earlier focused checks exercised the 3.0.1 source on installed Pi 0.85.1. That
+historical package declared Pi peers `>=0.85.1 <0.86.0` and locked development Pi dependencies
+to 0.85.1. The interval candidate's Pi 1.1 boundary is separate. Changed-release loader checks remain separate.
 
 A version or documentation change does not establish remote integration or
 loaded local adoption. Follow [activation and rollback](activation.md), preserve

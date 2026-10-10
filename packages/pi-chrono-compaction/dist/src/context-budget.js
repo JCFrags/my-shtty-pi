@@ -48,9 +48,9 @@ export function captureContextBudget(input) {
         estimator: CONTEXT_ESTIMATOR,
         qualification: "Estimated public-hook request, not an exact model tokenizer or final provider payload. Includes Pi compaction conversion, complete raw-tail messages, system, active schemas, framing allowance and response reserve. Later context/payload extensions and provider serialization can change the request." };
 }
-/** Estimate the current outgoing projection, not lifetime history. This also
- * charges newer native system/tool deltas that the locked Pi converter omits.
- * Native usage and this estimate are complementary, not exact token counts. */
+/** Estimate only the current projection with Pi's converter and message
+ * estimator. Charge the current system prompt and active schemas once.
+ * Pi owns image estimates. Encoded media is not tokenized as transport JSON. */
 export function estimateCurrentRequestTokens(input) {
     let tokens = textTokens(input.systemPrompt) + 512;
     for (const name of new Set(input.activeTools)) {
@@ -59,54 +59,25 @@ export function estimateCurrentRequestTokens(input) {
             throw new Error("context-v4-tool-schema-unavailable");
         tokens += textTokens(JSON.stringify({ name, description: tool.description, parameters: tool.parameters })) + 32;
     }
-    for (const value of input.messages) {
-        const message = value;
-        if (message.role === "system") {
-            tokens += textTokens(JSON.stringify({ content: message.content, sections: message.sections })) + 32;
-            continue;
-        }
-        const converted = convertToLlm([value]);
-        tokens += converted.length ? converted.reduce((sum, item) => sum + estimateTokens(item) + 32, 0)
-            : textTokens(JSON.stringify(value)) + 32;
-    }
+    const messages = conversationMessages(input.messages);
+    tokens += convertToLlm(messages).reduce((sum, message) => sum + estimateTokens(message) + 32, 0);
     if (!Number.isFinite(tokens) || tokens <= 0)
         throw new Error("session-agent-summary-headroom-unavailable");
     return tokens;
 }
-/** Recheck the final public payload against the admitted projection. Native
- * usage remains an estimated floor, not proof of exact provider tokenization.
- * Positive serialization/late growth is added to that floor.
- * Codex ciphertext length is not a tokenizer estimate. Only a positive native
- * observation permits that known replay field to use the native bound instead.
- * With null usage or an unknown API, retain the full transport estimate. */
-export function estimateProviderRequestTokens(input) {
-    if (!input.api || !Number.isFinite(input.projectionTokens) || input.projectionTokens <= 0
-        || !Number.isFinite(input.admittedTokens) || input.admittedTokens < input.projectionTokens
-        || (input.nativeTokens != null && (!Number.isFinite(input.nativeTokens) || input.nativeTokens < 0))
-        || !input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) {
-        throw new Error("session-agent-summary-headroom-unavailable");
+const conversationMessages = (messages) => messages.filter(value => value?.role !== "system");
+/** Pi already handles recent usage, trailing messages and stale usage after
+ * context edits. Reuse that estimate only for the same conversation projection.
+ * An expanded restart must not inherit the old full-prefix usage. The context
+ * hook omits system messages, so compare conversation messages only. */
+export function estimateCurrentRequestBudget(input) {
+    const reported = input.nativeTokens;
+    if (reported != null && Number.isFinite(reported) && reported > 0
+        && (input.messages === input.nativeMessages
+            || JSON.stringify(conversationMessages(input.messages)) === JSON.stringify(conversationMessages(input.nativeMessages)))) {
+        return { tokens: Math.ceil(reported), nativeTokens: reported };
     }
-    const payload = input.payload;
-    let accountingPayload = payload;
-    if (input.api === "openai-codex-responses" && Array.isArray(payload.input)) {
-        const items = payload.input.map(value => {
-            if (!value || typeof value !== "object" || Array.isArray(value))
-                return value;
-            const item = value;
-            if (item.type !== "reasoning" || item.encrypted_content == null)
-                return item;
-            if (typeof item.encrypted_content !== "string")
-                throw new Error("session-agent-summary-headroom-unavailable");
-            // Do not alter the request or remove visible summaries and unknown fields.
-            return input.nativeTokens != null && input.nativeTokens > 0 ? { ...item, encrypted_content: "" } : item;
-        });
-        accountingPayload = { ...payload, input: items };
-    }
-    const serialized = JSON.stringify(accountingPayload);
-    if (!serialized)
-        throw new Error("session-agent-summary-headroom-unavailable");
-    const payloadTokens = textTokens(serialized) + 512;
-    return Math.max(input.admittedTokens, input.nativeTokens ?? 0) + Math.max(0, payloadTokens - input.projectionTokens);
+    return { tokens: estimateCurrentRequestTokens(input), nativeTokens: null };
 }
 /** Public conversion includes Pi's compaction prefix and <summary> wrapper. */
 export function chargeCompactionSummary(summary) {
