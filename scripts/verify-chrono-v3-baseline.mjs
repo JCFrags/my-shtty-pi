@@ -36,9 +36,9 @@ export const CHRONO_PRE_INTERVAL_BASELINE = Object.freeze({
   }]
 });
 export const CHRONO_BASELINE = Object.freeze({
-  "commit": "42a43a9a3527bdff365667f82e3f9b8059c1d0a8",
-  "upstreamTree": "c7a3ce3e61b6efa487402a64c995cf55a6f8c86f",
-  "tree": "c7a3ce3e61b6efa487402a64c995cf55a6f8c86f",
+  "commit": "d528f01c8c0bdce014a78d2ad055053e291aac36",
+  "upstreamTree": "a77ea41ab5347addeff027a3729fbb9e0c7ade4a",
+  "tree": "a77ea41ab5347addeff027a3729fbb9e0c7ade4a",
   "files": 490,
   "maps": 160,
   "package": "packages/pi-chrono-compaction",
