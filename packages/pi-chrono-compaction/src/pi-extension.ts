@@ -77,7 +77,8 @@ import {
   renderHybridCompaction,
 } from "./pi-hybrid.js";
 import { DEFAULT_VALUE_WORKER_SETTINGS, type ValueWorkerSettings } from "./value-worker-types.js";
-import { selectHistoryHelperRole, clearHistoryHelperRole } from "./history-helper-config.js";
+import { selectHistoryHelperRole, clearHistoryHelperRole, validateHistoryModelSelection } from "./history-helper-config.js";
+import { historyHelperModelCompatibility } from "./history-helper-model.js";
 import { createIntervalHelperRuntime } from "./interval-helper-runtime.js";
 import {
   INTERVAL_CONTINUATION_RECORD, continuationRecord, hasContinuationDispatch,
@@ -753,10 +754,21 @@ async function openIntervalCompactionSettings(ctx: ExtensionCommandContext, init
       const provider = await ctx.ui.select("Select history inference destination", [...providers, "Back"]);
       if (!provider || provider === "Back") continue;
       const models = available.filter(model => model.provider === provider);
-      const modelLabels = models.map(model => `${model.name} (${model.id})`);
-      const selected = await ctx.ui.select("Select history model", [...modelLabels, "Back"]);
+      const modelLabels = models.map(model => `${model.name} (${model.id})${historyHelperModelCompatibility(model).status === "ready" ? "" : " · unavailable"}`);
+      const selected = await ctx.ui.select(`Select history model${ctx.scopedModels?.length ? " · your scoped models" : " · available models"}`, [...modelLabels, "Back"]);
       const model = models[modelLabels.indexOf(selected ?? "")];
       if (!model) continue;
+      const compatibility = historyHelperModelCompatibility(model);
+      if (compatibility.status !== "ready") {
+        await showChronoReport(ctx, "History route unavailable", `${compatibility.reason}\nNo role was changed. The main conversation model is unchanged.`);
+        continue;
+      }
+      if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
+        await showChronoReport(ctx, "History route unavailable", "This route has no configured authentication. No role was changed.");
+        continue;
+      }
+      try { validateHistoryModelSelection({ provider: model.provider, model: model.id }); }
+      catch (error) { await showChronoReport(ctx, "History route unavailable", safeErrorMessage(error)); continue; }
       if (!await ctx.ui.confirm("Allow this history route?", `${labels[role]} can send eligible original current-interval history, including user text and tool evidence, to ${model.provider}/${model.id}. A process on this computer can still use a remote provider. Calls can incur charges and provider retention terms apply. Prior packets are excluded. There is no silent provider substitution. This selects only this role, not a current-agent writer or new task authority.`)) continue;
       next = { ...config, historyHelpers: selectHistoryHelperRole(config.historyHelpers, role,
         { provider: model.provider, model: model.id }, { selectedForHistory: true }) };
