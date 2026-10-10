@@ -15,10 +15,18 @@ Opens the browser in the current pane. Pass --split to open it in a new
 split pane instead.
 
 The url can be a normal url, a localhost port, or a path to an html file.
-For native automation, supply both --session and --project. The project is
-canonicalized at launch. Keep the terminal open and run agent or session tabs
-from another shell with the same options. An owned launch never merges into a
-neighbor browser and refuses a duplicate owner. No host-agent setup runs.
+New ordinary browsers receive an internal native owner before neighbor matching
+and do not adopt a neighbor. App, embedding, SSH, and explicit interop routes
+keep their existing defaults. Ordinary Pi launches
+can reuse only their exact current launch origin and canonical project. A reused
+browser in Human or Paused refuses URL navigation. It is not relabeled.
+A present PI_SESSION_ID must match the origin's Pi session ID. A stale inherited
+origin refuses instead of being forwarded or rewritten.
+For stable native automation IDs, supply both --session and --project. The
+project is canonicalized at launch. Keep the terminal open and run agent or
+session tabs from another shell with the same options. An explicitly owned
+launch never merges into a neighbor browser and refuses a duplicate owner.
+No host-agent setup runs.
 
 Options:
   --session <id>        Own this native session without Pi or Herdr
@@ -140,6 +148,19 @@ when a user is using terminal-browser, and lets other applications discover term
 Remove application metadata from ~/.local/share/terminal-browser-interop/apps/<id>.json.
 `,
   },
+  "daemon-status": {
+    summary: "Read the daemon identity and session inventory",
+    usage: "terminal-browser daemon-status [--connections]",
+    body: `
+Plain status retains the exact inventory used for approved shutdown.
+--connections returns owner-free, complete owner and launch-origin metadata for
+connection discovery, including the configured absolute instancesDirectory.
+It reads no page data, opens no store, starts no daemon, and prunes no records.
+Only an exactly missing daemon socket returns an empty inventory. Unknown
+failures refuse. Incomplete legacy metadata requires the accepted runtime,
+not inferred project or task IDs. The directory can be absent and is not created.
+`,
+  },
   shutdown: {
     summary: "Stop the daemon after approval of its exact session inventory",
     usage: "terminal-browser shutdown --expect STATUS_FILE",
@@ -153,7 +174,7 @@ confirm its exact revision instead. Do not retry an uncertain shutdown.
   },
   agent: {
     summary: "Observe, control, and act through native AgentCursor",
-    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|blocking|status|control|pause|resume> [options]",
+    usage: "terminal-browser agent <observe|upload|click|hover|drag|type|press-key|scroll|navigate|get-url|wait-for|dialog|certificate|blocking|status|control|pause|resume> [options]",
     body: `
 Reads a fresh observation and performs native actions on the selected tab.
 Success responses are JSON on stdout. Failures exit nonzero and write
@@ -178,6 +199,9 @@ Commands:
   terminal-browser agent navigate <url> --control-epoch <n> [options]
   terminal-browser agent get-url --control-epoch <n> [options]
   terminal-browser agent wait-for (--ref <ref> | --locator-json <steps> | --text <text>) [--condition exists|visible|text|actionable] [--timeout-ms <n>] --observation <id> --control-epoch <n> [options]
+  terminal-browser agent certificate status [options]
+  terminal-browser agent certificate <approve|reject> --tab <id> --dialog-id <id> --origin <https-origin> --fingerprint <SHA-256> --control-epoch <n> [options]
+  terminal-browser agent certificate revoke --tab <id> --origin <https-origin> --fingerprint <SHA-256> --control-epoch <n> [options]
   terminal-browser agent blocking status [options]
   terminal-browser agent blocking <enable|disable|clear-diagnostics|reload> --control-epoch <n> [options]
   terminal-browser agent blocking <allow-site|block-site> --site <site> --control-epoch <n> [options]
@@ -185,6 +209,15 @@ Commands:
   terminal-browser agent control --mode agent|human|shared --control-epoch <n> [--browser <key>] [--runtime-instance <id>]
   terminal-browser agent pause --control-epoch <n> [--browser <key>]
   terminal-browser agent resume --control-epoch <n> [--browser <key>]
+
+Certificate failures return a pending certificate dialog with the exact HTTPS
+origin, SHA-256 fingerprint, validation error, subject, issuer, and validity dates.
+Only explicit approve with that exact identity grants a context-lifetime exception.
+Approval requires user authorization, not merely an error or a self-signed certificate.
+Other origins, ports, certificates, and contexts remain unapproved. No decision
+is persisted. Timeout denies after 60 seconds. Generic dialog --accept cannot
+approve a certificate. Status lists exceptions and revoke removes one. Removal
+cannot undo received data. Observe again before page input.
 
 Blocking status is read-only and remains available while paused. Every blocking
 mutation requires the current control epoch. No command enables blocking or
@@ -218,8 +251,10 @@ Type reads stdin only with --stdin. Use --replace to select all and insert
 text as one native edit. Status, control, pause, and resume are browser-wide and
 do not accept --tab. Resume explicitly selects Agent. Human is a strict stop.
 Shared yields conflicting input to the human without changing the control epoch.
-Only Shared with the visible updates preference on permits automatic screenshots
-for an explicitly bound receiver. Automatic updates never request a model reply.
+Only Shared with the visible updates preference on and no binding suspension
+permits automatic screenshots for an explicitly bound receiver. Selecting Shared
+explicitly clears suspension even when already Shared. It preserves the updates
+preference. Automatic updates never request a model reply.
 `,
   },
   session: {
@@ -236,7 +271,7 @@ Retain both IDs from receiver status for long-lived bindings and waits.
 
 Receiver and update commands:
   session receiver status
-  session receiver bind --receiver-kind pi|cli --receiver-session <id> --receiver-generation <uuid> [--replace-binding <id>]
+  session receiver bind --receiver-kind pi|cli --receiver-session <id> --receiver-generation <uuid> [--replace-binding <id>] [--suspend-automatic]
   session receiver unbind --binding <id> --receiver-generation <uuid>
   session updates --enabled true|false --binding <id> --receiver-generation <uuid>
   session events wait --binding <id> --receiver-generation <uuid> --after <sequence> [--timeout-ms <0..30000>] --image-output <newfile>
@@ -244,6 +279,10 @@ Receiver and update commands:
 One receiver may bind. Replacement must name the exact existing binding. Bind
 returns binding.bindingId and the current sequence. Wait defaults to 25000 ms,
 returns one flat changed:true event, or changed:false without creating a PNG.
+--suspend-automatic stops automatic capture for this binding without changing
+control or the stored updates preference. Status reports updates.suspended.
+An explicit Shared choice or updates setting clears suspension, including a
+same-mode or same-value choice. Reconnects and status refreshes do not clear it.
 Only one wait can be online. Automatic events retain no observation tokens and
 are not action authority. Capture uses the current visible page only, never a
 background tab. The service coalesces useful changes, not a screenshot timer.

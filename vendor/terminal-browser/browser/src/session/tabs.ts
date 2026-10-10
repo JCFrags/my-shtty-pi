@@ -4,6 +4,7 @@ import { BrowserDownloads } from "../agent/downloads";
 import type { BlockingRequest, BlockingStatus } from "../blocking/types";
 import type { BrowserOwner } from "pixel-store";
 import type { BrowserDialog, BrowserDialogs, DialogResponse } from "../agent/dialogs";
+import type { CertificateRequest } from "../agent/certificates";
 import type { PopupWindow } from "../page/popup";
 import { BrowserAgentRuntime } from "../agent/runtime";
 import type { BrowserControl } from "../agent/control";
@@ -588,6 +589,37 @@ export class TabManager {
     return null;
   }
 
+  async certificate(id: number, request: CertificateRequest, epoch?: number, signal?: AbortSignal) {
+    const context = this.context(id);
+    if (!context) throw new Error(`no context ${id}`);
+    if (request.action === "status") return { contextId: id, ...context.controller.certificates.status() };
+    if (epoch === undefined) throw new Error("certificate mutation requires a control epoch");
+    signal?.throwIfAborted();
+    this.control.assertAgent(epoch);
+    if (request.action === "revoke") {
+      if (this.control.busy || this.pendingDialog) throw new Error("browser input or dialog is busy");
+      await this.control.input.permit(ALL_INPUT, () => this.control.assertAgent(epoch), signal);
+      signal?.throwIfAborted();
+      this.control.assertAgent(epoch);
+      if (this.control.busy || this.pendingDialog) throw new Error("browser input or dialog is busy");
+      context.controller.certificates.revoke(request);
+    } else {
+      if (this.pendingDialog?.contextId !== id || this.pendingDialog.id !== request.dialogId) throw new Error("another decision is pending");
+      await context.controller.certificates.decide(request, epoch, signal);
+    }
+    this.host.requestRender();
+    return { contextId: id, ...context.controller.certificates.status() };
+  }
+
+  revokeHumanCertificates(id: number) {
+    if (this.currentVisiblePage()?.contextId !== id) throw new Error("certificate settings require the current visible context");
+    if (this.pendingDialog) throw new Error("a browser dialog is pending");
+    const context = this.context(id);
+    if (!context) throw new Error("visible context is no longer available");
+    context.controller.certificates.revokeAll();
+    this.host.requestRender();
+  }
+
   blocking(id: number, request: BlockingRequest, epoch?: number): BlockingStatus & { contextId: number } {
     const context = this.context(id);
     if (!context) throw new Error(`no context ${id}`);
@@ -633,7 +665,9 @@ export class TabManager {
   async answerHumanDialog(id: string, accept: boolean, text?: string) {
     const dialog = this.pendingDialog;
     if (!dialog || dialog.id !== id) throw new Error("stale or unknown dialog");
-    await this.context(dialog.contextId)!.controller.dialogs.answer(id, accept, text);
+    const certificate = dialog.certificate?.origin && dialog.certificate.fingerprint
+      ? { origin: dialog.certificate.origin, fingerprint: dialog.certificate.fingerprint } : undefined;
+    await this.context(dialog.contextId)!.controller.dialogs.answer(id, accept, text, undefined, certificate);
   }
 
   async waitContexts(afterId: number, timeoutMs: number, expectedEpoch: number) {

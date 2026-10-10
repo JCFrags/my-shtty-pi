@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import test from "node:test";
 
-import { BrowserCommandError, BrowserStartupError, PiBrowserClient, actionableError, defaultCommandRunner, ownerCommandRunner } from "../dist/client.js";
+import { BrowserCommandError, BrowserStartupError, PiBrowserClient, actionableError, connectionCommandRunner, connectionEnvironment, defaultCommandRunner, discoverConnections, ownerCommandRunner, parseConnectionInventory } from "../dist/client.js";
 
 const context = { cwd: "/tmp/project", sessionId: "pi-session-a", owner: { kind: "native", sessionId: "session-a", projectDir: "/tmp/project" } };
 
@@ -12,6 +12,29 @@ test("native JSON errors preserve codes and do not advise automatic resume or re
   assert.equal(error.code, "CONTROL_NOT_AGENT");
   assert.match(error.message, /only when the user explicitly asks/);
   assert.match(actionableError(JSON.stringify({ ok: false, error: { code: "STATE_CHANGED", message: "page changed" } })).message, /inspect the outcome/);
+});
+
+test("connection discovery is metadata-only, sanitized, bounded, and refuses incompatible runtime or incomplete owners", async () => {
+  const environment = connectionEnvironment({ PATH: "/bin", TERMINAL_BROWSER_INSTALLATION: "/tmp/private-installation.json",
+    HERDR_ENV: "1", HERDR_PANE_ID: "another-pane", PI_SESSION_ID: "old-pi", PI_SESSION_FILE: "/tmp/old.jsonl",
+    TERMINAL_BROWSER_OWNER_SESSION_ID: "old-task", TERMINAL_BROWSER_PI_ORIGIN: "old-origin" });
+  assert.deepEqual(environment, { PATH: "/bin", TERMINAL_BROWSER_INSTALLATION: "/tmp/private-installation.json" });
+  await assert.rejects(connectionCommandRunner({ context, args: ["open"] }), /Unsupported browser connection discovery/);
+  let request;
+  const value = await discoverConnections({ cwd: "/tmp", sessionId: "current-pi" }, async call => {
+    request = call;
+    return { schemaVersion: 1, instancesDirectory: "/tmp/known/instances", identity: null, matchesCandidate: null, sessions: [], complete: true,
+      pageTitle: "must not be projected", url: "https://private.test/" };
+  });
+  assert.deepEqual(request.args, ["daemon-status", "--connections"]);
+  assert.equal(request.timeoutMs, 5000);
+  assert.equal("pageTitle" in value, false);
+  const running = { ...value, identity: { instanceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }, matchesCandidate: false };
+  assert.throws(() => parseConnectionInventory(running), /loaded Pi browser package.*reload only this idle Pi session/);
+  assert.throws(() => parseConnectionInventory({ ...running, matchesCandidate: true, sessions: [{ key: "browser-1",
+    owner: { workspaceId: "w1", tabId: "t1", paneId: "p1" }, origin: null, terminal: null, tab: null, pane: null }] }), /complete owner/);
+  assert.match(actionableError(JSON.stringify({ ok: false, error: { code: "COMMAND_FAILED", message: "companion runtime mismatch" } })).message,
+    /matching package.*Do not launch a duplicate or replace the daemon/);
 });
 
 test("cancelled native calls never spawn or route a browser command", async () => {

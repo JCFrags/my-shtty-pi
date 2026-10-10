@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { APP_DIR_NAME, DAEMON_SOCKET, INSTALLATION, RUNTIME_IDENTITY, processStart, runtimeMatches } from "pixel-store";
+import { APP_DIR_NAME, DAEMON_SOCKET, INSTALLATION, RUNTIME_IDENTITY, parsePiOrigin, processStart, runtimeMatches } from "pixel-store";
+import { commandError } from "./errors";
 import { daemonRequest } from "./daemon-status";
 import { profileOwnership, socketEvidence } from "./profile-ownership";
 
@@ -36,14 +37,25 @@ function identity(value: any) {
   if (!value || value.protocol !== 2 || !build || !Number.isSafeInteger(value.pid) || value.pid < 1 || !instanceId) throw new Error("unknown runtime identity");
   return { artifactId: hex(value.artifactId, 64), sourceRevision: hex(value.sourceRevision, 40), build, protocol: 2, pid: value.pid, processStart: identifier(value.processStart), instanceId };
 }
-export function safeDaemonStatus(value: any) {
+export function safeDaemonStatus(value: any, connections = false) {
   if (value?.ok !== true || value.complete !== true || !Array.isArray(value.sessions) || value.sessions.length > 256) throw new Error("incomplete daemon status");
   const captured = identity(value.identity);
-  const sessions = value.sessions.map((entry: any) => {
+  const sessions = (value.sessions as any[]).map((entry: any) => {
     if (!identifier(entry.key)) throw new Error("invalid session identity");
-    const owner = entry.owner === null ? null : { workspaceId: identifier(entry.owner?.workspaceId), tabId: identifier(entry.owner?.tabId), paneId: identifier(entry.owner?.paneId) };
-    if (owner && Object.values(owner).some((field) => field === null)) throw new Error("invalid owner identity");
-    return { key: entry.key, owner, terminal: identifier(entry.terminal), tab: identifier(entry.tab), pane: identifier(entry.pane) };
+    if (connections && [entry.terminal, entry.tab, entry.pane].some(field => field !== null && identifier(field) === null)) throw new Error("invalid connection location metadata");
+    const tuple = entry.owner === null ? null : { workspaceId: identifier(entry.owner?.workspaceId), tabId: identifier(entry.owner?.tabId), paneId: identifier(entry.owner?.paneId) };
+    if (tuple && Object.values(tuple).some((field) => field === null)) throw new Error("invalid owner identity");
+    const fullOwner = tuple !== null && Object.hasOwn(entry.owner, "sessionId") && Object.hasOwn(entry.owner, "projectDir");
+    if (connections && ((!fullOwner && tuple !== null) || !Object.hasOwn(entry, "origin"))) {
+      throw commandError("RUNTIME_MISMATCH", "legacy loaded browser runtime has incomplete connection metadata; inspect doctor and load the accepted runtime before reconnecting. Do not infer a project or task, prune records, or replay a launch.");
+    }
+    if (fullOwner && ((entry.owner.sessionId !== null && (typeof entry.owner.sessionId !== "string" || !/^[^\u0000-\u001f\u007f-\u009f]{1,512}$/u.test(entry.owner.sessionId))) ||
+        typeof entry.owner.projectDir !== "string" || entry.owner.projectDir.length > 4096 || !path.isAbsolute(entry.owner.projectDir) || /[\u0000-\u001f\u007f-\u009f]/u.test(entry.owner.projectDir))) throw new Error("invalid complete owner identity");
+    const owner = fullOwner ? { ...tuple!, sessionId: entry.owner.sessionId as string | null, projectDir: entry.owner.projectDir as string } : tuple;
+    const hasOrigin = Object.hasOwn(entry, "origin");
+    const origin = entry.origin === null ? null : parsePiOrigin(entry.origin);
+    if (hasOrigin && entry.origin !== null && origin === null) throw new Error("invalid Pi origin metadata");
+    return { key: entry.key, owner, ...(hasOrigin ? { origin } : {}), terminal: identifier(entry.terminal), tab: identifier(entry.tab), pane: identifier(entry.pane) };
   });
   return { identity: captured, sessions, complete: true };
 }

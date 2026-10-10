@@ -25,7 +25,7 @@ export interface CompanionStatus extends CompanionAddress {
   pendingShareId: string | null;
   mode: CompanionMode;
   controlEpoch: number;
-  updates: { enabled: boolean; active: boolean; description: string };
+  updates: { enabled: boolean; suspended: boolean; active: boolean; description: string };
   limits: string[];
 }
 export interface PageVisual {
@@ -110,7 +110,8 @@ export function parseCompanionSessionArgs(input: string[]): CompanionCommandOpti
       const receiverSessionId = text(option(args, "--receiver-session"), "--receiver-session", 512);
       const receiverGeneration = uuid(option(args, "--receiver-generation"), "--receiver-generation");
       const replace = option(args, "--replace-binding");
-      request = { cmd: "receiver.bind", receiverKind: kind, receiverSessionId, receiverGeneration, ...(replace === undefined ? {} : { replaceBindingId: uuid(replace, "--replace-binding") }) };
+      const suspendAutomatic = flag(args, "--suspend-automatic");
+      request = { cmd: "receiver.bind", receiverKind: kind, receiverSessionId, receiverGeneration, ...(replace === undefined ? {} : { replaceBindingId: uuid(replace, "--replace-binding") }), ...(suspendAutomatic ? { suspendAutomatic: true } : {}) };
     } else if (action === "unbind") request = { cmd: "receiver.unbind", ...tuple() };
     else throw new Error("session receiver needs status, bind, or unbind");
   } else if (command === "recovery") {

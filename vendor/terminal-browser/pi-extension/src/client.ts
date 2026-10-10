@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { cliCommand } from "./launch.js";
-import { launchInstruction } from "./owner-binding.js";
-import type { SelectedOwner } from "./owner-binding.js";
+import { PI_ORIGIN_ENV, launchInstruction, parsePiOrigin, selectedOwner } from "./owner-binding.js";
+import type { BrowserOwnerMetadata, PiOrigin, SelectedOwner } from "./owner-binding.js";
 const OUTPUT_LIMIT = 256 * 1024;
 
 export interface ToolContext {
@@ -14,6 +14,7 @@ export interface ToolContext {
   storageIdentity?: string;
   associationId?: string;
   branchIds?: string[];
+  origin?: PiOrigin;
   signal?: AbortSignal;
 }
 
@@ -31,8 +32,14 @@ function ownerEnvironment(context: ToolContext): NodeJS.ProcessEnv {
   for (const name of Object.keys(environment)) {
     if (name.startsWith("TERMINAL_BROWSER_OWNER_")) delete environment[name];
   }
+  if (context.origin) {
+    const origin = parsePiOrigin(context.origin);
+    if (origin.piSessionId !== context.sessionId) throw new Error("Browser launch origin does not match the current Pi conversation.");
+    environment[PI_ORIGIN_ENV] = JSON.stringify(origin);
+    environment.PI_SESSION_ID = context.sessionId;
+  }
   const owner = context.owner;
-  if (!owner) throw new Error("No browser associated. Use /browser Settings to select an exact owner.");
+  if (!owner) throw new Error("No browser associated. Use /browser Connect existing browser or Open/focus browser.");
   // A native association overrides Herdr. Never inherit the containing pane's route.
   if (owner.kind === "native") {
     delete environment.HERDR_ENV;
@@ -53,13 +60,13 @@ function ownerEnvironment(context: ToolContext): NodeJS.ProcessEnv {
   };
 }
 
-const runCli: CommandRunner = ({ args, context, stdin, timeoutMs = 30_000 }) =>
-  new Promise((resolveResult, reject) => {
+function executeCli({ args, context, stdin, timeoutMs = 30_000 }: CommandRequest, environment: NodeJS.ProcessEnv): Promise<unknown> {
+  return new Promise((resolveResult, reject) => {
     if (context.signal?.aborted) return reject(new Error("Browser operation cancelled before dispatch."));
     const [command, commandArgs] = cliCommand(args);
     const child = spawn(command, commandArgs, {
       cwd: context.cwd,
-      env: ownerEnvironment(context),
+      env: environment,
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -95,6 +102,78 @@ const runCli: CommandRunner = ({ args, context, stdin, timeoutMs = 30_000 }) =>
     });
     child.stdin.end(stdin);
   });
+}
+
+const runCli: CommandRunner = request => {
+  if (request.context.signal?.aborted) return Promise.reject(new Error("Browser operation cancelled before dispatch."));
+  return executeCli(request, ownerEnvironment(request.context));
+};
+
+export function connectionEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const clean = { ...environment };
+  for (const name of Object.keys(clean)) {
+    if (name.startsWith("TERMINAL_BROWSER_OWNER_") || name.startsWith("HERDR_") ||
+        name.startsWith("PI_SESSION_") || name === PI_ORIGIN_ENV) delete clean[name];
+  }
+  return clean;
+}
+
+/** Only this metadata command can run without a selected owner. It cannot launch a browser. */
+export const connectionCommandRunner: CommandRunner = request => {
+  if (request.args.length !== 2 || request.args[0] !== "daemon-status" || request.args[1] !== "--connections" || request.stdin !== undefined) {
+    return Promise.reject(new Error("Unsupported browser connection discovery command."));
+  }
+  return executeCli({ ...request, timeoutMs: 5_000 }, connectionEnvironment());
+};
+
+export interface BrowserConnection {
+  key: string;
+  owner: BrowserOwnerMetadata | null;
+  origin: PiOrigin | null;
+  terminal: string | null;
+  tab: string | null;
+  pane: string | null;
+}
+export interface ConnectionInventory {
+  schemaVersion: 1;
+  instancesDirectory: string;
+  identity: { instanceId: string } | null;
+  matchesCandidate: boolean | null;
+  sessions: BrowserConnection[];
+  complete: true;
+}
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
+const cleanText = (value: unknown, limit: number): value is string => typeof value === "string" && value.length > 0 &&
+  value.length <= limit && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+export const RUNTIME_REMEDY = "The loaded Pi browser package does not match the running browser artifact. Use terminal-browser doctor --json, then reload only this idle Pi session from the matching package. Do not launch a duplicate or replace the daemon.";
+
+export function parseConnectionInventory(value: unknown): ConnectionInventory {
+  const item = value as ConnectionInventory;
+  if (!item || typeof item !== "object" || item.schemaVersion !== 1 || item.complete !== true ||
+      !cleanText(item.instancesDirectory, 4096) || !isAbsolute(item.instancesDirectory) ||
+      !Array.isArray(item.sessions) || item.sessions.length > 128 ||
+      !(item.identity === null ? item.matchesCandidate === null && item.sessions.length === 0 :
+        item.identity && typeof item.identity === "object" && cleanText(item.identity.instanceId, 128) && UUID.test(item.identity.instanceId) &&
+        typeof item.matchesCandidate === "boolean")) throw new Error("Browser connection inventory is incomplete. Use terminal-browser doctor --json, then /browser Connect existing browser. No browser was selected.");
+  if (item.matchesCandidate === false) throw new Error(RUNTIME_REMEDY);
+  const keys = new Set<string>();
+  const sessions = item.sessions.map(entry => {
+    if (!entry || typeof entry !== "object" || !cleanText(entry.key, 256) || keys.has(entry.key) ||
+        ![entry.terminal, entry.tab, entry.pane].every(place => place === null || cleanText(place, 128))) throw new Error("Invalid browser connection metadata.");
+    keys.add(entry.key);
+    if (entry.owner !== null) selectedOwner(entry.owner);
+    const owner = entry.owner === null ? null : { workspaceId: entry.owner.workspaceId, tabId: entry.owner.tabId,
+      paneId: entry.owner.paneId, sessionId: entry.owner.sessionId, projectDir: entry.owner.projectDir };
+    return { key: entry.key, owner, origin: entry.origin === null ? null : parsePiOrigin(entry.origin),
+      terminal: entry.terminal, tab: entry.tab, pane: entry.pane };
+  });
+  return { schemaVersion: 1, instancesDirectory: item.instancesDirectory, identity: item.identity === null ? null : { instanceId: item.identity.instanceId },
+    matchesCandidate: item.matchesCandidate, sessions, complete: true };
+}
+
+export async function discoverConnections(context: ToolContext, run: CommandRunner = connectionCommandRunner): Promise<ConnectionInventory> {
+  return parseConnectionInventory(await run({ context, args: ["daemon-status", "--connections"], timeoutMs: 5_000 }));
+}
 
 // Keep every adapter operation on the native CLI. Non-Herdr hosts attach only;
 // a piped child process must not take over the terminal that is running Pi.
@@ -202,7 +281,9 @@ export function actionableError(stderr: string): Error {
       }
     } catch {}
   }
-  if (code === "CONTROL_NOT_AGENT" || /agent control is human|agent control is paused|browser control is with the user/iu.test(message)) {
+  if (/runtime mismatch|runtime identity mismatch|runtime instance mismatch/iu.test(message)) {
+    message = RUNTIME_REMEDY;
+  } else if (code === "CONTROL_NOT_AGENT" || /agent control is human|agent control is paused|browser control is with the user/iu.test(message)) {
     message = "Browser control is with the user. Read browser_control status and resume only when the user explicitly asks.";
   } else if (code === "STATE_CHANGED" || /stale control epoch|page changed|stale or unknown observation/iu.test(message)) {
     message = "Browser state changed. Call browser_observe and inspect the outcome before deciding on another action.";

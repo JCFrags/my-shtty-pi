@@ -46,7 +46,7 @@ export class NativeBrowserMenu {
   back(): void {
     if (this.page === this.entryPage) this.host.close();
     else this.show(this.page === "send-link" || this.page === "send-visual" ? "send"
-      : this.page === "blocking" || this.page === "tools" || this.page === "disconnect" ? "settings" : "main");
+      : this.page === "disconnect" ? "settings" : "main");
   }
 
   items(): PageMenuItem[] {
@@ -59,6 +59,7 @@ export class NativeBrowserMenu {
       receiverOnline: status.receiverOnline,
       pendingShare: status.pendingShareId !== null,
       updatesEnabled: status.updates.enabled,
+      updatesSuspended: status.updates.suspended,
       updatesActive: status.updates.active,
       ...(this.preview ? { page: this.preview.page } : {}),
       ...(this.closePreview ? { close: this.closePreview } : {}),
@@ -74,7 +75,7 @@ export class NativeBrowserMenu {
 
   detail(): string {
     const status = this.host.service.status();
-    return status.pendingShareId ? "Send pending" : status.updates.active
+    return status.pendingShareId ? "Send pending" : status.updates.suspended ? "updates suspended" : status.updates.active
       ? status.receiverOnline ? "updates on" : "receiver offline" : "";
   }
 

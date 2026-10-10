@@ -10,6 +10,7 @@ export interface BrowserMenuState {
   receiverOnline: boolean;
   pendingShare: boolean;
   updatesEnabled: boolean;
+  updatesSuspended?: boolean;
   updatesActive: boolean;
   page?: { title: string; url: string };
   close?: {
@@ -35,6 +36,8 @@ export function browserMenuItems(page: BrowserMenuPage, state: BrowserMenuState)
         item("control", `Control mode: ${controlLabel(state.mode)}`),
         item("send", state.pendingShare ? "Send current page: pending" : state.receiverOnline
           ? "Send current page" : "Send current page: receiver offline", canSend),
+        item("tools", "Tools"),
+        item("blocking", "Ad blocking (shared profile)"),
         item("settings", "Settings"),
         item("close", "Close this owned browser"),
       ];
@@ -48,10 +51,9 @@ export function browserMenuItems(page: BrowserMenuPage, state: BrowserMenuState)
     case "settings":
       return [
         item("receiver-info", `Receiver: ${receiver}`, false),
-        item("updates", `Shared page updates: ${state.updatesEnabled ? "On" : "Off"}${state.updatesActive ? " (active)" : ""}`, state.receiverLabel !== null),
+        item("updates", `Shared page updates: ${state.updatesEnabled ? "On" : "Off"}${state.updatesSuspended ? " (suspended)" : state.updatesActive ? " (active)" : ""}`, state.receiverLabel !== null),
+        ...(state.updatesSuspended ? [item("suspension-info", "Select Shared explicitly to clear suspension", false)] : []),
         item("updates-info", "Page screenshots can contain private data", false),
-        item("blocking", "Ad blocking (shared profile)"),
-        item("tools", "Tools"),
         item("disconnect", "Disconnect this receiver", state.receiverLabel !== null),
         back(),
       ];

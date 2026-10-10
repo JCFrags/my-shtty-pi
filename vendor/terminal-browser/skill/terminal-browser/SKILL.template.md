@@ -28,6 +28,15 @@ ownership, observations, human control, or file restrictions.
 4. Read `terminal-browser agent --help` and `terminal-browser session --help` for
    the installed command contract. Launch does not run setup or install skills.
 
+Ordinary user launches can omit the owner flags and receive an internal owner.
+With the Pi menu loaded, a current conversation launch connects through exact
+session/file and fresh launch-generation metadata. Task IDs remain separate from
+Pi conversation IDs. Use Pi's reported connected CLI route for later commands.
+For a user-opened or older browser, run `/browser` in the intended conversation
+and choose Connect existing browser. Select the exact terminal, owner, and project.
+Do not launch a duplicate or guess the newest browser. Persistent shells can have
+stale launch metadata and need an explicit selection.
+
 ## Observe, act, and inspect the result
 
 ```sh
@@ -92,7 +101,8 @@ and does not hold the input queue. Popups keep their opener relationship.
 Dialogs never auto-accept. Use the exact dialog ID, context ID, and epoch from
 observe or an interrupted action, then give an explicit `--accept` or `--dismiss`
 to `agent dialog`. A prompt response can use `--stdin`. A timeout dismisses the
-dialog. Observe again after responding.
+dialog. Certificate warnings require the separate exact-identity command below.
+Observe again after responding.
 
 Uploads require a visible chooser trigger and 1–16 regular files under the fixed
 launch project, at most 32 MiB each and 64 MiB total. Project escapes, symlink
@@ -105,6 +115,35 @@ Use `session tabs --action downloads` to inspect transfers, and
 stay under `.terminal-browser-downloads` in the launch project, do not overwrite
 existing files, and are never opened or executed automatically. A click can be
 interrupted while its transfer still starts. Check the download list first.
+
+## HTTPS certificate warnings
+
+An invalid certificate returns a pending `certificate` dialog in native observation
+and a visible warning card. It stays blocked until an explicit decision, and denies
+after 60 seconds. Read its exact HTTPS origin, SHA-256 fingerprint, validation error,
+subject, issuer, and validity dates. Server-supplied fields do not prove identity.
+
+Obtain explicit user approval for that exact origin and fingerprint before:
+
+```sh
+terminal-browser agent certificate approve --session task-a --project /absolute/project \
+  --tab CONTEXT_ID --dialog-id DIALOG_ID --control-epoch EPOCH \
+  --origin EXACT_HTTPS_ORIGIN --fingerprint SHA256_FINGERPRINT
+```
+
+Use only current returned values. Generic `agent dialog --accept` cannot approve
+certificates. `certificate reject` uses the same identity, or `agent dialog --dismiss`
+denies the warning. Only main-frame warnings with readable certificates can be
+approved. Approval is in-memory for that context's lifetime, exact scheme/host/port
+and certificate only. Other origins, certificates, contexts, and owners remain
+unapproved. There is no global HTTPS bypass or trust-store edit.
+
+Use `agent certificate status` with the same owner and tab to list exceptions.
+After dismissing pending decisions, use `agent certificate revoke --tab CONTEXT_ID
+--origin EXACT_HTTPS_ORIGIN --fingerprint SHA256_FINGERPRINT --control-epoch EPOCH`
+with the same owner to remove one. The native full options, Tools menu removes all
+exceptions in the visible context. Removal cannot undo received data or close
+established connections. Context closure or daemon restart forgets every exception.
 
 ## Network blocking
 
@@ -135,6 +174,8 @@ browser model tools. A bare package source or
 `+dist/menu.js` alone also loads the tools resource. Do not change package settings
 unless the user requests that change.
 
+Connection preserves control mode and the Shared updates preference. A new Pi
+binding suspends automatic capture until an explicit Shared or updates choice.
 Opening or canceling a menu does not select Human. Send previews the current page
 and receiver and asks for confirmation. It can request a reply. Do not use terminal paste or
 another agent's draft to deliver a page.

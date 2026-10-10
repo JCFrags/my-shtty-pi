@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { z } from "zod";
 
 import type { BrowserOwner } from "./owner";
 import { INSTALLATION } from "./installation";
+import { parsePiOrigin, type PiOrigin } from "./pi-origin";
 
 const HOME = os.homedir();
 
@@ -49,6 +51,14 @@ const browserOwnerSchema = z.object({
   projectDir: z.string(),
 });
 
+const piOriginSchema = z.object({
+  schemaVersion: z.literal(1), generation: z.string(), piSessionId: z.string(), piSessionFile: z.string().nullable(),
+}).strict().refine(value => parsePiOrigin(value) !== null);
+const runtimeSchema = z.object({
+  artifactId: z.string().nullable(), sourceRevision: z.string().nullable(), build: z.string().nullable(),
+  protocol: z.number().refine((value): boolean => value === 2), pid: z.number().int().positive(), processStart: z.string().nullable(), instanceId: z.string().min(1).max(128),
+});
+
 export const interopInstanceSchema = z.object({
   protocolVersions: z.array(z.number()),
   mode: z.enum(["browser", "app"]).catch("browser"),
@@ -56,6 +66,8 @@ export const interopInstanceSchema = z.object({
   socket: z.string(),
   startedAt: z.number().catch(0),
   owner: browserOwnerSchema.nullable(),
+  origin: piOriginSchema.nullable().optional(),
+  runtime: runtimeSchema.optional(),
 }) satisfies z.ZodType<{
   protocolVersions: number[];
   mode: "browser" | "app";
@@ -63,6 +75,8 @@ export const interopInstanceSchema = z.object({
   socket: string;
   startedAt: number;
   owner: BrowserOwner | null;
+  origin?: PiOrigin | null;
+  runtime?: z.infer<typeof runtimeSchema>;
 }>;
 export type InteropInstance = z.infer<typeof interopInstanceSchema>;
 
@@ -75,10 +89,14 @@ function instanceFile(key: string): string {
 }
 
 export function advertiseInstance(key: string, record: InteropInstance): void {
+  const file = instanceFile(key);
+  const temporary = path.join(INTEROP_INSTANCES_DIR, `.${path.basename(file)}.${randomUUID()}.tmp`);
   try {
-    fs.mkdirSync(INTEROP_INSTANCES_DIR, { recursive: true });
-    fs.writeFileSync(instanceFile(key), `${JSON.stringify(record)}\n`);
+    fs.mkdirSync(INTEROP_INSTANCES_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { flag: "wx", mode: 0o600 });
+    fs.renameSync(temporary, file);
   } catch {}
+  finally { try { fs.unlinkSync(temporary); } catch {} }
 }
 
 export function withdrawInstance(key: string): void {

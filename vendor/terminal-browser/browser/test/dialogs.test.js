@@ -10,22 +10,28 @@ function fixture(timeout = 60000) {
   contents.debugger = new EventEmitter();
   contents.getURL = () => 'https://fixture.test/';
   const commands = [];
+  let dialogType = 'prompt';
   const control = new BrowserControl();
   const dialogs = new BrowserDialogs(contents, async (method, params) => {
     commands.push({ method, params });
-    if (method === 'Debugger.evaluateOnCallFrame' && !params.expression.startsWith('promptResult')) return { result: { value: { message: 'Question', defaultValue: 'Default' } } };
+    if (method === 'Debugger.evaluateOnCallFrame' && !params.expression.startsWith('promptResult')) return { result: { value: { type: dialogType, message: 'Question', defaultValue: dialogType === 'prompt' ? 'Default' : '' } } };
     return {};
   }, timeout);
   dialogs.configure(7, control);
   const event = (method, params) => contents.debugger.emit('message', {}, method, params);
-  const native = () => event('Page.javascriptDialogOpening', { type: 'confirm', message: 'Question' });
+  const native = async () => {
+    dialogType = 'confirm';
+    event('Debugger.scriptParsed', { url: 'terminal-browser-prompt.js', executionContextId: 3, hash: createHash('sha256').update(PROMPT_SOURCE).digest('hex'), startLine: 0, endLine: 11, scriptId: 'trusted' });
+    event('Debugger.paused', { callFrames: [{ callFrameId: 'frame', functionName: 'terminalBrowserPrompt', location: { scriptId: 'trusted', lineNumber: 5, columnNumber: 2 } }] });
+    await tick();
+  };
   return { contents, commands, control, dialogs, event, native };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 test('dialogs require exact identity and current control; duplicate responses fail', async () => {
   const f = fixture();
-  f.native();
+  await f.native();
   const pending = f.dialogs.pending;
   assert.equal(pending.contextId, 7);
   await assert.rejects(f.dialogs.respond({ dialogId: 'wrong', expectedControlEpoch: 1, accept: true }), /stale/);
@@ -33,7 +39,10 @@ test('dialogs require exact identity and current control; duplicate responses fa
   await assert.rejects(f.dialogs.respond({ dialogId: pending.id, expectedControlEpoch: 1, accept: true }), /stale/);
   f.control.resume(2);
   await f.dialogs.respond({ dialogId: pending.id, expectedControlEpoch: 3, accept: false });
-  assert.deepEqual(f.commands.at(-1), { method: 'Page.handleJavaScriptDialog', params: { accept: false } });
+  assert.deepEqual(f.commands.slice(-2), [
+    { method: 'Debugger.evaluateOnCallFrame', params: { callFrameId: 'frame', expression: 'promptResult = false', returnByValue: true } },
+    { method: 'Debugger.resume', params: {} },
+  ]);
   await assert.rejects(f.dialogs.respond({ dialogId: pending.id, expectedControlEpoch: 3, accept: true }), /stale/);
   f.dialogs.dispose();
 });
@@ -76,7 +85,7 @@ test('navigation mismatch and timeout never grant beforeunload permission', asyn
 
 test('prompt provenance rejects same-name and identical-source script clones', async () => {
   const f = fixture();
-  const parsed = { url: 'terminal-browser-prompt.js', executionContextId: 3, hash: createHash('sha256').update(PROMPT_SOURCE).digest('hex'), startLine: 0, endLine: 9 };
+  const parsed = { url: 'terminal-browser-prompt.js', executionContextId: 3, hash: createHash('sha256').update(PROMPT_SOURCE).digest('hex'), startLine: 0, endLine: 11 };
   f.event('Debugger.scriptParsed', { ...parsed, scriptId: 'trusted' });
   f.event('Debugger.scriptParsed', { ...parsed, scriptId: 'clone' });
   const pause = scriptId => f.event('Debugger.paused', { callFrames: [{ callFrameId: 'frame', functionName: 'terminalBrowserPrompt', location: { scriptId, lineNumber: 5, columnNumber: 2 } }] });
@@ -97,9 +106,9 @@ test('prompt provenance rejects same-name and identical-source script clones', a
   f.dialogs.dispose();
 });
 
-test('detach and destruction clear dialog state without reading destroyed WebContents', () => {
+test('detach and destruction clear dialog state without reading destroyed WebContents', async () => {
   const f = fixture();
-  f.native();
+  await f.native();
   f.contents.debugger.emit('detach');
   assert.equal(f.dialogs.pending, null);
   Object.defineProperty(f.contents, 'debugger', { get() { throw new Error('destroyed'); } });

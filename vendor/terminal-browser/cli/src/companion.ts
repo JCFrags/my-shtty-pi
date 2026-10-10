@@ -8,10 +8,12 @@ import {
   AGENT_SOCKETS_DIR,
   browserOwnerEnvironment,
   isNativeBrowserOwner,
+  piOriginEnvironment,
 } from "pixel-store";
 import type { BrowserOwner, InstanceRow } from "pixel-store";
 
 import { control } from "./control";
+import { commandError } from "./errors";
 import { ownerMatches, recordKey } from "./instances";
 import { instances } from "./registry";
 import { environmentOwner } from "./session";
@@ -163,7 +165,8 @@ async function liveOwned(owner: BrowserOwner): Promise<Array<{ record: InstanceR
       ]);
       live.push({ record, where, tabs: targets.tabs ?? [] });
       continue;
-    } catch {
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "RUNTIME_MISMATCH") throw commandError("RUNTIME_MISMATCH", `${error instanceof Error ? error.message : "browser runtime mismatch"} No record was removed and no duplicate was opened.`);
       throw new Error("existing companion identity or readiness is uncertain; no record was removed and no duplicate was opened. Inspect doctor before explicit recovery.");
     }
   }
@@ -249,7 +252,7 @@ async function reuseBrowser(
   return { action: "reused", key: recordKey(found.record), pane: found.where.pane!, tabs };
 }
 
-export function paneOpenArgs(owner: BrowserOwner, options: CompanionOpenOptions, startup?: StartupAttempt): string[] {
+export function paneOpenArgs(owner: BrowserOwner, options: CompanionOpenOptions, startup?: StartupAttempt, environment: NodeJS.ProcessEnv = process.env): string[] {
   const args = [
     "plugin", "pane", "open",
     "--plugin", PLUGIN_ID,
@@ -260,6 +263,7 @@ export function paneOpenArgs(owner: BrowserOwner, options: CompanionOpenOptions,
   ];
   const childEnvironment = {
     ...browserOwnerEnvironment(owner),
+    ...piOriginEnvironment(environment),
     ...(startup ? startupEnvironment(startup) : {}),
   };
   if (options.url) childEnvironment.TERMINAL_BROWSER_COMPANION_URL = options.url;
@@ -296,7 +300,7 @@ export async function openCompanion(
     const startup = createStartupAttempt(owner);
     let pane: string | null = null;
     try {
-      pane = parseOpenedPane(await runHerdr(paneOpenArgs(owner, options, startup), environment));
+      pane = parseOpenedPane(await runHerdr(paneOpenArgs(owner, options, startup, environment), environment));
       bindStartupPane(startup, pane);
       return await waitForOpenedBrowser(owner, pane, startup, environment);
     } catch (error) {

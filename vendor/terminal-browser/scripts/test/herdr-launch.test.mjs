@@ -14,7 +14,7 @@ test("Herdr entrypoints resolve a directory alias before finding the artifact an
   fs.mkdirSync(path.dirname(plugin), { recursive: true });
   fs.cpSync(path.join(root, "herdr-plugin"), plugin, { recursive: true });
   const probe = path.join(temp, "probe.cjs");
-  fs.writeFileSync(probe, 'console.log(JSON.stringify({args:process.argv.slice(2),owner:process.env.TERMINAL_BROWSER_OWNER_PROJECT_DIR,pane:process.env.TERMINAL_BROWSER_OWNER_PANE_ID}));');
+  fs.writeFileSync(probe, 'console.log(JSON.stringify({args:process.argv.slice(2),owner:process.env.TERMINAL_BROWSER_OWNER_PROJECT_DIR,pane:process.env.TERMINAL_BROWSER_OWNER_PANE_ID,origin:process.env.TERMINAL_BROWSER_PI_ORIGIN}));');
   fs.writeFileSync(path.join(plugin, "launch.sh"), '#!/bin/bash\nexec "$NODE" "$PROBE" "$@"\n');
   const alias = path.join(temp, "alias");
   fs.symlinkSync(plugin, alias);
@@ -26,5 +26,7 @@ test("Herdr entrypoints resolve a directory alias before finding the artifact an
   assert.deepEqual(run("open-companion.sh", { TERMINAL_BROWSER_STARTUP_ATTEMPT: "fixture-attempt" }).args, ["supervise-startup", "--", "open", "--no-merge"]);
   assert.deepEqual(run("open-companion.sh", { TERMINAL_BROWSER_COMPANION_URL: "https://example.test/?q=a b" }).args, ["open", "https://example.test/?q=a b", "--no-merge"]);
   assert.deepEqual(run("open-split.sh").args, ["open", "--split", "right"]);
+  const origin = JSON.stringify({ schemaVersion: 1, generation: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", piSessionId: "pi-a", piSessionFile: null }, null, 1);
+  for (const script of ["open-companion.sh", "open-split.sh"]) assert.equal(run(script, { TERMINAL_BROWSER_PI_ORIGIN: origin }).origin, origin);
   assert.deepEqual(run("focus-companion.sh"), { args: ["companion", "open"], owner: "/tmp/project with spaces", pane: "pane" });
 });
