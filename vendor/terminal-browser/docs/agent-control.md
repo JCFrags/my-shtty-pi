@@ -195,9 +195,13 @@ on context closure. There is no automatic retry or automatic approval.
 
 Approval lets this pending request continue. It retains at most 16 in-memory
 exceptions in that context, including same-origin resources with that exact
-certificate. Other tabs, owners, origins, ports, and certificates remain
-unapproved. Normal valid HTTPS needs no exception. No decision survives context
-closure or daemon restart, changes a trust store, or changes profile settings.
+certificate. A secure WebSocket (`wss:`) connection can reuse an existing HTTPS
+exception only for the same host, effective port, and certificate in that context.
+For example, approval for `https://device.example:8443` covers
+`wss://device.example:8443/socket`, not port 9443. It does not permit a fresh WSS
+approval. Decision commands still require an exact HTTPS origin. Other tabs,
+owners, endpoints, and certificates remain unapproved. Normal valid HTTPS needs no
+exception. No decision survives context closure or daemon restart, changes a trust store, or changes profile settings.
 This narrow exception still bypasses certificate validation errors for its exact
 identity. It does not make an expired or self-signed certificate valid.
 

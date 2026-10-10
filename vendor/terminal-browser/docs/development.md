@@ -159,7 +159,10 @@ baseline checks are not a substitute for packaged runtime acceptance.
 [WebContents certificate-error event](https://www.electronjs.org/docs/latest/api/web-contents#event-certificate-error).
 Its full URL provides the origin and port. SHA-256 is computed from the presented
 DER certificate through Node's `X509Certificate`. Exceptions remain in memory per
-WebContents, not in a shared Session or trust store. Native certificate decisions
+WebContents, not in a shared Session or trust store. Existing-exception lookup
+maps `wss:` to the corresponding HTTPS host and effective port, with the same DER
+fingerprint. This lookup cannot create an exception. The decision parser and
+creation gate remain HTTPS-only. Native certificate decisions
 reuse the dialog pending gate, context identity, input reservation, and control epoch.
 
 Do not use `setCertificateVerifyProc` for these exceptions. Its request has only

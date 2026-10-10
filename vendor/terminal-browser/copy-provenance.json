@@ -40,7 +40,7 @@
       "path": "README.md",
       "sourceSha256": "cc6be274fb1d624e367c8d6f1924cef4fa63499d0d4141a72192d8442aecdda1",
       "mode": 420,
-      "sha256": "e08f4325d648fa692e3deeb5db5ebbfc0fb3100965889aba27118573dd062db3",
+      "sha256": "773dbfbba8c69d0abe076bdd7a5de5f52d03d519903101e0fa598aea1a618d39",
       "modified": true
     },
     {
@@ -124,7 +124,7 @@
       "path": "browser/src/agent/certificates.ts",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "195fb1c83b62891fb3a0f3eabd221e99018d1be247cf74d2aebff5d539d527c5",
+      "sha256": "1ddb7ac01bd45f80e5301ed941df437b867ae52b133b7ed9b5fb8687928c2b0c",
       "modified": true
     },
     {
@@ -684,7 +684,7 @@
       "path": "browser/test/certificates.test.js",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "a3971e893f8d315d8deca6ec3605530f40d3a004ecfde85bd1721e775eff3a6b",
+      "sha256": "fd0e8e200e678916a31bba951940aa928829043c681a9bb015a1d4893805d2c9",
       "modified": true
     },
     {
@@ -1111,14 +1111,14 @@
       "path": "docs/agent-control.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "e9483a3af855c0f5f0cf2d3f71a6adbbb6239ab6ee38d78cf68a6669e5420439",
+      "sha256": "3dcd80a3f31e887edf18832ac7fa017913b83f929ad078de2dacaa3d7226a5a1",
       "modified": true
     },
     {
       "path": "docs/development.md",
       "sourceSha256": null,
       "mode": 420,
-      "sha256": "925a967471adcb7e97cb66454b3cc7c946d37027b30dc4e3549236e37bef4daf",
+      "sha256": "0c025803d69c127fd32651d638d76e7a9fd38408831f7d1b384641a50d83e152",
       "modified": true
     },
     {

@@ -50,6 +50,34 @@ test('certificate decisions bind to context, origin, DER SHA-256, epoch, and exp
     await certificates.decide(decision, control.controlEpoch);
     assert.deepEqual(blocked, [true]);
     assert.deepEqual(emit(origin + '/other', first, false), [true], 'same-origin resources use only the approved certificate');
+    assert.deepEqual(emit('wss://fixture.invalid:8443/socket', first, false), [true], 'WSS reuses only the approved HTTPS TLS endpoint');
+    for (const url of ['wss://fixture.invalid:9443/socket', 'wss://other.invalid:8443/socket', 'ws://fixture.invalid:8443/socket', 'http://fixture.invalid:8443/', 'wss://fixture:sample@fixture.invalid:8443/socket']) {
+      const denied = emit(url, first, false);
+      assert.equal(dialogs.pending.canAccept, false);
+      await dialogs.cancel();
+      assert.deepEqual(denied, [false], 'other endpoints, schemes, and userinfo cannot reuse trust');
+    }
+    const changedSocket = emit('wss://fixture.invalid:8443/socket', second, false);
+    assert.equal(dialogs.pending.canAccept, false);
+    await dialogs.cancel();
+    assert.deepEqual(changedSocket, [false], 'WSS must present the approved certificate');
+    const defaultBlocked = emit('https://fixture.invalid/');
+    await certificates.decide({ ...decision, dialogId: dialogs.pending.id, origin: 'https://fixture.invalid' }, control.controlEpoch);
+    assert.deepEqual(defaultBlocked, [true]);
+    assert.deepEqual(emit('wss://fixture.invalid:443/socket', first, false), [true], 'default TLS ports have the same endpoint identity');
+    certificates.revoke({ ...decision, origin: 'https://fixture.invalid' });
+    const otherContents = new EventEmitter();
+    otherContents.debugger = new EventEmitter();
+    otherContents.getURL = () => 'about:blank';
+    const otherDialogs = new BrowserDialogs(otherContents, async () => ({}), 50);
+    otherDialogs.configure(8, control);
+    const otherCertificates = new BrowserCertificates(otherContents, otherDialogs);
+    const otherContext = [];
+    otherContents.emit('certificate-error', { preventDefault() {} }, 'wss://fixture.invalid:8443/socket', 'ERR_CERT_AUTHORITY_INVALID', first, trusted => otherContext.push(trusted), false);
+    assert.equal(otherDialogs.pending.canAccept, false);
+    await otherDialogs.cancel();
+    assert.deepEqual(otherContext, [false], 'another context does not inherit an exception');
+    otherCertificates.dispose(); otherDialogs.dispose();
     const otherPort = emit('https://fixture.invalid:9443/');
     await dialogs.cancel();
     assert.deepEqual(otherPort, [false]);
@@ -59,6 +87,11 @@ test('certificate decisions bind to context, origin, DER SHA-256, epoch, and exp
     assert.deepEqual(changed, [false]);
     certificates.revoke(decision);
     assert.equal(certificates.status().exceptions.length, 0);
+    const revokedSocket = emit('wss://fixture.invalid:8443/socket', first, false);
+    assert.equal(dialogs.pending.canAccept, false, 'fresh WSS cannot create an exception');
+    await assert.rejects(certificates.decide({ ...decision, dialogId: dialogs.pending.id }, control.controlEpoch), /mismatched/);
+    await dialogs.cancel();
+    assert.deepEqual(revokedSocket, [false]);
     const revoked = emit(origin + '/');
     await new Promise(resolve => setTimeout(resolve, 70));
     assert.deepEqual(revoked, [false], 'timeout never grants trust');
@@ -68,6 +101,7 @@ test('certificate decisions bind to context, origin, DER SHA-256, epoch, and exp
     assert.deepEqual(resource, [false]);
     certificates.dispose(); dialogs.dispose();
     assert.throws(() => parseCertificateRequest('revoke', undefined, origin + '/', decision.fingerprint), /exact HTTPS origin/);
+    assert.throws(() => parseCertificateRequest('approve', 'id', 'wss://fixture.invalid:8443', decision.fingerprint), /exact HTTPS origin/);
     const userinfo = new URL('https://fixture.invalid');
     userinfo.username = 'fixture'; userinfo.password = 'sample';
     assert.throws(() => parseCertificateRequest('approve', 'id', userinfo.href, decision.fingerprint), /exact HTTPS origin/);

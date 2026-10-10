@@ -25,6 +25,16 @@ export function certificateOrigin(value: string): string | null {
   } catch { return null; }
 }
 
+// Reuse an HTTPS decision for WSS at the same TLS endpoint. This cannot create an exception.
+function secureWebSocketOrigin(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "wss:" || url.username || url.password) return null;
+    url.protocol = "https:";
+    return url.origin;
+  } catch { return null; }
+}
+
 export function parseCertificateRequest(action: unknown, dialogId: unknown, origin: unknown, fingerprint: unknown): CertificateRequest {
   if (action === "status") {
     if (dialogId !== undefined || origin !== undefined || fingerprint !== undefined) throw new Error("certificate status takes no decision or identity");
@@ -100,8 +110,9 @@ export class BrowserCertificates {
     event.preventDefault();
     if (this.disposed) { callback(false); return; }
     const failure = describeCertificate(url, error, certificate, mainFrame);
+    const exceptionOrigin = failure.origin ?? secureWebSocketOrigin(url);
+    if (exceptionOrigin && failure.fingerprint && this.exceptions.has(this.key({ origin: exceptionOrigin, fingerprint: failure.fingerprint }))) { callback(true); return; }
     const identity = failure.origin && failure.fingerprint ? { origin: failure.origin, fingerprint: failure.fingerprint } : null;
-    if (identity && this.exceptions.has(this.key(identity))) { callback(true); return; }
     this.lastFailure = failure;
     this.dialogs.openCertificate(failure, async accept => {
       if (accept && identity && mainFrame && !this.disposed) {

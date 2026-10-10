@@ -122,8 +122,11 @@ show the validation error, exact HTTPS origin, SHA-256 certificate fingerprint,
 subject, issuer, and validity dates. An agent must obtain explicit user approval
 before `agent certificate approve`. Approval binds to that origin (including port)
 and that certificate, only in the current context until it closes. It changes no
-trust store or shared-profile policy. A changed certificate or origin needs a new
-decision. The warning denies after 60 seconds and never auto-approves.
+trust store or shared-profile policy. Secure WebSocket (`wss:`) connections can
+reuse an existing approval only at the same host and effective port with the same
+certificate. They cannot create an approval. A changed certificate or endpoint
+needs a new HTTPS decision. The warning denies after 60 seconds and never
+auto-approves.
 
 Use `agent certificate status` to inspect exceptions and `agent certificate revoke`
 to remove one. The native full options, Tools menu can remove all exceptions for the
