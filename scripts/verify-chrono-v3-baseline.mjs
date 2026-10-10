@@ -36,13 +36,13 @@ export const CHRONO_PRE_INTERVAL_BASELINE = Object.freeze({
   }]
 });
 export const CHRONO_BASELINE = Object.freeze({
-  "commit": "4cbc67d53eb5806ac5fbe5cd856bd6bf67d9b638",
-  "upstreamTree": "2873a438e12b4fd856076b5d557c417790ae78f6",
-  "tree": "2873a438e12b4fd856076b5d557c417790ae78f6",
-  "files": 487,
+  "commit": "d6b89050c4cf29608053ec0c8da66b8493690251",
+  "upstreamTree": "1392a6144f2ad592e711105182c173c39ef84937",
+  "tree": "1392a6144f2ad592e711105182c173c39ef84937",
+  "files": 488,
   "maps": 159,
   "package": "packages/pi-chrono-compaction",
-  "version": "4.1.0-local.20261009",
+  "version": "4.1.1-local.20261010",
   "integrationDifferences": []
 });
 const fail = code => { throw new Error(code); };
