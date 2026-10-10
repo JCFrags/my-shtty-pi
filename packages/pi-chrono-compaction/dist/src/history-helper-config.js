@@ -21,8 +21,9 @@ function record(value, allowedKeys) {
 }
 function identifier(value, field, maxBytes) {
     if (typeof value !== "string" || value.length === 0 || value.length > maxBytes
-        || Buffer.byteLength(value, "utf8") > maxBytes || /[\s\p{Cc}\p{Cf}]/u.test(value)) {
-        invalid(`History helper ${field} must be a nonempty identifier of at most ${maxBytes} UTF-8 bytes, without whitespace or control characters.`);
+        || Buffer.byteLength(value, "utf8") > maxBytes || /[\p{Cc}\p{Cf}]/u.test(value)
+        || (field === "provider" ? /\s/u.test(value) : value.trim() !== value || /[^\S ]/u.test(value))) {
+        invalid(`History helper ${field} must be a nonempty identifier of at most ${maxBytes} UTF-8 bytes, without control characters. Only model identifiers may contain internal spaces.`);
     }
     return value;
 }

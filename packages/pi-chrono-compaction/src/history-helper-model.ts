@@ -19,21 +19,32 @@ function digest(model: Model<Api>): string {
   // This is a configuration binding, not proof of remote advertised capacity.
   return createHash("sha256").update(JSON.stringify([HISTORY_HELPER_MODEL_POLICY, model])).digest("hex");
 }
-function rejectedRoute(model: Model<Api>): boolean {
+/** Shared picker/runtime eligibility. Reads metadata only, without authentication or inference. */
+export function historyHelperModelCompatibility(model: Model<Api>):
+  { readonly status: "ready" } | { readonly status: "route-unavailable" | "capability-unavailable"; readonly reason: string } {
   const compat = plain(model.compat), vercel = plain(compat.vercelGatewayRouting);
-  return !SUPPORTED_APIS.has(model.api) || model.api === "pi-virtual"
-    || /(?:^|[/:])auto(?:$|[/:])/iu.test(model.id)
+  if (!SUPPORTED_APIS.has(model.api) || model.api === "pi-virtual") {
+    return { status: "route-unavailable", reason: model.api === "openai-codex-responses"
+      ? "This Codex adapter does not enforce the output limit required for history helpers."
+      : "This adapter has no verified bounded history-helper request support." };
+  }
+  if (/(?:^|[/:])auto(?:$|[/:])/iu.test(model.id)
     || (Array.isArray(vercel.models) && vercel.models.length > 0)
     || (Array.isArray(vercel.order) && vercel.order.length > 1)
     || (Array.isArray(vercel.only) && vercel.only.length > 1)
     // No inspected per-call no-fallback contract exists for the gateway here.
-    || model.provider === "vercel-ai-gateway";
-}
-function capabilityValid(model: Model<Api>): boolean {
-  const compat = plain(model.compat);
-  return model.input.includes("text") && Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
-    && Number.isSafeInteger(model.maxTokens) && model.maxTokens >= 16
-    && compat.supportsMaxOutputTokens !== false;
+    || model.provider === "vercel-ai-gateway") {
+    return { status: "route-unavailable", reason: "This router cannot guarantee one exact model without provider fallback." };
+  }
+  if (!model.input.includes("text")) return { status: "capability-unavailable", reason: "History helpers require text input." };
+  if (!Number.isSafeInteger(model.contextWindow) || model.contextWindow <= 0
+    || !Number.isSafeInteger(model.maxTokens) || model.maxTokens < 16) {
+    return { status: "capability-unavailable", reason: "This model has no valid context or output capacity for history helpers." };
+  }
+  if (compat.supportsMaxOutputTokens === false) {
+    return { status: "capability-unavailable", reason: "This model does not support the required output limit." };
+  }
+  return { status: "ready" };
 }
 function requestModel(model: Model<Api>): Model<Api> {
   const originalCompat = plain(model.compat), router = plain(originalCompat.openRouterRouting);
@@ -74,8 +85,9 @@ export function resolveHistoryHelperModel(
   if (!selection) return { status: "unselected" };
   const original = ctx.modelRegistry.find(selection.provider, selection.model);
   if (!original) return { status: "model-unavailable" };
-  if (original.provider !== selection.provider || original.id !== selection.model || rejectedRoute(original)) return { status: "route-unavailable" };
-  if (!capabilityValid(original)) return { status: "capability-unavailable" };
+  if (original.provider !== selection.provider || original.id !== selection.model) return { status: "route-unavailable" };
+  const compatibility = historyHelperModelCompatibility(original);
+  if (compatibility.status !== "ready") return { status: compatibility.status };
   if (!ctx.modelRegistry.hasConfiguredAuth(original)) return { status: "auth-unavailable" };
   const originalIdentity = digest(original);
   const identity = `${historyHelperDerivationIdentity(getConfig(), role)}:${originalIdentity}`;

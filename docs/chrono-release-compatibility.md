@@ -11,7 +11,7 @@ related:
 
 # ChronoCompact release compatibility
 
-Use the checked-out [package manifest](../packages/pi-chrono-compaction/package.json) for the source identity. The interval source version is `4.1.2-local.20261010`. The retained pre-interval baseline includes the 4.0.6 system-update continuation correction, unified `/Chrono` menu, stable projections, and earlier same-session summary path. A source version does not establish remote acceptance, local selection, or loaded-session adoption. The 4.0.0 and older sections below retain revision-bound compatibility records. Their pins, counts, commands, and passes do not verify this candidate.
+Use the checked-out [package manifest](../packages/pi-chrono-compaction/package.json) for the source identity. The interval source version is `4.1.3-local.20261010`. The retained pre-interval baseline includes the 4.0.6 system-update continuation correction, unified `/Chrono` menu, stable projections, and earlier same-session summary path. A source version does not establish remote acceptance, local selection, or loaded-session adoption. The 4.0.0 and older sections below retain revision-bound compatibility records. Their pins, counts, commands, and passes do not verify this candidate.
 
 ## Interval candidate compatibility boundary
 
