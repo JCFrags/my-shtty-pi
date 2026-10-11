@@ -85,7 +85,7 @@ export interface IntervalSourceBounds {
   readonly maxBlocks: number; readonly maxRoutedSegments: number; readonly maxGeneratedSuffix: number;
 }
 export const INTERVAL_SOURCE_BOUNDS: IntervalSourceBounds = Object.freeze({
-  maxEntries: 8192, maxBytes: 16 * 1024 * 1024, maxDepth: 64, maxBlocks: 4096,
+  maxEntries: 8192, maxBytes: 32 * 1024 * 1024, maxDepth: 64, maxBlocks: 4096,
   maxRoutedSegments: 64, maxGeneratedSuffix: 128,
 });
 export interface IntervalControlIdentities {

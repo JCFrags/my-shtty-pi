@@ -5,7 +5,7 @@ import { isLogicalSessionManifest, type LogicalSessionManifest, type LogicalCata
 import { resolveLogicalShardRoutes, type LogicalActivationGrant, type LogicalShardRoute } from "./logical-session-routing.js";
 import { resolveCatalogHistory, readCatalogHistoryPage, type CatalogHistoryExecutor, type CatalogHistoryScope } from "./catalog-history.js";
 import type { CatalogEvent, CatalogView } from "./catalog-contract.js";
-import type { IntervalRoutedSegment, IntervalSourceAssociation } from "./interval-source.js";
+import { INTERVAL_SOURCE_BOUNDS, type IntervalRoutedSegment, type IntervalSourceAssociation } from "./interval-source.js";
 import type { SessionEntryLike } from "./types.js";
 
 export const INTERVAL_LOGICAL_SOURCE_RULESET = "chrono-logical-original-source-v1" as const;
@@ -14,7 +14,7 @@ export interface LogicalIntervalSourceBounds {
   readonly maxRequests: number; readonly maxDepth: number; readonly maxSuffixEntries: number; readonly timeoutMs: number;
 }
 export const LOGICAL_INTERVAL_SOURCE_BOUNDS: LogicalIntervalSourceBounds = Object.freeze({
-  maxRoutes: 64, maxEntries: 8192, maxBytes: 16 * 1024 * 1024, maxRequests: 4096,
+  maxRoutes: 64, maxEntries: 8192, maxBytes: INTERVAL_SOURCE_BOUNDS.maxBytes, maxRequests: 4096,
   maxDepth: 64, maxSuffixEntries: 128, timeoutMs: 20_000,
 });
 export interface LogicalIntervalSourceAnchor { readonly sessionId: string; readonly shardId: string; readonly endEntryId: string }
