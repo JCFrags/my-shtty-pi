@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { collectIntervalBoundaryHints } from "./interval-boundary-hints.js";
 export const INTERVAL_SOURCE_RULESET = "chrono-original-interval-v1";
 export const INTERVAL_SOURCE_BOUNDS = Object.freeze({
-    maxEntries: 8192, maxBytes: 16 * 1024 * 1024, maxDepth: 64, maxBlocks: 4096,
+    maxEntries: 8192, maxBytes: 32 * 1024 * 1024, maxDepth: 64, maxBlocks: 4096,
     maxRoutedSegments: 64, maxGeneratedSuffix: 128,
 });
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;

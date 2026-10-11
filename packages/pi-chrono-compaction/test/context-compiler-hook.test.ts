@@ -16,6 +16,24 @@ import type { SessionEntryLike } from "../src/types.js";
 import { captureIntervalSource, type IntervalSourceSnapshot } from "../src/interval-source.js";
 import { classifyPressure, deriveIntervalBudget } from "../src/interval-policy.js";
 import { INTERVAL_CONTINUATION_MESSAGE, INTERVAL_CONTINUATION_RECORD } from "../src/interval-runtime.js";
+import { nativeIntervalSourcePressure, INTERVAL_SOURCE_PRESSURE_BYTES } from "../src/interval-source-pressure.js";
+
+test("native source pressure catches image bytes without reading prior compaction bodies", () => {
+  const entries = new Map<string, SessionEntryLike>();
+  const old = { type: "compaction", id: "old", parentId: "unavailable",
+    get summary(): never { throw new Error("old body must not be read"); } };
+  entries.set("old", old);
+  entries.set("small", { type: "message", id: "small", parentId: "old",
+    message: { role: "user", content: "Continue the existing task." } });
+  const input = { leafId: "small", getEntry: (id: string) => entries.get(id) };
+  assert.equal(nativeIntervalSourcePressure(input), false);
+  entries.set("large", { type: "message", id: "large", parentId: "small",
+    message: { role: "toolResult", toolName: "read", content: [
+      { type: "image", mimeType: "image/png", data: "a".repeat(INTERVAL_SOURCE_PRESSURE_BYTES) },
+    ] } });
+  assert.equal(nativeIntervalSourcePressure({ ...input, leafId: "large" }), true);
+  assert.throws(() => nativeIntervalSourcePressure({ ...input, leafId: "missing" }), /entry-unavailable/);
+});
 
 test("model-free interval lifecycle verifies public proposals, preserves source, matches preview and refuses stale capture", async () => {
   const directory = mkdtempSync(join(tmpdir(), "chrono-v4-hook-"));

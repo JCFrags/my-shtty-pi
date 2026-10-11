@@ -4,9 +4,10 @@ import { canonicalJson } from "./capsule-segment.js";
 import { isLogicalSessionManifest } from "./logical-session-contract.js";
 import { resolveLogicalShardRoutes } from "./logical-session-routing.js";
 import { resolveCatalogHistory, readCatalogHistoryPage } from "./catalog-history.js";
+import { INTERVAL_SOURCE_BOUNDS } from "./interval-source.js";
 export const INTERVAL_LOGICAL_SOURCE_RULESET = "chrono-logical-original-source-v1";
 export const LOGICAL_INTERVAL_SOURCE_BOUNDS = Object.freeze({
-    maxRoutes: 64, maxEntries: 8192, maxBytes: 16 * 1024 * 1024, maxRequests: 4096,
+    maxRoutes: 64, maxEntries: 8192, maxBytes: INTERVAL_SOURCE_BOUNDS.maxBytes, maxRequests: 4096,
     maxDepth: 64, maxSuffixEntries: 128, timeoutMs: 20_000,
 });
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;

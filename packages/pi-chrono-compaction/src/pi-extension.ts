@@ -90,6 +90,7 @@ import { buildDeterministicRecoveryHandoff, IntervalRecoveryRefusal } from "./in
 import { planIntervalContext } from "./interval-compiler.js";
 import { deriveIntervalBudget, classifyPressure, intervalResponseReserveTokens, INTERVAL_POLICY } from "./interval-policy.js";
 import { captureIntervalSource, revalidateIntervalSource, type IntervalSourceSnapshot } from "./interval-source.js";
+import { nativeIntervalSourcePressure } from "./interval-source-pressure.js";
 import { repinLogicalIntervalSource, type LogicalIntervalSourceManifest, type LogicalIntervalSourcePin } from "./interval-logical-source.js";
 import { runValueWorker, loadCompatibleAdvice, valueWorkerConfigurationHash, type ValueWorkerRunResult } from "./value-worker.js";
 import { readValueAdviceManifest, resetAdviceCircuit, valueAdviceStorePath } from "./value-advice-store.js";
@@ -2114,6 +2115,12 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
   };
   const currentRequestTokens = (ctx: ExtensionContext, messages?: readonly unknown[], observedTokens = 0): number =>
     currentRequestBudget(ctx, messages, observedTokens).tokens;
+  // Native-current pressure is independent of image token estimates. Existing
+  // paused/exchange guards run before this check. Prior routed shards are unchanged.
+  const nativeSourcePressure = (ctx: ExtensionContext): boolean => nativeIntervalSourcePressure({
+    leafId: ctx.sessionManager.getLeafId(),
+    getEntry: id => ctx.sessionManager.getEntry(id) as SessionEntryLike | undefined,
+  });
   const requireSummaryReadiness = (ctx: ExtensionContext, observedTokens?: number): void => {
     // A summary must be submitted immediately. Do not activate a managed tool
     // here: reactivation can rewrite an earlier deferred-schema position.
@@ -2911,7 +2918,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
             queueIntervalRecovery(ctx, pressure.reasons[0] ?? "context-v4-recovery-admission-unavailable");
             return projected;
           }
-          if (directRecovery || pressure?.status === "freeze" || tokens >= summaryTriggerLimit(ctx)) {
+          if (directRecovery || pressure?.status === "freeze" || tokens >= summaryTriggerLimit(ctx) || nativeSourcePressure(ctx)) {
             const intent = summaryInputIntent;
             if (inputPending || ctx.signal?.aborted || (directRecovery && !intent)) throw new Error("session-agent-summary-direct-input-unavailable");
             const requestScope = directRecovery ? bindSessionAgentSummaryInput(intent!, summaryObservation(ctx), messages)
@@ -3359,7 +3366,7 @@ export default function chronoCompactExtension(pi: ExtensionAPI, adapters: Histo
           return await prepareRecoveryProposal(ctx, event, pressure.reasons[0] ?? "context-v4-recovery-admission-unavailable",
             captureOriginalContinuation(ctx, "threshold"));
         }
-        if (pressure.status === "freeze" || tokens >= summaryTriggerLimit(ctx)) {
+        if (pressure.status === "freeze" || tokens >= summaryTriggerLimit(ctx) || nativeSourcePressure(ctx)) {
           await refreshIntervalSource(ctx);
           if (binding !== originalRunBinding(ctx)) return undefined;
           const request = beginSessionSummary(ctx, "threshold", "sent", undefined, undefined, tokens);
